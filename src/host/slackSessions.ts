@@ -12,7 +12,9 @@
 // **Nothing is registered while the Host is not active** (`active`). While an app keeps Slack, that app's
 // notifier opens each root and notes it; a record made here meanwhile would hold no thread, and at the
 // activation the Host would post a second root beside the one the note names. So the activation's
-// reconcile registers each session reading its note as it is then.
+// reconcile registers each session reading its note as it is then. **A record from an earlier activation
+// takes its note's thread then too** (`reconcile({ fromNotes: true })`, Task 6): the app may have opened a
+// new root for the session in the meantime, and the note is newer than what the record remembers.
 //
 // Imports only core and this folder: this bundles into the Host.
 import type { PtyMeta } from '../core/host/protocol'
@@ -24,30 +26,38 @@ import type { PtyRegistry } from './registry'
 import type { ProcRegistry } from './procRegistry'
 
 export interface HostSlackSessions {
-  /** Every live session entry considered again: the rolling tick's net, and every activation (P7). */
-  reconcile(): void
+  /** Every live session entry considered again: the rolling tick's net, and every activation (P7). With
+   *  `fromNotes` (an activation), a known record takes the thread its note names (Task 6). */
+  reconcile(o?: { fromNotes?: boolean }): void
   dispose(): void
 }
 
 export function createHostSlackSessions(d: {
   registry: Pick<PtyRegistry, 'onMeta' | 'onData' | 'onExit' | 'list' | 'metaOf' | 'sessionPty'>
   procs: Pick<ProcRegistry, 'onMeta' | 'onExit' | 'list'>
-  notifier: Pick<SlackNotifier, 'has' | 'register' | 'rename' | 'handleData' | 'handleExit'>
+  notifier: Pick<SlackNotifier, 'has' | 'register' | 'rename' | 'handleData' | 'handleExit' | 'adoptNoted'>
   /** Whether the Host owns Slack now. Default: always. Registration and renames wait for it; output and
    *  exits are fed whatever it says, so a record from an earlier activation still ends. */
   active?(): boolean
   /** Told after a registration and an exit (Task 6 hangs the codex watcher here). */
   onRegistered?(info: SessionInfo, restore: Record<string, unknown>): void
   onEnded?(sessionId: string): void
+  /** Told when a known session's note changes (Task 6: a codex rollout noted after registration). */
+  onNoted?(info: SessionInfo, restore: Record<string, unknown>): void
   log(m: string): void
 }): HostSlackSessions {
   let disposed = false
   const infoOf = (meta: PtyMeta): SessionInfo | null => sessionInfoFromNote(meta) ?? chatInfoFromNote(meta)
-  const consider = (meta: PtyMeta | null): void => {
+  const consider = (meta: PtyMeta | null, fromNotes = false): void => {
     if (disposed || !meta || !(d.active?.() ?? true)) return
     const info = infoOf(meta)
     if (!info || info.slackNotify !== true) return
-    if (d.notifier.has(info.id)) return d.notifier.rename(info.id, info.title)
+    if (d.notifier.has(info.id)) {
+      d.notifier.rename(info.id, info.title)
+      if (fromNotes) d.notifier.adoptNoted(info.id, notedThreadOf(meta.restore))
+      d.onNoted?.(info, meta.restore)
+      return
+    }
     // P7: a roll's new entry is the roll event's to carry while the old record stands, or it opens a
     // second root beside the one onRolled hands over. reconcile() registers it once the old one is gone.
     const from = meta.restore.rolledFrom
@@ -97,8 +107,8 @@ export function createHostSlackSessions(d: {
     })
   ]
   return {
-    reconcile: () => {
-      for (const e of [...d.registry.list(), ...d.procs.list()]) if (e.alive) safe('reconcile', () => consider(e.meta))
+    reconcile: (o) => {
+      for (const e of [...d.registry.list(), ...d.procs.list()]) if (e.alive) safe('reconcile', () => consider(e.meta, o?.fromNotes === true))
     },
     dispose: () => {
       disposed = true

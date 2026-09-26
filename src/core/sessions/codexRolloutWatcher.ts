@@ -110,6 +110,31 @@ export interface CodexRolloutDeps {
   now?: () => number
 }
 
+/**
+ * What the Host's note says about an adopted session's codex rollout, or null when it says nothing.
+ *
+ * The path is what `CodexRolloutWatcher.register` needs to attach without scanning, and null is a
+ * refusal to register at all — for an adopted session the scan is not merely useless but harmful, and
+ * the adopter's own note at the call site gives that argument in full. The codex session id rides
+ * along because the same mapping produced it and the scheduler's store is keyed by it.
+ *
+ * The two fields are narrowed separately: they come from a note that crossed a process boundary, and
+ * a build that wrote only the path should still get its session watched.
+ *
+ * A pure function because the app's adopter that calls it is an electron-only closure, and "register
+ * only when the path is really there" is the whole of the protection that closure is carrying. It lives
+ * here with the watcher since Slack in the Host (P13): the Host's own watcher registers from the same
+ * note, and `src/main/ipc.ts` re-exports it.
+ */
+export function codexRolloutFromNote(
+  restore: Record<string, unknown>
+): { rolloutPath: string; codexSessionId: string | null } | null {
+  const rolloutPath = restore.rolloutPath
+  if (typeof rolloutPath !== 'string' || rolloutPath === '') return null
+  const codexSessionId = restore.codexSessionId
+  return { rolloutPath, codexSessionId: typeof codexSessionId === 'string' ? codexSessionId : null }
+}
+
 /** Whether a line is a task_complete event */
 function isTaskComplete(line: string): boolean {
   let obj: unknown

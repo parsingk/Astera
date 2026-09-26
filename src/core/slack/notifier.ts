@@ -319,6 +319,22 @@ export class SlackNotifier {
     return this.records.has(sessionId)
   }
 
+  /** The session's note read again, and its thread preferred over this record's own when it names a
+   *  different root in the channel posted to now (Slack in the Host Task 6). A record kept across a
+   *  stretch where another process owned Slack is stale: that process may have opened a new root for the
+   *  session and noted it (which it does when the thread it knew was missing), and `register`'s rule that
+   *  a live record's knowledge wins does not hold for a record that heard nothing meanwhile. A thread in
+   *  another channel, no thread, or an unknown session changes nothing. */
+  adoptNoted(sessionId: string, thread: NotedThread | null): void {
+    const record = this.records.get(sessionId)
+    if (!record || !thread || thread.channel !== this.channel) return
+    if (record.noted?.ts === thread.ts && record.noted.channel === thread.channel) return
+    this.dropFromThreadIndex(sessionId)
+    record.noted = { ts: thread.ts, channel: thread.channel }
+    record.thread = null
+    this.seedNoted(record)
+  }
+
   /** The tab was renamed. Updates this record's copy so later messages carry the new prefix.
    *
    *  A copy is what makes this necessary: `SessionManager.spawn` returns `{ ...info }`, so the record

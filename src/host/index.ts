@@ -28,7 +28,7 @@ import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
 import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
-import { composeHostSlack, createAccountSnapshot, type HostSlackWiring } from './slackWiring'
+import { composeHostSlack, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
@@ -275,19 +275,19 @@ async function main(): Promise<void> {
           orch: () => orch,
           lang: () => wiring.checks.langNow(),
           log: (m) => log.write(m),
-          nowIso: () => new Date().toISOString()
+          nowIso: () => new Date().toISOString(),
+          // Slack in the Host Task 6: the Host's own rolls and every hook event are its Slack's sources.
+          // Read at the call: the Slack composition is built below, and each tap isolates itself.
+          onRollEvent: (e) => slackWiring?.onRollEvent(e),
+          hookTap: (sid, p) => slackWiring?.onHookEvent(sid, p)
         })
       : null
 
   // **The Host's Slack** (Slack in the Host, spec §3): slack.json read only, one notifier, one inbox, and
   // the socket held only while no attached app keeps Slack (P4). **Only with a spawner and the SDK**:
   // `slack-owner` is announced on the same two facts, and a Host without it answers slack-reload 501.
-  // Nothing is opened until `start()` below, once the server exists. The accounts come from a snapshot
-  // of accounts.json, read only (Task 6 hands it the rolling's own).
-  const slackAccounts = createAccountSnapshot({
-    read: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-    log: (m) => log.write(m)
-  })
+  // Nothing is opened until `start()` below, once the server exists. The accounts come from the rolling's
+  // own snapshot, and its chats and chains are what the Host sources itself (Task 6).
   slackWiring =
     spawner && wiring && rollingWiring && slackSdk
       ? composeHostSlack({
@@ -296,7 +296,8 @@ async function main(): Promise<void> {
           registry,
           procs,
           statusLinePayload: (id) => spawner.statusLinePayload(id),
-          accountOf: (id) => slackAccounts.of(id),
+          chats: rollingWiring.chats,
+          rolling: rollingWiring.rolling,
           server: () => server,
           lang: () => wiring.checks.langNow()
         })
@@ -403,6 +404,12 @@ async function main(): Promise<void> {
         // without `rolling` never announced `blocks`, so no app sends it, and the line stays unknown.
         if (m.t === 'blocks' && rollingWiring) {
           if (from.greeted && from.role === 'app') rollingWiring.blocksFromApp(m)
+          return true
+        }
+        // Slack in the Host (spec §3.3, P17): what only an app sees, told to the Host that owns Slack. Only
+        // from a greeted app; the Host drops what it sources itself.
+        if (m.t === 'slack-event') {
+          if (slackWiring && from.greeted && from.role === 'app') slackWiring.forwarded(m.event)
           return true
         }
         return (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false)

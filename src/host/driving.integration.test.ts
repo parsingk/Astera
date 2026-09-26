@@ -798,5 +798,21 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(orchCall).toMatch(/slack: slackWiring \?\? undefined/)
     expect(leave.indexOf('slackWiring?.dispose()')).toBeGreaterThan(-1)
     expect(leave.indexOf('slackWiring?.dispose()')).toBeLessThan(leave.indexOf('server.stopAccepting()'))
+    // Slack in the Host Task 6 (spec §3.3, P17): what only an app sees comes in as `slack-event`, taken
+    // only from a greeted app; the rolling's events and every hook event reach the Host's Slack through
+    // the two taps, and the Slack composition is handed the rolling's chats and accounts.
+    // Mutations: drop the intake, take it from a CLI socket or before the hello, or drop either tap.
+    expect(serverCall).toMatch(/m\.t === 'slack-event'/)
+    const intake = src.indexOf("m.t === 'slack-event'")
+    expect(src.slice(intake, intake + 300)).toMatch(/from\.greeted && from\.role === 'app'/)
+    expect(src.slice(intake, intake + 300)).toMatch(/slackWiring\.forwarded\(m\.event\)/)
+    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send)'))
+    const rollingCall = src.slice(src.indexOf('composeHostRolling('))
+    expect(rollingCall).toMatch(/onRollEvent: \(e\) => slackWiring\?\.onRollEvent\(e\)/)
+    expect(rollingCall).toMatch(/hookTap: \(sid, p\) => slackWiring\?\.onHookEvent\(sid, p\)/)
+    const slackCall = src.slice(src.indexOf('composeHostSlack('), src.indexOf('createHostOrch({'))
+    expect(slackCall).toMatch(/chats: rollingWiring\.chats/)
+    expect(slackCall).toMatch(/rolling: rollingWiring\.rolling/)
+    expect(src).not.toMatch(/createAccountSnapshot/)
   })
 })

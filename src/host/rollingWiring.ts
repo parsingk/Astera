@@ -33,7 +33,7 @@ import type { HostOrch } from './orch'
 import type { ProcHolders } from './procHolders'
 import type { ProcRegistry } from './procRegistry'
 import type { PtyRegistry } from './registry'
-import { createHostRolling, type HostRolling, type HostRollingDeps } from './rolling'
+import { createHostRolling, type HostRollEvent, type HostRolling, type HostRollingDeps } from './rolling'
 import { createHostRollTap, type HostRollTap } from './rollTapHost'
 import { createRollJournal, rollJournalPath, type RollJournal } from './rollJournal'
 import type { HostServer } from './server'
@@ -88,6 +88,11 @@ export function composeHostRolling(a: {
   lang(): Lang
   log(m: string): void
   nowIso(): string
+  /** Every roll event, after the broadcast (Slack in the Host Task 6: the Host's own rolls are the Host's
+   *  Slack's source). Its own try: a tap that throws costs neither the apps nor the journal. */
+  onRollEvent?(e: HostRollEvent): void
+  /** Every hook event the rolling's watcher reads, after the coordinators (Slack in the Host Task 6). */
+  hookTap?(sessionId: string, payload: unknown): void
   /** Test seams. */
   every?(ms: number, fn: () => void): () => void
   after?(ms: number, fn: () => void): () => void
@@ -204,12 +209,18 @@ export function composeHostRolling(a: {
       if (m.t === 'session-rolled' && m.procId !== undefined) a.server().broadcast(m, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
       else a.server().broadcast(m)
       try {
+        a.onRollEvent?.(e)
+      } catch (err) {
+        log(`the Slack roll tap failed: ${String(err)}`)
+      }
+      try {
         if (!a.server().hasApp()) journal.append(e)
       } catch (err) {
         log(`a roll event could not be journaled: ${String(err)}`)
       }
     },
     lang: () => a.lang(),
+    ...(a.hookTap ? { hookTap: a.hookTap } : {}),
     ...a.rollingDeps
   })
 

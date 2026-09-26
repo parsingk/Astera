@@ -70,6 +70,7 @@ type Over = {
   isLoggedIn?: () => Promise<boolean>
   onNativeSession?: (sessionId: string, nativeSessionId: string) => void
   readAccounts?: () => Promise<Account[]>
+  hookTap?: (sessionId: string, payload: unknown) => void
 }
 const rig = async (over: Over = {}) => {
   // Preflight C8: a profile per rig, removed after the test (the Host writes host/rolling.json there).
@@ -115,7 +116,8 @@ const rig = async (over: Over = {}) => {
     copy: async () => {}, // no transcript on disk here; the copy is the coordinators' own, tested there
     log: () => {},
     logCodex: () => {},
-    watchHooks: false
+    watchHooks: false,
+    ...(over.hookTap ? { hookTap: over.hookTap } : {})
   })
   return { profileDir, registry, ptys, open, payloads, spawned, events, rolled, rolling }
 }
@@ -276,6 +278,25 @@ describe('createHostRolling (S6 Task 9)', () => {
     expect(r.rolling.has('s1')).toBe(true)
     r.ptys.get('p1')!.exit(0)
     expect(r.rolling.has('s1')).toBe(false)
+    r.rolling.dispose()
+  })
+
+  it('hands every hook event to the tap too, and a throwing tap costs the coordinators nothing (Slack in the Host)', async () => {
+    const heard: string[] = []
+    const r = await rig({ hookTap: (sid) => { heard.push(sid); throw new Error('boom') } })
+    expect(() => r.rolling.onHookEvent('s1', { hook_event_name: 'Stop' })).not.toThrow()
+    r.rolling.onHookEvent('s2', { hook_event_name: 'Stop' })
+    expect(heard).toEqual(['s1', 's2'])
+    r.rolling.dispose()
+  })
+
+  it('answers an account from its snapshot (Slack in the Host)', async () => {
+    const r = await rig()
+    expect(r.rolling.account('a1')).toBeNull()
+    await r.rolling.refresh()
+    expect(r.rolling.account('a1')?.id).toBe('a1')
+    expect(r.rolling.account('c2')?.provider).toBe('codex')
+    expect(r.rolling.account('nope')).toBeNull()
     r.rolling.dispose()
   })
 })

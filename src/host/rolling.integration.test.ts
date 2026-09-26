@@ -23,6 +23,7 @@ import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 import { ROLL_SNAPSHOT_VERSION, type RollSnapshot } from '../core/rolling/snapshot'
 import type { HostMessage } from '../core/host/protocol'
 import type { Account, SessionInfo } from '../core/types'
+import type { HostRollEvent } from './rolling'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
 import type { ClientMessage } from '../core/host/protocol'
 import { createBlockSync } from '../main/host/blockSync'
@@ -53,7 +54,7 @@ const quietDeps = (accounts: () => Promise<Account[]>) => ({
   watchHooks: false
 })
 
-async function rig(o: { appPid?: number | null; coordinator?: string; openStop?: boolean; accountsGate?: Promise<void>; accountsFail?: number } = {}) {
+async function rig(o: { appPid?: number | null; coordinator?: string; openStop?: boolean; accountsGate?: Promise<void>; accountsFail?: number; rollTap?: (e: HostRollEvent) => void; hookTap?: (sid: string, p: unknown) => void } = {}) {
   vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'Date'] })
   const profileDir = await tempDir('astera-s6-rig-')
   dirs.push(profileDir)
@@ -126,6 +127,8 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     orch: () => box.orch!, lang: () => 'en', log: (m) => logs.push(m), nowIso: () => new Date().toISOString(),
     after: (_ms, fn) => { afters.push(fn); return () => { const i = afters.indexOf(fn); if (i >= 0) afters.splice(i, 1) } },
     appPid: () => appPid,
+    ...(o.rollTap ? { onRollEvent: o.rollTap } : {}),
+    ...(o.hookTap ? { hookTap: o.hookTap } : {}),
     rollingDeps: quietDeps(async () => {
       await o.accountsGate
       if (reads++ < (o.accountsFail ?? 0)) throw new Error('accounts.json is being written')
@@ -188,6 +191,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     limit: (p: string, s: string) => { payloads.set(s, payload(100)); ptys.get(p)!.emit(LIMIT) },
     statuslineAppears: (s: string) => payloads.set(s, payload(5)),
     forceRoll: (s: string) => void wiring.rolling.forceRoll(s),
+    hook: (s: string, p: unknown) => wiring.rolling.onHookEvent(s, p),
     advance: (ms: number) => vi.advanceTimersByTimeAsync(ms),
     settle: async () => { await vi.advanceTimersByTimeAsync(1_000); await vi.waitFor(() => undefined) },
     exitsHandoverRuns: async () => { await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS + 100); await vi.waitFor(() => undefined) },
@@ -535,6 +539,24 @@ describe('the Host journals the rolls no app saw (S6 limits Task 4, D5)', () => 
     await h.settle()
     await vi.waitFor(() => expect(h.broadcasts.some((m) => m.t === 'session-rolled' && m.oldSessionId === 's1')).toBe(true))
     expect((await h.journal()).body).toEqual({ entries: [], lastSeq: 0 })
+  })
+  it('the Slack roll tap hears every roll event, and a throwing tap costs the journal nothing (Slack in the Host Task 6)', async () => {
+    const heard: HostRollEvent[] = []
+    const h = await rig({ rollTap: (e) => { heard.push(e); throw new Error('boom') } })
+    await h.spawnWorker('p1', 's1', ['a1', 'a2'])
+    h.limit('p1', 's1')
+    await h.settle()
+    await vi.waitFor(() => expect(heard.some((e) => e.t === 'session-rolled' && e.oldSessionId === 's1' && e.info.id === 's2')).toBe(true))
+    expect(heard.some((e) => e.t === 'roll-state' && e.event.state === 'switching')).toBe(true)
+    expect(h.logs.some((m) => m.includes('the Slack roll tap failed'))).toBe(true)
+    const body = (await h.journal()).body as Journal
+    expect(body.entries.some((e) => e.kind === 'rolled' && e.oldSessionId === 's1')).toBe(true)
+  })
+  it('the hook tap is handed to the rolling: every hook event reaches it (Slack in the Host Task 6)', async () => {
+    const heard: string[] = []
+    const h = await rig({ hookTap: (sid) => heard.push(sid) })
+    h.hook('s1', { hook_event_name: 'Stop' })
+    expect(heard).toEqual(['s1'])
   })
 })
 

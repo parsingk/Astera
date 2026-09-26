@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry } from './procRegistry'
-import { composeHostSlack, createAccountSnapshot, hostSlackLog } from './slackWiring'
+import { composeHostSlack, hostSlackLog } from './slackWiring'
 import type { HostSlackSdk } from './slackSdk'
 import type { SlackConfig } from '../core/slack/config'
 import type { Account } from '../core/types'
@@ -46,7 +46,7 @@ function fakePty(): RegistryPty & { emit(d: string): void } {
   return { pid: 1, onData: (cb) => { onData = cb }, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {}, emit: (d) => onData(d) }
 }
 
-async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDir?: string; readConfig?: (() => Promise<SlackConfig>) | null; statusLinePayload?: () => Promise<unknown> } = {}) {
+async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDir?: string; readConfig?: (() => Promise<SlackConfig>) | null; statusLinePayload?: () => Promise<unknown>; hostChains?: string[] } = {}) {
   const slack = fakeSlack({ delay: o.delay })
   const ptys = new Map<string, ReturnType<typeof fakePty>>()
   let next = ''
@@ -60,7 +60,8 @@ async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDi
     registry,
     procs,
     statusLinePayload: o.statusLinePayload ?? (async () => null),
-    accountOf: () => account,
+    chats: null,
+    rolling: { has: (id: string) => (o.hostChains ?? []).includes(id), account: (id: string) => (id === account.id ? account : null) },
     server: () => ({ appsKeep: () => state.keep, hasApp: () => state.keep, act: vi.fn(async () => null) }),
     lang: () => 'en',
     log: (m) => logs.push(m),
@@ -153,6 +154,8 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     await vi.waitFor(() => expect(h.slack.posts).toHaveLength(1))
     expect(h.slack.posts[0]).toMatchObject({ channel: 'C1' })
     expect(h.slack.posts[0].text).toContain('Build')
+    // The account label comes from the rolling's own accounts snapshot (Task 6).
+    expect(h.slack.posts[0].text).toContain('home')
     await vi.waitFor(() => expect(h.registry.metaOf('p-s1')?.restore).toMatchObject({ slackThreadTs: 't1', slackChannel: 'C1' }))
   })
 
@@ -171,6 +174,49 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     await vi.waitFor(() => expect(h.slack.posts.length).toBeGreaterThan(0))
     expect(h.slack.posts.every((p) => p.thread_ts === 'app.1')).toBe(true)
     expect(h.registry.metaOf('p-s1')?.restore).toMatchObject({ slackThreadTs: 'app.1', slackChannel: 'C1' })
+  })
+
+  // Slack in the Host Task 6 (the Task 5 carry): a record from an earlier activation must not keep its old
+  // root when the app, owning Slack in between, noted a new one for the session in the same channel.
+  it('prefers the thread the app noted meanwhile over the record from an earlier activation', async () => {
+    const h = await rig()
+    h.wiring.start()
+    await h.active()
+    h.openSession('s1')
+    await vi.waitFor(() => expect(h.registry.metaOf('p-s1')?.restore).toMatchObject({ slackThreadTs: 't1' }))
+    h.state.keep = true
+    h.wiring.onAppsChanged()
+    await vi.waitFor(() => expect(h.wiring.active()).toBe(false))
+    h.registry.note('p-s1', { slackThreadTs: 'app.2', slackChannel: 'C1' })
+    h.state.keep = false
+    h.wiring.onAppsChanged()
+    await h.active()
+    const before = h.slack.posts.length
+    h.ptys.get('p-s1')!.emit('Claude usage limit ' + 'reached ∙ resets 3am')
+    await vi.waitFor(() => expect(h.slack.posts.length).toBeGreaterThan(before))
+    expect(h.slack.posts.slice(before).every((p) => p.thread_ts === 'app.2')).toBe(true)
+    expect(h.wiring.notifier.resolveSessionByThread('app.2')).toBe('s1')
+    expect(h.wiring.notifier.resolveSessionByThread('t1')).toBeNull()
+  })
+
+  it('hands forwarded events, the Host roll events and hook events to the notifier, and drops a forward of its own chain', async () => {
+    const h = await rig({ hostChains: ['s2'] })
+    h.wiring.start()
+    await h.active()
+    h.openSession('s1')
+    h.openSession('s2')
+    await vi.waitFor(() => expect(h.slack.posts).toHaveLength(2))
+    h.wiring.forwarded({ kind: 'roll-state', event: { sessionId: 's1', state: 'stalled' } })
+    h.wiring.forwarded({ kind: 'roll-state', event: { sessionId: 's2', state: 'stalled' } })
+    h.wiring.onRollEvent({ t: 'roll-state', event: { sessionId: 's2', state: 'nudged' } })
+    h.wiring.onHookEvent('s1', { hook_event_name: 'StopFailure', error: 'overloaded' })
+    await vi.waitFor(() => expect(h.slack.posts).toHaveLength(5))
+    await new Promise((r) => setTimeout(r, 10))
+    const inThread = (ts: string | undefined) => h.slack.posts.slice(2).filter((p) => p.thread_ts === ts)
+    expect(inThread('t1')).toHaveLength(2)
+    expect(inThread('t2').map((p) => p.text).join(' ')).toContain('Limit reset')
+    expect(inThread('t2').map((p) => p.text).join(' ')).not.toContain('stuck')
+    expect(h.logs.some((m) => m.includes('roll state of s2 dropped'))).toBe(true)
   })
 
   it('reads slack.json from the profile and never writes it, a reload included (S4)', async () => {
@@ -242,30 +288,5 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
-
-  it('createAccountSnapshot answers from its last read, refreshes after the window, and survives a failed read', async () => {
-    let now = 0
-    let reads = 0
-    let fail = false
-    const snap = createAccountSnapshot({
-      read: async () => { reads += 1; if (fail) throw new Error('RepairNeeded'); return [account] },
-      log: () => {},
-      now: () => now,
-      maxAgeMs: 15_000
-    })
-    expect(snap.of('a1')).toBeNull()
-    await vi.waitFor(() => expect(snap.of('a1')).toEqual(account))
-    expect(reads).toBe(1)
-    now = 10_000
-    snap.of('a1')
-    expect(reads).toBe(1)
-    fail = true
-    now = 20_000
-    expect(snap.of('a1')).toEqual(account)
-    await new Promise((r) => setTimeout(r, 5))
-    expect(reads).toBe(2)
-    expect(snap.of('a1')).toEqual(account)
-    expect(snap.of('nope')).toBeNull()
   })
 })

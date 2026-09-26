@@ -105,6 +105,9 @@ export interface HostRollingDeps {
   chatMayAct?(procId: string): boolean
   /** Test seam; default findClaudeTranscript. */
   findTranscript?(configDir: string, threadId: string): Promise<string | null>
+  /** Every hook event, after the coordinators have it (Slack in the Host Task 6: the Host's Slack reads
+   *  the same watcher). Its own try: a tap that throws costs the coordinators nothing. */
+  hookTap?(sessionId: string, payload: unknown): void
 }
 
 export interface HostRolling {
@@ -125,6 +128,9 @@ export interface HostRolling {
    *  restore would map nothing (Task 16 review): the wiring holds the takeover until this is true. */
   accountsRead(): boolean
   onHookEvent(sessionId: string, payload: unknown): void
+  /** The account from the snapshot `refresh` keeps, or null (before the first read, or no such account).
+   *  The Host's Slack reads it (Slack in the Host Task 6), so the profile's accounts are read once. */
+  account(accountId: string): Account | null
   /** The one block registry both coordinators share (S6 D3). The wiring sends its changes to the apps
    *  and absorbs theirs into it (Task 3). */
   readonly blocks: BlockRegistry
@@ -393,10 +399,25 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       log(`rolling could not take an exit session=${m.id}: ${String(err)}`)
     }
   })
+  /** One hook event to the claude coordinator, then to the tap; each isolated. */
+  const onHook = (sid: string, p: unknown): void => {
+    try {
+      claude.onHookEvent(sid, p)
+    } catch (err) {
+      log(`a hook event could not be taken session=${sid}: ${String(err)}`)
+    }
+    if (d.hookTap) {
+      try {
+        d.hookTap(sid, p)
+      } catch (err) {
+        log(`the hook tap failed session=${sid}: ${String(err)}`)
+      }
+    }
+  }
   const hooks =
     d.watchHooks === false
       ? null
-      : new HookEventWatcher(hookEventsDirIn(d.profileDir), (sid, p) => claude.onHookEvent(sid, p), log, undefined, { startAtEnd: true })
+      : new HookEventWatcher(hookEventsDirIn(d.profileDir), onHook, log, undefined, { startAtEnd: true })
   hooks?.start()
 
   return {
@@ -436,7 +457,8 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       strategy = await readStrategy().catch(() => 'original' as const)
     },
     accountsRead: () => accountsRead,
-    onHookEvent: (sid, p) => claude.onHookEvent(sid, p),
+    onHookEvent: onHook,
+    account: (id) => accounts.find((x) => x.id === id) ?? null,
     dispose: () => {
       try {
         stopChatFeed?.()

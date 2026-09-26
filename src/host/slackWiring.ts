@@ -1,6 +1,7 @@
 // The one composition of the Host's Slack (Slack in the Host, spec §3, plan rulings P4, P7, P9, P16): a
 // read-only config reader over `<profile>/slack.json`, one SlackNotifier, one SlackInboxController, the
-// registration that follows the Host's registries (slackSessions.ts), and the owner gate that holds the
+// registration that follows the Host's registries (slackSessions.ts), the sources that feed it and the
+// app's forwarded events (slackSources.ts, Task 6), and the owner gate that holds the
 // socket and the transport only while no attached app keeps Slack (the hello yield `slack`, P4).
 //
 // **Exactly one socket per profile.** The Host opens its socket only when it has the SDK and every
@@ -23,14 +24,17 @@ import { SlackConfigReader, type SlackConfig } from '../core/slack/config'
 import { SlackNotifier } from '../core/slack/notifier'
 import { SlackInboxController, type SocketClient } from '../core/slack/inbox'
 import type { Lang } from '../core/i18n'
-import type { Account } from '../core/types'
+import { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
+import { findClaudeTranscript } from '../core/history/strategies/claude'
 import type { PtyRegistry } from './registry'
 import type { ProcRegistry } from './procRegistry'
 import type { HostServer } from './server'
 import type { HostSlackSdk } from './slackSdk'
-import type { HostRollEvent } from './rolling'
+import type { HostRollEvent, HostRolling } from './rolling'
+import type { HostChats } from './hostChats'
 import { ROLLING_TICK_MS } from './rollingWiring'
 import { createHostSlackSessions } from './slackSessions'
+import { createHostSlackSources } from './slackSources'
 
 export interface HostSlackWiring {
   notifier: SlackNotifier
@@ -41,9 +45,11 @@ export interface HostSlackWiring {
   /** slack.json read again and applied (the app's slack-reload). Never rejects. */
   reload(): Promise<void>
   onAppsChanged(): void
-  /** Task 6. */
+  /** A greeted app's `slack-event` body (slackSources.ts drops what the Host sources itself). Never throws. */
   forwarded(m: unknown): void
+  /** The rolling's tap: every roll event of a chain this Host holds. Never throws. */
   onRollEvent(e: HostRollEvent): void
+  /** The rolling's hook tap: every hook event of the profile. Never throws. */
   onHookEvent(sessionId: string, payload: unknown): void
   /** Socket closed, timers stopped. Never rejects. */
   dispose(): Promise<void>
@@ -62,57 +68,6 @@ export function hostSlackLog(profileDir: string): (m: string) => void {
   }
 }
 
-/** How long an accounts snapshot answers before a read is started again. */
-export const ACCOUNT_SNAPSHOT_MS = 15_000
-
-/** The notifier asks for an account synchronously (its message prefix), and the profile's accounts.json
- *  is read asynchronously: so the answer is the last read, and a read older than `maxAgeMs` starts
- *  another in the background. A failed read keeps the last good snapshot and is logged. Until the first
- *  read lands, no account resolves (a notice then goes without its label). Task 6 replaces this with the
- *  rolling's own snapshot (`HostRolling.account`). */
-export function createAccountSnapshot(a: {
-  read(): Promise<Account[]>
-  log(m: string): void
-  now?(): number
-  maxAgeMs?: number
-}): { of(accountId: string): Account | null } {
-  const now = a.now ?? Date.now
-  const maxAge = a.maxAgeMs ?? ACCOUNT_SNAPSHOT_MS
-  let accounts: Account[] = []
-  let readAt: number | null = null
-  let reading = false
-  const refresh = (): void => {
-    if (reading) return
-    reading = true
-    readAt = now()
-    let p: Promise<Account[]>
-    try {
-      p = a.read()
-    } catch (err) {
-      p = Promise.reject(err)
-    }
-    p.then((got) => {
-      accounts = got
-    })
-      .catch((err: unknown) => {
-        try {
-          a.log(`accounts.json could not be read for Slack: ${err instanceof Error ? err.name : 'unknown'}`)
-        } catch {
-          /* nowhere to say it */
-        }
-      })
-      .finally(() => {
-        reading = false
-      })
-  }
-  return {
-    of: (accountId) => {
-      if (readAt === null || now() - readAt >= maxAge) refresh()
-      return accounts.find((x) => x.id === accountId) ?? null
-    }
-  }
-}
-
 function defaultEvery(ms: number, fn: () => void): () => void {
   const h = setInterval(fn, ms)
   h.unref?.()
@@ -125,13 +80,18 @@ export function composeHostSlack(a: {
   registry: PtyRegistry
   procs: ProcRegistry
   statusLinePayload(sessionId: string): Promise<unknown | null>
-  accountOf(accountId: string): Account | null
+  /** The chat adapters this Host holds (their events are its own source), or null. */
+  chats: Pick<HostChats, 'has' | 'info' | 'subscribe'> | null
+  /** The rolling: which chains this Host holds (their rolls are its own source) and its accounts snapshot,
+   *  the one read of accounts.json the Host keeps (Task 6 replaces Task 5's own snapshot with it). */
+  rolling: Pick<HostRolling, 'has' | 'account'> | null
   server(): Pick<HostServer, 'appsKeep' | 'hasApp' | 'act'>
   lang(): Lang
   /** Test seams. */
   log?(m: string): void
   readConfig?(): Promise<SlackConfig>
   every?(ms: number, fn: () => void): () => void
+  findTranscript?(configDir: string, threadId: string): Promise<string | null>
 }): HostSlackWiring {
   const raw = a.log ?? hostSlackLog(a.profileDir)
   /** A log line never throws (R3). */
@@ -162,15 +122,16 @@ export function composeHostSlack(a: {
     const proc = a.procs.list().find((e) => e.alive && e.meta?.kind === 'chat' && e.meta.id === sid)
     if (proc) a.procs.note(proc.id, patch)
   }
+  const getAccount = (id: string) => {
+    try {
+      return a.rolling?.account(id) ?? null
+    } catch {
+      return null
+    }
+  }
   // R3: every dependency the notifier calls as `void this.x()` settles, whatever the source does.
   const notifier = new SlackNotifier({
-    getAccount: (id) => {
-      try {
-        return a.accountOf(id)
-      } catch {
-        return null
-      }
-    },
+    getAccount,
     readStatusPayload: (id) => {
       try {
         return Promise.resolve(a.statusLinePayload(id)).catch(() => null)
@@ -211,8 +172,38 @@ export function composeHostSlack(a: {
     },
     isQuitting: () => disposed
   })
+  // P12: the Host's own codex rollout watcher, for the codex terminal sessions with Slack only; no
+  // `remember` (the app and the spawner already note the mapping).
+  const codex = new CodexRolloutWatcher({
+    getAccount,
+    onTurnComplete: (sid, p) => {
+      try {
+        notifier.onCodexTurnComplete(sid, p)
+      } catch (err) {
+        log(`slack: a codex turn end of ${sid} could not be told: ${String(err)}`)
+      }
+    },
+    log
+  })
+  const sources = createHostSlackSources({
+    notifier,
+    chats: a.chats,
+    rolling: a.rolling,
+    codex,
+    findTranscript: a.findTranscript ?? findClaudeTranscript,
+    log
+  })
   // Built here, before `start`, so the registries are followed from composition on.
-  const sessions = createHostSlackSessions({ registry: a.registry, procs: a.procs, notifier, log, active: () => isActive })
+  const sessions = createHostSlackSessions({
+    registry: a.registry,
+    procs: a.procs,
+    notifier,
+    log,
+    active: () => isActive,
+    onRegistered: (info, restore) => sources.sessionRegistered(info, restore),
+    onNoted: (info, restore) => sources.sessionNoted(info, restore),
+    onEnded: (sid) => sources.sessionEnded(sid)
+  })
 
   let queue: Promise<void> = Promise.resolve()
   const want = (): boolean => {
@@ -243,7 +234,9 @@ export function composeHostSlack(a: {
           await inbox.apply(cfg)
           if (!isActive) log(`this Host owns Slack now (${why})`)
           isActive = true
-          sessions.reconcile()
+          // Every activation reads the notes again: a record from an earlier activation takes the thread
+          // the app noted while it kept Slack (Task 6, the Task 5 carry).
+          sessions.reconcile({ fromNotes: true })
         } else {
           if (isActive) log(`this Host leaves Slack alone (${why})`)
           isActive = false
@@ -269,15 +262,22 @@ export function composeHostSlack(a: {
     onAppsChanged: () => {
       if (started) void settle('an app attached or left')
     },
-    // Task 6.
-    forwarded: () => {},
-    onRollEvent: () => {},
-    onHookEvent: () => {},
+    forwarded: (m) => {
+      if (!disposed) sources.forwarded(m)
+    },
+    onRollEvent: (e) => {
+      if (!disposed) sources.onRollEvent(e)
+    },
+    onHookEvent: (sid, p) => {
+      if (!disposed) sources.onHookEvent(sid, p)
+    },
     dispose: async () => {
       if (disposed) return
       disposed = true
       stopTick()
       sessions.dispose()
+      sources.dispose()
+      codex.stop()
       isActive = false
       await queue
       try {

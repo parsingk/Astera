@@ -2230,6 +2230,28 @@ describe('SlackNotifier — threads kept in the session note (Slack in the Host 
     expect(h.notifier.resolveSessionByThread('ts1')).toBeNull()
   })
 
+  // Slack in the Host Task 6 (the Task 5 carry): a record kept across a stretch another process owned
+  // Slack takes the root that process noted, in the channel posted to now; nothing else.
+  it('adoptNoted prefers a newer noted root in the current channel over the record it holds', async () => {
+    const h = bot()
+    h.notifier.register(info({ id: 's1', slackNotify: true }))
+    await flush()
+    expect(h.notifier.resolveSessionByThread('ts1')).toBe('s1')
+    h.notifier.adoptNoted('s1', { ts: 'app.2', channel: 'C1' })
+    expect(h.notifier.resolveSessionByThread('ts1')).toBeNull()
+    expect(h.notifier.resolveSessionByThread('app.2')).toBe('s1')
+    h.notifier.onRollState(nudge('s1'))
+    await flush()
+    expect(h.posts.at(-1)?.thread_ts).toBe('app.2')
+    // Another channel's root, no thread, or an unknown session: nothing moves.
+    h.notifier.adoptNoted('s1', { ts: 'other', channel: 'C9' })
+    h.notifier.adoptNoted('s1', null)
+    h.notifier.adoptNoted('nope', { ts: 'x', channel: 'C1' })
+    expect(h.notifier.resolveSessionByThread('app.2')).toBe('s1')
+    expect(h.notifier.resolveSessionByThread('other')).toBeNull()
+    expect(h.notifier.resolveSessionByThread('x')).toBeNull()
+  })
+
   it('a note that cannot be written does not cost the notice', async () => {
     const h = bot({ remember: () => { throw new Error('gone') } })
     h.notifier.register(info({ id: 's1', slackNotify: true }))

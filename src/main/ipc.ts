@@ -15,7 +15,7 @@ import { readFileTail } from '../core/slack/notifier'
 import { notedThreadOf } from '../core/slack/threadNote'
 import type { SlackConfigStore } from './slackConfigStore'
 import type { SlackConfig } from '../core/slack/config'
-import type { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
+import { codexRolloutFromNote, type CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import type { AttentionState, Attention } from './attention'
@@ -631,29 +631,8 @@ export function scheduleForAdoptedSession(
   return stored(key)
 }
 
-/**
- * What the Host's note says about an adopted session's codex rollout, or null when it says nothing.
- *
- * The path is what `CodexRolloutWatcher.register` needs to attach without scanning, and null is a
- * refusal to register at all — for an adopted session the scan is not merely useless but harmful, and
- * the adopter's own note at the call site gives that argument in full. The codex session id rides
- * along because the same mapping produced it and the scheduler's store is keyed by it.
- *
- * The two fields are narrowed separately: they come from a note that crossed a process boundary, and
- * a build that wrote only the path should still get its session watched.
- *
- * A pure function for the same reason `scheduleForAdoptedSession` above is one — the adopter that
- * calls it is an electron-only closure, and "register only when the path is really there" is the
- * whole of the protection that closure is carrying.
- */
-export function codexRolloutFromNote(
-  restore: Record<string, unknown>
-): { rolloutPath: string; codexSessionId: string | null } | null {
-  const rolloutPath = restore.rolloutPath
-  if (typeof rolloutPath !== 'string' || rolloutPath === '') return null
-  const codexSessionId = restore.codexSessionId
-  return { rolloutPath, codexSessionId: typeof codexSessionId === 'string' ? codexSessionId : null }
-}
+// Moved to core with the watcher (Slack in the Host P13): the Host registers from the same note.
+export { codexRolloutFromNote }
 
 /**
  * The running chat session already on a protocol thread, if there is one. One `codex app-server` per

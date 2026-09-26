@@ -24,17 +24,26 @@ function rig(o: { active?: () => boolean } = {}) {
   const procs = new ProcRegistry({ spawn: () => { const p = proc(); procsMade.set(next, p); return p }, log: () => {} })
   const records = new Map<string, SessionInfo>()
   const trail: string[] = []
+  const noted: string[] = []
   const notifier = {
     has: (id: string) => records.has(id),
     register: (info: SessionInfo, o?: { thread?: { ts: string; channel: string } | null }) => { records.set(info.id, info); trail.push(`register ${info.id} ${o?.thread?.ts ?? '-'}`) },
     rename: (id: string, title: string) => trail.push(`rename ${id} ${title}`),
     handleData: (e: { sessionId: string }) => trail.push(`data ${e.sessionId}`),
-    handleExit: (e: { sessionId: string; exitCode: number }) => { trail.push(`exit ${e.sessionId} ${e.exitCode}`) }
+    handleExit: (e: { sessionId: string; exitCode: number }) => { trail.push(`exit ${e.sessionId} ${e.exitCode}`) },
+    adoptNoted: (id: string, t: { ts: string; channel: string } | null) => { trail.push(`adopt ${id} ${t?.ts ?? '-'}`) }
   }
-  const s = createHostSlackSessions({ registry, procs, notifier, log: () => {}, ...(o.active ? { active: o.active } : {}) })
+  const s = createHostSlackSessions({
+    registry,
+    procs,
+    notifier,
+    log: () => {},
+    onNoted: (info, restore) => noted.push(`noted ${info.id} ${String(restore.rolloutPath ?? '-')}`),
+    ...(o.active ? { active: o.active } : {})
+  })
   const openPty = (ptyId: string, m: ReturnType<typeof note>) => { next = ptyId; registry.open({ id: ptyId, file: 'x', args: [], opts, meta: m }) }
   const openChat = (procId: string, id: string, over: Record<string, unknown> = {}) => { next = procId; procs.open({ id: procId, file: 'x', args: [], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id, restore: { accountId: 'a1', cwd: 'D:/p', title: id, slackNotify: true, ...over } } }) }
-  return { registry, procs, s, trail, records, ptys, procsMade, openPty, openChat }
+  return { registry, procs, s, trail, noted, records, ptys, procsMade, openPty, openChat }
 }
 
 describe('createHostSlackSessions (Slack in the Host Task 5, spec §3.3, P7)', () => {
@@ -60,6 +69,20 @@ describe('createHostSlackSessions (Slack in the Host Task 5, spec §3.3, P7)', (
     h.records.delete('s1')
     h.s.reconcile()
     expect(h.trail.filter((t) => !t.startsWith('rename'))).toEqual(['register s1 -', 'exit s1 0', 'register s2 -'])
+  })
+
+  // Task 6 (the Task 5 carry): an activation's reconcile hands a known record its note's thread; the
+  // rolling tick's does not. A known session's note change is told on (a codex rollout noted late).
+  it('an activation reads the noted thread of a known record again, and a note change on a known session is told', () => {
+    const h = rig()
+    h.openPty('p1', note('s1', { slackThreadTs: '1.2', slackChannel: 'C1' }))
+    h.registry.note('p1', { rolloutPath: 'D:/r.jsonl' })
+    h.s.reconcile()
+    expect(h.trail.filter((t) => t.startsWith('adopt'))).toEqual([])
+    h.registry.note('p1', { slackThreadTs: '3.4' })
+    h.s.reconcile({ fromNotes: true })
+    expect(h.trail.filter((t) => t.startsWith('adopt'))).toEqual(['adopt s1 3.4'])
+    expect(h.noted).toContain('noted s1 D:/r.jsonl')
   })
 
   it('feeds output, and an exit only when no other pty or proc carries the session on', () => {
