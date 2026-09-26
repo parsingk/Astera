@@ -25,7 +25,7 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
@@ -40,7 +40,7 @@ import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
-import { createHostSessionStarter } from './sessionCreate'
+import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -387,13 +387,7 @@ async function main(): Promise<void> {
       readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
       bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
       exists: existsSync,
-      announceProc: (procId) => {
-        try {
-          server.broadcast({ t: 'proc-opened', procId }, (yields) => yields.has(HOST_YIELD_CHAT_TAKEOVER))
-        } catch (err) {
-          log.write(`proc-opened broadcast failed proc=${procId}: ${String(err)}`)
-        }
-      },
+      announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),
       list: () => hostSessions.listSessions(),
       log: (m) => log.write(m)
     }),

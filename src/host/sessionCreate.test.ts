@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createHostSessionStarter } from './sessionCreate'
+import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 import { wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import type { HostSession } from '../core/orchestration/command'
 import type { Account, SessionInfo } from '../core/types'
@@ -100,5 +100,24 @@ describe('createHostSessionStarter — sessions create, by the spawn paths the H
       expect(String(err)).toContain('without the agent CLI paths')
       expect(wasRefusedBeforeActing(err)).toBe(true)
     }
+  })
+})
+
+// Review 3, M3: a chat proc the Host opened is told only to the apps that take chat sessions back.
+describe('announceChatProc — proc-opened, to chat-takeover apps only', () => {
+  it('broadcasts proc-opened with a filter that admits only apps yielding chat-takeover', () => {
+    const sent: Array<{ m: unknown; to?: (y: ReadonlySet<string>) => boolean }> = []
+    announceChatProc({ broadcast: (m, to) => sent.push({ m, to }) }, 'proc_1', () => {})
+    expect(sent).toHaveLength(1)
+    expect(sent[0].m).toEqual({ t: 'proc-opened', procId: 'proc_1' })
+    expect(sent[0].to?.(new Set(['chat-takeover', 'dispatch']))).toBe(true)
+    expect(sent[0].to?.(new Set(['dispatch']))).toBe(false)
+    expect(sent[0].to?.(new Set())).toBe(false)
+  })
+
+  it('a broadcast that throws is logged, never thrown', () => {
+    const logs: string[] = []
+    announceChatProc({ broadcast: () => { throw new Error('socket gone') } }, 'proc_1', (m) => logs.push(m))
+    expect(logs.join(' ')).toContain('proc_1')
   })
 })

@@ -17,6 +17,7 @@
 // Imports only core modules and the Host's own: this bundles into the Host.
 import type { HostSession, SessionCreate } from '../core/orchestration/command'
 import { refusedBeforeActing } from '../core/host/orchProtocol'
+import { HOST_YIELD_CHAT_TAKEOVER, type HostMessage } from '../core/host/protocol'
 import type { Account, SessionInfo } from '../core/types'
 import type { HostChats } from './hostChats'
 import type { HostRolling } from './rolling'
@@ -101,4 +102,19 @@ export function createHostSessionStarter(d: {
   }
 
   return (o) => (o.kind === 'chat' ? chat(o) : terminal(o))
+}
+
+/** `proc-opened` for a chat proc the Host started, **to the apps that yield chat takeover only**: they
+ *  take it back the way they take a rolled chat proc, and an app that does not know chat takeover must
+ *  not adopt a proc the Host writes to. A broadcast that throws is logged; the session is running. */
+export function announceChatProc(
+  server: { broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean): void },
+  procId: string,
+  log: (m: string) => void
+): void {
+  try {
+    server.broadcast({ t: 'proc-opened', procId }, (yields) => yields.has(HOST_YIELD_CHAT_TAKEOVER))
+  } catch (err) {
+    log(`proc-opened broadcast failed proc=${procId}: ${String(err)}`)
+  }
 }
