@@ -49,6 +49,7 @@ import { lostWithNobody } from '../core/orchestration/lostGate'
 import { policyOf } from '../core/orchestration/convergence'
 import { interruptStalledTask, type OrchState } from '../core/orchestration/state'
 import { liveAppPid } from '../core/host/pidFile'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import type { HostChecks } from './checks'
 import type { HostOrch } from './orch'
 import type { PtyRegistry } from './registry'
@@ -93,7 +94,8 @@ export function createHostDriving(d: {
   checks: Pick<HostChecks, 'resumeSweep' | 'stopForeignValidations' | 'checking' | 'accounts' | 'loginStatus' | 'langNow' | 'lang'>
   /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
   startRepair(a: { dispatchId: string }): void
-  registry: Pick<PtyRegistry, 'sessionPty' | 'list'>
+  /** `sessionExitCode` answers the loop's `sessionGone` (limits pass L1); optional for the test fakes. */
+  registry: Pick<PtyRegistry, 'sessionPty' | 'list'> & Partial<Pick<PtyRegistry, 'sessionExitCode'>>
   specsDir: string
   log(m: string): void
   nowMs(): number
@@ -328,6 +330,11 @@ export function createHostDriving(d: {
     reap: reapWhileDriving,
     isRegisteredWorktree: (p) => d.worktrees.isRegistered(p),
     sessionAlive: (id) => d.registry.sessionPty(id) !== null,
+    // L1: an ended pty the registry still holds, never a session it never held (that answers null).
+    sessionGone: (id) => {
+      const ended = d.registry.sessionExitCode?.(id) ?? null
+      return ended !== null && ended.code !== PTY_LOST_SIGHT_EXIT_CODE
+    },
     sessionBusy: (id) => d.spawner.sessionBusy(id),
     typeInto: (id, text) => {
       d.spawner.typeInto(id, text)

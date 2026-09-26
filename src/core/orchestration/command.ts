@@ -33,6 +33,7 @@ import {
   jobOfRunId,
   runIdOf,
   attachCoordinator,
+  detachCoordinator,
   pauseSchedule,
   resumeSchedule,
   resumeRun,
@@ -2071,6 +2072,20 @@ export async function handleCommand(
       if (!id) return bad('--run is required')
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
+      // **`--gone <sessionId>`: the driving process saw that session end for real** (L1), with no exit
+      // release to empty the slot (its exit was never heard). The stop is confirmed as the exit release
+      // would confirm it: `detachCoordinator` empties the slot and drops the pending mark; a replacement's
+      // `paused` was written with the mark and stays. Only when the slot still names that session, so a
+      // coordinator started meanwhile is never let go; otherwise `released: null`. Nothing is stopped.
+      const gone = str(args.gone)
+      if (gone) {
+        if (run.coordinatorSessionId !== gone) return okBody({ runId: id, released: null })
+        const detached = detachCoordinator(s, { runId: id })
+        if (!detached.ok) return okBody({ runId: id, released: null })
+        await deps.setState(detached.state)
+        deps.log?.(`coordinator ${gone} of run ${id} is gone with no exit heard; its slot is emptied, the stop confirmed`)
+        return okBody({ runId: id, released: gone })
+      }
       const job = jobOf(s, run)
       if (job && runMoves(s, job, run, now)) {
         await dropStopPending(id)

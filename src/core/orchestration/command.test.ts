@@ -7073,6 +7073,25 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(run).not.toHaveProperty('coordinatorStopPending')
   })
 
+  it('L1: run-coordinator-stop --gone empties the slot the way the exit release does, and only for that session', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    await patchRun(deps, first.id, (r) => ({ ...r, coordinatorStopPending: NOW, paused: true }))
+    const other = await call(deps, 'run-coordinator-stop', { run: first.id, gone: 'coord-someone-else' })
+    expect(other.status).toBe(200)
+    expect(other.body).toMatchObject({ released: null })
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id, gone: `coord-${first.id}` })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId: first.id, released: `coord-${first.id}` })
+    expect(deps.stopped).toEqual([])
+    const run = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(run).not.toHaveProperty('coordinatorSessionId')
+    expect(run).not.toHaveProperty('coordinatorStopPending')
+    expect(run.paused).toBe(true)
+  })
+
   it('I1: the Run is committed marked as starting its coordinator, and the attach clears the mark', async () => {
     const deps = coordDeps()
     const jobId = await scheduledJob(deps)

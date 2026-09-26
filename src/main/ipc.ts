@@ -2971,6 +2971,12 @@ export function registerIpc(
       reap: (p) => reapWorktree(p),
       isRegisteredWorktree: (p) => core.worktrees.list().some((w) => isSamePath(w.path, p)),
       sessionAlive: (id) => core.sessions.list().some((x) => x.id === id && x.status !== 'exited'),
+      // L1: exited with a real code. A lost-sight exit is a Host-held session still running, and a
+      // session not in the list is one this app cannot tell about: neither confirms a stop.
+      sessionGone: (id) =>
+        core.sessions
+          .list()
+          .some((x) => x.id === id && x.status === 'exited' && x.exitCode !== undefined && x.exitCode !== PTY_LOST_SIGHT_EXIT_CODE),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
       // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).

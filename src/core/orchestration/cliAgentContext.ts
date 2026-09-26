@@ -126,7 +126,14 @@ const SESSION = {
     summary: "stop a run's coordinator once nothing is left for it to do",
     detail:
       "Refused (409) while the run still has work its coordinator can start. The app sends it when a scheduled Job's run finishes.",
-    flags: [RUN_ARG('<runId>', 'the run whose coordinator to stop')]
+    flags: [
+      RUN_ARG('<runId>', 'the run whose coordinator to stop'),
+      {
+        name: 'gone',
+        value: '<sessionId>',
+        about: "that coordinator session has already ended: empty the run's slot instead of stopping it (the app or the Host sends it)"
+      }
+    ]
   },
   'run-start-marks-clear': {
     summary: 'drop the coordinator start marks that are past their window',

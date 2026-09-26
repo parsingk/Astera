@@ -72,6 +72,12 @@ export interface DispatchLoopContext {
   reap(worktreePath: string): Promise<boolean>
   isRegisteredWorktree(p: string): boolean
   sessionAlive(sessionId: string): boolean
+  /** True only when this process **knows** the session has ended for real (limits pass L1): the Host's
+   *  registry holds an ended pty for it, or the app's session list holds it exited with a real exit code
+   *  (not PTY_LOST_SIGHT_EXIT_CODE, which is a Host-held session still running). False for a live
+   *  session and for one this process cannot tell about (never held here), so a stop is never taken as
+   *  confirmed on a guess. Optional: without it a pending stop is only retried. */
+  sessionGone?(sessionId: string): boolean
   /** true busy, false idle, null cannot tell. */
   sessionBusy(sessionId: string): boolean | null
   typeInto(sessionId: string, text: string): void
@@ -181,6 +187,20 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       if (!pending) {
         if (jobOf(s, run)?.schedule === undefined) continue
         if (outcomeOf(s, run.id) === 'running') continue
+      }
+      // **A session this process knows has ended is the stop confirmed** (L1): its exit was never heard
+      // (no exit release came), so nothing else would ever empty the slot, and a stop sent to it goes
+      // nowhere for good. The command empties the slot the way the exit release does.
+      if (c.sessionGone?.(sessionId) === true) {
+        if (!c.mayStart()) return
+        try {
+          const r = await c.handle('run-coordinator-stop', { run: run.id, gone: sessionId })
+          if (r.status >= 400) log(`run=${run.id}: releasing the slot of its ended coordinator ${sessionId} was refused: ${JSON.stringify(r.body)}`)
+          else stopRetry.delete(sessionId)
+        } catch (e) {
+          log(`run=${run.id}: releasing the slot of its ended coordinator ${sessionId} failed: ${String(e)}`)
+        }
+        continue
       }
       const nowMs = c.nowMs()
       const retry = stopRetry.get(sessionId)

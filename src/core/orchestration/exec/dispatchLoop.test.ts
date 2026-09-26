@@ -822,6 +822,49 @@ describe('a coordinator stop is retried until the session is gone (L1)', () => {
     expect(h.stopCoordinator).toHaveBeenCalledTimes(2)
   })
 
+  it('a session that ended with no exit release is taken as the stop confirmed: slot emptied, mark gone, pause kept', async () => {
+    const h = rig({ reapableChild: true })
+    const s = h.state()
+    h.setState({
+      ...s,
+      runs: s.runs.map((r) => (r.id === 'run_rc' ? { ...r, coordinatorSessionId: 'coord-rc', coordinatorStopPending: NOW, paused: true } : r))
+    })
+    h.ctx.sessionGone = (id) => id === 'coord-rc'
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+    expect(rc(h)).not.toHaveProperty('coordinatorSessionId')
+    expect(rc(h)).not.toHaveProperty('coordinatorStopPending')
+    expect(rc(h).paused).toBe(true)
+    h.clock += COORDINATOR_STOP_RETRY_MS * 4
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+  })
+
+  it('a finished scheduled Run whose coordinator already ended is released without a stop', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    h.ctx.sessionGone = () => true
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+    expect(rc(h)).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  it('a session not known to be gone is asked to stop again, as before', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    h.ctx.sessionGone = () => false
+    await h.loop.run()
+    await h.settle()
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(2)
+    expect(rc(h).coordinatorSessionId).toBe('coord-rc')
+  })
+
   it('a process that does not drive sends nothing, pending mark or not', async () => {
     const h = rig({ reapableChild: true })
     const s = h.state()
