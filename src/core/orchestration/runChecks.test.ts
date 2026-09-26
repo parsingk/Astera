@@ -150,14 +150,14 @@ describe('checksForRun', () => {
       reviewRequested: true,
       status: 'dispatched',
       reviewIssues: [
-        issue({ file: 'src/a.ts', line: 12 }),
+        issue({ file: 'app/a.py', line: 12 }),
         issue({ id: 'iss_2', severity: 'low', blocking: false, title: 'naming' })
       ]
     })
     const row = rowOf(stateWith([t], [decided], job({ convergence: {} })), 't1')
     expect(row.review).toMatchObject({ status: 'failed', verdict: 'rejected' })
     expect(row.review.issues).toHaveLength(2)
-    expect(row.failureSummary).toBe('review: HIGH missing test (src/a.ts:12)')
+    expect(row.failureSummary).toBe('review: HIGH missing test (app/a.py:12)')
   })
 
   it('with a convergence policy and no blocking issue the review passed', () => {
