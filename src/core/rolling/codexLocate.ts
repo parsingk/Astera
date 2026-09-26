@@ -1,7 +1,7 @@
 // Finds the rollout file of a codex session we spawned. At spawn time codex has not created the file
 // yet, so we do not know the session id — the coordinator polls this function and waits for the file
-// to appear. Enumerating all three levels of sessions/ is expensive, so we only look at today's and
-// yesterday's date folders.
+// to appear. Enumerating all three levels of sessions/ is expensive, so we only look at the date folders
+// the file can be in: from the day before `since` forward (scanDays).
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
@@ -16,11 +16,40 @@ import { isExecRollout, parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codex
 // "someone else's session created a few seconds ago", and excludePaths filters those out again.
 const CLOCK_SKEW_MS = 2_000
 
-/** epoch ms -> ['2026','07','09'] (local time — codex creates its folders by local date too) */
-function dateParts(ms: number): [string, string, string] {
-  const d = new Date(ms)
+/** How many date folders one search reads at most (limit L5, 2026-09-26). A live locate needs two (the
+ *  day before `since` and today), a restore bounded by `bornBefore` three; the cap only matters for a
+ *  caller that passes an old `since` with no `bornBefore`, and keeps that one from walking months of
+ *  folders on every one-second poll. Two weeks is far past any takeover a person waits for. */
+export const ROLLOUT_SCAN_DAYS_MAX = 14
+
+const DAY_MS = 24 * 60 * 60_000
+
+/** Date -> ['2026','07','09'] (local time — codex creates its folders by local date too) */
+function dateParts(d: Date): [string, string, string] {
   const pad = (n: number): string => String(n).padStart(2, '0')
   return [String(d.getFullYear()), pad(d.getMonth() + 1), pad(d.getDate())]
+}
+
+/** The date folders a file born in [since, bornBefore ?? now] can sit in, oldest first: from the day
+ *  before `since` (midnight and time zone slack, as the old "yesterday" folder was) to the day after
+ *  `bornBefore`, or to today when there is none. Walking forward from `since` and not back from today
+ *  is the point of L5: a restore taking over days after a blank-slate spawn looks where that spawn's
+ *  rollout was born, not in today's and yesterday's folders, which cannot hold it. Steps by calendar
+ *  day, so a 23- or 25-hour day at a DST change neither skips nor repeats a folder. When the window is
+ *  empty (a `since` ahead of the clock), today's and yesterday's folders are read as before. */
+function scanDays(since: number, now: number, bornBefore: number | undefined): [string, string, string][] {
+  const end = Math.min(now, bornBefore !== undefined ? bornBefore + DAY_MS : now)
+  const start = since - DAY_MS
+  if (start > end) return [dateParts(new Date(now - DAY_MS)), dateParts(new Date(now))]
+  const last = dateParts(new Date(end)).join('/')
+  const first = new Date(start)
+  const days: [string, string, string][] = []
+  for (let i = 0; i < ROLLOUT_SCAN_DAYS_MAX; i++) {
+    const day = dateParts(new Date(first.getFullYear(), first.getMonth(), first.getDate() + i))
+    days.push(day)
+    if (day.join('/') === last) break
+  }
+  return days
 }
 
 async function jsonlIn(dir: string): Promise<string[]> {
@@ -44,7 +73,7 @@ const createdAt = (st: { birthtimeMs: number; mtimeMs: number }): number =>
   st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
 
 /**
- * The one `<configDir>/sessions/<today|yesterday>/**\/rollout-*.jsonl` that was 'created' after since
+ * The one `<configDir>/sessions/<y>/<m>/<d>/rollout-*.jsonl` (the days scanDays names) that was 'created' after since
  * and whose session_meta.cwd matches cwd. If there are several, the most recently created one. null if
  * there is none.
  *
@@ -79,13 +108,8 @@ export async function findRollout(opts: {
 }): Promise<{ path: string; sessionId: string } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
-  const days = [dateParts(now), dateParts(now - 24 * 60 * 60_000)] // today + yesterday
   const files: string[] = []
-  const seen = new Set<string>()
-  for (const [y, m, d] of days) {
-    const key = `${y}/${m}/${d}`
-    if (seen.has(key)) continue // same day (e.g. in tests) — avoid scanning it twice
-    seen.add(key)
+  for (const [y, m, d] of scanDays(opts.since, now, opts.bornBefore)) {
     files.push(...(await jsonlIn(path.join(root, y, m, d))))
   }
   const excluded = new Set((opts.excludePaths ?? []).map((p) => comparablePath(p)))

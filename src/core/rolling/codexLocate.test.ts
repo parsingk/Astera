@@ -381,3 +381,80 @@ describe('exec rollout 은 세션의 파일이 아니다', () => {
     expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d66')
   })
 })
+
+// 한계 L5 (2026-09-26). 넘겨받은 restore 는 백지 재개가 spawn 된 시각(locateSince)부터 찾는데, 그
+// 인계가 며칠 뒤에 일어나면 오늘·어제 폴더에는 그 rollout 이 없다. 찾는 날짜 폴더는 locateSince 의
+// 날짜에서 앞으로 간다. birthtime 은 조작할 수 없으므로 파일을 실제 오늘 폴더에 만들고, since 를 그
+// 생성 시각에 맞춘 뒤 '현재'(now)만 며칠 뒤로 민다.
+describe('locateSince 로부터 며칠 뒤의 인계 (L5)', () => {
+  const DAY = 24 * 60 * 60_000
+  const CWD = 'D:\work\later'
+  const LOCATE_WINDOW = 60_000
+  const partsOf = (ms: number): { y: string; m: string; d: string } => {
+    const t = new Date(ms)
+    const pad = (n: number): string => String(n).padStart(2, '0')
+    return { y: String(t.getFullYear()), m: pad(t.getMonth() + 1), d: pad(t.getDate()) }
+  }
+  const bornOf = async (file: string): Promise<number> => {
+    const st = await fs.stat(file)
+    return st.birthtimeMs > 0 ? st.birthtimeMs : st.mtimeMs
+  }
+
+  it('5일 뒤의 인계도 locateSince 날짜 폴더의 rollout 을 찾는다', async () => {
+    const uuid = '019f4524-e0ac-7571-a8af-5585504f0d77'
+    const file = await makeRollout({ ...partsOf(Date.now()), uuid, cwd: CWD, mtimeMs: Date.now() })
+    const since = (await bornOf(file)) - 1_000
+    const r = await findRollout({
+      configDir: home,
+      cwd: CWD,
+      since,
+      bornBefore: since + LOCATE_WINDOW,
+      now: () => since + 5 * DAY
+    })
+    expect(r?.sessionId).toBe(uuid)
+  })
+
+  it('bornBefore 없이 오래된 since 로 찾아도 since 날짜 폴더부터 본다 (최대 ROLLOUT_SCAN_DAYS_MAX 개)', async () => {
+    const uuid = '019f4524-e0ac-7571-a8af-5585504f0d7a'
+    const file = await makeRollout({ ...partsOf(Date.now()), uuid, cwd: CWD, mtimeMs: Date.now() })
+    const since = (await bornOf(file)) - 1_000
+    const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => since + 20 * DAY })
+    expect(r?.sessionId).toBe(uuid)
+  })
+
+  it('며칠 뒤에 찾아도 locateSince 보다 먼저 태어난 rollout 은 쥐지 않는다', async () => {
+    const file = await makeRollout({
+      ...partsOf(Date.now()),
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d88',
+      cwd: CWD,
+      mtimeMs: Date.now()
+    })
+    const since = (await bornOf(file)) + 10_000 // 클럭 오차 허용치(2초)를 넉넉히 넘게 늦다
+    const r = await findRollout({
+      configDir: home,
+      cwd: CWD,
+      since,
+      bornBefore: since + LOCATE_WINDOW,
+      now: () => since + 5 * DAY
+    })
+    expect(r).toBeNull()
+  })
+
+  it('bornBefore 뒤에 태어난 rollout 도 여전히 쥐지 않는다', async () => {
+    const file = await makeRollout({
+      ...partsOf(Date.now()),
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d99',
+      cwd: CWD,
+      mtimeMs: Date.now()
+    })
+    const since = (await bornOf(file)) - LOCATE_WINDOW - 10_000
+    const r = await findRollout({
+      configDir: home,
+      cwd: CWD,
+      since,
+      bornBefore: since + LOCATE_WINDOW,
+      now: () => since + 5 * DAY
+    })
+    expect(r).toBeNull()
+  })
+})
