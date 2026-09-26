@@ -288,10 +288,13 @@ the next account or waits for a reset, the same as a tab. Its permission prompts
 from the CLI, with `astera chats answer` (see below); a session set to deny after 60 seconds is answered
 deny by the Host once 60 seconds pass with nobody able to answer from Astera. Two kinds of session are
 not taken over: the sessions of an Astera older than this version, and sessions Astera ran inside itself
-because it could not reach the Host (those end with Astera). While Astera is closed, a session the Host
-moves sends no Slack message and no desktop notice, and a chat session sends nothing to Slack at all
-until an app attaches; those come only while Astera is open. With an older Astera open, that Astera moves
-the sessions it has open, and the Host leaves those alone until it closes.
+because it could not reach the Host (those end with Astera). The Host sends every Slack notice itself,
+whether Astera is open or closed, for a tab and a chat session alike: turn notices, rolling notices, and
+permission cards. A reply typed into a session's Slack thread becomes the tab's next keystrokes or the
+chat's next turn, and a card posted there can be answered from Slack. The desktop notice still comes only
+while Astera is open. An Astera older than this version keeps its own Slack instead of yielding it to the
+Host, and a Host too old to own Slack leaves Slack to Astera, as before. With an older Astera open, that
+Astera moves the sessions it has open, and the Host leaves those alone until it closes.
 
 **Chat prompts with Astera closed.** `astera chats pending` lists the permission prompts and questions
 every chat session is waiting on, from whichever process writes to it, the Host or Astera: each with its

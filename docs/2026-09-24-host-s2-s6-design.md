@@ -1463,6 +1463,168 @@ over" entry under "Known limits after S6" points back here.
     denied the prompt automatically (`UNATTENDED_DENY_MESSAGE`), not "User declined in Astera". Codex's
     answer carries no text.
 
+## Amendments (Slack in the Host, 2026-09-26)
+
+The Slack in the Host plan (`docs/superpowers/plans/2026-09-26-slack-in-host.md`, rulings P1 to P18) and its
+spec (`docs/superpowers/specs/2026-09-26-slack-in-host-design.md`, decisions S1 to S5) let Slack keep working
+while Astera is closed: turn notices, rolling notices, replies that become the next turn or keystrokes, and
+answers to permission cards, for a tab and a chat session alike. Its execution ledger is `progress.md`, and its
+tasks' reports are `task-1-report.md` through `task-8-report.md`, all in
+`.superpowers/sdd/2026-09-26-slack-in-host/` (Task 9 is this document, Task 10 the end to end run and CI).
+Landed on `develop` from `ce533d36` through `633be4b5`. This list is the record, in A1's form.
+
+- **A95. §3.1 moves, and the SDK split (Task 1, plan P1 to P3).** The spec's §2 read the three Slack files as
+  importing no electron, true, but `slackTransport.ts` and `slackInbox.ts` import `@slack/web-api` and
+  `@slack/socket-mode` statically (a contradiction, plan ruling P1): moved as they stood, the Host bundle would
+  carry a top-level `require('@slack/...')`, and a Windows runtime shipped by an older build, whose node
+  directory has no `@slack` and which a running Host locks against repair, would fail with MODULE_NOT_FOUND
+  before the Host could log a line, no Host at all. What shipped: `git mv` of `src/main/slack.ts`,
+  `slackInbox.ts`, `slackTransport.ts` and `codexRolloutWatcher.ts` (each with its test) to
+  `src/core/slack/notifier.ts`, `inbox.ts`, `transport.ts` and `src/core/sessions/codexRolloutWatcher.ts`;
+  `createWebClient` and `createSocketClient` carved out into new `src/main/slackSdk.ts`, the app's own static
+  `@slack/*` imports, so no file under `src/core` imports the SDK. `slack.json`'s read half is carved into
+  `src/core/slack/config.ts`'s `SlackConfigReader` (`load()`, a protected `read()`), and
+  `src/main/slackConfigStore.ts`'s `SlackConfigStore extends SlackConfigReader` keeps `save()` and `patch()`
+  (P2): the Host has no object that can write the file. With no `createPoster` a bot config selects no
+  transport (P3): `applyConfig` logs `slack: no poster for bot mode` and calls `replaceTransport(null)` rather
+  than defaulting to `createWebClient` as it used to. Pinned by `src/host/importFence.test.ts`'s new case (the
+  moved files live in core, none imports `@slack/`), and the moved files' own tests, now
+  `src/core/slack/*.test.ts`, `src/main/slackConfigStore.test.ts` and `src/main/slackSdk.test.ts`.
+- **A96. §3.7's "resolved dependency closure" (Task 2, plan P14).** The design's own words undercounted:
+  `@slack/*` declare `@types/node` and `@types/retry` as runtime dependencies, and `@types/node` pulls
+  `undici-types`, none with runtime code, several MB together. What shipped: `scripts/host-runtime-scan.mjs`
+  gained `dependencyClosure(root, names, { allowNative })`, replacing `scripts/host-runtime.mjs`'s old
+  one-level-only copy: it resolves the way Node does, from each package's own directory up, skips `@types/*`
+  and `undici-types` (P14), counts installed optional dependencies and non-optional peers, and throws on a
+  required package that is missing or on a native module other than `node-pty` (a `binding.gyp`,
+  `gypfile: true`, or a `.node` file outside its own nested `node_modules`). The copy keeps a package's nested
+  `node_modules` exactly where npm put it, because a nested package is an entry of the closure in its own
+  right. Measured for real: the runtime tree carries `@slack/socket-mode`, `@slack/web-api` and `undici`, with
+  nested copies such as `@slack/web-api/node_modules/retry` and `p-queue/node_modules/eventemitter3` kept in
+  place, and no `@types` directory anywhere. Pinned by `scripts/host-runtime-scan.test.mjs`.
+- **A97. `slack-owner`, the `slack` yield, `slack-event`, `slackChatAnswer`, the SDK load and the API URL seam
+  (Task 3, plan P4, P15, P17).** What shipped in `src/core/host/protocol.ts`: the feature
+  `HOST_FEATURE_SLACK_OWNER = 'slack-owner'` (announced with `spawn`, and only by a Host whose SDK loaded), the
+  hello yield `HOST_YIELD_SLACK = 'slack'` (P4: the Host holds its socket and posts only while
+  `server.appsKeep(HOST_YIELD_SLACK)` is false, so an older app in front of a Slack-owning Host, a case §3.8
+  left open, opens its own socket before its hello and briefly shares the token with the Host, known limit,
+  below), the app-only orch-act `HOST_ACT_SLACK_ANSWER = 'slackChatAnswer'` (P10, answered beside
+  `HOST_ACT_PATH_IN_USE`, not an `OrchServerDeps` name), and the client message
+  `{ t: 'slack-event'; event: SlackForwardedEvent }` (P17, beside `blocks`: fire and forget, taken only from a
+  greeted app, a malformed one ignored and logged once). `src/host/slackSdk.ts`'s `loadSlackSdk` loads the SDK
+  once at Host start with literal `import('@slack/web-api')` and `import('@slack/socket-mode')` calls (so the
+  runtime scan's `bundlePackages` sees both names, the `@xterm/headless` precedent) and never rejects: a
+  failed import is logged by error name only, never the message, and the Host then runs with no Slack and
+  announces no `slack-owner` (Review Focus 5). `slackApiUrlFrom` (`src/core/slack/apiUrl.ts`, P15) honours
+  `ASTERA_SLACK_API_URL` only on `http:`/`https:` at `127.0.0.1`, `localhost` or `[::1]`, so a token can never
+  be sent anywhere else; both SDK constructors, the app's and the Host's, pass it through, the socket client
+  through `clientOptions.slackApiUrl`. `hostFeatures({ spawns, slack })` in `src/host/features.ts` appends
+  `slack-owner` only when both hold, and `hostSpeaksSlackOwner` in `src/main/host/outdated.ts` reads it by
+  `hostSpeaksRolling`'s own rule, so an unresponsive Host still owns Slack. `HOST_PROTOCOL` stays 3. Pinned by
+  `src/core/slack/forwarded.test.ts`, `apiUrl.test.ts`, `src/host/slackSdk.test.ts`, `features.test.ts`,
+  `src/main/host/outdated.test.ts`, `src/main/slackSdk.test.ts` and the widened `src/host/importFence.test.ts`.
+- **A98. §3.5, threads in the note (Task 4, plan P8, P9).** The spec's "on a roll the entry moves to the new
+  session id with the rest of the note" assumed a note is copied on a roll; none is, a rolled pty's or proc's
+  note is built fresh from the spawn options, in two coordinators and two spawn paths (a contradiction, plan
+  P8). What shipped: `src/core/slack/threadNote.ts`'s `NotedThread`, `notedThreadOf` and `threadNotePatch`;
+  `SlackNotifier` gains a `channel`, a private `note()` and `seedNoted()`, and `register(info, { thread })`
+  seeds the record from a noted thread in the current channel before opening a root, dropping a thread noted
+  in another channel; `onRolled` notes the new id's thread once the inherited root resolves, one place for the
+  app's rolls and the Host's alike. The thread keys are written by whoever owns Slack, ungated, through the
+  registry's own note (P9): the Host with `registry.note`/`procs.note` directly, the app through
+  `core.sessions.remember`/`core.chat.remember`; a note is storage, merged per key. Both app adopters (the pty
+  and the chat adopter) now call `register(info, { thread: notedThreadOf(a.restore) })`. Pinned by
+  `src/core/slack/threadNote.test.ts`, `src/core/slack/notifier.test.ts` and a text guard in
+  `src/main/chatAdopt.test.ts`.
+- **A99. §3.2 and §3.4, the Host's composition, the registries' `onMeta`, the read-only reader and
+  `slack-reload` (Task 5, plan P7, P16).** The spec's "register/forget follow the Host's own session list"
+  assumed the registries already announce a session; neither `PtyRegistry` nor `ProcRegistry` did (a
+  contradiction, plan P7). What shipped: both gain an additive `onMeta(cb)`, fired at `open` with a note and
+  after every `note` merge, isolated like `onData`; `src/host/slackSessions.ts`'s `createHostSlackSessions`
+  registers a live entry whose note reads as a session with `slackNotify: true`, with its noted thread, renames
+  a known one from its note, and holds a rolled entry's new record back while the notifier still holds the
+  session its `rolledFrom` names, so the periodic `reconcile()` is the net that catches it once the old record
+  is gone. Registration runs only while the Host is active, an addition beyond the brief: a record made while
+  an app keeps Slack would hold `noted: null`, and the activation would post a second root, exactly Review
+  Focus 4's failure, so `createHostSlackSessions` takes an `active()` gate and only the activation's own
+  `reconcile` registers from the notes as they stand at that moment; output and exits are still fed while
+  inactive. `src/host/slackWiring.ts`'s `composeHostSlack` serializes every ownership change through one
+  `settle` queue, reading `server.appsKeep(HOST_YIELD_SLACK)` when it runs: active builds the config read,
+  `applyConfig`, `inbox.apply`, then `reconcile`; inactive tears the transport and the inbox down.
+  `hostSlackLog` writes `<profile>/slack.log`, lines prefixed `[host]` (P16, the twin of S6's shared
+  `rolling.log`). `HostOrchDeps.slack` answers the app-only orch-call `slack-reload` beside `roll-journal`: 403
+  to a non-app caller, 501 with no Slack, 400 with a request id, otherwise 200 `{ reloaded, active }`. Every R3
+  wrapper the constraint asks for is in place (`getAccount`, `readStatusPayload`, `lang`, `log`, a throwing
+  `createClient`, a throwing `appsKeep` read as "keeps"). Pinned by `src/host/registry.test.ts`,
+  `procRegistry.test.ts`, `slackSessions.test.ts`, `slackWiring.test.ts` (including the two single-socket
+  races, Review Focus 1's Host half) and `src/host/orch.test.ts`.
+- **A100. §3.3, the Host's sources and the forwarded intake (Task 6, plan P6, P11 to P13).** What shipped: the
+  exit of every session, terminal and chat, is the Host's alone (P6, the notifier already reads an exit only
+  through `handleExit`, never `onChatEvent`), so the app forwards only the four chat events the notifier reads
+  (`ready`, `status`, `request`, `error`, `isForwardedChatEvent`), never an exit. `src/host/slackSources.ts`'s
+  `createHostSlackSources` feeds the notifier from the hook watcher (through a new `HostRollingDeps.hookTap`),
+  the Host's own codex rollout watcher, `HostChats` events and the Host's own rolling chains'
+  `roll-state`/`session-rolled`, and drops a forwarded event for a session the Host sources itself, so a notice
+  is posted once whichever side saw it (Review Focus 2), pinned past the notifier's own 10 minute dedup window
+  by a clock that moves 11 minutes between the two copies. A forwarded chat event carries its `accountId` and
+  the transcript path the app already knows at forward time (P11), because the app's own path getter cannot be
+  re-read from a forwarded snapshot; the Host resolves a missing claude path itself with
+  `findClaudeTranscript`, retried on `status`. The Host's own codex rollout watcher watches only a codex
+  terminal session with `slackNotify` (P12, the app's own watcher stays for its usage chips, which the Host
+  has no use for), and, departing from the brief, only once the session's note names a `rolloutPath`, never
+  from a `since: now` scan: such a scan cannot find a file created before a late registration and would race
+  the Host spawner's own locate at spawn time, so `codexRolloutFromNote` moves to core with the watcher (P13,
+  `src/main/ipc.ts` re-exports it) and the watch starts from the registries' new `onNoted` hook instead. Pinned
+  by `src/host/slackSources.test.ts`, `rolling.test.ts`, `rolling.integration.test.ts` and
+  `src/host/slackWiring.test.ts`.
+- **A101. §3.4, inbox routing and the card answers (Task 7, plan P10, P18).** The spec's "the same writer rule
+  as chats answer" shares the rule, not the payload (a contradiction, plan P10): `chats answer` answers
+  approvals only, and `chatAnswer` carries `allow|deny`, but a Slack reply answers a question's numbers too, as
+  the app's inbox does today. What shipped: `HostChats.answerCard(sid, requestId, ChatAnswer)`, refused "not the
+  writer" with nothing written when the Host is not the writer, otherwise routed through `manager.answer` so
+  the adapter's own `request` event reviews the unattended policy and the policy's timer re-reads the open
+  list; `src/host/slackRoutes.ts`'s `hostInboxRoutes` types a terminal reply into its pty through the registry,
+  and delivers a chat reply or a card answer through the Host's own adapter when the Host is the writer,
+  otherwise through the app (`chatSend` for a turn, the new `slackChatAnswer` orch-act for a card), refused
+  with "nobody holds this session right now" when no app is attached. Which card a reply answers (P18):
+  `HostChats.requests` (less the note's answered ids) for a session with a Host adapter, otherwise the card the
+  notifier last heard from a forwarded `request` event (`chatRequestOf`). `src/main/slackAnswer.ts`'s
+  `answerSlackCard` never rejects, and answers `bad-args`, `not-held`, or `not-open` for "no open request"
+  specifically. Beyond the brief: `answerCard` also refuses a card the note already lists as answered, so a
+  second answer to one is never applied twice. Pinned by `src/host/hostChats.test.ts`, `slackRoutes.test.ts`,
+  `src/main/slackAnswer.test.ts`, the widened `notifier.test.ts` (`chatRequestOf`) and `slackWiring.test.ts`.
+- **A102. §3.2 and §3.6, the app's ownership and the offline gate (Task 8, plan P5).** What shipped:
+  `src/main/slackOwnership.ts`'s `createSlackOwnership` replaces the start time
+  `slackStore.load().then(...)`: the app applies no config until `hostSessionsTakenBack` settles, or yields at
+  once to a `slack-owner` status seen before then, and after a Slack-owning Host stops being there it waits
+  `SLACK_HANDBACK_MS` (15 s) before building its own socket, cancelled by a `slack-owner` handshake inside the
+  wait (P5). Three intakes are gated on `owner() !== 'host'`: the codex turn callback, the hook fan-out's Slack
+  tap, and the roll tap (which forwards instead, as `slack-event`, while the Host owns). `slack.setConfig` now
+  sends the app-only `slack-reload` call after the file write, and the offline summary's Slack line is skipped
+  while `hostPostsSlack()` (`src/main/host/offlineRolls.ts`), so the desktop aggregate still sends but Slack
+  does not get a duplicate. The app's hello gains the yield `HOST_YIELD_SLACK` (`src/main/host/client.ts`),
+  left out while the app itself keeps Slack, a fix beyond the brief, below. Beyond the brief, three carries:
+  the chat bypass retry now carries the noted thread forward (`ChatSessionManager.remember` copies the thread
+  keys, `THREAD_NOTE_KEYS`, into `live.retry`, a new `spawnNote(id)`), closing Task 4's own concern about a
+  second root after a bypass respawn; an app's forwarded roll and its new pty's note are proven to land in
+  either order with no second root, because the coordinators already send `session:rolled` synchronously right
+  after the spawn; and `helloKeeps()`, an addition the brief did not carry, makes the app's hello omit the
+  `slack` yield while the app itself still holds the socket, so a yield sent on every hello cannot make the
+  Host open a second socket the instant before the app's own asynchronous teardown finishes (known limits,
+  below). Pinned by `src/main/slackOwnership.test.ts` (Review Focus 1, the app half of the single-socket
+  invariant), `offlineRolls.test.ts`, `client.test.ts`, `src/core/chat/manager.test.ts` and
+  `slackWiring.test.ts`.
+- **A103. §7.2's additions.** The table has no Slack-in-the-Host rows. What shipped, none of it a protocol
+  bump, `HOST_PROTOCOL` stays 3: the feature `slack-owner`, announced with `spawn`; the `hello.yields` value
+  `slack`, sent by a new app once its startup chain settles or it keeps Slack itself; the client message
+  `{ t: 'slack-event'; event: SlackForwardedEvent }`, from a greeted app to a `slack-owner` Host only; the
+  app-only internal `orch-call` `slack-reload` beside `roll-journal`; the internal `orch-act`
+  `slackChatAnswer` (`HOST_ACT_SLACK_ANSWER`), Host to app, role app only; and the note keys `slackThreadTs`
+  and `slackChannel`, read and written by whichever side owns Slack. See the row added to §7.2's table below.
+- **A104. After the final review and the end to end run.** Not run as of this document: Task 9 (this document)
+  lands before Task 10, the end to end pass with a fake Slack and CI on three OS. Recorded here, in A94's
+  form, once Task 10 completes.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -1779,9 +1941,10 @@ at `3db032df`.
 - **A session held on a permission prompt under `hold` waits for someone** (spec §4). With nobody there
   to answer, the turn does not go on until a person answers it from the CLI, with `astera chats answer`,
   or opens Astera.
-- **Slack does not see a chat turn the Host owns**, until an app attaches (spec §4). The offline journal
-  (Amendments A77, A78) covers rolls, not a chat session's own turns; while no app is open its conversation
-  reaches Slack not at all.
+- **Slack does not see a chat turn the Host owns**, until an app attaches (spec §4). (resolved by Slack in
+  the Host, see Amendments A100: the Host feeds its notifier from its own `HostChats` events for every chat
+  whose adapter it holds, whichever process owns Slack) The offline journal (Amendments A77, A78) covers
+  rolls, not a chat session's own turns; while no app is open its conversation reaches Slack not at all.
 - **The conversation view rebuilds from a 1 MB replay buffer** (spec §4), the same buffer a pty replay
   already used. A very long unattended stretch can exceed it, as it can today.
 - **A carry-on lost between its mark and its write is not re-sent** (Amendments A87, A88; plan P4).
@@ -1843,6 +2006,58 @@ at `3db032df`.
 - **A re-pointed tab after a reconnect carries no codex `dest`.** The note the re-point reads from keeps
   none, so a codex chat roll's rollout watcher falls back to its own search after a re-point, until the
   chat's own `ready` registers the path.
+
+## Known limits after Slack in the Host
+
+Each was found while building or reviewing Slack in the Host and left as it is, with its reason. Checked at
+`633be4b5`.
+
+- **An installed build and a dev build that share one Slack app token still split replies** (spec §4). Slack
+  delivers each socket-mode event to one of the connections sharing an app token, and the other only hears
+  that the session has ended. The dev profile's own Slack intake stays off for this reason (project memory
+  `dev-slack-intake-disabled`).
+- **Right after a Host restart, a terminal session's pending tool is unknown** (spec §4). The hook event
+  watcher starts at the Host's own start, not before, so a reply typed into a fresh Host's Slack thread types
+  plain text into the pty rather than the choice key a known pending tool would pick (`pendingChoiceShape`);
+  that is today's own fallback, not a regression (Task 7).
+- **Webhook-only setups have no threads and no inbox**, as today (spec §4). A webhook posts one message per
+  notice with no thread to reply into, and opens no socket-mode connection, whichever process holds Slack.
+- **The Slack tokens are readable by a second long-lived process of the same user** (spec §4). `slack.json` is
+  already plain JSON in the profile folder; the Host reading it too is no new exposure.
+- **An older app in front of a Slack-owning Host briefly opens a second socket** (plan P4). Its socket opens
+  before its hello does, so for the moment between the two, both the Host's socket and the older app's socket
+  exist on the same token.
+- **The app takes up to 15 seconds with no Slack intake after a Slack-owning Host goes away**
+  (`SLACK_HANDBACK_MS`, plan P5). Its own sessions went with the Host anyway, so nothing that mattered was
+  listening in that window.
+- **A role-less app from before this feature (v1.3.17 to v1.3.25) is not seen by `appsKeep`, and counts as a
+  CLI** (the S6 pre-flight finding this document already carries, preflight C17). Such an app opens its own
+  Slack socket beside a Host that, seeing no attached app keep Slack, believes itself active too.
+- **The first roll event a Host misses because it was not yet running leaves its new session to the next
+  tick's reconcile, briefly a new root.** The deferral that holds a rolled session's new pty back (Amendments
+  A99, plan P7) works only while the notifier already holds the session its `rolledFrom` names; a Host that
+  starts after the roll happened holds nothing, registers the new entry at once, and only a later active
+  settle's `reconcile({ fromNotes: true })` (Amendments A100) can pull the thread back from the note, once
+  something has written it there.
+- **A codex terminal session adopted with no rollout path yet noted is watched only from a new file.** The
+  Host's own rollout watcher starts a session's watch from its note's `rolloutPath` rather than a backward
+  scan (Amendments A100), so turns already written to an existing rollout before the note named it are never
+  read; only a file written from that point on is seen.
+- **An inactive Host still updates its own notifier records, but posts nothing.** Hook events, the Host's
+  rolling chains and its codex turns keep reaching the notifier while an app keeps Slack, so a record's dedup
+  window and chat state keep moving with no transport behind them (Task 6). Harmless while the app is the one
+  actually posting.
+- **After a Host outage longer than 15 seconds, the app keeps Slack until it quits**, even once a new
+  Slack-owning Host attaches (Task 8). S1 still holds, because Slack still moves to the Host the moment Astera
+  closes; a clean mid-connection handover back to the Host would need an additive yields-update message, not
+  built.
+- **A Host that takes a yielding hello and then stays silent for longer than a full grace can briefly overlap
+  the app's own socket**, until its reply arrives and the app yields at once (Task 8). The same class of
+  window as the older-app case above.
+- **Sessions spawned while the Host owned Slack get new roots if Astera takes ownership back mid-run.** The
+  app's notifier still registers every spawn and adopt with no transport and no posts while the Host owns
+  Slack, but such a session has no noted thread in the app's own record; per plan P5 those sessions went with
+  the Host, and a hand-back finds nothing noted to resume (Task 8).
 
 ## 0. The problem, measured
 
@@ -2509,6 +2724,12 @@ Host. No change here needs a bump:
 | chat takeover | `session-rolled` gains `procId?: string` | Host to all greeted clients |
 | chat takeover | internal `orch-act` `chatPrompts`, `chatAnswer` (`HOST_CHATS`) | Host to app, role app only |
 | chat takeover | note keys `unattendedPermission`, `chosenModel`, `carryOn`, `carrySent`, `hostStarting` | proc note (not the wire) |
+| Slack in the Host | feature `slack-owner` | Host hello |
+| Slack in the Host | `hello.yields` value `slack` | app to Host |
+| Slack in the Host | `{ t: 'slack-event'; event: SlackForwardedEvent }` | app to Host, role app only |
+| Slack in the Host | internal `orch-call` `slack-reload` | app to Host, role app only |
+| Slack in the Host | internal `orch-act` `slackChatAnswer` (`HOST_ACT_SLACK_ANSWER`) | Host to app, role app only |
+| Slack in the Host | note keys `slackThreadTs`, `slackChannel` | session/proc note (not the wire) |
 
 (amended 2026-09-24, see Amendments A20: the S3 rows are not the whole mechanism; an internal
 `orch-call` `worktree-list` (app to Host, role app only) and a push `{ t: 'worktrees-state', seq, file
@@ -2518,6 +2739,9 @@ Host. No change here needs a bump:
 
 (amended for the chat takeover, see Amendments A93: the feature, the yield, `procId`, the two `orch-act`s
 and the note keys above, none of which bumps the protocol)
+
+(amended for Slack in the Host, see Amendments A103: the feature, the yield, `slack-event`, `slack-reload`,
+`slackChatAnswer` and the note keys above, none of which bumps the protocol)
 
 ### 7.3 Version skew
 
