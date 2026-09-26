@@ -167,10 +167,11 @@ describe('the Host import fence (constraint 10)', () => {
 
   // Host journal Task 1 (spec design 1): the journal and the recorder the Host writes with live in core.
   it('the continuity journal and recorder live in core/continuity and are inside the fence', () => {
-    const moved = ['journal.ts', 'recorder.ts'].map((f) => path.join(srcRoot, 'core', 'continuity', f))
+    const moved = ['journal.ts', 'recorder.ts', 'journalReader.ts', 'actor.ts', 'timelineRows.ts', 'promptWrite.ts', 'journalOps.ts'].map((f) => path.join(srcRoot, 'core', 'continuity', f))
     for (const f of moved) expect(existsSync(f), f).toBe(true)
     expect(existsSync(path.join(srcRoot, 'main', 'continuity', 'journal.ts'))).toBe(false)
     expect(existsSync(path.join(srcRoot, 'main', 'continuity', 'recorder.ts'))).toBe(false)
     expect(fenceViolations(srcRoot, moved)).toEqual([])
+    expect(fenceViolations(srcRoot, [path.join(here, 'hostJournal.ts')])).toEqual([])
   })
 })

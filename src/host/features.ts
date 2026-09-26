@@ -4,6 +4,7 @@ import {
   HOST_FEATURE_COORDINATOR_IDLE,
   HOST_FEATURE_DISPATCH,
   HOST_FEATURE_DRIVER,
+  HOST_FEATURE_JOURNAL,
   HOST_FEATURE_ROLLING,
   HOST_FEATURE_ROLL_JOURNAL,
   HOST_FEATURE_SLACK_OWNER,
@@ -23,5 +24,6 @@ export function hostFeatures(a: { spawns: boolean; slack?: boolean }): string[] 
   if (a.spawns && a.slack === true) spawning.push(HOST_FEATURE_SLACK_OWNER)
   // `coordinator-idle` (final round 3) does not ride that fact: every Host serves the CLI's
   // `check --wait`, spawner or not, and it is exactly the Host an app drives in front of that is asked.
-  return [...spawning, HOST_FEATURE_COORDINATOR_IDLE]
+  // `journal` (Host journal P6) rides no spawner either: every Host commits.
+  return [...spawning, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_JOURNAL]
 }

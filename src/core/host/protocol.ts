@@ -125,6 +125,10 @@ export const HOST_FEATURE_CHAT_TAKEOVER = 'chat-takeover'
  *  Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_SLACK_OWNER = 'slack-owner'
 
+/** The Host writes the Job Journal (Host journal J1, J2) and answers the app-only `journal-append` and
+ *  `journal-reload`. Announced by every Host (plan ruling P6). */
+export const HOST_FEATURE_JOURNAL = 'journal'
+
 /** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
  *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
  *  a reader folds a chain onto its live id. A `state` entry carries the roll state and its fields. */
@@ -172,6 +176,9 @@ export const HOST_YIELD_CHAT_TAKEOVER = 'chat-takeover'
 /** `hello.yields` value: this app opens no Slack socket and posts nothing while its Host announces
  *  `slack-owner`, forwards the events only it sees, and answers slackChatAnswer (P4). */
 export const HOST_YIELD_SLACK = 'slack'
+/** `hello.yields` value: this app writes no journal row while its Host announces `journal`; it reads the
+ *  file read-only and sends its reconciler's rows through `journal-append` (J2, J3). */
+export const HOST_YIELD_JOURNAL = 'journal'
 
 /** The `orch-act` a Host sends an attached app before it removes a worktree folder (S3, the ruling
  *  on plan risk 3). Args `[path]`. The app answers the tag of anything **it runs itself, not
