@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { findRollout } from './codexLocate'
+import { findRollout, ROLLOUT_SCAN_DAYS_MAX } from './codexLocate'
 import { absPath, foldsCaseHere } from '../testPaths'
 
 let home: string
@@ -425,12 +425,35 @@ describe('locateSince 로부터 며칠 뒤의 인계 (L5)', () => {
     expect(r?.sessionId).toBe(uuid)
   })
 
-  it('그 대신 오늘에서 ROLLOUT_SCAN_DAYS_MAX 개를 넘게 거슬러 간 since 날짜 폴더는 읽지 않는다', async () => {
+  // LP-3: a limit probe of a worker started more than ROLLOUT_SCAN_DAYS_MAX days ago passes that old
+  // `since` and no `bornBefore`. Its rollout was born in `since`'s folder, so the window keeps the folders
+  // anchored at `since` besides the newest ones.
+  it('bornBefore 없이 오늘에서 ROLLOUT_SCAN_DAYS_MAX 개를 넘게 거슬러 간 since 라도 since 날짜 폴더의 rollout 을 찾는다 (LP-3)', async () => {
     const uuid = '019f4524-e0ac-7571-a8af-5585504f0d7b'
     const file = await makeRollout({ ...partsOf(Date.now()), uuid, cwd: CWD, mtimeMs: Date.now() })
     const since = (await bornOf(file)) - 1_000
     const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => since + 20 * DAY })
-    expect(r).toBeNull()
+    expect(r?.sessionId).toBe(uuid)
+  })
+
+  it('since 에 닻을 내린 폴더를 읽어도 읽는 폴더 수는 ROLLOUT_SCAN_DAYS_MAX 를 넘지 않는다 (LP-3)', async () => {
+    const since = Date.now()
+    const read: string[] = []
+    const realReaddir = fs.readdir
+    ;(fs as { readdir: unknown }).readdir = async (dir: string, ...rest: unknown[]) => {
+      read.push(dir)
+      return (realReaddir as (...a: unknown[]) => Promise<unknown>)(dir, ...rest)
+    }
+    try {
+      await findRollout({ configDir: home, cwd: CWD, since, now: () => since + 60 * DAY })
+    } finally {
+      ;(fs as { readdir: unknown }).readdir = realReaddir
+    }
+    expect(read.length).toBe(ROLLOUT_SCAN_DAYS_MAX)
+    const p = partsOf(since)
+    expect(read).toContain(path.join(home, 'sessions', p.y, p.m, p.d))
+    const t = partsOf(since + 60 * DAY)
+    expect(read).toContain(path.join(home, 'sessions', t.y, t.m, t.d))
   })
 
   it('며칠 뒤에 찾아도 locateSince 보다 먼저 태어난 rollout 은 쥐지 않는다', async () => {

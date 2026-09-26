@@ -20,8 +20,10 @@ const CLOCK_SKEW_MS = 2_000
  *  day before `since` and today), a restore bounded by `bornBefore` three; the cap only matters for a
  *  caller that passes an old `since` with no `bornBefore`, and keeps that one from walking months of
  *  folders on every poll. When the window is longer, the newest folders are kept, the ones ending at
- *  `end`: such a caller (a limit probe of a long worker) is after a file born lately, and among the files
- *  born after `since` the newest wins anyway. Two weeks is far past any takeover a person waits for. */
+ *  `end`, and with no `bornBefore` the three folders anchored at `since` replace the oldest of them
+ *  (LP-3): a limit probe of a long worker still reads the folder its rollout was born in, and among the
+ *  files born after `since` the newest wins anyway. The folders between are not read. Two weeks is far
+ *  past any takeover a person waits for. */
 export const ROLLOUT_SCAN_DAYS_MAX = 14
 
 /** One day in ms. Exported for a caller that bounds its own `since` to keep a frequent search cheap
@@ -33,6 +35,10 @@ function dateParts(d: Date): [string, string, string] {
   const pad = (n: number): string => String(n).padStart(2, '0')
   return [String(d.getFullYear()), pad(d.getMonth() + 1), pad(d.getDate())]
 }
+
+/** How many folders a long window with no `bornBefore` keeps anchored at `since` (LP-3): the day before
+ *  `since`, its own day and the day after, the same slack a live locate reads. */
+const SINCE_ANCHOR_DAYS = 3
 
 /** The date folders a file born in [since, bornBefore ?? now] can sit in, oldest first: from the day
  *  before `since` (midnight and time zone slack, as the old "yesterday" folder was) to the day after
@@ -54,6 +60,15 @@ function scanDays(since: number, now: number, bornBefore: number | undefined): [
     const day = dateParts(new Date(last.getFullYear(), last.getMonth(), last.getDate() - i))
     days.unshift(day)
     if (day.join('/') === first) break
+  }
+  // LP-3: a window longer than the cap with no `bornBefore` (a limit probe of a worker started weeks
+  // ago) also keeps the SINCE_ANCHOR_DAYS folders anchored at `since`, where that worker's rollout was
+  // born, in place of the oldest of the newest ones. Still ROLLOUT_SCAN_DAYS_MAX folders in all.
+  if (bornBefore === undefined && days[0].join('/') !== first) {
+    const s = new Date(start)
+    const head: [string, string, string][] = []
+    for (let i = 0; i < SINCE_ANCHOR_DAYS; i++) head.push(dateParts(new Date(s.getFullYear(), s.getMonth(), s.getDate() + i)))
+    return [...head, ...days.slice(SINCE_ANCHOR_DAYS)]
   }
   return days
 }
