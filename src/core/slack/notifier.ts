@@ -313,6 +313,12 @@ export class SlackNotifier {
     this.threadIndex.set(n.ts, record.info.id)
   }
 
+  /** Whether this notifier holds a record for the session: registered and not yet ended (its exit timer
+   *  deletes it) or re-keyed by a roll. The Host's registration reads it (Slack in the Host, P7). */
+  has(sessionId: string): boolean {
+    return this.records.has(sessionId)
+  }
+
   /** The tab was renamed. Updates this record's copy so later messages carry the new prefix.
    *
    *  A copy is what makes this necessary: `SessionManager.spawn` returns `{ ...info }`, so the record

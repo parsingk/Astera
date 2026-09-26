@@ -103,8 +103,12 @@ export class PtyRegistry {
   // the same output and exits, and a second subscriber must not silently disconnect the first.
   private readonly dataCbs = new Set<(id: string, data: string) => void>()
   private readonly exitCbs = new Set<(id: string, exitCode: number) => void>()
+  /** Every listener hears a note: at open (when the pty has one) and after every merge (Slack in the
+   *  Host, P7). Neither the spawner nor the app's bridge needs this; the Host's Slack does, to register a
+   *  session the moment its pty opens and to rename it from its note. */
+  private readonly metaCbs = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
   /** Listeners that have thrown, by kind, so each is logged once and not on every chunk. */
-  private readonly failedCbs = { data: new Set<unknown>(), exit: new Set<unknown>() }
+  private readonly failedCbs = { data: new Set<unknown>(), exit: new Set<unknown>(), meta: new Set<unknown>() }
   private readonly deps: PtyRegistryDeps
   /** `slice(-0)` returns the whole string, so a scrollback of 0 would turn the cap off rather than
    *  down. One character is the smallest honest answer to "keep almost nothing". Computed once here,
@@ -117,14 +121,34 @@ export class PtyRegistry {
     this.scrollback = Math.max(1, deps.scrollback ?? SCROLLBACK_CHARS)
   }
 
-  /** Adds a listener; every one registered hears every chunk. */
-  onData(cb: (id: string, data: string) => void): void {
+  /** Adds a listener; every one registered hears every chunk. Returns the unsubscribe. */
+  onData(cb: (id: string, data: string) => void): () => void {
     this.dataCbs.add(cb)
+    return () => {
+      this.dataCbs.delete(cb)
+    }
   }
 
-  /** Adds a listener; every one registered hears every exit, after `exitCode` is recorded. */
-  onExit(cb: (id: string, exitCode: number) => void): void {
+  /** Adds a listener; every one registered hears every exit, after `exitCode` is recorded. Returns the
+   *  unsubscribe. */
+  onExit(cb: (id: string, exitCode: number) => void): () => void {
     this.exitCbs.add(cb)
+    return () => {
+      this.exitCbs.delete(cb)
+    }
+  }
+
+  /** Adds a listener for an entry's note: at open (when it has one) and after every merge. Isolated like
+   *  onData: a throw is logged once and costs no other listener. Returns the unsubscribe. */
+  onMeta(cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void): () => void {
+    this.metaCbs.add(cb)
+    return () => {
+      this.metaCbs.delete(cb)
+    }
+  }
+
+  private tellMeta(id: string, meta: PtyMeta, why: 'open' | 'note'): void {
+    for (const cb of [...this.metaCbs]) this.tell(cb, 'meta', id, () => cb(id, meta, why))
   }
 
   open(a: {
@@ -195,6 +219,9 @@ export class PtyRegistry {
       if (entry.meta?.kind !== 'session') this.pruneEnded(a.id)
     })
     this.deps.log(`pty ${a.id} started, pid ${pty.pid}`)
+    // After the entry is in place and its handlers are set, so a listener that asks the registry about
+    // this pty (`sessionPty`, `metaOf`) finds it.
+    if (entry.meta) this.tellMeta(a.id, entry.meta, 'open')
     return { ok: true, pid: pty.pid }
   }
 
@@ -217,7 +244,7 @@ export class PtyRegistry {
    *  broadcast among them) and then escape into node-pty's own event handler, where nothing catches it
    *  and the Host exits with every pty it holds. Logged once per listener and kind, because a
    *  listener that throws on one chunk usually throws on every chunk. */
-  private tell(cb: unknown, kind: 'data' | 'exit', id: string, call: () => void): void {
+  private tell(cb: unknown, kind: 'data' | 'exit' | 'meta', id: string, call: () => void): void {
     try {
       call()
     } catch (err) {
@@ -290,6 +317,7 @@ export class PtyRegistry {
     // A new object rather than a mutation: `list` hands the meta out by reference, and an entry
     // already reported must not change under whoever is holding it.
     e.meta = { ...e.meta, restore: { ...e.meta.restore, ...patch } }
+    this.tellMeta(id, e.meta, 'note')
   }
 
   /** The scrollback, or empty for an id that was never here — and empty, too, for one that has ended,

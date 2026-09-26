@@ -2519,6 +2519,19 @@ describe('Host-local spawn (S2)', () => {
     expect((await orch.call({ cmd: 'roll-journal', args: {}, sessionId: '', from: app, request: 'q1' })).status).toBe(400)
     expect(rollJournal.take).toHaveBeenCalledTimes(2)
   })
+  it('answers slack-reload for the app only, and 501 on a Host without Slack (Slack in the Host Task 5, P17)', async () => {
+    const slack = { reload: vi.fn(async () => {}), active: () => true }
+    const orch = orchOver({ slack })
+    const app = { role: 'app' as const, toOthers: () => {} }
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    expect(await orch.call({ cmd: 'slack-reload', args: {}, sessionId: '', from: app })).toMatchObject({ status: 200, body: { reloaded: true, active: true } })
+    expect(slack.reload).toHaveBeenCalledTimes(1)
+    expect((await orch.call({ cmd: 'slack-reload', args: {}, sessionId: '', from: cli })).status).toBe(403)
+    expect((await orch.call({ cmd: 'slack-reload', args: {}, sessionId: '' })).status).toBe(403)
+    expect((await orch.call({ cmd: 'slack-reload', args: {}, sessionId: '', from: app, request: 'q1' })).status).toBe(400)
+    expect((await orchOver().call({ cmd: 'slack-reload', args: {}, sessionId: '', from: app })).status).toBe(501)
+    expect(slack.reload).toHaveBeenCalledTimes(1)
+  })
   // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
   // refused, and the Dispatch is not marked stopped over a worker that is still running.
   it('forwards the stop of a worker the Host does not hold, and refuses it honestly with no app', async () => {

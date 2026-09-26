@@ -275,3 +275,29 @@ describe('ProcRegistry — listeners (chat takeover P13)', () => {
     expect(h.logs.some((l) => l.includes('boom'))).toBe(true)
   })
 })
+
+describe('ProcRegistry.onMeta (Slack in the Host, P7)', () => {
+  it('tells a note at open and after each merge, and nothing for a proc with no note', () => {
+    const h = harness()
+    const heard: Array<[string, string, unknown]> = []
+    h.registry.onMeta((id, m, why) => heard.push([id, why, m.restore.title]))
+    h.open('p1', meta({ restore: { title: 'a' } }))
+    h.open('p2', null)
+    h.registry.note('p1', { title: 'b' })
+    h.registry.note('p2', { title: 'c' })
+    expect(heard).toEqual([['p1', 'open', 'a'], ['p1', 'note', 'b']])
+  })
+  it('isolates a listener that throws, logs it once, and unsubscribes', () => {
+    const h = harness()
+    const heard: string[] = []
+    h.registry.onMeta(() => { throw new Error('boom') })
+    const off = h.registry.onMeta((id) => heard.push(id))
+    h.open('p1')
+    h.registry.note('p1', { x: 1 })
+    expect(heard).toEqual(['p1', 'p1'])
+    expect(h.logs.filter((l) => /a meta listener threw/.test(l))).toHaveLength(1)
+    off()
+    h.registry.note('p1', { x: 2 })
+    expect(heard).toEqual(['p1', 'p1'])
+  })
+})

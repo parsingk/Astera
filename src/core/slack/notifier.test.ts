@@ -2238,3 +2238,23 @@ describe('SlackNotifier — threads kept in the session note (Slack in the Host 
     expect(h.posts).toHaveLength(2)
   })
 })
+
+describe('SlackNotifier.has (Slack in the Host Task 5, P7)', () => {
+  it('holds a registered Slack session until its exit timer runs, and never one with Slack off', () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      expect(h.notifier.has('s-1')).toBe(false)
+      h.notifier.register(info())
+      h.notifier.register(info({ id: 's-2', slackNotify: false }))
+      expect(h.notifier.has('s-1')).toBe(true)
+      expect(h.notifier.has('s-2')).toBe(false)
+      h.notifier.handleExit({ sessionId: 's-1', exitCode: 0 })
+      expect(h.notifier.has('s-1')).toBe(true)
+      vi.advanceTimersByTime(3_000)
+      expect(h.notifier.has('s-1')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

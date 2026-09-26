@@ -550,3 +550,29 @@ describe('what each live pty runs in, and how many ended ones are kept', () => {
     expect(DEAD_ENTRIES_KEPT).toBe(64)
   })
 })
+
+describe('PtyRegistry.onMeta (Slack in the Host, P7)', () => {
+  it('tells a note at open and after each merge, and nothing for a pty with no note', () => {
+    const { r } = registry()
+    const heard: Array<[string, string, unknown]> = []
+    r.onMeta((id, m, why) => heard.push([id, why, m.restore.title]))
+    r.open({ id: 'p1', file: 'x', args: [], opts, meta: meta({ kind: 'session', id: 's1', restore: { title: 'a' } }) })
+    r.open({ id: 'p2', file: 'x', args: [], opts })
+    r.note('p1', { title: 'b' })
+    r.note('p2', { title: 'c' })
+    expect(heard).toEqual([['p1', 'open', 'a'], ['p1', 'note', 'b']])
+  })
+  it('isolates a listener that throws, logs it once, and unsubscribes', () => {
+    const { r, logs } = registry()
+    const heard: string[] = []
+    r.onMeta(() => { throw new Error('boom') })
+    const off = r.onMeta((id) => heard.push(id))
+    r.open({ id: 'p1', file: 'x', args: [], opts, meta: meta() })
+    r.note('p1', { x: 1 })
+    expect(heard).toEqual(['p1', 'p1'])
+    expect(logs.filter((l) => /a meta listener threw/.test(l))).toHaveLength(1)
+    off()
+    r.note('p1', { x: 2 })
+    expect(heard).toEqual(['p1', 'p1'])
+  })
+})

@@ -63,6 +63,10 @@ export class ProcRegistry {
    *  proc holders. Each is called in its own `try`, so one that throws costs the others nothing. */
   private readonly lineCbs = new Set<(id: string, seq: number, line: string) => void>()
   private readonly exitCbs = new Set<(id: string, exitCode: number, stderrTail?: string) => void>()
+  /** PtyRegistry.onMeta's twin (Slack in the Host, P7): a note at open and after every merge. */
+  private readonly metaCbs = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
+  /** The meta listeners that have thrown, each logged once (PtyRegistry's rule). */
+  private readonly failedMetaCbs = new Set<unknown>()
   private readonly deps: ProcRegistryDeps
   private readonly cap: number
 
@@ -84,6 +88,27 @@ export class ProcRegistry {
     this.exitCbs.add(cb)
     return () => {
       this.exitCbs.delete(cb)
+    }
+  }
+
+  /** Adds a listener for an entry's note: at open (when it has one) and after every merge. Isolated: a
+   *  throw is logged once and costs no other listener. Returns the unsubscribe. */
+  onMeta(cb: (id: string, meta: PtyMeta, why: 'open' | 'note') => void): () => void {
+    this.metaCbs.add(cb)
+    return () => {
+      this.metaCbs.delete(cb)
+    }
+  }
+
+  private tellMeta(id: string, meta: PtyMeta, why: 'open' | 'note'): void {
+    for (const cb of [...this.metaCbs]) {
+      try {
+        cb(id, meta, why)
+      } catch (err) {
+        if (this.failedMetaCbs.has(cb)) continue
+        this.failedMetaCbs.add(cb)
+        this.deps.log(`proc ${id}: a meta listener threw, and is logged only this once: ${String(err)}`)
+      }
     }
   }
 
@@ -135,6 +160,7 @@ export class ProcRegistry {
       }
     })
     this.deps.log(`proc ${a.id} started, pid ${proc.pid}`)
+    if (entry.meta) this.tellMeta(a.id, entry.meta, 'open')
     return { ok: true, pid: proc.pid }
   }
 
@@ -194,6 +220,7 @@ export class ProcRegistry {
     const e = this.live(id)
     if (!e?.meta) return
     e.meta = { ...e.meta, restore: { ...e.meta.restore, ...patch } }
+    this.tellMeta(id, e.meta, 'note')
   }
 
   /** The buffered lines, oldest first, each with the seq it was sent with; empty for an unknown or

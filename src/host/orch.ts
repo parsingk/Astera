@@ -24,6 +24,7 @@ import type { HostLocal } from './spawner'
 import type { HostRolling } from './rolling'
 import type { HostChats } from './hostChats'
 import type { RollJournal } from './rollJournal'
+import type { HostSlackWiring } from './slackWiring'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
@@ -387,6 +388,9 @@ export function createHostOrch(a: {
   /** The Host's roll journal (S6 limits D5; rollJournal.ts), for the app's `roll-journal` call. Absent
    *  exactly when there is no rolling: the call then answers 501. */
   rollJournal?: Pick<RollJournal, 'take'> | null
+  /** The Host's Slack (Slack in the Host, P17), for the app's `slack-reload` call. Absent exactly when
+   *  this Host does not own Slack (no spawner or no SDK): the call then answers 501. */
+  slack?: Pick<HostSlackWiring, 'reload' | 'active'>
   /** R7: the live session a pty note says was rolled from this one, or null. */
   rolledInto?(sessionId: string): { id: string; accountId: string } | null
   /** R7: rekeys through the Host's roll tap instead of closing. */
@@ -1174,6 +1178,7 @@ export function createHostOrch(a: {
             cmd === 'roll-state' ||
             cmd === 'roll-force' ||
             cmd === 'roll-journal' ||
+            cmd === 'slack-reload' ||
             cmd === 'coordinator-idle' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
@@ -1250,6 +1255,14 @@ export function createHostOrch(a: {
           if (ack !== undefined && !(Number.isSafeInteger(ack) && (ack as number) >= 0))
             return { status: 400, body: { error: 'roll-journal takes an ack that is a whole number, 0 or more' } }
           return { status: 200, body: await a.rollJournal.take(ack as number | undefined) }
+        }
+        // **Beside roll-journal, for its reason (Slack in the Host, P17).** The app, after its settings screen
+        // wrote slack.json, has the Host read it again. Never a command layer command, never a receipt.
+        if (cmd === 'slack-reload') {
+          if (from?.role !== 'app') return { status: 403, body: { error: 'slack-reload is the app’s to send' } }
+          if (!a.slack) return { status: 501, body: { error: 'this Host does not own Slack' } }
+          await a.slack.reload()
+          return { status: 200, body: { reloaded: true, active: a.slack.active() } }
         }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second

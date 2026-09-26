@@ -783,5 +783,20 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(src.indexOf('let exits: HostExits | null = null')).toBeGreaterThan(-1)
     expect(src.indexOf('let exits: HostExits | null = null')).toBeLessThan(src.indexOf('composeHostRolling('))
     expect(src).not.toMatch(/const exits\b/)
+    // Slack in the Host Task 5: the composition is built after the rolling and before the orch, the
+    // binding is declared above the rolling that reads it (the S6 M3 lesson), it starts once the server
+    // exists, hears apps come and go, stops before the server does, and answers slack-reload.
+    // Mutations: build it before the rolling, drop start(), the onAppsChanged call, the orch dep, or the
+    // dispose; each leaves a Host with no Slack, a Host that keeps its socket while an app keeps Slack,
+    // or a retiring Host still holding the socket.
+    expect(src.indexOf('let slackWiring: HostSlackWiring | null = null')).toBeGreaterThan(-1)
+    expect(src.indexOf('let slackWiring: HostSlackWiring | null = null')).toBeLessThan(src.indexOf('composeHostRolling('))
+    expect(src.indexOf('composeHostSlack(')).toBeGreaterThan(src.indexOf('composeHostRolling('))
+    expect(src.indexOf('composeHostSlack(')).toBeLessThan(src.indexOf('createHostOrch({'))
+    expect(src.indexOf('slackWiring?.start()')).toBeGreaterThan(src.indexOf('server = await startHostServer('))
+    expect(serverCall).toMatch(/slackWiring\?\.onAppsChanged\(\)/)
+    expect(orchCall).toMatch(/slack: slackWiring \?\? undefined/)
+    expect(leave.indexOf('slackWiring?.dispose()')).toBeGreaterThan(-1)
+    expect(leave.indexOf('slackWiring?.dispose()')).toBeLessThan(leave.indexOf('server.stopAccepting()'))
   })
 })

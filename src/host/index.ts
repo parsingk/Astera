@@ -28,6 +28,7 @@ import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
 import { hostFeatures } from './features'
 import { loadSlackSdk } from './slackSdk'
+import { composeHostSlack, createAccountSnapshot, type HostSlackWiring } from './slackWiring'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
@@ -136,6 +137,10 @@ async function main(): Promise<void> {
     // from here on, and every chain is quieted. No roll waits: `killAll` below ends every session, a roll
     // in flight included, and the spawner refuses new respawns from `closeAndSettle` on. Never throws.
     rollingWiring?.dispose()
+    // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
+    // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
+    // Slack back would be a second one beside. Never rejects.
+    void slackWiring?.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
@@ -222,7 +227,7 @@ async function main(): Promise<void> {
   // The Slack SDK (Slack in the Host, P1): loaded once, with import(), before the server fixes its
   // features, and **only with a spawner** (`slack-owner` rides `spawn`). A failed load is logged by its
   // error name and this Host announces no `slack-owner`, so the app keeps Slack. Nothing else reads it
-  // yet: the Host's Slack composition comes with Slack in the Host Task 5.
+  // yet: the Host's Slack composition is built below the rolling.
   const slackSdk = spawner ? await loadSlackSdk({ env: process.env, log: (m) => log.write(m) }) : null
 
   // **The Host drives Jobs** (S4+S5 §4, §5.1): its own checks, the dispatch loop and its triggers, and
@@ -246,6 +251,10 @@ async function main(): Promise<void> {
       })
     : null
 
+  /** Declared above the rolling (the S6 final review M3 lesson): Task 6 has the rolling's events reach it,
+   *  and a `const` below would be in its temporal dead zone. Null without a spawner or without the SDK. */
+  let slackWiring: HostSlackWiring | null = null
+
   // **The Host rolls its sessions** (S6 §2, §3A): the two coordinators over this registry, the roll tap, and
   // the takeover of a gone app's sessions — one composition, which the S6 rig builds too. **Only with a
   // spawner** (R17): a roll's respawn is the spawner's, and `rolling` is announced with `spawn` or not at
@@ -267,6 +276,29 @@ async function main(): Promise<void> {
           lang: () => wiring.checks.langNow(),
           log: (m) => log.write(m),
           nowIso: () => new Date().toISOString()
+        })
+      : null
+
+  // **The Host's Slack** (Slack in the Host, spec §3): slack.json read only, one notifier, one inbox, and
+  // the socket held only while no attached app keeps Slack (P4). **Only with a spawner and the SDK**:
+  // `slack-owner` is announced on the same two facts, and a Host without it answers slack-reload 501.
+  // Nothing is opened until `start()` below, once the server exists. The accounts come from a snapshot
+  // of accounts.json, read only (Task 6 hands it the rolling's own).
+  const slackAccounts = createAccountSnapshot({
+    read: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    log: (m) => log.write(m)
+  })
+  slackWiring =
+    spawner && wiring && rollingWiring && slackSdk
+      ? composeHostSlack({
+          profileDir,
+          sdk: slackSdk,
+          registry,
+          procs,
+          statusLinePayload: (id) => spawner.statusLinePayload(id),
+          accountOf: (id) => slackAccounts.of(id),
+          server: () => server,
+          lang: () => wiring.checks.langNow()
         })
       : null
 
@@ -333,7 +365,9 @@ async function main(): Promise<void> {
     ...(wiring?.orchHooks ?? {}),
     // The rolling's hooks (rolling, rolledInto, rekeyRolled): absent with no spawner, and then
     // `unregisterRolling` only forwards to the app and a rolled-from exit closes as before.
-    ...(rollingWiring?.orchHooks ?? {})
+    ...(rollingWiring?.orchHooks ?? {}),
+    // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
+    slack: slackWiring ?? undefined
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -401,6 +435,8 @@ async function main(): Promise<void> {
       onAppsChanged: () => {
         wiring?.serverHooks.onAppsChanged()
         rollingWiring?.onAppsChanged()
+        // P4: an app that keeps Slack attaching closes the Host's socket; the last one leaving opens it.
+        slackWiring?.onAppsChanged()
       },
       // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello.
       onAppGreeted: (send) => rollingWiring?.appGreeted(send),
@@ -426,6 +462,9 @@ async function main(): Promise<void> {
   } catch (err) {
     log.write(`could not record which process this Host is: ${String(err)}`)
   }
+
+  // The Host's Slack starts once the server exists: who keeps Slack is the server's to say.
+  slackWiring?.start()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })
