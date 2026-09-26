@@ -145,6 +145,11 @@ logon session, and is out of scope for the shape above.
 4. **The first round targets an Electron app plus the OS around it.** That means the project's own
    app launched from a Run configuration, driven precisely, with the OS-integration cases that
    survive the measurements above.
+5. **No CLI surface, and the Host owns it (2026-09-26).** The public `astera` CLI gets no command or
+   flag for isolation. If it is built, it lives in the Host, so a Run started from the CLI with the app
+   closed gets the same isolation as one started from the app: its workers still run in the user's
+   logon session and would take the screen the same way. Where there is no interactive desktop (CI,
+   SSH, a server), it switches itself off, since there is no screen to protect.
 
 ## Still open
 
