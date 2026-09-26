@@ -1,7 +1,7 @@
 // The package scan of scripts/host-runtime.mjs, apart so a test can run it over a fixture bundle.
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { isBuiltin } from 'node:module'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 
 /**
  * **Every package the Host bundle loads, read out of the bundle itself.**
@@ -48,4 +48,55 @@ export function bundlePackages(entry) {
       if (!isBuiltin(name)) packages.add(name)
     }
   return [...packages].sort()
+}
+
+const typeOnly = (name) => name.startsWith('@types/') || name === 'undici-types'
+
+/** Where Node finds `name` when `fromDir` asks for it. */
+function resolvePackage(root, name, fromDir) {
+  for (let d = fromDir; ; d = dirname(d)) {
+    if (basename(d) !== 'node_modules') {
+      const c = join(d, 'node_modules', name)
+      if (existsSync(join(c, 'package.json'))) return c
+    }
+    if (d === root || dirname(d) === d) return null
+  }
+}
+
+/** A .node file anywhere in the package, its own nested node_modules left out (those are packages of their own). */
+function hasNativeBinary(dir) {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) {
+      if (e.name !== 'node_modules' && hasNativeBinary(join(dir, e.name))) return true
+    } else if (e.name.endsWith('.node')) return true
+  }
+  return false
+}
+
+/** Every installed package directory `names` load at runtime, relative to `root` with forward slashes
+ *  (`node_modules/p-queue/node_modules/eventemitter3`), sorted. Resolved as Node resolves: from the asking
+ *  package's own directory up, skipping directories named node_modules, stopping at `root`. Dependencies
+ *  and non-optional peers are required; optional ones count when installed. Type-only packages are left
+ *  out (P14). Throws on a required package that is not installed, and on a native one not in allowNative. */
+export function dependencyClosure(root, names, { allowNative = [] } = {}) {
+  const found = new Map()
+  const visit = (name, fromDir, required) => {
+    if (typeOnly(name)) return
+    const dir = resolvePackage(root, name, fromDir)
+    if (!dir) {
+      if (required) throw new Error(`${name} is required from ${fromDir}, and it is not installed — run npm install`)
+      return
+    }
+    if (found.has(dir)) return
+    const m = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!allowNative.includes(name) && (existsSync(join(dir, 'binding.gyp')) || m.gypfile === true || hasNativeBinary(dir)))
+      throw new Error(`${name} is a native module — the Host runtime ships node-pty's prebuild only`)
+    found.set(dir, name)
+    for (const n of Object.keys(m.dependencies ?? {})) visit(n, dir, true)
+    for (const n of Object.keys(m.optionalDependencies ?? {})) visit(n, dir, false)
+    const meta = m.peerDependenciesMeta ?? {}
+    for (const n of Object.keys(m.peerDependencies ?? {})) visit(n, dir, meta[n]?.optional !== true)
+  }
+  for (const n of names) visit(n, root, true)
+  return [...found.keys()].map((d) => d.slice(root.length + 1).split(/[\\/]/).join('/')).sort()
 }

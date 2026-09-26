@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { bundlePackages } from './host-runtime-scan.mjs'
+import { bundlePackages, dependencyClosure } from './host-runtime-scan.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT = join(ROOT, 'resources', 'host-runtime')
@@ -137,28 +137,23 @@ async function main() {
     filter: (src) => !src.endsWith('.pdb')
   })
 
-  // **Every other package the Host bundle loads** (`bundlePackages`, scripts/host-runtime-scan.mjs).
-  // node-pty above used to be the whole list. The Host runs the orchestration command layer now, and
-  // that reaches `ignore` through core/files/tree.ts.
+  // **Every other package the Host bundle loads** (`bundlePackages`, scripts/host-runtime-scan.mjs),
+  // with its whole resolved dependency closure (`dependencyClosure`): what those packages load in turn,
+  // resolved the way Node resolves it. Each package lands at the same path under node_modules it has
+  // here, so a nested node_modules stays exactly where npm put it and node.exe resolves the same copy the
+  // app does. Type-only packages (@types/*, undici-types) are left out (P14). A native module is refused,
+  // loudly here rather than on a user's machine: node-pty above is the one native half this runtime
+  // ships, as a prebuild, and it is handled apart.
   const packages = bundlePackages(join(built, 'host.js')).filter((name) => name !== 'node-pty')
-  for (const name of packages) {
-    const from = join(ROOT, 'node_modules', name)
-    if (!existsSync(from)) throw new Error(`the Host bundle requires ${name}, which is not installed — run npm install`)
-    // One level deep on purpose. A package with dependencies of its own needs a real resolver, and a
-    // half-copied tree would fail the same way the missing package does — loudly here is the place to
-    // find that out, not on a user's machine. **All three kinds count**: an optional or peer
-    // dependency that the package actually requires at runtime is not optional to the Host, and
-    // reading only `dependencies` lets exactly that one through the gate.
-    const manifest = JSON.parse(readFileSync(join(from, 'package.json'), 'utf8'))
-    const nested = [
-      ...Object.keys(manifest.dependencies ?? {}),
-      ...Object.keys(manifest.optionalDependencies ?? {}),
-      ...Object.keys(manifest.peerDependencies ?? {})
-    ]
-    if (nested.length > 0)
-      throw new Error(`the Host bundle requires ${name}, which depends on ${nested.join(', ')} — this script copies one level only`)
-    cpSync(from, join(tree, 'node_modules', name), { recursive: true })
-    console.log(`host-runtime: the Host bundle requires ${name} — shipped`)
+  for (const rel of dependencyClosure(ROOT, packages)) {
+    const from = join(ROOT, ...rel.split('/'))
+    // A package's own nested node_modules is not copied with it: each nested package is an entry of the
+    // closure in its own right, at its own path, so a type-only one there stays out too (P14).
+    cpSync(from, join(tree, ...rel.split('/')), {
+      recursive: true,
+      filter: (src) => src === from || !src.slice(from.length + 1).split(/[\\/]/).includes('node_modules')
+    })
+    console.log(`host-runtime: the Host bundle requires ${rel.slice('node_modules/'.length)} — shipped`)
   }
 
   // The whole chunks directory rather than the one file host.js names. It is ~11 KB, the names carry
@@ -218,7 +213,7 @@ async function main() {
     return n
   }
   console.log(
-    `host-runtime: node ${NODE.version} + node-pty + build ${appVersion} -> resources/host-runtime/${nodeDirName(NODE.version)} (${mb(total(OUT))})`
+    `host-runtime: node ${NODE.version} + node-pty + ${packages.length} packages + build ${appVersion} -> resources/host-runtime/${nodeDirName(NODE.version)} (${mb(total(OUT))})`
   )
 }
 
