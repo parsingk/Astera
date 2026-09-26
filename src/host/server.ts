@@ -99,10 +99,6 @@ export interface HostServerDeps {
   /** Whether a pid names a live process; defaults to `pidLives` (core/host/pidFile.ts). What
    *  `lastAppPid` probes with, injectable so a test's made-up pid is not judged by this machine. */
   pidLives?(pid: number): boolean
-  /** Whether the profile's app.pid exists right now. Given, a clean close of the app socket whose hello
-   *  gave `lastAppPid` forgets that pid while this answers false (final review I1): the app removes the
-   *  file at `will-quit`, before its socket goes down. Left out, a close forgets nothing. */
-  appPidFilePresent?(): boolean
 }
 
 export interface HostServer {
@@ -166,8 +162,9 @@ export interface HostServer {
    *
    *  **Latched, so pid reuse cannot keep a gone app alive** (final review I1). Every call probes the pid,
    *  and the first probe that finds it dead forgets it: a process Windows later hands the same number is
-   *  not that app. It is also forgotten when that app's socket closes cleanly and app.pid is gone (a
-   *  quit). The driving tick asks while no app is attached, so the forgetting does not wait for the next
+   *  not that app. **A close forgets nothing**: an app that gave up on a stalled Host closes its socket
+   *  cleanly and lives on, and when it also could not write app.pid this pid is all that says it is
+   *  there, the case the fallback exists for. The driving tick asks while no app is attached, so the forgetting does not wait for the next
    *  worktree removal, which may come after the number has been reused. */
   lastAppPid(): number | null
   /** How many sockets the number index behind `yieldsOf` holds: every connection, greeted or not,
@@ -253,12 +250,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   const roles = new Map<net.Socket, 'app' | 'legacy-app' | 'cli'>()
   /** The role the hooks and the command layer hear: a legacy app is a `'cli'` to them (see `roles`). */
   const outwardRole = (s: net.Socket): 'app' | 'cli' => (roles.get(s) === 'app' ? 'app' : 'cli')
-  /** `lastAppPid`: the pid of the last app hello that carried one, until a probe finds it dead or its
-   *  app quits (see `HostServer.lastAppPid`). */
+  /** `lastAppPid`: the pid of the last app hello that carried one, until a probe finds it dead (see
+   *  `HostServer.lastAppPid`). */
   let lastAppPid: number | null = null
-  /** The pid each app socket's hello gave, so a close forgets `lastAppPid` only for the app that gave
-   *  it, not for an older app closing after a newer one said hello. */
-  const helloPids = new Map<net.Socket, number>()
   const probePid = deps.pidLives ?? pidLives
   /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
    *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
@@ -380,10 +374,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
-          if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) {
-            lastAppPid = m.pid
-            helloPids.set(socket, m.pid)
-          }
+          if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) lastAppPid = m.pid
           if (isApp(socket) || wasApp) tellAppsChanged()
           send({
             t: 'hello',
@@ -498,7 +489,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         deps.log.write(`message failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
     })
     socket.on('data', read)
-    const gone = (hadError?: boolean): void => {
+    const gone = (): void => {
       // Otherwise a peer that hangs up before saying anything still gets a "did not say hello" line
       // logged against it after it has already gone.
       greeted()
@@ -511,18 +502,6 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const role = outwardRole(socket)
       roles.delete(socket)
       yields.delete(socket)
-      // A quit (final review I1): the app removed app.pid at will-quit, then its socket closed without
-      // an error. What it said in hello no longer names it. A crash, or a socket that errored, leaves
-      // the pid to the probe instead.
-      const helloPid = helloPids.get(socket)
-      helloPids.delete(socket)
-      if (helloPid !== undefined && helloPid === lastAppPid && hadError !== true && deps.appPidFilePresent) {
-        try {
-          if (!deps.appPidFilePresent()) lastAppPid = null
-        } catch (err) {
-          deps.log.write(`could not read whether app.pid exists: ${String(err)}`)
-        }
-      }
       if (wasGreeted && wasApp) tellAppsChanged()
       // Whatever this socket was asked and never answered is refused now. Left in the map it would
       // be a promise nothing can ever settle, and the CLI call waiting behind it would hang for as

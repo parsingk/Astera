@@ -37,7 +37,6 @@ const server = async (
     onAppsChanged?: HostServerDeps['onAppsChanged']
     onAppGreeted?: HostServerDeps['onAppGreeted']
     pidLives?: HostServerDeps['pidLives']
-    appPidFilePresent?: HostServerDeps['appPidFilePresent']
   } = {}
 ): Promise<{
   s: HostServer
@@ -70,7 +69,6 @@ const server = async (
     // Every pid lives unless a test says otherwise: the tests' made-up pids must not be forgotten by a
     // real probe of whatever this machine runs under them.
     pidLives: over.pidLives ?? ((): boolean => true),
-    appPidFilePresent: over.appPidFilePresent,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -855,26 +853,18 @@ describe('startHostServer', () => {
       expect(h.s.lastAppPid()).toBeNull()
     })
 
-    it('forgets the last app pid when that app closes its socket cleanly with no app.pid left, and keeps it while the file is there', async () => {
-      const file = { present: true }
-      const h = await server({ appPidFilePresent: () => file.present })
-      const hello = async (pid: number) => {
-        const sock = net.connect(h.address)
-        await new Promise((r) => sock.once('connect', r))
-        const ch = messageChannel(sock)
-        ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', pid } as ClientMessage)
-        await ch.next()
-        return sock
-      }
-      const a = await hello(4242)
-      a.end()
-      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
-      expect(h.s.lastAppPid()).toBe(4242) // app.pid still names something: not a clean quit we can see
-      file.present = false
-      const b = await hello(5151)
-      b.end() // quit: will-quit removed app.pid before the socket went down
-      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
-      await vi.waitFor(() => expect(h.s.lastAppPid()).toBeNull())
+    // Controller ruling on I1: a close forgets nothing. An app that gave up on a stalled Host closes
+    // cleanly and lives on, and with no app.pid its hello pid is all that says it is there.
+    it('keeps the last app pid through a clean close while the app process is still alive', async () => {
+      const h = await server({ pidLives: () => true })
+      const sock = net.connect(h.address)
+      await new Promise((r) => sock.once('connect', r))
+      const ch = messageChannel(sock)
+      ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', pid: 4242 } as ClientMessage)
+      await ch.next()
+      sock.end()
+      await vi.waitFor(() => expect(h.s.clients()).toBe(0))
+      expect(h.s.lastAppPid()).toBe(4242)
     })
 
     it('tells onMessage whether the sender has said hello (review of Task 1)', async () => {

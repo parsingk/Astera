@@ -12,7 +12,7 @@ import tls from 'node:tls'
 import * as pty from 'node-pty'
 import { hostAddress } from './address'
 import { nodePtyMissing } from './nodePtyCheck'
-import { appPidFilePath, hostPidFilePath, serializeHostPidFile } from '../core/host/pidFile'
+import { hostPidFilePath, serializeHostPidFile } from '../core/host/pidFile'
 import { SPAWN_DEADLINE_MS } from '../core/host/unresponsive'
 import { hideForkedConsoleWindows } from './childWindows'
 import { trustSystemCa } from './systemCa'
@@ -415,9 +415,6 @@ async function main(): Promise<void> {
       version: hostVersion,
       idleMs: IDLE_MS,
       onIdle: () => leave(),
-      // Final review I1: a clean close of the app's socket with no app.pid left is a quit, and the pid
-      // its hello gave is forgotten then (HostServer.lastAppPid).
-      appPidFilePresent: () => existsSync(appPidFilePath(profileDir)),
       onMessage: (m, send, from) => {
         // Before the pty handler, so the mark is in place before a spawn can exit. Any role: see
         // `ptyHeldBy` for the apps that declare none. Only a greeted socket, which close releases.
