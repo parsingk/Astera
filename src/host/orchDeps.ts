@@ -73,7 +73,11 @@ const DEGRADES = {
   // be asked" (command.ts): `sessions read` then leaves `pending` out, rather than answering `null`,
   // which would claim there is no card. Refusing would cost the whole read, and the conversation
   // itself is the Host's to give.
-  chatPending: () => undefined
+  chatPending: () => undefined,
+  // **`chatTurn` joined for `sessions send --wait`** (CLI spec §15): the status of the adapter that
+  // decodes a chat session. Asked of the Host's own adapter first (`hostTurn`), and of the app for a
+  // session only it holds; `undefined` is "nobody can say", and the command keeps asking or refuses.
+  chatTurn: () => undefined
 } as const
 
 /**
@@ -248,7 +252,7 @@ const LOCAL_FILE: Record<(typeof LOCAL_WHEN_ABSENT)[number], string> = {
  *
  * Never refused, so never `onAppRequired`: nothing here needs the app.
  */
-const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession', 'readChat'] as const
+const HOST_SESSIONS = ['listSessions', 'readSession', 'sendSession', 'readChat', 'sessionTurn'] as const
 
 /**
  * **Forwarded when the app is attached, and done by the Host itself when none is** (CLI phase D4).
@@ -391,7 +395,7 @@ const HOST_LOCAL_FALLBACK: Record<HostLocalName, 'propagates' | 'swallowed'> = {
  * retiring Host), and leaves a failure after one untagged, since that coordinator is running. */
 const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWorktree', 'startCoordinator'])
 
-const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending'])
+const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending', 'chatTurn'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
 const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_ROLLS, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT, ...HOST_CHATS]
@@ -496,6 +500,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   sessionTasks: true,
   // DEGRADES.
   chatPending: false,
+  chatTurn: false,
   // LOCAL_WHEN_ABSENT — a read either way, from the app or from its file.
   listAccounts: false,
   listRunConfigs: false,
@@ -504,6 +509,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   readSession: false,
   sendSession: true,
   readChat: false,
+  sessionTurn: false,
   // HOST_WHEN_ABSENT — a turn, on either route.
   chatSend: true,
   // HOST_CHATS: a list is a read; an answer lets a tool run or refuses it, on either route.
@@ -618,7 +624,8 @@ export function hostOrchDeps(a: {
   /** The Host's own chat sessions (HOST_CHATS, and P10's Host-writer routes of `chatPending` and
    *  `chatSend`). Null or absent: the Host writes to no chat session, so both HOST_CHATS names only
    *  forward, and `chatPending`/`chatSend` keep their D4 routes. */
-  chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> | null
+  chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> &
+    Partial<Pick<HostChats, 'turnOf'>> | null
   /** False when an app holds this session's chat proc without the `chat-takeover` yield, so it cannot
    *  answer a forwarded `chatAnswer` (HOST_CHATS). Absent: every app is asked. */
   chatAppAnswers?(sessionId: string): boolean
@@ -862,6 +869,15 @@ export function hostOrchDeps(a: {
   }
 
   /** HOST_SESSIONS: the Host's own answer, marked as an effect before it runs when it is one. */
+  /** `chatTurn`: the Host's own adapter when it holds one for the session (writer or reader, it decodes
+   *  every line), else the app's by DEGRADES' route. */
+  const askTurn = degrading('chatTurn', DEGRADES.chatTurn)
+  const hostTurn = (id: string): Promise<unknown> => {
+    const mine = a.chats?.turnOf?.(id) ?? null
+    if (mine !== null) return Promise.resolve({ ...mine, prompt: a.chats?.prompts(id)[0] ?? null })
+    return askTurn(id)
+  }
+
   const own = <K extends (typeof HOST_SESSIONS)[number]>(name: K): HostSessions[K] => {
     const fn = a.sessions[name] as (...args: unknown[]) => unknown
     return ((...args: unknown[]) => {
@@ -1059,6 +1075,7 @@ export function hostOrchDeps(a: {
       }
       if ((HOST_DRIVES as readonly string[]).includes(name)) return [name, hostDrives(name as HostDrivesName)]
       if (name === 'chatPending') return [name, hostPending]
+      if (name === 'chatTurn') return [name, hostTurn]
       if (name in DEGRADES) return [name, degrading(name, DEGRADES[name as keyof typeof DEGRADES])]
       if (name === 'chatPrompts') return [name, chatPrompts]
       if (name === 'chatAnswer') return [name, chatAnswer]
@@ -1090,6 +1107,7 @@ export function hostOrchDeps(a: {
     readSession: own('readSession'),
     sendSession: own('sendSession'),
     readChat: own('readChat'),
+    ...(a.sessions.sessionTurn ? { sessionTurn: own('sessionTurn') } : {}),
     discardRunWorktree,
     stopCoordinator,
     ...(a.dispatchTask ? { dispatchTask } : {}),

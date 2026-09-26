@@ -29,7 +29,8 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { HostSession, SessionScreen } from '../core/orchestration/command'
-import { hookEventsFileIn, latestEventLine, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
+import { hookEventPrompt, hookEventsFileIn, latestEventLine, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
+import { hookEventAt } from '../core/hooks/eventTime'
 import type { PtyEntry } from '../core/host/protocol'
 import type { Account } from '../core/types'
 import { ptyDriver } from '../core/sessions/sessionDriver'
@@ -58,6 +59,19 @@ export interface HostSessions {
   /** Runs `run` after every earlier `serial` call for the same session id has settled. A rejection
    *  is the caller's and does not hold up the next one. */
   serial<T>(id: string, run: () => Promise<T>): Promise<T>
+  /** A terminal session's turn, for `sessions send --wait` (CLI spec §15): `state` exactly as `sessions
+   *  list` reads it, and when it is `waiting`, whether that is a prompt a person must answer
+   *  (`hookEventPrompt`). `since` (epoch ms) is when the send began: an event stamped before it is from
+   *  the turn before, however late it landed, and reads `unknown`. null for a session this Host does not
+   *  hold. Optional so a Host double that never waits need not have it. */
+  sessionTurn?(id: string, since?: number): Promise<SessionTurn | null>
+}
+
+/** One terminal session's turn, as `sessionTurn` reads it. */
+export interface SessionTurn {
+  alive: boolean
+  state: SessionState
+  prompt: 'permission' | 'question' | null
 }
 
 /** A note key as the app wrote it, or `null` — the note is the app's, and nothing checks its keys. */
@@ -173,7 +187,7 @@ export function registrySessions(a: {
   accounts(): Promise<Account[]>
   /** The JSON-RPC id of a Codex turn the Host writes. Test injection; the wiring leaves it out. */
   mintId?: () => string
-}): HostSessions {
+}): HostSessions & Required<Pick<HostSessions, 'sessionTurn'>> {
   const mintId = a.mintId ?? (() => `astera-host-${randomUUID()}`)
   /** The pty behind an agent session's id — only an agent session's, so a shell tab's id is nobody. */
   const ptyOf = (id: string): string | null =>
@@ -242,6 +256,25 @@ export function registrySessions(a: {
       return render(pty === null ? '' : a.ptys.buffer(pty), size, lines)
     },
     sendSession: (id, value, enter) => serial(id, () => deliver(id, value, enter)),
+    sessionTurn: async (id, since) => {
+      const all = a.ptys.list().filter((e) => e.meta?.kind === 'session' && e.meta.id === id)
+      const e = all.find((x) => x.alive) ?? all[0]
+      if (!e) return null
+      if (!e.alive) return { alive: false, state: 'unknown', prompt: null }
+      const last = await latestEvent(hookEventsFileIn(a.hookEventsDir, id))
+      let state = sessionStateOf({ lastLine: last?.line ?? null, eventAt: last?.at ?? null, lastInputAt: a.ptys.lastWrite(e.id) })
+      let payload: unknown = null
+      try {
+        payload = last ? JSON.parse(last.line) : null
+      } catch {
+        payload = null
+      }
+      // The capture's own stamp says when the hook ran. One from before the send belongs to the turn
+      // before, even when it landed after the input (the async hooks land out of order).
+      const at = hookEventAt(payload)
+      if (since !== undefined && at !== null && at < since) state = 'unknown'
+      return { alive: true, state, prompt: state === 'waiting' ? hookEventPrompt(payload) : null }
+    },
     readChat: async (id, turns) => {
       const e = chatOf(id)
       if (e === null) return []

@@ -64,7 +64,8 @@ export function waitingCommand(a: { cmd: string; args: Record<string, unknown> }
   if (a.cmd === 'ask' || a.cmd === 'jobs-wait' || a.cmd === 'runs-wait' || a.cmd === 'runs-follow') return true
   // `check` blocks only when asked to. Without --wait it answers at once, and a keepalive on it
   // would be a line about a wait that never happened.
-  return a.cmd === 'check' && a.args.wait === true
+  // `sessions send --wait` waits for the turn it started; without --wait it answers once the text went.
+  return (a.cmd === 'check' || a.cmd === 'sessions-send') && a.args.wait === true
 }
 
 /** `45s`, `3m 20s`. Seconds alone stop reading as a duration somewhere around a minute, and the

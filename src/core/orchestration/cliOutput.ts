@@ -345,6 +345,9 @@ const STEPS: Record<
   // 남의 질문을 기다린다. **`--timeout-ms` 도 같은 방식으로 붙인다** — 표는 인자를 보지 못하지만
   // `details` 는 보고, 그것이 없으면 덜 아는 쪽(답이 아예 안 온 갈래)이 더 나쁜 줄을 받는다.
   TIMEOUT: (cmd, details) => {
+    // `sessions send --wait` that ran out of time: the turn goes on, and the screen says where it is.
+    if (cmd === 'sessions-send' && typeof details.sessionId === 'string')
+      return ['astera sessions read --id <sessionId>', 'astera host status']
     if (cmd !== 'ask' || typeof details.questionId !== 'string') return ['astera host status']
     const resume =
       typeof details.timeoutMs === 'number'
@@ -360,7 +363,14 @@ const STEPS: Record<
   // 재개하라고 하면 아무것도 아닌 회차를 재개하려다 거절만 돌아온다. 다시 기다리거나
   // 지금 상태를 보는 것 말고 칠 것이 없다.
   WAITING_FOR_INPUT: (cmd, details) =>
-    details?.state === 'limited'
+    // `sessions send --wait` stopped at a prompt: answer it (a chat prompt has an id `chats answer`
+    // takes; a terminal prompt is answered in the session), and read what the session shows.
+    cmd === 'sessions-send'
+      ? [
+          ...(typeof details.promptId === 'string' ? ['astera chats answer --id <promptId> --allow --session <sessionId>'] : []),
+          'astera sessions read --id <sessionId>'
+        ]
+      : details?.state === 'limited'
       ? ['astera runs wait --id <runId>', 'astera runs get --id <runId>']
       : [
           'astera questions list --status open',
@@ -503,6 +513,48 @@ export function waitEnd(body: unknown): CliError | null {
       // 서버가 모르는 끝을 내는 길은 없지만, 짐작해서 0 으로 내보내면 스크립트가 안 끝난
       // 일을 끝난 것으로 읽는다.
       return { code: 'FAILED', message: `the app answered with an ending this CLI does not know: ${String(b.state)}`, details: at() }
+  }
+}
+
+/**
+ * How `sessions send --wait` ended (CLI spec §15): success (`null`) when the turn ended, a failed turn
+ * included (its `error` rides the body), or the error for the three endings that are not the turn
+ * ending. **The same exit codes a wait has**: a prompt a person must answer is 8, as an open question
+ * is for `runs wait`; a deadline is 7; a session that ended mid-turn is 1.
+ *
+ * **A body with no `turn` is a Host that sent and did not wait**, an older build that ignores `--wait`:
+ * the text went, and nothing waited. That is 9, the two builds differing, never a silent 0.
+ */
+export function sessionTurnEnd(body: unknown): CliError | null {
+  const b = (body ?? {}) as { id?: unknown; turn?: unknown }
+  const sessionId = typeof b.id === 'string' ? b.id : null
+  const turn = b.turn as { state?: unknown; promptId?: unknown; prompt?: unknown; error?: unknown } | undefined
+  if (turn === undefined || turn === null || typeof turn !== 'object')
+    return {
+      code: 'VERSION_MISMATCH',
+      message: 'the Host sent the text but did not wait for the turn: it is an older build that does not know --wait',
+      details: { sessionId }
+    }
+  switch (turn.state) {
+    case 'ended':
+      return null
+    case 'prompt': {
+      const p = (turn.prompt ?? {}) as { kind?: unknown; tool?: unknown; summary?: unknown }
+      const summary = typeof p.summary === 'string' && p.summary !== '' ? p.summary : null
+      const tool = typeof p.tool === 'string' && p.tool !== '' ? p.tool : null
+      const about = summary === null ? '' : ` (${tool === null ? '' : `${tool}: `}${summary})`
+      return {
+        code: 'WAITING_FOR_INPUT',
+        message: `the turn stopped at a ${String(p.kind ?? 'permission')} prompt${about}, and it goes on once someone answers it`,
+        details: { sessionId, state: 'prompt', promptId: typeof turn.promptId === 'string' ? turn.promptId : null, prompt: turn.prompt ?? null }
+      }
+    }
+    case 'timeout':
+      return { code: 'TIMEOUT', message: 'the turn had not ended when the deadline passed; it goes on', details: { sessionId } }
+    case 'exited':
+      return { code: 'FAILED', message: 'the session ended before its turn did', details: { sessionId } }
+    default:
+      return { code: 'FAILED', message: `the Host answered with a turn ending this CLI does not know: ${String(turn.state)}`, details: { sessionId } }
   }
 }
 

@@ -31,6 +31,7 @@ import {
   nextStepsFor,
   okEnvelope,
   silentHostEnd,
+  sessionTurnEnd,
   type CliError,
   type CliErrorCode,
   type ReplayMark
@@ -247,7 +248,7 @@ export function clientTimeoutMs(a: { cmd: string; args: Record<string, unknown> 
         : // **기다리는 명령은 서버와 같은 마감을 써야 한다.** 짧은 값을 쓰면 서버가 답을
           // 준비하는 사이에 클라이언트가 연결을 끊고, "타임아웃은 정보다" 는 계약이 깨진다
           // (ask 의 기본값이 서버보다 짧아서 실제로 그러였다).
-          a.cmd === 'jobs-wait' || a.cmd === 'runs-wait'
+          a.cmd === 'jobs-wait' || a.cmd === 'runs-wait' || (a.cmd === 'sessions-send' && a.args.wait === true)
           ? DEFAULT_WAIT_TIMEOUT_MS
           : DEFAULT_CHECK_TIMEOUT_MS
   const base = typeof a.args.timeoutMs === 'number' ? a.args.timeoutMs : defaultForCmd
@@ -1381,6 +1382,11 @@ export async function main(): Promise<void> {
       if (end !== null) {
         fail(end)
       }
+    }
+    // `sessions send --wait` (CLI spec §15): how the turn ended decides the exit code, as for a wait.
+    if (parsed.cmd === 'sessions-send' && args.wait === true) {
+      const end = sessionTurnEnd(body)
+      if (end !== null) fail(end)
     }
     out(renderOk(parsed.cmd, body, mode, markOf(reply)))
     process.exit(0)

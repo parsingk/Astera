@@ -632,3 +632,58 @@ describe('the @xterm/headless load', () => {
     expect(src).toContain("import('@xterm/headless')")
   })
 })
+
+// `sessions send --wait` (CLI spec §15): the turn of one terminal session, read off the same hook file
+// `state` reads, with the prompt a `waiting` is, and the stamp that says the event came after the send.
+describe('registrySessions — sessionTurn', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  const withEvents = () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-hook-turn-'))
+    dirs.push(dir)
+    const h = harness(undefined, dir)
+    const event = (payload: unknown, atMs = 1_000_000) => {
+      const file = path.join(dir, 'ses-1.jsonl')
+      appendFileSync(file, JSON.stringify(payload) + '\n')
+      utimesSync(file, atMs / 1000, atMs / 1000)
+    }
+    clock.now = 0
+    return { ...h, event }
+  }
+
+  it('a turn that ended is waiting with no prompt; a permission prompt says so', async () => {
+    const h = withEvents()
+    h.event({ hook_event_name: 'Stop' })
+    expect(await h.sessions.sessionTurn('ses-1')).toEqual({ alive: true, state: 'waiting', prompt: null })
+    h.event({ hook_event_name: 'Notification', notification_type: 'permission_prompt' }, 1_000_100)
+    expect(await h.sessions.sessionTurn('ses-1')).toEqual({ alive: true, state: 'waiting', prompt: 'permission' })
+    h.event({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' }, 1_000_200)
+    expect(await h.sessions.sessionTurn('ses-1')).toEqual({ alive: true, state: 'waiting', prompt: 'question' })
+  })
+
+  it('input after the event leaves it unknown, as state does', async () => {
+    const h = withEvents()
+    h.event({ hook_event_name: 'Stop' }, 1_000_000)
+    clock.now = 1_000_500
+    h.ptys.write('pty-a', 'go\r')
+    expect(await h.sessions.sessionTurn('ses-1')).toMatchObject({ state: 'unknown' })
+  })
+
+  it('an event stamped before the send says nothing about this turn, however late it landed', async () => {
+    const h = withEvents()
+    // A Stop of the turn before, stamped at 999_000, lands after the send's input.
+    h.event({ hook_event_name: 'Stop', astera_at: 999_000 }, 1_000_900)
+    expect(await h.sessions.sessionTurn('ses-1', 1_000_000)).toMatchObject({ state: 'unknown' })
+    h.event({ hook_event_name: 'Stop', astera_at: 1_000_950 }, 1_000_960)
+    expect(await h.sessions.sessionTurn('ses-1', 1_000_000)).toMatchObject({ state: 'waiting', prompt: null })
+  })
+
+  it('an ended session, and one this Host does not hold', async () => {
+    const h = withEvents()
+    h.agent.exit(0)
+    expect(await h.sessions.sessionTurn('ses-1')).toMatchObject({ alive: false })
+    expect(await h.sessions.sessionTurn('ses-nope')).toBeNull()
+  })
+})

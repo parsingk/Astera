@@ -1281,3 +1281,46 @@ describe('hostOrchDeps — createSession, the Host starting a session', () => {
     expect(flagged).toEqual([{ name: 'createSession', repair: 'app-settings.json' }])
   })
 })
+
+// `sessions send --wait` (CLI spec §15): where a chat turn is, from the adapter that decodes it.
+describe('hostOrchDeps — chatTurn and sessionTurn', () => {
+  const prompt: ChatPrompt = { sessionId: 'c1', id: 'req_1', kind: 'approval', tool: 'Bash', summary: 'npm test' }
+  const chatsWith = (turn: { alive: boolean; status: 'idle' | 'working' | 'waiting'; error: string | null } | null) => ({
+    prompts: () => [prompt],
+    isWriter: () => false,
+    answer: async () => ({ answered: true as const }),
+    requests: () => [],
+    send: async () => {},
+    turnOf: () => turn
+  })
+
+  it("the Host's own adapter answers first, with its open prompt, and the app is not asked", async () => {
+    const act = vi.fn()
+    const deps = hostOrchDeps(base({ act, chats: chatsWith({ alive: true, status: 'waiting', error: null }) }))
+    expect(await deps.chatTurn!('c1')).toEqual({ alive: true, status: 'waiting', error: null, prompt })
+    expect(act).not.toHaveBeenCalled()
+  })
+
+  it('a session the Host holds no adapter for is asked of the app, and nobody to ask is undefined', async () => {
+    const act = vi.fn().mockResolvedValue({ alive: true, status: 'working', error: null, prompt: null })
+    const deps = hostOrchDeps(base({ act, chats: chatsWith(null) }))
+    expect(await deps.chatTurn!('c1')).toEqual({ alive: true, status: 'working', error: null, prompt: null })
+    expect(act).toHaveBeenCalledWith('chatTurn', ['c1'])
+    const alone = hostOrchDeps(base({ hasApp: () => false, chats: chatsWith(null) }))
+    expect(await alone.chatTurn!('c1')).toBeUndefined()
+  })
+
+  it("sessionTurn is the Host's own registry, a read that marks nothing", async () => {
+    let acted = 0
+    const sessionTurn = vi.fn(async () => ({ alive: true, state: 'waiting' as const, prompt: null }))
+    const deps = hostOrchDeps(
+      base({
+        onEffect: () => acted++,
+        sessions: { ...base().sessions, sessionTurn }
+      })
+    )
+    expect(await deps.sessionTurn!('t1', 5)).toEqual({ alive: true, state: 'waiting', prompt: null })
+    expect(sessionTurn).toHaveBeenCalledWith('t1', 5)
+    expect(acted).toBe(0)
+  })
+})

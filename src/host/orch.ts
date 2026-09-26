@@ -272,6 +272,20 @@ export const OBSERVED: Record<string, ObservedReplay> = {
   check: {
     stale: (reply) => bodyOf(reply).timedOut === true,
     afresh: (args) => args
+  },
+  /**
+   * `sessions send --wait` types a turn (an effect, `sendSession` or `chatSend`) and then waits for it
+   * to end (CLI spec §15). **Re-running it would type the text a second time**, so the replay waits
+   * again for the turn the first call sent (`resumeWait`, which the command reads as "send nothing").
+   * Only a recorded deadline is a stopwatch reading; an ended turn, a prompt and an ended session are
+   * facts, replayed as they were.
+   */
+  'sessions-send': {
+    stale: (reply) => {
+      const turn = bodyOf(reply).turn
+      return typeof turn === 'object' && turn !== null && (turn as { state?: unknown }).state === 'timeout'
+    },
+    afresh: (args) => ({ ...args, resumeWait: true })
   }
 }
 
@@ -381,7 +395,7 @@ export function createHostOrch(a: {
   /** The Host's own chat sessions (chat takeover Task 8), passed through to `hostOrchDeps`: its
    *  HOST_CHATS and the Host-writer routes of `chatPending` and `chatSend` (P10). Absent: the Host
    *  answers no chat prompt of its own and forwards both names to the app. */
-  chats?: Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> | null
+  chats?: (Pick<HostChats, 'prompts' | 'isWriter' | 'answer' | 'requests' | 'send'> & Partial<Pick<HostChats, 'turnOf'>>) | null
   /** Whether the apps holding a session's chat proc all yield `chat-takeover` (HOST_CHATS), passed
    *  through to `hostOrchDeps`. Absent: every app is asked. */
   chatAppAnswers?(sessionId: string): boolean

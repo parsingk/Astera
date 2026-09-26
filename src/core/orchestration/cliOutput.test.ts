@@ -10,6 +10,7 @@ import {
   nextStepsFor,
   okEnvelope,
   silentHostEnd,
+  sessionTurnEnd,
   waitEnd
 } from './cliOutput'
 
@@ -595,5 +596,49 @@ describe('a CONFLICT a retiring Host answered', () => {
     expect(
       nextStepsFor({ code: 'CONFLICT', cmd: 'jobs-run', details: { retry: 'host-retiring', jobId: 'job_1', runId: 'run_2' } })
     ).toEqual(['astera host status', 'astera run-start --run run_2'])
+  })
+})
+
+// `sessions send --wait` (CLI spec §15): the Host says how the turn ended; the exit code is decided here.
+describe('sessionTurnEnd — how a waited turn exits', () => {
+  it('a turn that ended is success, a failed one included (its error is in the body)', () => {
+    expect(sessionTurnEnd({ id: 's1', sent: true, turn: { state: 'ended' } })).toBeNull()
+    expect(sessionTurnEnd({ id: 's1', sent: true, turn: { state: 'ended', error: 'limit' } })).toBeNull()
+  })
+
+  it('a prompt is 8, carrying the session and the prompt id', () => {
+    expect(
+      sessionTurnEnd({ id: 's1', sent: true, turn: { state: 'prompt', promptId: 'req_1', prompt: { kind: 'approval', tool: 'Bash', summary: 'npm test' } } })
+    ).toEqual({
+      code: 'WAITING_FOR_INPUT',
+      message: 'the turn stopped at a approval prompt (Bash: npm test), and it goes on once someone answers it',
+      details: { sessionId: 's1', state: 'prompt', promptId: 'req_1', prompt: { kind: 'approval', tool: 'Bash', summary: 'npm test' } }
+    })
+    const terminal = sessionTurnEnd({ id: 's1', sent: true, enter: true, turn: { state: 'prompt', prompt: { kind: 'permission' } } })
+    expect(terminal?.code).toBe('WAITING_FOR_INPUT')
+    expect(terminal?.details).toEqual({ sessionId: 's1', state: 'prompt', promptId: null, prompt: { kind: 'permission' } })
+  })
+
+  it('a deadline is 7 and a session that ended is 1', () => {
+    expect(sessionTurnEnd({ id: 's1', sent: true, turn: { state: 'timeout' } })?.code).toBe('TIMEOUT')
+    expect(sessionTurnEnd({ id: 's1', sent: true, turn: { state: 'exited' } })?.code).toBe('FAILED')
+  })
+
+  it('a Host that sent and did not wait is 9: it is older than this CLI', () => {
+    expect(sessionTurnEnd({ id: 's1', sent: true, enter: true })?.code).toBe('VERSION_MISMATCH')
+  })
+
+  it('what to run next: answer the prompt, or read the session', () => {
+    expect(nextStepsFor({ code: 'WAITING_FOR_INPUT', cmd: 'sessions-send', details: { sessionId: 's1', promptId: 'req_1' } })).toEqual([
+      'astera chats answer --id req_1 --allow --session s1',
+      'astera sessions read --id s1'
+    ])
+    expect(nextStepsFor({ code: 'WAITING_FOR_INPUT', cmd: 'sessions-send', details: { sessionId: 's1', promptId: null } })).toEqual([
+      'astera sessions read --id s1'
+    ])
+    expect(nextStepsFor({ code: 'TIMEOUT', cmd: 'sessions-send', details: { sessionId: 's1' } })).toEqual([
+      'astera sessions read --id s1',
+      'astera host status'
+    ])
   })
 })

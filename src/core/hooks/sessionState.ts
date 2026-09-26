@@ -83,6 +83,24 @@ export function hookEventState(payload: unknown): 'working' | 'waiting' | null {
 }
 
 /**
+ * Whether the event leaves the session asking a person something, and what: a permission prompt (the
+ * notification Claude Code sends once the dialog has been up a few seconds, or an MCP server's question)
+ * or a question (`AskUserQuestion` going up). null for everything else, a turn that ended included.
+ * `sessions send --wait` reads it to tell a `waiting` that is a prompt from one that is the next prompt.
+ */
+export function hookEventPrompt(payload: unknown): 'permission' | 'question' | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const p = payload as { hook_event_name?: unknown; tool_name?: unknown } & NotificationPayload
+  if (p.hook_event_name === 'PreToolUse' && p.tool_name === 'AskUserQuestion') return 'question'
+  if (
+    p.hook_event_name === 'Notification' &&
+    (p.notification_type === 'permission_prompt' || p.notification_type === 'elicitation_dialog')
+  )
+    return 'permission'
+  return null
+}
+
+/**
  * The line of the event that happened last, out of a file's last lines in the order they landed.
  * Not simply the last line: the async hooks can land out of order, and the capture's stamp says
  * which came first (core/hooks/eventTime.ts). A line replaces the current pick unless it is known to

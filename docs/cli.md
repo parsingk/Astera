@@ -478,7 +478,7 @@ astera skills  install [--account <accountId>]
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
-astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
+astera sessions send   --id <sessionId> --text <text|-> [--no-enter] [--wait [--timeout-ms <n>]]
 astera sessions create --account <accountId> --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
 
 astera chats pending   [--session <sessionId>]
@@ -845,6 +845,48 @@ rather than typed a second time.
   started its first thread yet cannot take a turn from the Host, and that is a 6 that says so; nothing was
   sent, so the same `--request-id` works once the thread exists.
 
+**`sessions send --wait` waits for the turn the send starts to end**, after the send was accepted.
+This is one turn of one session, not the end of a Job; for a Job use `runs wait`. The Host reads what
+it already knows about the session and starts nothing new to find out:
+
+- **A terminal session's turn ends when its hook events leave it `waiting`** with no prompt open: the
+  `Stop` or `StopFailure` of the turn, or Claude Code's "waiting for your input". It is the same
+  reading `state` gives in `sessions list` (above), with one more rule: an event whose time is from
+  before the send belongs to the turn before, however late it was written, so it cannot end this wait.
+- **A chat session's turn ends when its adapter goes back to idle.** The Host asks its own adapter for
+  the session when it holds one, and Astera when Astera holds the session. A turn that ended in an
+  error, such as a usage limit, has still ended, and `data.turn.error` says why.
+
+`data.turn` says how it ended, and the exit code follows it:
+
+```json
+{"ok":true,"data":{"id":"…","sent":true,"enter":true,"turn":{"state":"ended"}}}
+```
+
+| `turn.state` | Exit | What happened |
+|---|---|---|
+| `ended` | 0 | the turn is over |
+| `prompt` | 8 | a permission prompt or a question opened first, and the turn waits for someone to answer it |
+| `timeout` | 7 | `--timeout-ms` (default one hour) passed with the turn still going; it goes on |
+| `exited` | 1 | the session ended before its turn did |
+
+**A prompt ends the wait because nothing moves until someone answers it.** For a chat session
+`error.details.promptId` is the prompt's id, and `nextSteps` is the `chats answer` line for it. A
+terminal prompt has no id to answer by: read the screen with `sessions read` and answer in the
+session. `error.details.prompt.kind` is `approval` or `question` for a chat session, and `permission`
+or `question` for a terminal one.
+
+**Two sessions cannot be waited for, and are refused with 6 before anything is typed**: a Codex
+terminal session, because Codex runs without the hooks and its turn leaves no event, and a chat
+session nothing holds right now (Astera starting and not yet holding it, with the Host holding no
+adapter for it either). Send without `--wait` and read the session instead. `--wait` with
+`--no-enter` is a 2, since no turn starts.
+
+While it waits it says on stderr every 15 seconds that it is still waiting, as `runs wait` does, and
+`--no-keepalive` turns that off. With `--request-id`, a retry after a lost answer is not typed a second
+time: a recorded ending is replayed, and a recorded timeout waits again for the same turn, marked
+`"observed": true`.
+
 **`sessions create` starts an agent session**, with Astera open or closed, because the Host starts it.
 `--account` and `--cwd` are required; a relative `--cwd` is taken from the directory you ran the
 command from. It answers the new session as `sessions list` shows it, and its `id` is the one
@@ -1184,7 +1226,7 @@ astera: verbose: call jobs-list took 11ms: status 200
 | 5 | Refused for this caller |
 | 6 | Refused because of current state, such as a Job that is already running |
 | 7 | A deadline elapsed, or the Host is running and not answering |
-| 8 | A `wait` stopped before the work ended: a question is open, the run is paused, or every worker is waiting for a usage limit to reset |
+| 8 | A `wait` stopped before the work ended: a question is open, the run is paused, or every worker is waiting for a usage limit to reset; or `sessions send --wait` stopped at a permission prompt or a question |
 | 9 | The command exists here but not in the running build |
 | 10 | A `wait` ended with the Job or run in failure |
 
@@ -1198,6 +1240,10 @@ that says what became of it.
 
 **8 and 10 are the two that matter in CI.** A pipeline needs to tell "it finished badly" from "it is
 waiting for a person", and both are legitimate non-zero endings of a wait.
+
+**`sessions send --wait` uses the same codes.** 0 is a turn that ended, 8 a turn that stopped at a
+prompt someone must answer (`error.details.promptId` is set for a chat prompt), 7 a deadline that
+passed with the turn still going, and 1 a session that ended mid-turn.
 
 **An 8 has three causes, and `error.details` says which.** A question is open when
 `error.details.questionId` is set. The run is paused when `error.details.state` is `paused`. The third

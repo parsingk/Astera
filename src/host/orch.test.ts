@@ -1632,8 +1632,17 @@ describe('요청 영수증', () => {
     flush()
     // 가드가 헛돌지 않는지부터 — 파싱이 조용히 아무것도 못 찾으면 이 시험은 늘 통과한다.
     expect(blocks.size, 'switch 를 읽지 못했다').toBeGreaterThan(30)
+    // **Acting counts, not only committing** (`sessions send --wait`, CLI spec §15): typing into a session
+    // is an effect a receipt keeps (host/orchDeps.ts EFFECTFUL), and its wait polls with `pollTurn`.
     const commitsAndPolls = [...blocks]
-      .filter(([, text]) => text.includes('pollUntil(') && (text.includes('deps.setState(') || /\bcommit\(/.test(text)))
+      .filter(
+        ([, text]) =>
+          (text.includes('pollUntil(') || text.includes('pollTurn(')) &&
+          (text.includes('deps.setState(') ||
+            /\bcommit\(/.test(text) ||
+            text.includes('deps.sendSession(') ||
+            text.includes('deps.chatSend('))
+      )
       .map(([name]) => name)
       .sort()
     expect(commitsAndPolls).toEqual(Object.keys(OBSERVED).sort())
@@ -3165,5 +3174,21 @@ describe('coordinator-idle (final round 3)', () => {
     await waiting
     expect(await ask(app)).toEqual({ status: 200, body: { idle: false } })
     expect(await orch.call({ cmd: 'coordinator-idle', args: { runId }, sessionId: '', from: app })).toMatchObject({ status: 400 })
+  })
+})
+
+// `sessions send --wait` types, then waits (CLI spec §15): a recorded deadline is a stopwatch reading, so a
+// keyed retry waits again for the same turn instead of replaying it, and never types a second time.
+describe('OBSERVED — sessions send --wait', () => {
+  const entry = OBSERVED['sessions-send']
+  it('a recorded timeout is stale, and the retry waits again without sending', () => {
+    const recorded = { status: 200, body: { id: 's1', sent: true, turn: { state: 'timeout' } } }
+    expect(entry.stale(recorded)).toBe(true)
+    expect(entry.afresh({ id: 's1', text: 'go', wait: true }, recorded)).toEqual({ id: 's1', text: 'go', wait: true, resumeWait: true })
+  })
+  it('an ending that is a fact about the world is replayed as recorded', () => {
+    for (const state of ['ended', 'prompt', 'exited'])
+      expect(entry.stale({ status: 200, body: { id: 's1', sent: true, turn: { state } } }), state).toBe(false)
+    expect(entry.stale({ status: 200, body: { id: 's1', sent: true } })).toBe(false)
   })
 })

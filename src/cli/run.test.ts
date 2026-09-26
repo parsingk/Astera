@@ -36,7 +36,7 @@ import {
 import { siblingHostError } from './host'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { createHostOrch } from '../host/orch'
-import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
+import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
 import { KEEPALIVE_MS } from '../core/orchestration/cliKeepalive'
 import type { HostConnection } from '../core/host/connect'
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
@@ -219,6 +219,11 @@ describe('clientTimeoutMs', () => {
   // 짧아 서버가 응답하기 전에 클라이언트가 먼저 끊었다).
   it('ask 기본값(--timeout-ms 없음)은 서버의 ask 기본 시한보다 크다 — 클라이언트가 서버보다 먼저 끊으면 안 된다', () => {
     expect(clientTimeoutMs({ cmd: 'ask', args: {} })).toBeGreaterThan(DEFAULT_ASK_TIMEOUT_MS)
+  })
+  // `sessions send --wait` waits on the Host for up to an hour by default, as `runs wait` does.
+  it('sessions send --wait 는 서버의 기다림 기본 시한보다 크게 기다리고, --wait 없이는 check 의 것이다', () => {
+    expect(clientTimeoutMs({ cmd: 'sessions-send', args: { wait: true } })).toBeGreaterThan(DEFAULT_WAIT_TIMEOUT_MS)
+    expect(clientTimeoutMs({ cmd: 'sessions-send', args: {} })).toBe(clientTimeoutMs({ cmd: 'check', args: {} }))
   })
   it('check 기본값(--timeout-ms 없음)은 서버의 check 기본 시한보다 크다', () => {
     expect(clientTimeoutMs({ cmd: 'check', args: {} })).toBeGreaterThan(DEFAULT_CHECK_TIMEOUT_MS)

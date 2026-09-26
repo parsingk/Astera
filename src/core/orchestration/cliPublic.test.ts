@@ -103,6 +103,16 @@ describe('publicFor', () => {
       .toEqual({ id: 't1', jobId: 'job_1' })
   })
 
+  // `sessions send --wait` carries how the turn ended.
+  it('sessions send 는 --wait 의 turn 을 싣는다', () => {
+    expect(publicFor('sessions-send', { id: 's1', sent: true, enter: true, turn: { state: 'ended' }, secret: 1 })).toEqual({
+      id: 's1',
+      sent: true,
+      enter: true,
+      turn: { state: 'ended' }
+    })
+  })
+
   // `sessions create` answers the new session as `sessions list` shows it, and nothing of its note.
   it('sessions create 는 sessions list 의 한 줄과 같은 칸만 낸다', () => {
     expect(

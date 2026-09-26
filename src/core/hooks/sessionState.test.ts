@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { hookEventState, sessionStateOf, hookEventsDirIn, hookEventsFileIn, latestEventLine } from './sessionState'
+import { hookEventState, sessionStateOf, hookEventsDirIn, hookEventsFileIn, latestEventLine, hookEventPrompt } from './sessionState'
 
 describe('hookEventState', () => {
   // 턴 안에서만 나는 이벤트다 — 도구 호출이 있었다는 것은 아직 Stop 이 오지 않은 턴이 돈다는 뜻이다.
@@ -167,5 +167,30 @@ describe('hook event file location', () => {
   it('프로필 아래 hook-events/<sessionId>.jsonl', () => {
     expect(hookEventsDirIn('/prof')).toBe(path.join('/prof', 'hook-events'))
     expect(hookEventsFileIn(hookEventsDirIn('/prof'), 'ses-1')).toBe(path.join('/prof', 'hook-events', 'ses-1.jsonl'))
+  })
+})
+
+// `sessions send --wait` (CLI spec §15): a `waiting` that is a person being asked, rather than a turn
+// that ended, ends the wait with 8.
+describe('hookEventPrompt — is the session asking a person something', () => {
+  it('a permission prompt and an MCP question are permission prompts', () => {
+    expect(hookEventPrompt({ hook_event_name: 'Notification', notification_type: 'permission_prompt' })).toBe('permission')
+    expect(hookEventPrompt({ hook_event_name: 'Notification', notification_type: 'elicitation_dialog' })).toBe('permission')
+  })
+
+  it('AskUserQuestion going up is a question', () => {
+    expect(hookEventPrompt({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' })).toBe('question')
+  })
+
+  it('a turn that ended is no prompt, and neither is anything else', () => {
+    for (const p of [
+      { hook_event_name: 'Stop' },
+      { hook_event_name: 'StopFailure' },
+      { hook_event_name: 'Notification', notification_type: 'idle_prompt' },
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash' },
+      null,
+      'x'
+    ])
+      expect(hookEventPrompt(p), JSON.stringify(p)).toBeNull()
   })
 })

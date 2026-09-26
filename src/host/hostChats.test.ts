@@ -634,3 +634,17 @@ describe('createHostChats — Slack card answers (Slack in the Host Task 7, P10)
     expect(n.procs[0].sent.length).toBe(before)
   })
 })
+
+// `sessions send --wait` (CLI spec §15): where the turn is, as this Host's adapter decodes it, writer or
+// reader alike.
+describe('createHostChats — turnOf', () => {
+  it('is the adapter status and error, for a session the Host holds an adapter for', () => {
+    const r = rig(undefined, () => stubAdapter({ state: () => ({ ...stubAdapter().state(), status: 'working', error: null }) }))
+    expect(r.chats.turnOf('c1')).toBeNull()
+    r.chats.adopt(r.entry())
+    expect(r.chats.turnOf('c1')).toEqual({ alive: true, status: 'working', error: null })
+    // A reader decodes the same lines, so an app holding the proc does not change the answer.
+    r.holders.heldBy('p1', 1)
+    expect(r.chats.turnOf('c1')).toMatchObject({ status: 'working' })
+  })
+})

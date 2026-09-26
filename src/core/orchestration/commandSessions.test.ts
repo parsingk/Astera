@@ -130,3 +130,136 @@ describe('sessions create — refused before anything starts', () => {
     expect(error(r)).toContain('CWD_MISSING')
   })
 })
+
+// `sessions send --wait` (CLI spec §15): after the send is accepted, the Host waits until the session's
+// turn ends, reading what it already knows: the hook-event state of a terminal session, the adapter's
+// status of a chat session. The ending rides `turn`; the CLI turns it into the exit code.
+describe('sessions send --wait — the turn after the send', () => {
+  const terminal: HostSession = { id: 't1', kind: 'terminal', title: 't', accountId: 'acc_c', cwd: 'D:/p', alive: true, state: 'waiting' }
+  const codexTerminal: HostSession = { ...terminal, id: 't2', accountId: 'acc_x' }
+  const chat: HostSession = { ...terminal, id: 'c1', kind: 'chat', state: 'unknown' }
+  type Turn = { alive: boolean; state: 'working' | 'waiting' | 'unknown'; prompt: 'permission' | 'question' | null }
+  type ChatTurnState = { alive: boolean; status: 'idle' | 'working' | 'waiting'; error: string | null; prompt: unknown }
+
+  const hostDeps = (a: { turns?: Turn[]; chatTurns?: Array<ChatTurnState | undefined> } = {}) => {
+    const turns = [...(a.turns ?? [])]
+    const chatTurns = [...(a.chatTurns ?? [])]
+    const sendSession = vi.fn(async () => {})
+    const chatSend = vi.fn(async () => ({ sent: true as const }))
+    const sessionTurn = vi.fn(async () => (turns.length > 1 ? turns.shift()! : turns[0]))
+    const chatTurn = vi.fn(async () => (chatTurns.length > 1 ? chatTurns.shift() : chatTurns[0]))
+    const deps = makeDeps({
+      listSessions: async () => [terminal, codexTerminal, chat],
+      readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }),
+      sendSession,
+      readChat: async () => [],
+      chatSend,
+      sessionTurn,
+      chatTurn
+    } as Partial<OrchServerDeps>)
+    return { deps, sendSession, chatSend, sessionTurn, chatTurn }
+  }
+  const send = (deps: OrchServerDeps, args: Record<string, unknown>) =>
+    handleCommand(deps, { sessionId: '' }, 'sessions-send', args)
+  const turnOf = (r: { body: unknown }): Record<string, unknown> => (r.body as { turn: Record<string, unknown> }).turn
+
+  it('a terminal turn ends when its hook state reaches waiting with no prompt', async () => {
+    const h = hostDeps({
+      turns: [
+        { alive: true, state: 'unknown', prompt: null },
+        { alive: true, state: 'working', prompt: null },
+        { alive: true, state: 'waiting', prompt: null }
+      ]
+    })
+    const r = await send(h.deps, { id: 't1', text: 'run the tests', wait: true })
+    expect(r.status).toBe(200)
+    expect(h.sendSession).toHaveBeenCalledTimes(1)
+    expect(r.body).toMatchObject({ id: 't1', sent: true, enter: true })
+    expect(turnOf(r)).toEqual({ state: 'ended' })
+    // The stamp the Host compares events against is when this send began.
+    expect(h.sessionTurn).toHaveBeenCalledWith('t1', expect.any(Number))
+  })
+
+  it('a permission prompt that opens during the wait ends it, saying which kind', async () => {
+    const h = hostDeps({
+      turns: [
+        { alive: true, state: 'working', prompt: null },
+        { alive: true, state: 'waiting', prompt: 'permission' }
+      ]
+    })
+    const r = await send(h.deps, { id: 't1', text: 'go', wait: true })
+    expect(turnOf(r)).toEqual({ state: 'prompt', prompt: { kind: 'permission' } })
+  })
+
+  it('a session that ends during the wait, and a deadline that passes first', async () => {
+    const exited = hostDeps({ turns: [{ alive: false, state: 'unknown', prompt: null }] })
+    expect(turnOf(await send(exited.deps, { id: 't1', text: 'go', wait: true }))).toEqual({ state: 'exited' })
+    const slow = hostDeps({ turns: [{ alive: true, state: 'working', prompt: null }] })
+    expect(turnOf(await send(slow.deps, { id: 't1', text: 'go', wait: true, timeoutMs: 30 }))).toEqual({ state: 'timeout' })
+  })
+
+  it('a Codex terminal session writes no hook events, so the wait is refused before anything is typed (6)', async () => {
+    const h = hostDeps({ turns: [{ alive: true, state: 'unknown', prompt: null }] })
+    const r = await send(h.deps, { id: 't2', text: 'go', wait: true })
+    expect(r.status).toBe(409)
+    expect(error(r)).toContain('Codex')
+    expect(h.sendSession).not.toHaveBeenCalled()
+  })
+
+  it('--no-enter starts no turn, so it cannot be waited for (2)', async () => {
+    const h = hostDeps({ turns: [{ alive: true, state: 'waiting', prompt: null }] })
+    expect((await send(h.deps, { id: 't1', text: 'go', wait: true, noEnter: true })).status).toBe(400)
+    expect(h.sendSession).not.toHaveBeenCalled()
+  })
+
+  it('a chat turn ends when the adapter goes back to idle', async () => {
+    const idle: ChatTurnState = { alive: true, status: 'idle', error: null, prompt: null }
+    const h = hostDeps({ chatTurns: [idle, { ...idle, status: 'working' }, idle] })
+    const r = await send(h.deps, { id: 'c1', text: 'hello', wait: true })
+    expect(r.status).toBe(200)
+    expect(h.chatSend).toHaveBeenCalledTimes(1)
+    expect(turnOf(r)).toEqual({ state: 'ended' })
+  })
+
+  it('a chat permission prompt ends the wait with its prompt id', async () => {
+    const idle: ChatTurnState = { alive: true, status: 'idle', error: null, prompt: null }
+    const prompt = { sessionId: 'c1', id: 'req_7', kind: 'approval', tool: 'Bash', summary: 'npm test' }
+    const h = hostDeps({ chatTurns: [idle, { ...idle, status: 'working' }, { ...idle, status: 'waiting', prompt }] })
+    const r = await send(h.deps, { id: 'c1', text: 'hello', wait: true })
+    expect(turnOf(r)).toEqual({
+      state: 'prompt',
+      promptId: 'req_7',
+      prompt: { kind: 'approval', tool: 'Bash', summary: 'npm test' }
+    })
+  })
+
+  it('a chat turn that failed still ended, and says why', async () => {
+    const idle: ChatTurnState = { alive: true, status: 'idle', error: null, prompt: null }
+    const h = hostDeps({ chatTurns: [idle, { ...idle, status: 'working' }, { ...idle, error: 'the API answered 500' }] })
+    expect(turnOf(await send(h.deps, { id: 'c1', text: 'hello', wait: true }))).toEqual({
+      state: 'ended',
+      error: 'the API answered 500'
+    })
+  })
+
+  it('a chat session nobody can read the status of is refused before the send (6)', async () => {
+    const h = hostDeps({ chatTurns: [undefined] })
+    const r = await send(h.deps, { id: 'c1', text: 'hello', wait: true })
+    expect(r.status).toBe(409)
+    expect(h.chatSend).not.toHaveBeenCalled()
+  })
+
+  it('an observed replay waits again without sending again', async () => {
+    const h = hostDeps({ turns: [{ alive: true, state: 'waiting', prompt: null }] })
+    const r = await send(h.deps, { id: 't1', text: 'go', wait: true, resumeWait: true })
+    expect(turnOf(r)).toEqual({ state: 'ended' })
+    expect(h.sendSession).not.toHaveBeenCalled()
+  })
+
+  it('without --wait nothing is waited for and there is no turn', async () => {
+    const h = hostDeps({ turns: [{ alive: true, state: 'working', prompt: null }] })
+    const r = await send(h.deps, { id: 't1', text: 'go' })
+    expect(r.body).toEqual({ id: 't1', sent: true, enter: true })
+    expect(h.sessionTurn).not.toHaveBeenCalled()
+  })
+})

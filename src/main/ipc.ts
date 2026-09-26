@@ -3270,6 +3270,20 @@ export function registerIpc(
       // 쥐지 않은 세션(재접속 중)은 카드를 모른다 — null(없음)이 아니라 undefined(모름)다.
       chatPending: async (sessionId) =>
         core.chat.has(sessionId) ? chatPendingOf(core.chat.state(sessionId)?.request ?? null) : undefined,
+      // `astera sessions send --wait` (CLI spec §15): where a chat session this app holds is in its turn, as
+      // its adapter decodes it. undefined for a session it does not hold (yet), which the Host reads as
+      // "cannot say" rather than as a turn that ended.
+      chatTurn: async (sessionId) => {
+        if (!core.chat.has(sessionId)) return undefined
+        const st = core.chat.state(sessionId)
+        if (!st) return undefined
+        return {
+          alive: core.chat.info(sessionId)?.status === 'running',
+          status: st.status,
+          error: st.error,
+          prompt: chatPromptsOf(sessionId, core.chat.pendingOf(sessionId))[0] ?? null
+        }
+      },
       // `astera sessions send` 가 대화 세션에 치는 턴. 스케줄러와 Slack 이 쓰는 그 세션 드라이버로
       // 넘겨 앱의 턴 상태가 제 것으로 남는다. 카드가 열려 있으면 치지 않고 그 카드를 돌려준다 —
       // 답은 앱에서 사람이 한다(R4.3). Slack 은 여기서 카드에 답하지만, 셸에서 온 글자를 승인이나

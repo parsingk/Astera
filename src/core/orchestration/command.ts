@@ -57,6 +57,7 @@ import {
   CHAT_TURNS_MAX,
   type ChatAnswerResult,
   type ChatPending,
+  type ChatPrompt,
   type ChatPromptList,
   type ChatTurn
 } from '../sessions/chatRead'
@@ -493,6 +494,28 @@ export interface OrchServerDeps {
    *  take). **Only the Host injects it.** Rejects with the reason when the start fails; answers the new
    *  session's row as `sessions list` shows it. */
   createSession?(o: SessionCreate): Promise<HostSession>
+  /** A terminal session's turn, for `sessions send --wait` (CLI spec §15): the hook-event state
+   *  `sessions list` reads, with the prompt a `waiting` is. `since` is when the send began; an event
+   *  stamped before it reads `unknown`. null for a session the Host does not hold. Host-injected, beside
+   *  `listSessions`. */
+  sessionTurn?(id: string, since?: number): Promise<{
+    alive: boolean
+    state: SessionState
+    prompt: 'permission' | 'question' | null
+  } | null>
+  /** A chat session's turn, for the same wait: the status of the adapter that decodes it (the Host's own
+   *  when it holds one, the app's otherwise), its last turn's error, and the prompt it is waiting on.
+   *  `undefined` when nobody can say. */
+  chatTurn?(id: string): Promise<ChatTurnState | undefined>
+}
+
+/** A chat session's turn as `chatTurn` reads it. `prompt` is the open prompt, as `chats pending` lists
+ *  it, or null. */
+export interface ChatTurnState {
+  alive: boolean
+  status: 'idle' | 'working' | 'waiting'
+  error: string | null
+  prompt: ChatPrompt | null
 }
 
 /** What `sessions create` hands the Host, checked. `rollAccountIds` is the whole chain, the account
@@ -895,6 +918,31 @@ export const FOLLOW_WINDOW_MS = 20_000
 const FOLLOW_WINDOW_MAX_MS = 60_000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** How often `sessions send --wait` asks for the turn. Each ask reads the end of a hook file, or crosses
+ *  a socket to the app for a chat session it holds, so it is slower than the state polls (POLL_MS). */
+export const SESSION_TURN_POLL_MS = 250
+
+/** How a waited turn ended (`sessions send --wait`): `ended` (the turn is over; `error` when it failed),
+ *  `prompt` (a person must answer a permission prompt or a question first), `exited` (the session ended
+ *  during the wait) or `timeout`. */
+type TurnEnding =
+  | { state: 'ended'; error?: string }
+  | { state: 'prompt'; promptId?: string; prompt: { kind: string; tool?: string | null; summary?: string } }
+  | { state: 'exited' }
+  | { state: 'timeout' }
+
+/** Asks `probe` every `SESSION_TURN_POLL_MS` until it answers an ending or `timeoutMs` passes. The
+ *  asynchronous twin of `pollUntil`, for probes that read a file or cross a socket. */
+async function pollTurn(probe: () => Promise<TurnEnding | null>, timeoutMs: number): Promise<TurnEnding> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const v = await probe()
+    if (v !== null) return v
+    if (Date.now() >= deadline) return { state: 'timeout' }
+    await sleep(Math.min(SESSION_TURN_POLL_MS, Math.max(0, deadline - Date.now())))
+  }
+}
 
 /** Polls until the condition becomes true or the deadline passes. Returns the value once it is true.
  *  deps.setState is an injected function, so it cannot be intercepted to implement "wake up when a
@@ -3526,9 +3574,8 @@ export async function handleCommand(
      * 더 치지 않고 첫 답을 재생한다.
      */
     case 'sessions-list':
-    case 'sessions-read':
-    case 'sessions-send': {
-      if (!deps.listSessions || !deps.readSession || !deps.sendSession || !deps.readChat || !deps.chatSend)
+    case 'sessions-read': {
+      if (!deps.listSessions || !deps.readSession || !deps.readChat)
         return conflict('sessions are answered by the Astera Host, and this caller is not one')
       // **Two filters (CLI spec §14).** `--status` names one field a script can see: `alive` or `ended`
       // read `alive`, and the rest read `state`. `--provider` is the provider of the session's account,
@@ -3570,19 +3617,15 @@ export async function handleCommand(
       }
       const id = str(args.id)
       if (id === null) return bad('--id is required: a session id from `sessions list`')
-      const lines = routed === 'sessions-read' && args.lines !== undefined ? posInt(args.lines) : 200
+      const lines = args.lines !== undefined ? posInt(args.lines) : 200
       if (lines === null) return bad('--lines must be a whole number, 1 or more')
       // The emulator holds that many rows, in the Host that holds every session: a million costs it
       // about half a gigabyte for one read. The Host keeps 256,000 characters of a session, so this
       // is more rows than a session can have.
       if (lines > 10_000) return bad('--lines is at most 10000')
-      const turns =
-        routed === 'sessions-read' && args.turns !== undefined ? posInt(args.turns) : CHAT_TURNS_DEFAULT
+      const turns = args.turns !== undefined ? posInt(args.turns) : CHAT_TURNS_DEFAULT
       if (turns === null) return bad('--turns must be a whole number, 1 or more')
       if (turns > CHAT_TURNS_MAX) return bad(`--turns is at most ${CHAT_TURNS_MAX}`)
-      const text = routed === 'sessions-send' ? str(args.text) : null
-      if (routed === 'sessions-send' && text === null)
-        return bad('--text is required: what to type (a value of `-` reads it from stdin)')
       const session = (await deps.listSessions()).find((x) => x.id === id)
       if (!session) return notFound(`unknown session: ${id}`)
       // **한 명령에 두 모양이다.** 터미널은 화면의 줄(--lines), 대화는 턴(--turns)이다. 맞지 않는
@@ -3590,21 +3633,97 @@ export async function handleCommand(
       if (session.kind === 'chat') {
         if (args.lines !== undefined)
           return bad(`--lines is for terminal sessions; ${id} is a chat session, which reads in turns (--turns)`)
-        if (routed === 'sessions-send' && args.noEnter !== undefined)
-          return bad(`--no-enter is for terminal sessions; ${id} is a chat session, where a send is one turn`)
       } else if (args.turns !== undefined)
         return bad(`--turns is for chat sessions; ${id} is a terminal session, which reads in rows (--lines)`)
       // 대화는 CLI 가 쓰는 transcript·rollout 파일에서 읽는다 — 대화 화면이 읽는 그 파일, 그 reducer 다.
       // 열린 카드는 앱만 안다. 앱이 답하지 못하면(`undefined`) 칸을 싣지 않는다 — "카드 없음" 이 아니다.
-      if (routed === 'sessions-read' && session.kind === 'chat') {
+      if (session.kind === 'chat') {
         const read = await deps.readChat(id, turns)
         const pending = deps.chatPending ? await deps.chatPending(id) : undefined
         return okBody({ id, kind: 'chat', alive: session.alive, turns: read, ...(pending === undefined ? {} : { pending }) })
       }
       // 화면은 Host 가 그린다 — 흐름에서 escape 만 벗기면 ConPTY 가 커서로 옮긴 줄이 한 줄로 붙는다.
-      if (routed === 'sessions-read')
-        return okBody({ id, kind: 'terminal', alive: session.alive, ...(await deps.readSession(id, lines)) })
+      return okBody({ id, kind: 'terminal', alive: session.alive, ...(await deps.readSession(id, lines)) })
+    }
+    /**
+     * 세션에 친다 — 공개 이름(phase C). 터미널은 글자와 Enter, 대화는 한 턴이다.
+     *
+     * **`--wait` (CLI spec §15) 는 보낸 뒤 그 턴이 끝날 때까지 기다린다.** 치는 것은 커밋이 아니라
+     * 의존(`sendSession`·`chatSend`)의 움직임이고, 기다림은 `pollTurn` 이다. 그래서 이 명령은 영수증
+     * 설계의 "움직이고 기다리는" 모양이고 host/orch.ts 의 OBSERVED 에 있다: 시한이 지난 답은 재생하지
+     * 않고, 다시 치지 않은 채(`resumeWait`) 같은 턴을 다시 기다린다. 목록과 읽기와 한 case 였다가
+     * 갈라진 것도 그 가드(orch.test.ts)가 case 하나를 한 명령으로 읽기 때문이다.
+     */
+    case 'sessions-send': {
+      if (!deps.listSessions || !deps.sendSession || !deps.chatSend)
+        return conflict('sessions are answered by the Astera Host, and this caller is not one')
+      const id = str(args.id)
+      if (id === null) return bad('--id is required: a session id from `sessions list`')
+      const text = str(args.text)
+      if (text === null) return bad('--text is required: what to type (a value of `-` reads it from stdin)')
+      // `--wait` (CLI spec §15): the turn this send starts, waited for after the send is accepted.
+      const wait = args.wait !== undefined
+      if (wait && args.wait !== true) return bad('--wait takes no value')
+      if (wait && args.noEnter !== undefined)
+        return bad('--no-enter starts no turn, so there is nothing to --wait for; press Enter or leave out --wait')
+      const session = (await deps.listSessions()).find((x) => x.id === id)
+      if (!session) return notFound(`unknown session: ${id}`)
+      if (session.kind === 'chat' && args.noEnter !== undefined)
+        return bad(`--no-enter is for terminal sessions; ${id} is a chat session, where a send is one turn`)
       if (!session.alive) return conflict(`session ${id} has ended; there is nothing to type into`)
+      /**
+       * **The wait is judged before anything is typed.** A turn nobody can see the end of would only time
+       * out after the text was delivered, so it is refused while refusing still costs nothing:
+       * - a terminal session's end is its hook events (`sessionTurn`), and a Codex terminal writes none;
+       * - a chat session's end is the adapter that decodes it (`chatTurn`): the Host's own, or the app's.
+       *   Nobody holding one is `undefined`, refused the same way.
+       * A permission prompt that opens during the wait is an ending of its own (8 in the CLI).
+       */
+      const since = Date.now()
+      const resuming = wait && args.resumeWait === true
+      let waitFor: (() => Promise<TurnEnding | null>) | null = null
+      if (wait) {
+        const timeoutWord = 'send it without --wait and read the session instead'
+        if (session.kind === 'terminal') {
+          if (!deps.sessionTurn) return conflict('the end of a turn is read by the Astera Host, and this caller is not one')
+          const provider = session.accountId === null ? undefined : (await deps.listAccounts()).find((a) => a.id === session.accountId)?.provider
+          if (provider === 'codex')
+            return conflict(`${id} is a Codex terminal session, which writes no hook events, so the end of its turn cannot be seen; ${timeoutWord}`)
+          const turnOf = deps.sessionTurn
+          waitFor = async () => {
+            const t = await turnOf(id, resuming ? undefined : since)
+            if (t === null || !t.alive) return { state: 'exited' }
+            if (t.state !== 'waiting') return null
+            return t.prompt === null ? { state: 'ended' } : { state: 'prompt', prompt: { kind: t.prompt } }
+          }
+        } else {
+          const chatTurnOf = deps.chatTurn
+          if (!chatTurnOf || (await chatTurnOf(id)) === undefined)
+            return conflict(`nothing that holds ${id} can say where its turn is (Astera may still be taking its sessions back); ${timeoutWord}`)
+          waitFor = async () => {
+            const t = await chatTurnOf(id)
+            if (t === undefined) return null
+            if (!t.alive) return { state: 'exited' }
+            if (t.status === 'waiting') {
+              const p = t.prompt
+              return {
+                state: 'prompt',
+                ...(p ? { promptId: p.id } : {}),
+                prompt: p ? { kind: p.kind, tool: p.tool, summary: p.summary } : { kind: 'approval' }
+              }
+            }
+            if (t.status === 'idle') return t.error ? { state: 'ended', error: t.error } : { state: 'ended' }
+            return null
+          }
+        }
+      }
+      const timeoutMs = typeof args.timeoutMs === 'number' && args.timeoutMs >= 0 ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS
+      // An observed replay (host/orch.ts OBSERVED) waits again for the turn the first call sent; it
+      // types nothing a second time.
+      if (resuming && waitFor) {
+        const turn = await pollTurn(waitFor, timeoutMs)
+        return okBody({ id, sent: true, ...(session.kind === 'terminal' ? { enter: true } : {}), turn })
+      }
       // 앱이 붙어 있으면 앱의 세션 드라이버로, 없으면 Host 가 어댑터의 바이트를 직접 쓴다(orchDeps 의
       // chatSend). 카드가 열려 있으면 앱이 거절한다 — 그 답은 앱에서 사람이 한다(R4.3).
       if (session.kind === 'chat') {
@@ -3615,20 +3734,15 @@ export async function handleCommand(
           return conflict(
             `${id} is waiting on ${r.pending.kind === 'approval' ? 'an approval' : 'a question'}: ${r.pending.summary}. Answer it in Astera; a send does not answer it`
           )
+        if (waitFor) return okBody({ id, sent: true, turn: await pollTurn(waitFor, timeoutMs) })
         return okBody({ id, sent: true })
       }
       const enter = args.noEnter !== true
       // 붙여 넣고 Enter 를 치는 약속(ptyDriver)과 세션마다 한 번에 하나씩은 Host 가 지킨다.
       await deps.sendSession(id, text as string, enter)
+      if (waitFor) return okBody({ id, sent: true, enter, turn: await pollTurn(waitFor, timeoutMs) })
       return okBody({ id, sent: true, enter })
     }
-    /**
-     * The permission prompts chat sessions wait on, and one answer to one of them (chat takeover §3.5).
-     * Both are answered by the Host: it lists the sessions it writes to itself and asks an attached app
-     * for the rest, and an answer goes to the session's writer (host/orchDeps.ts HOST_CHATS). Only an
-     * approval can be answered here (plan ruling P6); a prompt id is per process, so an id open in two
-     * sessions needs `--session` (P7).
-     */
     /**
      * 세션 하나를 띄운다 — 공개 이름(CLI spec §14). **띄우는 것은 Host 다**(`createSession`): 터미널은
      * 워커가 뜨는 그 spawner 로(계정, 폴더 신뢰, statusLine, D4 의 환경, 설정의 권한 우회), 대화는
@@ -3684,6 +3798,13 @@ export async function handleCommand(
         return bad(`could not start the session: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
+    /**
+     * The permission prompts chat sessions wait on, and one answer to one of them (chat takeover §3.5).
+     * Both are answered by the Host: it lists the sessions it writes to itself and asks an attached app
+     * for the rest, and an answer goes to the session's writer (host/orchDeps.ts HOST_CHATS). Only an
+     * approval can be answered here (plan ruling P6); a prompt id is per process, so an id open in two
+     * sessions needs `--session` (P7).
+     */
     case 'chats-pending':
     case 'chats-answer': {
       // **An answer is for a person** (Task 8 fix round 1, the controller's ruling). Letting a tool run

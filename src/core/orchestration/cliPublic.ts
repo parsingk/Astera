@@ -156,7 +156,7 @@ type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
 /** `sessions read` 는 두 모양이다(command.ts). 터미널은 SessionScreen 에 id·kind·alive 를 더한 것,
  *  대화는 id·kind·alive 에 턴과 열린 카드다. `sessions send` 는 명령 층이 짓는다. */
 const SESSION_READ = ['id', 'kind', 'alive', 'cols', 'rows', 'screen', 'scrollback', 'turns', 'pending'] as const
-const SESSION_SEND = ['id', 'sent', 'enter'] as const
+const SESSION_SEND = ['id', 'sent', 'enter', 'turn'] as const
 /** `tasks dispatch`: the worker the Host's loop started for the Task. The spec file's path stays on the
  *  Host: it is where the worker reads its brief, not something a shell acts on. */
 const TASK_DISPATCH = ['taskId', 'runId', 'dispatchId', 'sessionId', 'cwd'] as const

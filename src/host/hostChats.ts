@@ -72,6 +72,10 @@ export interface HostChats {
   send(sessionId: string, text: string, wrote?: () => void): Promise<void>
   requests(sessionId: string): ChatRequest[]
   hasOpenRequest(sessionId: string): boolean
+  /** Where the session's turn is, as this Host's adapter decodes it (writer or reader): `status` and the
+   *  last turn's error, and whether its proc still runs. null for a session the Host holds no adapter
+   *  for. `sessions send --wait` reads it (CLI spec §15). */
+  turnOf(sessionId: string): { alive: boolean; status: 'idle' | 'working' | 'waiting'; error: string | null } | null
   /** The open prompts of the sessions the Host is the writer of, minus the ids the note lists answered. */
   prompts(sessionId?: string): ChatPrompt[]
   /** `wrote` as for `send`: only once the answer's line reached the proc. A failure other than "no open
@@ -379,6 +383,12 @@ export function createHostChats(d: HostChatsDeps): HostChats {
       return true
     },
     has: (id) => manager.has(id),
+    turnOf: (id) => {
+      if (!manager.has(id)) return null
+      const st = manager.state(id)
+      if (!st) return null
+      return { alive: manager.info(id)?.status === 'running', status: st.status, error: st.error }
+    },
     info: (id) => manager.info(id),
     procOf,
     note(id, patch) {

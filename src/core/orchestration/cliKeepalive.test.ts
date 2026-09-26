@@ -61,3 +61,10 @@ describe('cliKeepalive — 한 줄', () => {
     expect(elapsedWord(0)).toBe('0s')
   })
 })
+
+describe('cliKeepalive — sessions send --wait waits', () => {
+  it('only with --wait', () => {
+    expect(waitingCommand({ cmd: 'sessions-send', args: { id: 's', text: 't', wait: true } })).toBe(true)
+    expect(waitingCommand({ cmd: 'sessions-send', args: { id: 's', text: 't' } })).toBe(false)
+  })
+})
