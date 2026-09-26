@@ -156,6 +156,29 @@ describe('createAppJournal', () => {
     expect(j.firstCheckpointHead('dsp_1')).toBeNull()
   })
 
+  // P1 carry-over 3: orch.runDetail scanned the journal twice (once for the lost rows, once for the
+  // recovery rows). Mutation that fails it: reading eventsFor once per kind of row in timeline().
+  it('builds runDetail’s journal rows, lost and recovery both, from one read of the journal', () => {
+    const host = new ContinuityJournal(file())
+    opened.push(host)
+    host.append([
+      { runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'ATTEMPT_LOST', at: NOW, idempotencyKey: 'l1', payload: {} },
+      { runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'RECOVERY_STRATEGY_SELECTED', at: NOW, idempotencyKey: 's1', payload: { strategy: 'redispatch', reason: 'r' } }
+    ])
+    const { j } = make(JOURNAL_HOST)
+    const reads = vi.spyOn(JournalReader.prototype, 'eventsFor')
+    try {
+      expect(j.timeline('run_1', on()).map((e) => e.kind)).toEqual(['runtime-lost', 'recovery'])
+      expect(reads).toHaveBeenCalledTimes(1)
+    } finally {
+      reads.mockRestore()
+    }
+    // …and the handler asks appJournal once per call, not once per kind of row.
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ipc.ts'), 'utf8')
+    const handler = src.slice(src.indexOf("ipcMain.handle('orch.runDetail'"))
+    expect(handler.slice(0, handler.indexOf('ipcMain.handle(', 10)).match(/appJournal\.\w+\(/g)).toEqual(['appJournal.timeline('])
+  })
+
   it('turning on in front of a journal Host asks it to reload and writes no baseline itself', async () => {
     const { j, calls } = make(JOURNAL_HOST)
     await j.turnedOn(on())
