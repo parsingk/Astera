@@ -2,7 +2,18 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ensureShuttle, shuttleFiles, writeShuttle } from './shuttle'
+import { execFileSync } from 'node:child_process'
+import {
+  appImageBootstrap,
+  ensureShuttle,
+  isShuttleContent,
+  removeShuttle,
+  shuttleFiles,
+  shuttleNames,
+  shuttleSyncPlan,
+  syncShuttle,
+  writeShuttle
+} from './shuttle'
 
 let dir: string
 beforeEach(async () => {
@@ -109,5 +120,148 @@ describe('ensureShuttle', () => {
     const p = await ensureShuttle({ dir, execPath: 'x', entryPath: 'y2' })
     expect(await fs.readFile(p, 'utf8')).toContain('y2')
     expect(await fs.readFile(path.join(dir, 'astera'), 'utf8')).toContain('y2')
+  })
+})
+
+// 공개 셔틀의 되돌리기와 갱신(명세 §29–30). 사람이 PATH 에 넣은 폴더는 남의 파일도 사는 곳이라,
+// 지우고 다시 쓰는 판단은 "우리가 쓴 파일인가" 에서 시작한다.
+describe('shuttleNames (플랫폼 지정)', () => {
+  it('win32 은 .cmd 와 sh 둘, 나머지는 sh 하나다', () => {
+    expect(shuttleNames('win32')).toEqual(['astera.cmd', 'astera'])
+    expect(shuttleNames('linux')).toEqual(['astera'])
+    expect(shuttleNames('darwin')).toEqual(['astera'])
+  })
+})
+
+describe('isShuttleContent', () => {
+  const pair = { execPath: 'C:\\App\\Astera.exe', entryPath: 'C:\\App\\resources\\app.asar\\out\\main\\cli.js' }
+  it('우리가 쓴 내용은 우리 것으로 본다 (win32 두 파일, posix, AppImage)', () => {
+    for (const f of shuttleFiles({ ...pair, platform: 'win32' })) expect(isShuttleContent(f.name, f.content)).toBe(true)
+    const posix = shuttleFiles({
+      execPath: '/opt/Astera/astera',
+      entryPath: '/opt/Astera/resources/app.asar/out/main/cli.js',
+      platform: 'linux'
+    })
+    for (const f of posix) expect(isShuttleContent(f.name, f.content)).toBe(true)
+    const ai = shuttleFiles({
+      execPath: '/tmp/.mount_AsteraX/astera',
+      entryPath: '/tmp/.mount_AsteraX/resources/app.asar/out/main/cli.js',
+      appImage: { path: '/home/me/Apps/Astera.AppImage', entryInMount: 'resources/app.asar/out/main/cli.js' },
+      platform: 'linux'
+    })
+    for (const f of ai) expect(isShuttleContent(f.name, f.content)).toBe(true)
+  })
+  it('사람이나 다른 도구가 쓴 같은 이름의 파일은 우리 것이 아니다', () => {
+    expect(isShuttleContent('astera', '#!/bin/sh\necho mine\n')).toBe(false)
+    expect(isShuttleContent('astera', '#!/usr/bin/env node\nrequire("astera-other")\n')).toBe(false)
+    expect(isShuttleContent('astera.cmd', '@echo off\r\nnode C:\\tools\\astera.js %*\r\n')).toBe(false)
+    // 우리 셔틀 뒤에 사람이 한 줄을 덧붙였다면 이제 사람의 파일이다
+    const [sh] = shuttleFiles({ execPath: '/a', entryPath: '/b/cli.js', platform: 'linux' })
+    expect(isShuttleContent('astera', sh.content + 'echo extra\n')).toBe(false)
+  })
+  it('모르는 이름은 우리 것이 아니다', () => {
+    const [sh] = shuttleFiles({ execPath: '/a', entryPath: '/b/cli.js', platform: 'linux' })
+    expect(isShuttleContent('astera-old', sh.content)).toBe(false)
+  })
+})
+
+describe('shuttleSyncPlan', () => {
+  const desired = shuttleFiles({ execPath: 'C:\\New\\Astera.exe', entryPath: 'C:\\New\\cli.js', platform: 'win32' })
+  const old = shuttleFiles({ execPath: 'C:\\Old\\Astera.exe', entryPath: 'C:\\Old\\cli.js', platform: 'win32' })
+  const current = (files: { name: string; content: string }[]): Record<string, string | null> =>
+    Object.fromEntries(files.map((f) => [f.name, f.content]))
+
+  it('설치된 적이 없으면 깔지 않는다', () => {
+    expect(shuttleSyncPlan({ current: { 'astera.cmd': null, astera: null }, desired })).toBe('not-installed')
+  })
+  it('한쪽만 있으면 설치된 것으로 보지 않는다 (없는 파일을 쓰는 것은 설치다)', () => {
+    expect(shuttleSyncPlan({ current: { 'astera.cmd': old[0].content, astera: null }, desired })).toBe(
+      'not-installed'
+    )
+  })
+  it('같은 이름이라도 남의 파일이 하나라도 있으면 건드리지 않는다', () => {
+    expect(
+      shuttleSyncPlan({ current: { 'astera.cmd': old[0].content, astera: '#!/bin/sh\necho mine\n' }, desired })
+    ).toBe('foreign')
+  })
+  it('이미 지금의 앱을 가리키면 쓰지 않는다', () => {
+    expect(shuttleSyncPlan({ current: current(desired), desired })).toBe('current')
+  })
+  it('예전 앱을 가리키는 우리 셔틀은 다시 쓴다', () => {
+    expect(shuttleSyncPlan({ current: current(old), desired })).toBe('rewrite')
+  })
+})
+
+describe('removeShuttle', () => {
+  it('우리가 쓴 파일만 지우고 이웃 파일과 폴더는 남긴다', async () => {
+    await writeShuttle({ dir, execPath: '/opt/Astera/astera', entryPath: '/opt/Astera/cli.js' })
+    await fs.writeFile(path.join(dir, 'kubectl'), 'someone else', 'utf8')
+    await fs.writeFile(path.join(dir, 'astera.bak'), 'a backup the person made', 'utf8')
+    const removed = await removeShuttle({ dir })
+    expect([...removed].sort()).toEqual([...shuttleNames()].sort())
+    expect((await fs.readdir(dir)).sort()).toEqual(['astera.bak', 'kubectl'])
+  })
+  it('같은 이름이라도 우리 내용이 아니면 지우지 않는다', async () => {
+    await fs.writeFile(path.join(dir, 'astera'), '#!/bin/sh\necho mine\n', 'utf8')
+    expect(await removeShuttle({ dir, platform: 'linux' })).toEqual([])
+    await expect(fs.readFile(path.join(dir, 'astera'), 'utf8')).resolves.toBe('#!/bin/sh\necho mine\n')
+  })
+  it('비어도 폴더를 지우지 않고, 없는 폴더에도 실패하지 않는다', async () => {
+    await writeShuttle({ dir, execPath: 'x', entryPath: 'y/cli.js' })
+    await removeShuttle({ dir })
+    await expect(fs.readdir(dir)).resolves.toEqual([])
+    await expect(removeShuttle({ dir: path.join(dir, 'nope') })).resolves.toEqual([])
+  })
+})
+
+describe('syncShuttle', () => {
+  it('설치되어 있지 않으면 아무것도 쓰지 않는다', async () => {
+    expect(await syncShuttle({ dir, execPath: 'x', entryPath: 'y/cli.js' })).toBe('not-installed')
+    await expect(fs.readdir(dir)).resolves.toEqual([])
+  })
+  it('설치되어 있으면 지금의 앱을 가리키게 다시 쓴다', async () => {
+    await writeShuttle({ dir, execPath: '/old/astera', entryPath: '/old/cli.js' })
+    expect(await syncShuttle({ dir, execPath: '/new/astera', entryPath: '/new/cli.js' })).toBe('rewrite')
+    for (const n of shuttleNames()) expect(await fs.readFile(path.join(dir, n), 'utf8')).toContain('/new/cli.js')
+  })
+  it('남의 파일이 그 이름을 쓰고 있으면 두고 온다', async () => {
+    await fs.writeFile(path.join(dir, 'astera'), '#!/bin/sh\necho mine\n', 'utf8')
+    expect(await syncShuttle({ dir, execPath: '/new/astera', entryPath: '/new/cli.js', platform: 'linux' })).toBe(
+      'foreign'
+    )
+    await expect(fs.readFile(path.join(dir, 'astera'), 'utf8')).resolves.toBe('#!/bin/sh\necho mine\n')
+  })
+})
+
+// AppImage 의 process.execPath 는 실행할 때마다 바뀌는 임시 마운트다(/tmp/.mount_*). 공개 셔틀은
+// 진짜 파일($APPIMAGE)을 부르고, 엔트리는 그 실행이 새로 만든 마운트($APPDIR) 안에서 찾는다.
+describe('AppImage 셔틀', () => {
+  const appImage = { path: '/home/me/Apps/Astera.AppImage', entryInMount: 'resources/app.asar/out/main/cli.js' }
+  const files = shuttleFiles({
+    execPath: '/tmp/.mount_AsteraX/astera',
+    entryPath: '/tmp/.mount_AsteraX/resources/app.asar/out/main/cli.js',
+    appImage,
+    platform: 'linux'
+  })
+  it('임시 마운트가 아니라 AppImage 파일을 부른다', () => {
+    expect(files.map((f) => f.name)).toEqual(['astera'])
+    expect(files[0].content).toContain('exec "/home/me/Apps/Astera.AppImage"')
+    expect(files[0].content).not.toContain('.mount_')
+    expect(files[0].content).toContain('ELECTRON_RUN_AS_NODE=1')
+  })
+  // electron-builder 의 AppRun 은 사용자 네임스페이스가 막힌 시스템에서 --no-sandbox 를 앞에 붙인다.
+  // node 모드에서는 모르는 옵션이라 죽는다. 스크립트 인자 자리에 먼저 넣어 두면 AppRun 은 붙이지
+  // 않고, 부트스트랩이 그것을 걷는다.
+  it('AppRun 이 --no-sandbox 를 덧붙이지 않게 스크립트 인자 자리에 먼저 넣는다', () => {
+    expect(files[0].content).toMatch(/ astera --no-sandbox "\$@"\n$/)
+  })
+  it('부트스트랩이 $APPDIR 안의 엔트리를 부르고 argv 를 보통 실행과 같게 맞춘다', async () => {
+    await fs.writeFile(path.join(dir, 'cli.js'), 'console.log(JSON.stringify(process.argv.slice(1)))\n', 'utf8')
+    const out = execFileSync(
+      process.execPath,
+      ['-e', appImageBootstrap('cli.js'), 'astera', '--no-sandbox', 'jobs', '--json', "it's"],
+      { env: { ...process.env, APPDIR: dir }, encoding: 'utf8' }
+    )
+    expect(JSON.parse(out)).toEqual([`${dir}/cli.js`, 'jobs', '--json', "it's"])
   })
 })

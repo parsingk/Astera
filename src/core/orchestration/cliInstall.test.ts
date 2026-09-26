@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { binDirFor, isOnPath, pathEntries, pathHintFor } from './cliInstall'
+import { appImageLaunchFor, binDirFor, isOnPath, pathEntries, pathHintFor } from './cliInstall'
 
 const HOME = '/home/me'
 
@@ -76,5 +76,46 @@ describe('pathHintFor', () => {
   it('나머지는 export 한 줄이다', () => {
     expect(pathHintFor({ dir: '/home/me/.local/bin', platform: 'linux' }))
       .toBe('export PATH="$PATH:/home/me/.local/bin"')
+  })
+})
+
+// AppImage 로 돌 때 process.execPath 는 /tmp/.mount_* 라는 임시 마운트다. 앱을 끄면 사라지고 다음
+// 실행은 다른 이름으로 마운트된다. 공개 셔틀은 진짜 파일인 $APPIMAGE 를 불러야 한다.
+describe('appImageLaunchFor', () => {
+  const execPath = '/tmp/.mount_AsteraAbc/astera'
+  const entryPath = '/tmp/.mount_AsteraAbc/resources/app.asar/out/main/cli.js'
+
+  it('APPIMAGE 가 있으면 그 파일과 마운트 안의 엔트리 상대 경로를 준다', () => {
+    expect(
+      appImageLaunchFor({
+        env: { APPIMAGE: '/home/me/Apps/Astera.AppImage', APPDIR: '/tmp/.mount_AsteraAbc' },
+        execPath,
+        entryPath
+      })
+    ).toEqual({ path: '/home/me/Apps/Astera.AppImage', entryInMount: 'resources/app.asar/out/main/cli.js' })
+  })
+
+  it('APPDIR 이 없으면 실행 파일이 있는 폴더를 마운트로 본다', () => {
+    expect(appImageLaunchFor({ env: { APPIMAGE: '/a/Astera.AppImage' }, execPath, entryPath })).toEqual({
+      path: '/a/Astera.AppImage',
+      entryInMount: 'resources/app.asar/out/main/cli.js'
+    })
+  })
+
+  it('APPIMAGE 가 없으면 AppImage 가 아니다', () => {
+    expect(appImageLaunchFor({ env: {}, execPath: '/opt/Astera/astera', entryPath: '/opt/Astera/cli.js' }))
+      .toBeUndefined()
+    expect(appImageLaunchFor({ env: { APPIMAGE: '' }, execPath, entryPath })).toBeUndefined()
+  })
+
+  // 마운트 밖의 엔트리는 원래 오래 사는 경로다. 거기에 AppImage 실행을 끼울 이유가 없다.
+  it('엔트리가 마운트 밖이면 AppImage 실행을 쓰지 않는다', () => {
+    expect(
+      appImageLaunchFor({
+        env: { APPIMAGE: '/a/Astera.AppImage', APPDIR: '/tmp/.mount_AsteraAbc' },
+        execPath,
+        entryPath: '/tmp/.mount_AsteraAbcd/cli.js'
+      })
+    ).toBeUndefined()
   })
 })
