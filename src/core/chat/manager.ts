@@ -24,6 +24,7 @@ import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatState, Permis
 import { isUnattendedPermission } from './types'
 import { MAX_SNAPSHOT_PROMPT_CHARS, type RollSpawnExtra } from '../rolling/snapshot'
 import { chatInfoFromNote } from '../sessions/noteInfo'
+import { THREAD_NOTE_KEYS } from '../slack/threadNote'
 import type { ModelDescriptor } from '../models/types'
 import { BYPASS_ENV, looksLikeRefusal, watchFirstLine, type BypassSignal } from '../sessions/retryBypass'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -618,9 +619,31 @@ export class ChatSessionManager {
     return this.sessions.get(id)?.bypassed ?? false
   }
 
-  /** Merges `patch` into the session's note. Unknown id: no-op. */
+  /** Merges `patch` into the session's note. Unknown id: no-op.
+   *
+   *  The Slack thread keys also go into the retry materials (Slack in the Host Task 8, the Task 4 carry): a
+   *  bypass retry spawns a new process whose note is built from those materials, and without them it would
+   *  forget the session's root, so the app's register and a Slack-owning Host's registration from the new
+   *  note would each open a second one. Only those keys: everything else remembered belonged to the first
+   *  attempt (its carry-on marker, say). */
   remember(id: string, patch: Record<string, unknown>): void {
-    this.sessions.get(id)?.proc.remember?.(patch)
+    const live = this.sessions.get(id)
+    live?.proc.remember?.(patch)
+    const retry = live?.retry
+    if (!live || !retry) return
+    const carried = THREAD_NOTE_KEYS.filter((k) => k in patch)
+    if (carried.length === 0) return
+    const restore = { ...retry.meta.restore }
+    for (const k of carried) restore[k] = patch[k]
+    live.retry = { ...retry, meta: { ...retry.meta, restore } }
+  }
+
+  /** The note the session's process was spawned with, with the Slack thread keys remembered since (see
+   *  `remember`), or null for an unknown or adopted session (nothing to respawn with). A bypass retry's
+   *  caller reads the session's thread here. */
+  spawnNote(id: string): Record<string, unknown> | null {
+    const retry = this.sessions.get(id)?.retry
+    return retry ? { ...retry.meta.restore } : null
   }
 
   /** Drops the session without touching its process: its adapter stops being heard and the id is no

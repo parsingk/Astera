@@ -649,6 +649,26 @@ describe('ChatSessionManager.retryWithBypass (design F5)', () => {
     expect(seen.at(-1)).toEqual({ type: 'notice', key: 'bypassed' })
   })
 
+  // Slack in the Host Task 8 (the Task 4 carry): the Slack thread noted into the first attempt's note
+  // follows the session into the retry's note, and spawnNote reads it, so the app registers the retry
+  // with it (no second root) and a Host that owns Slack registers the new proc with it from its note.
+  it('keeps the noted Slack thread across a bypass retry: in the new note, and in spawnNote', () => {
+    const { manager, handles, spawned } = setup()
+    const info = manager.spawn({ account: codexAccount, cwd: 'D:/proj', bypassSignal: 'path' })
+    manager.remember(info.id, { slackThreadTs: '1.1', slackChannel: 'C1', carrySent: true })
+    expect(spawned[0].proc.notes).toEqual([{ slackThreadTs: '1.1', slackChannel: 'C1', carrySent: true }])
+    handles[0].emit({ type: 'exit', code: 8, errorDetail: null })
+    manager.retryWithBypass(info.id)
+    expect(spawned[1].opts.meta?.restore).toMatchObject({ slackThreadTs: '1.1', slackChannel: 'C1', bypassedToolchain: true })
+    // Only the thread keys follow: the rest of what was remembered belonged to the first attempt.
+    expect(spawned[1].opts.meta?.restore).not.toHaveProperty('carrySent')
+    expect(manager.spawnNote(info.id)).toMatchObject({ slackThreadTs: '1.1', slackChannel: 'C1' })
+    // A dropped thread (both keys null) is dropped from what follows too.
+    manager.remember(info.id, { slackThreadTs: null, slackChannel: null })
+    expect(manager.spawnNote(info.id)).toMatchObject({ slackThreadTs: null, slackChannel: null })
+    expect(manager.spawnNote('nope')).toBeNull()
+  })
+
   it('말없이 즉사해도 재시도가 성공하면 initialPrompt 를 그 재시도가 보낸다', async () => {
     // startRejectsOnce: 첫 시도의 handshake 가 끝내 완성되지 않는다 — 실제로 거절당한 CLI 의 모양과
     // 같다. false 로 두면 가짜 adapter 의 start() 가 (실제와 달리) exit 과 무관하게 성공해 버려

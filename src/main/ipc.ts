@@ -13,6 +13,8 @@ import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier } from '../core/slack/notifier'
 import { readFileTail } from '../core/slack/notifier'
 import { notedThreadOf } from '../core/slack/threadNote'
+import { isForwardedChatEvent } from '../core/slack/forwarded'
+import type { SlackOwnership } from './slackOwnership'
 import type { SlackConfigStore } from './slackConfigStore'
 import type { SlackConfig } from '../core/slack/config'
 import { codexRolloutFromNote, type CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
@@ -753,10 +755,10 @@ export function registerIpc(
   slack?: {
     notifier: SlackNotifier
     store: SlackConfigStore
-    // A config change reconfigures the inbound socket too — without this, turning bot mode off (or
-    // even just changing the channel or token) leaves the old socket attached to the old channel,
-    // still injecting into live sessions.
-    reconfigureInbox?: (cfg: SlackConfig) => void
+    /** Who owns Slack (Slack in the Host, P4, P5): this app's notifier hears its inputs only while
+     *  `local()`, a settings save is applied by the owner (`configChanged`), and while a Host owns Slack
+     *  the events only this app sees are forwarded to it. */
+    ownership: SlackOwnership
   }, // Slack notifications
   codexRolling?: CodexRollingCoordinator, // Codex rolling
   scheduler?: SchedulerCoordinator, // session scheduler
@@ -1255,6 +1257,9 @@ export function registerIpc(
   void hostSessionsTakenBack.then(() =>
     core.pruneStatusLinePayloads(new Set(core.sessions.list().map((session) => session.id)))
   )
+  // Slack in the Host (P5): who owns Slack is decided once the startup chain settles, and not before, so
+  // this app opens no socket in front of a Slack-owning Host it has not heard from yet.
+  void hostSessionsTakenBack.then(() => slack?.ownership.settled())
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -1479,7 +1484,7 @@ export function registerIpc(
       }
     }
     try {
-      slack?.notifier.handleData(e) // limit detection for non-rolling sessions
+      if (slack?.ownership.local() !== false) slack?.notifier.handleData(e) // limit detection for non-rolling sessions (a Slack-owning Host reads the same output)
     } catch {
       /* A Slack failure does not block the session */
     }
@@ -1549,7 +1554,8 @@ export function registerIpc(
     if (busyState.get(e.sessionId)) send('session:busy', { sessionId: e.sessionId, busy: false })
     busyState.delete(e.sessionId)
     try {
-      slack?.notifier.handleExit(e) // exit notification — delayed 3s, cancelled on a rolling switch
+      // exit notification — delayed 3s, cancelled on a rolling switch. A Slack-owning Host sources every exit (P6).
+      if (slack?.ownership.local() !== false) slack?.notifier.handleExit(e)
     } catch {
       /* A Slack failure does not block the session */
     }
@@ -1647,10 +1653,27 @@ export function registerIpc(
     // return at the notifier's first line. The transcript path is a getter because Claude's file exists
     // only after the first turn and Codex names its rollout at `ready` — the summary reads it when the
     // turn ends, not when the session starts.
-    slack?.notifier.onChatEvent(sessionId, event, {
-      provider: core.chat.state(sessionId)?.provider ?? 'codex',
-      transcriptPath: () => chatTranscripts.get(sessionId) ?? codexRollout?.rolloutPathFor(sessionId) ?? null
-    })
+    //
+    // While a Host owns Slack, the events the notifier reads (never an exit: the Host sources those, P6)
+    // are forwarded to it with the account and the transcript path known now (P11). The Host drops one for
+    // a session whose adapter it holds itself, so a Host-held chat is announced once.
+    if (slack?.ownership.local() !== false) {
+      slack?.notifier.onChatEvent(sessionId, event, {
+        provider: core.chat.state(sessionId)?.provider ?? 'codex',
+        transcriptPath: () => chatTranscripts.get(sessionId) ?? codexRollout?.rolloutPathFor(sessionId) ?? null
+      })
+    } else if (isForwardedChatEvent(event)) {
+      const accountId = core.chat.info(sessionId)?.accountId
+      if (accountId)
+        slack.ownership.forward({
+          kind: 'chat',
+          sessionId,
+          accountId,
+          event,
+          provider: core.chat.state(sessionId)?.provider ?? 'codex',
+          transcriptPath: chatTranscripts.get(sessionId) ?? codexRollout?.rolloutPathFor(sessionId) ?? null
+        })
+    }
     if (event.type === 'ready') {
       const info = core.chat.info(sessionId)
       if (!info) return
@@ -5204,11 +5227,12 @@ export function registerIpc(
   ipcMain.handle('slack.setConfig', async (_e, patch: Partial<SlackConfig>) => {
     if (!slack) return
     const normalized = await slack.store.patch(patch)
-    slack.notifier.applyConfig(normalized) // applied immediately on save
-    // The inbound socket is reconfigured immediately too — it disconnects when this turns off (any of
-    // botToken, channelId, or appToken missing), and reopens when the channel or token changes. With no
-    // change it does not reconnect (the dedup in SlackInboxController.apply).
-    slack.reconfigureInbox?.(normalized)
+    // Applied immediately on save by whichever process owns Slack: here (the notifier, and the inbound
+    // socket, which disconnects when this turns off — any of botToken, channelId, or appToken missing —
+    // and reopens when the channel or token changes; with no change it does not reconnect, the dedup in
+    // SlackInboxController.apply), or in the Slack-owning Host, told to read the file again with
+    // slack-reload. Undecided (the startup chain has not settled): nothing, the decision reads the file.
+    await slack.ownership.configChanged(normalized)
   })
 
   // The language setting. getLang returns both halves: `resolved` is what the renderer translates with,
@@ -5596,6 +5620,9 @@ export function registerIpc(
       // Read at every handshake, so the notice belongs to the Host that just answered rather than to
       // whatever the runtime looked like when the app started.
       runtimeIncomplete: () => runtime?.incomplete ?? false,
+      // Slack in the Host, Task 8 carry 3: a hello sent while this app holds its Slack socket leaves the
+      // slack yield out, or a Slack-owning Host would open a second socket before this app hears it.
+      keepsSlack: () => slack?.ownership.helloKeeps() ?? false,
       spawnHost: () => {
         // Checked and repaired again here, not reused from startup: the old Host held its `node.exe`
         // and nothing could be replaced while it did. By the time a spawn is wanted that Host is gone,
@@ -5624,6 +5651,15 @@ export function registerIpc(
       }
     })
     hostClient = client
+    // Slack in the Host (P17): the Host half of the ownership. slack-reload is an app-only orch-call the
+    // app awaits; slack-event is a plain client message. Both are sent only while the Host owns Slack.
+    slack?.ownership.setHost({
+      reload: async () => {
+        const r = await orchCall({ cmd: 'slack-reload', args: {}, sessionId: '' })
+        if (r.status !== 200) throw new Error(`slack-reload answered ${r.status}`)
+      },
+      forward: (event) => client.send({ t: 'slack-event', event })
+    })
 
     // S6 D4: the block records this app's coordinators found go to a Host that speaks `blocks`, whole
     // after each handshake, and the Host's come back as `blocks` pushes. Sends nothing to an older Host.
@@ -5655,6 +5691,8 @@ export function registerIpc(
       now: () => Date.now(),
       slack: slack?.notifier,
       desktop,
+      // spec §3.6: a Slack-owning Host posted its rolls as it made them.
+      hostPostsSlack: () => slack?.ownership.owner() === 'host',
       log: hostLog
     })
     // Fix round 1 (I1, M1): a run whose Slack lines could not go out (slack.json not loaded yet, or a
@@ -6473,6 +6511,13 @@ export function registerIpc(
     }
     client.onStatusChange((s) => {
       routeByStatus(s)
+      // Who owns Slack follows the same status (P5): a Slack-owning Host takes it at once, and one that goes
+      // away hands it back after the grace.
+      try {
+        slack?.ownership.status(s)
+      } catch (err) {
+        hostLog(`host: the Slack ownership could not follow a status change: ${String(err)}`)
+      }
       // Host S3 (R1, R3): the same transition this status subscription already drives ptyRouter and
       // procRouter by also decides whether worktrees.json writes go to the Host or to the file here.
       void worktreeRoute.status(s).catch((err) => hostLog(`host: worktrees status change failed: ${String(err)}`))
@@ -6911,7 +6956,9 @@ export function registerIpc(
     }
     if (need.slack) {
       try {
-        slack?.notifier.register(info)
+        // With the thread its note names, like the adopters (Slack in the Host, the Task 4 carry): the
+        // retry keeps the id and the root, and the chat manager carries the thread keys into it.
+        slack?.notifier.register(info, { thread: notedThreadOf(core.chat.spawnNote(info.id) ?? {}) })
       } catch {
         /* A failed Slack re-registration does not block the retry */
       }

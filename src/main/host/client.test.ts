@@ -6,7 +6,7 @@ import path from 'node:path'
 import { hostAddress } from '../../host/address'
 import { startHostServer, type HostServer } from '../../host/server'
 import { encodeLine, createLineReader } from '../../host/framing'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_SLACK, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
 import { hostSpeaksDispatch } from './outdated'
 
@@ -165,9 +165,47 @@ describe('HostClient', () => {
     const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await waitFor(() => host.got.some((m) => m.t === 'hello'))
-    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual([HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER])
+    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual([HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_SLACK])
+    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toContain('slack')
     await c.stop()
     await host.close()
+  })
+
+  // Slack in the Host Task 8 carry 3: an app holding its Slack socket leaves the slack yield out of that
+  // hello, or the Host opens its socket beside the app's before the app hears the reply. Asked at every
+  // hello; a throwing question is read as "keeps" (no second socket), logged.
+  it('leaves the slack yield out of a hello while keepsSlack says this app holds Slack', async () => {
+    const addr = addressFor('yields-slack')
+    const host = await rawHost(addr, [])
+    let keeps: () => boolean = () => true
+    const logs: string[] = []
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m), keepsSlack: () => keeps() })
+    c.start()
+    await waitFor(() => host.got.some((m) => m.t === 'hello'))
+    const yields = (host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields
+    expect(yields).not.toContain('slack')
+    expect(yields).toContain('rolling')
+    await c.stop()
+    await host.close()
+    keeps = () => { throw new Error('boom') }
+    const addr2 = addressFor('yields-slack-throw')
+    const host2 = await rawHost(addr2, [])
+    const c2 = new HostClient({ address: addr2.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m), keepsSlack: () => keeps() })
+    c2.start()
+    await waitFor(() => host2.got.some((m) => m.t === 'hello'))
+    expect((host2.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).not.toContain('slack')
+    expect(logs.some((m) => m.includes('keepsSlack'))).toBe(true)
+    await c2.stop()
+    await host2.close()
+    keeps = () => false
+    const addr3 = addressFor('yields-slack-free')
+    const host3 = await rawHost(addr3, [])
+    const c3 = new HostClient({ address: addr3.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m), keepsSlack: () => keeps() })
+    c3.start()
+    await waitFor(() => host3.got.some((m) => m.t === 'hello'))
+    expect((host3.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toContain('slack')
+    await c3.stop()
+    await host3.close()
   })
 
   // Task 14 review I1: the app's `hostDrives()` over the real status. An unresponsive Host that announced

@@ -237,6 +237,35 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     expect(h.logs.some((m) => m.includes('roll state of s2 dropped'))).toBe(true)
   })
 
+  // Task 8 carry 2: an app-held roll. The app forwards the `rolled` in the same turn as the respawn's
+  // pty-spawn, behind it on the socket, but the Host may open the new pty before or after it handles the
+  // forward. Either way the new session goes on in the old root, and no second one is posted.
+  it("an app roll's forwarded rolled and the new pty's note land in either order with no second root", async () => {
+    for (const order of ['pty first', 'rolled first'] as const) {
+      const h = await rig()
+      h.wiring.start()
+      await h.active()
+      h.openSession('s1')
+      await vi.waitFor(() => expect(h.registry.metaOf('p-s1')?.restore).toMatchObject({ slackThreadTs: 't1' }))
+      const rolled = { kind: 'rolled' as const, oldSessionId: 's1', info: { id: 's2', accountId: 'a1', cwd: 'D:/p', title: 's1', slackNotify: true } as never }
+      if (order === 'pty first') {
+        h.openSession('s2', { rolledFrom: 's1', title: 's1' })
+        h.wiring.forwarded(rolled)
+      } else {
+        h.wiring.forwarded(rolled)
+        h.openSession('s2', { rolledFrom: 's1', title: 's1' })
+      }
+      await vi.waitFor(() => expect(h.registry.metaOf('p-s2')?.restore).toMatchObject({ slackThreadTs: 't1', slackChannel: 'C1' }))
+      h.ptys.get('p-s2')!.emit('Claude usage limit ' + 'reached ∙ resets 3am')
+      await vi.waitFor(() => expect(h.slack.posts.length).toBeGreaterThan(1))
+      await new Promise((r) => setTimeout(r, 10))
+      expect(h.slack.posts.filter((p) => p.thread_ts === undefined), order).toHaveLength(1)
+      expect(h.slack.posts.slice(1).every((p) => p.thread_ts === 't1'), order).toBe(true)
+      expect(h.wiring.notifier.resolveSessionByThread('t1'), order).toBe('s2')
+      await h.wiring.dispose()
+    }
+  })
+
   it('reads slack.json from the profile and never writes it, a reload included (S4)', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'astera-host-slack-'))
     try {

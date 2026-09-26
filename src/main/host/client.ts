@@ -2,7 +2,7 @@
 // `status()`: nothing else in slice 1 depends on the Host being there, and every failure ends here,
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_SLACK, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { HOST_UNRESPONSIVE_MS, PING_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
@@ -33,6 +33,11 @@ export interface HostClientDeps {
    *  not once: the answer belongs to the Host that just answered, and the next one may be started
    *  from a runtime this app has since repaired. */
   runtimeIncomplete?: () => boolean
+  /** Whether this app holds its own Slack socket now (Slack in the Host Task 8). Read at every hello: while
+   *  it is true the hello leaves the `slack` yield out, because a Slack-owning Host opens its socket the
+   *  moment a yielding hello reaches it, and two sockets on one token split the replies. Absent: yields.
+   *  A throw is read as true (no second socket) and logged. */
+  keepsSlack?: () => boolean
 }
 
 const DEFAULT_ATTEMPTS = 25
@@ -509,12 +514,22 @@ export class HostClient {
     // sessions it owns, and this app shows them. `chat-takeover`: this app writes its chat chains into
     // the proc notes and leaves a Host-started or Host-marked chat proc to a Host that announces it.
     // An older Host ignores the names, and this app goes on driving in front of it (D5).
+    // `slack` (Slack in the Host P4): this app opens no socket and posts nothing in front of a Host that
+    // announces `slack-owner`, and forwards what only it sees. Left out while this app holds its own socket
+    // (keepsSlack), so that Host stays inactive rather than opening a second one beside it.
+    let keepsSlack = false
+    try {
+      keepsSlack = this.deps.keepsSlack?.() === true
+    } catch (err) {
+      keepsSlack = true
+      this.deps.log(`keepsSlack threw, so this hello keeps Slack: ${String(err)}`)
+    }
     this.send({
       t: 'hello',
       protocol: this.deps.protocol ?? HOST_PROTOCOL,
       app: this.deps.appVersion,
       role: 'app',
-      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER]
+      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])]
     })
   }
 

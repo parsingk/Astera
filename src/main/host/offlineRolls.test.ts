@@ -20,6 +20,7 @@ function rig(o: {
   journal?: () => Promise<{ status: number; body: unknown }>
   slackFails?: boolean
   desktopThrows?: boolean
+  hostPostsSlack?: boolean
 } = {}) {
   const trail: string[] = []
   const calls: Record<string, unknown>[] = []
@@ -52,7 +53,8 @@ function rig(o: {
         trail.push(`desktop ${n} ${String(id)}`)
       }
     },
-    log: (m) => logs.push(m)
+    log: (m) => logs.push(m),
+    ...(o.hostPostsSlack === undefined ? {} : { hostPostsSlack: () => o.hostPostsSlack === true })
   })
   return { rolls, trail, calls, logs }
 }
@@ -67,6 +69,15 @@ describe('createOfflineRolls (S6 Task 5, D6)', () => {
     // Counted: b and c met a limit; 'gone' only stalled, so it is not (fix round 1, M4).
     expect(h.trail.slice(-2)).toEqual(['desktop 2 b', 'ack 8'])
     expect(h.calls).toEqual([{}, { ack: 8 }])
+  })
+
+  it('sends nothing to Slack while the Host posts to Slack itself; the desktop notice and the ack stay (spec §3.6)', async () => {
+    const h = rig({ hostPostsSlack: true })
+    await h.rolls.swept('at startup', swept)
+    expect(h.trail.filter((t) => t.startsWith('slack'))).toEqual([])
+    expect(h.trail).toContain('ack 8')
+    expect(h.trail.some((t) => t.startsWith('desktop'))).toBe(true)
+    expect(h.logs.some((m) => m.includes('the Host posts to Slack itself'))).toBe(true)
   })
 
   it('asks nothing of a Host that lacks the feature, or is not connected', async () => {

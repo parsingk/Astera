@@ -42,6 +42,7 @@ import { SlackNotifier } from '../core/slack/notifier'
 import { SlackConfigStore } from './slackConfigStore'
 import { SlackInboxController } from '../core/slack/inbox'
 import { createSocketClient, createWebClient } from './slackSdk'
+import { createSlackOwnership, type SlackOwnership } from './slackOwnership'
 import { HookEventWatcher } from '../core/hooks/eventWatcher'
 import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
@@ -90,6 +91,7 @@ let codexRollingRef: CodexRollingCoordinator | null = null
 let schedulerRef: SchedulerCoordinator | null = null
 let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
+let slackOwnershipRef: SlackOwnership | null = null // who owns Slack — its hand-back timer is cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
 let hostClientStopRef: (() => Promise<void>) | null = null // Astera Host client — closes the socket on quit
@@ -501,7 +503,7 @@ app.whenReady().then(async () => {
   })
   // Slack thread reply intake. Connects only when an app token is present and bot mode is on — on
   // the webhook path there are no threads, so there is nothing to reply into. SlackInboxController
-  // safely rebuilds the socket whenever settings change (reconfigureInbox in registerIpc below) —
+  // safely rebuilds the socket whenever settings change (slackOwnership.configChanged, from registerIpc) —
   // that fixed a bug where turning bot mode off left the socket attached to the old channel until
   // the next restart.
   const slackInboxController = new SlackInboxController({
@@ -541,10 +543,27 @@ app.whenReady().then(async () => {
     isQuitting: () => quitting
   })
   slackInboxControllerRef = slackInboxController
-  void slackStore.load().then((c) => {
-    slack.applyConfig(c)
-    void slackInboxController.apply(c)
+  // Who owns Slack (Slack in the Host, P4, P5): this app, or a Host that announced `slack-owner`. Nothing
+  // is applied at start any more: slack.json is read and the socket opened only once the startup chain
+  // settles with no Slack-owning Host (registerIpc calls `settled`), or after the hand-back grace when one
+  // goes away. Before that, the notifier hears its inputs with no transport and posts nothing.
+  const slackOwnership = createSlackOwnership({
+    load: () => slackStore.load(),
+    apply: (c) => {
+      slack.applyConfig(c)
+      void slackInboxController.apply(c)
+    },
+    yieldAll: () => {
+      slack.setTransport(null)
+      void slackInboxController.stop()
+    },
+    after: (ms, fn) => {
+      const t = setTimeout(fn, ms)
+      return () => clearTimeout(t)
+    },
+    log: slackLog
   })
+  slackOwnershipRef = slackOwnership
   // codex rollout watcher: codex has neither hooks nor a statusLine mechanism, so this one tail of
   // the rollout jsonl answers both questions — task_complete for turn completion, and the token_count
   // records the usage chips draw. Independent of rolling. Every codex session is watched (the caller
@@ -559,7 +578,11 @@ app.whenReady().then(async () => {
         return null
       }
     },
-    onTurnComplete: (sessionId, rolloutPath) => slack.onCodexTurnComplete(sessionId, rolloutPath),
+    // The watcher stays for the usage chips; its turn end reaches the notifier only while this app owns
+    // Slack (P12): a Slack-owning Host watches its codex terminal sessions itself.
+    onTurnComplete: (sessionId, rolloutPath) => {
+      if (slackOwnership.local()) slack.onCodexTurnComplete(sessionId, rolloutPath)
+    },
     // The mapping goes into the note the Host keeps for that session's pty, which is the only place it
     // can be read back from after a restart — the scan that made it cannot be run again for a session
     // whose spawn is in the past. With no Host the pty has no note and this does nothing.
@@ -581,7 +604,22 @@ app.whenReady().then(async () => {
     // is not one of these taps: it no longer reads a hook payload directly, it subscribes to `attention`
     // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
     // still runs first regardless.
-    (sid, payload) => fanOutHookEvent({ attention, pendingPrompt, slack, rolling: rollingRef }, sid, payload),
+    // Slack hears the hooks only while this app owns it: a Slack-owning Host reads the same hook files.
+    (sessionId, payload) =>
+      fanOutHookEvent(
+        {
+          attention,
+          pendingPrompt,
+          slack: {
+            onHookEvent: (sid, p) => {
+              if (slackOwnership.local()) slack.onHookEvent(sid, p)
+            }
+          },
+          rolling: rollingRef
+        },
+        sessionId,
+        payload
+      ),
     slackLog
   )
   hookWatcher.start()
@@ -827,12 +865,29 @@ app.whenReady().then(async () => {
     // not block rolling. Without this the SlackNotifier record stays on the old id, so turn
     // notifications stop after the switch, onRolled cannot cancel the scheduled exit timer so a false
     // session-exit goes out, and limit-reached, account-switch and reset notifications never arrive.
+    //
+    // While a Host owns Slack (Slack in the Host, spec §3.3), this app's own chains are forwarded to it: it
+    // cannot see them. The forward is synchronous, so for a roll it goes out in the same turn as the
+    // respawn's pty-spawn (the coordinators spawn and then send with no await between), behind it on the one
+    // socket. The Host holds the new entry back while the old record stands (P7), so the `rolled` moves the
+    // old thread onto the new id in either order and no second root is opened (Task 8 carry 2).
     try {
-      if (channel === 'session:rolled') {
-        const p = payload as { oldSessionId: string; info: SessionInfo }
-        slack.onRolled(p.oldSessionId, p.info)
-      } else if (channel === 'session:rollState') {
-        slack.onRollState(payload as RollStateEvent)
+      if (slackOwnership.local()) {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          slack.onRolled(p.oldSessionId, p.info)
+        } else if (channel === 'session:rollState') {
+          slack.onRollState(payload as RollStateEvent)
+        }
+      } else if (opts.orchestration) {
+        // The Host owns Slack and cannot see this app's own chains (spec §3.3). A Host roll
+        // (orchestration false) is the Host's own, and forwarding it back would announce it twice.
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
+          slackOwnership.forward({ kind: 'rolled', oldSessionId: p.oldSessionId, info: p.info, ...(p.dest ? { dest: p.dest } : {}) })
+        } else if (channel === 'session:rollState') {
+          slackOwnership.forward({ kind: 'roll-state', event: payload as RollStateEvent })
+        }
       }
     } catch {
       /* a Slack tap failure must not block rolling */
@@ -1061,7 +1116,9 @@ app.whenReady().then(async () => {
     {
       notifier: slack,
       store: slackStore,
-      reconfigureInbox: (cfg) => void slackInboxController.apply(cfg) // rebuild the socket on settings change
+      // A settings save is applied by whichever process owns Slack (ownership.configChanged): here, which
+      // rebuilds the socket too, or in the Host through slack-reload.
+      ownership: slackOwnership
     },
     codexRolling,
     scheduler,
@@ -1374,6 +1431,8 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   quitting = true
+  slackOwnershipRef?.dispose() // no hand-back may open a socket while quitting
+  slackOwnershipRef = null
   void slackInboxControllerRef?.stop() // Slack inbound socket cleanup — a failure must not block quit
   slackInboxControllerRef = null
 })

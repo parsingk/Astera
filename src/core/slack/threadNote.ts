@@ -3,6 +3,9 @@
 // the only reader, so a restart, a roll or an ownership handover resumes the same root instead of
 // posting a second one.
 
+/** The note keys the thread is kept under. */
+export const THREAD_NOTE_KEYS = ['slackThreadTs', 'slackChannel'] as const
+
 export interface NotedThread {
   ts: string
   channel: string

@@ -16,6 +16,8 @@
 //   memory only.
 // - The ack is never persisted (Task 4 review): the Host's seq restarts on a damaged file, so the only
 //   ack this sends is the lastSeq the same fetch just answered.
+// - While a Host owns Slack (Slack in the Host, spec §3.6) no Slack line is sent: that Host posted each roll
+//   into its thread as it made it. The desktop notice and the ack stay.
 // - One run at a time. A sweep that ends while a run is in flight (a startup and a reconnect
 //   overlapping) queues one more run after it rather than a second fetch beside it.
 //
@@ -48,6 +50,9 @@ export function createOfflineRolls(d: {
   now(): number
   slack?: { announceOffline(sessionId: string, text: string): Promise<boolean> }
   desktop?: { announceOffline(count: number, sessionId?: string): void }
+  /** True while a Host that owns Slack posts it (Slack in the Host, spec §3.6): it announced its own rolls
+   *  as it made them, so no Slack line is sent here. The desktop notice and the ack are as before. */
+  hostPostsSlack?(): boolean
   log(m: string): void
 }): OfflineRolls {
   const log = (m: string): void => {
@@ -86,7 +91,9 @@ export function createOfflineRolls(d: {
     })
     let posted = 0
     let slackFailed = false
-    for (const one of summary.sessions) {
+    const hostPosts = d.hostPostsSlack?.() === true
+    if (hostPosts) log(`host: the Host posts to Slack itself — the offline summary sends Slack nothing (${why})`)
+    for (const one of hostPosts ? [] : summary.sessions) {
       if ((postedThrough.get(one.sessionId) ?? -1) >= one.seq) continue
       try {
         if (await d.slack?.announceOffline(one.sessionId, one.text)) {
