@@ -7,7 +7,8 @@
 // **A rolled session's new entry waits for the roll event** while the notifier still holds the session
 // its note's `rolledFrom` names: `onRolled` carries the old record's thread onto the new id, and a
 // registration here first would open a second root beside it. `reconcile()` (the rolling tick, and every
-// activation) is the net that registers it once the old record is gone.
+// activation) is the net that registers it once the old record is gone. And the old entry, which lives on for a moment
+// after the roll moved its record, is never registered again while a live entry names it in `rolledFrom`.
 //
 // **Nothing is registered while the Host is not active** (`active`). While an app keeps Slack, that app's
 // notifier opens each root and notes it; a record made here meanwhile would hold no thread, and at the
@@ -48,6 +49,8 @@ export function createHostSlackSessions(d: {
 }): HostSlackSessions {
   let disposed = false
   const infoOf = (meta: PtyMeta): SessionInfo | null => sessionInfoFromNote(meta) ?? chatInfoFromNote(meta)
+  const supersededByRoll = (id: string): boolean =>
+    [...d.registry.list(), ...d.procs.list()].some((e) => e.alive && e.meta?.restore.rolledFrom === id)
   const consider = (meta: PtyMeta | null, fromNotes = false): void => {
     if (disposed || !meta || !(d.active?.() ?? true)) return
     const info = infoOf(meta)
@@ -62,6 +65,11 @@ export function createHostSlackSessions(d: {
     // second root beside the one onRolled hands over. reconcile() registers it once the old one is gone.
     const from = meta.restore.rolledFrom
     if (typeof from === 'string' && from !== info.id && d.notifier.has(from)) return
+    // The other half: a roll's old entry lives on for a moment after onRolled moved its record to the new
+    // id (the old proc or pty is ended after the new one opened). A live entry naming it in `rolledFrom`
+    // says it was rolled away; registered again, its exit would post "session ended" in the thread the
+    // new session carries on.
+    if (supersededByRoll(info.id)) return
     d.notifier.register(info, { thread: notedThreadOf(meta.restore) })
     d.onRegistered?.(info, meta.restore)
   }

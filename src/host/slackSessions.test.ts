@@ -71,6 +71,24 @@ describe('createHostSlackSessions (Slack in the Host Task 5, spec §3.3, P7)', (
     expect(h.trail.filter((t) => !t.startsWith('rename'))).toEqual(['register s1 -', 'exit s1 0', 'register s2 -'])
   })
 
+  // Slack in the Host e2e (Task 10): the Host hands a roll to its Slack the moment it sends it, so the old
+  // proc (or pty) still lives for a moment after onRolled moved its record to the new id. Registered again
+  // then, its exit posted "session ended" in the thread the new session carries on.
+  it('the old entry of a roll is not registered again once the roll moved its record, however long it lingers', () => {
+    const h = rig()
+    h.openChat('q1', 'c1')
+    h.openPty('p1', note('s1'))
+    h.openChat('q2', 'c2', { rolledFrom: 'c1' })
+    h.openPty('p2', note('s2', { rolledFrom: 's1' }))
+    // onRolled: each record moves to its new id.
+    for (const [from, to] of [['c1', 'c2'], ['s1', 's2']]) { h.records.set(to, h.records.get(from)!); h.records.delete(from) }
+    h.procs.note('q1', { answered: ['r1'] })
+    h.registry.note('p1', { title: 's1 again' })
+    h.s.reconcile()
+    h.s.reconcile({ fromNotes: true })
+    expect(h.trail.filter((t) => t.startsWith('register'))).toEqual(['register c1 -', 'register s1 -'])
+  })
+
   // Task 6 (the Task 5 carry): an activation's reconcile hands a known record its note's thread; the
   // rolling tick's does not. A known session's note change is told on (a codex rollout noted late).
   it('an activation reads the noted thread of a known record again, and a note change on a known session is told', () => {
