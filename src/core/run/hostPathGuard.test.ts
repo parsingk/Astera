@@ -45,3 +45,26 @@ describe('hostPathGuard, paths that are not normalised (review m7)', () => {
     await expect(guard(path.join('proj', 'sub'))).rejects.toThrow('path not allowed')
   })
 })
+
+describe('hostPathGuard, a Job cwd too broad to allow (S45-11)', () => {
+  const home = path.join(root, 'home', 'me')
+  const broad = (cwd: string): ((p: string) => Promise<string>) =>
+    hostPathGuard({ jobCwds: () => [cwd], runWorktrees: () => [], registeredWorktrees: () => [], refusal: 'no', home })
+
+  it('a Job whose cwd is a filesystem root opens nothing below it', async () => {
+    const fsRoot = path.parse(path.resolve(root)).root
+    await expect(broad(fsRoot)(path.join(root, 'anything'))).rejects.toThrow('no')
+    await expect(broad(fsRoot)(fsRoot)).rejects.toThrow('no')
+  })
+  it('a Job whose cwd is the home folder opens nothing, even written with a trailing separator', async () => {
+    await expect(broad(home)(path.join(home, 'proj'))).rejects.toThrow('no')
+    await expect(broad(home + path.sep)(path.join(home, 'proj'))).rejects.toThrow('no')
+  })
+  it('a Job below the home folder is still allowed', async () => {
+    expect(await broad(path.join(home, 'proj'))(path.join(home, 'proj', 'a'))).toBe(path.join(home, 'proj'))
+  })
+  it('the home folder defaults to the OS home', async () => {
+    const g = hostPathGuard({ jobCwds: () => [os.homedir()], runWorktrees: () => [], registeredWorktrees: () => [], refusal: 'no' })
+    await expect(g(path.join(os.homedir(), 'proj'))).rejects.toThrow('no')
+  })
+})
