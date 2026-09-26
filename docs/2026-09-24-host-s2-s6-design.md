@@ -1639,8 +1639,15 @@ Landed on `develop` from `ce533d36` through `633be4b5`. This list is the record,
     again, a settings save in the app or the Host's `slack-reload`, which `SlackInboxController.apply` now
     rebuilds even with an unchanged key. Every start ends in a catch. A stop cancels a pending retry, and a
     start that resolves after a stop closes what it opened, so no socket outlives a deactivation. The
-    controller no longer waits for the first start before it takes the next apply or stop, because that
-    start can sit in the SDK's network retries for as long as an outage lasts.
+    controller no longer waits for the first start before it takes the next apply or stop, so a start that
+    is slow to answer never holds a stop behind it.
+  - **The WebClient inside the socket client retries nothing itself** (`SOCKET_WEB_CLIENT_OPTIONS` in
+    `src/core/slack/inbox.ts`, passed as `clientOptions` by both constructors; found by the reconnect e2e run,
+    report `reconnect-e2e-report.md`). Socket mode gives that WebClient `{ retries: 100, factor: 1.3 }` with
+    no ceiling and no timeout, so an HTTP 500 or a network error on `apps.connections.open` was retried inside
+    `start()` with waits that grow past an hour. The inbox's backoff and its 5 minute cap never ran, and a stop
+    could not end that loop, so a client replaced by a token change kept calling with the old token. With
+    `retries: 0` and a 10 s timeout, `start()` rejects at once and every retry is the inbox's.
   - **The Host logs a rejection nobody handled and keeps running** (`logUnhandledRejections` in
     `src/host/log.ts`, installed as soon as the Host log exists). This replaces the plan's constraint 5
     wording that the Host has no such handler. It is a belt only: every path still ends in its own catch.
