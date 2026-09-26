@@ -203,6 +203,29 @@ describe('createHostJournal', () => {
       expect(enabledRows()).toHaveLength(1)
     })
 
+    // Review 4-5 M-3: paid once, not scanned for at every write after (the `already` scan would hide a
+    // debt that is never dropped).
+    it('is paid exactly once: no write after the payment looks for it again', async () => {
+      const { j, box } = make({ git: noGit })
+      await j.start()
+      box.writer = false
+      await settings({ jobContinuityEnabled: true })
+      await j.reload(() => withOpen())
+      box.writer = true
+      const scans = vi.spyOn(ContinuityJournal.prototype, 'eventsFor')
+      try {
+        j.committed({ prev: withOpen(), next: pausedOpen(), version: 1, actor: cli })
+        const afterPayment = scans.mock.calls.length
+        expect(afterPayment).toBeGreaterThan(0)
+        j.committed({ prev: pausedOpen(), next: withOpen(), version: 2, actor: cli })
+        j.promptWrite({ dispatchId: 'dsp_1', taskId: 'tsk_1', phase: 'requested', via: 'argv', promptLength: 1, specPath: 's' }, withOpen())
+        expect(scans.mock.calls.length).toBe(afterPayment)
+      } finally {
+        scans.mockRestore()
+      }
+      expect(enabledRows()).toHaveLength(1)
+    })
+
     it('is not written when the file already has one since the reload', async () => {
       const { j, box } = make({ git: noGit })
       await j.start()
@@ -234,6 +257,37 @@ describe('createHostJournal', () => {
       j.committed({ prev: withOpen(), next: pausedOpen(), version: 1, actor: cli })
       expect(rows().map((e) => e.type)).toEqual(['JOB_RUN_PAUSED'])
     })
+  })
+
+  // Review 4-5 M-1: two reloads that overlap must not both see journaling as off and both write the
+  // baseline (the clock moves between them, so their keys differ and both would land).
+  it('two overlapping reloads that turn journaling on write the baseline once', async () => {
+    let tick = 0
+    const release: Array<() => void> = []
+    const { j } = make({
+      git: async () => ({ ok: false, stdout: '', stderr: 'no git in this test' }),
+      now: () => new Date(Date.parse(NOW) + tick++ * 1000).toISOString(),
+      // Each read waits until the test lets it go, so the two are in flight together.
+      readSettings: () => new Promise((resolve) => release.push(() => resolve({ enabled: true, smartResume: false })))
+    })
+    const withOpen = stateFromLegacy({
+      runs: [run],
+      tasks: [{ id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
+      dispatches: [{ id: 'dsp_1', taskId: 'tsk_1', provider: 'claude', accountId: 'acc', sessionId: 'ses_1', cwd: dir, specPath: 's', startedAt: NOW, workerState: 'ready', retained: false }]
+    })
+    const first = j.reload(() => withOpen)
+    const second = j.reload(() => withOpen)
+    let settled = false
+    void Promise.all([first, second]).then(() => (settled = true))
+    await vi.waitFor(() => expect(release.length).toBeGreaterThan(0))
+    await new Promise((r) => setTimeout(r, 5))
+    while (!settled) {
+      release.splice(0).forEach((go) => go())
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(await first).toEqual({ enabled: true, writer: true })
+    expect(await second).toEqual({ enabled: true, writer: true })
+    expect(rows().filter((e) => e.type === 'CONTINUITY_ENABLED')).toHaveLength(1)
   })
 
   it('a journal it cannot open is logged once and journals nothing, and nothing throws', async () => {

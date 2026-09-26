@@ -140,6 +140,23 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     }
   }
 
+  /** The reload in progress, which the next one waits for. Never rejects. */
+  let reloading: Promise<unknown> = Promise.resolve()
+  const reloadNow = async (state: () => OrchState): Promise<{ enabled: boolean; writer: boolean }> => {
+    const was = settings.enabled
+    settings = await readSettings()
+    if (!settings.enabled) {
+      owed = null
+      if (was) close()
+      return { enabled: false, writer: isWriter() }
+    }
+    const w = writing()
+    if (!was && w) await w.recorder.enable(state(), DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
+    // Turned on while an attached app keeps the journal: nobody writes the baseline now, so it is owed.
+    else if (!was && !w && !openFailed) owed = { since: d.now(), state }
+    return { enabled: true, writer: w !== null }
+  }
+
   return {
     start: async () => {
       settings = await readSettings()
@@ -203,19 +220,12 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
       }
       return { status: 200, body: { applied, failed } }
     },
-    reload: async (state) => {
-      const was = settings.enabled
-      settings = await readSettings()
-      if (!settings.enabled) {
-        owed = null
-        if (was) close()
-        return { enabled: false, writer: isWriter() }
-      }
-      const w = writing()
-      if (!was && w) await w.recorder.enable(state(), DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
-      // Turned on while an attached app keeps the journal: nobody writes the baseline now, so it is owed.
-      else if (!was && !w && !openFailed) owed = { since: d.now(), state }
-      return { enabled: true, writer: w !== null }
+    // Review 4-5 M-1: one reload at a time. Two that overlapped would both read `was` as off before
+    // either finished, and both write the baseline under keys a moving clock keeps apart.
+    reload: (state) => {
+      const run = reloading.then(() => reloadNow(state))
+      reloading = run.catch(() => {})
+      return run
     },
     timeline: (runId, state) => {
       if (!settings.enabled) return []
