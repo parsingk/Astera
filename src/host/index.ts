@@ -8,12 +8,14 @@ import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import tls from 'node:tls'
 import * as pty from 'node-pty'
 import { hostAddress } from './address'
 import { nodePtyMissing } from './nodePtyCheck'
 import { hostPidFilePath, serializeHostPidFile } from '../core/host/pidFile'
 import { SPAWN_DEADLINE_MS } from '../core/host/unresponsive'
 import { hideForkedConsoleWindows } from './childWindows'
+import { trustSystemCa } from './systemCa'
 import { openHostLog, logUnhandledRejections } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
@@ -66,6 +68,9 @@ async function main(): Promise<void> {
   // Final review C1, the belt: a rejection nobody handled is logged and never ends the Host (and every
   // session in it). Each path keeps its own catch; this only keeps a miss from being fatal.
   logUnhandledRejections(process, log)
+  // S6-22: the OS certificate store joins Node's default CAs before any HTTPS (the usage lookup), so a
+  // TLS-inspecting proxy's root verifies. Never throws; on failure the defaults stay (systemCa.ts).
+  trustSystemCa(tls, (m) => log.write(m))
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
 
   // Where node-pty's own JavaScript lives, for the check below. `createRequire(__filename)` rather

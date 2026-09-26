@@ -1,0 +1,65 @@
+import { describe, it, expect } from 'vitest'
+import tls from 'node:tls'
+import { trustSystemCa } from './systemCa'
+
+// S6-22, the CA half: behind a TLS-inspecting proxy the usage lookup's HTTPS only verifies against
+// the proxy's root, which the OS store holds and Node's bundled list does not.
+const fakeTls = (d: { def: string[]; system: string[]; setThrows?: Error; getThrows?: Error }) => {
+  const set: string[][] = []
+  return {
+    set,
+    tls: {
+      getCACertificates: (type?: 'default' | 'system' | 'bundled' | 'extra'): string[] => {
+        if (d.getThrows) throw d.getThrows
+        return type === 'system' ? d.system : d.def
+      },
+      setDefaultCACertificates: (certs: ReadonlyArray<string>): void => {
+        if (d.setThrows) throw d.setThrows
+        set.push([...certs])
+      }
+    }
+  }
+}
+
+describe('trustSystemCa', () => {
+  it('adds the OS store to the default CAs, once each, keeping the defaults first', () => {
+    const f = fakeTls({ def: ['A', 'B'], system: ['B', 'C', 'D'] })
+    const logs: string[] = []
+    expect(trustSystemCa(f.tls, (m) => logs.push(m))).toBe('added')
+    expect(f.set).toEqual([['A', 'B', 'C', 'D']])
+    expect(logs.join('\n')).toMatch(/2 certificates/)
+  })
+
+  it('changes nothing when the OS store adds nothing new', () => {
+    const f = fakeTls({ def: ['A', 'B'], system: ['A'] })
+    expect(trustSystemCa(f.tls, () => {})).toBe('nothing-new')
+    expect(f.set).toEqual([])
+  })
+
+  it('keeps the defaults and logs when reading the OS store fails', () => {
+    const f = fakeTls({ def: ['A'], system: [], getThrows: new Error('store locked') })
+    const logs: string[] = []
+    expect(trustSystemCa(f.tls, (m) => logs.push(m))).toBe('failed')
+    expect(f.set).toEqual([])
+    expect(logs.join('\n')).toMatch(/store locked/)
+  })
+
+  it('keeps the defaults and logs when setting them fails', () => {
+    const f = fakeTls({ def: ['A'], system: ['B'], setThrows: new Error('bad pem') })
+    const logs: string[] = []
+    expect(trustSystemCa(f.tls, (m) => logs.push(m))).toBe('failed')
+    expect(logs.join('\n')).toMatch(/bad pem/)
+  })
+
+  it('does nothing on a Node without the API, and says so', () => {
+    const logs: string[] = []
+    expect(trustSystemCa({}, (m) => logs.push(m))).toBe('unsupported')
+    expect(logs).toHaveLength(1)
+  })
+
+  // The real module fits the seam; the Host passes `node:tls` itself.
+  it('accepts node:tls as its seam', () => {
+    const seam: Parameters<typeof trustSystemCa>[0] = tls
+    expect(seam).toBe(tls)
+  })
+})
