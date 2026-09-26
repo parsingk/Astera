@@ -63,7 +63,7 @@ export const NOUNS = {
   // `jobs create` 와 `tasks add` 는 phase C 다 — 앞의 것은 run-create 를 `--auto` 로, 뒤의 것은
   // task-create 를 부른다(command.ts). 코디네이터가 쓰는 두 이름은 그대로 남는다.
   jobs: ['list', 'get', 'wait', 'run', 'create'],
-  runs: ['list', 'get', 'wait', 'stop', 'resume'],
+  runs: ['list', 'get', 'wait', 'stop', 'resume', 'checks'],
   tasks: ['list', 'add'],
   questions: ['list', 'get', 'answer'],
   // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.

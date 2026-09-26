@@ -259,6 +259,40 @@ describe('humanFor', () => {
     expect(humanFor('tasks-add', { id: 't1', status: 'ready' })).toBe(['id      t1', 'status  ready'].join('\n'))
   })
 
+  // One row per Task, and the failure under it: the summary is what a person reads the command for.
+  it('runs checks 는 Task 마다 한 줄, 실패의 요약은 그 아래 줄이다', () => {
+    expect(
+      humanFor('runs-checks', {
+        runId: 'run_1',
+        tasks: [
+          {
+            id: 't1',
+            title: '빌드',
+            status: 'failed',
+            validation: { status: 'failed' },
+            review: { status: 'not-required', verdict: null },
+            failureSummary: 'build failed (exit 1)'
+          },
+          {
+            id: 't22',
+            title: 'docs',
+            status: 'completed',
+            validation: { status: 'not-required' },
+            review: { status: 'passed', verdict: 'accepted' },
+            failureSummary: null
+          }
+        ]
+      })
+    ).toBe(
+      [
+        'FAILED     t1   validation failed        review not-required  빌드',
+        '  build failed (exit 1)',
+        'COMPLETED  t22  validation not-required  review passed        docs'
+      ].join('\n')
+    )
+    expect(humanFor('runs-checks', { runId: 'run_1', tasks: [] })).toBe('(no tasks in run_1)')
+  })
+
   it('sessions list 는 살았는지·하는 일·id·종류·제목이다', () => {
     expect(
       humanFor('sessions-list', {

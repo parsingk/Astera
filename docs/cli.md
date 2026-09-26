@@ -462,6 +462,7 @@ astera runs    get    --id <runId>
 astera runs    wait   --id <runId>  [--timeout-ms <n>]
 astera runs    stop   --id <runId>
 astera runs    resume --id <runId>
+astera runs    checks --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
 astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
@@ -785,6 +786,36 @@ rather than typed a second time.
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
 held open on purpose.
+
+**`runs checks` shows each task's completion checks and what they came to.** It reads what the
+checks already recorded and runs nothing, so it answers the same with Astera closed, and from the
+state file with no Host at all. `data.tasks` has one row per task of the run, in the order they were
+made, each with its `id`, `title` and `status`, and two parts:
+
+- `validation`: `required` is whether the task names run configurations to pass (`tasks add
+  --validate`), and `checks` is the last round, each check with `configId`, `name`, `status`
+  (`passed`, `failed`, `timed-out`, or `not-run` when an earlier check failed), `exitCode`,
+  `outputTail` (the end of its output), `startedAt`, `endedAt` and `unstable`. Each round replaces the
+  one before it.
+- `review`: `required` is whether a review was asked for (`tasks add --review`) or has run. `verdict`
+  is `accepted` or `rejected`, from the last reviewer that gave one, or `null` before any did. Without
+  `--convergence` on the Job the reviewer's own outcome is the verdict; with it, any finding the Job's
+  policy counts as blocking rejects. `issues` are that review's findings, each with `blocking`.
+
+Both parts carry `status`: `not-required`, `pending` (asked for, and no answer yet, or the last review
+ended without a verdict), `running`, `passed` or `failed`. `failureSummary` says in one line what
+failed, validation first: the failing checks with their exit codes and the last line of their output,
+then the blocking findings or the reviewer's reason. It is `null` when nothing failed.
+`completionOverride` is there when a person marked the task done without its checks being met, with
+their reason. An unknown run is a 4, a Job id included, with `astera runs list` as its step.
+`--human` prints one line per task and the failure summary under a task that has one.
+
+```json
+{"ok":true,"data":{"runId":"run_9f8e","jobId":"job_4f2a","tasks":[{"id":"tsk_1","title":"Fix the build","status":"failed",
+  "validation":{"required":true,"status":"failed","checks":[{"configId":"cfg_b","name":"build","status":"failed","exitCode":2,"outputTail":"…"}]},
+  "review":{"required":false,"status":"not-required","verdict":null,"issues":[]},
+  "failureSummary":"build failed (exit 2): error TS2322: Type 'string' is not assignable to type 'number'."}]}}
+```
 
 **`wait` has five endings**, and two of them are a person: the work finished well, the work failed,
 a question is open, the run is paused, or every worker is waiting for a usage limit to reset. The

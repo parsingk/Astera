@@ -202,6 +202,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'let a paused run go again',
     flags: [ID('<runId>', 'the run to resume')]
   },
+  'runs-checks': {
+    summary: "each task's validation and review, and what they came to",
+    detail:
+      'One row per task of the run: `validation` (the run configurations it must pass, the last round of checks, each with its status, exit code and output tail) and `review` (whether one was asked for, and the verdict of the last reviewer that gave one, with its findings). Each has a `status`: not-required, pending, running, passed or failed. `failureSummary` says in one line what failed, validation first. It reads what the checks already recorded and runs nothing.',
+    flags: [ID('<runId>', 'the run whose checks to read')]
+  },
 
   'tasks-list': {
     summary: 'the tasks of a run',

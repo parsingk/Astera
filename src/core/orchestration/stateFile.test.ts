@@ -17,7 +17,7 @@ describe('fileAnswerable', () => {
   it('보기만 하는 명령은 파일로 답한다', () => {
     for (const cmd of ['jobs-list', 'jobs-get', 'runs-list', 'runs-get', 'tasks-list',
                        'questions-list', 'questions-get', 'projects-list', 'projects-get',
-                       'projects-find', 'status', 'dispatch-show', 'inbox', 'run-configs'])
+                       'projects-find', 'status', 'dispatch-show', 'inbox', 'run-configs', 'runs-checks'])
       expect(fileAnswerable(cmd)).toBe(true)
   })
 

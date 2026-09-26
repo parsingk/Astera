@@ -48,6 +48,7 @@ import { CLI_PROTOCOL } from './cliOutput'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
+import { checksForRun } from './runChecks'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
 import {
@@ -1712,6 +1713,15 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
       return run ? okBody(runView(s, run)) : notFound(`unknown run: ${id}`)
+    }
+    // **Each Task's completion checks, read and never run** (CLI spec §20: no new validation engine).
+    // runChecks.ts reads `Task.checks`, the review Dispatches and `Task.reviewIssues`; cliPublic.ts
+    // keeps the public fields of every layer of the answer.
+    case 'runs-checks': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const checks = checksForRun(s, id)
+      return checks ? okBody(checks) : notFound(`unknown run: ${id}`)
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.

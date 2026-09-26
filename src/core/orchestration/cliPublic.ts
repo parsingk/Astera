@@ -11,7 +11,8 @@
 //
 // **컴파일러가 빠짐을 잡는다.** 칸을 더하고 두 목록 중 어디에도 적지 않으면 타입 검사가 그
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
-import type { Gate, Job, JobRun, Project, Task } from './types'
+import type { CheckResult, Gate, Job, JobRun, Project, ReviewIssue, Task } from './types'
+import type { RunChecks, TaskChecks, TaskReview, TaskValidation } from './runChecks'
 import type { HostSession, OrchAccount, OrchRunConfig } from './command'
 import type { ChatPending, ChatPrompt, ChatTurn } from '../sessions/chatRead'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
@@ -198,6 +199,47 @@ function shapeSkills(cmd: 'skills-list' | 'skills-install', body: unknown): unkn
   return out
 }
 
+/** `runs checks` (CLI spec §20). The answer is four layers deep, and each layer is held to its type
+ *  by the compiler: the run, a Task's row, that row's validation and review, and the checks and the
+ *  review findings inside them. `CheckResult` and `ReviewIssue` are the same fields `tasks list`
+ *  already publishes in a Task's `checks` and `reviewIssues`. */
+const RUN_CHECKS = ['runId', 'jobId', 'tasks'] as const
+type _runChecks = NothingLeft<Unlisted<RunChecks, typeof RUN_CHECKS, []>>
+const TASK_CHECKS = ['id', 'title', 'status', 'validation', 'review', 'failureSummary', 'completionOverride'] as const
+type _taskChecks = NothingLeft<Unlisted<TaskChecks, typeof TASK_CHECKS, []>>
+const VALIDATION = ['required', 'status', 'checks'] as const
+type _validation = NothingLeft<Unlisted<TaskValidation, typeof VALIDATION, []>>
+const REVIEW = ['required', 'status', 'verdict', 'issues'] as const
+type _review = NothingLeft<Unlisted<TaskReview, typeof REVIEW, []>>
+const CHECK = ['configId', 'name', 'status', 'exitCode', 'outputTail', 'startedAt', 'endedAt', 'unstable'] as const
+type _check = NothingLeft<Unlisted<CheckResult, typeof CHECK, []>>
+const REVIEW_ISSUE = ['id', 'severity', 'blocking', 'title', 'description', 'file', 'line', 'suggestedFix'] as const
+type _reviewIssue = NothingLeft<Unlisted<ReviewIssue, typeof REVIEW_ISSUE, []>>
+
+function shapeRunChecks(body: unknown): unknown {
+  if (body === null || typeof body !== 'object') return body
+  const obj = (v: unknown, fields: readonly string[]): unknown =>
+    v !== null && typeof v === 'object' ? pick(fields, v) : v
+  const list = (v: unknown, fields: readonly string[]): unknown =>
+    Array.isArray(v) ? v.map((x) => obj(x, fields)) : v
+  const out = pick(RUN_CHECKS, body)
+  if (Array.isArray(out.tasks))
+    out.tasks = out.tasks.map((t: unknown) => {
+      if (t === null || typeof t !== 'object') return t
+      const row = pick(TASK_CHECKS, t)
+      const validation = obj(row.validation, VALIDATION)
+      if (validation !== null && typeof validation === 'object' && 'checks' in validation)
+        (validation as Record<string, unknown>).checks = list((validation as { checks: unknown }).checks, CHECK)
+      if ('validation' in row) row.validation = validation
+      const review = obj(row.review, REVIEW)
+      if (review !== null && typeof review === 'object' && 'issues' in review)
+        (review as Record<string, unknown>).issues = list((review as { issues: unknown }).issues, REVIEW_ISSUE)
+      if ('review' in row) row.review = review
+      return row
+    })
+  return out
+}
+
 /**
  * 어느 명령이 무엇을 내보내는가.
  *
@@ -256,6 +298,7 @@ function shapeOne(cmd: string, fields: readonly string[], x: unknown): unknown {
 /** 앱이 돌려준 것을 공개 표면의 모양으로. 표에 없는 명령은 그대로 지나간다. */
 export function publicFor(cmd: string, body: unknown): unknown {
   if (cmd === 'skills-list' || cmd === 'skills-install') return shapeSkills(cmd, body)
+  if (cmd === 'runs-checks') return shapeRunChecks(body)
   const fields = SHAPE[cmd]
   if (fields === undefined) return body
   if (Array.isArray(body)) return body.map((x) => shapeOne(cmd, fields, x))

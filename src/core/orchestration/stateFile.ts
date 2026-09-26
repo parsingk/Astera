@@ -25,7 +25,7 @@ import type { OrchState } from './state'
 const FROM_FILE = new Set([
   'jobs-list', 'jobs-get', 'runs-list', 'runs-get', 'tasks-list',
   'questions-list', 'questions-get', 'projects-list', 'projects-get', 'projects-find',
-  'status', 'dispatch-show', 'inbox', 'run-configs'
+  'status', 'dispatch-show', 'inbox', 'run-configs', 'runs-checks'
 ])
 
 export const fileAnswerable = (cmd: string): boolean => FROM_FILE.has(cmd)

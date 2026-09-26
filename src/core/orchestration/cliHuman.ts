@@ -168,6 +168,26 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
           str(t.title)
         ])
       )
+    // One row per Task, and under a row that failed, what failed: that line is what a person reads
+    // this command for, and a table cell would cut it.
+    case 'runs-checks': {
+      const tasks = asList(data, 'tasks')
+      if (tasks.length === 0) return `(no tasks in ${str(data.runId)})`
+      const standing = (v: unknown): string =>
+        v !== null && typeof v === 'object' ? str((v as { status?: unknown }).status) : ''
+      const table = columns(
+        tasks.map((t) => [
+          String(t.status ?? '-').toUpperCase(),
+          str(t.id),
+          `validation ${standing(t.validation)}`,
+          `review ${standing(t.review)}`,
+          str(t.title)
+        ])
+      ).split('\n')
+      return tasks
+        .flatMap((t, i) => [table[i], ...(typeof t.failureSummary === 'string' ? [`  ${t.failureSummary}`] : [])])
+        .join('\n')
+    }
     case 'questions-list':
       return columns(
         asList(data, 'questions').map((q) => [

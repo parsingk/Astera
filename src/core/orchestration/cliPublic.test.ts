@@ -198,6 +198,63 @@ describe('publicFor', () => {
     expect(publicFor('chats-answer', { sessionId: 'c1', id: 'r1', decision: 'deny', answered: true, extra: 1 }))
       .toEqual({ sessionId: 'c1', id: 'r1', decision: 'deny', answered: true })
   })
+  // `runs checks` (CLI spec §20) folds four layers: the run, its Task rows, each row's validation and
+  // review, and the checks and issues inside those. Every layer goes through its own list.
+  it('runs checks 는 네 겹 모두 제 칸만 낸다', () => {
+    const body = {
+      runId: 'run_1',
+      jobId: 'job_1',
+      secret: 1,
+      tasks: [
+        {
+          id: 't1',
+          title: 'a',
+          status: 'failed',
+          policySnapshot: { key: 'k' },
+          validation: {
+            required: true,
+            status: 'failed',
+            configIds: ['x'],
+            checks: [{ configId: 'c', name: 'build', status: 'failed', exitCode: 1, outputTail: 'e', env: 'SECRET=1' }]
+          },
+          review: {
+            required: true,
+            status: 'failed',
+            verdict: 'rejected',
+            dispatchId: 'd1',
+            issues: [{ id: 'i', severity: 'high', blocking: true, title: 't', description: 'd', raw: 'x' }]
+          },
+          failureSummary: 'build failed (exit 1)',
+          completionOverride: { reason: 'r', at: 'T' }
+        }
+      ]
+    }
+    expect(publicFor('runs-checks', body)).toEqual({
+      runId: 'run_1',
+      jobId: 'job_1',
+      tasks: [
+        {
+          id: 't1',
+          title: 'a',
+          status: 'failed',
+          validation: {
+            required: true,
+            status: 'failed',
+            checks: [{ configId: 'c', name: 'build', status: 'failed', exitCode: 1, outputTail: 'e' }]
+          },
+          review: {
+            required: true,
+            status: 'failed',
+            verdict: 'rejected',
+            issues: [{ id: 'i', severity: 'high', blocking: true, title: 't', description: 'd' }]
+          },
+          failureSummary: 'build failed (exit 1)',
+          completionOverride: { reason: 'r', at: 'T' }
+        }
+      ]
+    })
+  })
+
   it('객체가 아닌 것은 그대로 둔다', () => {
     expect(publicFor('jobs-list', [])).toEqual([])
     expect(publicFor('questions-get', null)).toBe(null)
