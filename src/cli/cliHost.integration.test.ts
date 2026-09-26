@@ -26,6 +26,9 @@ import { hostAddress } from '../host/address'
 import { encodeLine, createLineReader } from '../host/framing'
 import { startHostServer, ADDRESS_TAKEN, type HostServer } from '../host/server'
 import { createHostOrch, type HostOrch } from '../host/orch'
+import { createHostJournal } from '../host/hostJournal'
+import { JournalReader } from '../core/continuity/journalReader'
+import type { JournalEventRow } from '../core/continuity/journal'
 import { composeHostDriving } from '../host/drivingWiring'
 import { createHostExits } from '../host/exits'
 import { createHostWorktrees } from '../host/worktrees'
@@ -40,13 +43,14 @@ import {
   HOST_PROTOCOL,
   HOST_YIELD_CHAT_TAKEOVER,
   HOST_YIELD_DISPATCH,
+  HOST_YIELD_JOURNAL,
   HOST_YIELD_ROLLING,
   HOST_YIELD_SLACK,
   HOST_YIELD_WORKTREES,
   type ClientMessage,
   type HostMessage
 } from '../core/host/protocol'
-import { emptyState, type OrchState } from '../core/orchestration/state'
+import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState, type Res } from '../core/orchestration/state'
 import { ensureProject } from '../core/orchestration/projects'
 import { CLI_PROTOCOL, codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 
@@ -224,7 +228,7 @@ const appHello: ClientMessage = {
   protocol: HOST_PROTOCOL,
   app: '9.9.9',
   role: 'app',
-  yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_SLACK]
+  yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_SLACK]
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -253,11 +257,14 @@ interface Rig {
   /** Ends a worker's session the way a crashed agent ends: its pty exits with no report. */
   exitWorker(s: Spawn, code: number): void
   logs: string[]
+  /** The rows of the Host's Job Journal for this run, read through a read-only `JournalReader` opened
+   *  and closed per call on `<profile>/orch/continuity.sqlite`, as the app reads them. */
+  journalRows(runId: string): JournalEventRow[]
   /** Test seams inside the Host's own commands. */
   hooks: { release?: () => Promise<void> }
 }
 
-async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: string } = {}): Promise<Rig> {
+async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: string; continuity?: boolean } = {}): Promise<Rig> {
   const profileDir = o.profileDir ?? (await tempDir(PROFILE_PREFIX))
   const home = await tempDir('astera-cli-int-home-')
   const repo = o.repo === false ? '' : await makeRepo('astera-cli-int-repo-')
@@ -267,7 +274,11 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
 
   // The profile an app that ran once leaves behind: the settings migration done (the Host may drive,
   // F62), a worktrees root of the test's own, one logged-in account (C8's one login rule, read for real).
-  await fs.writeFile(path.join(profileDir, 'app-settings.json'), JSON.stringify({ orchAlwaysOnMigrated: true }))
+  // `continuity` turns Job Continuity on, so the Host keeps the Job Journal (Host journal J1).
+  await fs.writeFile(
+    path.join(profileDir, 'app-settings.json'),
+    JSON.stringify(o.continuity ? { orchAlwaysOnMigrated: true, jobContinuityEnabled: true } : { orchAlwaysOnMigrated: true })
+  )
   await fs.writeFile(path.join(profileDir, 'worktrees.json'), JSON.stringify({ root: path.join(home, 'wt'), items: [] }))
   const accountId = 'acc_claude_0'
   const configDir = path.join(home, 'cfg', accountId)
@@ -420,6 +431,20 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     readGate: (p: string) => readDispatchGate(p)
   })
 
+  // The Job Journal, built the way index.ts builds it (J2: it writes while every attached app yields it).
+  // `journalDown` is the rig's own, set by the teardown only.
+  let journalDown = false
+  const journal = o.continuity
+    ? createHostJournal({
+        profileDir,
+        writer: () => !journalDown && !serverOf().appsKeep(HOST_YIELD_JOURNAL),
+        hostStartedAt: () => serverOf().startedAt,
+        now: () => new Date().toISOString(),
+        log
+      })
+    : null
+  await journal?.start()
+
   /** Exits the Host has handed to the command layer, counted so the teardown can wait them out. */
   let exitsHandled = 0
   const orch = createHostOrch({
@@ -445,6 +470,7 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     specsDir: path.join(profileDir, 'orch', 'specs'),
     worktrees,
     resolveProjectRoot: createHostProjectRoots({ profileDir, repoPaths: () => worktrees.repoPaths() }).resolve,
+    journal,
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -490,6 +516,12 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     const target = exitsHandled + live
     registry.killAll()
     await until(() => expect(exitsHandled).toBeGreaterThanOrEqual(target)).catch(() => {})
+    // The journal's handle goes last, once the exits the kill started have committed. The writer rule
+    // turns false first: a commit after `close()` would open the file again (a driving pass already in
+    // flight when the teardown began can still place a worker), and Windows cannot remove a folder
+    // whose SQLite file is open.
+    journalDown = true
+    journal?.close()
     if (addr.dirToPrepare) await rmrf(addr.dirToPrepare)
   })
 
@@ -509,6 +541,14 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
       ptys.get(entry.pid)!.exit(code)
     },
     logs,
+    journalRows: (runId) => {
+      const reader = new JournalReader(path.join(profileDir, 'orch', 'continuity.sqlite'))
+      try {
+        return reader.eventsFor(runId)
+      } finally {
+        reader.close()
+      }
+    },
     hooks
   }
 }
@@ -527,6 +567,30 @@ async function runningJob(h: Rig): Promise<{ jobId: string; runId: string; taskI
   await until(() => expect(h.spawns()).toHaveLength(1))
   const worker = h.spawns()[0]
   return { jobId, runId, taskId: worker.taskId, worker }
+}
+
+/** What a Host restart finds after a worker died with the Host: a Job, its Run, one Task and an open
+ *  Dispatch on a session no registry holds ('ses_gone'), built with the pure layer. The Host's load
+ *  cleanup closes that Dispatch as lost. */
+function lostWorkerSeed(): { state: OrchState; runId: string; taskId: string } {
+  const now = new Date().toISOString()
+  const cwd = path.join(os.tmpdir(), 'astera-cli-int-lost')
+  const need = <T>(r: Res<T>, what: string): { state: OrchState; value: T } => {
+    if (!r.ok) throw new Error(`lostWorkerSeed: ${what}: ${r.error}`)
+    return r
+  }
+  const job = need(createJob(emptyState(), { objective: 'the lost worker job', cwd, concurrency: 1 }, now), 'createJob')
+  const run = need(startJobRun(job.state, job.value.id, now), 'startJobRun')
+  const task = need(createTask(run.state, { runId: run.value.id, title: 'one', spec: 'do the one thing', deps: [], accountIds: ['acc_claude_0'] }, now), 'createTask')
+  const opened = need(
+    openDispatch(
+      task.state,
+      { taskId: task.value.id, provider: 'claude', accountId: 'acc_claude_0', sessionId: 'ses_gone', cwd, specPath: path.join(os.tmpdir(), 'astera-cli-int-lost.md') },
+      now
+    ),
+    'openDispatch'
+  )
+  return { state: opened.state, runId: run.value.id, taskId: task.value.id }
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -575,8 +639,8 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   // the question a person gets from a worker in a run with no coordinator, with Astera closed, is the
   // one the Host opens when that worker ends without reporting (docs/cli.md, "A worker lost while
   // Astera is closed opens a question"). Answering it is what lets the worker go again: the Task
-  // unblocks and the Host places it, with the answer recorded on the Gate. The Journal's answer event
-  // is the app's (ruling D8), so it is not asserted here.
+  // unblocks and the Host places it, with the answer recorded on the Gate. The Journal's answer row is
+  // asserted in the Host journal tests below.
   it('a worker question: questions list --run shows it, questions answer records it, and the Host places the worker again', async () => {
     const h = await hostRig()
     const { runId, taskId, worker } = await runningJob(h)
@@ -907,5 +971,55 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
       expect(acts.code).toBe(3)
       expect(acts.envelope.error?.code).toBe('HOST_NOT_RUNNING')
     })
+  })
+})
+
+describe('the Job Journal with Astera closed (Host journal)', { timeout: 60_000 }, () => {
+  it('a question answered from the CLI lands one GATE_RESOLVED row, and says the CLI did it', async () => {
+    const h = await hostRig({ continuity: true })
+    const { runId, taskId, worker } = await runningJob(h)
+    h.exitWorker(worker, 1)
+    await until(() => expect(h.state().gates.filter((g) => g.status === 'open')).toHaveLength(1))
+    const questionId = h.state().gates.find((g) => g.status === 'open')!.id
+    okData(await astera(['questions', 'answer', '--id', questionId, '--answer', 'Use the existing DB.'], h.env), 'questions answer')
+    okData(await astera(['questions', 'answer', '--id', questionId, '--answer', 'Something else'], h.env), 'questions answer again')
+    const rows = h.journalRows(runId)
+    expect(rows.filter((e) => e.type === 'GATE_RESOLVED')).toEqual([
+      expect.objectContaining({ taskId, actor: { surface: 'cli' }, payload: expect.objectContaining({ gateId: questionId, resolution: 'Use the existing DB.' }) })
+    ])
+    // Who did the rest: the CLI started the run, the Host placed the worker and opened the question.
+    expect(rows.find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'cli' })
+    expect(rows.find((e) => e.type === 'ATTEMPT_START_REQUESTED')?.actor).toEqual({ surface: 'host' })
+    expect(rows.find((e) => e.type === 'TASK_WAITING_INPUT')?.actor).toEqual({ surface: 'host' })
+    expect(rows.some((e) => e.type === 'PROMPT_WRITE_REQUESTED')).toBe(false) // the rig's spawner is fake; the real one is Task 5's test
+  })
+
+  it('a worker the restart lost is a journal row written by the Host, and runs follow prints it', async () => {
+    const seeded = lostWorkerSeed() // a Job, a Run, a Task and an open Dispatch on 'ses_gone', built with the pure layer
+    const h = await hostRig({ continuity: true, seed: seeded.state })
+    const r = await astera(['runs', 'follow', '--id', seeded.runId, '--timeout-ms', '1500', '--no-keepalive'], h.env)
+    const events = r.stdout
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { data?: { event?: { kind: string; taskId?: string } } })
+      .flatMap((e) => (e.data?.event ? [e.data.event] : []))
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'runtime-lost', taskId: seeded.taskId }))
+    expect(h.journalRows(seeded.runId).find((e) => e.type === 'ATTEMPT_LOST')?.actor).toEqual({ surface: 'host' })
+  })
+
+  it('an older app attached holds the Host off; once it leaves the Host journals again (J2, P9)', async () => {
+    const h = await hostRig({ continuity: true })
+    const { runId } = await runningJob(h)
+    const older = await rawClient(
+      h.address,
+      { t: 'hello', protocol: HOST_PROTOCOL, app: '1.3.40', role: 'app', yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH] },
+      appAnswers(h.accountId)
+    )
+    okData(await astera(['runs', 'stop', '--id', runId], h.env), 'runs stop')
+    expect(h.journalRows(runId).some((e) => e.type === 'JOB_RUN_PAUSED')).toBe(false)
+    await older.close()
+    await until(() => expect(h.server.hasApp()).toBe(false))
+    okData(await astera(['runs', 'resume', '--id', runId], h.env), 'runs resume')
+    await until(() => expect(h.journalRows(runId).map((e) => e.type)).toContain('JOB_RUN_RESUMED'))
   })
 })
