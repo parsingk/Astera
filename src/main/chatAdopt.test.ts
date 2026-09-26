@@ -94,6 +94,22 @@ describe('ipc.ts wires the chat adopter (chat takeover Task 9)', () => {
     expect(src).toMatch(/takeBackRolledProc = \(procId\) => takeSessionsBack\('the Host rolled a chat session', undefined, procId\)/)
     expect(src.slice(end, end + 1600)).toMatch(/only,\s*onlyProc\s*\}\)/)
   })
+  // Slack in the Host Task 4 (spec S5). Mutation: drop the thread from either adopter's register, or the
+  // notifier's remember dep, and an app restart opens a second root for every Slack session.
+  it('registers both adopted kinds with the thread their note names, and the notifier can note one', () => {
+    const adoptersStart = src.indexOf('adopters: {')
+    const adopterSlice = src.slice(adoptersStart, end)
+    expect(adoptersStart).toBeGreaterThan(-1)
+    expect(adoptersStart).toBeLessThan(start)
+    const registers = adopterSlice.match(/notifier\.register\(info, \{ thread: notedThreadOf\(a\.restore\) \}\)/g) ?? []
+    expect(registers).toHaveLength(2)
+    expect(adopterSlice.slice(start - adoptersStart)).toMatch(/notifier\.register\(info, \{ thread: notedThreadOf\(a\.restore\) \}\)/)
+    const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+    const depsStart = index.indexOf('new SlackNotifier({')
+    const deps = index.slice(depsStart, index.indexOf('const attention = createAttentionState()', depsStart))
+    expect(depsStart).toBeGreaterThan(-1)
+    expect(deps).toMatch(/remember: \(sid, patch\) =>/)
+  })
   it("guards a history resume with the Host's chat proc notes (carry 2)", () => {
     expect(src).toMatch(/listProcs: hostSpeaksChatTakeover\(hostClient\?\.status\(\) \?\? \{ connected: false, features: \[\] \}\) \? hostProcList : null/)
     expect(src).toMatch(/core\.chat\.list\(\)\.find\(\(x\) => x\.id === id && x\.status === 'running'\)/)

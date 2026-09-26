@@ -435,7 +435,18 @@ app.whenReady().then(async () => {
     log: slackLog,
     // core has no default SDK constructor (P1) — the app supplies it explicitly, where it always did
     // before this was the default.
-    createPoster: createWebClient
+    createPoster: createWebClient,
+    // The session's thread keys go into its note (spec S5, P9), so an app restart resumes the root
+    // instead of opening a second one. A chat session's note is the chat manager's, a terminal
+    // session's the session manager's.
+    remember: (sid, patch) => {
+      try {
+        if (core!.chat.has(sid)) core!.chat.remember(sid, patch)
+        else core!.sessions.remember(sid, patch)
+      } catch {
+        /* a note must not cost a notice */
+      }
+    }
   })
   // The one attention verdict (main/attention.ts): is a session working, or waiting for a person,
   // decided from the same hook stream Slack and the desktop sink already read. Constructed here,

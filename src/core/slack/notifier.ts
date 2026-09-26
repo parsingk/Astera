@@ -39,6 +39,7 @@ import {
   type SlackPoster,
   type SlackTransport
 } from './transport'
+import { threadNotePatch, type NotedThread } from './threadNote'
 
 export type { SlackConfig } from './config'
 
@@ -85,6 +86,10 @@ export interface SlackDeps {
   now?: () => number
   createPoster?: (token: string) => SlackPoster // supplied by the caller (the app's createWebClient, main/slackSdk.ts); with none, a bot config selects no transport (P3)
   wait?: (ms: number) => Promise<void> // test injection for sendChatTurnSummary's re-read window; default setTimeout
+  /** Writes a session's thread keys into its note (spec S5, P9): the patch names the root this notifier
+   *  opened or inherited, or drops it (both null). Optional: with none, nothing is noted. A throw is
+   *  logged and never costs the notice. */
+  remember?(sessionId: string, patch: { slackThreadTs: string | null; slackChannel: string | null }): void
 }
 
 /** The common shape of the non-rolling limit detection scanner — feed it a chunk and it returns only
@@ -119,6 +124,8 @@ interface SlackRecord {
   /** The promise for posting the root message. register starts it and send awaits it — without waiting for
    *  the ts, notifications that go out first leak outside the thread. Resolves to null on failure. */
   thread: Promise<string | null> | null
+  /** The thread this session's note names (spec S5). Seeds `thread` in its own channel only (seedNoted). */
+  noted: NotedThread | null
   /** The tool call, captured from PreToolUse, that is currently waiting for an answer. While a question or
    *  approval prompt is on screen the transcript does not contain that tool_use (see the countToolUses
    *  comment), so the content has to be held here to be included in the notification.
@@ -178,6 +185,8 @@ export class SlackNotifier {
   // empty, events arriving with a ts we wrote can still be filtered out through this index.
   private ownTs = new Set<string>()
   private transport: SlackTransport | null = null
+  /** The channel the current transport posts to: bot mode's channelId, else null. */
+  private channel: string | null = null
   // Whether any transport choice has been made yet, including one that turns Slack off (final review
   // I2). Before it, a null transport means slack.json has not loaded; after it, it means Slack is off.
   private configured = false
@@ -202,12 +211,13 @@ export class SlackNotifier {
 
   setWebhookUrl(url: string | null): void {
     const trimmed = url && url.trim() !== '' ? url.trim() : null
-    this.replaceTransport(trimmed ? new WebhookTransport(trimmed, this.fetchFn) : null)
+    this.replaceTransport(trimmed ? new WebhookTransport(trimmed, this.fetchFn) : null, null)
   }
 
-  /** For a different transport such as bot mode. Mutually exclusive with setWebhookUrl. */
-  setTransport(transport: SlackTransport | null): void {
-    this.replaceTransport(transport)
+  /** For a different transport such as bot mode. Mutually exclusive with setWebhookUrl. `channel` is the
+   *  channel it posts to, when it has one: it decides which noted threads still hold (spec S5). */
+  setTransport(transport: SlackTransport | null, channel: string | null = null): void {
+    this.replaceTransport(transport, channel)
   }
 
   /** Chooses the transport from the settings.
@@ -233,10 +243,10 @@ export class SlackNotifier {
       const create = this.deps.createPoster
       if (!create) {
         this.deps.log('slack: no poster for bot mode')
-        this.replaceTransport(null)
+        this.replaceTransport(null, null)
         return
       }
-      this.replaceTransport(new BotTransport(create(cfg.botToken), cfg.channelId))
+      this.replaceTransport(new BotTransport(create(cfg.botToken), cfg.channelId), cfg.channelId)
       return
     }
     this.setWebhookUrl(cfg.webhookUrl) // it goes through replaceTransport internally, so the reset happens along with it
@@ -249,11 +259,33 @@ export class SlackNotifier {
    *  a thread on the new transport and would only ever post at channel level. Why it resets to null instead
    *  of re-posting immediately: putting a new root message up for every live session at once spams sessions
    *  that have nothing to report — send() reopens lazily with the transport of the moment when it sees
-   *  thread===null (see send() below). */
-  private replaceTransport(transport: SlackTransport | null): void {
+   *  thread===null (see send() below).
+   *
+   *  **The noted threads follow the channel (spec S5).** A swap to another non-null channel drops every
+   *  live record's noted thread from another channel, record and note alike, since its root cannot be
+   *  posted in. A swap to the same channel (a settings reload) or to one with no channel (webhook, off)
+   *  keeps them, and a record whose noted thread is in the channel now posted to is seeded with it again,
+   *  so a reload opens no new roots. */
+  private replaceTransport(transport: SlackTransport | null, channel: string | null): void {
+    const changed = channel !== null && channel !== this.channel
     this.transport = transport
+    this.channel = channel
     this.configured = true
-    for (const record of this.records.values()) record.thread = null
+    // Cleared before the loop below, which seeds the index again with the noted threads that still hold.
+    // A ts from the old channel or workspace is no longer valid — left in place, replies arriving with that
+    // ts would still be injected into live sessions even after bot mode is turned off (token and channel
+    // deleted). It is the same reason record.thread is reset, and both have to be cleared at the same time
+    // so we never end up with only one of them done.
+    this.threadIndex.clear()
+    for (const record of this.records.values()) {
+      record.thread = null
+      if (changed && record.noted && record.noted.channel !== channel) {
+        record.noted = null
+        this.note(record.info.id, null)
+      } else {
+        this.seedNoted(record)
+      }
+    }
     if (transport) for (const fn of [...this.transportReady]) {
       try {
         fn()
@@ -261,11 +293,24 @@ export class SlackNotifier {
         /* a listener must not break the swap */
       }
     }
-    // A ts from the old channel or workspace is no longer valid — left in place, replies arriving with that
-    // ts would still be injected into live sessions even after bot mode is turned off (token and channel
-    // deleted). It is the same reason record.thread is reset, and both have to be cleared at the same time
-    // so we never end up with only one of them done.
-    this.threadIndex.clear()
+  }
+
+  /** Writes a session's thread keys into its note, or drops them (null). A failed write is logged and
+   *  swallowed: a note must never cost a notice. */
+  private note(sessionId: string, t: NotedThread | null): void {
+    try {
+      this.deps.remember?.(sessionId, threadNotePatch(t))
+    } catch (err) {
+      this.deps.log(`slack thread note failed session=${sessionId}: ${err instanceof Error ? err.name : 'unknown'}`)
+    }
+  }
+
+  /** A noted thread in the channel the transport posts to becomes the record's thread, indexed at once. */
+  private seedNoted(record: SlackRecord): void {
+    const n = record.noted
+    if (!n || !this.transport?.supportsThreads || n.channel !== this.channel) return
+    record.thread = Promise.resolve(n.ts)
+    this.threadIndex.set(n.ts, record.info.id)
   }
 
   /** The tab was renamed. Updates this record's copy so later messages carry the new prefix.
@@ -286,7 +331,7 @@ export class SlackNotifier {
    *  again by the reattach adopter for a session the Host handed back after a reconnect — that
    *  second caller registers over an id this already has a record for, and the body below says what
    *  is carried across and what is not. */
-  register(info: SessionInfo): void {
+  register(info: SessionInfo, opts?: { thread?: NotedThread | null }): void {
     if (!info.slackNotify) return
     // **A pending exit notification for this id is cancelled, the way onRolled cancels the one it
     // re-keys past.** Registering over a live id used to be impossible; the Host's reconnect makes it
@@ -342,6 +387,9 @@ export class SlackNotifier {
       lastSent: replaced?.lastSent ?? new Map(),
       exitTimer: null,
       thread: replaced?.thread ?? null,
+      // The thread the session's note names (spec S5): what an adopter hands over after an app or Host
+      // restart. A live record's own knowledge wins, since it is at least as new as the note.
+      noted: replaced?.noted ?? opts?.thread ?? null,
       pendingTool: replaced?.pendingTool ?? null,
       // Carried with pendingTool, for the same reason: it decides whether a late turn end clears it.
       promptAt: replaced?.promptAt,
@@ -361,7 +409,15 @@ export class SlackNotifier {
         if (ts && this.records.get(info.id) === record) this.threadIndex.set(ts, info.id)
       })
     } else {
-      record.thread = this.openThread(record)
+      // A noted thread in the channel posted to is resumed: no second root, and a reply in it reaches
+      // this session at once. One in another channel cannot be posted in, so it is dropped, record and
+      // note, and a new root is opened (and noted) in its place.
+      this.seedNoted(record)
+      if (record.thread === null && record.noted && this.channel && record.noted.channel !== this.channel) {
+        record.noted = null
+        this.note(info.id, null)
+      }
+      if (record.thread === null) record.thread = this.openThread(record)
     }
   }
 
@@ -386,7 +442,14 @@ export class SlackNotifier {
         // retries, so it can be slow, and if the session dies in that window a dead session id would be
         // resurrected in the index and stay there for good. It is blocked with the same identity comparison
         // (the record object reference) that onRolled uses when handing over on re-keying.
-        if (this.records.get(record.info.id) === record) this.threadIndex.set(ts, record.info.id)
+        if (this.records.get(record.info.id) === record) {
+          this.threadIndex.set(ts, record.info.id)
+          // Noted with the channel it was opened in, so a restart resumes it (spec S5).
+          if (this.channel) {
+            record.noted = { ts, channel: this.channel }
+            this.note(record.info.id, record.noted)
+          }
+        }
         return ts
       })
       .catch((err: unknown) => {
@@ -744,6 +807,9 @@ export class SlackNotifier {
       // continues on the existing root rather than making a new one. Unless thread is falsy (no old record,
       // or old.thread was null), in which case a new one is opened.
       thread: old?.thread ?? null,
+      // Carried with the thread, and noted into the new id once the inherited root resolves (below): no
+      // note is copied on a roll, since the new session's note is built from its spawn options (P8).
+      noted: old?.noted ?? null,
       // A pending call is not handed over — unlike lastSent and thread, this is the state of one particular
       // screen. The new session starts again from the resume prompt, so that screen is already gone, and
       // handing it over would put the old question in the new session's first notification. count could not
@@ -763,7 +829,13 @@ export class SlackNotifier {
       // Re-indexes the inherited thread under the new id — even across an account change, replies in that
       // thread have to reach the session that is alive
       void record.thread.then((ts) => {
-        if (ts && this.records.get(newInfo.id) === record) this.threadIndex.set(ts, newInfo.id)
+        if (ts && this.records.get(newInfo.id) === record) {
+          this.threadIndex.set(ts, newInfo.id)
+          if (this.channel) {
+            record.noted = { ts, channel: this.channel }
+            this.note(newInfo.id, record.noted)
+          }
+        }
       })
     } else {
       record.thread = this.openThread(record) // openThread registers it in the index too
@@ -1025,7 +1097,10 @@ export class SlackNotifier {
     // A null thread means "reset, or never there in the first place" — a reopen is attempted against the
     // current transport. With a transport that does not support threads, openThread returns null immediately
     // (no network call), so calling it on every send costs nothing.
-    if (record.thread === null) record.thread = this.openThread(record)
+    if (record.thread === null) {
+      this.seedNoted(record)
+      if (record.thread === null) record.thread = this.openThread(record)
+    }
     const threadTs = record.thread ? ((await record.thread) ?? undefined) : undefined
     try {
       const ts = await transport.post(full, threadTs)

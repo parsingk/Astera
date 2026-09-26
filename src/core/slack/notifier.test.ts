@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { Account, SessionInfo } from '../types'
+import type { Account, RollStateEvent, SessionInfo } from '../types'
 import { SlackNotifier, type SlackDeps } from './notifier'
 import { SlackPostError, type SlackTransport } from './transport'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -2157,5 +2157,84 @@ describe('SlackNotifier — the restored wait and the offline summary (S6 Task 5
     notifier.applyConfig({ webhookUrl: 'https://hooks.slack.com/services/T/B/x', botToken: null, channelId: null })
     notifier.applyConfig({ webhookUrl: null, botToken: null, channelId: null })
     expect(await notifier.announceOffline('s-1', 'x')).toBe(false)
+  })
+})
+
+describe('SlackNotifier — threads kept in the session note (Slack in the Host Task 4, spec S5)', () => {
+  const bot = (over: Partial<SlackDeps> = {}) => {
+    const posts: Array<{ channel: string; text: string; thread_ts?: string }> = []
+    const notes: Array<[string, Record<string, unknown>]> = []
+    let n = 0
+    const notifier = new SlackNotifier({
+      getAccount: () => account,
+      readStatusPayload: async () => null,
+      lang: () => 'en',
+      log: () => {},
+      readFileTail: async () => null,
+      createPoster: () => ({ chat: { postMessage: async (a) => { posts.push(a); return { ok: true, ts: `ts${++n}` } } } }),
+      remember: (id, patch) => notes.push([id, patch]),
+      ...over
+    })
+    notifier.applyConfig({ webhookUrl: null, botToken: 'xoxb-1', channelId: 'C1' })
+    return { notifier, posts, notes }
+  }
+  const nudge = (sessionId: string): RollStateEvent => ({ sessionId, state: 'nudged' })
+
+  it('notes the root it opened into the session note, with its channel', async () => {
+    const h = bot()
+    h.notifier.register(info({ id: 's1', slackNotify: true }))
+    await flush()
+    expect(h.notes).toContainEqual(['s1', { slackThreadTs: 'ts1', slackChannel: 'C1' }])
+  })
+
+  // Review Focus 4.
+  it('resumes a noted thread in the current channel: no second root, and a reply in it reaches the session', async () => {
+    const h = bot()
+    h.notifier.register(info({ id: 's1', slackNotify: true }), { thread: { ts: 'old-root', channel: 'C1' } })
+    expect(h.notifier.resolveSessionByThread('old-root')).toBe('s1')
+    h.notifier.onRollState(nudge('s1'))
+    await flush()
+    expect(h.posts).toHaveLength(1)
+    expect(h.posts[0].thread_ts).toBe('old-root')
+  })
+
+  it('opens a new root when the noted thread is in another channel, and notes the new one', async () => {
+    const h = bot()
+    h.notifier.register(info({ id: 's1', slackNotify: true }), { thread: { ts: 'old-root', channel: 'C0' } })
+    await flush()
+    expect(h.posts[0].thread_ts).toBeUndefined()
+    expect(h.notifier.resolveSessionByThread('old-root')).toBeNull()
+    expect(h.notes).toContainEqual(['s1', { slackThreadTs: 'ts1', slackChannel: 'C1' }])
+  })
+
+  it('a roll moves the noted thread to the new session id (P8)', async () => {
+    const h = bot()
+    h.notifier.register(info({ id: 's1', slackNotify: true }))
+    await flush()
+    h.notifier.onRolled('s1', info({ id: 's2', slackNotify: true }))
+    await flush()
+    expect(h.notes).toContainEqual(['s2', { slackThreadTs: 'ts1', slackChannel: 'C1' }])
+    expect(h.notifier.resolveSessionByThread('ts1')).toBe('s2')
+  })
+
+  it('a swap to another channel drops the noted threads; one to the same channel keeps them', async () => {
+    const h = bot()
+    h.notifier.register(info({ id: 's1', slackNotify: true }))
+    await flush()
+    h.notifier.applyConfig({ webhookUrl: null, botToken: 'xoxb-1', channelId: 'C1' })
+    h.notifier.onRollState(nudge('s1'))
+    await flush()
+    expect(h.posts.map((p) => p.thread_ts)).toEqual([undefined, 'ts1']) // the root, then in it: no new root
+    h.notifier.applyConfig({ webhookUrl: null, botToken: 'xoxb-1', channelId: 'C2' })
+    expect(h.notes).toContainEqual(['s1', { slackThreadTs: null, slackChannel: null }])
+    expect(h.notifier.resolveSessionByThread('ts1')).toBeNull()
+  })
+
+  it('a note that cannot be written does not cost the notice', async () => {
+    const h = bot({ remember: () => { throw new Error('gone') } })
+    h.notifier.register(info({ id: 's1', slackNotify: true }))
+    h.notifier.onRollState(nudge('s1'))
+    await flush()
+    expect(h.posts).toHaveLength(2)
   })
 })

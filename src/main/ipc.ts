@@ -12,6 +12,7 @@ import type { CodexRollingCoordinator } from '../core/rolling/codexCoordinator'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier } from '../core/slack/notifier'
 import { readFileTail } from '../core/slack/notifier'
+import { notedThreadOf } from '../core/slack/threadNote'
 import type { SlackConfigStore } from './slackConfigStore'
 import type { SlackConfig } from '../core/slack/config'
 import type { CodexRolloutWatcher } from '../core/sessions/codexRolloutWatcher'
@@ -6225,7 +6226,7 @@ export function registerIpc(
             }
             if (info.slackNotify === true) {
               try {
-                slack?.notifier.register(info)
+                slack?.notifier.register(info, { thread: notedThreadOf(a.restore) })
               } catch {
                 /* A failed Slack registration does not block taking the session back */
               }
@@ -6414,7 +6415,7 @@ export function registerIpc(
             }
             if (info.slackNotify === true) {
               try {
-                slack?.notifier.register(info)
+                slack?.notifier.register(info, { thread: notedThreadOf(a.restore) })
               } catch {
                 /* A failed Slack registration does not block taking the session back */
               }
