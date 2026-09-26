@@ -2,7 +2,7 @@
 // `status()`: nothing else in slice 1 depends on the Host being there, and every failure ends here,
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_SLACK, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_SLACK, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { HOST_UNRESPONSIVE_MS, PING_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
@@ -514,6 +514,9 @@ export class HostClient {
     // sessions it owns, and this app shows them. `chat-takeover`: this app writes its chat chains into
     // the proc notes and leaves a Host-started or Host-marked chat proc to a Host that announces it.
     // An older Host ignores the names, and this app goes on driving in front of it (D5).
+    // `journal` (Host journal J2): a Host that announces it writes the Job Journal, and this app only
+    // reads it (appJournal.ts). Sent only by a build that stops writing in front of such a Host: a
+    // yield before that would make the Host a second writer.
     // `slack` (Slack in the Host P4): this app opens no socket and posts nothing in front of a Host that
     // announces `slack-owner`, and forwards what only it sees. Left out while this app holds its own socket
     // (keepsSlack), so that Host stays inactive rather than opening a second one beside it.
@@ -531,7 +534,7 @@ export class HostClient {
       role: 'app',
       // Leftovers Task 1 (S6-3): the Host asks whether this pid lives when app.pid could not be written.
       pid: process.pid,
-      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])]
+      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])]
     })
   }
 

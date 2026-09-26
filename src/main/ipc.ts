@@ -92,8 +92,8 @@ import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
 import { HandoffStore } from './handoff/store'
-import { ContinuityJournal } from '../core/continuity/journal'
-import { ContinuityRecorder } from '../core/continuity/recorder'
+import { createAppJournal } from './continuity/appJournal'
+import { promptWriteEventOf } from '../core/continuity/promptWrite'
 import { readGitSummary } from '../core/orchestration/exec/gitSummary'
 import { RecoveryReconciler } from './recovery/reconciler'
 import { executeRecovery } from './recovery/execute'
@@ -136,7 +136,7 @@ import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
-import { jobOf, resolveRunId, runIdOf } from '../core/orchestration/state'
+import { jobOf, resolveRunId } from '../core/orchestration/state'
 import type { WorktreeInfo } from '../core/types'
 
 /** 이 프로젝트의 것인 id 전부 — Job 과 그 회차. **한 집합으로 묻는 이유**는 명령이 둘 중 무엇이든
@@ -1277,58 +1277,39 @@ export function registerIpc(
   // Slack in the Host (P5): who owns Slack is decided once the startup chain settles, and not before, so
   // this app opens no socket in front of a Slack-owning Host it has not heard from yet.
   void hostSessionsTakenBack.then(() => slack?.ownership.settled())
-  /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
-   *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
-   *  journaled, and by the toggle handler when turned on at runtime. */
-  let continuity: ContinuityRecorder | null = null
-  /** The journal `continuity` wraps. Needed on its own beside the recorder: Job Continuity P1's
-   *  reconciler and `sweepOrphans` both act on the journal directly, not through the recorder's
-   *  read-only projections. Set in openContinuity, nulled in closeContinuity — same lifecycle as
-   *  `continuity` (closeContinuity's `continuity?.close()` already closes this journal, so this
-   *  variable is only ever nulled here, never closed a second time). */
-  let continuityJournal: ContinuityJournal | null = null
   const continuityFile = path.join(app.getPath('userData'), 'orch', 'continuity.sqlite')
+  /** Job Continuity's journal, as this app sees it (Host journal J1, J2, J3). Off means no file is
+   *  opened and nothing is written (spec §0.4). In front of a Host that announces `journal` the Host
+   *  is the one writer and this app only reads, sending its reconciler's rows as `journal-append` and
+   *  a changed setting as `journal-reload`; in front of an older Host it writes the file itself. The
+   *  writer decision is kept from the last greeting (P8), so a dropped socket never makes this app a
+   *  second writer. `orchCall` and `hostClient` are read inside the closures, at call time. */
+  const appJournal = createAppJournal({
+    file: continuityFile,
+    status: () => hostClient?.status() ?? { connected: false, features: [] },
+    call: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
+    log: orchLog,
+    // Read per row, not captured: these rows are rendered long after they were written, and the
+    // settings handler reassigns core.lang under them.
+    lang: () => core.lang,
+    smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
+    handoffLookup: (sessionId) => handoffs.lookup(sessionId)
+  })
   /** Job Continuity P1's reconciler, and the closure that builds it. **The builder is assigned inside
    *  bootOrch** — it needs the store and the server deps, which live there — while the callers are
    *  outside it (openContinuity, and the settings toggle). Same convention as releaseCoordinator. */
   let recovery: RecoveryReconciler | null = null
   let buildRecovery: (() => void) | null = null
-  /** Opens the journal, or leaves `continuity` null if it can't. ContinuityJournal's constructor
-   *  already moves a corrupt file aside and reopens once, but rethrows if that second open also fails
-   *  (a locked file, a read-only or full disk, an antivirus hold) — caught here because a journal that
-   *  cannot open must not stop orchestration or fail an already-persisted settings toggle. */
+  /** Turns journaling on. Nothing is opened here: appJournal opens its reader, or its own writer, at
+   *  the first use that needs one, and a writer that cannot open is logged there and never stops
+   *  orchestration. Not yet assigned on the very first call (bootOrch turns it on before it builds the
+   *  server deps the reconciler needs), so buildRecovery is a no-op then, built explicitly in bootOrch. */
   const openContinuity = (): void => {
-    if (continuity) return
-    try {
-      const journal = new ContinuityJournal(continuityFile, { log: orchLog })
-      if (journal.recovered) orchLog('continuity journal was unreadable — moved aside, started a new one')
-      continuity = new ContinuityRecorder({
-        journal,
-        log: orchLog,
-        // Read per row, not captured: these rows are rendered long after they were written, and the
-        // settings handler reassigns core.lang under them.
-        lang: () => core.lang,
-        smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
-        handoffLookup: (sessionId) => handoffs.lookup(sessionId)
-      })
-      continuityJournal = journal
-    } catch (err) {
-      orchLog(`continuity: journal could not be opened — journaling stays off until the next start: ${String(err)}`)
-      continuity = null
-    }
-    // Outside the try: a throw from buildRecovery is not a journal failure, and logging it as "the
-    // journal could not be opened" would be false. Guarded on `continuity` rather than on the catch
-    // having been skipped — the same condition, read from the state it left behind — so a failed open
-    // (continuity left null) does not call it at all.
-    if (continuity)
-      // Not yet assigned on the very first call (bootOrch opens the journal before it builds the
-      // server deps the reconciler needs) — a no-op then, built explicitly further down in bootOrch.
-      buildRecovery?.()
+    appJournal.open()
+    buildRecovery?.()
   }
   const closeContinuity = (): void => {
-    continuity?.close()
-    continuity = null
-    continuityJournal = null
+    appJournal.close()
     recovery = null
   }
   /** 검증기. bootOrch 가 만들 때까지 null 이다 — 서버가 서지 못한 실행에서는 끝까지 null 로 남는다 */
@@ -2707,21 +2688,10 @@ export function registerIpc(
 
     // The restart cleanup is a state transition like any other: every worker it closed as
     // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.
-    if (continuity && loaded?.before) {
-      continuity.record(loaded.before, store.get())
-      continuity.reportSkew(store.get())
-    }
-    // Job Continuity P1: rows the journal kept for a Run that no longer exists (deleted, or pruned by
-    // the TTL above) are dead weight — nothing will ever read them again. A failure here must not
-    // stop the boot, the same discipline as the recorder's own journal writes.
-    if (continuityJournal) {
-      try {
-        const swept = continuityJournal.sweepOrphans(new Set(store.get().runs.map((r) => r.id)))
-        if (swept > 0) orchLog(`continuity: swept ${swept} orphaned run(s) from the journal`)
-      } catch (e) {
-        orchLog(`continuity: sweepOrphans failed: ${String(e)}`)
-      }
-    }
+    // Job Continuity P1: and rows the journal kept for a Run that no longer exists (deleted, or pruned
+    // by the TTL above) are swept. Only when this app is the writer: a Host that writes the journal
+    // does both at its own load (Host journal J2).
+    appJournal.bootCleanup(loaded?.before ?? null, store.get())
     if (loaded?.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
     if (
       loaded &&
@@ -2870,22 +2840,7 @@ export function registerIpc(
       // Job Continuity's two prompt rows. Not a state transition, so it cannot come out of the
       // setState diff: only the coordinator knows when the prompt left the app. The Run comes from
       // the Task because the event carries no runId.
-      onPromptWrite: (e) => {
-        if (!continuity) return
-        const st = store.get()
-        const task = st.tasks.find((t) => t.id === e.taskId)
-        if (!task) return
-        const type = e.phase === 'requested' ? 'PROMPT_WRITE_REQUESTED' : 'PROMPT_WRITE_CONFIRMED'
-        continuity.note({
-          runId: runIdOf(task),
-          taskId: task.id,
-          dispatchId: e.dispatchId,
-          type,
-          at: new Date().toISOString(),
-          idempotencyKey: `${type}:${e.dispatchId}`,
-          payload: { via: e.via, promptLength: e.promptLength, specPath: e.specPath }
-        })
-      }
+      onPromptWrite: (e) => appJournal.note(promptWriteEventOf(store.get(), e, new Date().toISOString()))
     })
 
     // performRepair/repairOnce(repair.ts)가 받는 의존 묶음. 판정이 검증에서 왔든(onSettled, 아래)
@@ -2915,7 +2870,7 @@ export function registerIpc(
       isAlive: (id) => core.sessions.list().some((s) => s.id === id && s.status === 'running'),
       startReview: (a) => startReview(a),
       startRepair: (a) => performRepair(repairDeps, a),
-      firstCheckpointHead: (dispatchId) => continuityJournal?.firstCheckpointFor(dispatchId)?.gitHead ?? null,
+      firstCheckpointHead: (dispatchId) => appJournal.firstCheckpointHead(dispatchId),
       diffNames: async (cwd, fromHead) => {
         const r = await git(['diff', '--name-only', fromHead, 'HEAD'], { cwd })
         return r.ok ? r.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : null
@@ -3015,8 +2970,10 @@ export function registerIpc(
      * stays here is the wiring, because every one of these depends on something local to this boot.
      */
     const afterOrchCommit = createOrchCommitHook({
-      record: continuity ? (prev, next) => continuity?.record(prev, next) ?? [] : undefined,
-      checkpoint: (events, next) => continuity?.checkpoint(events, next) ?? Promise.resolve(),
+      // Asked at every commit, not decided once at boot: whether this app writes follows the Host it
+      // last greeted (P8), and a refill or a push from a Host that writes the journal records nothing.
+      record: (prev, next) => appJournal.record(prev, next),
+      checkpoint: (events, next) => appJournal.checkpoint(events, next),
       push: pushOrchState,
       // Assembling the record needs the project key and the understanding pipeline, so it stays on
       // this side; which Runs finished is the hook's judgement (justFinished).
@@ -3422,8 +3379,7 @@ export function registerIpc(
     // after `deps` is complete, and invoked once below if continuity is already on; a later runtime
     // toggle-on calls it through openContinuity's own `buildRecovery?.()`.
     buildRecovery = () => {
-      if (!continuityJournal) return
-      const journal = continuityJournal
+      if (!appJournal.enabled()) return
       // Nulling `recovery` (closeContinuity, on toggle-off or will-quit) cannot cancel a sweep that
       // is already running — reconcileAll/reconcileOne hold this reconciler through their own
       // closure, so a running one would otherwise go on to call deps.startWorker seconds after the
@@ -3433,7 +3389,7 @@ export function registerIpc(
       mine = new RecoveryReconciler({
         getState: deps.getState,
         setState: deps.setState,
-        journal,
+        journal: appJournal.reconcilerJournal,
         readGitFacts: (cwd) => readGitFacts(cwd),
         smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
         // The last gate before a worker is spawned. Turning the toggle off, or quitting, must not
@@ -3465,7 +3421,7 @@ export function registerIpc(
       })
       recovery = mine
     }
-    if (continuity) buildRecovery()
+    if (appJournal.enabled()) buildRecovery()
 
     /**
      * **The one-time pause for work the old orchestration toggle had parked** (ruling F62).
@@ -4318,8 +4274,7 @@ export function registerIpc(
     // leaves nothing in the projection to read it back from — only the journal remembers it happened.
     const events = [
       ...timelineFor(state, detailRunId, (id) => known.has(id)),
-      ...(continuity?.lostEventsFor(detailRunId, state) ?? []),
-      ...(continuity?.recoveryEventsFor(detailRunId, state) ?? [])
+      ...appJournal.timeline(detailRunId, state)
     ].sort((a, b) => a.at.localeCompare(b.at))
     return { events, layers, deps, cyclic }
   })
@@ -5453,6 +5408,8 @@ export function registerIpc(
     // Turning it off does not close the server — handoffEnabled() is read per request.
     if (strategy === 'smart' && orchWiring) await startOrch()
     if (strategy === 'smart') installStubsForCurrentToggles()
+    // A Host that writes the journal reads the resume strategy for its checkpoints' handoff refs (P7).
+    appJournal.settingsChanged()
   })
 
   // 에이전트 권한 모드. 값 검사만 하고 부수 효과는 없다 — 이 값은 **다음 spawn 부터** 읽히고
@@ -5479,10 +5436,16 @@ export function registerIpc(
     if (enabled) installStubsForCurrentToggles()
     if (enabled && !was && orch) {
       // Turned on while Runs may be active: a baseline for every open worker, no invented history (spec §3.6)
+      // (here, or by the Host on journal-reload when it writes the journal, P7)
       openContinuity()
-      void continuity?.enable(orch.deps.getState()).catch((e) => orchLog(`continuity: enable failed: ${String(e)}`))
+      void appJournal.turnedOn(orch.deps.getState()).catch((e) => orchLog(`continuity: enable failed: ${String(e)}`))
     }
-    if (!enabled) closeContinuity() // the file stays; nothing is deleted (spec §3.4)
+    if (!enabled) {
+      // The file stays; nothing is deleted (spec §3.4). A Host that writes the journal reads the toggle
+      // only at start and on journal-reload, so it is told as well.
+      closeContinuity()
+      appJournal.settingsChanged()
+    }
     return r
   })
 

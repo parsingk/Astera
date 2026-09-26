@@ -15,10 +15,18 @@ import type { ExecuteResult } from './execute'
 export { candidates, type LostAttemptSeed } from '../../core/recovery/candidates'
 import { candidates, type LostAttemptSeed } from '../../core/recovery/candidates'
 
+/** What the reconciler needs of the journal. A port rather than the class since the Host journal (J3):
+ *  in front of a Host that writes the journal the app reads through a read-only reader and sends its
+ *  writes as `journal-append` (appJournal.ts); otherwise these are the app's own ContinuityJournal. */
+export type ReconcilerJournal = Pick<
+  ContinuityJournal,
+  'eventsFor' | 'firstCheckpointFor' | 'append' | 'startRecoveryAction' | 'finishRecoveryAction'
+>
+
 export interface ReconcilerDeps {
   getState(): OrchState
   setState(next: OrchState): Promise<void>
-  journal: ContinuityJournal
+  journal: ReconcilerJournal
   readGitFacts(cwd: string): Promise<GitFacts>
   smartResume(): boolean
   execute(a: { attempt: LostAttempt; decision: RecoveryDecision; state: OrchState; now: string }): Promise<ExecuteResult>

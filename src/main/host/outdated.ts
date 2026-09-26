@@ -16,7 +16,8 @@ import {
   HOST_FEATURE_ROLL_JOURNAL,
   HOST_FEATURE_COORDINATOR_IDLE,
   HOST_FEATURE_CHAT_TAKEOVER,
-  HOST_FEATURE_SLACK_OWNER
+  HOST_FEATURE_SLACK_OWNER,
+  HOST_FEATURE_JOURNAL
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -115,6 +116,16 @@ export function hostSpeaksSlackOwner(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_SLACK_OWNER)
+}
+
+/** The connected Host writes the Job Journal (Host journal J2). Read by hostSpeaksRolling's rule: an
+ *  unresponsive Host still sees this app's yield and still writes. appJournal keeps the last answer (P8). */
+export function hostSpeaksJournal(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_JOURNAL)
 }
 
 /** The connected Host exchanges usage-limit block records (S6 D4): the app sends its registry's changes

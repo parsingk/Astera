@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal } from './outdated'
 import { HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_SLACK_OWNER } from '../../core/host/protocol'
 
 describe('hostIsOutdated', () => {
@@ -137,5 +137,14 @@ describe('hostSpeaksSlackOwner (Slack in the Host, P5)', () => {
     expect(hostSpeaksSlackOwner({ connected: false, unresponsive: true, features: f })).toBe(true)
     expect(hostSpeaksSlackOwner({ connected: false, features: [] })).toBe(false)
     expect(hostSpeaksSlackOwner({ connected: true, features: ['rolling'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksJournal (Host journal J2)', () => {
+  it('holds for a connected or unresponsive Host that announced journal, and nothing else', () => {
+    expect(hostSpeaksJournal({ connected: true, features: ['journal'] })).toBe(true)
+    expect(hostSpeaksJournal({ connected: false, unresponsive: true, features: ['journal'] })).toBe(true)
+    expect(hostSpeaksJournal({ connected: false, features: ['journal'] })).toBe(false)
+    expect(hostSpeaksJournal({ connected: true, features: ['spawn'] })).toBe(false)
   })
 })
