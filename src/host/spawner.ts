@@ -21,7 +21,8 @@ import { OrchCoordinator, type CoordinatorDeps, type PromptWriteEvent } from '..
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
-import { ensureShuttle } from '../core/orchestration/exec/shuttle'
+import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
+import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
   startCoordinatorSession,
@@ -235,9 +236,22 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     platform === 'win32' ? 'node' : resolveNodePath(d.env as { PATH?: string }, existsSync, platform)
   )
   const ensured = once(() => statusLine.ensureFiles())
-  const shuttlePath = once(() =>
-    ensureShuttle({ dir: path.join(profileDir, 'orch'), execPath: cli.exec, entryPath: cli.entry })
-  )
+  // The app writes this same file at its start (bootOrch). Both go through the same junction decision
+  // (sessionCmdLink), so on win32 from a non-ASCII install folder outside the user folders both write the
+  // `.cmd` through %LOCALAPPDATA%\astera\app and neither turns the other's file back. Never removed here.
+  const shuttlePath = once(async () => {
+    const link = await sessionCmdLink(
+      {
+        publicDir: binDirFor({ platform, env: d.env, home: homeDir }),
+        execPath: cli.exec,
+        entryPath: cli.entry,
+        platform,
+        env: d.env
+      },
+      (w) => log(`session astera shuttle: ${w.code}: ${w.detail}`)
+    )
+    return ensureShuttle({ dir: path.join(profileDir, 'orch'), execPath: cli.exec, entryPath: cli.entry, env: d.env, link })
+  })
   const specsDir = path.join(profileDir, 'orch', 'specs')
   const settingsPath = path.join(profileDir, 'app-settings.json')
   const accountsPath = path.join(profileDir, 'accounts.json')

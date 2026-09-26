@@ -90,6 +90,28 @@ const rigWith = (hooks: LocateHooks) => {
   return { ...rig({ ...hooks, state: () => box.state }), taskId: seed.taskId, dispatchId: seed.dispatchId, box }
 }
 
+// The Host writes the same session `.cmd` the app does (bootOrch). From a non-ASCII install folder outside
+// the user folders it must go through the same %LOCALAPPDATA%\astera\app junction, or the Host's write
+// would turn the app's file back to the raw path that cmd.exe cannot read. The env names no user folder,
+// so the temp folder counts as outside them; LOCALAPPDATA points inside `dir`.
+describe.runIf(process.platform === 'win32')('createHostSpawner, session shuttle junction', () => {
+  it('writes the session .cmd through the app junction it makes, beside the public bin', async () => {
+    const root = path.join(dir, '설치 폴더')
+    await fs.mkdir(root, { recursive: true })
+    await fs.writeFile(path.join(root, 'Astera.exe'), ''); await fs.writeFile(path.join(root, 'cli.js'), '')
+    const local = path.join(dir, 'local')
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s, env: { ...hostEnv(), LOCALAPPDATA: local, ASTERA_HOST_CLI_EXEC: path.join(root, 'Astera.exe'), ASTERA_HOST_CLI_ENTRY: path.join(root, 'cli.js') } })
+    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    const link = path.join(local, 'astera', 'app')
+    expect((await fs.lstat(link)).isSymbolicLink()).toBe(true)
+    expect(path.resolve(await fs.readlink(link)).toLowerCase()).toBe(root.toLowerCase())
+    const cmd = await fs.readFile(path.join(profile, 'orch', 'astera.cmd'), 'utf8')
+    expect(cmd).toContain(`"%LOCALAPPDATA%\\astera\\app\\Astera.exe" "%LOCALAPPDATA%\\astera\\app\\cli.js"`)
+    await fs.unlink(link)
+  })
+})
+
 describe('createHostSpawner', () => {
   // Host journal, A19 lifted: the Host's coordinator reports the prompt writes the journal reasons from.
   it('reports each prompt write of a worker it starts', async () => {

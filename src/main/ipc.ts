@@ -159,6 +159,7 @@ import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import {
   installShuttle,
   removeShuttle,
+  sessionCmdLink,
   shuttleNames,
   syncShuttle,
   writeShuttle,
@@ -3476,7 +3477,19 @@ export function registerIpc(
     // A `writeShuttle` ENOSPC on a full disk reaches the caller's catch with `orch` still null, which
     // is the truth: nothing was assigned and nothing needs unwinding. There is no listening socket to
     // close first any more — the command layer is the Host's (host control plane design §7).
-    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath })
+    // win32: from a non-ASCII install folder outside the user folders, the session `.cmd` goes through
+    // the same %LOCALAPPDATA%\astera\app junction as the public one (sessionCmdLink), made here before
+    // any session starts. It is never removed from this path. When it cannot be made, the path is raw.
+    const sessionLink = await sessionCmdLink(
+      {
+        // binDirFor directly, not cliBinDir: that const is declared further down registerIpc.
+        publicDir: binDirFor({ platform: process.platform, env: process.env, home: app.getPath('home') }),
+        execPath: process.execPath,
+        entryPath
+      },
+      (w) => orchLog(`session astera shuttle: ${w.code}: ${w.detail}`)
+    )
+    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath, link: sessionLink })
     orch = { deps, cliPath, skillsPath, profileDir }
     // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
     // Before `pushOrchState` below, which is what redraws it.
@@ -5297,7 +5310,12 @@ export function registerIpc(
   })
   // 되돌리기(명세 §29). 우리가 쓴 셔틀 파일만 지우고 폴더와 이웃 파일은 남긴다(removeShuttle).
   ipcMain.handle('cli.uninstall', async () => {
-    await removeShuttle({ dir: cliBinDir() })
+    // The junction stays while this app's own session shuttle goes through it (keepFor).
+    const entryPath = cliEntryPath()
+    await removeShuttle({
+      dir: cliBinDir(),
+      keepFor: entryPath ? { execPath: process.execPath, entryPath } : undefined
+    })
     return cliStatus()
   })
   // 갱신(명세 §30). 앱이 옮겨 가면 깔아 둔 공개 셔틀은 예전 실행 파일을 가리킨다. 부팅마다 깔려 있는

@@ -11,9 +11,11 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
   cmdLinkFor,
+  ensureShuttle,
   installShuttle,
   isShuttleContent,
   removeShuttle,
+  sessionCmdLink,
   shuttleFiles,
   syncShuttle,
   writeShuttle,
@@ -312,5 +314,105 @@ describe.runIf(process.platform === 'win32')('진짜 정션', () => {
     await removeShuttle({ dir: bin, platform: 'win32' })
     await expect(fs.lstat(appLink)).rejects.toThrow()
     await expect(fs.readFile(entry, 'utf8')).resolves.toContain('argv')
+  })
+})
+
+// 앱이 자기 세션에 주는 셔틀(`<userData>\orch`, bootOrch 와 Host 의 ensureShuttle)도 같은 정션을 쓴다.
+// 세션 쪽은 정션을 만들거나 다시 가리키게만 하고 **걷지 않는다.** 걷는 것은 공개 셔틀 제거와 NSIS 뿐이다.
+describe('sessionCmdLink (세션 셔틀의 정션)', () => {
+  const publicDir = 'C:\\Users\\me\\AppData\\Local\\astera\\bin'
+  const appLink = 'C:\\Users\\me\\AppData\\Local\\astera\\app'
+  const run = (links: LinkFs, execPath = EXEC, entryPath = ENTRY) => {
+    const warnings: ShuttleWarning[] = []
+    return sessionCmdLink({ publicDir, execPath, entryPath, platform: 'win32', env, links }, (w) => warnings.push(w)).then(
+      (link) => ({ link, warnings })
+    )
+  }
+
+  it('필요하면 공개 셔틀과 같은 자리에 정션을 만들고 그것을 돌려준다', async () => {
+    const f = fakeLinks()
+    const r = await run(f.api)
+    expect(r.link).toEqual({ link: appLink, root: ROOT })
+    expect(f.calls).toEqual([`symlink junction ${appLink} -> ${ROOT}`])
+    expect(r.warnings).toEqual([])
+  })
+
+  it('옛 자리를 가리키는 정션은 다시 가리키게 한다', async () => {
+    const f = fakeLinks({ links: { [appLink]: 'E:\\옛 자리\\Astera' } })
+    expect((await run(f.api)).link).toEqual({ link: appLink, root: ROOT })
+    expect(f.calls).toEqual([`unlink ${appLink}`, `symlink junction ${appLink} -> ${ROOT}`])
+  })
+
+  it('필요 없어도 있는 정션을 걷지 않는다 (공개 셔틀이 쓰고 있을 수 있다)', async () => {
+    const f = fakeLinks({ links: { [appLink]: ROOT } })
+    const r = await run(f.api, 'D:\\Apps\\Astera\\Astera.exe', 'D:\\Apps\\Astera\\cli.js')
+    expect(r.link).toBeUndefined()
+    expect(f.calls).toEqual([])
+  })
+
+  it('못 만들면 undefined 와 경고, 정션이 아닌 것은 건드리지 않는다', async () => {
+    const failed = await run(fakeLinks({ symlinkFails: 'EPERM' }).api)
+    expect(failed.link).toBeUndefined()
+    expect(failed.warnings.map((w) => w.code)).toEqual(['junction-failed'])
+    const taken = fakeLinks({ others: [appLink] })
+    const r = await run(taken.api)
+    expect(r.link).toBeUndefined()
+    expect(r.warnings.map((w) => w.code)).toEqual(['link-path-taken'])
+    expect(taken.calls).toEqual([])
+  })
+
+  it('앱(writeShuttle)과 Host(ensureShuttle)가 같은 정션으로 같은 .cmd 를 쓴다: 두 번째는 다시 쓰지 않는다', async () => {
+    const link = { link: appLink, root: ROOT }
+    await writeShuttle({ dir, execPath: EXEC, entryPath: ENTRY, platform: 'win32', env, link })
+    const before = await fs.stat(path.join(dir, 'astera.cmd'))
+    await new Promise((r) => setTimeout(r, 20))
+    await ensureShuttle({ dir, execPath: EXEC, entryPath: ENTRY, platform: 'win32', env, link })
+    expect((await fs.stat(path.join(dir, 'astera.cmd'))).mtimeMs).toBe(before.mtimeMs)
+    expect(await cmdIn(dir)).toContain('"%LOCALAPPDATA%\\astera\\app\\Astera.exe"')
+  })
+})
+
+describe('removeShuttle 와 지금 도는 앱의 세션 셔틀', () => {
+  it('지금 도는 앱의 세션 셔틀이 정션을 거치면 공개 셔틀을 걷어도 정션은 남긴다', async () => {
+    const f = fakeLinks()
+    await installShuttle({ dir, execPath: EXEC, entryPath: ENTRY, platform: 'win32', env, links: f.api })
+    f.calls.length = 0
+    const removed = await removeShuttle({ dir, platform: 'win32', links: f.api, keepFor: { execPath: EXEC, entryPath: ENTRY, env } })
+    expect(removed.sort()).toEqual(['astera', 'astera.cmd'])
+    expect(f.calls).toEqual([])
+    expect(f.links.get(link)).toBe(ROOT)
+  })
+
+  it('지금 도는 앱이 정션을 쓰지 않으면(ASCII 폴더) 공개 셔틀과 함께 걷는다', async () => {
+    const f = fakeLinks()
+    await installShuttle({ dir, execPath: EXEC, entryPath: ENTRY, platform: 'win32', env, links: f.api })
+    f.calls.length = 0
+    await removeShuttle({
+      dir,
+      platform: 'win32',
+      links: f.api,
+      keepFor: { execPath: 'D:\\Apps\\Astera\\Astera.exe', entryPath: 'D:\\Apps\\Astera\\cli.js', env }
+    })
+    expect(f.calls).toEqual([`unlink ${link}`])
+  })
+})
+
+describe.runIf(process.platform === 'win32')('진짜 정션 (세션 셔틀)', () => {
+  it('세션 셔틀의 .cmd 가 정션을 거쳐 돈다', async () => {
+    const root = path.join(dir, '설치 폴더')
+    const entry = path.join(root, 'resources', 'entry.js')
+    await fs.mkdir(path.dirname(entry), { recursive: true })
+    await fs.writeFile(entry, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))\n', 'utf8')
+    const exe = path.join(root, 'Astera.exe')
+    await fs.copyFile(process.execPath, exe)
+    const publicDir = path.join(dir, 'astera', 'bin')
+    const warnings: ShuttleWarning[] = []
+    const l = await sessionCmdLink({ publicDir, execPath: exe, entryPath: entry, platform: 'win32', env: {} }, (w) => warnings.push(w))
+    expect(warnings).toEqual([])
+    const shim = await writeShuttle({ dir: path.join(dir, 'profile', 'orch'), execPath: exe, entryPath: entry, platform: 'win32', env: {}, link: l })
+    expect(await fs.readFile(shim, 'utf8')).toMatch(ASCII)
+    const run = spawnSync('cmd.exe', ['/d', '/s', '/c', `"chcp 949 >nul & "${shim}" hi"`], { windowsVerbatimArguments: true, encoding: 'utf8' })
+    expect(JSON.parse(run.stdout)).toEqual(['hi'])
+    await fs.unlink(path.join(dir, 'astera', 'app'))
   })
 })

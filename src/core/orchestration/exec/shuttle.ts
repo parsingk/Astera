@@ -285,7 +285,11 @@ export interface LinkFs {
 const realLinkFs: LinkFs = {
   lstat: (p) => fs.lstat(p),
   readlink: (p) => fs.readlink(p),
-  symlink: (target, p, type) => fs.symlink(target, p, type),
+  // %LOCALAPPDATA%\astera may not exist yet when the session shuttle is the first to need the junction.
+  symlink: async (target, p, type) => {
+    await fs.mkdir(path.dirname(p), { recursive: true })
+    await fs.symlink(target, p, type)
+  },
   unlink: (p) => fs.unlink(p)
 }
 
@@ -329,7 +333,7 @@ const dropLink = async (link: string, links: LinkFs): Promise<void> => {
  * through, or undefined to write it raw, with a warning when raw is not what it needed.
  */
 async function prepareCmdLink(
-  a: { dir: string; execPath: string; entryPath: string; env: NodeJS.ProcessEnv; links: LinkFs },
+  a: { dir: string; execPath: string; entryPath: string; env: NodeJS.ProcessEnv; links: LinkFs; keepUnneeded?: boolean },
   warn: (w: ShuttleWarning) => void
 ): Promise<CmdLink | undefined> {
   const plan = cmdLinkFor(a)
@@ -343,7 +347,7 @@ async function prepareCmdLink(
             ? `the CLI entry ${a.entryPath} is not inside ${path.win32.dirname(a.execPath)}`
             : `the paths below ${path.win32.dirname(a.execPath)} are not ASCII either`
       })
-    await dropLink(linkPath, a.links)
+    if (!a.keepUnneeded) await dropLink(linkPath, a.links)
     return undefined
   }
   const { link, root } = plan.link
@@ -412,6 +416,9 @@ export async function removeShuttle(a: {
   dir: string
   platform?: NodeJS.Platform
   links?: LinkFs
+  /** The running app's own paths. While its session shuttle needs the junction (cmdLinkFor says
+   *  `link`), the junction stays: that shuttle goes through it for as long as this app runs. */
+  keepFor?: { execPath: string; entryPath: string; env?: NodeJS.ProcessEnv }
 }): Promise<string[]> {
   const removed: string[] = []
   for (const name of shuttleNames(a.platform)) {
@@ -421,9 +428,50 @@ export async function removeShuttle(a: {
     await fs.rm(p, { force: true })
     removed.push(name)
   }
-  if ((a.platform ?? process.platform) === 'win32' && (await readOrNull(path.join(a.dir, 'astera.cmd'))) === null)
+  const sessionNeedsIt =
+    a.keepFor !== undefined &&
+    cmdLinkFor({ dir: a.dir, ...a.keepFor, env: a.keepFor.env ?? process.env }).kind === 'link'
+  if (
+    (a.platform ?? process.platform) === 'win32' &&
+    !sessionNeedsIt &&
+    (await readOrNull(path.join(a.dir, 'astera.cmd'))) === null
+  )
     await dropLink(cmdLinkPath(a.dir), a.links ?? realLinkFs)
   return removed
+}
+
+/**
+ * The junction for the app's **session** shuttle (`<userData>\orch`, written by bootOrch and by the
+ * Host's ensureShuttle). The same junction as the public shuttle's, beside `publicDir`, and the same
+ * decision (cmdLinkFor). It is made or re-pointed here, **never removed**: the public shuttle may be
+ * using it, and only the public uninstall and the NSIS uninstaller take it away. Returns the link to
+ * write the `.cmd` through, or undefined to write it raw; a raw path it needed is a warning.
+ *
+ * Both writers of that file call this, so they write the same `.cmd` and neither undoes the other.
+ */
+export async function sessionCmdLink(
+  a: {
+    publicDir: string
+    execPath: string
+    entryPath: string
+    platform?: NodeJS.Platform
+    env?: NodeJS.ProcessEnv
+    links?: LinkFs
+  },
+  warn: (w: ShuttleWarning) => void
+): Promise<CmdLink | undefined> {
+  if ((a.platform ?? process.platform) !== 'win32') return undefined
+  return prepareCmdLink(
+    {
+      dir: a.publicDir,
+      execPath: a.execPath,
+      entryPath: a.entryPath,
+      env: a.env ?? process.env,
+      links: a.links ?? realLinkFs,
+      keepUnneeded: true
+    },
+    warn
+  )
 }
 
 /**
@@ -479,7 +527,15 @@ export async function writeShuttle(a: {
 /** writeShuttle, but a file whose content is already right is left alone (R6). The Host calls this at
  *  its first spawn and the app writes the same files at its start, so a rewrite of identical content
  *  would be a second writer racing the first for nothing. Returns the canonical path. */
-export async function ensureShuttle(a: { dir: string; execPath: string; entryPath: string }): Promise<string> {
+export async function ensureShuttle(a: {
+  dir: string
+  execPath: string
+  entryPath: string
+  platform?: NodeJS.Platform
+  env?: NodeJS.ProcessEnv
+  /** The junction the `.cmd` goes through (sessionCmdLink), the same one the app's writer uses. */
+  link?: CmdLink
+}): Promise<string> {
   const files = shuttleFiles(a)
   await fs.mkdir(a.dir, { recursive: true })
   const written: string[] = []
