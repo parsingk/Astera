@@ -745,6 +745,10 @@ export interface CoreEvents {
    *  one** — see `OrchHostGate` for what carrying it in the snapshot cost. Sent whenever it moves;
    *  `orch.hostGate` answers the same value for a window that mounts after the change. */
   'orch:host': OrchHostGate | null
+  /** Who drives Jobs, as the Host last said it (limits L3), or null when nothing is known: no Host, a
+   *  connection that went, or a Host too old to say. The Jobs sidebar reads it with the Host status to
+   *  say why nothing moves (jobsStall). `host.driver` answers the same value for a window that mounts later. */
+  'host:driver': HostDriverReport | null
 
   /** How It Works 의 저장 파일이 바뀌었다. **실린 값은 프로젝트 키이고, 받는 쪽은 그것을 쓰지
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
@@ -839,6 +843,19 @@ export interface HostStatus {
   /** What the Host announced it can do (protocol.ts HOST_FEATURE_*); empty until a hello, and for a
    *  Host that predates the field. */
   features: string[]
+}
+
+/** Who drives Jobs, as a Host that announced HOST_FEATURE_DRIVER says it (limits pass L3). The app
+ *  keeps the last one it was told on this connection and forgets it when the connection drops; an
+ *  older Host says nothing, and then nothing is known. Written out here rather than imported from
+ *  core/host/driver.ts because the renderer compiles this file and not that one.
+ *
+ *  `gate` is what the Host last read from the profile's settings file: `not-migrated` and
+ *  `unreadable` are the two things that park it (driverOf), and null means it has not read the file
+ *  yet (a Host that has just started is parked until it has, N2). */
+export interface HostDriverReport {
+  driver: 'host' | 'app' | 'parked'
+  gate: 'no-settings' | 'migrated' | 'not-migrated' | 'unreadable' | null
 }
 
 /** How much of this app's work the Host is holding right now — the fact that makes the Info tab's
@@ -1632,6 +1649,9 @@ export type RendererApi = CoreApi & {
      *  Ends everything the Host holds, so the caller has already shown what that is. Resolves with
      *  the status the new connection settled at (docs/superpowers/specs/2026-09-14-host-replacement-design.md). */
     replace(): Promise<HostStatus>
+    /** Who drives Jobs, as the Host last said it (limits L3); null when nothing is known. Changes
+     *  arrive on the 'host:driver' event. */
+    driver(): Promise<HostDriverReport | null>
     /** What the Host says it is holding, or **null when it did not say** — there is no Host, the
      *  connection is down, or it did not answer in time. Null and `{ sessions: 0, terminals: 0 }` are
      *  opposite answers and the caller must not merge them: zero is the Host telling you nothing of

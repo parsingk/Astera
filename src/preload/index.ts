@@ -46,6 +46,7 @@ const EVENT_CHANNELS = [
   'terminal:created',
   'orch:state',
   'orch:host',
+  'host:driver',
   'understanding:changed',
   'sessionTasks:changed',
   'sessionTasks:goalIgnored',
@@ -323,6 +324,7 @@ const api = {
     sessionsOutlivingApp: invoke('host.sessionsOutlivingApp'),
     survivesUpdate: invoke('host.survivesUpdate'),
     replace: invoke('host.replace'),
+    driver: invoke('host.driver'),
     holdings: invoke('host.holdings')
   },
   conversation: {

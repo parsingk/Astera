@@ -2292,6 +2292,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .jobs-delete:hover { background: none; color: var(--git-deleted); }
 .jobs-empty { margin: auto; text-align: center; padding: 0 24px; color: var(--text-faint); font-size: 13px; }
 .jobs-empty-hint { margin-top: 6px; font-size: 11.5px; }
+/* 아무것도 움직이지 않는 까닭(한도 L3). 경고 색 한 줄 — 사람이 할 일이 있을 수도 있다는 뜻이지 실패가 아니다 */
+.jobs-stall { margin: 10px 10px 4px; padding: 6px 10px; border: 1px solid var(--warn); border-radius: var(--radius-sm); color: var(--warn); font-size: 12px; text-align: left; }
 
 /* 예약 템플릿 줄. **띠도 진행률도 없다** — 템플릿은 돌지 않으므로 그것들이 말할 것이 없다
    (JobsView 의 ScheduleCard 주석). 대신 규칙·다음 시각·회차 수 한 줄이 그 자리를 쓴다 */

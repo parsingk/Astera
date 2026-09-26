@@ -570,6 +570,9 @@ describe('index.ts wires the blocks exchange (S6 Task 3)', () => {
     expect(serverCall).toMatch(/if \(m\.t === 'blocks' && rollingWiring\) \{\s*if \(from\.greeted && from\.role === 'app'\) rollingWiring\.blocksFromApp\(m\)\s*return true/)
   })
   it('sends a newly greeted app the whole registry', () => {
-    expect(serverCall).toMatch(/onAppGreeted: \(send\) => rollingWiring\?\.appGreeted\(send\)/)
+    // Limits L3 made it a block that also tells the driver; the rolling's call is still in it.
+    const greetedAt = serverCall.indexOf('onAppGreeted:')
+    expect(greetedAt).toBeGreaterThan(-1)
+    expect(serverCall.slice(greetedAt, greetedAt + 400)).toMatch(/rollingWiring\?\.appGreeted\(send\)/)
   })
 })

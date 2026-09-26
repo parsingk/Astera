@@ -7,7 +7,7 @@
 // floor and a person with four dead features read "no project is open". Ordering matters here and the
 // renderer has no test environment (vitest runs `environment: 'node'`), so the order lives where a
 // test can hold it.
-import type { OrchHostGate, OrchSnapshot } from '../types'
+import type { HostDriverReport, HostStatus, OrchHostGate, OrchSnapshot } from '../types'
 
 /** `host` — the Host gate's own screen. `blank` — nothing is known yet, so nothing is drawn (drawing
  *  the empty state here flashes "no jobs" for a frame on every project switch). `empty` — a real
@@ -28,4 +28,27 @@ export function jobsViewScreen(a: {
   if (a.hostGate) return 'host'
   if (a.snapshot === null) return 'blank'
   return a.snapshot.runs.length === 0 ? 'empty' : 'runs'
+}
+
+/** Why nothing in the Jobs sidebar moves, when the Host is the reason and still answers the gate
+ *  above's question (limits pass L3, design A38 and A52). `parked` — the Host holds the state and will
+ *  not start work, and `gate` says why. `unresponsive` — the Host is there and is not answering, so
+ *  the app keeps yielding to it and no Job moves. */
+export type JobsStall = { kind: 'unresponsive' } | { kind: 'parked'; gate: 'not-migrated' | 'unreadable' }
+
+/**
+ * **Not answering comes first.** What a Host that stopped answering last said about itself is stale,
+ * and the one fact that is true now is that it does not answer. A parked Host is named only with the
+ * reason that parks it: a parked driver with no gate read yet is the Host's first moment (N2) and
+ * lasts until its first read, so it has no reason to show. A Host that drives, an app that drives,
+ * and an older Host that says nothing all draw nothing.
+ */
+export function jobsStall(a: {
+  hostStatus: Pick<HostStatus, 'unresponsive'> | null
+  driver: HostDriverReport | null
+}): JobsStall | null {
+  if (a.hostStatus?.unresponsive === true) return { kind: 'unresponsive' }
+  const d = a.driver
+  if (d?.driver === 'parked' && (d.gate === 'not-migrated' || d.gate === 'unreadable')) return { kind: 'parked', gate: d.gate }
+  return null
 }

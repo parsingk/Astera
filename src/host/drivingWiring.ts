@@ -21,7 +21,7 @@
 // Imports only core modules, node builtins and the Host's own modules: this bundles into the Host.
 import path from 'node:path'
 import type { DispatchGate, Driver } from '../core/host/driver'
-import type { HostMessage } from '../core/host/protocol'
+import { HOST_YIELD_DISPATCH, type HostMessage } from '../core/host/protocol'
 import { createHostChecks, type HostChecks } from './checks'
 import { createHostDriving, type HostDriving } from './driving'
 import type { HostOrch } from './orch'
@@ -43,6 +43,9 @@ export interface HostDrivingWiring {
   }
   /** Spread into startHostServer's deps. */
   serverHooks: { onAppsChanged(): void }
+  /** A newly greeted app is told the current driver (limits L3). index.ts calls it from the server's
+   *  `onAppGreeted`, beside the rolling's. Never throws. */
+  appGreeted(send: (m: HostMessage) => void): void
   dispose(): void
 }
 
@@ -56,7 +59,7 @@ export function composeHostDriving(a: {
   spawner: HostSpawner
   worktrees: HostWorktrees
   orch(): HostOrch
-  server(): { hasApp(): boolean; appsKeep(duty: string): boolean; broadcast(m: HostMessage): void }
+  server(): { hasApp(): boolean; appsKeep(duty: string): boolean; broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean): void }
   log(m: string): void
   now(): string
   nowMs(): number
@@ -129,7 +132,11 @@ export function composeHostDriving(a: {
     nowMs: () => a.nowMs(),
     ...(a.every ? { every: a.every } : {}),
     ...(a.after ? { after: a.after } : {}),
-    ...(a.readGate ? { readGate: a.readGate } : {})
+    ...(a.readGate ? { readGate: a.readGate } : {}),
+    // Limits L3: every change of the driver or its gate goes to the apps that yield dispatch, the
+    // ones whose Jobs wait on this Host. An app that keeps dispatch drives itself and has nothing to
+    // wait for, and a CLI reads no push. A throw here is the driving's to log (constraint 14).
+    onReport: (r) => a.server().broadcast({ t: 'driver', ...r }, (yields) => yields.has(HOST_YIELD_DISPATCH))
   })
 
   return {
@@ -160,6 +167,13 @@ export function composeHostDriving(a: {
         } catch (err) {
           log(`the driver could not take an app attaching or leaving: ${String(err)}`)
         }
+      }
+    },
+    appGreeted: (send) => {
+      try {
+        send({ t: 'driver', ...driving.report() })
+      } catch (err) {
+        log(`the driver could not be told to an app: ${String(err)}`)
       }
     },
     dispose: () => {

@@ -46,6 +46,7 @@ import { createHostProcFactory } from './host/procFactory'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover } from './host/outdated'
 import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
+import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
@@ -1027,6 +1028,8 @@ export function registerIpc(
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
+  /** Who drives Jobs, as the Host last said it (limits L3). Null until `startHostClient` builds it. */
+  let hostDriverView: HostDriverView | null = null
   /** Takes back the one pty a Host roll respawned into (`takeSessionsBack` with its id). Null until
    *  `startHostClient` has built the sweep queue, and then for good: nothing is pushed before then. */
   let takeBackRolledPty: ((ptyId: string) => Promise<unknown>) | null = null
@@ -5667,6 +5670,17 @@ export function registerIpc(
       forward: (event) => client.send({ t: 'slack-event', event })
     })
 
+    // Limits L3: who drives, as a Host that announced `driver` says it, pushed to the window so its Jobs
+    // sidebar can say why a parked Host starts nothing. Neither callback throws (hostDriver.ts).
+    const driverView = createHostDriverView({
+      status: () => client.status(),
+      changed: (r) => send('host:driver', r),
+      log: hostLog
+    })
+    hostDriverView = driverView
+    client.onMessage((m) => driverView.pushed(m))
+    client.onStatusChange((s) => driverView.status(s))
+
     // S6 D4: the block records this app's coordinators found go to a Host that speaks `blocks`, whole
     // after each handshake, and the Host's come back as `blocks` pushes. Sends nothing to an older Host.
     // Neither callback throws (blockSync.ts).
@@ -6689,6 +6703,8 @@ export function registerIpc(
     features: []
   }
   ipcMain.handle('host.status', () => hostClient?.status() ?? noHostStatus)
+  // Limits L3: the window reads it once at mount; changes arrive on 'host:driver'.
+  ipcMain.handle('host.driver', () => hostDriverView?.current() ?? null)
   // How many of the running sessions would still be running after this app quits — the window-close
   // confirmation's question (App.tsx's closeWindow, then `quitConfirmBody`).
   //

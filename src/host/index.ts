@@ -448,8 +448,12 @@ async function main(): Promise<void> {
         // P4: an app that keeps Slack attaching closes the Host's socket; the last one leaving opens it.
         slackWiring?.onAppsChanged()
       },
-      // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello.
-      onAppGreeted: (send) => rollingWiring?.appGreeted(send),
+      // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello. Limits L3:
+      // and who drives, so its Jobs sidebar can say why a parked Host starts nothing. Each isolates itself.
+      onAppGreeted: (send) => {
+        rollingWiring?.appGreeted(send)
+        wiring?.appGreeted(send)
+      },
       log
     })
   } catch (err) {

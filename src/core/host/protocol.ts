@@ -5,7 +5,7 @@
 // JSON string escaping is what will carry it, the same way the app already ships PTY output to the
 // renderer.
 import type { OrchState } from '../orchestration/state'
-import type { RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
+import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
 import type { SlackForwardedEvent } from '../slack/forwarded'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
@@ -73,6 +73,13 @@ export const HOST_FEATURE_WORKTREES = 'worktrees'
 /** The Host drives Jobs (S4+S5, design §4): it places workers, runs checks, reviews and repairs. Only a
  *  Host that also announces `spawn` (ruling R7). Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_DISPATCH = 'dispatch'
+
+/** The Host tells an attached app who drives Jobs (limits pass L3): a `driver` message on every change
+ *  of its driver or of the settings gate it read, and once to an app right after its hello. The app's
+ *  Jobs sidebar reads it to say why a parked Host starts nothing (design A38). Announced with
+ *  `dispatch`, because the driving that computes it exists exactly then. An app reads no `driver`
+ *  from a Host without it. Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_DRIVER = 'driver'
 
 /** The Host rolls the sessions it owns at their usage limit (S6): the ones it spawned, and the ones
  *  it took over from an app that is gone. Only a Host that also announces `spawn` (R17). Additive, so
@@ -423,3 +430,6 @@ export type HostMessage =
   /** The Host's block records (HOST_FEATURE_BLOCKS): one change of its registry, broadcast, or the whole
    *  registry, sent once to an app right after its hello. The app absorbs it. Additive. */
   | ({ t: 'blocks' } & BlocksBody)
+  /** Who drives Jobs and the gate it was computed from (HOST_FEATURE_DRIVER): on every change, to the
+   *  greeted apps that yield dispatch, and once to an app right after its hello. Additive. */
+  | ({ t: 'driver' } & HostDriverReport)

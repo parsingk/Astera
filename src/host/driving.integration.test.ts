@@ -28,6 +28,7 @@ import { createHostWorktrees } from './worktrees'
 import type { HostLocal, HostSpawner } from './spawner'
 import { makeRepo, gitSync, tempDir } from '../core/worktrees/testRepo'
 import { readDispatchGate } from '../core/host/driver'
+import { HOST_YIELD_DISPATCH, type HostMessage } from '../core/host/protocol'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, type OrchCaller } from '../core/host/orchProtocol'
 import { openDispatch, type OrchState } from '../core/orchestration/state'
@@ -161,7 +162,11 @@ async function rig(o: RigOpts) {
     keeps: false,
     hasApp: () => server.app,
     appsKeep: (_duty: string) => server.app && server.keeps,
-    broadcast: () => {}
+    /** What the Host broadcast, with the filter it gave (limits L3 reads the `driver` ones). */
+    broadcasts: [] as Array<{ m: HostMessage; to?: (yields: ReadonlySet<string>) => boolean }>,
+    broadcast: (m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean) => {
+      server.broadcasts.push({ m, to })
+    }
   }
   const box: { orch: HostOrch | null; wiring: HostDrivingWiring | null } = { orch: null, wiring: null }
   const orchOf = (): HostOrch => box.orch!
@@ -422,6 +427,7 @@ async function rig(o: RigOpts) {
     },
     repairDispatches: () => state().dispatches.filter((d) => d.repair !== undefined),
     server,
+    profileDir,
     logs,
     jobId,
     repo,
@@ -743,6 +749,26 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(h.openGates()).toHaveLength(0)
   })
 
+  // Limits pass L3: a parked Host tells the apps that yield dispatch why, and a newly greeted app at once.
+  it('broadcasts the driver to the apps that yield dispatch when it parks, and tells a greeted app the current one (L3)', async () => {
+    const h = await rig({ tasks: 1 })
+    await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')
+    await h.wiring.driving.tick()
+    const told = h.server.broadcasts.filter((b) => b.m.t === 'driver')
+    expect(told.at(-1)?.m).toEqual({ t: 'driver', driver: 'parked', gate: 'unreadable' })
+    expect(told.at(-1)?.to?.(new Set([HOST_YIELD_DISPATCH]))).toBe(true)
+    expect(told.at(-1)?.to?.(new Set())).toBe(false)
+    const sent: HostMessage[] = []
+    h.wiring.appGreeted((m) => sent.push(m))
+    expect(sent).toEqual([{ t: 'driver', driver: 'parked', gate: 'unreadable' }])
+    // Repaired: the next tick drives, and says so once.
+    await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), JSON.stringify({ orchAlwaysOnMigrated: true }))
+    await h.wiring.driving.tick()
+    await h.wiring.driving.tick()
+    const after = h.server.broadcasts.filter((b) => b.m.t === 'driver').slice(told.length)
+    expect(after.map((b) => b.m)).toEqual([{ t: 'driver', driver: 'host', gate: 'migrated' }])
+  })
+
   it('index.ts disposes the driving as the first step of leaving, before it stops accepting (m6)', () => {
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
     const leave = src.slice(src.indexOf('const leave = '))
@@ -766,6 +792,8 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     const serverAt = src.indexOf('startHostServer({')
     const serverCall = src.slice(serverAt, src.indexOf('ADDRESS_TAKEN', serverAt))
     expect(serverCall).toMatch(/\.\.\.\(wiring\?\.serverHooks \?\? \{\}\)/)
+    // Limits L3: a greeted app is told the driver, beside the rolling's block registry.
+    expect(serverCall).toMatch(/wiring\?\.appGreeted\(send\)/)
     // The rolling's three (Task 16 review): the S6 rig builds its own orch and server and never runs
     // index.ts, so without these a Host that never rolls, never hears an app leave, or keeps its rolling
     // timers after retire starts would leave every rig test green.

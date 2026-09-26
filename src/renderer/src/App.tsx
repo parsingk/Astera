@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostDriverReport, HostHoldings, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
 import type { UnattendedPermission } from '../../core/chat/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
@@ -20,6 +20,7 @@ import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
+import { jobsStall } from '../../core/orchestration/jobsView'
 import { UnderstandingView } from './components/UnderstandingView'
 import { RecordDetailHost } from './components/RecordDetail'
 import { RunDetail } from './components/RunDetail'
@@ -2244,6 +2245,10 @@ export default function App(): React.JSX.Element {
    *  none open; a gate carried inside it was therefore erased in exactly the window that needs it —
    *  a fresh install, or any window before its first session. */
   const [orchHostGate, setOrchHostGate] = useState<OrchHostGate | null>(null)
+  /** Who drives Jobs, as the Host last said it (limits L3) — null when nothing is known. With
+   *  `hostStatus` it tells the Jobs sidebar why nothing moves (jobsStall). One fact about the app's
+   *  Host, like the gate above, so it is not carried in the snapshot either. */
+  const [hostDriver, setHostDriver] = useState<HostDriverReport | null>(null)
   /** 상세 창이 열려 있는 Run. null 이면 닫혀 있다.
    *
    *  **runId 만 들지 않고 프로젝트를 함께 든다.** 프로젝트가 바뀌는 커밋에서는 리셋 효과의
@@ -3015,6 +3020,25 @@ export default function App(): React.JSX.Element {
     }
   }, [])
 
+  // Who drives Jobs (limits L3): read once, then listened for, the same shape and the same reason as
+  // the gate above.
+  useEffect(() => {
+    let cancelled = false
+    void window.api.host
+      .driver()
+      .then((r) => {
+        if (!cancelled) setHostDriver(r)
+      })
+      .catch(() => {})
+    const off = window.api.on('host:driver', (r) => {
+      if (!cancelled) setHostDriver(r)
+    })
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
+
   // Loads the Jobs sidebar snapshot and subscribes to further changes, the same shape as the run.list
   // effect above. orch.list doubles as the subscription (OrchApi's doc comment): its return value is
   // the initial payload and must be rendered here, because 'orch:state' only carries changes after it —
@@ -3778,6 +3802,8 @@ export default function App(): React.JSX.Element {
               <JobsView
                 snapshot={orchSnapshot}
                 hostGate={orchHostGate}
+                // 아무것도 움직이지 않을 때 그 까닭(한도 L3): 멈춰 둔 Host, 응답하지 않는 Host.
+                stall={jobsStall({ hostStatus, driver: hostDriver })}
                 // 빈 상태의 "+ 새 작업" 버튼을 가리는 신호 — snapshot 만으로는 프로젝트가 없는
                 // 경우와 프로젝트가 있는데 Run 이 없는 경우를 구별할 수 없다(JobsView 의
                 // hasProject 주석). onNewRun 의 가드(아래)와 함께 newRunOpen 이 프로젝트 없이

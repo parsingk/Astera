@@ -1065,6 +1065,10 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.host.retry': 'It tries again when a setting changes or the app restarts',
   'jobs.host.reason': 'Reason: {reason}',
   'jobs.host.log': 'Full record: {path}',
+  'jobs.stall.parked': 'The Host has paused Jobs: {reason}',
+  'jobs.stall.gate.unreadable': 'the settings file cannot be read. Restarting Astera repairs it',
+  'jobs.stall.gate.notMigrated': 'the settings migration has not finished yet. It finishes while Astera is open',
+  'jobs.stall.unresponsive': 'The Host is not answering, so Jobs do not move. You can restart it from Settings, Info',
   // Tooltips for the eight state glyphs (JobIcons.tsx). The sidebar no longer spells a state out, so
   // these are not on screen all the time — they are where someone meeting the icons learns them.
   // pending and blocked have to read differently: a dependency holds the first, a person the second.

@@ -50,6 +50,7 @@ import { policyOf } from '../core/orchestration/convergence'
 import { interruptStalledTask, type OrchState } from '../core/orchestration/state'
 import { liveAppPid } from '../core/host/pidFile'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
+import type { HostDriverReport } from '../core/types'
 import type { HostChecks } from './checks'
 import type { HostOrch } from './orch'
 import type { PtyRegistry } from './registry'
@@ -68,6 +69,9 @@ export interface HostDriving {
   onLoaded(): void
   tick(): Promise<void>
   status(): { driver: Driver; appAttached: boolean }
+  /** The last driver and the gate it was computed from (limits pass L3): null before the first read.
+   *  What an attached app is told, so its Jobs sidebar can say why a parked Host starts nothing. */
+  report(): HostDriverReport
   dispose(): void
 }
 
@@ -109,6 +113,9 @@ export function createHostDriving(d: {
   interruptStalled?: typeof interruptStalledTask
   /** Test seam (B6); defaults to readDispatchGate. */
   readGate?(settingsPath: string): Promise<DispatchGate>
+  /** Told every change of `report()` (limits pass L3), in the same turn as the change. A throw is
+   *  logged and costs nothing else (constraint 14). */
+  onReport?(r: HostDriverReport): void
 }): HostDriving {
   const settingsPath = path.join(d.profileDir, 'app-settings.json')
   const readGate = d.readGate ?? readDispatchGate
@@ -260,6 +267,20 @@ export function createHostDriving(d: {
     await afterDriveChange(why, 'handover')
   }
 
+  /** The report the hook last heard, so an unchanged one is not told again on every tick. */
+  let told: HostDriverReport = { driver: last, gate: lastGate }
+  /** Tells `onReport` when the driver or the gate moved. Called from `apply`, which runs right after
+   *  `compute` records the gate it read and on every app coming or going. */
+  const tellReport = (): void => {
+    if (told.driver === last && told.gate === lastGate) return
+    told = { driver: last, gate: lastGate }
+    try {
+      d.onReport?.({ ...told })
+    } catch (err) {
+      log(`could not report the driver: ${String(err)}`)
+    }
+  }
+
   /** Sets `last` **synchronously**, then hands over when this is the Host taking the drive with the
    *  state in memory. `gates` is the change the computation saw (null from `appsChanged`, which reads
    *  no file): the not-migrated → migrated change out of parked is the one handover with no drain (N4)
@@ -267,6 +288,7 @@ export function createHostDriving(d: {
   const apply = (next: Driver, gates: { was: DispatchGate | null; now: DispatchGate } | null, why: string): void => {
     const was = last
     last = next
+    tellReport()
     if (next !== 'host') {
       handedOver = false
       return
@@ -532,6 +554,7 @@ export function createHostDriving(d: {
     },
     tick,
     status: () => ({ driver: last, appAttached: d.server.hasApp() }),
+    report: () => ({ driver: last, gate: lastGate }),
     dispose: () => {
       stop()
       appLeftPending?.cancel()

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { jobsViewScreen } from './jobsView'
+import { jobsStall, jobsViewScreen } from './jobsView'
 import type { JobRow, OrchHostGate, OrchSnapshot } from '../types'
 
 const gate: OrchHostGate = { state: 'unreachable', reason: 'no connection', logPath: 'C:/o.log' }
@@ -31,5 +31,37 @@ describe('jobsViewScreen', () => {
     expect(jobsViewScreen({ hostGate: null, snapshot: null })).toBe('blank')
     expect(jobsViewScreen({ hostGate: null, snapshot: noProject })).toBe('empty')
     expect(jobsViewScreen({ hostGate: null, snapshot: withRuns })).toBe('runs')
+  })
+})
+
+// 한도 L3: 아무것도 움직이지 않을 때 사이드바가 그 까닭을 적는다.
+describe('jobsStall', () => {
+  const ok = { unresponsive: false }
+
+  it('Host 가 작업을 멈춰 두면 그 사유를 준다', () => {
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'parked', gate: 'unreadable' } })).toEqual({ kind: 'parked', gate: 'unreadable' })
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'parked', gate: 'not-migrated' } })).toEqual({ kind: 'parked', gate: 'not-migrated' })
+  })
+
+  it('Host 가 응답하지 않으면 그 알림을 준다', () => {
+    expect(jobsStall({ hostStatus: { unresponsive: true }, driver: null })).toEqual({ kind: 'unresponsive' })
+  })
+
+  // 응답하지 않는 Host 가 마지막으로 한 말은 낡았다: 멈춰 둔 사유보다 응답하지 않는다는 사실이 앞선다.
+  it('응답하지 않는다는 사실이 멈춰 둔 사유보다 앞선다', () => {
+    expect(jobsStall({ hostStatus: { unresponsive: true }, driver: { driver: 'parked', gate: 'unreadable' } })).toEqual({ kind: 'unresponsive' })
+  })
+
+  it('Host 가 몰거나 앱이 몰면 아무것도 적지 않는다', () => {
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'host', gate: 'migrated' } })).toBeNull()
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'host', gate: 'no-settings' } })).toBeNull()
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'app', gate: 'unreadable' } })).toBeNull()
+  })
+
+  // 첫 읽기 전의 parked 는 잠깐이다(N2): 사유가 없는 것을 사유처럼 적지 않는다. 옛 Host 는 아무 말도 하지 않는다.
+  it('설정을 아직 읽지 않은 parked 와 아무 말도 없는 옛 Host 에는 아무것도 적지 않는다', () => {
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'parked', gate: null } })).toBeNull()
+    expect(jobsStall({ hostStatus: ok, driver: null })).toBeNull()
+    expect(jobsStall({ hostStatus: null, driver: null })).toBeNull()
   })
 })

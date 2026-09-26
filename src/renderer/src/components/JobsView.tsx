@@ -3,7 +3,7 @@ import type { JobRow, JobTask, OrchHostGate, OrchSnapshot, Provider, TaskStatus 
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { formatElapsed, formatRemaining } from '../../../core/orchestration/elapsed'
 import { isStoppedWorker, runningCount } from '../../../core/orchestration/running'
-import { jobsViewScreen } from '../../../core/orchestration/jobsView'
+import { jobsViewScreen, type JobsStall } from '../../../core/orchestration/jobsView'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { convergenceChipOf, type ConvergenceChip } from '../../../core/orchestration/nodeMeta'
 import { useI18n } from '../i18n/I18nProvider'
@@ -579,6 +579,7 @@ function ScheduleCard({
 export function JobsView({
   snapshot,
   hostGate,
+  stall,
   hasProject,
   canOpenSession,
   onOpenSession,
@@ -597,6 +598,10 @@ export function JobsView({
    *  so a gate carried inside it disappeared in exactly the state most likely to meet it. App reads it
    *  once (`orch.hostGate`) and listens on `orch:host` after that. */
   hostGate: OrchHostGate | null
+  /** Why nothing moves, when the Host still answers the gate's question but will not or cannot start
+   *  work (limits L3): a parked Host and its reason, or a Host that is not answering. Null when a Host
+   *  or the app drives normally. Decided in core (jobsStall); this view only draws it. */
+  stall: JobsStall | null
   /** Whether the caller currently has a project open. snapshot alone cannot answer that — with no
    *  project App.tsx deliberately still hands this component `{ runs: [] }` rather than null (its
    *  own comment: null would leave an unexplained blank sidebar for as long as the view stays open,
@@ -697,6 +702,16 @@ export function JobsView({
   // empty state, which would otherwise flash "no jobs" for a frame on every project switch).
   if (screen === 'blank' || snapshot === null) return <></>
 
+  // 아무것도 움직이지 않는 까닭(한도 L3). 목록과 빈 화면 둘 다의 맨 위에 한 줄로 선다 — Run 이 있든
+  // 없든 새로 만든 Job 도 움직이지 않으니 두 화면 모두 이것을 알아야 한다.
+  const stallLine = stall && (
+    <p className="jobs-stall" role="status">
+      {stall.kind === 'unresponsive'
+        ? t('jobs.stall.unresponsive')
+        : t('jobs.stall.parked', { reason: t(stall.gate === 'unreadable' ? 'jobs.stall.gate.unreadable' : 'jobs.stall.gate.notMigrated') })}
+    </p>
+  )
+
   if (screen === 'empty') {
     // **프로젝트가 없을 때와 있을 때가 다른 화면이다.** 이 빈 상태는 둘 다에서 그려진다(App.tsx 가
     // 프로젝트 없을 때 일부러 `{ runs: [] }` 를 넣는다 — 빈 사이드바보다 낫다는 판단). 그런데
@@ -705,6 +720,7 @@ export function JobsView({
     // 함께 갈라, 무엇을 하면 되는지 그 자리에서 말한다.
     return (
       <div className="jobs-empty">
+        {stallLine}
         <p>{hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
         <p className="jobs-empty-hint">
           {hasProject ? t('jobs.empty.hint') : t('jobs.noProject.hint')}
@@ -723,6 +739,7 @@ export function JobsView({
 
   return (
     <section className="jobs-view">
+      {stallLine}
       {/* 목록 위, 첫 자식 — 아이콘을 새로 만들지 않는다: '+' 글자로 충분하다 */}
       <button className="jobs-new" onClick={onNewRun}>
         + {t('jobs.new.open')}

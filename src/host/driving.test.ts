@@ -263,6 +263,8 @@ async function rig(o: RigOpts = {}) {
   const grace = { hold: false, pending: [] as Array<{ ms: number; fn: () => void; cancelled: boolean }> }
   const reaped: string[] = []
   const reapHook = { onReap: (_p: string): void => {} }
+  /** Every report the driving made (limits L3), in order. */
+  const reports: Array<{ driver: string; gate: string | null }> = []
   const driving = createHostDriving({
     profileDir: dir,
     orch: { handle, internalDeps: () => orch.internalDeps(), loaded: () => orch.loaded(), drainOnce, state: () => orch.state() },
@@ -289,6 +291,7 @@ async function rig(o: RigOpts = {}) {
     log: (m) => logs.push(m),
     nowMs: () => clock.now,
     appPid: () => appPid.value,
+    onReport: (r) => reports.push(r),
     ...(o.refuseGates
       ? { interruptStalled: (st: OrchState) => ({ state: st, interrupted: null, resume: null, stuck: true }) }
       : {}),
@@ -368,6 +371,7 @@ async function rig(o: RigOpts = {}) {
     heldReads: () => heldReads.length,
     liveSpecPath: path.join(specsDir, 'dsp_live.md'),
     reapHook,
+    reports,
     workerStarts: () => starts,
     handled: () => handled,
     settle,
@@ -1351,5 +1355,45 @@ describe('createHostDriving — a refused restart Gate (S4+S5 tidy)', () => {
       await h.tickNow()
     }
     expect(refusals()).toBe(2)
+  })
+})
+
+// Limits pass L3: a parked Host says why, so the app's Jobs sidebar can.
+describe('createHostDriving — the driver report (L3)', () => {
+  it('reports parked with the gate that parks it, once per change, and host once the file is repaired', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await fs.writeFile(path.join(dir, 'app-settings.json'), '{ not json', 'utf8')
+    await h.tickNow()
+    await h.tickNow()
+    expect(h.reports).toEqual([{ driver: 'parked', gate: 'unreadable' }])
+    expect(h.driving.report()).toEqual({ driver: 'parked', gate: 'unreadable' })
+    await h.writeSettings({ orchAlwaysOnMigrated: true })
+    await h.tickNow()
+    expect(h.reports).toEqual([
+      { driver: 'parked', gate: 'unreadable' },
+      { driver: 'host', gate: 'migrated' }
+    ])
+  })
+  it('reports not-migrated for a profile the migration has not reached', async () => {
+    const h = await rig({ readyTasks: 0, settings: { orchestrationEnabled: false } })
+    await h.tickNow()
+    expect(h.driving.report()).toEqual({ driver: 'parked', gate: 'not-migrated' })
+  })
+  it('answers parked with no gate before the first read, and reports an app that keeps dispatch at its hello', async () => {
+    const h = await rig({ readyTasks: 0 })
+    expect(h.driving.report()).toEqual({ driver: 'parked', gate: null })
+    h.server.app = true
+    h.server.keeps = true
+    h.driving.appsChanged()
+    expect(h.reports[0]).toEqual({ driver: 'app', gate: null })
+  })
+  it('a report hook that throws costs nothing but a log line (constraint 14)', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.reports.push = () => {
+      throw new Error('boom')
+    }
+    await expect(h.tickNow()).resolves.toBeUndefined()
+    expect(h.driving.status().driver).toBe('host')
+    expect(h.logs.join(' | ')).toMatch(/could not report the driver/)
   })
 })
