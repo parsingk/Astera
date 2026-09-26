@@ -55,6 +55,17 @@ describe('createHostRollView (S6 §3.4)', () => {
     view.pushed({ t: 'session-rolled', oldSessionId: 'c1', info, ptyId: null, procId: 'p2' })
     await vi.waitFor(() => expect(order.filter((x) => x.startsWith('forward')).length).toBe(2))
   })
+  it('a re-point forwards the codex dest it is handed, and none when it has none (CT-16)', () => {
+    const payloads: unknown[] = []
+    const view = createHostRollView({ adopt: async () => {}, forward: (_c, p) => payloads.push(p), log: () => {} })
+    const info = { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running' as const, title: 't', kind: 'chat' as const }
+    view.repointed('c1', info, 'C:/acc2/sessions/rollout-x.jsonl')
+    view.repointed('c3', { ...info, id: 'c4' }, null)
+    expect(payloads).toEqual([
+      { oldSessionId: 'c1', info, dest: 'C:/acc2/sessions/rollout-x.jsonl' },
+      { oldSessionId: 'c3', info: { ...info, id: 'c4' } }
+    ])
+  })
   it('keeps the last lasting state per session, clears it on none, and follows a rekey', async () => {
     const v = createHostRollView({ adopt: async () => {}, forward: () => {}, log: () => {} })
     v.pushed({ t: 'roll-state', event: { sessionId: 's1', state: 'waiting', nextRetryAt: 'x' } })

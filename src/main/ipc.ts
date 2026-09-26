@@ -6481,7 +6481,7 @@ export function registerIpc(
             }
             // Fix round 1, M1: the new half of a Host roll found before its push (or with no push
             // coming) re-points the old tab now, through the view, which then forwards no second rekey.
-            else if (plan.repoint !== null) hostRollView.repointed(plan.repoint, info)
+            else if (plan.repoint !== null) hostRollView.repointed(plan.repoint, info, plan.dest)
             return true
           }
         },

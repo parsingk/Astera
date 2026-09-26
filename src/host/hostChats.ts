@@ -56,6 +56,9 @@ export interface HostChats {
   has(sessionId: string): boolean
   info(sessionId: string): SessionInfo | null
   procOf(sessionId: string): string | null
+  /** Merges `patch` into the note of the session's live proc; nothing for a session with none. CT-16: a
+   *  codex chat roll's `dest` goes here (`rollDest`), for an app that re-points the tab from the note. */
+  note(sessionId: string, patch: Record<string, unknown>): void
   /** The one-writer rule for this session: the Host holds an adapter and no socket holds the proc. */
   isWriter(sessionId: string): boolean
   kill(sessionId: string): void
@@ -378,6 +381,10 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     has: (id) => manager.has(id),
     info: (id) => manager.info(id),
     procOf,
+    note(id, patch) {
+      const procId = procOf(id)
+      if (procId !== null) d.procs.note(procId, patch)
+    },
     isWriter,
     kill: (id) => manager.kill(id),
     forget,

@@ -43,8 +43,9 @@ export interface HostRollView {
   /** Fix round 1, M1: the chat adopter found the new half of a Host roll before its push (the sweep's
    *  proc list landed first, or no push is coming) and re-points the old tab now, forwarding the rekey
    *  as the push would. A push for the same roll that follows adopts and settles as usual and does not
-   *  forward it again. Never throws. */
-  repointed(oldSessionId: string, info: SessionInfo): void
+   *  forward it again. `dest` is the codex copy the roll resumed onto, when the note kept it (CT-16),
+   *  forwarded as the push's own `dest` is. Never throws. */
+  repointed(oldSessionId: string, info: SessionInfo, dest?: string | null): void
 }
 
 export function createHostRollView(d: {
@@ -160,14 +161,16 @@ export function createHostRollView(d: {
           settle(m.oldSessionId)
         })
     },
-    repointed: (oldId, info) => {
+    repointed: (oldId, info, dest) => {
       known.add(oldId)
       known.add(info.id)
       repointedBy.set(info.id, oldId)
       const was = last.get(oldId)
       last.delete(oldId)
       if (was) last.set(info.id, { ...was, sessionId: info.id })
-      safe('forwarding a re-point', () => d.forward('session:rolled', { oldSessionId: oldId, info }, { orchestration: false }))
+      safe('forwarding a re-point', () =>
+        d.forward('session:rolled', { oldSessionId: oldId, info, ...(dest ? { dest } : {}) }, { orchestration: false })
+      )
     },
     stateOf: (id) => last.get(id) ?? null,
     knows: (id) => known.has(id),

@@ -472,6 +472,24 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     started()
     await vi.waitFor(() => expect(h.events.filter((e) => e.t === 'session-rolled')).toHaveLength(1))
   })
+  // CT-16: the app's adopter re-points a tab from the note alone when the sweep beats the push (or no push
+  // comes), so the codex dest the push carries has to be in the note too.
+  it('notes a chat roll’s codex dest on the new proc, before it is announced, and nothing without one (CT-16)', async () => {
+    const note = vi.fn()
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2' || id === 'c4', note }
+    const h = harness({ chats, chatMayAct: () => true })
+    h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' }, dest: 'C:/acc2/rollout-x.jsonl' })
+    expect(note.mock.calls).toEqual([['c2', { rollDest: 'C:/acc2/rollout-x.jsonl' }]])
+    h.sendDep('session:rolled', { oldSessionId: 'c3', info: { id: 'c4', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' } })
+    expect(note).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(h.events.filter((e) => e.t === 'session-rolled')).toHaveLength(2))
+  })
+  it('a chat dest note that throws still announces the roll (CT-16)', async () => {
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', note: () => { throw new Error('gone') } }
+    const h = harness({ chats, chatMayAct: () => true })
+    h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' }, dest: 'C:/acc2/rollout-x.jsonl' })
+    await vi.waitFor(() => expect(h.events.filter((e) => e.t === 'session-rolled')).toHaveLength(1))
+  })
   // Slack in the Host e2e (Task 10): the carry-on turn runs inside the wait above, so a Slack tap that heard
   // the roll only with the announcement left that turn's notices on an id it did not know yet.
   it('hands a chat roll to the Slack tap at once, before the new proc has started, and only once', async () => {

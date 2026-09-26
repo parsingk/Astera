@@ -38,6 +38,15 @@ describe('chatAdoptPlan (chat takeover, the app side)', () => {
     expect(plan({ restore: { rolledFrom: 'c1' }, appHoldsOld: () => true })).toMatchObject({ repoint: null, announce: true })
     expect(plan({ restore, adopting: true, rolledFrom: 'c1', appHoldsOld: () => true })).toMatchObject({ repoint: null, announce: false })
   })
+  // CT-16: a codex chat roll's `dest` (the rollout copy its resume appends to) is noted by the Host as
+  // `rollDest`, and a re-point hands it on the way the push would.
+  it('a re-point carries the codex dest the note keeps, and only a re-point does (CT-16)', () => {
+    const restore = { rolledBy: 'host', rolledFrom: 'c1', rollDest: 'C:/acc2/sessions/rollout-x.jsonl' }
+    expect(plan({ restore, appHoldsOld: (id) => id === 'c1' })).toMatchObject({ repoint: 'c1', dest: 'C:/acc2/sessions/rollout-x.jsonl' })
+    expect(plan({ restore: { rolledBy: 'host', rolledFrom: 'c1' }, appHoldsOld: () => true }).dest).toBeNull()
+    expect(plan({ restore: { ...restore, rollDest: 7 }, appHoldsOld: () => true }).dest).toBeNull()
+    expect(plan({ restore, appHoldsOld: () => false }).dest).toBeNull()
+  })
 })
 
 describe('hostCarryOnIsOurs (final review I1)', () => {
@@ -75,7 +84,7 @@ describe('ipc.ts wires the chat adopter (chat takeover Task 9)', () => {
   it('announces only when the plan says so, once, and re-points otherwise (Review Focus 1, M1)', () => {
     expect(adopter).toMatch(/if \(plan\.announce\) \{\s*try \{\s*send\('session:created', info\)/)
     expect(adopter.split("send('session:created'").length - 1).toBe(1)
-    expect(adopter).toMatch(/else if \(plan\.repoint !== null\) hostRollView\.repointed\(plan\.repoint, info\)/)
+    expect(adopter).toMatch(/else if \(plan\.repoint !== null\) hostRollView\.repointed\(plan\.repoint, info, plan\.dest\)/)
     expect(adopter).toMatch(/const appHeldNew = core\.chat\.has\(a\.id\)\s*const info = core\.chat\.adopt\(a\)/)
   })
   it('defers a proc the Host is still starting (P5)', () => {

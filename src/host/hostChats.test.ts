@@ -249,6 +249,16 @@ describe('createHostChats — a roll reads the note, not the copy taken at adopt
   })
 })
 
+describe('createHostChats — note (CT-16)', () => {
+  it('merges into the live proc’s note of a session, and does nothing for one it does not know', () => {
+    const r = rig()
+    r.chats.adopt(r.entry())
+    r.chats.note('c1', { rollDest: 'C:/acc2/rollout-x.jsonl' })
+    expect(r.entry().meta!.restore).toMatchObject({ threadId: 'th', rollDest: 'C:/acc2/rollout-x.jsonl' })
+    expect(() => r.chats.note('nope', { rollDest: 'x' })).not.toThrow()
+  })
+})
+
 describe('createHostChats — the Host spawn path (final review I3)', () => {
   it('a chat CLI the Host spawns for a roll carries ASTERA_SESSION, its own session id', () => {
     const envs: Array<Record<string, string | undefined>> = []

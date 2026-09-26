@@ -58,7 +58,8 @@ export interface RollSpawnOpts {
 export type HostChatsForRolling = Pick<
   HostChats,
   'has' | 'info' | 'procOf' | 'spawn' | 'started' | 'kill' | 'deliver' | 'hasOpenRequest' | 'chosenModelOf' | 'bypassedOf' | 'subscribe'
->
+> &
+  Partial<Pick<HostChats, 'note'>>
 
 /** The three spawner members rolling needs; `HostSpawner` implements them (Task 10). */
 export interface HostRollSpawner {
@@ -257,6 +258,18 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
         const event: HostRollEvent = { t: 'session-rolled', oldSessionId: p.oldSessionId, info: p.info, ...(p.dest !== undefined ? { dest: p.dest } : {}) }
         heard(event)
         if (isChat(p.info.id)) {
+          // CT-16: the codex copy this roll resumed onto goes into the new proc's note as well, before
+          // the push. An app that re-points the old tab from the note (its sweep beat the push, or it was
+          // away through the roll) reads it back and hands it on as the push would, so the rollout
+          // watcher tails that copy instead of searching until the chat's own `ready`. Its own try: a
+          // note that fails costs the announcement nothing.
+          if (p.dest !== undefined) {
+            try {
+              chats!.note?.(p.info.id, { rollDest: p.dest })
+            } catch (err) {
+              log(`the rolled chat's rollout could not be noted session=${p.info.id}: ${String(err)}`)
+            }
+          }
           // P5: a Host-spawned chat proc is announced once its handshake and carry-on settled, so an
           // app adopting it never becomes its writer mid-handshake. started() never rejects; the catch
           // is the net under onEvent (R3).

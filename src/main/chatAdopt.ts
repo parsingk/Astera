@@ -20,6 +20,10 @@ export interface ChatAdoptPlan {
    *  `session-rolled` push, or no push is coming (the app was disconnected through the roll). Null
    *  otherwise. */
   repoint: string | null
+  /** CT-16: the codex `dest` of the roll a re-point stands in for (the rollout copy its resume appends
+   *  to), read back from the note's `rollDest`, which the Host writes for a codex chat roll. Null when
+   *  there is no re-point or the note keeps none (a claude roll, a blank-slate one, an older Host). */
+  dest: string | null
 }
 
 /** P5's rule on its own, for reattach's `deferProc` (ipc.ts): a note saying `hostStarting: true`, in front
@@ -53,5 +57,6 @@ export function chatAdoptPlan(a: {
   const repoint =
     noted !== null && !a.adopting && a.rolledFrom === null && a.appHeldNew !== true && a.appHoldsOld(noted) ? noted : null
   const announce = repoint === null && (a.rolledFrom === null || !a.appHoldsOld(a.rolledFrom))
-  return { defer, announce, rolling, repoint }
+  const dest = repoint !== null && typeof a.restore.rollDest === 'string' ? a.restore.rollDest : null
+  return { defer, announce, rolling, repoint, dest }
 }
