@@ -211,13 +211,15 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
   return { ok: true, newDispatchId: dispatchId }
 }
 
-/** Moves the Task to `validating` (skipped if it is already there) and starts the check. Starts no
- *  agent — the whole point of a recheck is that the previous attempt may have already finished the
- *  work, so nothing new needs to run. */
+/** Moves the Task to `validating` and starts the check. Starts no agent — the whole point of a recheck
+ *  is that the previous attempt may have already finished the work, so nothing new needs to run. */
 async function recheck(a: ExecuteInput, deps: ExecuteDeps): Promise<ExecuteResult> {
   const { attempt, now } = a
   const state = deps.getState()
   const task = state.tasks.find((t) => t.id === attempt.taskId)
+  // candidates() only yields `dispatched` Tasks, so the other side of this guard is not reached today.
+  // It stays for a state changed during the reconciler's await on git: without it an already-validating
+  // Task would get a redundant commit, and any other status a logged refusal from beginValidation.
   if (task && task.status === 'dispatched') {
     const res = beginValidation(state, { taskId: attempt.taskId }, now)
     if (res.ok) await deps.setState(res.state)
