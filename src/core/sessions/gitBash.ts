@@ -27,10 +27,23 @@ function pathEntries(env: Record<string, string | undefined>): string[] {
   return value ? value.split(path.delimiter).filter((s) => s !== '') : []
 }
 
+/** The install root of the Git for Windows whose git.exe sits in this PATH entry, or null. Git for Windows
+ *  puts `<root>\cmd` (or, when asked, `<root>\bin`) on PATH, and both hold a git.exe. */
+function gitRootOf(entry: string, probe: (p: string) => boolean): string | null {
+  const dir = path.basename(entry).toLowerCase()
+  if (dir !== 'cmd' && dir !== 'bin') return null
+  return probe(path.join(entry, 'git.exe')) ? path.dirname(entry) : null
+}
+
 /**
  * The Git Bash to hand to a spawned agent, or null when there is nothing to add — either the user
  * already set `CLAUDE_CODE_GIT_BASH_PATH` (never overwritten: their choice wins) or no real Git Bash
  * could be found (better to leave the CLI's own error than to point it at the wrong binary).
+ *
+ * **Git for Windows first, then any bash on PATH** (P1 carry-over 4). A Cygwin or MSYS2 bash earlier on
+ * PATH is a bash, not Git Bash, and the hooks fail differently with it. So the order is: the install
+ * whose git.exe is on PATH (`<root>\cmd\git.exe` or `<root>\bin\git.exe`, giving `<root>\bin\bash.exe`),
+ * then the Program Files installs, and only then a plain `bash.exe` in a PATH entry.
  */
 export function findGitBash(
   env: Record<string, string | undefined>,
@@ -39,15 +52,17 @@ export function findGitBash(
   if (env.CLAUDE_CODE_GIT_BASH_PATH) return null
   // Check if PATH key exists in environment (case-insensitive)
   const hasPath = Object.keys(env).some((k) => k.toUpperCase() === 'PATH')
+  const entries = pathEntries(env)
   const candidates: string[] = []
-  for (const entry of pathEntries(env)) {
-    // A PATH entry is usually <root>\cmd or <root>\bin; both sit one level under the install root.
-    candidates.push(path.join(entry, 'bash.exe'), path.join(path.dirname(entry), BIN_BASH))
+  for (const entry of entries) {
+    const root = gitRootOf(entry, probe)
+    if (root !== null) candidates.push(path.join(root, BIN_BASH))
   }
   // Only check standard roots if PATH was actually set in the environment
   if (hasPath) {
     for (const root of ROOTS) candidates.push(path.join(root, BIN_BASH))
   }
+  for (const entry of entries) candidates.push(path.join(entry, 'bash.exe'))
   for (const c of candidates) {
     if (isWslBash(c)) continue
     if (probe(c)) return c
