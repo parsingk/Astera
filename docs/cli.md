@@ -27,6 +27,35 @@ astera version
 Sessions that Astera itself starts already have the command on their `PATH`. The install button is
 for shells the app did not start.
 
+### Uninstall
+
+Once the command is installed, the same panel has an **Uninstall** button. It removes only the files
+Astera wrote into the folder: `astera.cmd` and `astera` on Windows, `astera` on macOS and Linux. A
+file there is removed only when its content is exactly what Astera writes, so a file of the same name
+that you or another tool put there stays. The folder itself is never removed, and neither is anything
+else in it. The `PATH` line you ran is yours to take out again.
+
+On Windows, uninstalling Astera from the system does the same thing: the uninstaller removes those
+two files from `%LOCALAPPDATA%\astera\bin` under the same rule and leaves the folder. An update does
+not count as an uninstall, so the command keeps working across updates.
+
+### Staying current
+
+The command is a small script that names the Astera binary it runs. When Astera starts, it checks
+the installed script. If the script is Astera's and names a different binary (after an update, a
+reinstall into another folder, or a moved AppImage), Astera rewrites it to name the one that is
+running. If the command was never installed, nothing is written. If a file of that name is not
+Astera's, it is left alone. `PATH` and your shell profile are never touched. Development builds skip
+this check, so running Astera from source never repoints the command you installed.
+
+### Linux AppImage
+
+An AppImage runs from a temporary mount under `/tmp/.mount_*` that disappears when the app quits and
+gets a new name on the next start. The command therefore calls the AppImage file itself (the path in
+`$APPIMAGE`) and finds the CLI inside whatever mount that run creates. Keep the AppImage where it was
+when you installed the command, or start Astera once from its new place so that the script follows
+it.
+
 ## The Host
 
 Commands are answered by the **Astera Host**, a background process that owns the orchestration
