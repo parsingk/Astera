@@ -1084,6 +1084,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 명령줄 도구의 PATH 안내 한 줄. 사람이 그대로 복사해 실행할 글이라 줄바꿈을 허용한다 —
    한 줄로 잠가 놓으면 끝이 잘려 무엇을 복사하는지 보이지 않는다. 새 색은 만들지 않고
    터미널과 같은 토큰을 쓴다. */
+/* 설치와 제거 버튼을 한 줄에 둔다. 제거는 설치된 뒤에만 보인다. */
+.cli-actions { display: flex; gap: 8px; }
 .cli-path-hint { display: flex; align-items: flex-start; gap: 8px; }
 .cli-path-hint code { flex: 1; padding: 6px 8px; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg); color: var(--text-dim);

@@ -33,13 +33,37 @@ export function CliSettings(): React.JSX.Element {
     }
   }
 
+  // 되돌리기(명세 §29). 앱이 쓴 셔틀 파일만 지운다. 폴더도, 그 안의 다른 파일도 남는다.
+  const uninstall = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      setStatus(await window.api.cli.uninstall())
+      toast.success(t('settings.cli.uninstalled.toast'))
+    } catch (err) {
+      toast.error(
+        t('settings.cli.uninstallFailed', {
+          detail: err instanceof Error ? err.message : String(err)
+        })
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="settings-group">
       <div className="settings-row">
         <span>{t('settings.cli.label')}</span>
-        <button disabled={busy} onClick={() => void install()}>
-          {status?.installed ? t('settings.cli.reinstall') : t('settings.cli.install')}
-        </button>
+        <div className="cli-actions">
+          <button disabled={busy} onClick={() => void install()}>
+            {status?.installed ? t('settings.cli.reinstall') : t('settings.cli.install')}
+          </button>
+          {status?.installed && (
+            <button disabled={busy} onClick={() => void uninstall()}>
+              {t('settings.cli.uninstall')}
+            </button>
+          )}
+        </div>
       </div>
       <span className="settings-hint">{t('settings.cli.hint')}</span>
       {status !== null && (

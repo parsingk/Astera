@@ -156,8 +156,14 @@ import { completionForTaskOf } from '../core/orchestration/completion'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
-import { shuttleNames, writeShuttle } from '../core/orchestration/exec/shuttle'
-import { binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
+import {
+  removeShuttle,
+  shuttleNames,
+  syncShuttle,
+  writeShuttle,
+  type AppImageLaunch
+} from '../core/orchestration/exec/shuttle'
+import { appImageLaunchFor, binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import {
@@ -5295,14 +5301,51 @@ export function registerIpc(
     }
   }
 
+  /** 공개 셔틀이 부를 대상. AppImage 면 임시 마운트가 아니라 AppImage 파일이다(appImageLaunchFor).
+   *  세션 셔틀(bootOrch)은 앱이 도는 동안만 살아서 마운트를 그대로 쓴다. */
+  const publicShuttleTarget = (
+    entryPath: string
+  ): { execPath: string; entryPath: string; appImage?: AppImageLaunch } => ({
+    execPath: process.execPath,
+    entryPath,
+    appImage:
+      process.platform === 'linux'
+        ? appImageLaunchFor({ env: process.env, execPath: process.execPath, entryPath })
+        : undefined
+  })
+
   ipcMain.handle('cli.status', () => cliStatus())
   ipcMain.handle('cli.install', async () => {
     const entryPath = cliEntryPath()
     // 번들을 못 찾으면 쓰지 않는다 — 잘못된 경로를 가리키는 셔틀은 없는 셔틀보다 나쁘다.
     if (!entryPath) throw new Error('CLI_ENTRY_MISSING')
-    await writeShuttle({ dir: cliBinDir(), execPath: process.execPath, entryPath })
+    await writeShuttle({ dir: cliBinDir(), ...publicShuttleTarget(entryPath) })
     return cliStatus()
   })
+  // 되돌리기(명세 §29). 우리가 쓴 셔틀 파일만 지우고 폴더와 이웃 파일은 남긴다(removeShuttle).
+  ipcMain.handle('cli.uninstall', async () => {
+    await removeShuttle({ dir: cliBinDir() })
+    return cliStatus()
+  })
+  // 갱신(명세 §30). 앱이 옮겨 가면 깔아 둔 공개 셔틀은 예전 실행 파일을 가리킨다. 부팅마다 깔려 있는
+  // 것만 지금의 앱으로 다시 쓴다. 깔려 있지 않으면 깔지 않고, PATH 와 셸 프로필은 건드리지 않는다.
+  // 실패는 기록만 한다: 셔틀을 못 고쳤다고 앱이 서지 않을 이유는 없다.
+  //
+  // **설치본만 한다.** 폴더는 프로필을 가리지 않으므로(binDirFor), 개발본이 이것을 하면 사람이 설치본
+  // 으로 깐 셔틀을 저장소의 electron 으로 돌려 놓는다. 개발본에서 셔틀을 바꾸는 것은 버튼뿐이다.
+  if (app.isPackaged) {
+    const entryPath = cliEntryPath()
+    if (entryPath)
+      void syncShuttle({ dir: cliBinDir(), ...publicShuttleTarget(entryPath) }).then(
+        (plan) => {
+          if (plan === 'rewrite') orchLog(`public astera shuttle in ${cliBinDir()} now points at this app`)
+          else if (plan === 'foreign')
+            orchLog(`public astera shuttle in ${cliBinDir()} was left alone: a file there is not one Astera wrote`)
+        },
+        (err: unknown) =>
+          orchLog(`public astera shuttle sync failed: ${err instanceof Error ? err.message : String(err)}`)
+      )
+  }
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
   // sent is validated before being written to disk. Registered unconditionally here (not inside

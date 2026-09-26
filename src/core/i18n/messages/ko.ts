@@ -29,6 +29,9 @@ export const ko = {
   'settings.cli.reinstall': '다시 설치',
   'settings.cli.installed.toast': 'astera 명령을 설치했습니다.',
   'settings.cli.failed': 'astera 명령을 설치하지 못했습니다: {detail}',
+  'settings.cli.uninstall': '제거',
+  'settings.cli.uninstalled.toast': 'astera 명령을 제거했습니다. 폴더와 그 안의 다른 파일은 그대로 둡니다.',
+  'settings.cli.uninstallFailed': 'astera 명령을 제거하지 못했습니다: {detail}',
   // 사람이 직접 실행할 한 줄을 아래에 보여 준다
   'settings.cli.pathMissing': '이 폴더가 PATH 에 없습니다. 아래 한 줄을 한 번 실행하면 들어갑니다.',
   'settings.cli.onPath': '이 폴더가 PATH 에 있습니다.',

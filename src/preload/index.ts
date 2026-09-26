@@ -144,7 +144,8 @@ const api = {
   /** `astera` 명령을 사람의 PATH 에서 닿는 자리에 깔아 둔다(공개 CLI 설계 §10). */
   cli: {
     status: invoke('cli.status'),
-    install: invoke('cli.install')
+    install: invoke('cli.install'),
+    uninstall: invoke('cli.uninstall')
   },
   settings: {
     getLang: invoke('settings.getLang'),

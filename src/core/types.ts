@@ -1083,6 +1083,8 @@ export interface CoreApi {
     status(): Promise<CliInstallStatus>
     /** 셔틀 파일을 그 자리에 쓰고 바뀜 상태를 돌려준다. */
     install(): Promise<CliInstallStatus>
+    /** 그 자리에서 앱이 쓴 셔틀 파일만 지우고 바뀐 상태를 돌려준다. 폴더와 이웃 파일은 남긴다. */
+    uninstall(): Promise<CliInstallStatus>
   }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.

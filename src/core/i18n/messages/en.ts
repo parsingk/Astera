@@ -25,6 +25,9 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.cli.reinstall': 'Install again',
   'settings.cli.installed.toast': 'The astera command is installed.',
   'settings.cli.failed': 'Could not install the astera command: {detail}',
+  'settings.cli.uninstall': 'Uninstall',
+  'settings.cli.uninstalled.toast': 'The astera command is removed. The folder and anything else in it are left as they were.',
+  'settings.cli.uninstallFailed': 'Could not remove the astera command: {detail}',
   // The one line a person runs themselves is shown below
   'settings.cli.pathMissing': 'This folder is not on PATH. Running the line below once adds it.',
   'settings.cli.onPath': 'This folder is on PATH.',
