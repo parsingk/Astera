@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { ContinuityJournal } from './journal'
 import { ContinuityRecorder, type ContinuityJournalPort } from './recorder'
+import { commitStamp } from './actor'
 import { emptyState, type OrchState } from '../orchestration/state'
 import type { Dispatch, Task } from '../orchestration/types'
 import type { Lang } from '../i18n'
@@ -253,5 +254,35 @@ describe('ContinuityRecorder reads', () => {
     logs.length = 0
     r.reportSkew(state(dispatch({ sessionId: 'pending:ab' })))
     expect(logs).toEqual([])
+  })
+})
+
+describe('ContinuityRecorder — who and when (Host journal J4, J6)', () => {
+  const on = (): OrchState => stateFromLegacy({ runs: [run()], tasks: [], dispatches: [] })
+  const paused = (): OrchState => stateFromLegacy({ runs: [{ ...run(), paused: true }], tasks: [], dispatches: [] })
+
+  // Review Focus 4.
+  it('the same version in two Host lives lands twice, the same commit recorded twice lands once', () => {
+    const { r, journal } = recorder()
+    const cli = { surface: 'cli' as const }
+    r.record(on(), paused(), { stamp: commitStamp('2026-09-26T01:00:00.000Z', 5), actor: cli })
+    r.record(on(), paused(), { stamp: commitStamp('2026-09-26T01:00:00.000Z', 5), actor: cli })
+    expect(journal.eventsFor('run_1').filter((e) => e.type === 'JOB_RUN_PAUSED')).toHaveLength(1)
+    r.record(on(), paused(), { stamp: commitStamp('2026-09-26T02:00:00.000Z', 5), actor: cli })
+    expect(journal.eventsFor('run_1').filter((e) => e.type === 'JOB_RUN_PAUSED')).toHaveLength(2)
+    expect(journal.eventsFor('run_1').every((e) => e.actor?.surface === 'cli')).toBe(true)
+  })
+
+  it('without an actor the rows read as unknown, as before this change', () => {
+    const { r, journal } = recorder()
+    r.record(on(), paused())
+    expect(journal.eventsFor('run_1').map((e) => e.actor)).toEqual([null])
+  })
+
+  it('a checkpoint row carries the actor of the rows that asked for it', async () => {
+    const { r, journal } = recorder()
+    const next = state(dispatch())
+    await r.checkpoint(r.record(state(dispatch({ sessionId: 'pending:ab' })), next, { actor: { surface: 'host' } }), next)
+    expect(journal.eventsFor('run_1').find((e) => e.type === 'CHECKPOINT_CREATED')?.actor).toEqual({ surface: 'host' })
   })
 })

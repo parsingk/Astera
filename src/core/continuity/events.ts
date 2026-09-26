@@ -47,6 +47,8 @@ export type ContinuityEventType =
   | 'ACCOUNT_ROLL_REQUESTED'
   | 'ACCOUNT_ROLL_COMPLETED'
   | 'CONTINUITY_ENABLED'
+  /** A question answered (J5): its own row, beside any Task transition the answer caused. */
+  | 'GATE_RESOLVED'
   // Written by the recovery reconciler (P1), never derived here — a lost worker is discovered on a
   // sweep, not diffed out of a state transition, so these have no counterpart in deriveEvents.
   | 'RECOVERY_DETECTED'
@@ -62,6 +64,65 @@ export type ContinuityEventType =
   | 'RECOVERY_COMPLETED'
   | 'RECOVERY_FAILED'
 
+/** Every event type by name. A Record so the compiler rejects a type left out here. */
+const EVENT_TYPES: Record<ContinuityEventType, true> = {
+  JOB_RUN_STARTED: true,
+  JOB_RUN_PAUSED: true,
+  JOB_RUN_RESUMED: true,
+  JOB_RUN_COMPLETED: true,
+  JOB_RUN_FAILED: true,
+  TASK_BECAME_READY: true,
+  TASK_STARTED: true,
+  TASK_STATE_CHANGED: true,
+  TASK_WAITING_INPUT: true,
+  TASK_CHECK_STARTED: true,
+  TASK_CHECK_PASSED: true,
+  TASK_CHECK_FAILED: true,
+  TASK_COMPLETED: true,
+  TASK_FAILED: true,
+  TASK_REVIEW_STARTED: true,
+  TASK_REVIEW_PASSED: true,
+  TASK_REVIEW_CHANGES_REQUESTED: true,
+  TASK_CONVERGENCE_EXHAUSTED: true,
+  TASK_COMPLETED_WITH_OVERRIDE: true,
+  ATTEMPT_START_REQUESTED: true,
+  ATTEMPT_STARTED: true,
+  ATTEMPT_WAITING: true,
+  ATTEMPT_EXITED: true,
+  ATTEMPT_LOST: true,
+  ATTEMPT_ABANDONED: true,
+  ATTEMPT_RESUMED: true,
+  ATTEMPT_COMPLETED: true,
+  ATTEMPT_FAILED: true,
+  AGENT_NATIVE_SESSION_BOUND: true,
+  AGENT_NATIVE_SESSION_CHANGED: true,
+  PROMPT_WRITE_REQUESTED: true,
+  PROMPT_WRITE_CONFIRMED: true,
+  CHECKPOINT_CREATED: true,
+  USAGE_LIMIT_DETECTED: true,
+  ACCOUNT_ROLL_REQUESTED: true,
+  ACCOUNT_ROLL_COMPLETED: true,
+  CONTINUITY_ENABLED: true,
+  GATE_RESOLVED: true,
+  RECOVERY_DETECTED: true,
+  RECOVERY_STRATEGY_SELECTED: true,
+  RECOVERY_NATIVE_RESUME_REQUESTED: true,
+  RECOVERY_NATIVE_RESUME_SUCCEEDED: true,
+  RECOVERY_NATIVE_RESUME_FAILED: true,
+  RECOVERY_SMART_RESUME_REQUESTED: true,
+  RECOVERY_SMART_RESUME_SUCCEEDED: true,
+  RECOVERY_SMART_RESUME_FAILED: true,
+  RECOVERY_TASK_RESTARTED: true,
+  RECOVERY_REQUIRES_REVIEW: true,
+  RECOVERY_COMPLETED: true,
+  RECOVERY_FAILED: true
+}
+
+/** Whether `v` names an event type this build knows (a row sent over the wire is checked with it). */
+export function isContinuityEventType(v: unknown): v is ContinuityEventType {
+  return typeof v === 'string' && Object.hasOwn(EVENT_TYPES, v)
+}
+
 export interface ContinuityEvent {
   runId: string
   taskId?: string
@@ -70,8 +131,9 @@ export interface ContinuityEvent {
   /** ISO. The record's own time where it has one (a Dispatch ending, a resume entry), else `now`. */
   at: string
   /** Deterministic for a given observation so the same diff never lands twice: the journal inserts
-   *  with `OR IGNORE` on it. Repeatable observations end in the write's `now`; one-shot attempt events
-   *  end in the dispatch id (design §5 "Dedupe"). */
+   *  with `OR IGNORE` on it. Repeatable observations end in the write's stamp (the Host's
+   *  `<hostStartedAt>#<version>`, else `now`); one-shot attempt events end in the dispatch id (design
+   *  §5 "Dedupe"). */
   idempotencyKey: string
   payload: Record<string, unknown>
   /** Who acted (J4). Set by the writer, never derived; absent reads as null. */
@@ -93,14 +155,14 @@ const ev = (
  * "예약 템플릿은 스스로 돌지 않으므로 빼야 한다" 는 예외가 하나 더 있었다. 둘 다 없어졌다 —
  * 계획은 jobs 에 있어 이 배열에 오지 않고, 회차는 만들어지는 순간이 곧 시작이다(설계 §8).
  */
-function runStartEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+function runStartEvents(prev: OrchState, next: OrchState, now: string, stamp: string): ContinuityEvent[] {
   const before = new Set(prev.runs.map((r) => r.id))
   const out: ContinuityEvent[] = []
   for (const run of next.runs) {
     if (before.has(run.id)) continue
     const job = jobOf(next, run)
     out.push(
-      ev({ runId: run.id }, 'JOB_RUN_STARTED', now, `JOB_RUN_STARTED:${run.id}:${now}`, {
+      ev({ runId: run.id }, 'JOB_RUN_STARTED', now, `JOB_RUN_STARTED:${run.id}:${stamp}`, {
         objective: job?.objective ?? '',
         cwd: job?.cwd ?? '',
         worktree: run.worktree ?? null,
@@ -115,20 +177,20 @@ function runStartEvents(prev: OrchState, next: OrchState, now: string): Continui
   return out
 }
 
-function runEndEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+function runEndEvents(prev: OrchState, next: OrchState, now: string, stamp: string): ContinuityEvent[] {
   const before = new Map(prev.runs.map((r) => [r.id, r]))
   const out: ContinuityEvent[] = []
   for (const run of next.runs) {
     const was = before.get(run.id)
     if (was && was.paused !== true && run.paused === true)
-      out.push(ev({ runId: run.id }, 'JOB_RUN_PAUSED', now, `JOB_RUN_PAUSED:${run.id}:${now}`, {}))
+      out.push(ev({ runId: run.id }, 'JOB_RUN_PAUSED', now, `JOB_RUN_PAUSED:${run.id}:${stamp}`, {}))
     if (was && was.paused === true && run.paused !== true)
-      out.push(ev({ runId: run.id }, 'JOB_RUN_RESUMED', now, `JOB_RUN_RESUMED:${run.id}:${now}`, {}))
+      out.push(ev({ runId: run.id }, 'JOB_RUN_RESUMED', now, `JOB_RUN_RESUMED:${run.id}:${stamp}`, {}))
     const outcomeBefore = was ? outcomeOf(prev, run.id) : 'running'
     const outcomeAfter = outcomeOf(next, run.id)
     if (outcomeBefore === 'running' && outcomeAfter !== 'running') {
       const type = outcomeAfter === 'completed' ? 'JOB_RUN_COMPLETED' : 'JOB_RUN_FAILED'
-      out.push(ev({ runId: run.id }, type, now, `${type}:${run.id}:${now}`, {}))
+      out.push(ev({ runId: run.id }, type, now, `${type}:${run.id}:${stamp}`, {}))
     }
   }
   return out
@@ -193,7 +255,7 @@ const latestGate = (gates: Gate[], taskId: string, status: Gate['status']): Gate
     .filter((g) => g.taskId === taskId && g.status === status)
     .sort((a, b) => (b.resolvedAt ?? b.createdAt).localeCompare(a.resolvedAt ?? a.createdAt))[0]
 
-function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+function taskEvents(prev: OrchState, next: OrchState, now: string, stamp: string): ContinuityEvent[] {
   const before = new Map(prev.tasks.map((t) => [t.id, t]))
   const out: ContinuityEvent[] = []
   for (const task of next.tasks) {
@@ -238,7 +300,7 @@ function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
     }
     for (const type of taskTransitionEvents(from, to, gateKind, task.completionOverride !== undefined))
       out.push(
-        ev({ runId: runIdOf(task), taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${now}`, payload)
+        ev({ runId: runIdOf(task), taskId: task.id }, type, now, `${type}:${task.id}:${from}->${to}:${stamp}`, payload)
       )
   }
   return out
@@ -257,7 +319,7 @@ function endingOf(d: Dispatch): ContinuityEventType {
   return 'ATTEMPT_EXITED'
 }
 
-function dispatchEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+function dispatchEvents(prev: OrchState, next: OrchState, now: string, stamp: string): ContinuityEvent[] {
   const before = new Map(prev.dispatches.map((d) => [d.id, d]))
   const runOf = (taskId: string): string | undefined =>
     (next.tasks.find((t) => t.id === taskId) ?? prev.tasks.find((t) => t.id === taskId))?.runId
@@ -290,7 +352,7 @@ function dispatchEvents(prev: OrchState, next: OrchState, now: string): Continui
     } else if (was.sessionId !== d.sessionId || was.accountId !== d.accountId) {
       // rekeyDispatch after a roll: same attempt, new process and possibly new account
       out.push(
-        ev(ids, 'ACCOUNT_ROLL_COMPLETED', now, `ACCOUNT_ROLL_COMPLETED:${d.id}:${now}`, {
+        ev(ids, 'ACCOUNT_ROLL_COMPLETED', now, `ACCOUNT_ROLL_COMPLETED:${d.id}:${stamp}`, {
           fromSessionId: was.sessionId,
           toSessionId: d.sessionId,
           fromAccountId: was.accountId,
@@ -341,13 +403,35 @@ function dispatchEvents(prev: OrchState, next: OrchState, now: string): Continui
   return out
 }
 
+/** A Gate that is resolved now and was not before (P3). Keyed on the Gate: it resolves once. */
+function gateEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+  const before = new Map(prev.gates.map((g) => [g.id, g]))
+  const out: ContinuityEvent[] = []
+  for (const g of next.gates) {
+    if (g.status !== 'resolved' || before.get(g.id)?.status === 'resolved') continue
+    out.push(
+      ev({ runId: g.runId, taskId: g.taskId }, 'GATE_RESOLVED', g.resolvedAt ?? now, `GATE_RESOLVED:${g.id}`, {
+        gateId: g.id,
+        kind: g.kind ?? null,
+        question: g.question,
+        resolution: g.resolution ?? null
+      })
+    )
+  }
+  return out
+}
+
 /** Everything the write prev → next did, in journal order: runs that started, then task transitions,
- *  then dispatch (worker attempt) changes, then runs that paused, resumed or finished. */
-export function deriveEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+ *  then the questions answered, then dispatch (worker attempt) changes, then runs that paused, resumed
+ *  or finished. `stamp` ends every repeatable row's key (P1, P2): the Host passes
+ *  `<hostStartedAt>#<version>`, everyone else the default, `now`. */
+export function deriveEvents(prev: OrchState, next: OrchState, now: string, stamp: string = now): ContinuityEvent[] {
   return [
-    ...runStartEvents(prev, next, now),
-    ...taskEvents(prev, next, now),
-    ...dispatchEvents(prev, next, now),
-    ...runEndEvents(prev, next, now)
+    ...runStartEvents(prev, next, now, stamp),
+    ...taskEvents(prev, next, now, stamp),
+    // After the Task rows (P3): a transition's first row stays the Task's.
+    ...gateEvents(prev, next, now),
+    ...dispatchEvents(prev, next, now, stamp),
+    ...runEndEvents(prev, next, now, stamp)
   ]
 }

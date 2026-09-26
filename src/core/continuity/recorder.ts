@@ -3,11 +3,13 @@
 // reads the rows the Timeline shows. Every entry point swallows journal failures into the log —
 // a broken journal must never stop a Job (design §6).
 // Lives in core/continuity since the Host journal (Task 1), so the Host writes with the same code the app did.
-import { CATALOGS, t, type Lang, type MessageKey, type MessageParams } from '../i18n'
+import type { Lang } from '../i18n'
 import type { JobEvent } from '../types'
 import { runIdOf, type OrchState } from '../orchestration/state'
 import { buildCheckpoint } from '../orchestration/checkpoint'
-import { deriveEvents, type ContinuityEvent, type ContinuityEventType } from './events'
+import { deriveEvents, type ContinuityEvent } from './events'
+import type { JournalActor } from './actor'
+import { lostRowsOf, recoveryRowsOf } from './timelineRows'
 import { checkpointsFor, type CheckpointKind } from './checkpointPolicy'
 import type { HandoffLookup } from '../handoff/types'
 import { readGitSummary, type GitSummaryDeps } from '../orchestration/exec/gitSummary'
@@ -61,15 +63,23 @@ export class ContinuityRecorder {
 
   /** Journals the transition prev → next and returns the events so the caller can ask for
    *  checkpoints. Runs that vanished from the projection (TTL prune, run-delete) have their rows
-   *  deleted here: the diff is the one place both paths pass through. */
-  record(prev: OrchState, next: OrchState, at: string = this.now()): ContinuityEvent[] {
+   *  deleted here: the diff is the one place both paths pass through. `stamp` ends the repeatable
+   *  rows' keys (the Host's commit stamp, P1; `at` when absent) and `actor` goes on every row (J4). */
+  record(
+    prev: OrchState,
+    next: OrchState,
+    o: { at?: string; stamp?: string; actor?: JournalActor | null } = {}
+  ): ContinuityEvent[] {
+    const at = o.at ?? this.now()
     let events: ContinuityEvent[] = []
     try {
-      events = deriveEvents(prev, next, at)
+      events = deriveEvents(prev, next, at, o.stamp ?? at)
     } catch (err) {
       this.deps.log(`continuity: derive failed: ${String(err)}`)
       return []
     }
+    const actor = o.actor
+    if (actor) events = events.map((e) => ({ ...e, actor }))
     this.append(events)
     const kept = new Set(next.runs.map((r) => r.id))
     for (const run of prev.runs) {
@@ -89,15 +99,21 @@ export class ContinuityRecorder {
   }
 
   /** Checkpoints for the transitions in `events`, read from `state` — the committed next state.
-   *  Async because git is asked; the wiring fires and forgets after the save. */
-  async checkpoint(events: ContinuityEvent[], state: OrchState): Promise<void> {
+   *  Async because git is asked; the wiring fires and forgets after the save. The CHECKPOINT_CREATED
+   *  row carries `actor`, by default that of the rows that asked for it. */
+  async checkpoint(
+    events: ContinuityEvent[],
+    state: OrchState,
+    actor: JournalActor | null = events[0]?.actor ?? null
+  ): Promise<void> {
     for (const { dispatchId, kind } of checkpointsFor(events, state))
-      await this.writeCheckpoint(state, dispatchId, kind)
+      await this.writeCheckpoint(state, dispatchId, kind, actor)
   }
 
   /** The toggle turned on while Runs are active (spec §3.6): one baseline per open real Dispatch and
-   *  one CONTINUITY_ENABLED per Run that has one. No history is invented. */
-  async enable(state: OrchState): Promise<void> {
+   *  one CONTINUITY_ENABLED per Run that has one. No history is invented. `actor` goes on the
+   *  CONTINUITY_ENABLED rows and the baselines' CHECKPOINT_CREATED rows. */
+  async enable(state: OrchState, actor: JournalActor | null = null): Promise<void> {
     const now = this.now()
     const open = state.dispatches.filter((d) => !d.endedAt && !isPlaceholder(d.sessionId))
     const runIds = new Set<string>()
@@ -111,75 +127,32 @@ export class ContinuityRecorder {
         type: 'CONTINUITY_ENABLED' as const,
         at: now,
         idempotencyKey: `CONTINUITY_ENABLED:${runId}:${now}`,
-        payload: {}
+        payload: {},
+        ...(actor ? { actor } : {})
       }))
     )
-    for (const d of open) await this.writeCheckpoint(state, d.id, 'baseline')
-  }
-
-  /** One journal event type read back as one kind of Timeline line (design §9). The two public
-   *  readers below differ only in the type they keep, the kind they emit and how they word the
-   *  summary, so the fold, the task titles and the swallow-and-log live here once. */
-  private timelineRows(
-    runId: string,
-    state: OrchState,
-    type: ContinuityEventType,
-    kind: JobEvent['kind'],
-    summary: (e: JournalEventRow) => string,
-    body?: (e: JournalEventRow) => string
-  ): JobEvent[] {
-    try {
-      const titleOf = new Map(state.tasks.map((t) => [t.id, t.title]))
-      return this.deps.journal
-        .eventsFor(runId)
-        .filter((e) => e.type === type)
-        .map((e) => ({
-          at: e.at,
-          kind,
-          sourceId: e.eventId,
-          ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
-          summary: summary(e),
-          ...(body ? { body: body(e) } : {})
-        }))
-    } catch (err) {
-      this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)
-      return []
-    }
+    for (const d of open) await this.writeCheckpoint(state, d.id, 'baseline', actor)
   }
 
   /** The journal rows the Timeline shows (design §9): each ATTEMPT_LOST as a 'runtime-lost' line. */
   lostEventsFor(runId: string, state: OrchState): JobEvent[] {
-    return this.timelineRows(runId, state, 'ATTEMPT_LOST', 'runtime-lost', () => '')
+    return this.timeline(runId, (rows) => lostRowsOf(rows, state))
   }
 
-  /** The journal rows the Timeline shows: each RECOVERY_STRATEGY_SELECTED as a 'recovery' line. The
-   *  summary is the strategy as journaled and the renderer words it (RunDetail's RECOVERY_LABEL);
-   *  the body is why that strategy was chosen, which is the half a person cannot get anywhere else. */
+  /** The journal rows the Timeline shows: each RECOVERY_STRATEGY_SELECTED as a 'recovery' line, its
+   *  body the reason in the app's language, read per call (timelineRows.ts). */
   recoveryEventsFor(runId: string, state: OrchState): JobEvent[] {
-    return this.timelineRows(
-      runId,
-      state,
-      'RECOVERY_STRATEGY_SELECTED',
-      'recovery',
-      (e) => String(e.payload?.strategy ?? ''),
-      (e) => this.reasonText(e)
-    )
+    return this.timeline(runId, (rows) => recoveryRowsOf(rows, state, this.deps.lang()))
   }
 
-  /** The reason in the reader's language. The journal holds both halves the decision wrote: an
-   *  English sentence for the file and the key it was written under. A key this build does not have
-   *  (a row from another version, or one written before the keys existed) falls back to the English
-   *  sentence — worse to read, far better than a bare key. */
-  private reasonText(e: JournalEventRow): string {
-    const key = e.payload?.reasonKey
-    const english = String(e.payload?.reason ?? '')
-    if (typeof key !== 'string' || !(key in CATALOGS.ko.messages)) return english
-    const params = e.payload?.reasonParams
-    return t(
-      this.deps.lang(),
-      key as MessageKey,
-      params && typeof params === 'object' ? (params as MessageParams) : undefined
-    )
+  /** The run's rows through `lines`, or none (logged) when the read or the fold fails. */
+  private timeline(runId: string, lines: (rows: JournalEventRow[]) => JobEvent[]): JobEvent[] {
+    try {
+      return lines(this.deps.journal.eventsFor(runId))
+    } catch (err) {
+      this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)
+      return []
+    }
   }
 
   /** P0 detects, P1 acts: a crash between the journal append and the JSON rename leaves the journal
@@ -205,7 +178,12 @@ export class ContinuityRecorder {
     }
   }
 
-  private async writeCheckpoint(state: OrchState, dispatchId: string, kind: CheckpointKind): Promise<void> {
+  private async writeCheckpoint(
+    state: OrchState,
+    dispatchId: string,
+    kind: CheckpointKind,
+    actor: JournalActor | null
+  ): Promise<void> {
     const dispatch = state.dispatches.find((d) => d.id === dispatchId)
     const task = dispatch && state.tasks.find((t) => t.id === dispatch.taskId)
     if (!dispatch || !task) return
@@ -242,7 +220,8 @@ export class ContinuityRecorder {
           type: 'CHECKPOINT_CREATED',
           at: now,
           idempotencyKey: `CHECKPOINT_CREATED:${row.checkpointId}`,
-          payload: { checkpointId: row.checkpointId, kind, gitHead: git?.head ?? null }
+          payload: { checkpointId: row.checkpointId, kind, gitHead: git?.head ?? null },
+          ...(actor ? { actor } : {})
         }
       ])
     } catch (err) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deriveEvents } from './events'
+import { deriveEvents, isContinuityEventType } from './events'
 import { emptyState, type OrchState } from '../orchestration/state'
 import { FAILURE_LIMIT, type Task, type Dispatch } from '../orchestration/types'
 import { stateFromLegacy } from '../orchestration/legacyState'
@@ -396,5 +396,51 @@ describe('deriveEvents — convergence', () => {
     const oneShotAt = (now: string) =>
       deriveEvents(withRun(run(), [task({ status: 'ready' })]), withDispatch, now).find((e) => e.type === 'ATTEMPT_START_REQUESTED')!.idempotencyKey
     expect(oneShotAt(NOW)).toBe(oneShotAt(LATER))
+  })
+})
+
+describe('deriveEvents — questions (Host journal J5, P3)', () => {
+  const open = { id: 'g1', runId: 'run_1', taskId: 'tsk_1', question: 'Which db?', status: 'open' as const, createdAt: T1 }
+  const answered = { ...open, status: 'resolved' as const, resolution: 'sqlite', resolvedAt: NOW }
+
+  it('an answer is its own row, after the Task rows, keyed on the Gate', () => {
+    const before: OrchState = { ...withRun(run(), [task({ status: 'blocked' })]), gates: [open] }
+    const after: OrchState = { ...withRun(run(), [task({ status: 'pending', updatedAt: NOW })]), gates: [answered] }
+    const ev = deriveEvents(before, after, NOW)
+    expect(ev.map((e) => e.type)).toEqual(['TASK_STATE_CHANGED', 'GATE_RESOLVED'])
+    expect(ev[1]).toMatchObject({
+      runId: 'run_1', taskId: 'tsk_1', at: NOW, idempotencyKey: 'GATE_RESOLVED:g1',
+      payload: { gateId: 'g1', kind: null, question: 'Which db?', resolution: 'sqlite' }
+    })
+  })
+
+  it('an answer that moves no Task still records itself', () => {
+    const before: OrchState = { ...withRun(run(), [task({ status: 'dispatched' })]), gates: [open] }
+    const after: OrchState = { ...withRun(run(), [task({ status: 'dispatched' })]), gates: [answered] }
+    expect(deriveEvents(before, after, NOW).map((e) => e.type)).toEqual(['GATE_RESOLVED'])
+  })
+
+  it('a Gate made and answered in one write counts; one already answered says nothing again', () => {
+    const base = withRun(run(), [task({ status: 'dispatched' })])
+    expect(deriveEvents(base, { ...base, gates: [answered] }, NOW).map((e) => e.type)).toEqual(['GATE_RESOLVED'])
+    expect(deriveEvents({ ...base, gates: [answered] }, { ...base, gates: [answered] }, NOW)).toEqual([])
+  })
+})
+
+describe('deriveEvents — keys (Host journal J6, P2)', () => {
+  it('a repeatable row ends in the stamp when one is given, and in now otherwise; at stays now', () => {
+    const on = withRun(run())
+    const paused = withRun(run({ paused: true }))
+    expect(deriveEvents(on, paused, NOW)[0].idempotencyKey).toBe(`JOB_RUN_PAUSED:run_1:${NOW}`)
+    expect(deriveEvents(on, paused, NOW, 'h#7')[0]).toMatchObject({ at: NOW, idempotencyKey: 'JOB_RUN_PAUSED:run_1:h#7' })
+    const t = deriveEvents(withRun(run(), [task({ status: 'ready' })]), withRun(run(), [task({ status: 'blocked' })]), NOW, 'h#8')
+    expect(t[0].idempotencyKey).toBe('TASK_WAITING_INPUT:tsk_1:ready->blocked:h#8')
+  })
+
+  it('knows every event type by name, and nothing else', () => {
+    expect(isContinuityEventType('GATE_RESOLVED')).toBe(true)
+    expect(isContinuityEventType('RECOVERY_FAILED')).toBe(true)
+    expect(isContinuityEventType('toString')).toBe(false)
+    expect(isContinuityEventType('TASK_EXPLODED')).toBe(false)
   })
 })
