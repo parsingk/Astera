@@ -86,7 +86,15 @@ export function createWorktreeRoute(a: {
    *  connection to the Host". Only that failure is retried: the call never left this app, so the Host did
    *  not apply it. Any other failure (a refusal, a socket that dropped with the call out) is the caller's,
    *  as before. Never written locally: the new Host owns the file, and a local write beside it is the
-   *  lost-entry race R1 exists to prevent. No new Host within the bound fails with the first error. */
+   *  lost-entry race R1 exists to prevent. No new Host within the bound fails with the first error.
+   *
+   *  **The wait holds the registry's queue** (final review M7). This runs inside the WorktreeRegistry
+   *  turn of the write that made it (`add`/`removeEntry`/`setRoot` all `enqueue`), so for up to
+   *  REPLACE_WAIT_MS (about 7 s) everything queued behind it waits too: other writes, the new Host's
+   *  refill and pushes (`accept` queues while anything is queued), and a `refresh()` on the way back to
+   *  local. Those are delayed, not failed: a write behind it decides host or local when its own turn
+   *  comes (registry.ts), so it goes to the new Host once this one has, and one that finds no socket
+   *  either waits the same way in its turn. The bound is what keeps the delay from being a hang. */
   const send = async (m: { cmd: string; args: Record<string, unknown>; sessionId: string }): Promise<{ status: number; body: unknown }> => {
     try {
       return await a.call(m)
