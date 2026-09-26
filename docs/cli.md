@@ -853,8 +853,10 @@ it already knows about the session and starts nothing new to find out:
   `Stop` or `StopFailure` of the turn, or Claude Code's "waiting for your input". It is the same
   reading `state` gives in `sessions list` (above), with one more rule: an event whose time is from
   before the send belongs to the turn before, however late it was written, so it cannot end this wait.
-- **A chat session's turn ends when its adapter goes back to idle.** The Host asks its own adapter for
-  the session when it holds one, and Astera when Astera holds the session. A turn that ended in an
+- **A chat session's turn ends when its adapter goes back to idle after the turn was seen working.**
+  The Host asks the adapter of whichever process writes to the session: its own when the Host is the
+  writer, Astera's when Astera holds the session. An `idle` read before the turn was seen working is not
+  the end, since an adapter that has not heard the turn yet reads `idle` too. A turn that ended in an
   error, such as a usage limit, has still ended, and `data.turn.error` says why.
 
 `data.turn` says how it ended, and the exit code follows it:
@@ -875,6 +877,11 @@ it already knows about the session and starts nothing new to find out:
 terminal prompt has no id to answer by: read the screen with `sessions read` and answer in the
 session. `error.details.prompt.kind` is `approval` or `question` for a chat session, and `permission`
 or `question` for a terminal one.
+
+**A terminal session that is in a turn right now is refused with 6** ("the session is busy"), and
+nothing is typed. Claude Code would queue the text behind the running turn, and that turn's own `Stop`
+would end the wait for a turn that never ran. Wait for its turn to end, as `sessions list` shows it,
+then send again. Without `--wait` a busy session still takes the text as before.
 
 **Two sessions cannot be waited for, and are refused with 6 before anything is typed**: a Codex
 terminal session, because Codex runs without the hooks and its turn leaves no event, and a chat
@@ -918,6 +925,11 @@ open or closed.
 **With Astera open, the session shows up as a tab**: Astera takes it back from the Host the moment it
 starts, as it does a session the Host started for a worker. An Astera too old to hear that picks it up
 the next time it starts.
+
+**A worker session cannot create sessions**, which is a 5: a caller with an open Dispatch. A new
+session runs on any account and in any folder, and it holds no Dispatch, so it would be a process
+outside the worker's role. A coordinator, a plain session, a shell and Astera itself may create one.
+`sessions send` stays open to every caller.
 
 A folder that does not exist is a 2, an account that is not in `accounts list` a 4, and a Host started
 without the agent CLI paths (it answers no `spawn` feature) a 6. Nothing is started in any of those

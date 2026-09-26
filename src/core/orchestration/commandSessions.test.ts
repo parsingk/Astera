@@ -183,6 +183,7 @@ describe('sessions send --wait — the turn after the send', () => {
   it('a permission prompt that opens during the wait ends it, saying which kind', async () => {
     const h = hostDeps({
       turns: [
+        { alive: true, state: 'unknown', prompt: null },
         { alive: true, state: 'working', prompt: null },
         { alive: true, state: 'waiting', prompt: 'permission' }
       ]
@@ -194,7 +195,8 @@ describe('sessions send --wait — the turn after the send', () => {
   it('a session that ends during the wait, and a deadline that passes first', async () => {
     const exited = hostDeps({ turns: [{ alive: false, state: 'unknown', prompt: null }] })
     expect(turnOf(await send(exited.deps, { id: 't1', text: 'go', wait: true }))).toEqual({ state: 'exited' })
-    const slow = hostDeps({ turns: [{ alive: true, state: 'working', prompt: null }] })
+    // The first read is the check before the send (review 3, I2); the turn then stays working.
+    const slow = hostDeps({ turns: [{ alive: true, state: 'waiting', prompt: null }, { alive: true, state: 'working', prompt: null }] })
     expect(turnOf(await send(slow.deps, { id: 't1', text: 'go', wait: true, timeoutMs: 30 }))).toEqual({ state: 'timeout' })
   })
 
@@ -261,5 +263,74 @@ describe('sessions send --wait — the turn after the send', () => {
     const r = await send(h.deps, { id: 't1', text: 'go' })
     expect(r.body).toEqual({ id: 't1', sent: true, enter: true })
     expect(h.sessionTurn).not.toHaveBeenCalled()
+  })
+})
+
+// Review 3, I1 and I2: a wait must not end on a turn that is not the one the send started.
+describe('sessions send --wait — the turn it ends on is the one it started', () => {
+  const terminal: HostSession = { id: 't1', kind: 'terminal', title: 't', accountId: 'acc_c', cwd: 'D:/p', alive: true, state: 'waiting' }
+  const chat: HostSession = { ...terminal, id: 'c1', kind: 'chat', state: 'unknown' }
+  type ChatTurnState = { alive: boolean; status: 'idle' | 'working' | 'waiting'; error: string | null; prompt: unknown }
+  const idle: ChatTurnState = { alive: true, status: 'idle', error: null, prompt: null }
+  const rig = (a: { turns?: Array<{ alive: boolean; state: 'working' | 'waiting' | 'unknown'; prompt: null }>; chatTurns?: ChatTurnState[] }) => {
+    const turns = [...(a.turns ?? [])]
+    const chatTurns = [...(a.chatTurns ?? [])]
+    const sendSession = vi.fn(async () => {})
+    const chatSend = vi.fn(async () => ({ sent: true as const }))
+    const deps = makeDeps({
+      listSessions: async () => [terminal, chat],
+      sendSession,
+      chatSend,
+      sessionTurn: vi.fn(async () => (turns.length > 1 ? turns.shift()! : turns[0])),
+      chatTurn: vi.fn(async () => (chatTurns.length > 1 ? chatTurns.shift() : chatTurns[0]))
+    } as Partial<OrchServerDeps>)
+    return { deps, sendSession, chatSend }
+  }
+  const send = (deps: OrchServerDeps, args: Record<string, unknown>) => handleCommand(deps, { sessionId: '' }, 'sessions-send', args)
+
+  it('a chat idle read before the turn is seen working does not end the wait', async () => {
+    // pre-check idle, then two idles (a reader that has not heard the turn yet), then working, then idle.
+    const h = rig({ chatTurns: [idle, idle, idle, { ...idle, status: 'working' }, idle] })
+    const r = await send(h.deps, { id: 'c1', text: 'hello', wait: true })
+    expect((r.body as { turn: unknown }).turn).toEqual({ state: 'ended' })
+    expect(h.chatSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('a chat turn never seen working runs to the deadline rather than ending at once', async () => {
+    const h = rig({ chatTurns: [idle] })
+    const r = await send(h.deps, { id: 'c1', text: 'hello', wait: true, timeoutMs: 600 })
+    expect((r.body as { turn: unknown }).turn).toEqual({ state: 'timeout' })
+  })
+
+  it('a terminal session still in a turn is refused before anything is typed (6)', async () => {
+    const h = rig({ turns: [{ alive: true, state: 'working', prompt: null }] })
+    const r = await send(h.deps, { id: 't1', text: 'go', wait: true })
+    expect(r.status).toBe(409)
+    expect(error(r)).toContain('busy')
+    expect(h.sendSession).not.toHaveBeenCalled()
+  })
+
+  it('a busy terminal still takes a send without --wait', async () => {
+    const h = rig({ turns: [{ alive: true, state: 'working', prompt: null }] })
+    expect((await send(h.deps, { id: 't1', text: 'go' })).status).toBe(200)
+    expect(h.sendSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Controller ruling on review 3, I3: a worker cannot start a session, which would run outside its role.
+describe('sessions create — refused to a worker session', () => {
+  it('a caller with an open Dispatch is 5; the shell, a plain session and a coordinator are not', async () => {
+    const createSession = vi.fn(async () => row())
+    const deps = makeDeps({ createSession, startWorker: async () => ({ sessionId: 'sess_w', cwd: 'D:/p', specPath: 'S' }) })
+    await handleCommand(deps, { sessionId: '' }, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs.at(-1)!.id
+    const t = await handleCommand(deps, { sessionId: '' }, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc_c' })
+    await handleCommand(deps, { sessionId: '' }, 'worker-start', { task: (t.body as { id: string }).id, agent: 'claude', account: 'acc_c', worktree: 'current' })
+    const worker = await handleCommand(deps, { sessionId: 'sess_w' }, 'sessions-create', { account: 'acc_c', cwd: 'D:/p' })
+    expect(worker.status).toBe(403)
+    expect(createSession).not.toHaveBeenCalled()
+    for (const sessionId of ['', 'sess_plain'])
+      expect((await handleCommand(deps, { sessionId }, 'sessions-create', { account: 'acc_c', cwd: 'D:/p' })).status, sessionId).toBe(200)
+    // sessions send stays open to the worker.
   })
 })

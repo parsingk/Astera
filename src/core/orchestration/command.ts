@@ -3690,6 +3690,22 @@ export async function handleCommand(
           if (provider === 'codex')
             return conflict(`${id} is a Codex terminal session, which writes no hook events, so the end of its turn cannot be seen; ${timeoutWord}`)
           const turnOf = deps.sessionTurn
+          /**
+           * **A session still in a turn is refused** (review 3, I2). Claude Code queues text typed during a
+           * turn, and that turn's own `Stop` lands after the send, stamped after it, so it would end this
+           * wait for a turn that never ran. The other fix, accepting `waiting` only after a
+           * `UserPromptSubmit` stamped after the send, was rejected as the less safe one: a session
+           * started by an older Astera has no `UserPromptSubmit` hook, and a local command such as
+           * `/clear` fires none, so that rule would hang those waits to the deadline or, worse, be
+           * tempted into fallbacks. A refusal is loud, costs nothing (nothing was typed), and the person
+           * can wait for the turn to end and send again. An observed replay skips the check: its text was
+           * typed by the first call.
+           */
+          if (!resuming) {
+            const now = await turnOf(id)
+            if (now !== null && now.alive && now.state === 'working')
+              return conflict(`${id} is busy: the session is in a turn now; wait for its turn to end, then send with --wait`)
+          }
           waitFor = async () => {
             const t = await turnOf(id, resuming ? undefined : since)
             if (t === null || !t.alive) return { state: 'exited' }
@@ -3700,10 +3716,16 @@ export async function handleCommand(
           const chatTurnOf = deps.chatTurn
           if (!chatTurnOf || (await chatTurnOf(id)) === undefined)
             return conflict(`nothing that holds ${id} can say where its turn is (Astera may still be taking its sessions back); ${timeoutWord}`)
+          /** `idle` is the end only once `working` was seen since the send (review 3, I1): an adapter
+           *  that had not yet heard the turn reads `idle` too. A prompt (`waiting`) counts at once. An
+           *  observed replay's turn was sent by the first call and may be seen at any stage, so it takes
+           *  `idle` as it comes. */
+          let sawWorking = resuming
           waitFor = async () => {
             const t = await chatTurnOf(id)
             if (t === undefined) return null
             if (!t.alive) return { state: 'exited' }
+            if (t.status === 'working') sawWorking = true
             if (t.status === 'waiting') {
               const p = t.prompt
               return {
@@ -3712,7 +3734,7 @@ export async function handleCommand(
                 prompt: p ? { kind: p.kind, tool: p.tool, summary: p.summary } : { kind: 'approval' }
               }
             }
-            if (t.status === 'idle') return t.error ? { state: 'ended', error: t.error } : { state: 'ended' }
+            if (t.status === 'idle' && sawWorking) return t.error ? { state: 'ended', error: t.error } : { state: 'ended' }
             return null
           }
         }
@@ -3752,6 +3774,12 @@ export async function handleCommand(
      * COORDINATOR_ONLY 가 아니다 — `sessions send` 와 같은 사용자 결정이다.
      */
     case 'sessions-create': {
+      // **Refused to a worker session** (the controller's ruling on review 3, I3): a caller with an open
+      // Dispatch. A new session runs on any account, in any folder, and holds no Dispatch, so it would
+      // be a process outside the worker's role, free to call every COORDINATOR_ONLY command. A
+      // coordinator, a plain session, the shell and the app may create; `sessions send` stays open.
+      if (myDispatch !== undefined)
+        return denied('a worker session cannot start sessions; ask your coordinator, or run it from a shell')
       if (!deps.createSession) return conflict('sessions are started by the Astera Host, and this caller is not one')
       if (args.account === undefined) return bad('--account is required: the account the session runs on (from `accounts list`)')
       const account = str(args.account)
