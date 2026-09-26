@@ -3296,6 +3296,73 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(logs.filter((l) => l.includes('disk full')).length).toBeGreaterThanOrEqual(2)
   })
 
+  // Review 4-5 I2: the state-put's diff base is the state before the put, never the put itself.
+  it('a state-put that pauses a Run is journaled against the state before it', async () => {
+    await seed()
+    const f = fake()
+    const orch = orchOver({ journal: f.journal })
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    const paused: OrchState = { ...got.state, runs: got.state.runs.map((r) => ({ ...r, paused: true })) }
+    expect((await orch.call({ cmd: 'state-put', args: { state: paused, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(f.committed).toHaveLength(1)
+    expect(f.committed[0].actor).toEqual({ surface: 'desktop' })
+    expect(f.committed[0].prev.runs[0].paused).toBeFalsy()
+    expect(f.committed[0].next.runs[0].paused).toBe(true)
+  })
+
+  // Review 4-5 I3: the three fixed actors no call judges.
+  const queueDone = async (a: { taskId: string; dispatchId: string; sessionId: string }): Promise<void> => {
+    const queue = pendingReportsDirIn(dir)
+    await fs.mkdir(queue, { recursive: true })
+    await fs.writeFile(
+      path.join(queue, pendingReportFileName({ queuedAt: NOW, nonce: 'bbbbbbbb' })),
+      serializePendingReport({
+        queuedAt: NOW,
+        sessionId: a.sessionId,
+        cmd: 'send',
+        args: { type: 'worker_done', taskId: a.taskId, dispatchId: a.dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }
+      }),
+      'utf8'
+    )
+  }
+
+  it('a queued report the load drains is recorded as the agent that wrote it', async () => {
+    const { taskId, dispatchId } = await seedWorker()
+    await queueDone({ taskId, dispatchId, sessionId: 'ses_w' })
+    const f = fake()
+    const orch = orchOver({ mayDrain: async () => true, journal: f.journal })
+    await orch.ready()
+    expect(orch.state().tasks.find((t) => t.id === taskId)?.status).toBe('completed')
+    expect(f.committed.length).toBeGreaterThan(0)
+    expect(f.committed.map((c) => c.actor)).toEqual(f.committed.map(() => ({ surface: 'agent', sessionId: 'ses_w' })))
+  })
+
+  it('a Dispatch the drain writes off, its report refused, is recorded as the Host', async () => {
+    const { dispatchId } = await seedWorker()
+    // Naming a Task the Dispatch is not for: `send` refuses it, and the Dispatch the load left open only
+    // for this report is written off.
+    await queueDone({ taskId: 'tsk_nope', dispatchId, sessionId: 'ses_w' })
+    const f = fake()
+    const orch = orchOver({ mayDrain: async () => true, journal: f.journal })
+    await orch.ready()
+    expect(orch.state().dispatches.find((d) => d.id === dispatchId)?.endedAt).toBeDefined()
+    expect(f.committed.length).toBeGreaterThan(0)
+    expect(f.committed.map((c) => c.actor)).toEqual(f.committed.map(() => ({ surface: 'host' })))
+  })
+
+  it('a session this Host holds that exits is closed as the Host', async () => {
+    const { dispatchId } = await seedWorker()
+    const f = fake()
+    // No usage limit behind the exit (the limit probe answers nothing).
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), act: async () => null, journal: f.journal })
+    await orch.ready()
+    expect(f.committed).toEqual([])
+    await orch.sessionExited({ sessionId: 'ses_w', exitCode: 1 })
+    expect(orch.state().dispatches.find((d) => d.id === dispatchId)?.endedAt).toBeDefined()
+    expect(f.committed.length).toBeGreaterThan(0)
+    expect(f.committed.map((c) => c.actor)).toEqual(f.committed.map(() => ({ surface: 'host' })))
+  })
+
   it('journal-append and journal-reload are the app’s alone, need a journal, and take no request id', async () => {
     await seed()
     const f = fake()
