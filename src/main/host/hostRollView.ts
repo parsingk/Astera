@@ -228,6 +228,19 @@ export function withHostRollHold(view: Pick<HostRollView, 'holds' | 'hold'>, han
   return wrapped
 }
 
+/** S6-20: ipc.ts's exit wiring. One handler, with the ordering hold in front, set as the exit of every
+ *  manager given (the pty manager and the chat manager: a chat session's exit has to reach the same
+ *  consumers a pty's does). Handed back for callers that also call it directly. */
+export function installHostRollExit(
+  view: Pick<HostRollView, 'holds' | 'hold'>,
+  managers: ReadonlyArray<{ onExit?: (e: Exit) => void }>,
+  handler: (e: Exit) => void
+): (e: Exit) => void {
+  const onExit = withHostRollHold(view, handler)
+  for (const m of managers) m.onExit = onExit
+  return onExit
+}
+
 /** Whether the adopter announces this session to the renderer with `session:created`. Not the new half
  *  of a Host roll whose old session the app holds: the forwarded `session:rolled` re-points the old tab
  *  at it, as the app's own roll does, and a created tab beside it is a second tab for one session

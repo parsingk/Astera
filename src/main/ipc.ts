@@ -50,7 +50,7 @@ import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
-import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
+import { createHostRollView, installHostRollExit, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
 import { findHostHeld, hostHeldLive, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
 import { chatAdoptPlan, hostCarryOnIsOurs, hostStartingDefers } from './chatAdopt'
@@ -1516,7 +1516,8 @@ export function registerIpc(
   // The exit of a session a Host roll is replacing waits until the new session is adopted, the rekey
   // forwarded and the mirror moved (S6 §3.4, withHostRollHold), so the renderer replaces the old tab
   // rather than closing it, and the app's orchestration tap finds the Dispatch already rekeyed.
-  const onSessionExit = withHostRollHold(hostRollView, (e: { sessionId: string; exitCode: number }): void => {
+  // installHostRollExit sets this one held handler as both core.sessions.onExit and core.chat.onExit (S6-20).
+  installHostRollExit(hostRollView, [core.sessions, core.chat], (e: { sessionId: string; exitCode: number }): void => {
     adoptedNative.delete(e.sessionId)
     hostOwned.delete(e.sessionId)
     batcher.flush()
@@ -1587,8 +1588,6 @@ export function registerIpc(
     else if (exitsBeforeTap.hold(e) === 'full')
       orchLog(`exit of session=${e.sessionId} dropped: too many exits arrived before orchestration started`)
   })
-  core.sessions.onExit = onSessionExit
-  core.chat.onExit = onSessionExit
   /** Chat sessions' own log line, as this wiring block sees it. They are the Host's line processes, so
    *  their notices belong in the same file the Host's own do. Read from `hostWiring` here rather than
    *  through the reattach sweep's `hostLog`, which is declared inside a closure that runs much later

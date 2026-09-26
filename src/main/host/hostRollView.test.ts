@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './hostRollView'
+import { createHostRollView, withHostRollHold, installHostRollExit, orchHoldsSession, hostForced, announcesAdopted } from './hostRollView'
 import type { OrchState } from '../../core/orchestration/state'
 import type { HostMessage } from '../../core/host/protocol'
 
@@ -233,6 +233,42 @@ describe('withHostRollHold', () => {
     onExit({ sessionId: 's1', exitCode: 1 })
     expect(seen).toEqual(['s9'])
     await vi.waitFor(() => expect(seen).toEqual(['s9', 's1']))
+  })
+})
+
+// S6-20: ipc.ts's composition — one held handler set on both managers — pinned where it lives.
+describe('installHostRollExit', () => {
+  it('sets one held handler as both the pty and the chat manager’s exit, and hands it back', async () => {
+    const v = createHostRollView({ adopt: async () => {}, forward: () => {}, log: () => {} })
+    const sessions: { onExit?: (e: { sessionId: string; exitCode: number }) => void } = {}
+    const chat: { onExit?: (e: { sessionId: string; exitCode: number }) => void } = {}
+    const seen: string[] = []
+    const onExit = installHostRollExit(v, [sessions, chat], (e) => seen.push(`${e.sessionId}:${e.exitCode}`))
+    expect(sessions.onExit).toBe(onExit)
+    expect(chat.onExit).toBe(onExit)
+    sessions.onExit?.({ sessionId: 's9', exitCode: 0 })
+    chat.onExit?.({ sessionId: 'c9', exitCode: 0 })
+    expect(seen).toEqual(['s9:0', 'c9:0'])
+    // A pty roll and a chat roll: each old session's exit waits for its adoption, whichever manager it came from.
+    let finishPty: () => void = () => {}
+    let finishChat: () => void = () => {}
+    const held = createHostRollView({
+      adopt: (ptyId) => new Promise<void>((r) => { if (ptyId) finishPty = r; else finishChat = r }),
+      forward: () => {},
+      log: () => {}
+    })
+    const seen2: string[] = []
+    installHostRollExit(held, [sessions, chat], (e) => seen2.push(e.sessionId))
+    held.pushed({ t: 'session-rolled', oldSessionId: 's1', info: rolled, ptyId: 'p2' })
+    held.pushed({ t: 'session-rolled', oldSessionId: 'c1', info: { ...rolled, id: 'c2', kind: 'chat' }, ptyId: null, procId: 'q2' })
+    sessions.onExit?.({ sessionId: 's1', exitCode: 1 })
+    chat.onExit?.({ sessionId: 'c1', exitCode: 1 })
+    await Promise.resolve()
+    expect(seen2).toEqual([])
+    finishChat()
+    await vi.waitFor(() => expect(seen2).toEqual(['c1']))
+    finishPty()
+    await vi.waitFor(() => expect(seen2).toEqual(['c1', 's1']))
   })
 })
 
