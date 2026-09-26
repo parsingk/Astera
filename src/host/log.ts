@@ -49,3 +49,26 @@ export function openHostLog(a: { path: string; maxBytes?: number }): HostLog {
     }
   }
 }
+
+/** Final review C1, the belt: a promise rejection nobody handled is logged, and the Host keeps running.
+ *  Node 24's default (`--unhandled-rejections=throw`) turns one into an uncaught exception, which ends
+ *  node.exe and every session in it; a Host that loses one notice is far better than one that loses every
+ *  terminal. This is not the fix for any rejection: each path still ends in its own catch (R3). The error
+ *  name only, because a message can carry a token. Never throws. Returns the undo, for tests. */
+export function logUnhandledRejections(
+  target: { on(event: 'unhandledRejection', l: (reason: unknown) => void): unknown; off(event: 'unhandledRejection', l: (reason: unknown) => void): unknown },
+  log: HostLog
+): () => void {
+  const listener = (reason: unknown): void => {
+    try {
+      const name = reason instanceof Error ? reason.name : typeof reason
+      log.write(`unhandled rejection (${name}), kept running`)
+    } catch {
+      /* nowhere left to say it */
+    }
+  }
+  target.on('unhandledRejection', listener)
+  return () => {
+    target.off('unhandledRejection', listener)
+  }
+}

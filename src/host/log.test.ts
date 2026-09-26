@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { openHostLog } from './log'
+import { openHostLog, logUnhandledRejections } from './log'
 
 let dir: string
 beforeEach(async () => {
@@ -53,5 +53,36 @@ describe('openHostLog', () => {
     const log = openHostLog({ path: path.join(blocker, 'nested', 'host.log') })
     expect(() => log.write('still fine')).not.toThrow()
     expect(() => log.close()).not.toThrow()
+  })
+})
+
+// Final review C1, the belt: a rejection nobody handled is logged and the Host keeps running. Node 24's
+// default mode throws it, which ends node.exe and every session in it. The fix is that every Slack start
+// ends in a catch; this only keeps a miss somewhere else from being fatal.
+describe('logUnhandledRejections', () => {
+  it('logs a rejection nobody handled by its error name only, and keeps the process running', async () => {
+    const lines: string[] = []
+    const off = logUnhandledRejections(process, { write: (m) => lines.push(m), close: () => {} })
+    try {
+      void Promise.reject(Object.assign(new Error('invalid_auth xapp-secret'), { name: 'WebAPIPlatformError' }))
+      await new Promise((r) => setTimeout(r, 20))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toMatch(/unhandled rejection \(WebAPIPlatformError\), kept running/)
+      expect(lines[0]).not.toMatch(/xapp-secret/)
+    } finally {
+      off()
+    }
+  })
+
+  it('never throws, even when the log does', () => {
+    const listeners: Array<(r: unknown) => void> = []
+    const off = logUnhandledRejections({ on: (_e: string, l: (r: unknown) => void) => listeners.push(l), off: () => {} }, {
+      write: () => {
+        throw new Error('disk full')
+      },
+      close: () => {}
+    })
+    expect(() => listeners[0]('not an error')).not.toThrow()
+    off()
   })
 })

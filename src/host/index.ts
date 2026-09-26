@@ -14,7 +14,7 @@ import { nodePtyMissing } from './nodePtyCheck'
 import { hostPidFilePath, serializeHostPidFile } from '../core/host/pidFile'
 import { SPAWN_DEADLINE_MS } from '../core/host/unresponsive'
 import { hideForkedConsoleWindows } from './childWindows'
-import { openHostLog } from './log'
+import { openHostLog, logUnhandledRejections } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
 import { attachPtyHost } from './ptyHost'
@@ -63,6 +63,9 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const log = openHostLog({ path: process.env.ASTERA_HOST_LOG ?? path.join(profileDir, 'host', 'host.log') })
+  // Final review C1, the belt: a rejection nobody handled is logged and never ends the Host (and every
+  // session in it). Each path keeps its own catch; this only keeps a miss from being fatal.
+  logUnhandledRejections(process, log)
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
 
   // Where node-pty's own JavaScript lives, for the check below. `createRequire(__filename)` rather

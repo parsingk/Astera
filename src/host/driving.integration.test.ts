@@ -798,6 +798,10 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(orchCall).toMatch(/slack: slackWiring \?\? undefined/)
     expect(leave.indexOf('slackWiring?.dispose()')).toBeGreaterThan(-1)
     expect(leave.indexOf('slackWiring?.dispose()')).toBeLessThan(leave.indexOf('server.stopAccepting()'))
+    // Final review C1, the belt: a rejection nobody handled is logged and the Host keeps running, from the
+    // moment the log exists. Mutation: drop the call, or install it after the Slack SDK loads.
+    expect(src.indexOf('logUnhandledRejections(process, log)')).toBeGreaterThan(src.indexOf('const log = openHostLog('))
+    expect(src.indexOf('logUnhandledRejections(process, log)')).toBeLessThan(src.indexOf('await loadSlackSdk('))
     // Slack in the Host Task 6 (spec §3.3, P17): what only an app sees comes in as `slack-event`, taken
     // only from a greeted app; the rolling's events and every hook event reach the Host's Slack through
     // the two taps, and the Slack composition is handed the rolling's chats and accounts.
