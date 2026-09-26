@@ -454,12 +454,16 @@ export function resumeSchedule(s: OrchState, jobId: string): Res<Job> {
  *
  * paused 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
  * 해당 없는 칸을 아예 두지 않는 관례다(resumeSchedule 과 같다).
+ *
+ * **`coordinatorStopPending` 도 함께 걷는다** (한계 L1, 최종 리뷰 I2). 교체돼 세워진 회차를 사람이
+ * 다시 돌리는 것은 그 코디네이터를 되찾는 일이다. Task 가 없는 회차는 다시 돌려도 시작할 것이 없어
+ * "다시 움직인다" 로 표시가 걷히지 않았고, 약 30초 뒤의 재시도가 사람이 되찾은 코디네이터를 멈췄다.
  */
 export function resumeRun(s: OrchState, runId: string): Res<JobRun> {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return gone(`unknown run: ${runId}`)
   if (!run.paused) return ok(s, run)
-  const { paused: _drop, ...resumed } = run
+  const { paused: _drop, coordinatorStopPending: _stop, ...resumed } = run
   return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? resumed : r)) }, resumed)
 }
 

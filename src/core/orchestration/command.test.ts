@@ -7073,6 +7073,45 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(run).not.toHaveProperty('coordinatorStopPending')
   })
 
+  // Final review I2. A replaced Run with no Tasks does not move after `runs resume` (nothing to start),
+  // so "moves again" never dropped the mark and the retry stopped the coordinator the person took back.
+  it('L1: runs resume on a replaced Run drops its pending stop, so the retry no longer stops that coordinator', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const waiting = await park(deps, first.id)
+    expect((await fire(deps, jobId)).status).toBe(200)
+    await waiting.done
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorStopPending).toBeDefined()
+    expect((await call(deps, 'runs-resume', { id: first.id })).status).toBe(200)
+    const resumed = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(resumed).not.toHaveProperty('paused')
+    expect(resumed).not.toHaveProperty('coordinatorStopPending')
+    // The coordinator is at work again (not parked): a stop now is a fresh one and asks the idle check.
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(r.status).toBe(409)
+    expect(deps.stopped).toEqual([`coord-${first.id}`])
+  })
+
+  it('L1: a pending stop on a Run neither paused nor finished asks the idle check again', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    await patchRun(deps, first.id, (r) => ({ ...r, coordinatorStopPending: NOW }))
+    // Busy (not parked in check --wait): refused, and the mark dropped so the loop stops asking.
+    const busy = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(busy.status).toBe(409)
+    expect(deps.stopped).toEqual([])
+    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorStopPending')
+    // Parked: the idle check answers yes, and the stop goes out.
+    await patchRun(deps, first.id, (r) => ({ ...r, coordinatorStopPending: NOW }))
+    const waiting = await park(deps, first.id)
+    const idle = await call(deps, 'run-coordinator-stop', { run: first.id })
+    await waiting.done
+    expect(idle.status).toBe(200)
+    expect(deps.stopped).toEqual([`coord-${first.id}`])
+  })
+
   it('L1: run-coordinator-stop --gone empties the slot the way the exit release does, and only for that session', async () => {
     const deps = coordDeps()
     const jobId = await scheduledJob(deps)

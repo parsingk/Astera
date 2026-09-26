@@ -1021,13 +1021,13 @@ export async function handleCommand(
 
   /** Drops a Run's `coordinatorStopPending`, on the state as it is now (L1): its Run moves again, so the
    *  stop it held is no longer one to retry. Nothing is written when there is no mark. */
-  const dropStopPending = async (runId: string): Promise<void> => {
+  const dropStopPending = async (runId: string, why = 'moves again'): Promise<void> => {
     const current = deps.getState()
     const run = current.runs.find((r) => r.id === runId)
     if (!run || run.coordinatorStopPending === undefined) return
     const { coordinatorStopPending: _mark, ...rest } = run
     await deps.setState({ ...current, runs: current.runs.map((r) => (r.id === runId ? rest : r)) })
-    deps.log?.(`run ${runId} moves again; the stop pending for its coordinator ${run.coordinatorSessionId ?? '(none)'} was dropped`)
+    deps.log?.(`run ${runId} ${why}; the stop pending for its coordinator ${run.coordinatorSessionId ?? '(none)'} was dropped`)
   }
 
   /**
@@ -2061,11 +2061,13 @@ export async function handleCommand(
      * `stopped: null`, so a repeat does nothing.
      *
      * **A stop still pending is sent again as it was decided** (limits pass L1): the loop sends this
-     * for a slot marked `coordinatorStopPending` after a backoff. The idle check is not asked again,
-     * since the decision was made on it already (a fire's replacement leaves the Run paused and
-     * unfinished, and its coordinator is no longer in `check --wait` once asked to stop). The Run moving
-     * again still refuses it, and then the mark is dropped: a person took that Run back (`runs resume`),
-     * so its coordinator is no longer one to stop.
+     * for a slot marked `coordinatorStopPending` after a backoff. The idle check is not asked again
+     * while the decision still stands: the Run was replaced and is still paused (its coordinator is no
+     * longer in `check --wait` once asked to stop), or its work is finished. Otherwise the idle check is
+     * asked as for a fresh stop (final review I2), and a busy answer drops the mark: a Run neither paused
+     * nor finished is one a person or its coordinator has taken back. `runs resume` drops the mark itself
+     * (resumeRun), since a replaced Run with no Tasks does not move and so never reaches the next rule.
+     * The Run moving again still refuses it, and then the mark is dropped too.
      */
     case 'run-coordinator-stop': {
       const id = str(args.run)
@@ -2096,13 +2098,12 @@ export async function handleCommand(
       // **An unfinished Run's coordinator is stopped only while parked in `check --wait`** (final round 2,
       // I-A): a Run with no Tasks, whose coordinator may be doing the work itself. A finished Run (every
       // Task terminal) needs no such check: there is nothing left for it to do. Nor does a stop already
-      // decided and pending (L1).
-      if (
-        run.coordinatorStopPending === undefined &&
-        outcomeOf(s, id) === 'running' &&
-        (await deps.coordinatorIdle?.(id, sessionId)) !== true
-      )
+      // decided and pending on a replaced Run that is still paused (L1, final review I2).
+      const decided = run.coordinatorStopPending !== undefined && run.paused === true
+      if (!decided && outcomeOf(s, id) === 'running' && (await deps.coordinatorIdle?.(id, sessionId)) !== true) {
+        await dropStopPending(id, 'is neither paused nor finished and its coordinator is not idle')
         return conflict(`run ${id}'s coordinator is busy or its state is unknown; it was left running`)
+      }
       // **Asked again on the state after the stop** (Minor 4): the Run may have gained work meanwhile.
       const moved = (current: OrchState): boolean => {
         const r = current.runs.find((x) => x.id === id)
