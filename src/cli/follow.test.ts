@@ -145,7 +145,10 @@ describe('followRun through the Host', () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cli-follow-'))
   })
   afterEach(async () => {
-    await fs.rm(dir, { recursive: true, force: true })
+    // The orchestrator's state save can still be landing after the follow ends, and a file it
+    // writes into the folder mid-removal fails the rmdir with ENOTEMPTY (seen on macOS CI); rm
+    // retries exactly that.
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   it('follows a run to completed while another caller finishes its task', async () => {
