@@ -42,6 +42,7 @@ import {
   waitingCommand
 } from '../core/orchestration/cliKeepalive'
 import { agentContext, sessionUsage } from '../core/orchestration/cliAgentContext'
+import { helloLine, verboseLog, type VerboseLog } from '../core/orchestration/cliVerbose'
 
 /** 빌드가 박아 넣은 이 프로그램의 버전(electron.vite.config.ts). 앱과 CLI 는 한 프로그램이므로
  *  값이 하나이고, 그래서 둘이 갈라질 수가 없다. */
@@ -631,6 +632,17 @@ export function callHost(a: {
   })
 }
 
+/** `callHost`, timed for `--verbose`: how long the round trip took and how it ended. With `--verbose`
+ *  off this is `callHost` itself. */
+export function timedCall(
+  verbose: VerboseLog,
+  a: Parameters<typeof callHost>[0]
+): ReturnType<typeof callHost> {
+  return verbose.timed(`call ${a.cmd}`, () => callHost(a), (r) =>
+    'unreachable' in r ? `no answer: ${r.unreachable}` : 'stuck' in r ? `no answer: ${r.stuck}` : `status ${r.status}`
+  )
+}
+
 /** How `followRun` ended. `ended` carries the body `runs wait` would have answered with (the Host's
  *  `waitEndingFor`, or a `timeout` built here), so the caller turns it into the same exit code. */
 export type FollowEnd =
@@ -926,6 +938,9 @@ export async function main(): Promise<void> {
     process.exit(exitCodeFor('INVALID_ARGUMENTS'))
   }
 
+  /** `--verbose` (cliVerbose.ts): stderr only, and nothing at all unless it was given. */
+  const verbose = verboseLog({ enabled: parsed.verbose, write: logToStderr })
+
   /**
    * **모드가 정해진 뒤의 모든 실패는 이 문 하나를 지난다.**
    *
@@ -998,6 +1013,7 @@ export async function main(): Promise<void> {
     home: homedir()
   })
   const sessionId = process.env.ASTERA_SESSION ?? ''
+  verbose.say(`Host address ${address} (profile ${profileDir})`)
 
   // **stdin is read before connecting, not after.** A report's body arrives on stdin, and the
   // report has to be complete before either unreachable path below can write it down — a worker that
@@ -1173,9 +1189,11 @@ export async function main(): Promise<void> {
       if (found !== null) fail(siblingHostError({ found, cliProtocol: HOST_PROTOCOL }))
     }
     if (!fileAnswerable(parsed.cmd)) unreachable(reason, lost)
-    const state = readStateFile(path.join(profileDir, 'orchestration.json'))
+    const stateFile = path.join(profileDir, 'orchestration.json')
+    const state = readStateFile(stateFile)
     // 못 읽은 파일을 빈 Job 목록으로 내면 사람은 자기 Job 이 사라졌다고 읽는다.
     if (!state) unreachable(reason, lost)
+    verbose.say(`no Host answered, so ${spelledCommand(parsed.cmd)} is answered from the state file ${stateFile}`)
     return answerFromFile({ state, cmd: parsed.cmd, args, sessionId })
   }
 
@@ -1184,7 +1202,13 @@ export async function main(): Promise<void> {
   // is exactly that — so the assignment must not be something a later edit can move past them.
   // Defining `reply` *from* `answer` is what makes that impossible rather than merely unlikely.
   answer = await (async (): Promise<HostAnswer> => {
+    const connectStarted = Date.now()
     const conn = await connectHost({ address, app: CLI_VERSION, log: logToStderr })
+    verbose.say(
+      'error' in conn
+        ? `connecting to ${address} failed after ${Date.now() - connectStarted}ms: ${conn.error}`
+        : helloLine(conn.hello, Date.now() - connectStarted)
+    )
     if ('error' in conn) {
       // **셋 중 하나만 "아무도 없다" 다** (connectFailureEnd). 나머지 둘에서 파일을 읽으면 살아
       // 있는 주인의 파일을 0 으로 답하게 된다 — 바로 아래 `orch` 없는 Host 를 9 로 끝내는 가지와
@@ -1243,7 +1267,8 @@ export async function main(): Promise<void> {
         mode,
         timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS,
         write: out,
-        call: (callArgs, timeoutMs) => callHost({ conn, cmd: parsed.cmd, args: callArgs, sessionId, timeoutMs })
+        call: (callArgs, timeoutMs) =>
+          timedCall(verbose, { conn, cmd: parsed.cmd, args: callArgs, sessionId, timeoutMs })
       }).finally(() => keepalive.stop())
       conn.close()
       if ('stuck' in followed) fail({ code: SILENT_HOST_CODE, message: followed.stuck })
@@ -1254,7 +1279,7 @@ export async function main(): Promise<void> {
     // Held rather than passed inline: the retry line below has to carry what this actually sent,
     // and `argsForCall` fills a missing `--cwd` that the typed line does not have (`implicitArgs`).
     const sentArgs = argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() })
-    const r = await callHost({
+    const r = await timedCall(verbose, {
       conn,
       cmd: parsed.cmd,
       args: sentArgs,

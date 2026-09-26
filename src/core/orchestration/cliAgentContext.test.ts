@@ -65,6 +65,7 @@ describe('agent-context — 무엇이 실리는가', () => {
       'human',
       'quiet',
       'no-keepalive',
+      'verbose',
       'request-id',
       'help'
     ])

@@ -20,6 +20,30 @@ export interface ParsedArgs {
    *  nothing about whether it wants to be told that a one-hour wait is still alive. Folding them
    *  together would also leave no way to ask for one without the other. */
   noKeepalive: boolean
+  /** `--verbose`: diagnostics on stderr (cliVerbose.ts). A mode of this process, like the four above,
+   *  so it never reaches `args`, which go on the wire. */
+  verbose: boolean
+}
+
+/**
+ * The mode flags that may also come **before** the command: `astera --verbose jobs list`. They are
+ * modes of this process rather than arguments of a command, so where they sit on the line changes
+ * nothing; after the command they are read exactly the same way. Any other flag before the command
+ * is still refused, because it could only belong to a command that has not been named yet.
+ */
+const LEADING_MODES = new Set(['json', 'human', 'quiet', 'noKeepalive', 'verbose'])
+
+/** The flags before the command, and where the command starts. */
+export function leadingGlobals(argv: readonly string[]): { modes: Set<string>; start: number } | { error: string } {
+  const modes = new Set<string>()
+  let i = 0
+  while (i < argv.length && argv[i].startsWith('-')) {
+    const key = camel(argv[i].replace(/^--?/, ''))
+    if (!argv[i].startsWith('--') || !LEADING_MODES.has(key)) return { error: `expected a command, got flag: ${argv[i]}` }
+    modes.add(key)
+    i++
+  }
+  return { modes, start: i }
 }
 
 export const camel = (flag: string): string =>
@@ -129,10 +153,12 @@ export const RENAMED: Record<string, string> = {
 export const renamedTo = (cmd: string): string | undefined =>
   Object.hasOwn(RENAMED, cmd) ? RENAMED[cmd] : undefined
 
-export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
+export function parseArgs(all: string[]): ParsedArgs | { error: string } {
+  const lead = leadingGlobals(all)
+  if ('error' in lead) return lead
+  const argv = all.slice(lead.start)
   if (argv.length === 0) return { error: 'a command is required (try: help)' }
   let cmd = argv[0]
-  if (cmd.startsWith('-')) return { error: `expected a command, got flag: ${cmd}` }
   // The browser is the one two-word command: `astera browser js`, `astera browser help`. Joined here
   // into `browser-js` / `browser-help` so the server and the tests see one token, like every other
   // command. The rest of the line parses as flags from the third word on.
@@ -158,10 +184,11 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
 
   const args: Record<string, unknown> = {}
   const wantsStdin: string[] = []
-  let json = false
-  let human = false
-  let quiet = false
-  let noKeepalive = false
+  let json = lead.modes.has('json')
+  let human = lead.modes.has('human')
+  let quiet = lead.modes.has('quiet')
+  let noKeepalive = lead.modes.has('noKeepalive')
+  let verbose = lead.modes.has('verbose')
 
   for (let i = first; i < argv.length; i++) {
     const tok = argv[i]
@@ -185,6 +212,10 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     // this process, not an argument to any command, and everything in `args` goes on the wire.
     if (key === 'noKeepalive') {
       noKeepalive = true
+      continue
+    }
+    if (key === 'verbose') {
+      verbose = true
       continue
     }
     if (!hasValue) {
@@ -229,5 +260,5 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     // Only when neither --script nor --file was given; `--script -` already asked.
     if (!hasScript && !hasFile) wantsStdin.push('script')
   }
-  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive }
+  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive, verbose }
 }

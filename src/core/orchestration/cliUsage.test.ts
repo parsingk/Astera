@@ -88,6 +88,17 @@ describe('cliUsage — 세 층', () => {
     })
   })
 
+  it('명령 앞의 전역 모드 플래그는 건너뛰고 그 명령의 사용법을 낸다', () => {
+    expect(usageFor(['--verbose', 'jobs', 'list', '--help'])).toEqual({
+      text: expect.stringContaining('astera jobs list')
+    })
+    expect(usageFor(['--verbose', '--help'])).toEqual({ text: expect.stringContaining('commands:') })
+  })
+
+  it('루트 사용법은 --verbose 를 말한다', () => {
+    expect((usageFor(['--help']) as { text: string }).text).toContain('--verbose')
+  })
+
   it('browser 의 두 하위 명령도 같은 세 층이다', () => {
     const noun = (usageFor(['browser', '--help']) as { text: string }).text
     expect(noun).toContain('js')
@@ -412,6 +423,7 @@ describe('unknownFlagError — 공개 명령은 모르는 플래그를 거절한
   it('전역 플래그는 어느 공개 명령에서든 받는다', () => {
     expect(check('jobs list --json --request-id r1 --no-keepalive')).toBeNull()
     expect(check('jobs list --human')).toBeNull()
+    expect(check('jobs list --verbose')).toBeNull()
     expect(check('runs wait --id run_1 --quiet --timeout-ms 5')).toBeNull()
   })
 

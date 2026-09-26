@@ -434,7 +434,7 @@ Every command is a noun and a verb. A noun with no verb is rejected with the lis
 **A flag that a command does not take is refused with exit 2.** The message names the flag and lists
 the flags the command does take, and `nextSteps` is that command's `--help`. Nothing is mapped to a
 flag it resembles, so `--timeout 30m` is refused rather than read as `--timeout-ms`. The global flags
-(`--json`, `--human`, `--quiet`, `--no-keepalive`, `--request-id`) are never refused as unknown,
+(`--json`, `--human`, `--quiet`, `--no-keepalive`, `--verbose`, `--request-id`) are never refused as unknown,
 though a command can still refuse one for its own reason, as the `host` and `skills` commands do
 with `--request-id` (below). The
 commands agents use inside sessions (see the end of this section) are not checked this way: the guide
@@ -1068,6 +1068,20 @@ filter out of a pipeline: `astera runs wait --id "$run" | jq .data` is unaffecte
 turns the lines off for a caller that wants stderr empty; `2>/dev/null` does the same from the shell.
 `--quiet` does not turn them off, because it decides what stdout carries and this is the other
 channel.
+
+**`--verbose` says on stderr how the command got its answer**: which Host address it reached and on
+which profile, what the Host said in its handshake (its version, the protocol, its pid, when it
+started and the features it announced), and how long each call to it took and with what status.
+When no Host answers it says that too, and whether the state file answered instead. It is off unless
+you give it. stdout is exactly the same with or without it, so it is safe on any line a script
+parses. Like the mode flags above it can come before the command, as in `astera --verbose runs wait
+--id "$run"`, or after it.
+
+```text
+astera: verbose: Host address \\.\pipe\astera-host-9f2a (profile C:\Users\me\AppData\Roaming\astera)
+astera: verbose: handshake in 4ms: Host 1.4.0, protocol 3, pid 18244, started 2026-09-26T01:02:03.000Z, features orch, ping, requests
+astera: verbose: call jobs-list took 11ms: status 200
+```
 
 ## Exit codes
 

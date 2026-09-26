@@ -21,6 +21,7 @@ import {
   refusalDetailsOf,
   shownReceipt,
   callHost,
+  timedCall,
   connectFailureEnd,
   SILENT_HOST_CODE,
   resolveGuidePath,
@@ -38,6 +39,7 @@ import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orches
 import { KEEPALIVE_MS } from '../core/orchestration/cliKeepalive'
 import type { HostConnection } from '../core/host/connect'
 import type { ClientMessage, HostMessage } from '../core/host/protocol'
+import { verboseLog } from '../core/orchestration/cliVerbose'
 import {
   parsePendingReport,
   pendingReportFileName,
@@ -1064,6 +1066,39 @@ describe('callHost — 명령 하나를 Host 에 묻는다', () => {
       }
     }
   }
+
+  // `--verbose`: the round trip, timed, on the writer it is given (stderr in main). The answer itself is
+  // handed back untouched, so what reaches stdout cannot differ.
+  it('timedCall 은 --verbose 일 때 걸린 시간과 상태를 말하고, 답은 그대로 돌려준다', async () => {
+    const lines: string[] = []
+    const f = fakeConn()
+    const p = timedCall(verboseLog({ enabled: true, write: (l) => lines.push(l) }), {
+      conn: f.conn,
+      cmd: 'jobs-list',
+      args: {},
+      sessionId: '',
+      timeoutMs: 1000
+    })
+    const call = (f.sent[0] as { call: string }).call
+    f.answer({ t: 'orch-result', call, status: 200, body: { jobs: [] } })
+    expect(await p).toEqual({ status: 200, body: { jobs: [] } })
+    expect(lines).toEqual([expect.stringMatching(/^verbose: call jobs-list took \d+ms: status 200$/)])
+  })
+
+  it('timedCall 은 --verbose 가 없으면 아무 말도 하지 않는다', async () => {
+    const lines: string[] = []
+    const f = fakeConn()
+    const p = timedCall(verboseLog({ enabled: false, write: (l) => lines.push(l) }), {
+      conn: f.conn,
+      cmd: 'status',
+      args: {},
+      sessionId: '',
+      timeoutMs: 1000
+    })
+    f.drop()
+    expect(await p).toEqual({ unreachable: expect.any(String) })
+    expect(lines).toEqual([])
+  })
 
   it('명령과 인자와 세션을 한 줄로 보내고 그 답을 돌려준다', async () => {
     const f = fakeConn()

@@ -36,7 +36,7 @@
 //
 // The text is plain, not JSON, and no part of it needs a Host. `--help` is for a person, and a
 // person asking what the commands are must get an answer with nothing running.
-import { BROWSER_VERBS, NOUNS, camel, renamedTo, verbsOf } from './cliArgs'
+import { BROWSER_VERBS, NOUNS, camel, leadingGlobals, renamedTo, verbsOf } from './cliArgs'
 
 /** `jobs-wait`, `host-start`, … — every noun/verb pair `NOUNS` declares. */
 type NounCommand = {
@@ -470,6 +470,7 @@ export function rootUsage(): string {
     '',
     'output is JSON. --human prints aligned columns for reading, --quiet prints ids only.',
     'while a wait is on, a line every 15s goes to stderr, never stdout. --no-keepalive stops them.',
+    '--verbose says on stderr which Host was reached, its handshake, and how long each call took.',
     // **The one flag here that changes what happens rather than how it is printed.** It was missing,
     // and `requests show`'s own usage text refers to it by name — so a person sent to that command
     // had no way to learn it from `--help`, which is the level that answers with nothing running.
@@ -574,8 +575,12 @@ export function usageFor(
   sessionUsage: (name: string) => CommandUsage | undefined = () => undefined
 ): { text: string } | { error: string } | null {
   if (!argv.some((t) => HELP_TOKENS.has(t))) return null
+  // The mode flags a line may start with (`astera --verbose jobs list --help`) are skipped, so the
+  // command after them is the one described. A line that starts with any other flag gets the root.
+  const lead = leadingGlobals(argv.filter((t) => !HELP_TOKENS.has(t)))
+  const from = 'error' in lead ? 0 : lead.start
   const words: string[] = []
-  for (const tok of argv) {
+  for (const tok of argv.filter((t) => !HELP_TOKENS.has(t)).slice(from)) {
     if (tok.startsWith('-')) break
     words.push(tok)
   }
@@ -616,7 +621,7 @@ export function usageFor(
  * than by any one command, so no `USAGE` entry lists them. cliAgentContext.ts describes each one
  * (`globalFlags`), and cliUsage.test.ts holds the two lists to the same names.
  */
-export const GLOBAL_FLAGS: readonly string[] = ['json', 'human', 'quiet', 'no-keepalive', 'request-id', 'help']
+export const GLOBAL_FLAGS: readonly string[] = ['json', 'human', 'quiet', 'no-keepalive', 'verbose', 'request-id', 'help']
 
 /** Flags a public command really reads that its `USAGE` entry leaves out on purpose. `--skills-dir`
  *  is the one, and the comment on `help` above says why it is not listed. */
@@ -660,5 +665,5 @@ export function unknownFlagError(cmd: string, argv: readonly string[]): string |
     own.length === 0
       ? `it takes no flags of its own`
       : `its flags are ${own.map((n) => `--${n}`).join(', ')}`
-  return `${spelledCommand(cmd)} does not take ${named}: ${takes}, plus the global ones (--json, --human, --quiet, --no-keepalive, --request-id)`
+  return `${spelledCommand(cmd)} does not take ${named}: ${takes}, plus the global ones (--json, --human, --quiet, --no-keepalive, --verbose, --request-id)`
 }

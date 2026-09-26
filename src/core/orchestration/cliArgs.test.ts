@@ -304,3 +304,25 @@ describe('없어진 이름', () => {
     expect(parseArgs(['gate-resolve', '--id', 'g1'])).toMatchObject({ cmd: 'gate-resolve' })
   })
 })
+
+describe('parseArgs — --verbose and the globals before the command', () => {
+  it('--verbose is a mode, not an argument, after the command', () => {
+    const r = parseArgs(['jobs', 'list', '--verbose'])
+    expect(r).toMatchObject({ cmd: 'jobs-list', verbose: true })
+    expect((r as { args: Record<string, unknown> }).args.verbose).toBeUndefined()
+  })
+
+  it('it is off unless given', () => {
+    expect(parseArgs(['jobs', 'list'])).toMatchObject({ verbose: false })
+  })
+
+  it('the mode flags may also come before the command', () => {
+    const r = parseArgs(['--verbose', '--human', 'jobs', 'list'])
+    expect(r).toMatchObject({ cmd: 'jobs-list', verbose: true, human: true })
+  })
+
+  it('any other flag before the command is still refused', () => {
+    expect(parseArgs(['--id', 'x', 'jobs', 'list'])).toEqual({ error: 'expected a command, got flag: --id' })
+    expect(parseArgs(['--verbose'])).toEqual({ error: 'a command is required (try: help)' })
+  })
+})

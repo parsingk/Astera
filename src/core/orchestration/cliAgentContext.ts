@@ -483,6 +483,13 @@ const GLOBAL: readonly AgentContextFlag[] = [
     about: 'do not print the waiting line on stderr every 15s while a waiting command waits'
   },
   {
+    name: 'verbose',
+    takesValue: false,
+    required: false,
+    about:
+      'diagnostics on stderr: the Host address, the handshake, and how long each call took. stdout is exactly the same with or without it. It may also come before the command.'
+  },
+  {
     name: 'request-id',
     takesValue: true,
     required: false,
