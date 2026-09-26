@@ -43,13 +43,22 @@ describe('createMergeRecorder (carry 1)', () => {
     await rec.end(id)
     expect(await read()).toMatchObject([{ id, headBefore: 'c0', headAfter: 'c1', endedAt: '2026-09-24T10:00:00.000Z' }])
   })
-  it('keeps the newest HOST_MERGES_KEPT records', async () => {
-    const rec = createMergeRecorder({ file, headOf: async () => 'h', now: () => '2026-09-24T10:00:00.000Z', log: () => {} })
-    for (let i = 0; i < HOST_MERGES_KEPT + 3; i++) await rec.end(await rec.begin(path.join(dir, `r${i}`)))
-    const kept = await read()
-    expect(kept).toHaveLength(HOST_MERGES_KEPT)
-    expect(kept.at(-1)?.projectPath).toBe(path.join(dir, `r${HOST_MERGES_KEPT + 2}`))
-  })
+  // Real disk I/O, HOST_MERGES_KEPT + 3 times over (each begin/end reads, writes a tmp file and
+  // renames it): on a loaded machine the retries in renameRetrying/readFileRetrying (real setTimeout
+  // backoff on a transient Windows EBUSY/EPERM) push this past the suite's default 10s testTimeout,
+  // the way a loaded CI runner overran hookTimeout for the worktree fixtures (vitest.config.ts). Not
+  // fewer records — the point is exactly that HOST_MERGES_KEPT are kept — so it gets its own budget.
+  it(
+    'keeps the newest HOST_MERGES_KEPT records',
+    async () => {
+      const rec = createMergeRecorder({ file, headOf: async () => 'h', now: () => '2026-09-24T10:00:00.000Z', log: () => {} })
+      for (let i = 0; i < HOST_MERGES_KEPT + 3; i++) await rec.end(await rec.begin(path.join(dir, `r${i}`)))
+      const kept = await read()
+      expect(kept).toHaveLength(HOST_MERGES_KEPT)
+      expect(kept.at(-1)?.projectPath).toBe(path.join(dir, `r${HOST_MERGES_KEPT + 2}`))
+    },
+    30_000
+  )
   it('a file it cannot write costs the merge nothing: begin still answers an id, and the failure is logged', async () => {
     await fs.mkdir(file, { recursive: true }) // a directory where the file should be
     const logs: string[] = []

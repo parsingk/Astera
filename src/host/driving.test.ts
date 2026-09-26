@@ -601,11 +601,15 @@ describe('createHostDriving', () => {
     await h.tickNow()
     h.clock += 61_000
     await h.tickNow()
-    await h.settle()
     const child = h.orch.state().runs.find((r) => r.jobId === 'job_sched')!
+    // The fire's placement is the tick's own kick, run fire-and-forget (driving.ts's `kick`): under
+    // load a fixed settle() is not always enough for it to land, so this waits for it instead. Waits
+    // on the startWorker call itself, not the Task's status: openDispatch commits 'dispatched' before
+    // startWorker is even called (command.ts), so status alone would resolve one microtask early.
+    await vi.waitFor(() => expect(h.local.startWorker).toHaveBeenCalled())
     const copy = h.orch.state().tasks.find((t) => t.runId === child.id)!
-    expect(copy.status).toBe('dispatched')
     expect(h.local.startWorker).toHaveBeenCalledWith(expect.objectContaining({ taskId: copy.id }))
+    expect(copy.status).toBe('dispatched')
     expect(h.local.startCoordinator).not.toHaveBeenCalled()
   })
 
