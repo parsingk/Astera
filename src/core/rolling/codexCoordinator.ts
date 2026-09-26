@@ -231,8 +231,9 @@ interface Chain {
   lastOutputAt: number
   rolling: boolean
   locateTimer: ReturnType<typeof setTimeout> | null
-  /** When a blank-slate roll spawned the live session, until its rollout is found (S6 Task 12, carry
-   *  C-b): written into the snapshot while rolloutPath is null, so a restore can look for that file. */
+  /** When a spawn that has to look for its rollout started (a fresh spawn or a blank-slate roll), until
+   *  that rollout is found (S6 Task 12 carry C-b, LP-4): written into the snapshot while rolloutPath is
+   *  null, so a restore can look for that file. */
   locateSince: number | null
   waitTimer: ReturnType<typeof setTimeout> | null
   healthyTimer: ReturnType<typeof setTimeout> | null
@@ -889,6 +890,10 @@ export class CodexRollingCoordinator {
    *  same way register() does for a brand-new chain. The exclude list the re-locate after an ordinary
    *  (non-blank-slate) roll used to need went away with that roll's `attachRollout` call instead. */
   private startLocate(chain: Chain, account: Account | null, bound?: { since: number; bornBefore?: number }): void {
+    // LP-4: every locate writes down when to look from, not only a blank-slate respawn's: a fresh spawn
+    // (register) that dies before its file is found is then restored mapped instead of unmapped. The
+    // snapshot carries it only while rolloutPath is null, and a hit clears it.
+    chain.locateSince = bound?.since ?? this.now()
     if (!account) {
       this.deps.log(`codex locate aborted — no such account session=${chain.liveId}`)
       return

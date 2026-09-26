@@ -2600,6 +2600,38 @@ describe('codex snapshots and restore (S6 R4)', () => {
     h2.coord.stop()
   })
 
+  // LP-4: every codex spawn that has to look for its rollout writes locateSince, not only a blank slate.
+  // A fresh spawn (register with locate) that dies before its locate finds the file is restored mapped.
+  it('a fresh codex spawn’s snapshot names locateSince until its rollout is found, and restores mapped (LP-4)', async () => {
+    const snaps: { id: string; s: RollSnapshot }[] = []
+    const h = harness({ snapshot: (id, s) => snaps.push({ id, s }) })
+    const info = { ...h.info1, cwd: path.join(tmp, 'work', 'fresh') }
+    h.coord.register(info)
+    const unmapped = parseRollSnapshot(JSON.parse(JSON.stringify(snaps.filter((x) => x.id === 's1').at(-1)!.s)))!
+    expect(unmapped.codex).toMatchObject({ sessionId: null, rolloutPath: null })
+    expect(typeof unmapped.codex?.locateSince).toBe('number')
+    h.coord.stop() // the app dies before its own locate finds the new file
+    const born = await writeRollout({ accountId: 'c1', uuid: 'cx-fresh', cwd: info.cwd, primary: 5 })
+    const h2 = harness()
+    expect(h2.coord.restore(info, unmapped)).toBe(true)
+    await advance(1_500)
+    expect(h2.coord.rolloutPathFor('s1')).toBe(born)
+    h2.coord.stop()
+  })
+
+  it('once the fresh spawn’s rollout is found, the snapshot names the file and no locateSince (LP-4)', async () => {
+    const snaps: { id: string; s: RollSnapshot }[] = []
+    const h = harness({ snapshot: (id, s) => snaps.push({ id, s }) })
+    const info = { ...h.info1, cwd: path.join(tmp, 'work', 'fresh2') }
+    h.coord.register(info)
+    const born = await writeRollout({ accountId: 'c1', uuid: 'cx-fresh2', cwd: info.cwd, primary: 5 })
+    await advance(1_500)
+    const last = snaps.filter((x) => x.id === 's1').at(-1)!.s
+    expect(last.codex?.rolloutPath).toBe(born)
+    expect(last.codex?.locateSince).toBeUndefined()
+    h.coord.stop()
+  })
+
   const codexWaitSnap = (at: number): RollSnapshot => ({
     v: 1, provider: 'codex', accountIds: ['c1'], currentIndex: 0, streak: 1, recovery: [null], blocks: {},
     wait: { retryAt: at, target: 0, weekly: false }, inPlaceUsed: false, rolledAt: null, awaitingPrompt: false,
