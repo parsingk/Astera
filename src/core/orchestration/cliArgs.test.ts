@@ -326,3 +326,23 @@ describe('parseArgs — --verbose and the globals before the command', () => {
     expect(parseArgs(['--verbose'])).toEqual({ error: 'a command is required (try: help)' })
   })
 })
+
+describe('parseArgs — the global --project, before the command', () => {
+  it('is read before the command and kept out of args', () => {
+    const r = parseArgs(['--project', '/work/p', 'jobs', 'list'])
+    expect(r).toMatchObject({ cmd: 'jobs-list', project: '/work/p' })
+    expect((r as { args: Record<string, unknown> }).args.project).toBeUndefined()
+  })
+
+  it("after the command it is that command's own flag, in args", () => {
+    const r = parseArgs(['jobs', 'list', '--project', '/work/q'])
+    expect(r).toMatchObject({ cmd: 'jobs-list', args: { project: '/work/q' } })
+    expect((r as { project?: string }).project).toBeUndefined()
+  })
+
+  it('needs a value', () => {
+    expect(parseArgs(['--project', 'jobs'])).toEqual({ error: 'a command is required (try: help)' })
+    expect(parseArgs(['--project', '--verbose', 'jobs', 'list'])).toEqual({ error: '--project needs a path' })
+    expect(parseArgs(['--project'])).toEqual({ error: '--project needs a path' })
+  })
+})

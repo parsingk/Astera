@@ -397,7 +397,8 @@ describe('unknownFlagError — 공개 명령은 모르는 플래그를 거절한
 
   it('감사가 실행으로 본 무시 사례가 전부 거절된다', () => {
     for (const line of [
-      'sessions list --project p_x',
+      'tasks list --project p_x',
+      'runs get --id run_1 --project /work/p',
       'runs get --id run_1 --follow',
       'status --no-color',
       'host stop --force'
@@ -411,13 +412,24 @@ describe('unknownFlagError — 공개 명령은 모르는 플래그를 거절한
     for (const line of [
       'jobs list --project /work/p --status running',
       'sessions list --provider claude --status alive',
-      'questions list --run run_1 --status open'
+      'questions list --run run_1 --status open',
+      'runs list --project /work/p --job job_1',
+      'sessions list --project /work/p'
     ])
       expect(check(line), line).toBeNull()
   })
 
   it('플래그가 없는 명령은 그렇다고 말한다', () => {
     expect(check('projects list --project p_x')).toContain('takes no flags of its own')
+  })
+
+  // The global --project goes before the command. What unknownFlagError sees is the line from the
+  // command on (run.ts), so a leading one never reaches it; after the command it is the command's own.
+  it('명령 앞의 --project 는 명령의 플래그 검사에 닿지 않는다', () => {
+    const argv = ['--project', '/work/p', 'runs', 'get', '--id', 'run_1']
+    const parsed = parseArgs(argv)
+    if ('error' in parsed) throw new Error(parsed.error)
+    expect(unknownFlagError(parsed.cmd, argv.slice(2))).toBeNull()
   })
 
   it('전역 플래그는 어느 공개 명령에서든 받는다', () => {

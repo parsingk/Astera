@@ -23,6 +23,10 @@ export interface ParsedArgs {
   /** `--verbose`: diagnostics on stderr (cliVerbose.ts). A mode of this process, like the four above,
    *  so it never reaches `args`, which go on the wire. */
   verbose: boolean
+  /** The global `--project <path>`, given **before** the command: a default project for the commands
+   *  that take one (`jobs list`, `runs list`, `sessions list`). After the command, `--project` is that
+   *  command's own flag and lands in `args`, where it wins over this. Absent when not given. */
+  project?: string
 }
 
 /**
@@ -33,17 +37,29 @@ export interface ParsedArgs {
  */
 const LEADING_MODES = new Set(['json', 'human', 'quiet', 'noKeepalive', 'verbose'])
 
-/** The flags before the command, and where the command starts. */
-export function leadingGlobals(argv: readonly string[]): { modes: Set<string>; start: number } | { error: string } {
+/** The flags before the command, and where the command starts. `--project <path>` is the one leading
+ *  flag with a value: before the command it is the global default (`ParsedArgs.project`), which is the
+ *  only way to tell it from a command's own `--project`, spelled the same. */
+export function leadingGlobals(
+  argv: readonly string[]
+): { modes: Set<string>; project?: string; start: number } | { error: string } {
   const modes = new Set<string>()
+  let project: string | undefined
   let i = 0
   while (i < argv.length && argv[i].startsWith('-')) {
     const key = camel(argv[i].replace(/^--?/, ''))
+    if (argv[i] === '--project') {
+      const value = argv[i + 1]
+      if (value === undefined || value.startsWith('--') || value === '') return { error: '--project needs a path' }
+      project = value
+      i += 2
+      continue
+    }
     if (!argv[i].startsWith('--') || !LEADING_MODES.has(key)) return { error: `expected a command, got flag: ${argv[i]}` }
     modes.add(key)
     i++
   }
-  return { modes, start: i }
+  return { modes, ...(project === undefined ? {} : { project }), start: i }
 }
 
 export const camel = (flag: string): string =>
@@ -260,5 +276,5 @@ export function parseArgs(all: string[]): ParsedArgs | { error: string } {
     // Only when neither --script nor --file was given; `--script -` already asked.
     if (!hasScript && !hasFile) wantsStdin.push('script')
   }
-  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive, verbose }
+  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive, verbose, ...(lead.project === undefined ? {} : { project: lead.project }) }
 }

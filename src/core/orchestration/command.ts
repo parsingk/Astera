@@ -74,10 +74,12 @@ import {
   type Job,
   type JobRun,
   type MessageType,
+  type Project,
   type Task,
   type TaskStatus
 } from './types'
 import { runWorktrees } from './integrate'
+import { isPathWithin } from '../files/tree'
 import { buildHandoverPrompt } from './handover'
 import { parseReviewFile, type ReviewIssueInput } from './review'
 import { nameForRun } from '../worktrees/naming'
@@ -850,6 +852,17 @@ function enumFilter<T extends string>(
   return { value: given as T }
 }
 
+/** A list command's `--project`: the project that holds the folder (`findProjectContaining`, the
+ *  rule `projects find` uses), `undefined` when the flag was not given, or the refusal: a bare or empty
+ *  flag is 400 (never "no filter"), a folder no project holds is 404. */
+function projectFilter(s: OrchState, given: unknown): { project: Project | undefined } | { error: Reply } {
+  if (given === undefined) return { project: undefined }
+  const p = str(given)
+  if (p === null) return { error: bad('--project needs a value: a project folder (from `projects list`)') }
+  const project = findProjectContaining(s, p)
+  return project ? { project } : { error: notFound(`no project registered for: ${p}`) }
+}
+
 const POLL_MS = 50
 
 /** How long one `runs-follow` call holds before it answers with nothing new (CLI spec §22). The client
@@ -1483,7 +1496,17 @@ export async function handleCommand(
       // A named Job that is not there is a 404, not an empty list, for the reason tasks-list gives
       // for its `--run`: the list would read as "that Job has no runs" (conformance audit #101).
       if (job && !s.jobs.some((j) => j.id === job)) return notFound(`unknown job: ${job}`)
-      const runs = job ? s.runs.filter((r) => r.jobId === job) : s.runs
+      let runs = job ? s.runs.filter((r) => r.jobId === job) : s.runs
+      // `--project` (CLI spec §24's global default lands here too): the runs of the project's Jobs.
+      const inProject = projectFilter(s, args.project)
+      if ('error' in inProject) return inProject.error
+      if (inProject.project) {
+        const project = inProject.project
+        runs = runs.filter((r) => {
+          const j = jobOf(s, r)
+          return j !== undefined && jobInProject(s, j, project)
+        })
+      }
       return okBody([...runs].sort((a, b) => a.ordinal - b.ordinal).map((r) => runView(s, r)))
     }
     /**
@@ -1784,11 +1807,10 @@ export async function handleCommand(
       const status = enumFilter('status', args.status, JOB_STATES)
       if ('error' in status) return bad(status.error)
       let jobs = s.jobs
-      if (args.project !== undefined) {
-        const p = str(args.project)
-        if (p === null) return bad('--project needs a value: a project folder (from `projects list`)')
-        const project = findProjectContaining(s, p)
-        if (!project) return notFound(`no project registered for: ${p}`)
+      const inProject = projectFilter(s, args.project)
+      if ('error' in inProject) return inProject.error
+      if (inProject.project) {
+        const project = inProject.project
         jobs = jobs.filter((j) => jobInProject(s, j, project))
       }
       const views = jobs.map((j) => jobView(s, j, latestRunOf(s, j)))
@@ -3435,7 +3457,26 @@ export async function handleCommand(
         if ('error' in status) return bad(status.error)
         const provider = enumFilter('provider', args.provider, ['claude', 'codex'] as const)
         if ('error' in provider) return bad(provider.error)
+        const inProject = projectFilter(s, args.project)
+        if ('error' in inProject) return inProject.error
         let rows = await deps.listSessions()
+        // `--project`: a session whose folder is inside the project, or one a Run of the project's Jobs
+        // started, a worker (its Dispatch) or a coordinator (the Run's slot), wherever its worktree is.
+        if (inProject.project) {
+          const project = inProject.project
+          const runIds = new Set(
+            s.runs.filter((r) => {
+              const j = jobOf(s, r)
+              return j !== undefined && jobInProject(s, j, project)
+            }).map((r) => r.id)
+          )
+          const taskRun = new Map(s.tasks.map((t) => [t.id, t.runId]))
+          const theirs = new Set([
+            ...s.dispatches.filter((d) => runIds.has(taskRun.get(d.taskId) ?? '')).map((d) => d.sessionId),
+            ...s.runs.filter((r) => runIds.has(r.id) && r.coordinatorSessionId !== undefined).map((r) => r.coordinatorSessionId!)
+          ])
+          rows = rows.filter((x) => theirs.has(x.id) || (x.cwd !== null && isPathWithin(project.path, x.cwd)))
+        }
         if (status.value === 'alive' || status.value === 'ended')
           rows = rows.filter((x) => x.alive === (status.value === 'alive'))
         else if (status.value !== undefined) rows = rows.filter((x) => x.state === status.value)

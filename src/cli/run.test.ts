@@ -11,6 +11,7 @@ import {
   applyStdin,
   clientTimeoutMs,
   argsForCall,
+  withDefaultProject,
   liftRequestId,
   mintRequestId,
   requestForHost,
@@ -226,6 +227,45 @@ describe('clientTimeoutMs', () => {
     const headroom = clientTimeoutMs({ cmd: 'ask', args: { timeoutMs: 1000 } }) - 1000
     expect(clientTimeoutMs({ cmd: 'ask', args: { timeoutMs: 5000 } })).toBe(5000 + headroom)
     expect(clientTimeoutMs({ cmd: 'check', args: { timeoutMs: 5000 } })).toBe(5000 + headroom)
+  })
+})
+
+describe('withDefaultProject — the global --project is a default for the list commands', () => {
+  it('fills --project on a list command that takes one', () => {
+    for (const cmd of ['jobs-list', 'runs-list', 'sessions-list'])
+      expect(withDefaultProject({ cmd, args: {}, project: '/work/p' }), cmd).toEqual({ project: '/work/p' })
+  })
+
+  it('an explicit per-command --project wins', () => {
+    expect(withDefaultProject({ cmd: 'jobs-list', args: { project: '/work/q' }, project: '/work/p' })).toEqual({
+      project: '/work/q'
+    })
+  })
+
+  it('a command that takes no project is left alone', () => {
+    expect(withDefaultProject({ cmd: 'runs-get', args: { id: 'r' }, project: '/work/p' })).toEqual({ id: 'r' })
+    expect(withDefaultProject({ cmd: 'tasks-list', args: {}, project: '/work/p' })).toEqual({})
+  })
+
+  it('no global, no change', () => {
+    const args = { status: 'open' }
+    expect(withDefaultProject({ cmd: 'jobs-list', args, project: undefined })).toBe(args)
+  })
+})
+
+describe('argsForCall — a project path is resolved here, not by the Host', () => {
+  const here = path.resolve('/work/repo/sub')
+  it('a relative --project and projects find --path are resolved against the CLI cwd', () => {
+    expect(argsForCall({ cmd: 'jobs-list', args: { project: '.' }, cwd: here })).toEqual({ project: here })
+    expect(argsForCall({ cmd: 'sessions-list', args: { project: '..' }, cwd: here })).toEqual({
+      project: path.resolve(here, '..')
+    })
+    expect(argsForCall({ cmd: 'projects-find', args: { path: '.' }, cwd: here })).toEqual({ path: here })
+  })
+
+  it('an absolute one goes as given', () => {
+    const abs = path.resolve('/else')
+    expect(argsForCall({ cmd: 'runs-list', args: { project: abs }, cwd: here })).toEqual({ project: abs })
   })
 })
 

@@ -185,7 +185,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
 
   'runs-list': {
     summary: 'every run, oldest first',
-    flags: [{ name: 'job', value: '<jobId>', about: 'only the runs of this Job' }]
+    detail:
+      "--project keeps the runs of the project's Jobs, the project found the way `projects find` finds it; a folder no project holds is 4. It combines with --job.",
+    flags: [
+      { name: 'job', value: '<jobId>', about: 'only the runs of this Job' },
+      { name: 'project', value: '<path>', about: 'only the runs of the project at this folder' }
+    ]
   },
   'runs-get': { summary: 'one run', flags: [ID('<runId>', 'the run to read')] },
   'runs-wait': {
@@ -317,10 +322,15 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-list': {
     summary: 'the agent sessions the Host holds, running and ended',
     detail:
-      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2.',
+      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2. --project keeps the sessions whose folder is inside the project (found the way `projects find` finds it), and the workers and coordinators of its runs wherever their worktree is; a folder no project holds is 4.',
     flags: [
       { name: 'status', value: '<alive|ended|working|waiting|unknown>', about: 'only sessions in this state' },
-      { name: 'provider', value: '<claude|codex>', about: "only sessions on this vendor's accounts" }
+      { name: 'provider', value: '<claude|codex>', about: "only sessions on this vendor's accounts" },
+      {
+        name: 'project',
+        value: '<path>',
+        about: "only the sessions in the project's folder, and the workers and coordinators of its runs"
+      }
     ]
   },
   'sessions-read': {
@@ -471,6 +481,7 @@ export function rootUsage(): string {
     'output is JSON. --human prints aligned columns for reading, --quiet prints ids only.',
     'while a wait is on, a line every 15s goes to stderr, never stdout. --no-keepalive stops them.',
     '--verbose says on stderr which Host was reached, its handshake, and how long each call took.',
+    'astera --project <path> <command> filters jobs list, runs list and sessions list to that project.',
     // **The one flag here that changes what happens rather than how it is printed.** It was missing,
     // and `requests show`'s own usage text refers to it by name — so a person sent to that command
     // had no way to learn it from `--help`, which is the level that answers with nothing running.
@@ -621,7 +632,22 @@ export function usageFor(
  * than by any one command, so no `USAGE` entry lists them. cliAgentContext.ts describes each one
  * (`globalFlags`), and cliUsage.test.ts holds the two lists to the same names.
  */
-export const GLOBAL_FLAGS: readonly string[] = ['json', 'human', 'quiet', 'no-keepalive', 'verbose', 'request-id', 'help']
+export const GLOBAL_FLAGS: readonly string[] = [
+  'json',
+  'human',
+  'quiet',
+  'no-keepalive',
+  'verbose',
+  'project',
+  'request-id',
+  'help'
+]
+
+/** Global flags that go **before** the command only. After the command `--project` is a command's own
+ *  flag, accepted where `USAGE` declares it and refused elsewhere: accepting it on every command would
+ *  let `runs get --project p` run and ignore it, the fault this check exists for. run.ts hands this
+ *  check the line from the command on, so a leading `--project` never reaches it. */
+const LEADING_ONLY: ReadonlySet<string> = new Set(['project'])
 
 /** Flags a public command really reads that its `USAGE` entry leaves out on purpose. `--skills-dir`
  *  is the one, and the comment on `help` above says why it is not listed. */
@@ -654,7 +680,9 @@ export function unknownFlagError(cmd: string, argv: readonly string[]): string |
   if (!Object.hasOwn(USAGE, cmd)) return null
   const pc = cmd as PublicCommand
   const own = (USAGE[pc].flags ?? []).map((f) => f.name)
-  const allowed = new Set([...own, ...(UNLISTED[pc] ?? []), ...GLOBAL_FLAGS].map(camel))
+  const allowed = new Set(
+    [...own, ...(UNLISTED[pc] ?? []), ...GLOBAL_FLAGS.filter((f) => !LEADING_ONLY.has(f))].map(camel)
+  )
   const unknown = argv
     .filter((t) => t.startsWith('--'))
     .map((t) => t.slice(2))

@@ -313,3 +313,66 @@ describe('projects find — a path inside a project names that project', () => {
     expect(ids(r.body)).toEqual([deps.getState().jobs[0].id])
   })
 })
+
+describe('runs list --project and sessions list --project', () => {
+  const root = absPath('work', 'proj')
+  const other = absPath('work', 'other')
+  const seeded = async (
+    extra: Partial<OrchServerDeps> = {}
+  ): Promise<{ deps: OrchServerDeps; mine: string; theirs: string }> => {
+    const a = ensureProject(emptyState(), { path: root, now: NOW })
+    const b = ensureProject(a.state, { path: other, now: NOW })
+    const deps = makeDeps(b.state, extra)
+    await call(deps, 'run-create', { objective: 'mine', cwd: root })
+    const mine = deps.getState().runs.at(-1)!.id
+    await call(deps, 'run-create', { objective: 'theirs', cwd: other })
+    const theirs = deps.getState().runs.at(-1)!.id
+    return { deps, mine, theirs }
+  }
+
+  it("runs list --project keeps the runs of that project's Jobs", async () => {
+    const { deps, mine } = await seeded()
+    const r = await call(deps, 'runs-list', { project: absPath('work', 'proj', 'src') })
+    expect(r.status).toBe(200)
+    expect(ids(r.body)).toEqual([mine])
+  })
+
+  it('runs list --project combines with --job, and an unknown folder is 4, a bare flag 2', async () => {
+    const { deps, theirs } = await seeded()
+    const jobOfTheirs = deps.getState().runs.find((x) => x.id === theirs)!.jobId
+    expect(ids((await call(deps, 'runs-list', { project: root, job: jobOfTheirs })).body)).toEqual([])
+    expect((await call(deps, 'runs-list', { project: absPath('nowhere') })).status).toBe(404)
+    expect((await call(deps, 'runs-list', { project: true })).status).toBe(400)
+  })
+
+  it('sessions list --project keeps the sessions in the folder, and the workers of its runs wherever they run', async () => {
+    const rows: HostSession[] = [
+      { id: 'in_root', kind: 'terminal', title: 'a', accountId: 'acc_c', cwd: absPath('work', 'proj', 'pkg'), alive: true, state: 'unknown' },
+      { id: 'elsewhere', kind: 'terminal', title: 'b', accountId: 'acc_c', cwd: other, alive: true, state: 'unknown' },
+      { id: 'no_cwd', kind: 'chat', title: 'c', accountId: 'acc_c', cwd: null, alive: true, state: 'unknown' },
+      // A worker in a worktree outside the project folder, found by its Dispatch.
+      { id: 'worker_1', kind: 'terminal', title: 'd', accountId: 'acc_x', cwd: absPath('wt', 'x'), alive: true, state: 'unknown' }
+    ]
+    const { deps, mine } = await seeded({
+      listSessions: async () => rows,
+      readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }),
+      sendSession: async () => {},
+      readChat: async () => [],
+      chatSend: async () => ({ sent: true }),
+      startWorker: async () => ({ sessionId: 'worker_1', cwd: absPath('wt', 'x'), specPath: 'S' })
+    })
+    const t = await call(deps, 'task-create', { run: mine, title: 't', spec: 's', account: 'acc_x' })
+    const started = await call(deps, 'worker-start', {
+      task: (t.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc_x',
+      worktree: 'current'
+    })
+    expect(started.status).toBe(200)
+    const r = await call(deps, 'sessions-list', { project: root })
+    expect(r.status).toBe(200)
+    expect(ids(r.body).sort()).toEqual(['in_root', 'worker_1'])
+    expect((await call(deps, 'sessions-list', { project: absPath('nowhere') })).status).toBe(404)
+    expect((await call(deps, 'sessions-list', { project: '' })).status).toBe(400)
+  })
+})

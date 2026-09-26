@@ -490,6 +490,13 @@ const GLOBAL: readonly AgentContextFlag[] = [
       'diagnostics on stderr: the Host address, the handshake, and how long each call took. stdout is exactly the same with or without it. It may also come before the command.'
   },
   {
+    name: 'project',
+    takesValue: true,
+    required: false,
+    about:
+      'before the command only (`astera --project <path> jobs list`): the default project for jobs list, runs list and sessions list, found the way `projects find` finds it. A relative path is taken from the current directory. A --project after the command belongs to that command and wins; other commands ignore the default.'
+  },
+  {
     name: 'request-id',
     takesValue: true,
     required: false,

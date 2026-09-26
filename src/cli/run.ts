@@ -7,7 +7,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os, { homedir } from 'node:os'
-import { parseArgs } from '../core/orchestration/cliArgs'
+import { leadingGlobals, parseArgs } from '../core/orchestration/cliArgs'
 import { publicEvent, publicFor } from '../core/orchestration/cliPublic'
 import { eventKey, followLine } from '../core/orchestration/cliFollow'
 import { FOLLOW_WINDOW_MS } from '../core/orchestration/command'
@@ -267,6 +267,16 @@ export function argsForCall(a: {
   /** The CLI process's own process.cwd(). */
   cwd: string
 }): Record<string, unknown> {
+  // **A project path is resolved here too** (`--project`, `projects find --path`): the Host resolves a
+  // relative path against its own working directory, which is not the shell's, so `--project .` would
+  // name whatever folder the Host was started in.
+  const pathKey = a.cmd === 'projects-find' ? 'path' : PROJECT_COMMANDS.has(a.cmd) ? 'project' : null
+  if (pathKey !== null) {
+    const p = a.args[pathKey]
+    return typeof p === 'string' && p.length > 0 && !path.isAbsolute(p)
+      ? { ...a.args, [pathKey]: path.resolve(a.cwd, p) }
+      : a.args
+  }
   const given = typeof a.args.cwd === 'string' && a.args.cwd.length > 0 ? a.args.cwd : null
   // `jobs create` is run-create under its public name (command.ts), so it needs the same default.
   if (a.cmd !== 'run-create' && a.cmd !== 'jobs-create') return a.args
@@ -274,6 +284,27 @@ export function argsForCall(a: {
   // **An explicit relative path is resolved here too, for the same reason.** Sent as typed, `--cwd .`
   // is resolved against whichever process answers it, and the Job's workers start there.
   return path.isAbsolute(given) ? a.args : { ...a.args, cwd: path.resolve(a.cwd, given) }
+}
+
+/** The commands that take a project (`--project <path>`): the lists a project narrows. The global
+ *  `--project`, before the command, fills theirs in (`withDefaultProject`). */
+const PROJECT_COMMANDS: ReadonlySet<string> = new Set(['jobs-list', 'runs-list', 'sessions-list'])
+
+/**
+ * The global `--project` as the default of a command's own (CLI spec §24).
+ *
+ * **Only for the commands that take a project**, and **only when the command was not given one**: a
+ * `--project` after the command is the more specific ask and wins. Every other command ignores the
+ * default, as it would ignore an environment variable it does not read; the same line can then carry
+ * the default in front of any command, which is what a default is for.
+ */
+export function withDefaultProject(a: {
+  cmd: string
+  args: Record<string, unknown>
+  project: string | undefined
+}): Record<string, unknown> {
+  if (a.project === undefined || !PROJECT_COMMANDS.has(a.cmd) || a.args.project !== undefined) return a.args
+  return { ...a.args, project: a.project }
 }
 
 /**
@@ -966,7 +997,10 @@ export async function main(): Promise<void> {
 
   // **공개 명령은 선언하지 않은 플래그를 거절한다**(cliUsage.ts 의 unknownFlagError). 무시하면
   // `runs wait --timeout 30m` 이 기본 한 시간을 기다린다. 세션 전용 명령은 예전처럼 지나간다.
-  const flagError = unknownFlagError(parsed.cmd, argv)
+  // From the command on: the global flags before it (`--project <path>`, the modes) are not the
+  // command's, and a leading `--project` must not be judged as that command's own flag.
+  const lead = leadingGlobals(argv)
+  const flagError = unknownFlagError(parsed.cmd, 'error' in lead ? argv : argv.slice(lead.start))
   if (flagError !== null) fail({ code: 'INVALID_ARGUMENTS', message: flagError })
 
   // **스키마도 Host 없이 답한다** — `--help` 와 같은 자리다(cliAgentContext.ts). 물어본 것이 "이
@@ -1044,7 +1078,7 @@ export async function main(): Promise<void> {
   // other flag with a `-` does.
   const lifted = liftRequestId(args)
   if ('error' in lifted) fail({ code: 'INVALID_ARGUMENTS', message: lifted.error })
-  args = lifted.args
+  args = withDefaultProject({ cmd: parsed.cmd, args: lifted.args, project: parsed.project })
   /** **Every invocation carries an id, whether or not one was asked for** (`mintRequestId`, §8).
    *  Which of the two it is matters in exactly one place, against a Host too old to keep receipts:
    *  there a presented key is refused and a minted one is dropped (`requestForHost`). */

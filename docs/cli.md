@@ -457,7 +457,7 @@ astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
 astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
 
-astera runs    list   [--job <jobId>]
+astera runs    list   [--job <jobId>] [--project <path>]
 astera runs    get    --id <runId>
 astera runs    wait   --id <runId>  [--timeout-ms <n>]
 astera runs    follow --id <runId>  [--timeout-ms <n>]
@@ -475,7 +475,7 @@ astera run-configs list --job <jobId>
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
 
-astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>]
+astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
 
@@ -556,6 +556,19 @@ list. Filters on one command combine.
   `unknown`, which read `state`. **`--provider claude|codex`** keeps the sessions whose account is on
   that vendor, as `accounts list` shows it. A session whose account has since been removed matches
   neither.
+- **`runs list --project <path>`** keeps the runs of the project's Jobs, the project found as for
+  `jobs list --project`, and combines with `--job`.
+- **`sessions list --project <path>`** keeps the sessions whose folder is inside the project, and
+  the workers and coordinators of the project's runs wherever their worktree is. A session with no
+  folder in its record, and not started by one of those runs, is left out.
+
+**The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
+is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
+list`. A `--project` after the command belongs to that command and wins over the global one. Every
+other command ignores the global one, so a script can put it in front of every line. A relative path,
+in either place and in `projects find --path`, is taken from the directory you ran the command from,
+never from the Host's. After the command, `--project` is refused with 2 by a command that does not
+take one, as any flag a command does not take is.
 
 **`projects find --path <path>` names the project a folder belongs to**: the registered project whose
 folder is that path or holds it. When registered projects nest, as a package registered inside a
