@@ -54,7 +54,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
-import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, HOST_ACT_SLACK_ANSWER, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
@@ -125,6 +125,7 @@ import {
 } from '../core/orchestration/state'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { chatAnswerFailureOf, chatPendingOf, chatPromptsOf } from '../core/sessions/chatRead'
+import { answerSlackCard } from './slackAnswer'
 import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/types'
 import { chatSessionUsage } from '../core/usage/chatSession'
 import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
@@ -5721,6 +5722,14 @@ export function registerIpc(
         } catch (err) {
           client.send({ t: 'orch-acted', call: m.call, ok: false, error: err instanceof Error ? err.message : String(err) })
         }
+        return
+      }
+      // Slack in the Host (P10): a Slack card answer for a chat this app writes. Not an OrchServerDeps name,
+      // like the one above. answerSlackCard never rejects; the catch is the net under it.
+      if (m.act === HOST_ACT_SLACK_ANSWER) {
+        void answerSlackCard(core.chat, m.args)
+          .then((value) => client.send({ t: 'orch-acted', call: m.call, ok: true, value }))
+          .catch((err: unknown) => client.send({ t: 'orch-acted', call: m.call, ok: false, error: err instanceof Error ? err.message : String(err) }))
         return
       }
       // One thing the Host cannot do itself — spawn a session, touch a worktree (design §5). The

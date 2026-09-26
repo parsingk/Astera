@@ -41,9 +41,10 @@ function fakeSlack(o: { delay?: number } = {}) {
   return { sdk, live, clients, posts, trail, peak: () => peak }
 }
 
-function fakePty(): RegistryPty & { emit(d: string): void } {
+function fakePty(): RegistryPty & { emit(d: string): void; sent: string[] } {
   let onData: (d: string) => void = () => {}
-  return { pid: 1, onData: (cb) => { onData = cb }, onExit: () => {}, write: () => {}, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {}, emit: (d) => onData(d) }
+  const sent: string[] = []
+  return { pid: 1, sent, onData: (cb) => { onData = cb }, onExit: () => {}, write: (d) => { sent.push(d) }, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {}, emit: (d) => onData(d) }
 }
 
 async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDir?: string; readConfig?: (() => Promise<SlackConfig>) | null; statusLinePayload?: () => Promise<unknown>; hostChains?: string[] } = {}) {
@@ -157,6 +158,23 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     // The account label comes from the rolling's own accounts snapshot (Task 6).
     expect(h.slack.posts[0].text).toContain('home')
     await vi.waitFor(() => expect(h.registry.metaOf('p-s1')?.restore).toMatchObject({ slackThreadTs: 't1', slackChannel: 'C1' }))
+  })
+
+  // Task 7: the inbox's reply writer is the Host's routes, not Task 5's `() => false`. Mutation: put the
+  // stub back, and every reply in a terminal session's thread is answered "this session has ended".
+  it("types a reply in a terminal session's thread into its pty, and says an unknown thread has ended", async () => {
+    const h = await rig()
+    h.wiring.start()
+    await h.active()
+    h.openSession('s1')
+    await vi.waitFor(() => expect(h.slack.posts).toHaveLength(1))
+    const socket = h.slack.clients[0]
+    socket.emit('message', { ack: async () => {}, event: { ts: '9.1', thread_ts: 't1', channel: 'C1', user: 'U1', text: 'hi' } })
+    await vi.waitFor(() => expect(h.ptys.get('p-s1')?.sent).toContain('hi'))
+    socket.emit('message', { ack: async () => {}, event: { ts: '9.2', thread_ts: 'nope', channel: 'C1', user: 'U1', text: 'hi' } })
+    await vi.waitFor(() => expect(h.slack.posts.some((m) => m.thread_ts === 'nope')).toBe(true))
+    expect(h.ptys.get('p-s1')?.sent.filter((d) => d === 'hi')).toHaveLength(1)
+    await h.wiring.dispose()
   })
 
   // Review Focus 4, the Host half: the app owned Slack and noted its root; the app leaves, and the Host

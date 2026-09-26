@@ -1,8 +1,9 @@
 // The one composition of the Host's Slack (Slack in the Host, spec §3, plan rulings P4, P7, P9, P16): a
 // read-only config reader over `<profile>/slack.json`, one SlackNotifier, one SlackInboxController, the
 // registration that follows the Host's registries (slackSessions.ts), the sources that feed it and the
-// app's forwarded events (slackSources.ts, Task 6), and the owner gate that holds the
-// socket and the transport only while no attached app keeps Slack (the hello yield `slack`, P4).
+// app's forwarded events (slackSources.ts, Task 6), where a reply goes (slackRoutes.ts, Task 7), and the
+// owner gate that holds the socket and the transport only while no attached app keeps Slack (the hello
+// yield `slack`, P4).
 //
 // **Exactly one socket per profile.** The Host opens its socket only when it has the SDK and every
 // attached app yields `slack` (or no app is attached), and an app that keeps Slack attaching closes it
@@ -35,6 +36,7 @@ import type { HostChats } from './hostChats'
 import { ROLLING_TICK_MS } from './rollingWiring'
 import { createHostSlackSessions } from './slackSessions'
 import { createHostSlackSources } from './slackSources'
+import { hostInboxRoutes } from './slackRoutes'
 
 export interface HostSlackWiring {
   notifier: SlackNotifier
@@ -81,7 +83,7 @@ export function composeHostSlack(a: {
   procs: ProcRegistry
   statusLinePayload(sessionId: string): Promise<unknown | null>
   /** The chat adapters this Host holds (their events are its own source), or null. */
-  chats: Pick<HostChats, 'has' | 'info' | 'subscribe'> | null
+  chats: Pick<HostChats, 'has' | 'info' | 'subscribe' | 'isWriter' | 'send' | 'requests' | 'answerCard'> | null
   /** The rolling: which chains this Host holds (their rolls are its own source) and its accounts snapshot,
    *  the one read of accounts.json the Host keeps (Task 6 replaces Task 5's own snapshot with it). */
   rolling: Pick<HostRolling, 'has' | 'account'> | null
@@ -154,8 +156,8 @@ export function composeHostSlack(a: {
       postNote: (ts, text) => notifier.postThreadNote(ts, text),
       isOwnMessage: (ts) => notifier.isOwnMessage(ts),
       pendingChoiceShape: (sid) => notifier.pendingChoiceShape(sid),
-      // Task 7 routes replies.
-      write: () => false
+      // Task 7: a terminal reply into its pty, a chat reply and a card answer by the writer rule.
+      ...hostInboxRoutes({ registry: a.registry, procs: a.procs, chats: a.chats, notifier, server: a.server })
     }),
     // A constructor that throws would reject the controller's queue, and every later apply and stop
     // behind it would never run: the throw becomes a start that fails, which SlackInbox logs.

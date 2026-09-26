@@ -78,6 +78,29 @@ const message = (over: Record<string, unknown> = {}): Record<string, unknown> =>
 })
 
 describe('SlackInbox 주입', () => {
+  it('a message handler that fails is logged, never an unhandled rejection (R3)', async () => {
+    const seen: unknown[] = []
+    const on = (e: unknown): void => {
+      seen.push(e)
+    }
+    process.on('unhandledRejection', on)
+    try {
+      const h = setup({
+        resolveSession: () => {
+          throw new Error('boom')
+        }
+      })
+      const f = fakeClient()
+      await h.inbox.start(f.client)
+      f.emit('message', { ack: async () => {}, event: message() })
+      await new Promise((r) => setTimeout(r, 10))
+      expect(seen).toEqual([])
+      expect(h.logs.join('\n')).toMatch(/slack inbound failed/)
+    } finally {
+      process.off('unhandledRejection', on)
+    }
+  })
+
   it('스레드 답장을 해당 세션 PTY에 넣는다 — 텍스트를 먼저 쓰고 Enter는 지연 후 별도로 보낸다', async () => {
     vi.useFakeTimers()
     try {

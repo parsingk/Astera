@@ -573,3 +573,54 @@ describe('createHostChats — the unattended permission policy (Task 7)', () => 
     }
   })
 })
+
+describe('createHostChats — Slack card answers (Slack in the Host Task 7, P10)', () => {
+  // Review Focus 3.
+  it('a Slack answer before the 60 s wins, and the policy never denies it', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = rig({ unattendedPermission: 'deny-after-60s' })
+      r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+      r.chats.adopt(r.entry())
+      await vi.advanceTimersByTimeAsync(59_000)
+      const [req] = r.chats.requests('c1')
+      await r.chats.answerCard('c1', req.id, { kind: 'approval', decision: 'accept' })
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      const sent = r.procs[0].sent.join('')
+      expect(sent).toContain('"behavior":"allow"')
+      expect(sent).not.toContain('"behavior":"deny"')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refuses while an app holds the proc, and writes nothing', async () => {
+    const r = rig()
+    r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+    r.chats.adopt(r.entry())
+    r.holders.heldBy('p1', 1)
+    const before = r.procs[0].sent.length
+    const [req] = r.chats.requests('c1')
+    await expect(r.chats.answerCard('c1', req.id, { kind: 'approval', decision: 'accept' })).rejects.toThrow(/not the writer/)
+    expect(r.procs[0].sent.length).toBe(before)
+  })
+
+  // An answer is never applied twice: a card the note lists answered (the app answered it before its echo
+  // reached this adapter) is refused, and so is a second answer to the same card.
+  it('refuses a card the note lists answered, and a second answer to one it answered', async () => {
+    const id = (JSON.parse(F.CAN_USE_TOOL_WRITE) as { request_id: string }).request_id
+    const r = rig()
+    r.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+    r.chats.adopt(r.entry())
+    await r.chats.answerCard('c1', id, { kind: 'approval', decision: 'accept' })
+    const after = r.procs[0].sent.length
+    await expect(r.chats.answerCard('c1', id, { kind: 'approval', decision: 'accept' })).rejects.toThrow()
+    expect(r.procs[0].sent.length).toBe(after)
+    const n = rig({ answered: [id] })
+    n.procs[0].emit(`${F.CAN_USE_TOOL_WRITE}\n`)
+    n.chats.adopt(n.entry())
+    const before = n.procs[0].sent.length
+    await expect(n.chats.answerCard('c1', id, { kind: 'approval', decision: 'accept' })).rejects.toThrow(/no open request/)
+    expect(n.procs[0].sent.length).toBe(before)
+  })
+})

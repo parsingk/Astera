@@ -142,3 +142,18 @@ describe("ipc.ts carries the unattended-permission pick into core.chat.spawn (ch
     )
   })
 })
+
+// Slack in the Host Task 7 (P10). Mutation: drop the branch, and every Slack card answer on a chat this
+// app writes fails as `unknown act`.
+describe('ipc.ts answers a Slack card for a chat this app writes (Slack in the Host Task 7)', () => {
+  const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'ipc.ts'), 'utf8')
+  it('answers slackChatAnswer through answerSlackCard, before the orch table', () => {
+    const start = src.indexOf("if (m.t !== 'orch-act') return")
+    const table = src.indexOf('answerOrchAct(', start)
+    const branch = src.indexOf('if (m.act === HOST_ACT_SLACK_ANSWER)', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(branch).toBeGreaterThan(start)
+    expect(branch).toBeLessThan(table)
+    expect(src.slice(branch, table)).toMatch(/answerSlackCard\(core\.chat, m\.args\)/)
+  })
+})

@@ -103,7 +103,17 @@ export class SlackInbox {
    *  (REST) must keep working. */
   async start(client: SocketClient): Promise<void> {
     this.client = client
-    client.on('message', ((env: MessageEnvelope) => void this.handleMessage(env)) as never)
+    // R3 (Slack in the Host): the Host has no unhandledRejection handler, so a route that throws is logged
+    // here by error name only (a message could carry reply text) and never escapes the socket's emit.
+    client.on('message', ((env: MessageEnvelope) => {
+      this.handleMessage(env).catch((err: unknown) => {
+        try {
+          this.deps.log(`slack inbound failed(${err instanceof Error ? err.name : 'unknown'})`)
+        } catch {
+          /* a log line never throws */
+        }
+      })
+    }) as never)
     // Connection state is logged for diagnostics only. Reconnection is the SDK's job
     // (autoReconnectEnabled defaults to true)
     client.on('disconnected', (() => this.deps.log('slack socket disconnected')) as never)

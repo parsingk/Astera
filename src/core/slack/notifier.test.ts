@@ -1992,6 +1992,20 @@ describe('SlackNotifier chat events', () => {
     expect(h.sent).toEqual(['[myproj · work1] 🙋 입력 필요\n🔧 Write\nD:/p.txt\n💡 허용 또는 거절로 답장'])
   })
 
+  // Slack in the Host Task 7 (P18): the card a Slack reply is read against, for a chat whose adapter the
+  // Host does not hold.
+  it('chatRequestOf tells the card the chat record last heard of, and null once it closed', () => {
+    const h = setup()
+    expect(h.notifier.chatRequestOf('s-1')).toBeNull()
+    h.notifier.register(chatInfo())
+    expect(h.notifier.chatRequestOf('s-1')).toBeNull()
+    const card = { id: 'a1', kind: 'approval' as const, about: { tool: 'Write', lines: ['D:/p.txt'] }, decisions: ['accept' as const, 'decline' as const] }
+    h.notifier.onChatEvent('s-1', { type: 'request', request: card }, claudeAt(null))
+    expect(h.notifier.chatRequestOf('s-1')).toEqual(card)
+    h.notifier.onChatEvent('s-1', { type: 'request', request: null }, claudeAt(null))
+    expect(h.notifier.chatRequestOf('s-1')).toBeNull()
+  })
+
   it('an error event posts one line', async () => {
     const h = setup()
     h.notifier.register(chatInfo())

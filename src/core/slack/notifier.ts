@@ -632,6 +632,13 @@ export class SlackNotifier {
     await this.send(record, excerpt ? `${done}\n> ${excerpt.replace(/\n/g, '\n> ')}` : done)
   }
 
+  /** The card this session's chat record last heard of (Slack in the Host P18), or null. The Host reads a
+   *  Slack reply against it for a chat whose adapter it does not hold (the app forwards its `request`
+   *  events); one it holds is read against HostChats.requests instead. */
+  chatRequestOf(sessionId: string): ChatRequest | null {
+    return this.records.get(sessionId)?.chat?.request ?? null
+  }
+
   /**
    * The shape of a pending choice screen. SlackInbox uses it when turning a reply into a key sequence.
    *

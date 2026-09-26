@@ -12,7 +12,7 @@ import type { SessionInfo } from '../core/types'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { ChatSessionManager, type ChatManagerDeps } from '../core/chat/manager'
 import { chatSpawnOptsOf, type ChatRollSpawn } from '../core/chat/respawn'
-import { isUnattendedPermission, type ChatEvent, type ChatRequest, type UnattendedPermission } from '../core/chat/types'
+import { isUnattendedPermission, type ChatAnswer, type ChatEvent, type ChatRequest, type UnattendedPermission } from '../core/chat/types'
 import { chatAnswerFailureOf, chatPromptsOf, type ChatAnswerResult, type ChatPrompt } from '../core/sessions/chatRead'
 import type { ProcRegistry } from './procRegistry'
 import type { ProcHolders } from './procHolders'
@@ -74,6 +74,12 @@ export interface HostChats {
   /** `wrote` as for `send`: only once the answer's line reached the proc. A failure other than "no open
    *  request" (a NotWriterError, a pipe that has gone) is `not-held`: this side could not answer. */
   answer(sessionId: string, requestId: string, decision: 'allow' | 'deny', wrote?: () => void): Promise<ChatAnswerResult>
+  /** A Slack card answer, questions included (Slack in the Host P10). Rejects when the Host is not the
+   *  writer (nothing is written), when the note lists the card answered (the app answered it and its echo
+   *  has not reached this adapter: never applied twice), or when the adapter refuses (`no open request`
+   *  for a card already closed). The unattended policy's timer re-reads the open list when it fires, so
+   *  an answer that landed first wins. */
+  answerCard(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
   unattendedOf(sessionId: string): UnattendedPermission
   /** The note's `answered` ids (the app writes them, claudeAdapter's rememberAnswered). */
   answeredOf(sessionId: string): string[]
@@ -427,6 +433,11 @@ export function createHostChats(d: HostChatsDeps): HostChats {
         if (failed.answered === false && failed.reason === 'not-held') d.log(`chat ${id}: answering ${requestId} failed: ${m}`)
         return failed
       }
+    },
+    async answerCard(id, requestId, answer) {
+      if (!isWriter(id)) throw new Error('not the writer')
+      if (answeredOf(id).includes(requestId)) throw new Error(`no open request: ${requestId} (answered already)`)
+      await manager.answer(id, requestId, answer)
     },
     unattendedOf,
     answeredOf,
