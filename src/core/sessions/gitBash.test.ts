@@ -66,6 +66,11 @@ describe('findGitBash', () => {
     expect(findGitBash(env, only('C:\\Windows\\System32\\bash.exe'))).toBeNull()
   })
 
+  it('never returns the WSL bash in WindowsApps either', () => {
+    const env = { PATH: 'C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps' }
+    expect(findGitBash(env, only('C:\\Users\\u\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe'))).toBeNull()
+  })
+
   it('returns null when no Git Bash exists', () => {
     expect(findGitBash({ PATH: 'C:\\Windows\\System32' }, () => false)).toBeNull()
   })

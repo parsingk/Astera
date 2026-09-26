@@ -17,9 +17,9 @@ import { win32 as path } from 'node:path'
 const BIN_BASH = path.join('bin', 'bash.exe')
 const ROOTS = ['C:\\Program Files\\Git', 'C:\\Program Files (x86)\\Git']
 
-/** `System32\bash.exe` is the WSL launcher, not Git Bash: handing it over makes the hook fail
- *  differently rather than work. Recognized by folder name, case-insensitively. */
-const isWslBash = (p: string): boolean => /[\\/]system32[\\/]bash\.exe$/i.test(p)
+/** `System32\bash.exe` and the Store alias `WindowsApps\bash.exe` are WSL launchers, not Git Bash: handing
+ *  either over makes the hook fail differently rather than work. Recognized by folder name, case-insensitively. */
+const isWslBash = (p: string): boolean => /[\\/](system32|windowsapps)[\\/]bash\.exe$/i.test(p)
 
 function pathEntries(env: Record<string, string | undefined>): string[] {
   const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH')
