@@ -111,8 +111,10 @@ the profile, both `status` and `host status` answer 9 (see Exit codes).
 Astera is open and does that work itself. It is `parked` when the Host waits for Astera to be opened
 once: the profile's settings still carry work that the old orchestration switch paused, and only
 Astera can release it. A damaged `app-settings.json` parks the Host too, until Astera is restarted and
-repairs the file. Astera itself does not show that the Host is parked. `data.appAttached` says whether
-Astera is connected. A Host that does not announce `dispatch` leaves both fields out.
+repairs the file. Astera's Jobs sidebar says so too, once it has read a Host's first report, with one
+line naming why: the settings file cannot be read, or the settings migration has not finished yet.
+`data.appAttached` says whether Astera is connected. A Host that does not announce `dispatch` leaves
+both fields out.
 
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
@@ -237,8 +239,11 @@ the same rule that makes `jobs run` refuse a Job that is already going (see "the
 below).
 
 **A scheduled Job does not pile up coordinators.** When a run of a scheduled Job finishes, which means
-every one of its tasks is done, the process that drives stops that run's coordinator. A run that
-`jobs run` started for a Job with no schedule keeps its coordinator, because you may be reading its tab.
+every one of its tasks is done, the process that drives stops that run's coordinator. It keeps asking
+until the session is confirmed gone, backing off from 30 seconds up to 10 minutes rather than asking
+once, so a run whose coordinator resists stopping can still show that coordinator, paused, for a while
+after the run itself finished. A run that `jobs run` started for a Job with no schedule keeps its
+coordinator, because you may be reading its tab.
 At a fire, a latest run whose coordinator is the only thing left is replaced: it has no open worker, no
 open question, no check under way and no task its coordinator can still start, as with a run made from
 an objective alone. It is replaced only while its coordinator is parked in `check --wait`, which is the
@@ -317,7 +322,8 @@ from a shell alone, with Astera closed.
 **While Astera shows the Host as not answering, Jobs wait.** Astera does not take over from a Host
 that announced `dispatch`, even while that Host is not answering, because the Host may still be
 working. So nothing is placed until the Host answers again or stops. The status bar says **Host not
-answering**; the Jobs sidebar does not say why nothing moves. If it stays that way, restart the Host
+answering**, and the Jobs sidebar says so too, with one line at the top: "The Host is not answering, so
+Jobs do not move. You can restart it from Settings, Info". If it stays that way, restart the Host
 from **Settings → Info**.
 
 **Stopping a worker.** `worker-stop --dispatch <id>` ends the worker's session and marks its Dispatch

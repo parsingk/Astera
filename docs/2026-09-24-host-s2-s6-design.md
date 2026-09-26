@@ -1684,6 +1684,115 @@ Landed on `develop` from `ce533d36` through `633be4b5`. This list is the record,
   re-apply, a forward during activation), `src/main/slackOwnership.test.ts`, `src/core/slack/forwarded.test.ts`,
   `src/core/slack/apiUrl.test.ts` and `src/core/slack/notifier.test.ts`.
 
+## Amendments (remaining limits pass, 2026-09-26)
+
+The plan `.superpowers/sdd/2026-09-26-limits-pass/plan.md` (Decisions L1 to L5, in that plan's own
+numbering) closed five of the "Known limits" below that a person is most likely to hit, ranked
+2026-09-26 by impact, effort and risk. Its execution ledger is `progress.md` in the same folder, and its
+three tasks' reports are `task-1-report.md` through `task-3-report.md`. Landed on `develop` from
+`ee46dd4d` through `68a2bfca`. This list is the record, in A1's form; the limits it closes point back
+here.
+
+- **A106. L1: a coordinator stop is retried until the session is gone, not asked once (task-1-report.md).**
+  Confirmed first: `askedToStop` added a session before its stop and never removed it, so a failed or
+  refused stop was never sent again by that process; `retireCoordinator` emptied the slot
+  (`detachCoordinator`) even when `stopCoordinator` threw; and the Host's own `stopCoordinator`
+  (`orchDeps.ts`) swallows its own failures, so "the stop failed" is often invisible to the command
+  layer. What shipped: a new `JobRun.coordinatorStopPending?: string` (`types.ts`, hidden from the CLI's
+  public run fields in `cliPublic.ts`; `detachCoordinator` and `attachCoordinator` drop it, a roll's rekey
+  carries it). `retireCoordinator` no longer empties the slot in either caller (`run-coordinator-stop` and
+  the fire's replacement in `run-spawn`): it writes `coordinatorStopPending` when the slot still names the
+  session, and `paused` when asked; the exit release (`coordinatorReleaseOf`, the boot sweep) empties the
+  slot once the stop is confirmed. With a pending mark, `run-coordinator-stop` skips the idle check, since
+  the decision was made already; if the Run moves again it is refused as before and the mark is dropped
+  (`dropStopPending`). `dispatchLoop.ts` replaces `askedToStop` with an in-memory backoff map per session
+  (`COORDINATOR_STOP_RETRY_MS` 30 seconds, doubling, capped at `COORDINATOR_STOP_RETRY_MAX_MS` 10
+  minutes), pruned once a session leaves every slot. The new `tidyCoordinators` (stale marks, then stops;
+  see A107) is guarded against overlap, asks `mayStart` before each step and each stop, and runs from the
+  pass, in place of the old `stopFinishedCoordinators`, and from `nudge`, since the app runs the pass only
+  on commits while its own timer calls `nudge`. A follow-up asks a new optional context member
+  `sessionGone` before each stop: the Host answers from an ended pty in its own registry
+  (`sessionExitCode`); the app answers from its session list, which must show the session exited with a
+  real exit code. Once gone, the loop sends `run-coordinator-stop --gone <sessionId>`, which empties the
+  slot and drops the mark with no stop sent, only while the slot still names that session; a
+  replacement's `paused` mark, already written together with the pending mark, stays. A lost-sight exit,
+  or a session this process never held, does not count as gone, so such a slot keeps being retried at the
+  10 minute cap (see "Known limits after the limits pass"). Pinned by `dispatchLoop.test.ts` ("a
+  coordinator stop is retried until the session is gone (L1)": a failed stop retried after backoff and
+  succeeds, a refused stop retried, the slot kept pending, the exit release clears the mark and nothing is
+  sent after, `nudge` retries, a non-driving process does nothing) and `command.test.ts` (three L1 cases;
+  six existing U4 cases updated to the kept-then-released slot).
+- **A107. L2: a stale `coordinatorStartingAt` marker is cleared by the driving loop's own pass
+  (task-1-report.md).** `coordinatorStarting` already read a marker past `COORDINATOR_START_WINDOW_MS` as
+  dead, so a ▶ or a later fire could try again, but nothing ever cleared the field itself, so the sidebar
+  kept hiding ▶ until the Run's next commit. What shipped: a new internal command
+  `run-start-marks-clear` (`COORDINATOR_ONLY`, a `SESSION` entry in `cliAgentContext.ts`, required by the
+  `SwitchedCommand` compile check) drops every start mark past its window on the current state, from
+  `tidyCoordinators`, the same pass and `nudge` call A106 added, so only the one process that may start
+  something acts (`mayStart`). It answers in `astera agent-context` as a session command; harmless if
+  called by hand. Pinned by `dispatchLoop.test.ts` ("a stale coordinator start mark is cleared by the pass
+  (L2)": the pass and `nudge` clear a stale mark, a fresh one is kept).
+- **A108. L3: a parked or unresponsive Host tells the app so, and the Jobs sidebar says why nothing moves
+  (task-2-report.md).** Both were already true with nothing surfacing them: `driverOf` parks on gate
+  `not-migrated` or `unreadable`, and the driving in `src/host/driving.ts` starts parked with
+  `lastGate === null` until its first settings read, but the driver was reachable only through the
+  `status` orch-call, which the app never asked, and `HostStatus.unresponsive` already reached the
+  renderer (`host.status`, the `host:status` push, held in `App.tsx` as `hostStatus`) with nothing in the
+  Jobs sidebar reading it. What shipped, additive and feature-gated, `HOST_PROTOCOL` stays 3: a new
+  feature `HOST_FEATURE_DRIVER = 'driver'`, announced with `dispatch` (spawner only, exactly when the
+  driving exists), and a new `HostMessage { t: 'driver', driver, gate }` (`HostDriverReport` in
+  `core/types.ts`; `gate` is the last settings gate read, `null` before the first one). `createHostDriving`
+  gets `onReport`, told on each change of driver or gate, a throw only logged, and `report()`;
+  `composeHostDriving` broadcasts it to every greeted app that yields dispatch, and exposes
+  `appGreeted(send)`, wired beside the rolling's in `index.ts`'s `onAppGreeted`, so a newly greeted app
+  gets the current report at once. The app's new `src/main/host/hostDriver.ts` reads `driver` only from a
+  Host that announced the feature, validates it, forgets it when the connection is gone, not merely
+  unresponsive, and tells `ipc.ts` on each change, which pushes `host:driver` and answers `host.driver`
+  (preload and `CoreApi`/`CoreEvents` extended). The renderer's `jobsStall({ hostStatus, driver })`
+  (`src/core/orchestration/jobsView.ts`, beside the pure `jobsViewScreen`) answers
+  `{ kind: 'unresponsive' }` when the Host does not answer, which wins over a stale parked report,
+  `{ kind: 'parked', gate }` when parked with a read gate, and `null` while parked with no gate yet, with
+  no host, with no app, or with an older Host that sent no report. `App.tsx` reads `host.driver` once and
+  listens on `host:driver`, and passes the result to `JobsView`, which draws one warning line
+  (`.jobs-stall`) at the top of both the empty and the list screens. New i18n keys, ko and en:
+  `jobs.stall.parked`, `jobs.stall.gate.unreadable`, `jobs.stall.gate.notMigrated`,
+  `jobs.stall.unresponsive`; `catalog.test` does not force ja or es, so a partial catalog falls back to ko
+  and those were left. Pinned by `jobsView.test.ts` (`jobsStall`'s cases: parked gives a reason,
+  unresponsive gives a notice, unresponsive beats parked, host or app missing gives none, parked with no
+  gate and no report gives none), `driving.test.ts`, `driving.integration.test.ts` (the composition
+  broadcasts to dispatch-yielding apps only, `appGreeted` sends the current one, repair reports the host
+  once), `features.test.ts`, `hostDriver.test.ts` (the feature gate, dedupe, malformed drops, forget on
+  disconnect but keep on unresponsive, never throws) and `rolling.integration.test.ts` (its `onAppGreeted`
+  source check loosened to the new block form).
+- **A109. L4: merge records are kept per project, within the shared total (task-3-report.md).**
+  `HOST_MERGES_KEPT` moves from 200, the whole total, to 1000, and a new
+  `HOST_MERGES_KEPT_PER_PROJECT = 100` caps each project's own share, so one busy project's merges no
+  longer push another project's out of `src/host/mergeRecords.ts`. A record only has to survive until the
+  app's next look at that folder after the merge (`sinceMs`), so 100 covers a long unattended run; 1000 in
+  all lets 10 such projects keep their own 100, at about 250 KB per rewrite. The new exported
+  `keptHostMerges(records, { total, perProject })` walks newest to oldest, keeps the newest `perProject`
+  records of each `comparablePath(projectPath)`, the same key the reader's `isSamePath` uses, stops at
+  `total`, and returns them in file order; readers are unchanged. `createMergeRecorder` takes an optional
+  `kept`, used only by tests. The flaky 203 cycle test, "keeps the newest HOST_MERGES_KEPT records in
+  all", is rewritten to seed `merges.json` once and run one begin and end cycle, asserting the exact kept
+  ids and order; it runs in 55 ms in place of its old 30 second override, and still passes on the pre-fix
+  code, as a rewrite should. Pinned by that rewritten test and three new ones: a busy project does not
+  push out another's records, a project keeps only its newest `HOST_MERGES_KEPT_PER_PROJECT`, and the rule
+  holds over seven real begin and end cycles with small caps.
+- **A110. L5: the codex rollout search scans forward from `locateSince`, not just today and yesterday
+  (task-3-report.md).** `findRollout` (`src/core/rolling/codexLocate.ts`) no longer reads only today's and
+  yesterday's date folders. The new `scanDays(since, now, bornBefore)` walks calendar days, DST-safe, from
+  `since` minus a day to `min(now, bornBefore + 1 day)`, capped at `ROLLOUT_SCAN_DAYS_MAX = 14` folders
+  counted forward from `since` (see "Known limits after the limits pass"). A live locate, `since` near
+  `now`, still reads 2 folders, as before; a restore with `bornBefore = locateSince + 60 seconds` reads 3
+  folders however many days later the takeover happens. If `since` is ahead of the clock, so the window is
+  empty, the old today and yesterday folders are read instead. The `since` and `bornBefore` filters
+  themselves are unchanged, so an older rollout is still not claimed. Pinned by the `locateSince 로부터 며칠
+  뒤의 인계 (L5)` block in `codexLocate.test.ts`: a takeover 5 days later finds the rollout, and an old
+  `since` with no `bornBefore` reads forward from its own folder, both failing before the fix;
+  born-before-`locateSince` and born-after-`bornBefore` stay unclaimed, regression guards the old code
+  also happened to pass, since it found nothing at all.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -1726,12 +1835,15 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   its restart Gate for it only once the last app has left (final review I1), and the app does not
   recover it either: in front of a Host that drives, its resume sweep is off and it gates only at a
   Host load it caused. The Gate comes within about 5 to 20 s of the last app closing.
-- **A parked Host is silent in the app.** The app yields to any Host that announces `dispatch`, parked
-  or not, so while the Host is parked nothing dispatches, and nothing in the app says why (A38). A
-  settings file damaged while the app runs parks the Host until Astera restarts and repairs it.
-- **A hung Host that keeps its pipe open stops every Job.** The app keeps yielding to it (A52). Jobs do
-  not move until it answers, dies, or is restarted from Settings, Info. The status bar shows that the
-  Host is not answering; the Jobs sidebar does not say why nothing moves.
+- **A parked Host is silent in the app.** (resolved in the limits pass, see Amendments A108: the Host
+  reports its driver and gate, and the Jobs sidebar draws one line naming why nothing moves) The app
+  yields to any Host that announces `dispatch`, parked or not, so while the Host is parked nothing
+  dispatches, and nothing in the app says why (A38). A settings file damaged while the app runs parks
+  the Host until Astera restarts and repairs it.
+- **A hung Host that keeps its pipe open stops every Job.** (resolved in the limits pass, see Amendments
+  A108: the Jobs sidebar now says so too, in the same line the status bar uses) The app keeps yielding
+  to it (A52). Jobs do not move until it answers, dies, or is restarted from Settings, Info. The status
+  bar shows that the Host is not answering; the Jobs sidebar does not say why nothing moves.
 - **A Task a closed app left mid-check, outside a convergence Job, is gated, not restarted.** The resume
   sweep restarts only a convergence Run's `validating` and `reviewing` Tasks (A54). Any other Task left
   so with nothing checking it is armed at the handover, when the last app leaves, and again on every
@@ -1786,8 +1898,9 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   (`src/host/driving.ts:170-176`), so the applied `migrated` read compares against nothing and drains
   (A40, N4). The effect is reports applied early, not unsafe work (Task 12 re-review).
 - **The 200 merge records are shared by all projects** (`HOST_MERGES_KEPT`,
-  `src/host/mergeRecords.ts:64`). A busy project can push another's records out, and a HEAD move that
-  only a dropped record explained then reads as an outside change (Task 3 review m2).
+  `src/host/mergeRecords.ts:64`). (resolved in the limits pass, see Amendments A109: each project now
+  keeps its own newest 100, within a total of 1000) A busy project can push another's records out, and
+  a HEAD move that only a dropped record explained then reads as an outside change (Task 3 review m2).
 - **A broad Job `cwd` allows its whole subtree to the path guard** (A45,
   `src/core/run/hostPathGuard.ts:20-21`). A Job whose `cwd` is a drive root lets a validation or review
   run anywhere below it (Task 9 review m4).
@@ -1877,7 +1990,9 @@ Amendments (S6 as shipped) preamble).
   one account in one folder within 60 s may cross, the same as they can live.
 - **A codex rollout search that times out keeps `locateSince`**, and the search scans only today's and
   yesterday's folders. So a takeover days later finds nothing for a blank-slate codex respawn, and that
-  chain stays unmapped.
+  chain stays unmapped. (The folder window is resolved in the limits pass, see Amendments A110: the
+  search now scans forward from `locateSince`, bounded. A search that still times out keeps `locateSince`
+  as before, and the new window is itself capped, see "Known limits after the limits pass".)
 
 **The app beside a Host that rolls**
 
@@ -1961,9 +2076,10 @@ reason. Checked at `bf479b4e`.
   the same reasoning as the rest of the loop: losing one fire is safer than two processes firing the same
   schedule at once.
 - **A stale `coordinatorStartingAt` marker is ignored, but nothing clears it from the state.**
-  (Amendments A82) Past `COORDINATOR_START_WINDOW_MS` the marker is read as a start that died with its
-  process, so a ▶ or a later fire is free to try again, but the field itself stays on the Run until
-  something else writes over it, a later hand-over or a failure. The sidebar reads it live, so ▶
+  (Amendments A82) (resolved in the limits pass, see Amendments A107: the driving loop's own pass clears
+  every marker past its window) Past `COORDINATOR_START_WINDOW_MS` the marker is read as a start that
+  died with its process, so a ▶ or a later fire is free to try again, but the field itself stays on the
+  Run until something else writes over it, a later hand-over or a failure. The sidebar reads it live, so ▶
   reappears only on the first commit after the window has passed, not the moment it does.
 - **The window can be outlived by a start that is still genuinely running.**
   (Amendments A82) `COORDINATOR_START_WINDOW_MS` is two minutes, bounded by the spawn deadline plus the
@@ -1971,14 +2087,16 @@ reason. Checked at `bf479b4e`.
   longer than that. So can, on a Host with no local spawner of its own, a `startCoordinator` call that
   Host forwards to an attached app whose own reply never comes. Either way the marker goes stale while
   its start is still in flight, and a second start can then be begun beside the first.
-- **A coordinator stop that fails leaves the session alive, with no slot.** (Amendments A84) The stop is
-  best effort: a Host that does not hold the pty and has no app attached cannot stop it, and logs that.
-  The slot is emptied anyway, so nothing asks again. The session then loops on `check --wait` on a
-  finished Run until someone closes it.
-- **The loop asks each finished coordinator to stop once per process.** (Amendments A84) A refused or
-  failed `run-coordinator-stop` is not sent again by that process, so a transient failure waits for the
-  Job's next fire, which stops the coordinator of a finished latest Run it finds still attached, or for
-  a restart.
+- **A coordinator stop that fails leaves the session alive, with no slot.** (Amendments A84) (resolved
+  in the limits pass, see Amendments A106: the slot is kept, pending, until the stop is confirmed, not
+  emptied on a mere attempt) The stop is best effort: a Host that does not hold the pty and has no app
+  attached cannot stop it, and logs that. The slot is emptied anyway, so nothing asks again. The session
+  then loops on `check --wait` on a finished Run until someone closes it.
+- **The loop asks each finished coordinator to stop once per process.** (Amendments A84) (resolved in
+  the limits pass, see Amendments A106: a refused or failed stop is retried, backing off from 30 seconds
+  to 10 minutes, until the session is confirmed gone) A refused or failed `run-coordinator-stop` is not
+  sent again by that process, so a transient failure waits for the Job's next fire, which stops the
+  coordinator of a finished latest Run it finds still attached, or for a restart.
 - **A Run with only its coordinator left is replaced only while that coordinator is parked.**
   (Amendments A84, the idle rule) A fire that finds the coordinator between two `check --wait` calls, or
   thinking, skips. Whichever process drives, a coordinator that parks in `check --wait` between turns
@@ -2128,6 +2246,30 @@ Each was found while building or reviewing Slack in the Host and left as it is, 
   app's notifier still registers every spawn and adopt with no transport and no posts while the Host owns
   Slack, but such a session has no noted thread in the app's own record; per plan P5 those sessions went with
   the Host, and a hand-back finds nothing noted to resume (Task 8).
+
+## Known limits after the limits pass
+
+Each was found while building or reviewing the remaining limits pass and left as it is, with its reason.
+Checked at `68a2bfca`.
+
+- **A stop the live session always refuses is retried every 10 minutes, forever** (Amendments A106). A
+  finished Run that `runMoves` still counts as moving, or any other stop a session keeps refusing for
+  good, used to be asked once; now the backoff caps at `COORDINATOR_STOP_RETRY_MAX_MS` and the loop keeps
+  asking, with a log line each time, since nothing tells it the refusal is permanent.
+- **A slot this process never held can be retried even once the session is actually gone, because
+  liveness cannot be told** (Amendments A106). `sessionGone` only answers from what this process itself
+  can see: the Host from an ended pty in its own registry, the app from its own session list, which must
+  show a real exit code. A lost-sight exit, or a session spawned or adopted by a different process,
+  answers `false` either way, so such a slot keeps being retried at the 10 minute cap instead of being
+  confirmed and released.
+- **The Jobs sidebar stays silent while the Host's first settings read hangs** (Amendments A108). Parked
+  with no gate read yet, the moment before the Host has ever read its settings, answers `null` from
+  `jobsStall`; if that first read itself hangs, the sidebar says nothing until it lands, the same silence
+  as before this pass, now narrowed to just that one moment.
+- **The codex rollout search is capped at 14 folders forward from `locateSince`**
+  (`ROLLOUT_SCAN_DAYS_MAX`, Amendments A110). A caller with a `bornBefore` needs at most 3; the cap only
+  bites a caller that passes an old `since` with none, so a takeover further out than that still finds
+  nothing for a blank-slate codex respawn.
 
 ## 0. The problem, measured
 
