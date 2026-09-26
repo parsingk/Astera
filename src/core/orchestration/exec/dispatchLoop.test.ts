@@ -5,7 +5,11 @@
 // 워크트리·세션)뿐이다. **setState 는 상태를 갈아 끼운 뒤 `loop.run()` 을 다시 부른다** — 앱의 커밋
 // 훅이 하는 일 그대로라(B4), 루프의 scheduleAgain 갈래가 운영에서처럼 돈다.
 import { describe, it, expect, vi } from 'vitest'
-import { COORDINATOR_STOP_RETRY_MS, createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
+import {
+  COORDINATOR_STOP_RETRY_CAP_TRIES,
+  COORDINATOR_STOP_RETRY_MAX_MS,
+  COORDINATOR_STOP_RETRY_MS,
+  createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
 import { coordinatorReleaseOf } from './releaseDefer'
 import { handleCommand, type OrchServerDeps } from '../command'
 import { APP_CALLER } from '../../host/driver'
@@ -794,6 +798,68 @@ describe('a coordinator stop is retried until the session is gone (L1)', () => {
     await h.loop.run()
     await h.settle()
     expect(h.stopCoordinator).toHaveBeenCalledTimes(2)
+  })
+
+  it('a stop refused at the 10 minute cap N times is logged once as given up and sent no more (LP-1/2)', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    h.ctx.handle = async (cmd, args) => {
+      if (cmd === 'run-coordinator-stop' && args.gone === undefined) return { status: 409, body: { error: 'run moves' } }
+      return h.real(cmd, args)
+    }
+    const pass = async (): Promise<void> => {
+      await h.loop.run()
+      await h.settle()
+    }
+    // Climb to the cap: 30 s, 60 s, ... until the wait reaches COORDINATOR_STOP_RETRY_MAX_MS.
+    await pass()
+    let wait = COORDINATOR_STOP_RETRY_MS
+    let sent = 1
+    while (wait < COORDINATOR_STOP_RETRY_MAX_MS) {
+      h.clock += wait
+      await pass()
+      sent++
+      wait = Math.min(wait * 2, COORDINATOR_STOP_RETRY_MAX_MS)
+    }
+    // `sent` stops have been sent and the last one waits the cap. N-1 more at the cap, then it gives up.
+    for (let i = 1; i < COORDINATOR_STOP_RETRY_CAP_TRIES; i++) {
+      h.clock += COORDINATOR_STOP_RETRY_MAX_MS
+      await pass()
+      sent++
+    }
+    expect(stops(h)).toBe(sent)
+    const gaveUp = (): string[] => h.logs.filter((m) => /gave up/.test(m))
+    expect(gaveUp()).toEqual([])
+    for (let i = 0; i < 5; i++) {
+      h.clock += COORDINATOR_STOP_RETRY_MAX_MS
+      await pass()
+    }
+    expect(stops(h)).toBe(sent)
+    expect(gaveUp()).toHaveLength(1)
+    expect(gaveUp()[0]).toContain('coord-rc')
+    // The slot stays: a new driver, or a restart, asks again.
+    expect(rc(h).coordinatorSessionId).toBe('coord-rc')
+  })
+
+  it('a stop given up on still releases the slot once the session is known to be gone (LP-1/2)', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    let gone = false
+    h.ctx.sessionGone = () => gone
+    h.ctx.handle = async (cmd, args) => {
+      if (cmd === 'run-coordinator-stop' && args.gone === undefined) return { status: 409, body: { error: 'run moves' } }
+      return h.real(cmd, args)
+    }
+    for (let i = 0; i < 40; i++) {
+      await h.loop.run()
+      await h.settle()
+      h.clock += COORDINATOR_STOP_RETRY_MAX_MS
+    }
+    expect(h.logs.filter((m) => /gave up/.test(m))).toHaveLength(1)
+    gone = true
+    await h.loop.run()
+    await h.settle()
+    expect(rc(h).coordinatorSessionId).toBeUndefined()
   })
 
   it('the exit release empties the slot and drops the pending mark, and nothing is sent after it', async () => {

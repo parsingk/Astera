@@ -59,6 +59,12 @@ export const COORDINATOR_NUDGE_MS = 90_000
  *  further try waits twice as long, up to `COORDINATOR_STOP_RETRY_MAX_MS`. */
 export const COORDINATOR_STOP_RETRY_MS = 30_000
 export const COORDINATOR_STOP_RETRY_MAX_MS = 10 * 60_000
+/** How many stops are sent at the `COORDINATOR_STOP_RETRY_MAX_MS` interval before the loop gives up on a
+ *  session (LP-1/2): about an hour at the cap. A stop the session keeps refusing for good (a finished Run
+ *  that `runMoves` still counts as moving) was otherwise asked every 10 minutes forever, with a log line
+ *  each time. Giving up is logged once and is in memory only: the slot and its pending mark stay, so a
+ *  restart or a new driver asks again, and a session later known to be gone is still released. */
+export const COORDINATOR_STOP_RETRY_CAP_TRIES = 6
 
 export interface DispatchLoopContext {
   /** handleCommand under this process's own caller id (the app's UI_CALLER, the Host's HOST_CALLER). */
@@ -156,9 +162,10 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  is not remembered as done: until the exit release empties the slot, the Run keeps it (marked
    *  `coordinatorStopPending` once the command ran) and the stop is sent again, first after
    *  `COORDINATOR_STOP_RETRY_MS`, then twice as long each time up to `COORDINATOR_STOP_RETRY_MAX_MS`.
-   *  A refusal and a throw are retried the same way. **In memory on purpose**: the pending mark is what
+   *  A refusal and a throw are retried the same way, until `COORDINATOR_STOP_RETRY_CAP_TRIES` stops at
+   *  the cap have gone unanswered, then it gives up with one log line (LP-1/2). **In memory on purpose**: the pending mark is what
    *  survives a restart or a change of driver, and a new driver's first pass sends the stop at once. */
-  const stopRetry = new Map<string, { tries: number; nextAt: number }>()
+  const stopRetry = new Map<string, { tries: number; nextAt: number; capped: number; gaveUp: boolean }>()
 
   /**
    * **A scheduled Job's Run that has finished gets its coordinator stopped** (the user's U4 of
@@ -204,11 +211,21 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       }
       const nowMs = c.nowMs()
       const retry = stopRetry.get(sessionId)
-      if (retry && nowMs < retry.nextAt) continue
+      if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
       if (!c.mayStart()) return
+      // LP-1/2: after COORDINATOR_STOP_RETRY_CAP_TRIES stops at the cap, one log line and no more stops.
+      if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+        retry.gaveUp = true
+        log(
+          `run=${run.id}: gave up stopping its coordinator ${sessionId} after ${retry.tries} attempts; ` +
+            `the slot stays pending until the session exits, a restart or a new driver asks again`
+        )
+        continue
+      }
       const tries = (retry?.tries ?? 0) + 1
       const wait = Math.min(COORDINATOR_STOP_RETRY_MS * 2 ** (tries - 1), COORDINATOR_STOP_RETRY_MAX_MS)
-      stopRetry.set(sessionId, { tries, nextAt: nowMs + wait })
+      const capped = (retry?.capped ?? 0) + (wait === COORDINATOR_STOP_RETRY_MAX_MS ? 1 : 0)
+      stopRetry.set(sessionId, { tries, nextAt: nowMs + wait, capped, gaveUp: false })
       const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
       const what = tries === 1 ? `scheduled run=${run.id} finished` : `run=${run.id} (stop attempt ${tries})`
       try {
