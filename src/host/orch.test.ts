@@ -3257,6 +3257,22 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(f.committed[0].next.runs[0].paused).toBe(true)
   })
 
+  // Final review M1: a CLI or agent socket cannot borrow the Host's or the app's caller id to read as them.
+  it('a CLI caller that sends a reserved caller id is journaled as cli', async () => {
+    await seed()
+    const f = fake()
+    const orch = orchOver({ journal: f.journal })
+    await orch.ready()
+    const runId = orch.state().runs[0].id
+    const cliSocket: OrchCaller = { role: 'cli', toOthers: () => {} }
+    expect((await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: 'astera:host', from: cliSocket })).status).toBe(200)
+    expect((await orch.call({ cmd: 'runs-resume', args: { id: runId }, sessionId: 'astera:app', from: cliSocket })).status).toBe(200)
+    expect(f.committed.map((c) => c.actor)).toEqual([
+      { surface: 'cli', sessionId: 'astera:host' },
+      { surface: 'cli', sessionId: 'astera:app' }
+    ])
+  })
+
   it('hands the load’s restart cleanup to the journal once', async () => {
     await seedWorker()
     const f = fake()

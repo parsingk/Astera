@@ -39,13 +39,18 @@ export const HOST_ACTOR: JournalActor = { surface: 'host' }
 export const DESKTOP_ACTOR: JournalActor = { surface: 'desktop' }
 
 /** Who made a call (P5), judged on the state the call found, before it committed: a worker's report
- *  that closes its own Dispatch is still the agent's. The Host's caller id is the Host; the app's, or a
- *  caller whose hello said `role: 'app'`, is the desktop; a session naming an open Dispatch or a Run's
- *  coordinator is an agent; anything else is the CLI, with its session when it has one. */
+ *  that closes its own Dispatch is still the agent's. A caller whose hello said `role: 'app'` is the
+ *  desktop; a session naming an open Dispatch or a Run's coordinator is an agent; anything else is the
+ *  CLI, with its session when it has one.
+ *
+ *  **The reserved caller ids name nobody here** (final review M1). Any shell or agent can send
+ *  HOST_CALLER or APP_CALLER, so they count only when the Host itself or the app's own connection sets
+ *  them: the Host's own commands carry HOST_ACTOR without being judged here, and the app is known by its
+ *  role. Anyone else claiming one is the CLI. */
 export function actorOf(a: { sessionId: string; role?: 'app' | 'cli'; state: OrchState | null }): JournalActor {
-  if (a.sessionId === HOST_CALLER) return HOST_ACTOR
-  if (a.sessionId === APP_CALLER || a.role === 'app') return DESKTOP_ACTOR
+  if (a.role === 'app') return DESKTOP_ACTOR
   if (a.sessionId === '') return { surface: 'cli' }
+  if (a.sessionId === HOST_CALLER || a.sessionId === APP_CALLER) return { surface: 'cli', sessionId: a.sessionId }
   const st = a.state
   const isAgent =
     st !== null &&

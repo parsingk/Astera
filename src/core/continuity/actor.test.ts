@@ -26,10 +26,17 @@ describe('actorOf (J4, P5)', () => {
     runs: [{ id: 'run_1', coordinatorSessionId: 'ses_c' }]
   } as unknown as OrchState
 
-  it('the Host and the app are named by their caller ids and the app by its role', () => {
-    expect(actorOf({ sessionId: HOST_CALLER, state })).toEqual({ surface: 'host' })
-    expect(actorOf({ sessionId: APP_CALLER, state })).toEqual({ surface: 'desktop' })
+  it('the app is named by its connection’s role', () => {
     expect(actorOf({ sessionId: '', role: 'app', state })).toEqual({ surface: 'desktop' })
+    expect(actorOf({ sessionId: APP_CALLER, role: 'app', state })).toEqual({ surface: 'desktop' })
+  })
+  // Final review M1: the reserved caller ids are one environment variable away for any shell or agent.
+  // Only the app's own connection counts as the desktop; the Host's own commands never come through here.
+  it('a caller that is not the app claiming a reserved caller id is the CLI', () => {
+    for (const sessionId of [HOST_CALLER, APP_CALLER]) {
+      expect(actorOf({ sessionId, role: 'cli', state })).toEqual({ surface: 'cli', sessionId })
+      expect(actorOf({ sessionId, state })).toEqual({ surface: 'cli', sessionId })
+    }
   })
   it('a session with an open Dispatch or a Run to coordinate is an agent', () => {
     expect(actorOf({ sessionId: 'ses_w', role: 'cli', state })).toEqual({ surface: 'agent', sessionId: 'ses_w' })
