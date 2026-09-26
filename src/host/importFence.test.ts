@@ -164,4 +164,13 @@ describe('the Host import fence (constraint 10)', () => {
     expect(sdk).toMatch(/import\('@slack\/web-api'\)/)
     expect(sdk).toMatch(/import\('@slack\/socket-mode'\)/)
   })
+
+  // Host journal Task 1 (spec design 1): the journal and the recorder the Host writes with live in core.
+  it('the continuity journal and recorder live in core/continuity and are inside the fence', () => {
+    const moved = ['journal.ts', 'recorder.ts'].map((f) => path.join(srcRoot, 'core', 'continuity', f))
+    for (const f of moved) expect(existsSync(f), f).toBe(true)
+    expect(existsSync(path.join(srcRoot, 'main', 'continuity', 'journal.ts'))).toBe(false)
+    expect(existsSync(path.join(srcRoot, 'main', 'continuity', 'recorder.ts'))).toBe(false)
+    expect(fenceViolations(srcRoot, moved)).toEqual([])
+  })
 })

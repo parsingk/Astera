@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ContinuityJournal, SCHEMA_VERSION } from './journal'
-import type { ContinuityEvent } from '../../core/continuity/events'
+import type { ContinuityEvent } from './events'
 
 let dir: string
 beforeEach(async () => {

@@ -1,5 +1,5 @@
 // Which journal events earn a deterministic checkpoint (spec §12.3, P0 design §7). Pure; the recorder
-// (main/continuity/recorder.ts) reads git and writes the row.
+// (core/continuity/recorder.ts) reads git and writes the row.
 import type { ContinuityEvent, ContinuityEventType } from './events'
 import type { OrchState } from '../orchestration/state'
 

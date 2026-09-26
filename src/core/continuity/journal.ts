@@ -5,12 +5,13 @@
 // projection is saved, so there is nothing to overlap with.
 //
 // orchestration.json stays the source of "what is the state now"; this file answers "what happened".
+// Lives in core/continuity since the Host journal (Task 1), so the Host writes with the same code the app did.
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { existsSync, renameSync } from 'node:fs'
-import type { ContinuityEvent, ContinuityEventType } from '../../core/continuity/events'
-import type { CheckpointKind } from '../../core/continuity/checkpointPolicy'
-import type { Checkpoint } from '../../core/orchestration/checkpoint'
+import type { ContinuityEvent, ContinuityEventType } from './events'
+import type { CheckpointKind } from './checkpointPolicy'
+import type { Checkpoint } from '../orchestration/checkpoint'
 
 export const SCHEMA_VERSION = 2
 

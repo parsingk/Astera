@@ -8,7 +8,7 @@ import { DEFAULT_CONCURRENCY } from '../../core/orchestration/types'
 import type { GitFacts, LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import { decideRecovery } from '../../core/recovery/decide'
 import type { ContinuityEvent, ContinuityEventType } from '../../core/continuity/events'
-import type { CheckpointRow, ContinuityJournal, JournalEventRow, RecoveryActionRow } from '../continuity/journal'
+import type { CheckpointRow, ContinuityJournal, JournalEventRow, RecoveryActionRow } from '../../core/continuity/journal'
 import type { ExecuteResult } from './execute'
 
 // `candidates` and its seed live in core now (the Host's lost-worker Gate asks the same question, R16).

@@ -2,14 +2,15 @@
 // state transition into journal rows, decides and writes checkpoints, handles the mid-run enable, and
 // reads the rows the Timeline shows. Every entry point swallows journal failures into the log —
 // a broken journal must never stop a Job (design §6).
-import { CATALOGS, t, type Lang, type MessageKey, type MessageParams } from '../../core/i18n'
-import type { JobEvent } from '../../core/types'
-import { runIdOf, type OrchState } from '../../core/orchestration/state'
-import { buildCheckpoint } from '../../core/orchestration/checkpoint'
-import { deriveEvents, type ContinuityEvent, type ContinuityEventType } from '../../core/continuity/events'
-import { checkpointsFor, type CheckpointKind } from '../../core/continuity/checkpointPolicy'
-import type { HandoffLookup } from '../../core/handoff/types'
-import { readGitSummary, type GitSummaryDeps } from '../../core/orchestration/exec/gitSummary'
+// Lives in core/continuity since the Host journal (Task 1), so the Host writes with the same code the app did.
+import { CATALOGS, t, type Lang, type MessageKey, type MessageParams } from '../i18n'
+import type { JobEvent } from '../types'
+import { runIdOf, type OrchState } from '../orchestration/state'
+import { buildCheckpoint } from '../orchestration/checkpoint'
+import { deriveEvents, type ContinuityEvent, type ContinuityEventType } from './events'
+import { checkpointsFor, type CheckpointKind } from './checkpointPolicy'
+import type { HandoffLookup } from '../handoff/types'
+import { readGitSummary, type GitSummaryDeps } from '../orchestration/exec/gitSummary'
 import type { CheckpointRow, JournalEventRow, NewCheckpointRow } from './journal'
 
 /** What the recorder needs from the journal. ContinuityJournal satisfies it; tests hand in a fake. */
