@@ -11,6 +11,11 @@
 // ships both `npm` and `npm.cmd`.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import type { ShuttleWarning } from '../../types'
+
+// The reasons the installer gives when the `.cmd` had to be written raw (the type's own comment says
+// what each means). Declared in core/types.ts, which the renderer can read.
+export type { ShuttleWarning }
 
 export interface ShuttleFile {
   name: string
@@ -91,11 +96,15 @@ const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
  * **Only a path that needs it is touched.** An ASCII path is written exactly as before, so nobody who
  * works today depends on a variable being set. Of the folders that hold the path, the longest whose
  * remainder is ASCII wins; a path with no such folder (a non-ASCII install folder outside the user's
- * own) is written as it is, which is what it was before. Windows compares paths without case, and a
- * folder counts only up to a separator, so `C:\Users\홍` does not claim `C:\Users\홍길동`.
+ * own) is written as it is, which is what it was before, unless the installer gave it a junction
+ * (`CmdLink` below). Windows compares paths without case, and a folder counts only up to a separator,
+ * so `C:\Users\홍` does not claim `C:\Users\홍길동`.
+ *
+ * `always` writes a user folder as its variable even when the path is ASCII. The junction's paths use
+ * it, so the shuttle reads `%LOCALAPPDATA%\astera\app\…` as the design names them.
  */
-const forCmd = (p: string, env: NodeJS.ProcessEnv): string => {
-  if (PRINTABLE_ASCII.test(p)) return p
+const forCmd = (p: string, env: NodeJS.ProcessEnv, always = false): string => {
+  if (!always && PRINTABLE_ASCII.test(p)) return p
   let best: { name: string; length: number } | null = null
   for (const name of USER_FOLDER_VARS) {
     const value = env[name]?.replace(/[\\/]+$/, '')
@@ -107,6 +116,74 @@ const forCmd = (p: string, env: NodeJS.ProcessEnv): string => {
     if (best === null || value.length > best.length) best = { name, length: value.length }
   }
   return best === null ? p : `%${best.name}%${p.slice(best.length)}`
+}
+
+/**
+ * A directory junction the `.cmd` shuttle reaches the app through: `link` (`%LOCALAPPDATA%\astera\app`,
+ * beside the public `bin`) points at `root`, the folder that holds the executable.
+ *
+ * **Why.** A non-ASCII install folder outside the user's own folders (`D:\프로그램\Astera`) cannot be
+ * written as a variable (forCmd), and cmd.exe reads the batch file in the OEM code page, so the raw
+ * name breaks. The junction gives the same files an ASCII name. `fs.symlink(root, link, 'junction')`
+ * needs no admin. Only the public shuttle gets one: the installer makes it (installShuttle, syncShuttle)
+ * and shuttleFiles only writes the paths through it.
+ */
+export interface CmdLink {
+  link: string
+  root: string
+}
+
+export type CmdLinkPlan =
+  | { kind: 'none' }
+  | { kind: 'link'; link: CmdLink }
+  | { kind: 'unsuitable'; reason: 'entry-outside-root' | 'remainder-not-ascii' }
+
+/** Where the junction lives for a public shuttle in `dir`: `app` beside it. */
+export const cmdLinkPath = (dir: string): string => path.win32.join(path.win32.dirname(dir), 'app')
+
+/** `p` below `root` as its remainder (a leading separator, or '' for root itself), or null when it is
+ *  not below. Without case and only up to a separator, as forCmd compares. */
+const restUnder = (root: string, p: string): string | null => {
+  const r = root.replace(/[\\/]+$/, '')
+  if (p.slice(0, r.length).toLowerCase() !== r.toLowerCase()) return null
+  const rest = p.slice(r.length)
+  return rest === '' || rest[0] === '\\' || rest[0] === '/' ? rest : null
+}
+
+/**
+ * Whether the public `.cmd` shuttle needs the junction (win32 only; pure).
+ *
+ * `none` when forCmd already leaves both paths printable ASCII. `link` when both paths sit below the
+ * executable's folder with ASCII remainders. `unsuitable` otherwise: the shuttle is then written as it
+ * always was, raw, and the installer says so.
+ */
+export function cmdLinkFor(a: {
+  dir: string
+  execPath: string
+  entryPath: string
+  env: NodeJS.ProcessEnv
+}): CmdLinkPlan {
+  if (PRINTABLE_ASCII.test(forCmd(a.execPath, a.env)) && PRINTABLE_ASCII.test(forCmd(a.entryPath, a.env)))
+    return { kind: 'none' }
+  const root = path.win32.dirname(a.execPath)
+  const execRest = restUnder(root, a.execPath)
+  const entryRest = restUnder(root, a.entryPath)
+  if (execRest === null || entryRest === null) return { kind: 'unsuitable', reason: 'entry-outside-root' }
+  const link = cmdLinkPath(a.dir)
+  if (
+    !PRINTABLE_ASCII.test(execRest) ||
+    !PRINTABLE_ASCII.test(entryRest) ||
+    !PRINTABLE_ASCII.test(forCmd(link, a.env))
+  )
+    return { kind: 'unsuitable', reason: 'remainder-not-ascii' }
+  return { kind: 'link', link: { link, root } }
+}
+
+/** A path as the `.cmd` writes it: through the junction when there is one and the path is below its
+ *  root, and as forCmd writes it otherwise. */
+const forCmdVia = (p: string, env: NodeJS.ProcessEnv, link: CmdLink | undefined): string => {
+  const rest = link ? restUnder(link.root, p) : null
+  return link && rest !== null ? forCmd(link.link + rest, env, true) : forCmd(p, env)
 }
 
 /**
@@ -125,13 +202,15 @@ export function shuttleFiles(a: {
   platform?: NodeJS.Platform
   /** Where the user folders `forCmd` writes as variables are read from. This process's by default. */
   env?: NodeJS.ProcessEnv
+  /** The junction the `.cmd` goes through (CmdLink). Only the installer passes one, once it exists. */
+  link?: CmdLink
 }): ShuttleFile[] {
   if ((a.platform ?? process.platform) === 'win32') {
     const env = a.env ?? process.env
     return [
       {
         name: 'astera.cmd',
-        content: `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${forCmd(a.execPath, env)}" "${forCmd(a.entryPath, env)}" %*\r\n`
+        content: `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${forCmdVia(a.execPath, env, a.link)}" "${forCmdVia(a.entryPath, env, a.link)}" %*\r\n`
       },
       shShuttle(a)
     ]
@@ -193,8 +272,106 @@ const readOrNull = async (p: string): Promise<string | null> => {
   }
 }
 
+/** The few filesystem calls the junction needs, injected so tests can stand in for them. Node's
+ *  `lstat` reports a junction as a symbolic link, and its `unlink` removes a junction itself, never
+ *  what it points at. */
+export interface LinkFs {
+  lstat(p: string): Promise<{ isSymbolicLink(): boolean }>
+  readlink(p: string): Promise<string>
+  symlink(target: string, p: string, type: 'junction'): Promise<void>
+  unlink(p: string): Promise<void>
+}
+
+const realLinkFs: LinkFs = {
+  lstat: (p) => fs.lstat(p),
+  readlink: (p) => fs.readlink(p),
+  symlink: (target, p, type) => fs.symlink(target, p, type),
+  unlink: (p) => fs.unlink(p)
+}
+
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** A junction target in a form two can be compared in: no `\\?\` or `\??\` prefix, backslashes, no
+ *  trailing separator, no case. */
+const linkKey = (p: string): string =>
+  p
+    .replace(/^(\\\\\?\\|\\\?\?\\)/, '')
+    .replace(/\//g, '\\')
+    .replace(/\\+$/, '')
+    .toLowerCase()
+
+type LinkState = 'missing' | 'other' | { target: string }
+
+const linkState = async (link: string, links: LinkFs): Promise<LinkState> => {
+  try {
+    if (!(await links.lstat(link)).isSymbolicLink()) return 'other'
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'missing'
+    throw err
+  }
+  return { target: await links.readlink(link) }
+}
+
+/** Removes the junction if one is there, **as a link only**: a folder or file at that path stays, and
+ *  nothing is ever removed through it. Quiet on failure; a stale junction harms nothing. */
+const dropLink = async (link: string, links: LinkFs): Promise<void> => {
+  try {
+    if (typeof (await linkState(link, links)) === 'object') await links.unlink(link)
+  } catch {
+    /* left as it is */
+  }
+}
+
+/**
+ * The installer's half of the junction (win32, public shuttle only). Makes `%LOCALAPPDATA%\astera\app`
+ * point at the install root when the `.cmd` needs it (cmdLinkFor), re-points one left from where the
+ * app used to be, and removes one the shuttle no longer needs. Returns the link to write the `.cmd`
+ * through, or undefined to write it raw, with a warning when raw is not what it needed.
+ */
+async function prepareCmdLink(
+  a: { dir: string; execPath: string; entryPath: string; env: NodeJS.ProcessEnv; links: LinkFs },
+  warn: (w: ShuttleWarning) => void
+): Promise<CmdLink | undefined> {
+  const plan = cmdLinkFor(a)
+  const linkPath = cmdLinkPath(a.dir)
+  if (plan.kind !== 'link') {
+    if (plan.kind === 'unsuitable')
+      warn({
+        code: 'junction-unsuitable',
+        detail:
+          plan.reason === 'entry-outside-root'
+            ? `the CLI entry ${a.entryPath} is not inside ${path.win32.dirname(a.execPath)}`
+            : `the paths below ${path.win32.dirname(a.execPath)} are not ASCII either`
+      })
+    await dropLink(linkPath, a.links)
+    return undefined
+  }
+  const { link, root } = plan.link
+  try {
+    const state = await linkState(link, a.links)
+    if (state === 'other') {
+      warn({ code: 'link-path-taken', detail: `${link} exists and is not a junction; it was left alone` })
+      return undefined
+    }
+    if (state !== 'missing') {
+      if (linkKey(state.target) === linkKey(root)) return plan.link
+      await a.links.unlink(link) // the app moved: this junction still names its old folder
+    }
+    await a.links.symlink(root, link, 'junction')
+    return plan.link
+  } catch (err) {
+    warn({ code: 'junction-failed', detail: `could not make the junction ${link} -> ${root}: ${errText(err)}` })
+    return undefined
+  }
+}
+
 /** 깔려 있는 공개 셔틀을 지금의 앱으로 다시 쓴다. 판단은 shuttleSyncPlan 이 하고, 쓰는 것은
- *  `rewrite` 일 때뿐이다. PATH 도 셸 프로필도 건드리지 않는다. */
+ *  `rewrite` 일 때뿐이다. PATH 도 셸 프로필도 건드리지 않는다.
+ *
+ *  win32 에서는 `.cmd` 가 정션(CmdLink)을 거쳐야 하는지도 본다. **깔려 있고 우리 것일 때만** 정션을
+ *  만들거나 지금의 설치 폴더로 다시 가리키게 한다. 앱이 옮겨 가도 설치 폴더 아래의 나머지가 같으면
+ *  셔틀은 한 글자도 바뀌지 않으므로(`current`), 정션의 대상은 셔틀과 따로 확인한다. 정션을 못 만든
+ *  까닭은 `onWarning` 으로 넘긴다. */
 export async function syncShuttle(a: {
   dir: string
   execPath: string
@@ -202,12 +379,24 @@ export async function syncShuttle(a: {
   appImage?: AppImageLaunch
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
+  links?: LinkFs
+  onWarning?: (w: ShuttleWarning) => void
 }): Promise<ShuttleSyncPlan> {
-  const desired = shuttleFiles(a)
+  const first = shuttleFiles(a)
   const current: Record<string, string | null> = {}
-  for (const f of desired) current[f.name] = await readOrNull(path.join(a.dir, f.name))
+  for (const f of first) current[f.name] = await readOrNull(path.join(a.dir, f.name))
+  const installed = shuttleSyncPlan({ current, desired: first })
+  if (installed === 'not-installed' || installed === 'foreign') return installed
+  const link =
+    (a.platform ?? process.platform) === 'win32'
+      ? await prepareCmdLink(
+          { ...a, env: a.env ?? process.env, links: a.links ?? realLinkFs },
+          a.onWarning ?? (() => {})
+        )
+      : undefined
+  const desired = shuttleFiles({ ...a, link })
   const plan = shuttleSyncPlan({ current, desired })
-  if (plan === 'rewrite') await writeShuttle(a)
+  if (plan === 'rewrite') await writeShuttle({ ...a, link })
   return plan
 }
 
@@ -215,8 +404,15 @@ export async function syncShuttle(a: {
  * 공개 셔틀을 걷는다. **우리가 쓴 파일만 지운다.** 이름이 같아도 내용이 우리 모양이 아니면 두고,
  * 폴더는 비어도 지우지 않는다(`%LOCALAPPDATA%\astera` 는 다른 것도 사는 폴더이고, `~/.local/bin` 은
  * 말할 것도 없다). 지운 이름들을 돌려준다.
+ *
+ * win32 에서는 `.cmd` 가 거치던 정션(`%LOCALAPPDATA%\astera\app`)도 걷는다. **정션일 때만, 링크로만**
+ * 지우고 그 안으로 들어가지 않는다. 남의 `astera.cmd` 가 남아 있으면 그것이 쓰고 있을지 모르니 둔다.
  */
-export async function removeShuttle(a: { dir: string; platform?: NodeJS.Platform }): Promise<string[]> {
+export async function removeShuttle(a: {
+  dir: string
+  platform?: NodeJS.Platform
+  links?: LinkFs
+}): Promise<string[]> {
   const removed: string[] = []
   for (const name of shuttleNames(a.platform)) {
     const p = path.join(a.dir, name)
@@ -225,7 +421,34 @@ export async function removeShuttle(a: { dir: string; platform?: NodeJS.Platform
     await fs.rm(p, { force: true })
     removed.push(name)
   }
+  if ((a.platform ?? process.platform) === 'win32' && (await readOrNull(path.join(a.dir, 'astera.cmd'))) === null)
+    await dropLink(cmdLinkPath(a.dir), a.links ?? realLinkFs)
   return removed
+}
+
+/**
+ * 공개 셔틀을 까는 버튼의 일. writeShuttle 에 win32 의 정션(CmdLink)을 더한다: `.cmd` 가 정션을
+ * 거쳐야 하면 만들고(예전 것은 다시 가리키게), 못 만들면 지금처럼 진짜 경로를 적고 `warnings` 로
+ * 까닭을 돌려준다. 돌려주는 `path` 는 정본이다.
+ */
+export async function installShuttle(a: {
+  dir: string
+  execPath: string
+  entryPath: string
+  appImage?: AppImageLaunch
+  platform?: NodeJS.Platform
+  env?: NodeJS.ProcessEnv
+  links?: LinkFs
+}): Promise<{ path: string; warnings: ShuttleWarning[] }> {
+  const warnings: ShuttleWarning[] = []
+  let link: CmdLink | undefined
+  if ((a.platform ?? process.platform) === 'win32') {
+    await fs.mkdir(a.dir, { recursive: true }) // the junction goes beside it
+    link = await prepareCmdLink({ ...a, env: a.env ?? process.env, links: a.links ?? realLinkFs }, (w) =>
+      warnings.push(w)
+    )
+  }
+  return { path: await writeShuttle({ ...a, link }), warnings }
 }
 
 export async function writeShuttle(a: {
@@ -235,6 +458,7 @@ export async function writeShuttle(a: {
   appImage?: AppImageLaunch
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
+  link?: CmdLink
 }): Promise<string> {
   const files = shuttleFiles(a)
   await fs.mkdir(a.dir, { recursive: true })

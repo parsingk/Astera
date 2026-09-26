@@ -32,6 +32,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.cli.pathMissing': 'This folder is not on PATH. Running the line below once adds it.',
   'settings.cli.onPath': 'This folder is on PATH.',
   'settings.cli.copy': 'Copy',
+  'settings.cli.cmdRawPath': 'Astera is installed in a folder whose name is not ASCII, and astera from cmd or PowerShell may not run: {detail}. It still runs from Git Bash. Reinstalling Astera into a folder with an ASCII name fixes it.',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':

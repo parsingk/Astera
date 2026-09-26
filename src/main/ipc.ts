@@ -157,6 +157,7 @@ import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import {
+  installShuttle,
   removeShuttle,
   shuttleNames,
   syncShuttle,
@@ -5288,8 +5289,11 @@ export function registerIpc(
     const entryPath = cliEntryPath()
     // 번들을 못 찾으면 쓰지 않는다 — 잘못된 경로를 가리키는 셔틀은 없는 셔틀보다 나쁘다.
     if (!entryPath) throw new Error('CLI_ENTRY_MISSING')
-    await writeShuttle({ dir: cliBinDir(), ...publicShuttleTarget(entryPath) })
-    return cliStatus()
+    // win32: a non-ASCII install folder outside the user folders goes through a junction (installShuttle).
+    // When it cannot, the shuttle is written raw as before and the reply says why.
+    const { warnings } = await installShuttle({ dir: cliBinDir(), ...publicShuttleTarget(entryPath) })
+    for (const w of warnings) orchLog(`public astera shuttle: ${w.code}: ${w.detail}`)
+    return warnings.length > 0 ? { ...cliStatus(), warnings } : cliStatus()
   })
   // 되돌리기(명세 §29). 우리가 쓴 셔틀 파일만 지우고 폴더와 이웃 파일은 남긴다(removeShuttle).
   ipcMain.handle('cli.uninstall', async () => {
@@ -5305,7 +5309,11 @@ export function registerIpc(
   if (app.isPackaged) {
     const entryPath = cliEntryPath()
     if (entryPath)
-      void syncShuttle({ dir: cliBinDir(), ...publicShuttleTarget(entryPath) }).then(
+      void syncShuttle({
+        dir: cliBinDir(),
+        ...publicShuttleTarget(entryPath),
+        onWarning: (w) => orchLog(`public astera shuttle: ${w.code}: ${w.detail}`)
+      }).then(
         (plan) => {
           if (plan === 'rewrite') orchLog(`public astera shuttle in ${cliBinDir()} now points at this app`)
           else if (plan === 'foreign')

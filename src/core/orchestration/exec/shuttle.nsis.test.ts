@@ -69,6 +69,47 @@ describe.runIf(process.platform === 'win32')('installer.nsh customUnInstall (Pow
     expect((await fs.readdir(bin)).sort()).toEqual(['astera', 'astera.cmd'])
   })
 
+  // The junction the .cmd reaches a non-ASCII install folder through (shuttle.ts, CmdLink). Removed as
+  // a link only: the folder it points at, here still full, keeps every file.
+  it('removes the app junction with the shuttle, as a link only, also when its target is gone', async () => {
+    const target = path.join(local, '설치 폴더')
+    await fs.mkdir(target, { recursive: true })
+    await fs.writeFile(path.join(target, 'Astera.exe'), 'x', 'utf8')
+    const link = path.join(local, 'astera', 'app')
+    await fs.symlink(target, link, 'junction')
+    for (const f of shuttleFiles({
+      execPath: path.join(target, 'Astera.exe'),
+      entryPath: path.join(target, 'cli.js'),
+      platform: 'win32',
+      link: { link, root: target }
+    }))
+      await fs.writeFile(path.join(bin, f.name), f.content, 'utf8')
+    run()
+    await expect(fs.lstat(link)).rejects.toThrow()
+    expect(await fs.readdir(target)).toEqual(['Astera.exe'])
+
+    // The app's own uninstall may have removed the folder first: a dangling junction goes too.
+    await fs.symlink(path.join(local, 'gone'), link, 'junction')
+    run()
+    await expect(fs.lstat(link)).rejects.toThrow()
+  })
+
+  it('leaves the app path alone when it is a real folder, or when a foreign astera.cmd stays', async () => {
+    const app = path.join(local, 'astera', 'app')
+    await fs.mkdir(app)
+    await fs.writeFile(path.join(app, 'keep.txt'), 'k', 'utf8')
+    run()
+    expect(await fs.readdir(app)).toEqual(['keep.txt'])
+    await fs.rm(app, { recursive: true })
+
+    const target = path.join(local, 'target')
+    await fs.mkdir(target)
+    await fs.symlink(target, app, 'junction')
+    await fs.writeFile(path.join(bin, 'astera.cmd'), '@echo off\r\nnode C:\\tools\\astera.js %*\r\n', 'utf8')
+    run()
+    expect((await fs.lstat(app)).isSymbolicLink()).toBe(true)
+  })
+
   it('does not fail when the folder is not there', async () => {
     await fs.rm(path.join(local, 'astera'), { recursive: true, force: true })
     run()

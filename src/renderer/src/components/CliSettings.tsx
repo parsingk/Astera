@@ -79,6 +79,12 @@ export function CliSettings(): React.JSX.Element {
               {status.onPath ? t('settings.cli.onPath') : t('settings.cli.pathMissing')}
             </span>
           )}
+          {/* 설치 응답에만 온다: 설치 폴더 이름이 ASCII 가 아닌데 정션을 못 만들어 .cmd 에 진짜 경로를 적었다. */}
+          {status.installed && status.warnings && status.warnings.length > 0 && (
+            <span className="settings-hint">
+              {t('settings.cli.cmdRawPath', { detail: status.warnings.map((w) => w.detail).join('; ') })}
+            </span>
+          )}
           {status.installed && !status.onPath && (
             <div className="cli-path-hint">
               <code>{status.hint}</code>

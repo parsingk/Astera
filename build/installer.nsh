@@ -62,6 +62,11 @@
 ; the ones isShuttleContent (src/core/orchestration/exec/shuttle.ts) recognises; `\x22` is a double
 ; quote, written that way so the command line needs no escaping. -cmatch, because -match ignores case.
 ;
+; **And the `app` junction, as a link only.** For an install folder whose name is not ASCII, the
+; `.cmd` reaches Astera through %LOCALAPPDATA%\astera\app, a directory junction (CmdLink in shuttle.ts).
+; It goes once no `astera.cmd` is left, and only when it is a junction: [IO.Directory]::Delete without
+; recursion removes the link itself and never enters the folder it points at. A real folder there stays.
+;
 ; **Not during an update.** electron-builder runs the old version's uninstaller before installing the
 ; new one; removing the shuttle then would take the command away from everyone who updates. The new
 ; app rewrites it to point at itself when it starts.
@@ -72,7 +77,7 @@
 ; Tested by src/core/orchestration/exec/shuttle.nsis.test.ts, which runs this exact command.
 !macro customUnInstall
   ${ifNot} ${isUpdated}
-    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -C "$$d = Join-Path $$env:LOCALAPPDATA 'astera\bin'; $$w = @{ 'astera.cmd' = '^@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n\x22[^\x22\r\n]*\x22 \x22[^\x22\r\n]*\x22 %\*\r\n\z'; 'astera' = '^#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec \x22[^\x22\n]*\x22 \x22[^\x22\n]*\x22 \x22\$$@\x22\n\z' }; foreach ($$n in $$w.Keys) { $$f = Join-Path $$d $$n; if ((Test-Path -LiteralPath $$f -PathType Leaf) -and ([IO.File]::ReadAllText($$f) -cmatch $$w[$$n])) { Remove-Item -LiteralPath $$f -Force -ErrorAction SilentlyContinue } }"`
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -C "$$d = Join-Path $$env:LOCALAPPDATA 'astera\bin'; $$w = @{ 'astera.cmd' = '^@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n\x22[^\x22\r\n]*\x22 \x22[^\x22\r\n]*\x22 %\*\r\n\z'; 'astera' = '^#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec \x22[^\x22\n]*\x22 \x22[^\x22\n]*\x22 \x22\$$@\x22\n\z' }; foreach ($$n in $$w.Keys) { $$f = Join-Path $$d $$n; if ((Test-Path -LiteralPath $$f -PathType Leaf) -and ([IO.File]::ReadAllText($$f) -cmatch $$w[$$n])) { Remove-Item -LiteralPath $$f -Force -ErrorAction SilentlyContinue } }; $$j = Join-Path $$env:LOCALAPPDATA 'astera\app'; $$i = Get-Item -LiteralPath $$j -Force -ErrorAction SilentlyContinue; if ($$i -and $$i.LinkType -eq 'Junction' -and -not (Test-Path -LiteralPath (Join-Path $$d 'astera.cmd'))) { [IO.Directory]::Delete($$j) }"`
     Pop $R0
   ${endIf}
 !macroend

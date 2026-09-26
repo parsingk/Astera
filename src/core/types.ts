@@ -1592,6 +1592,23 @@ export interface CliInstallStatus {
   onPath: boolean
   /** PATH 에 없을 때 사람이 직접 실행할 한 줄. 앱은 셸 프로필을 고치지 않는다. */
   hint: string
+  /** 설치 응답에만. `.cmd` 가 정션을 거쳐야 했는데 못 해서 진짜 경로를 적은 까닭들
+   *  (core/orchestration/exec/shuttle.ts 의 ShuttleWarning). 있으면 cmd·PowerShell 의 astera 가
+   *  돌지 않을 수 있다. */
+  warnings?: ShuttleWarning[]
+}
+
+/**
+ * Why the public `.cmd` shuttle was written with the raw path after all, which cmd.exe may not be able
+ * to run (core/orchestration/exec/shuttle.ts, CmdLink). `junction-failed`: the junction could not be
+ * made (a network drive, a FAT volume). `link-path-taken`: something that is not a junction already sits
+ * where it goes, and is left alone. `junction-unsuitable`: the paths cannot go through one (the entry is
+ * not below the executable's folder, or the part below it is not ASCII either). `detail` is for a log or
+ * a person, in English. Declared here because the renderer reads it and cannot see shuttle.ts.
+ */
+export interface ShuttleWarning {
+  code: 'junction-failed' | 'link-path-taken' | 'junction-unsuitable'
+  detail: string
 }
 
 export type RendererApi = CoreApi & {
