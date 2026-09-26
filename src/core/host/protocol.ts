@@ -6,6 +6,7 @@
 // renderer.
 import type { OrchState } from '../orchestration/state'
 import type { RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
+import type { SlackForwardedEvent } from '../slack/forwarded'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
  *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
@@ -112,6 +113,11 @@ export const HOST_FEATURE_COORDINATOR_IDLE = 'coordinator-idle'
  *  Announced with `rolling`. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_CHAT_TAKEOVER = 'chat-takeover'
 
+/** The Host owns Slack (Slack in the Host S1): the socket-mode inbox and every post, while no attached app
+ *  keeps Slack (HOST_YIELD_SLACK). Announced with `spawn`, and only by a Host whose SDK loaded (P1).
+ *  Additive, so HOST_PROTOCOL stays 3. */
+export const HOST_FEATURE_SLACK_OWNER = 'slack-owner'
+
 /** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
  *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
  *  a reader folds a chain onto its live id. A `state` entry carries the roll state and its fields. */
@@ -156,6 +162,9 @@ export const HOST_YIELD_ROLLING = 'rolling'
 /** `hello.yields` value: this app knows chat takeover. It defers a chat proc the Host is still starting,
  *  leaves a Host-marked chat chain to the Host, and answers chatPrompts and chatAnswer. */
 export const HOST_YIELD_CHAT_TAKEOVER = 'chat-takeover'
+/** `hello.yields` value: this app opens no Slack socket and posts nothing while its Host announces
+ *  `slack-owner`, forwards the events only it sees, and answers slackChatAnswer (P4). */
+export const HOST_YIELD_SLACK = 'slack'
 
 /** The `orch-act` a Host sends an attached app before it removes a worktree folder (S3, the ruling
  *  on plan risk 3). Args `[path]`. The app answers the tag of anything **it runs itself, not
@@ -165,6 +174,11 @@ export const HOST_YIELD_CHAT_TAKEOVER = 'chat-takeover'
  *  an `OrchServerDeps` name: the app answers it beside `answerOrchAct`. An app that does not answer, or
  *  answers anything but a string or null, costs the removal: the Host keeps the folder. */
 export const HOST_ACT_PATH_IN_USE = 'worktreePathInUse'
+
+/** The orch-act a Slack-owning Host sends an app for a card answer on a chat the app writes. Args
+ *  `[sessionId, requestId, ChatAnswer]`, answered `{ answered: true } | { answered: false, reason }`.
+ *  Not an OrchServerDeps name: the app answers it beside HOST_ACT_PATH_IN_USE (P10). */
+export const HOST_ACT_SLACK_ANSWER = 'slackChatAnswer'
 
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
@@ -285,6 +299,10 @@ export type ClientMessage =
   /** The app's block records (HOST_FEATURE_BLOCKS): one change, or its whole registry after a
    *  handshake. Taken only from a greeted app; the Host absorbs it and does not broadcast it back. */
   | ({ t: 'blocks' } & BlocksBody)
+  /** An event only the app sees, for a Host that announced HOST_FEATURE_SLACK_OWNER to post (Slack in the
+   *  Host §3.3). Fire and forget: nothing answers it. Taken only from a greeted app, and dropped for a
+   *  session the Host sources itself, so no notice is posted twice. A Host without the feature is sent none. */
+  | { t: 'slack-event'; event: SlackForwardedEvent }
 
 export type HostMessage =
   | {

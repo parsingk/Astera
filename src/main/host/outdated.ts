@@ -15,7 +15,8 @@ import {
   HOST_FEATURE_BLOCKS,
   HOST_FEATURE_ROLL_JOURNAL,
   HOST_FEATURE_COORDINATOR_IDLE,
-  HOST_FEATURE_CHAT_TAKEOVER
+  HOST_FEATURE_CHAT_TAKEOVER,
+  HOST_FEATURE_SLACK_OWNER
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -101,6 +102,19 @@ export function hostSpeaksChatTakeover(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_CHAT_TAKEOVER)
+}
+
+/** The connected Host owns Slack (Slack in the Host): the app opens no socket and posts nothing while this
+ *  holds, and forwards what only it sees. Read live, by hostSpeaksRolling's rule: an unresponsive Host
+ *  still holds its socket and posts (only its answers to this app stalled), so the app building its own
+ *  would put two sockets on one token and split the replies (P5). A close clears the features, and only
+ *  then does the app take Slack back, after its grace. */
+export function hostSpeaksSlackOwner(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_SLACK_OWNER)
 }
 
 /** The connected Host exchanges usage-limit block records (S6 D4): the app sends its registry's changes

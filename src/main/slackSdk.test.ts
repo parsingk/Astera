@@ -17,4 +17,10 @@ describe('createWebClient', () => {
     expect(client.retryConfig.retries).toBeDefined()
     expect(client.retryConfig.retries as number).toBeLessThanOrEqual(2) // 기본값(10회)보다 확실히 적어야 한다
   })
+
+  it('points both clients at a loopback API URL when the seam says so (P15)', () => {
+    const c = createWebClient('xoxb-test', { ASTERA_SLACK_API_URL: 'http://127.0.0.1:9/api/' }) as unknown as { slackApiUrl: string }
+    expect(c.slackApiUrl).toBe('http://127.0.0.1:9/api/')
+    expect((createWebClient('xoxb-test', {}) as unknown as { slackApiUrl: string }).slackApiUrl).toBe('https://slack.com/api/')
+  })
 })

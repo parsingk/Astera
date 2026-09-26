@@ -4,23 +4,21 @@
 // installed would fail to start the Host at all.
 import { WebClient } from '@slack/web-api'
 import { SocketModeClient } from '@slack/socket-mode'
-import type { SlackPoster } from '../core/slack/transport'
+import { WEB_CLIENT_OPTIONS, type SlackPoster } from '../core/slack/transport'
 import type { SocketClient } from '../core/slack/inbox'
+import { slackApiUrlFrom } from '../core/slack/apiUrl'
 
-/** Confines SDK construction to one place — so no other file imports @slack/web-api.
- *
- *  Why timeout and retryConfig are specified explicitly: the SDK defaults are no request timeout (timeout: 0) plus
- *  tenRetriesInAboutThirtyMinutes (10 attempts, roughly 30 minutes in total). The root message register() in
- *  core/slack/notifier.ts posts is queued behind `await record.thread` in send(), so if a session starts while
- *  offline or rate-limited, that root chat.postMessage stays pending for up to 30 minutes on the defaults and
- *  every notification for that session (turn complete, limit, rolling, exit) piles up behind it. The design
- *  promises an immediate fallback — "root post fails → threadTs null → notifications go to channel level" —
- *  so a finite timeout and few retries are what make that fallback actually happen within seconds. */
-export function createWebClient(token: string): SlackPoster {
-  return new WebClient(token, { timeout: 10_000, retryConfig: { retries: 2 } })
+/** Confines SDK construction to one place — so no other file imports @slack/web-api. The options and why
+ *  they are finite: WEB_CLIENT_OPTIONS in core/slack/transport.ts. A loopback `ASTERA_SLACK_API_URL`
+ *  points the client at a fake Slack (P15). */
+export function createWebClient(token: string, env: Record<string, string | undefined> = process.env): SlackPoster {
+  const url = slackApiUrlFrom(env)
+  return new WebClient(token, { ...WEB_CLIENT_OPTIONS, ...(url ? { slackApiUrl: url } : {}) })
 }
 
-/** Confines SDK construction to one place — so no other file imports @slack/socket-mode. */
-export function createSocketClient(appToken: string): SocketClient {
-  return new SocketModeClient({ appToken }) as unknown as SocketClient
+/** Confines SDK construction to one place — so no other file imports @slack/socket-mode. The API URL seam
+ *  goes through `clientOptions`, so `apps.connections.open` and the WebSocket URL both come from it (P15). */
+export function createSocketClient(appToken: string, env: Record<string, string | undefined> = process.env): SocketClient {
+  const url = slackApiUrlFrom(env)
+  return new SocketModeClient({ appToken, ...(url ? { clientOptions: { slackApiUrl: url } } : {}) }) as unknown as SocketClient
 }

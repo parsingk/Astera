@@ -44,6 +44,17 @@ export class WebhookTransport implements SlackTransport {
   }
 }
 
+/** The options every WebClient is built with, by the app (main/slackSdk.ts) and the Host (host/slackSdk.ts).
+ *
+ *  Why timeout and retryConfig are specified explicitly: the SDK defaults are no request timeout (timeout: 0) plus
+ *  tenRetriesInAboutThirtyMinutes (10 attempts, roughly 30 minutes in total). The root message register() in
+ *  core/slack/notifier.ts posts is queued behind `await record.thread` in send(), so if a session starts while
+ *  offline or rate-limited, that root chat.postMessage stays pending for up to 30 minutes on the defaults and
+ *  every notification for that session (turn complete, limit, rolling, exit) piles up behind it. The design
+ *  promises an immediate fallback — "root post fails → threadTs null → notifications go to channel level" —
+ *  so a finite timeout and few retries are what make that fallback actually happen within seconds. */
+export const WEB_CLIENT_OPTIONS: { timeout: number; retryConfig: { retries: number } } = { timeout: 10_000, retryConfig: { retries: 2 } }
+
 /** The minimal shape WebClient satisfies. Kept narrow so tests can supply a fake without the SDK. */
 export interface SlackPoster {
   chat: {

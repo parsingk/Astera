@@ -152,4 +152,16 @@ describe('the Host import fence (constraint 10)', () => {
     expect(fenceViolations(srcRoot, moved)).toEqual([])
     for (const f of moved) expect(readFileSync(f, 'utf8'), f).not.toMatch(/from\s+['"]@slack\//)
   })
+
+  // Slack in the Host Task 3 (P1): the Host bundle's only SDK load is the literal import() in slackSdk.ts,
+  // so a runtime without the SDK still starts a Host, and the runtime scan still sees both names.
+  it('no file in core or host imports @slack statically; slackSdk.ts loads both with import()', () => {
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.ts') && !e.name.endsWith('.test.ts') ? [path.join(d, e.name)] : []))
+    for (const f of [...walk(path.join(srcRoot, 'core')), ...walk(here)])
+      expect(readFileSync(f, 'utf8'), f).not.toMatch(/(from|require\()\s*['"]@slack\//)
+    const sdk = readFileSync(path.join(here, 'slackSdk.ts'), 'utf8')
+    expect(sdk).toMatch(/import\('@slack\/web-api'\)/)
+    expect(sdk).toMatch(/import\('@slack\/socket-mode'\)/)
+  })
 })

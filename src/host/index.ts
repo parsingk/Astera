@@ -27,6 +27,7 @@ import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
 import { hostFeatures } from './features'
+import { loadSlackSdk } from './slackSdk'
 import { createHostSpawner } from './spawner'
 import { createHostWorktrees, loadWorktreesIfSpawning } from './worktrees'
 import { createHostProjectRoots } from './projectRoots'
@@ -218,6 +219,12 @@ async function main(): Promise<void> {
   // operation that reached the registry before this heal finished would read it still damaged.
   await loadWorktreesIfSpawning({ hasSpawner: spawner !== null, worktrees, log: (m) => log.write(m) })
 
+  // The Slack SDK (Slack in the Host, P1): loaded once, with import(), before the server fixes its
+  // features, and **only with a spawner** (`slack-owner` rides `spawn`). A failed load is logged by its
+  // error name and this Host announces no `slack-owner`, so the app keeps Slack. Nothing else reads it
+  // yet: the Host's Slack composition comes with Slack in the Host Task 5.
+  const slackSdk = spawner ? await loadSlackSdk({ env: process.env, log: (m) => log.write(m) }) : null
+
   // **The Host drives Jobs** (S4+S5 §4, §5.1): its own checks, the dispatch loop and its triggers, and
   // the hooks they hand `createHostOrch` and `startHostServer` — one composition, which the integration
   // rig builds too (N11). **Only with a spawner** (R7): a Host that cannot start a worker cannot place
@@ -387,7 +394,7 @@ async function main(): Promise<void> {
       // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself,
       // that it also owns worktrees.json (R5: the one decision is `spawner !== null`), that it drives
       // Jobs (R7) and that it rolls its sessions (R17) — the same one fact.
-      features: hostFeatures({ spawns: spawner !== null }),
+      features: hostFeatures({ spawns: spawner !== null, slack: slackSdk !== null }),
       // An app's hello and its socket's close (N1). The server isolates the call too (`tellAppsChanged`).
       ...(wiring?.serverHooks ?? {}),
       // Both hear it: the driver's app-left rule and the rolling's app-gone watch. Each isolates itself.

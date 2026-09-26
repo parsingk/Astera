@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover } from './outdated'
-import { HOST_FEATURE_CHAT_TAKEOVER } from '../../core/host/protocol'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner } from './outdated'
+import { HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_SLACK_OWNER } from '../../core/host/protocol'
 
 describe('hostIsOutdated', () => {
   it('is true when the Host is strictly older than the app', () => {
@@ -127,5 +127,15 @@ describe('hostSpeaksRollJournal', () => {
     expect(hostSpeaksRollJournal({ connected: true, features: ['rolling', 'blocks', 'roll-journal'] })).toBe(true)
     expect(hostSpeaksRollJournal({ connected: true, features: ['rolling', 'blocks'] })).toBe(false) // an S6 Host before Task 4
     expect(hostSpeaksRollJournal({ connected: false, features: ['roll-journal'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksSlackOwner (Slack in the Host, P5)', () => {
+  it('holds while connected or unresponsive with the feature, and not after a close', () => {
+    const f = [HOST_FEATURE_SLACK_OWNER]
+    expect(hostSpeaksSlackOwner({ connected: true, features: f })).toBe(true)
+    expect(hostSpeaksSlackOwner({ connected: false, unresponsive: true, features: f })).toBe(true)
+    expect(hostSpeaksSlackOwner({ connected: false, features: [] })).toBe(false)
+    expect(hostSpeaksSlackOwner({ connected: true, features: ['rolling'] })).toBe(false)
   })
 })
