@@ -8,7 +8,7 @@ import { followRun } from './run'
 import { createHostOrch } from '../host/orch'
 import { handleCommand, type OrchServerDeps } from '../core/orchestration/command'
 import { emptyState, type OrchState } from '../core/orchestration/state'
-import { clockOf } from '../core/orchestration/cliFollow'
+import { clockOf, followLine } from '../core/orchestration/cliFollow'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -196,5 +196,68 @@ describe('followRun through the Host', () => {
     setTimeout(() => void orch.call({ cmd: 'task-update', args: { id: taskId, status: 'completed' }, sessionId: 'coord' }), 80)
     expect(await done).toEqual({ ended: expect.objectContaining({ state: 'completed', runId }) })
     expect(lines.map((l) => l.replace(/^\[[^\]]*\] /, ''))).toEqual(['run created: o', `task created: ${taskId} t`])
+  })
+
+  it('prints the journal’s worker-lost row the Host answers with', async () => {
+    const box: { runId?: string; taskId?: string } = {}
+    const orch = createHostOrch({
+      profileDir: dir,
+      version: '9.9.9',
+      now: () => NOW,
+      hostStartedAt: () => NOW,
+      runningSessions: () => 0,
+      aliveSessionIds: () => new Set<string>(),
+      act: async (name, callArgs) =>
+        name === 'resolveProjectRoot'
+          ? callArgs[0]
+          : name === 'listAccounts'
+            ? [{ id: 'acc', label: 'a', provider: 'codex' }]
+            : {},
+      hasApp: () => true,
+      onState: () => {},
+      log: () => {},
+      sessions: {
+        listSessions: async () => [],
+        readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }),
+        sendSession: async () => {},
+        readChat: async () => [],
+        sendChat: async () => {},
+        serial: (_id, run) => run()
+      },
+      journal: {
+        committed: () => {},
+        loaded: () => {},
+        append: () => ({ status: 200, body: {} }),
+        reload: async () => ({ enabled: true, writer: true }),
+        timeline: (id) =>
+          id === box.runId && box.taskId
+            ? [{ at: '2999-01-01T00:00:00.000Z', kind: 'runtime-lost', sourceId: 'evt_lost', taskId: box.taskId, summary: '' }]
+            : []
+      }
+    })
+    box.runId = ((await orch.call({ cmd: 'run-create', args: { objective: 'o', cwd: path.resolve('/p') }, sessionId: 'coord' })).body as { id: string }).id
+    box.taskId = ((await orch.call({ cmd: 'task-create', args: { run: box.runId, title: 't', spec: 's', account: 'acc' }, sessionId: 'coord' })).body as { id: string }).id
+    const lines: string[] = []
+    const done = followRun({
+      id: box.runId,
+      mode: 'human',
+      timeoutMs: 5_000,
+      windowMs: 40,
+      write: (l) => lines.push(l),
+      call: (args) => orch.call({ cmd: 'runs-follow', args, sessionId: '' })
+    })
+    setTimeout(() => void orch.call({ cmd: 'task-update', args: { id: box.taskId, status: 'completed' }, sessionId: 'coord' }), 80)
+    await done
+    const said = lines.map((l) => l.replace(/^\[[^\]]*\] /, ''))
+    expect(said).toContain(`worker lost: ${box.taskId}`)
+    // Printed once, though every later page carries the row again.
+    expect(said.filter((l) => l.startsWith('worker lost:'))).toHaveLength(1)
+  })
+})
+
+describe('followLine for the journal rows (J7)', () => {
+  it('says a worker was lost and what recovery chose', () => {
+    expect(followLine({ at: '2026-08-04T00:00:00.000Z', kind: 'runtime-lost', sourceId: 'e', taskId: 'tsk_1', summary: '' })).toMatch(/\] worker lost: tsk_1$/)
+    expect(followLine({ at: '2026-08-04T00:00:00.000Z', kind: 'recovery', sourceId: 'e', taskId: 'tsk_1', summary: 'redispatch' })).toMatch(/\] recovery: tsk_1: redispatch$/)
   })
 })

@@ -49,7 +49,7 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
-import { eventCountFor, timelineFor } from './timeline'
+import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
 import {
@@ -90,7 +90,7 @@ import { parseCheckFlag } from '../workUnit/verification'
 import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
 import { appDriven } from './schedule'
-import type { RunOutcome } from '../types'
+import type { JobEvent, RunOutcome } from '../types'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { parseHandoffBody } from '../handoff/parse'
@@ -453,6 +453,10 @@ export interface OrchServerDeps {
    *  The app's wiring always injects it and decides inside whether there is anything to do — the
    *  Job Continuity toggle is read there, not here. Optional so tests can leave it out. */
   onDispatchLost?(a: { dispatchId: string }): void
+  /** The Run's journal rows the timeline shows (Host journal J7, P10): each ATTEMPT_LOST as `runtime-lost`
+   *  and each RECOVERY_STRATEGY_SELECTED as `recovery`. Answered by the Host's own journal (orchDeps'
+   *  NOT_FORWARDED). Absent: `runs-follow` shows the state's events only, as before. */
+  journalTimeline?(runId: string, state: OrchState): JobEvent[]
   /** The agent sessions the Host holds, live and ended (`sessions list`). **Only the Host injects
    *  the three below**, from its own registries (host/sessions.ts): it is the process that holds the
    *  ptys, so it answers with or without an app. Absent, the three commands answer 409. */
@@ -1836,11 +1840,21 @@ export async function handleCommand(
       const seen = typeof args.seen === 'number' && args.seen >= 0 ? args.seen : 0
       const waitMs =
         typeof args.waitMs === 'number' && args.waitMs >= 0 ? Math.min(args.waitMs, FOLLOW_WINDOW_MAX_MS) : FOLLOW_WINDOW_MS
-      type Seen = { gone: true } | { cur: OrchState; count: number; ending: Record<string, unknown> | null }
+      /** The journal's rows (J7). A read that throws costs them, never the follow (P10). */
+      const journalRows = (cur: OrchState): JobEvent[] => {
+        try {
+          return deps.journalTimeline?.(id, cur) ?? []
+        } catch (err) {
+          deps.log?.(`runs-follow: the journal rows of ${id} could not be read: ${String(err)}`)
+          return []
+        }
+      }
+      type Seen = { gone: true } | { cur: OrchState; extra: JobEvent[]; count: number; ending: Record<string, unknown> | null }
       const look = (): Seen => {
         const cur = deps.getState()
         if (!cur.runs.some((r) => r.id === id)) return { gone: true }
-        return { cur, count: eventCountFor(cur, id), ending: waitEndingFor(cur, id, deps.now?.() ?? new Date().toISOString()) }
+        const extra = journalRows(cur)
+        return { cur, extra, count: eventCountFor(cur, id) + extra.length, ending: waitEndingFor(cur, id, deps.now?.() ?? new Date().toISOString()) }
       }
       const waited = await pollUntil(() => {
         const l = look()
@@ -1854,7 +1868,7 @@ export async function handleCommand(
         jobId: run.jobId,
         count: at.count,
         progress: progressOf(at.cur, id),
-        events: at.count > seen ? timelineFor(at.cur, id, () => false) : [],
+        events: at.count > seen ? timelineWith(at.cur, id, () => false, at.extra) : [],
         ending: at.ending
       })
     }

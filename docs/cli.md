@@ -959,6 +959,7 @@ With `--human` each event is one line, the local time first:
 [14:21:02] worker started: tsk_1
 [14:24:14] validation failed (tsk_1)
 [14:25:03] repair worker started: tsk_1 (check-failure)
+[14:27:55] worker lost: tsk_2
 [14:31:40] worker done: tsk_1 (succeeded): the build passes
 run run_9f8e completed, 1/1 tasks done
 ```

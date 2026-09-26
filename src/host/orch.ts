@@ -616,6 +616,7 @@ export function createHostOrch(a: {
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       ...(a.createSession ? { createSession: a.createSession } : {}),
+      ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {
         marks.effects += 1
       },

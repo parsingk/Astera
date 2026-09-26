@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest'
 import { handleCommand, type OrchServerDeps } from './command'
 import { emptyState, type OrchState } from './state'
+import type { JobEvent } from '../types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -117,5 +118,34 @@ describe('runs-follow', () => {
       void deps.setState({ ...cur, runs: [], tasks: [] })
     }, 30)
     expect((await pending).status).toBe(404)
+  })
+})
+
+describe('runs-follow with the journal’s rows (Host journal J7, P10)', () => {
+  const lost = (taskId: string): JobEvent => ({ at: '2026-08-04T00:00:01.000Z', kind: 'runtime-lost', sourceId: 'evt_lost', taskId, summary: '' })
+
+  it('merges the journal rows into the timeline and counts them', async () => {
+    const { deps, runId, taskId } = await seeded()
+    const withJournal = { ...deps, journalTimeline: (id: string) => (id === runId ? [lost(taskId)] : []) } as OrchServerDeps
+    const page = (await call(withJournal, 'runs-follow', { id: runId, seen: 0, waitMs: 5_000 })).body as Page
+    expect(page.count).toBe(3)
+    expect(page.events.map((e) => e.kind)).toEqual(['run-created', 'task-created', 'runtime-lost'])
+  })
+
+  it('wakes when a journal row lands during the window', async () => {
+    const { deps, runId, taskId } = await seeded()
+    const rows: JobEvent[] = []
+    const withJournal = { ...deps, journalTimeline: () => rows } as OrchServerDeps
+    const pending = call(withJournal, 'runs-follow', { id: runId, seen: 2, waitMs: 5_000 })
+    setTimeout(() => rows.push(lost(taskId)), 30)
+    expect(((await pending).body as Page).events.map((e) => e.kind)).toContain('runtime-lost')
+  })
+
+  it('a journal read that throws costs its rows, never the follow', async () => {
+    const { deps, runId } = await seeded()
+    const broken = { ...deps, journalTimeline: () => { throw new Error('locked') } } as OrchServerDeps
+    const r = await call(broken, 'runs-follow', { id: runId, seen: 0, waitMs: 5_000 })
+    expect(r.status).toBe(200)
+    expect((r.body as Page).events.map((e) => e.kind)).toEqual(['run-created', 'task-created'])
   })
 })

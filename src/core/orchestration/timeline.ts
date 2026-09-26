@@ -153,18 +153,28 @@ function collect(
   return events
 }
 
+/** The timeline's order: time, then KIND_RANK, then sourceId. Exported so rows from elsewhere (the
+ *  journal's, Host journal J7) sort by the same rule as the derived ones. */
+export const byTimeline = (a: JobEvent, b: JobEvent): number =>
+  a.at.localeCompare(b.at) || KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.sourceId.localeCompare(b.sourceId)
+
 /** Run 하나의 이벤트, 시각 오름차순. 모달이 열릴 때만 불린다(orch.runDetail). */
 export function timelineFor(
   state: OrchState,
   runId: string,
   isKnownSession: (sessionId: string) => boolean
 ): JobEvent[] {
-  return collect(state, runId, isKnownSession).sort(
-    (a, b) =>
-      a.at.localeCompare(b.at) ||
-      KIND_RANK[a.kind] - KIND_RANK[b.kind] ||
-      a.sourceId.localeCompare(b.sourceId)
-  )
+  return collect(state, runId, isKnownSession).sort(byTimeline)
+}
+
+/** timelineFor with rows from elsewhere (the journal's, J7) merged in by the same order. */
+export function timelineWith(
+  state: OrchState,
+  runId: string,
+  isKnownSession: (sessionId: string) => boolean,
+  extra: readonly JobEvent[]
+): JobEvent[] {
+  return [...collect(state, runId, isKnownSession), ...extra].sort(byTimeline)
 }
 
 /** 이벤트 개수. snapshotFor 가 매 쓰기마다 부르므로 정렬을 건너뛴다.

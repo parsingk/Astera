@@ -12,6 +12,7 @@ import { ProcRegistry } from './procRegistry'
 import { registrySessions } from './sessions'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
 import type { ChatPrompt } from '../core/sessions/chatRead'
+import { emptyState } from '../core/orchestration/state'
 
 const base = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): Parameters<typeof hostOrchDeps>[0] => ({
   getState: () => ({}) as never,
@@ -1341,5 +1342,16 @@ describe('hostOrchDeps — chatTurn and sessionTurn', () => {
     expect(await deps.sessionTurn!('t1', 5)).toEqual({ alive: true, state: 'waiting', prompt: null })
     expect(sessionTurn).toHaveBeenCalledWith('t1', 5)
     expect(acted).toBe(0)
+  })
+})
+
+describe('hostOrchDeps and the Host journal (J7)', () => {
+  it('journalTimeline is the Host’s own, never forwarded, and absent without a journal', () => {
+    const act = vi.fn()
+    const rows = [{ at: 'x', kind: 'runtime-lost' as const, sourceId: 'e', summary: '' }]
+    const deps = hostOrchDeps({ ...base(), act, journalTimeline: () => rows })
+    expect(deps.journalTimeline?.('run_1', emptyState())).toBe(rows)
+    expect(act).not.toHaveBeenCalled()
+    expect(hostOrchDeps({ ...base(), act }).journalTimeline).toBeUndefined()
   })
 })

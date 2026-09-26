@@ -47,6 +47,12 @@ function whatHappened(e: JobEvent): string {
       return `question opened: ${task}: ${summary}`
     case 'gate-resolved':
       return `question answered: ${task}${summary === '' ? '' : `: ${summary}`}`
+    // The Host journal's rows (J7). The recovery summary is the strategy as journaled; its reason is
+    // the body, which the public filter holds back.
+    case 'runtime-lost':
+      return `worker lost: ${task}`
+    case 'recovery':
+      return `recovery: ${task}${summary === '' ? '' : `: ${summary}`}`
     case 'message':
       if (e.messageType === 'worker_done')
         return `worker done: ${task}${e.outcome ? ` (${e.outcome})` : ''}${summary === '' ? '' : `: ${summary}`}`

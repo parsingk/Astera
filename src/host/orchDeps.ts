@@ -5,7 +5,8 @@
 // `handleCommand` did not.
 import type { CheckWaits } from '../core/orchestration/checkWaits'
 import type { OrchAccount, OrchRunConfig, OrchServerDeps } from '../core/orchestration/command'
-import type { Provider } from '../core/types'
+import type { JobEvent, Provider } from '../core/types'
+import type { OrchState } from '../core/orchestration/state'
 import { AppUnreachable, leftNothingBehind, wasRefusedBeforeActing } from '../core/host/orchProtocol'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
@@ -410,7 +411,8 @@ const NOT_FORWARDED = [
   'enterCheckWait',
   'coordinatorIdle',
   'dispatchTask',
-  'createSession'
+  'createSession',
+  'journalTimeline'
 ] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -531,7 +533,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   dispatchTask: true,
   // NOT_FORWARDED as well (CLI spec §14, `sessions create`): the Host's own spawner or chat manager,
   // never the app. It starts a session, so it acts; the wrapper marks it unless nothing started.
-  createSession: true
+  createSession: true,
+  // NOT_FORWARDED as well (Host journal J7, P10): the Host's own journal read for `runs-follow`, never
+  // the app's. A read of a file this Host holds; it leaves nothing outside the call.
+  journalTimeline: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -635,6 +640,9 @@ export function hostOrchDeps(a: {
   /** The Host's own session starter (`sessions create`, sessionCreate.ts). Absent: the command
    *  answers 409, as a caller that is not the Host. */
   createSession?: OrchServerDeps['createSession']
+  /** The Host journal's rows for one Run's timeline (J7, P10), `hostJournal.timeline`. Absent (a Host
+   *  with no journal): `runs-follow` shows the state's events only. */
+  journalTimeline?(runId: string, state: OrchState): JobEvent[]
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -1118,6 +1126,7 @@ export function hostOrchDeps(a: {
     stopCoordinator,
     ...(a.dispatchTask ? { dispatchTask } : {}),
     ...(a.createSession ? { createSession } : {}),
+    ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),
