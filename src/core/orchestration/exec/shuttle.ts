@@ -359,9 +359,21 @@ async function prepareCmdLink(
     }
     if (state !== 'missing') {
       if (linkKey(state.target) === linkKey(root)) return plan.link
-      await a.links.unlink(link) // the app moved: this junction still names its old folder
+      // The app moved: this junction still names its old folder. ENOENT means another writer removed
+      // it first, which is what this call wanted.
+      await a.links.unlink(link).catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      })
     }
-    await a.links.symlink(root, link, 'junction')
+    try {
+      await a.links.symlink(root, link, 'junction')
+    } catch (err) {
+      // At boot the public sync, bootOrch and the Host's first spawn all make this junction, not
+      // waiting on each other. The loser sees EEXIST; if the winner's link names this root, it is ours.
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      const now = await linkState(link, a.links)
+      if (typeof now !== 'object' || linkKey(now.target) !== linkKey(root)) throw err
+    }
     return plan.link
   } catch (err) {
     warn({ code: 'junction-failed', detail: `could not make the junction ${link} -> ${root}: ${errText(err)}` })

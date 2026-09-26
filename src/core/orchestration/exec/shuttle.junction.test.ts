@@ -416,3 +416,63 @@ describe.runIf(process.platform === 'win32')('진짜 정션 (세션 셔틀)', ()
     await fs.unlink(path.join(dir, 'astera', 'app'))
   })
 })
+
+// 부팅 때 세 자리가 같은 정션을 동시에 만들려 한다: 공개 셔틀 동기화(syncShuttle, 기다리지 않음),
+// bootOrch 의 sessionCmdLink, Host 의 첫 spawn. 진 쪽이 EEXIST 나 ENOENT 를 실패로 보고 진짜 경로를
+// 적으면 안 된다. `before` 는 우리가 본 뒤, 우리 호출 직전에 다른 작성자가 한 일이다.
+describe('정션 경합', () => {
+  const racing = (init: { target?: string; beforeSymlink?: (links: Map<string, string>) => void; beforeUnlink?: (links: Map<string, string>) => void }) => {
+    const f = fakeLinks(init.target ? { links: { [link]: init.target } } : {})
+    const api: LinkFs = {
+      ...f.api,
+      symlink: async (target, p, type) => {
+        init.beforeSymlink?.(f.links)
+        if (f.links.has(p)) throw Object.assign(new Error(`EEXIST: ${p}`), { code: 'EEXIST' })
+        return f.api.symlink(target, p, type)
+      },
+      unlink: async (p) => {
+        init.beforeUnlink?.(f.links)
+        if (!f.links.has(p)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' })
+        return f.api.unlink(p)
+      }
+    }
+    return { ...f, api }
+  }
+  const install = (links: LinkFs) => installShuttle({ dir, execPath: EXEC, entryPath: ENTRY, platform: 'win32', env, links })
+
+  it('만들려는 순간 다른 작성자가 같은 대상으로 만들었으면(EEXIST) 성공으로 본다', async () => {
+    const f = racing({ beforeSymlink: (links) => void links.set(link, `${ROOT}\\`) })
+    const r = await install(f.api)
+    expect(r.warnings).toEqual([])
+    expect(await cmdIn(dir)).toContain(`"${link}\\Astera.exe"`)
+  })
+
+  it('EEXIST 뒤에 다시 읽은 정션이 다른 곳을 가리키면 여전히 실패다', async () => {
+    const f = racing({ beforeSymlink: (links) => void links.set(link, 'E:\\다른 앱') })
+    const r = await install(f.api)
+    expect(r.warnings.map((w) => w.code)).toEqual(['junction-failed'])
+    expect(await cmdIn(dir)).toContain(`"${EXEC}"`)
+  })
+
+  it('다시 가리키려 걷는 순간 다른 작성자가 먼저 걷었으면(ENOENT) 그대로 만든다', async () => {
+    const f = racing({ target: 'E:\\옛 자리\\Astera', beforeUnlink: (links) => void links.delete(link) })
+    const r = await install(f.api)
+    expect(r.warnings).toEqual([])
+    expect(f.links.get(link)).toBe(ROOT)
+  })
+
+  it('다른 작성자가 걷고 다시 만들기까지 먼저 했어도(ENOENT 뒤 EEXIST) 성공이다', async () => {
+    const f = racing({
+      target: 'E:\\옛 자리\\Astera',
+      beforeUnlink: (links) => void links.delete(link),
+      beforeSymlink: (links) => void links.set(link, ROOT)
+    })
+    const warnings: ShuttleWarning[] = []
+    const l = await sessionCmdLink(
+      { publicDir: dir, execPath: EXEC, entryPath: ENTRY, platform: 'win32', env, links: f.api },
+      (w) => warnings.push(w)
+    )
+    expect(warnings).toEqual([])
+    expect(l).toEqual({ link, root: ROOT })
+  })
+})
