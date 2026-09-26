@@ -293,7 +293,7 @@ whether Astera is open or closed, for a tab and a chat session alike: turn notic
 permission cards. A reply typed into a session's Slack thread becomes the tab's next keystrokes or the
 chat's next turn, and a card posted there can be answered from Slack. A Host started with no Astera open
 takes Slack about ten seconds after it starts. If Slack refuses the app token (a regenerated token, or the
-Slack app removed), the Host stops reconnecting until the Slack settings are saved again, and says so in
+Slack app removed), the Host stops reconnecting until the Slack settings are saved again or Astera is opened, and says so in
 `slack.log`. The desktop notice still comes only while Astera is open. An Astera older than this version keeps its own Slack instead of yielding it to the
 Host, and a Host too old to own Slack leaves Slack to Astera, as before. With an older Astera open, that
 Astera moves the sessions it has open, and the Host leaves those alone until it closes.
