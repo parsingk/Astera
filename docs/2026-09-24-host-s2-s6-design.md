@@ -1703,8 +1703,13 @@ here.
   carries it). `retireCoordinator` no longer empties the slot in either caller (`run-coordinator-stop` and
   the fire's replacement in `run-spawn`): it writes `coordinatorStopPending` when the slot still names the
   session, and `paused` when asked; the exit release (`coordinatorReleaseOf`, the boot sweep) empties the
-  slot once the stop is confirmed. With a pending mark, `run-coordinator-stop` skips the idle check, since
-  the decision was made already; if the Run moves again it is refused as before and the mark is dropped
+  slot once the stop is confirmed. With a pending mark, `run-coordinator-stop` skips the idle check only
+  while the decision still stands: the Run was replaced and is still paused, or its work is finished.
+  Otherwise it asks the idle check again, as for a fresh stop, and a busy answer drops the mark, since a
+  Run neither paused nor finished is one a person or its coordinator has taken back (final review I2).
+  `runs resume` drops the mark itself (`resumeRun`), since a replaced Run with no Tasks does not move and
+  so never reaches that rule and would otherwise keep a coordinator a person just took back stopped about
+  30 seconds later; the Run moving again still refuses the stop as before and the mark is dropped then too
   (`dropStopPending`). `dispatchLoop.ts` replaces `askedToStop` with an in-memory backoff map per session
   (`COORDINATOR_STOP_RETRY_MS` 30 seconds, doubling, capped at `COORDINATOR_STOP_RETRY_MAX_MS` 10
   minutes), pruned once a session leaves every slot. The new `tidyCoordinators` (stale marks, then stops;
@@ -1720,8 +1725,11 @@ here.
   10 minute cap (see "Known limits after the limits pass"). Pinned by `dispatchLoop.test.ts` ("a
   coordinator stop is retried until the session is gone (L1)": a failed stop retried after backoff and
   succeeds, a refused stop retried, the slot kept pending, the exit release clears the mark and nothing is
-  sent after, `nudge` retries, a non-driving process does nothing) and `command.test.ts` (three L1 cases;
-  six existing U4 cases updated to the kept-then-released slot).
+  sent after, `nudge` retries, a non-driving process does nothing) and `command.test.ts` (five L1 cases,
+  the last two added once `runs resume` and a retry's idle check were corrected (final review I2): `runs
+  resume` on a replaced Run drops its pending stop, so the retry no longer stops that coordinator, and a
+  pending stop on a Run neither paused nor finished asks the idle check again, dropping the mark when it
+  answers busy; six existing U4 cases updated to the kept-then-released slot).
 - **A107. L2: a stale `coordinatorStartingAt` marker is cleared by the driving loop's own pass
   (task-1-report.md).** `coordinatorStarting` already read a marker past `COORDINATOR_START_WINDOW_MS` as
   dead, so a ▶ or a later fire could try again, but nothing ever cleared the field itself, so the sidebar
@@ -1750,20 +1758,23 @@ here.
   unresponsive, and tells `ipc.ts` on each change, which pushes `host:driver` and answers `host.driver`
   (preload and `CoreApi`/`CoreEvents` extended). The renderer's `jobsStall({ hostStatus, driver })`
   (`src/core/orchestration/jobsView.ts`, beside the pure `jobsViewScreen`) answers
-  `{ kind: 'unresponsive' }` when the Host does not answer, which wins over a stale parked report,
-  `{ kind: 'parked', gate }` when parked with a read gate, and `null` while parked with no gate yet, with
-  no host, with no app, or with an older Host that sent no report. `App.tsx` reads `host.driver` once and
-  listens on `host:driver`, and passes the result to `JobsView`, which draws one warning line
-  (`.jobs-stall`) at the top of both the empty and the list screens. New i18n keys, ko and en:
+  `{ kind: 'unresponsive' }` when the Host does not answer, which wins over a stale parked report, but
+  only for a Host the app hands Jobs to, meaning one that announces `dispatch` (final review M1): a Host
+  with no spawner, or an older Host, leaves the app driving by itself, so Jobs keep moving and saying they
+  do not would be false. `{ kind: 'parked', gate }` when parked with a read gate, and `null` while parked
+  with no gate yet, with no host, with no app, or with an older Host that sent no report. `App.tsx` reads
+  `host.driver` once and listens on `host:driver`, and passes the result to `JobsView`, which draws one
+  warning line (`.jobs-stall`) at the top of both the empty and the list screens. New i18n keys, ko and en:
   `jobs.stall.parked`, `jobs.stall.gate.unreadable`, `jobs.stall.gate.notMigrated`,
   `jobs.stall.unresponsive`; `catalog.test` does not force ja or es, so a partial catalog falls back to ko
   and those were left. Pinned by `jobsView.test.ts` (`jobsStall`'s cases: parked gives a reason,
-  unresponsive gives a notice, unresponsive beats parked, host or app missing gives none, parked with no
-  gate and no report gives none), `driving.test.ts`, `driving.integration.test.ts` (the composition
-  broadcasts to dispatch-yielding apps only, `appGreeted` sends the current one, repair reports the host
-  once), `features.test.ts`, `hostDriver.test.ts` (the feature gate, dedupe, malformed drops, forget on
-  disconnect but keep on unresponsive, never throws) and `rolling.integration.test.ts` (its `onAppGreeted`
-  source check loosened to the new block form).
+  unresponsive gives a notice, unresponsive beats parked, an app driving by itself draws nothing even from
+  an unresponsive Host with no `dispatch` in its features (final review M1), host or app missing gives
+  none, parked with no gate and no report gives none), `driving.test.ts`, `driving.integration.test.ts`
+  (the composition broadcasts to dispatch-yielding apps only, `appGreeted` sends the current one, repair
+  reports the host once), `features.test.ts`, `hostDriver.test.ts` (the feature gate, dedupe, malformed
+  drops, forget on disconnect but keep on unresponsive, never throws) and `rolling.integration.test.ts`
+  (its `onAppGreeted` source check loosened to the new block form).
 - **A109. L4: merge records are kept per project, within the shared total (task-3-report.md).**
   `HOST_MERGES_KEPT` moves from 200, the whole total, to 1000, and a new
   `HOST_MERGES_KEPT_PER_PROJECT = 100` caps each project's own share, so one busy project's merges no
@@ -1779,19 +1790,35 @@ here.
   code, as a rewrite should. Pinned by that rewritten test and three new ones: a busy project does not
   push out another's records, a project keeps only its newest `HOST_MERGES_KEPT_PER_PROJECT`, and the rule
   holds over seven real begin and end cycles with small caps.
-- **A110. L5: the codex rollout search scans forward from `locateSince`, not just today and yesterday
-  (task-3-report.md).** `findRollout` (`src/core/rolling/codexLocate.ts`) no longer reads only today's and
-  yesterday's date folders. The new `scanDays(since, now, bornBefore)` walks calendar days, DST-safe, from
-  `since` minus a day to `min(now, bornBefore + 1 day)`, capped at `ROLLOUT_SCAN_DAYS_MAX = 14` folders
-  counted forward from `since` (see "Known limits after the limits pass"). A live locate, `since` near
-  `now`, still reads 2 folders, as before; a restore with `bornBefore = locateSince + 60 seconds` reads 3
-  folders however many days later the takeover happens. If `since` is ahead of the clock, so the window is
-  empty, the old today and yesterday folders are read instead. The `since` and `bornBefore` filters
-  themselves are unchanged, so an older rollout is still not claimed. Pinned by the `locateSince 로부터 며칠
-  뒤의 인계 (L5)` block in `codexLocate.test.ts`: a takeover 5 days later finds the rollout, and an old
-  `since` with no `bornBefore` reads forward from its own folder, both failing before the fix;
+- **A110. L5: the codex rollout search reads more than just today and yesterday's date folders, the
+  newest ones it is allowed (task-3-report.md; final review I1).** `findRollout`
+  (`src/core/rolling/codexLocate.ts`) no longer reads only today's and yesterday's date folders. The new
+  `scanDays(since, now, bornBefore)` walks calendar days, DST-safe, over the window from `since` minus a
+  day to `end`, `min(now, bornBefore + 1 day)`, capped at `ROLLOUT_SCAN_DAYS_MAX = 14` folders. A first
+  version counted the cap forward from `since`, so a caller whose window ran longer than 14 days, an old
+  `since` with no `bornBefore`, stopped short of `end` and never reached today's folder; the final review
+  (I1) caught this, since that caller is exactly a `/new` opened weeks into a rolled codex tab, and such a
+  tab needs its search to still reach today's folder.
+  The cap now counts backward from `end` instead, keeping the newest folders: among the files born after
+  `since`, the newest one wins anyway, so the folders nearest today are the ones worth reading. A live
+  locate, `since` near `now`, still reads 2 folders, as before; a restore with
+  `bornBefore = locateSince + 60 seconds` reads 3 folders however many days later the takeover happens,
+  since `end` sits close to `since` either way and the cap never bites. If `since` is ahead of the clock,
+  so the window is empty, the old today and yesterday folders are read instead. The `since` and
+  `bornBefore` filters themselves are unchanged, so an older rollout is still not claimed. The rollout
+  watcher's own rescan (`src/core/sessions/codexRolloutWatcher.ts`) bounds the `since` it passes to at most
+  a day before now (`Math.max(entry.mappedAt, now - DAY_MS)`, `DAY_MS` now exported from `codexLocate.ts`
+  for this), so a tab mapped long ago rescans only today's and yesterday's folders on every pass rather
+  than walking up to 14 of them every few seconds. A caller whose `since` sits further back than the cap
+  and passes no `bornBefore`, such as a limit probe of a long-started worker, no longer reaches the day its
+  own rollout was born in (see "Known limits after the limits pass"). Pinned by the `locateSince 로부터 며칠
+  뒤의 인계 (L5)` block in `codexLocate.test.ts`: a takeover 5 days later finds the rollout; an old `since`
+  with no `bornBefore`, further back than the cap, now finds a rollout born today instead of reading
+  forward from its own folder, and such a `since` no longer reads the date folder that far back;
   born-before-`locateSince` and born-after-`bornBefore` stay unclaimed, regression guards the old code
-  also happened to pass, since it found nothing at all.
+  also happened to pass, since it found nothing at all. And by `codexRolloutWatcher.test.ts`: a tab mapped
+  more than two weeks ago still moves to the rollout `/new` opens today, and a rescan of a tab mapped days
+  ago reads only the recent folders (at most 3 `readdir` calls, not the cap).
 
 ## Known limits after S3
 
@@ -2266,10 +2293,13 @@ Checked at `68a2bfca`.
   with no gate read yet, the moment before the Host has ever read its settings, answers `null` from
   `jobsStall`; if that first read itself hangs, the sidebar says nothing until it lands, the same silence
   as before this pass, now narrowed to just that one moment.
-- **The codex rollout search is capped at 14 folders forward from `locateSince`**
-  (`ROLLOUT_SCAN_DAYS_MAX`, Amendments A110). A caller with a `bornBefore` needs at most 3; the cap only
-  bites a caller that passes an old `since` with none, so a takeover further out than that still finds
-  nothing for a blank-slate codex respawn.
+- **The codex rollout search no longer reaches a worker's own birth folder once that folder is more than
+  14 days behind today or `bornBefore`** (`ROLLOUT_SCAN_DAYS_MAX`, Amendments A110). The cap keeps the
+  newest folders, ending at today or at `bornBefore`'s next day, not the ones nearest `since`, so a live
+  locate and a restore, whose window sits close to `now` or to `bornBefore` either way, are unaffected. A
+  caller with an old `since` and no `bornBefore` is the one this bites: a limit probe asked about a worker
+  started more than 14 days ago no longer reads the date folder that worker's rollout was actually born
+  in, since the folders read now run backward from today instead.
 
 ## 0. The problem, measured
 

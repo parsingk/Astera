@@ -243,7 +243,11 @@ every one of its tasks is done, the process that drives stops that run's coordin
 until the session is confirmed gone, backing off from 30 seconds up to 10 minutes rather than asking
 once, so a run whose coordinator resists stopping can still show that coordinator, paused, for a while
 after the run itself finished. A run that `jobs run` started for a Job with no schedule keeps its
-coordinator, because you may be reading its tab.
+coordinator, because you may be reading its tab. That stop once the session is gone
+(`run-coordinator-stop --gone`) and the sweep that clears a stale coordinator start mark
+(`run-start-marks-clear`) are the driving loop's own commands: called from inside an agent session they
+are refused with exit 5, and only the app, the Host or a shell reaches them, so a coordinator can never
+empty its own slot or sweep marks itself.
 At a fire, a latest run whose coordinator is the only thing left is replaced: it has no open worker, no
 open question, no check under way and no task its coordinator can still start, as with a run made from
 an objective alone. It is replaced only while its coordinator is parked in `check --wait`, which is the
