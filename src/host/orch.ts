@@ -411,6 +411,9 @@ export function createHostOrch(a: {
   onLoaded?(): void
   /** The two status fields, or null when this Host does not drive (R6). */
   driverStatus?(): { driver: Driver; appAttached: boolean } | null
+  /** The Host's dispatch loop placing one ready Task (`tasks dispatch`), passed through to
+   *  `hostOrchDeps`. Absent: the command answers 409. */
+  dispatchTask?(taskId: string): Promise<{ status: number; body: unknown }>
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -570,6 +573,7 @@ export function createHostOrch(a: {
       rolling: a.rolling ?? null,
       chats: a.chats ?? null,
       chatAppAnswers: a.chatAppAnswers,
+      ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       onEffect: () => {
         marks.effects += 1
       },

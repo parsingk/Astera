@@ -104,7 +104,7 @@ export const NOUNS = {
   // task-create 를 부른다(command.ts). 코디네이터가 쓰는 두 이름은 그대로 남는다.
   jobs: ['list', 'get', 'wait', 'run', 'create'],
   runs: ['list', 'get', 'wait', 'follow', 'stop', 'resume', 'checks'],
-  tasks: ['list', 'add'],
+  tasks: ['list', 'add', 'dispatch'],
   questions: ['list', 'get', 'answer'],
   // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.
   // 동사 없는 `accounts` 는 가이드가 가르치는 세션 명령 그대로다(BARE_NOUNS).

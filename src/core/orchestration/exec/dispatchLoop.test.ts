@@ -990,3 +990,71 @@ describe('a stale coordinator start mark is cleared by the pass (L2)', () => {
     expect(run1(h).coordinatorStartingAt).toBe(NOW)
   })
 })
+
+describe('dispatchOne — one ready Task placed on request (tasks dispatch)', () => {
+  /** The Run is placed by nobody: its Job has no autoDispatch and the Run no coordinator, as a Run is
+   *  once its coordinator has gone. The loop's own pass leaves it alone. */
+  const unplaced = (o: RigOpts = {}) => {
+    const h = rig(o)
+    const s = h.state()
+    h.setState({ ...s, jobs: s.jobs.map((j) => ({ ...j, autoDispatch: undefined })) })
+    return h
+  }
+
+  it('places the Task through the slot the loop uses, on a Run the loop does not place', async () => {
+    const h = unplaced()
+    await h.loop.run()
+    await h.settle()
+    expect(h.startWorker).not.toHaveBeenCalled()
+    const r = await h.loop.dispatchOne('tsk_2')
+    await h.settle()
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ taskId: 'tsk_2', runId: 'run_1', sessionId: 's-0', dispatchId: expect.any(String) })
+    expect(h.handled()).toEqual(['worker-start'])
+    // The loop's placement: concurrency 1 runs in the run worktree.
+    expect(h.startWorker.mock.calls[0][0]).toMatchObject({ taskId: 'tsk_2', accountId: 'accA', worktree: '/wt1' })
+  })
+
+  it('forks the run worktree first when the run has none, as the loop does', async () => {
+    const h = unplaced({ runWithoutWorktree: true })
+    const r = await h.loop.dispatchOne('tsk_1')
+    expect(r.status).toBe(200)
+    expect(h.forked).toHaveLength(1)
+    expect(h.handled()).toEqual(['run-worktree-set', 'worker-start'])
+  })
+
+  it('what the loop would gate is the answer instead: 409 with the reason, and no Gate', async () => {
+    const h = unplaced()
+    h.ctx.loginStatus = async () => false
+    const r = await h.loop.dispatchOne('tsk_1')
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('tsk_1 was not placed')
+    expect(h.handled()).toEqual([])
+    expect(h.state().tasks.find((t) => t.id === 'tsk_1')!.status).toBe('ready')
+  })
+
+  it('refuses a Task that is not ready, one with no account, and an unknown one', async () => {
+    const h = unplaced({ noAccountTask: true })
+    const s = h.state()
+    h.setState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_1' ? { ...t, status: 'pending' as const } : t)) })
+    expect((await h.loop.dispatchOne('tsk_1')).status).toBe(409)
+    expect(((await h.loop.dispatchOne('tsk_na')).body as { error: string }).error).toContain('names no account')
+    expect((await h.loop.dispatchOne('tsk_nope')).status).toBe(404)
+    expect(h.handled()).toEqual([])
+  })
+
+  it('refuses when this process does not drive', async () => {
+    const h = unplaced()
+    h.ctx.mayStart = () => false
+    expect((await h.loop.dispatchOne('tsk_1')).status).toBe(409)
+    expect(h.handled()).toEqual([])
+  })
+
+  it('a worker-start refusal is handed back as it came', async () => {
+    const h = unplaced({ startFailsFor: 'all' })
+    const r = await h.loop.dispatchOne('tsk_1')
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toContain('failed to start worker')
+    expect(h.handled()).toEqual(['worker-start'])
+  })
+})

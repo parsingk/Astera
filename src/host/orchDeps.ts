@@ -400,7 +400,7 @@ const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ..
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
  *  added to the returned object), so that its own failure can never reach `onAppRequired`. Declared
  *  here only for the compiler check below. */
-const NOT_FORWARDED = ['discardRunWorktree', 'stopCoordinator', 'enterCheckWait', 'coordinatorIdle'] as const
+const NOT_FORWARDED = ['discardRunWorktree', 'stopCoordinator', 'enterCheckWait', 'coordinatorIdle', 'dispatchTask'] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -512,7 +512,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED (final round 2, I-A): the Host's own in-memory record of the `check --wait` calls it
   // serves. A record in memory and a read of it; neither leaves anything outside the call.
   enterCheckWait: false,
-  coordinatorIdle: false
+  coordinatorIdle: false,
+  // NOT_FORWARDED as well (CLI spec §18, `tasks dispatch`): built by hand below over the Host's own
+  // dispatch loop, never the app's. It starts a worker, so it acts; the wrapper marks it once it has.
+  dispatchTask: true
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -609,6 +612,9 @@ export function hostOrchDeps(a: {
   /** False when an app holds this session's chat proc without the `chat-takeover` yield, so it cannot
    *  answer a forwarded `chatAnswer` (HOST_CHATS). Absent: every app is asked. */
   chatAppAnswers?(sessionId: string): boolean
+  /** The Host's own dispatch loop placing one ready Task (`tasks dispatch`, drivingWiring's
+   *  `dispatchTask`). Absent: the command answers 409, as a caller that is not the Host. */
+  dispatchTask?(taskId: string): Promise<{ status: number; body: unknown }>
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -948,6 +954,26 @@ export function hostOrchDeps(a: {
     }
   }
 
+  /**
+   * **`tasks dispatch`, by the Host's own dispatch loop** (CLI spec §18). The worker it starts is started
+   * through `worker-start` under the loop's own caller, whose commits count for that call, not this one,
+   * so this call's receipt would otherwise read "did nothing" and a keyed retry would place a second
+   * worker. **Marked once it placed one (2xx), or once it threw** (it may have acted before the throw);
+   * a refusal (a Task not ready, no usable account, a start that rolled back) placed nothing and leaves
+   * no receipt, so the same id works once the cause is fixed.
+   */
+  const dispatchTask = async (taskId: string): Promise<{ status: number; body: unknown }> => {
+    let reply: { status: number; body: unknown }
+    try {
+      reply = await a.dispatchTask!(taskId)
+    } catch (err) {
+      a.onEffect?.()
+      throw err
+    }
+    if (reply.status >= 200 && reply.status < 300) a.onEffect?.()
+    return reply
+  }
+
   /** HOST_RESOLVES: the Host's own resolver when no app is attached or the Host drives, else the app,
    *  and the Host again when that app cannot be asked. A failure is thrown as it is, never flagged:
    *  the command layer swallows it (see HOST_RESOLVES). */
@@ -1033,6 +1059,7 @@ export function hostOrchDeps(a: {
     readChat: own('readChat'),
     discardRunWorktree,
     stopCoordinator,
+    ...(a.dispatchTask ? { dispatchTask } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),

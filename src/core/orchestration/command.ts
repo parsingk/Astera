@@ -484,6 +484,10 @@ export interface OrchServerDeps {
   /** Allow or deny one open approval, by the session's writer. Never throws for a closed prompt: that is
    *  `{ answered: false, reason: 'not-open' }`. */
   chatAnswer?(sessionId: string, requestId: string, decision: 'allow' | 'deny'): Promise<ChatAnswerResult>
+  /** Places one ready Task now, for `tasks dispatch` (CLI spec §18): the driving process's dispatch loop
+   *  (exec/dispatchLoop.ts `dispatchOne`), through the slot the loop fills. **Only the Host injects it**,
+   *  and answers 409 itself when it does not drive. Absent, the command answers 409. */
+  dispatchTask?(taskId: string): Promise<Reply>
 }
 
 type Reply = { status: number; body: unknown }
@@ -786,7 +790,9 @@ const COORDINATOR_ONLY = new Set([
   'reply',
   'reset',
   'check',
-  'inbox'
+  'inbox',
+  // A worker placing another Task is nested orchestration, refused for worker-start's reason.
+  'tasks-dispatch'
 ])
 
 /** Session-task commands answer to the work-unit tracking toggle, not the orchestration one. They
@@ -2362,6 +2368,65 @@ export async function handleCommand(
           now
         )
       )
+    }
+    /**
+     * **One ready Task, placed now** (CLI spec §18). A person or a script asks; the driver places it
+     * through the slot its loop fills (`dispatchTask`, the Host's dispatch loop), so the account, the
+     * run worktree, the integration step and the placement are the loop's, and `worker-start` is the
+     * one door, as it is for the loop and for a coordinator.
+     *
+     * **This layer judges whether it may be placed at all**, from the state, before anything is asked:
+     * the Task is ready, its Run is running and not paused, and nobody else places that Run's Tasks.
+     *
+     * **A coordinator-driven Run is refused, and that is the safer of the two rules.** Letting a person
+     * place into it would work mechanically, since `worker-start` is the coordinator's own door too. But
+     * the coordinator plans that Run: it chooses which Task goes next, on which account, reusing which
+     * session (`--terminal`), and it counts the concurrency slots it has left. A worker it did not start
+     * takes one of those slots behind its back, and its report arrives in the coordinator's `check`
+     * batch as the result of a start it never made; the coordinator then either repeats work or has to
+     * reason about a worker it cannot account for. The person's intent is served better by telling that
+     * coordinator (`sessions send` to its session) or by `runs stop` first. So the rule is the one the
+     * app's loop already follows (`slotsToFill` places only app-driven Runs): a Run has one placer.
+     */
+    case 'tasks-dispatch': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required: a task id from `tasks list`')
+      const task = s.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      const run = task.runId === undefined ? undefined : s.runs.find((r) => r.id === task.runId)
+      if (!run)
+        return conflict(
+          `task ${id} belongs to a Job's plan, not to a run; \`jobs run\` copies it into a run, where it can be placed`
+        )
+      const job = jobOf(s, run)
+      if (run.coordinatorSessionId !== undefined || coordinatorStarting(run, Date.parse(now)))
+        return conflict(
+          run.coordinatorSessionId !== undefined
+            ? `run ${run.id} is driven by its coordinator (session ${run.coordinatorSessionId}), which places its tasks; ask it with \`sessions send --id ${run.coordinatorSessionId}\`, or \`runs stop\` the run first`
+            : `run ${run.id} has a coordinator starting, which will place its tasks`
+        )
+      if (run.paused === true || job?.paused === true)
+        return conflict(`run ${run.id} is paused; \`runs resume --id ${run.id}\` lets it go again, and then its tasks can be placed`)
+      if (job?.pendingStart === true)
+        return conflict(`run ${run.id} is not running: its Job has not been started; start it with \`jobs run --id ${job.id}\``)
+      if (job?.schedule !== undefined && run.ordinal === 0)
+        return conflict(`job ${job.id} is a schedule; it places nothing itself, its runs do`)
+      if (outcomeOf(s, run.id) !== 'running') return conflict(`run ${run.id} is not running: it has ${outcomeOf(s, run.id)}`)
+      if (task.status !== 'ready')
+        return conflict(
+          `task ${id} is ${task.status}, not ready${task.status === 'blocked' ? ': a question is open on it (`questions list --status open`)' : ''}`
+        )
+      if (task.consecutiveFailures >= FAILURE_LIMIT)
+        return conflict(`task ${id} has failed ${task.consecutiveFailures} times in a row (circuit break); reset it with task-update first`)
+      if ((task.accountIds?.length ?? 0) === 0)
+        return conflict(`task ${id} names no account to run on`)
+      const limit = job?.concurrency ?? DEFAULT_CONCURRENCY
+      const mine = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
+      const openHere = s.dispatches.filter((d) => mine.has(d.taskId) && !d.outcome && !d.endedAt).length
+      if (openHere >= limit)
+        return conflict(`run ${run.id} is at its concurrency limit: ${openHere} of ${limit} workers are open`)
+      if (!deps.dispatchTask) return conflict('placing a task on request is done by the Astera Host, and this caller is not one')
+      return deps.dispatchTask(id)
     }
     case 'tasks-list': {
       let tasks = s.tasks

@@ -40,6 +40,7 @@ export interface HostDrivingWiring {
     onLoaded(): void
     driverStatus(): { driver: Driver; appAttached: boolean }
     validationStop(runId: string): boolean
+    dispatchTask(taskId: string): Promise<{ status: number; body: unknown }>
   }
   /** Spread into startHostServer's deps. */
   serverHooks: { onAppsChanged(): void }
@@ -157,7 +158,12 @@ export function composeHostDriving(a: {
       },
       driverStatus: () => driving.status(),
       // Marks the run stopped, then kills it (checks.stopValidation).
-      validationStop: (id) => checks.stopValidation(id)
+      validationStop: (id) => checks.stopValidation(id),
+      // `tasks dispatch`: a leaving Host places nothing (the loop's own mayStart says so too).
+      dispatchTask: (taskId) =>
+        disposed
+          ? Promise.resolve({ status: 409, body: { error: 'the Host is leaving and places nothing; try again once a Host is up' } })
+          : driving.dispatchOne(taskId)
     },
     serverHooks: {
       // Isolated here as well as in the server's own `tellAppsChanged` (constraint 14): this runs inside

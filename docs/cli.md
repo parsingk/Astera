@@ -467,6 +467,7 @@ astera runs    checks --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
 astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
+astera tasks   dispatch --id <taskId>
 
 astera accounts list  [--agent <claude|codex>]
 
@@ -609,6 +610,44 @@ id given to `--job`, or a Job id given to `--run`, is a 4, never quietly the oth
 `--validate` names the run configurations that must pass on the worker's result before the task counts
 as done; the ids come from `run-configs list --job`, comma-separated. An id that is not one of that
 Job's is a 4, and `nextSteps` is `astera run-configs list --job <jobId>` with the Job filled in.
+
+**`tasks dispatch --id <taskId>` places one ready task now**, for a person or a script. The Host
+places it the way its own loop places a task: the task's first account (logged in, of the right
+vendor), the run's worktree (made first if the run has none), a merge of the worktrees it depends on
+when it needs one, the placement (the run worktree at a concurrency of 1, a worktree of its own
+above that), and then `worker-start`, the one door every worker goes through. The answer is the
+worker it started:
+
+```json
+{"ok":true,"data":{"taskId":"tsk_2","runId":"run_9f8e","dispatchId":"dsp_1c","sessionId":"…","cwd":"D:\\repo-wt\\tsk_2"}}
+```
+
+It is for a task the loop does not reach on its own: most often a task of a run nothing places any
+more, such as a run whose coordinator has gone, or a task the loop tried once and left. It is refused
+with 6, and nothing is started, when:
+
+- the task is not `ready` (the message says what it is), has failed three times in a row, or names
+  no account;
+- its run is paused (`runs resume` lets it go again), not started yet (`jobs run`), or finished;
+- its run is at its concurrency limit;
+- its run is driven by a coordinator, or has one starting;
+- the Host does not place Jobs on this profile right now: Astera places them instead, the Host is
+  parked until Astera has run once with the profile, or the Host is leaving.
+
+**A run driven by a coordinator is refused on purpose.** `worker-start` would take the task, since it
+is the coordinator's own door, but the coordinator plans that run: it picks the next task, the account
+and the session to reuse, and it counts the workers it has left. A worker it did not start takes one
+of those places behind its back, and its report reaches the coordinator as the result of a start it
+never made. So a run has one placer, the rule the loop already follows. Tell the coordinator instead,
+with `astera sessions send --id <its session> --text …`, or stop the run first with `runs stop`.
+
+What would open a question in the app, such as no usable account or a worktree that cannot be made, is
+a 6 carrying the reason instead, and no question is opened: you asked, so you get the answer. When the
+task first needs the worktrees it depends on merged, the Host makes the merge task and says so with a 6;
+the merge task runs first and the task after it. A start that fails is handed back as `worker-start`
+answered it. A worker session is refused with 5, as it is for `worker-start`. With `--request-id` a
+retry does not place a second worker; a refusal leaves no receipt, so the same id works once the cause
+is fixed.
 
 **`run-configs list --job <jobId>` prints `id`, `name` and `type`** for each run configuration of the
 Job's folder: the ones the app's Run menu shows there, saved and detected. Nothing else about a

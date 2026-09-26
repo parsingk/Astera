@@ -103,6 +103,13 @@ describe('publicFor', () => {
       .toEqual({ id: 't1', jobId: 'job_1' })
   })
 
+  // `tasks dispatch` answers the worker the loop started: the spec file's path is the Host's own.
+  it('tasks dispatch 는 Task·회차·Dispatch·세션·폴더만 낸다', () => {
+    expect(
+      publicFor('tasks-dispatch', { taskId: 't1', runId: 'r1', dispatchId: 'd1', sessionId: 's1', cwd: 'D:/wt', specPath: 'D:/p/orch/specs/d1.md' })
+    ).toEqual({ taskId: 't1', runId: 'r1', dispatchId: 'd1', sessionId: 's1', cwd: 'D:/wt' })
+  })
+
   // 구성은 명령·env·cwd 를 들고 있다 — env 값은 비밀일 수 있다. 앱이 이미 셋으로 추리지만 그래도 가린다.
   it('run-configs list 는 id·name·type 셋만 낸다', () => {
     expect(

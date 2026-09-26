@@ -1193,3 +1193,45 @@ describe('hostOrchDeps — HOST_CHATS (chat takeover §3.5)', () => {
     expect(onEffect).toHaveBeenCalledTimes(1)
   })
 })
+
+// `tasks dispatch` (CLI spec §18). The worker is started through `worker-start` under the loop's own
+// caller, so this call's own receipt depends on this mark alone.
+describe('hostOrchDeps — dispatchTask, the Host loop placing one Task', () => {
+  it('is absent when the Host has no loop to ask, so the command answers 409', () => {
+    expect(hostOrchDeps(base()).dispatchTask).toBeUndefined()
+  })
+
+  it('never goes to the app, and marks an effect once a worker was placed', async () => {
+    const act = vi.fn()
+    let acted = 0
+    const deps = hostOrchDeps(
+      base({ act, onEffect: () => acted++, dispatchTask: async (id) => ({ status: 200, body: { taskId: id } }) })
+    )
+    expect(await deps.dispatchTask!('tsk_1')).toEqual({ status: 200, body: { taskId: 'tsk_1' } })
+    expect(acted).toBe(1)
+    expect(act).not.toHaveBeenCalled()
+  })
+
+  it('a refusal placed nothing and marks nothing, so the same request id works later', async () => {
+    let acted = 0
+    const deps = hostOrchDeps(
+      base({ onEffect: () => acted++, dispatchTask: async () => ({ status: 409, body: { error: 'not placed' } }) })
+    )
+    expect((await deps.dispatchTask!('tsk_1')).status).toBe(409)
+    expect(acted).toBe(0)
+  })
+
+  it('a throw is marked, since it may have come after the start', async () => {
+    let acted = 0
+    const deps = hostOrchDeps(
+      base({
+        onEffect: () => acted++,
+        dispatchTask: async () => {
+          throw new Error('disk full')
+        }
+      })
+    )
+    await expect(deps.dispatchTask!('tsk_1')).rejects.toThrow('disk full')
+    expect(acted).toBe(1)
+  })
+})

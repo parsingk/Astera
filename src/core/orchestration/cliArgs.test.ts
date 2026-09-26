@@ -195,7 +195,7 @@ describe('공개 표면 — 두 낱말 명령', () => {
   // 플래그가 동사 자리에 오면 동사를 안 준 것이다 — `--json` 을 동사로 읽으면 엉뚱한 오류가 난다
   it('플래그를 동사로 읽지 않는다', () => {
     expect(parseArgs(['tasks', '--json'])).toEqual({
-      error: 'tasks needs one of: list, add'
+      error: 'tasks needs one of: list, add, dispatch'
     })
   })
 

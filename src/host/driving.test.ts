@@ -1437,3 +1437,42 @@ describe('createHostDriving — the driver report (L3)', () => {
     expect(h.logs.join(' | ')).toMatch(/could not report the driver/)
   })
 })
+
+// `tasks dispatch` (CLI spec §18): one ready Task placed by this Host's loop, only while it drives.
+describe('dispatchOne — tasks dispatch through the Host loop', () => {
+  it('places a ready Task of a Run nothing places, while the Host drives', async () => {
+    const h = await rig()
+    await h.load()
+    const s = h.orch.state()
+    await h.orch.internalDeps().setState({
+      ...s,
+      jobs: [...s.jobs, { id: 'job_2', objective: 'o', cwd: dir, createdAt: NOW, concurrency: 1 }],
+      runs: [...s.runs, { id: 'run_2', jobId: 'job_2', ordinal: 1, createdAt: NOW, worktree: wt }],
+      tasks: [...s.tasks, task({ id: 'tsk_mine', runId: 'run_2', jobId: 'job_2' })]
+    })
+    await h.settle()
+    expect(h.local.startWorker).not.toHaveBeenCalled()
+    const r = await h.driving.dispatchOne('tsk_mine')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ taskId: 'tsk_mine', runId: 'run_2' })
+    expect(h.local.startWorker).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses while an app that keeps dispatch drives, naming it', async () => {
+    const h = await rig({ readyTasks: 0 })
+    h.server.app = true
+    h.server.keeps = true
+    await h.load()
+    const r = await h.driving.dispatchOne('tsk_0')
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('Astera places Jobs')
+  })
+
+  it('refuses while the Host is parked', async () => {
+    const h = await rig({ settings: {} })
+    await h.load()
+    const r = await h.driving.dispatchOne('tsk_0')
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('parked')
+  })
+})

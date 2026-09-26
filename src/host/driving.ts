@@ -73,6 +73,9 @@ export interface HostDriving {
   /** The last driver and the gate it was computed from (limits pass L3): null before the first read.
    *  What an attached app is told, so its Jobs sidebar can say why a parked Host starts nothing. */
   report(): HostDriverReport
+  /** `tasks dispatch` (CLI spec §18): one ready Task placed now by this Host's loop (`dispatchOne`),
+   *  after any handover in progress. 409 when this Host does not drive, naming who does. */
+  dispatchOne(taskId: string): Promise<{ status: number; body: unknown }>
   dispose(): void
 }
 
@@ -534,6 +537,23 @@ export function createHostDriving(d: {
     tick,
     status: () => ({ driver: last, appAttached: d.server.hasApp() }),
     report: () => ({ driver: last, gate: lastGate }),
+    dispatchOne: async (taskId) => {
+      await compute('a task was asked for')
+      if (!mayStart())
+        return {
+          status: 409,
+          body: {
+            error:
+              last === 'app'
+                ? 'Astera places Jobs on this profile right now, not the Host; its loop places ready tasks as room opens'
+                : d.spawner.isRetiring()
+                  ? 'the Host is leaving and places nothing; try again once a Host is up'
+                  : 'this Host does not place Jobs on this profile yet (it is parked until Astera has run once with it); open Astera'
+          }
+        }
+      await handover
+      return loop.dispatchOne(taskId)
+    },
     dispose: () => {
       stop()
       grace.dispose()
