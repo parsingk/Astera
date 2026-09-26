@@ -150,6 +150,11 @@ logon session, and is out of scope for the shape above.
    closed gets the same isolation as one started from the app: its workers still run in the user's
    logon session and would take the screen the same way. Where there is no interactive desktop (CI,
    SSH, a server), it switches itself off, since there is no screen to protect.
+6. **The Host owns it whether the app is open or not (2026-09-26).** Whoever started the worker (the
+   app while it is open, the Host once it has quit), the worker asks the Host for the hidden desktop and
+   the app in it, so quitting the app mid-verification loses nothing. The open app only shows what the
+   Host reports: captures or a marker that an agent is driving an app out of sight. The agent browser
+   stays as it is, in the app, and still does not work with the app closed.
 
 ## Still open
 
