@@ -19,10 +19,14 @@ const CLOCK_SKEW_MS = 2_000
 /** How many date folders one search reads at most (limit L5, 2026-09-26). A live locate needs two (the
  *  day before `since` and today), a restore bounded by `bornBefore` three; the cap only matters for a
  *  caller that passes an old `since` with no `bornBefore`, and keeps that one from walking months of
- *  folders on every one-second poll. Two weeks is far past any takeover a person waits for. */
+ *  folders on every poll. When the window is longer, the newest folders are kept, the ones ending at
+ *  `end`: such a caller (a limit probe of a long worker) is after a file born lately, and among the files
+ *  born after `since` the newest wins anyway. Two weeks is far past any takeover a person waits for. */
 export const ROLLOUT_SCAN_DAYS_MAX = 14
 
-const DAY_MS = 24 * 60 * 60_000
+/** One day in ms. Exported for a caller that bounds its own `since` to keep a frequent search cheap
+ *  (the rollout watcher's rescan). */
+export const DAY_MS = 24 * 60 * 60_000
 
 /** Date -> ['2026','07','09'] (local time — codex creates its folders by local date too) */
 function dateParts(d: Date): [string, string, string] {
@@ -34,20 +38,22 @@ function dateParts(d: Date): [string, string, string] {
  *  before `since` (midnight and time zone slack, as the old "yesterday" folder was) to the day after
  *  `bornBefore`, or to today when there is none. Walking forward from `since` and not back from today
  *  is the point of L5: a restore taking over days after a blank-slate spawn looks where that spawn's
- *  rollout was born, not in today's and yesterday's folders, which cannot hold it. Steps by calendar
- *  day, so a 23- or 25-hour day at a DST change neither skips nor repeats a folder. When the window is
- *  empty (a `since` ahead of the clock), today's and yesterday's folders are read as before. */
+ *  rollout was born, not in today's and yesterday's folders, which cannot hold it. At most
+ *  ROLLOUT_SCAN_DAYS_MAX folders, the newest ones, so a long window still ends at today (or at
+ *  `bornBefore`'s next day). Steps by calendar day, so a 23- or 25-hour day at a DST change neither
+ *  skips nor repeats a folder. When the window is empty (a `since` ahead of the clock), today's and
+ *  yesterday's folders are read as before. */
 function scanDays(since: number, now: number, bornBefore: number | undefined): [string, string, string][] {
   const end = Math.min(now, bornBefore !== undefined ? bornBefore + DAY_MS : now)
   const start = since - DAY_MS
   if (start > end) return [dateParts(new Date(now - DAY_MS)), dateParts(new Date(now))]
-  const last = dateParts(new Date(end)).join('/')
-  const first = new Date(start)
+  const first = dateParts(new Date(start)).join('/')
+  const last = new Date(end)
   const days: [string, string, string][] = []
   for (let i = 0; i < ROLLOUT_SCAN_DAYS_MAX; i++) {
-    const day = dateParts(new Date(first.getFullYear(), first.getMonth(), first.getDate() + i))
-    days.push(day)
-    if (day.join('/') === last) break
+    const day = dateParts(new Date(last.getFullYear(), last.getMonth(), last.getDate() - i))
+    days.unshift(day)
+    if (day.join('/') === first) break
   }
   return days
 }

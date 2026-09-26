@@ -17,7 +17,7 @@
 // Lives in core since Slack in the Host (Task 1), so the Host runs the same notifier the app does.
 import type { Account, SessionInfo, SessionUsage } from '../types'
 import { JsonlTail } from '../rolling/jsonlTail'
-import { findRollout } from '../rolling/codexLocate'
+import { DAY_MS, findRollout } from '../rolling/codexLocate'
 import { limitStateFromLines, type CodexLimitState } from '../rolling/codexSignal'
 import { tailLines } from '../rolling/tailLines'
 import { contextFromLines, sessionUsageOf } from '../usage/codex'
@@ -331,7 +331,11 @@ export class CodexRolloutWatcher {
       cwd: entry.cwd,
       // The clock-skew margin findRollout allows means the file we are already on can come back here;
       // the path comparison below is what settles it, so no separate guard is needed.
-      since: entry.mappedAt,
+      // Bounded to the last day: the date folders read run from the day before `since`, and a tab mapped
+      // weeks ago would otherwise walk up to ROLLOUT_SCAN_DAYS_MAX folders on every rescan. The file
+      // `/new` opens is seconds newer than the previous rescan, so today's and yesterday's folders (the
+      // search before limit L5) are all it can be in.
+      since: Math.max(entry.mappedAt, this.now() - DAY_MS),
       now: this.now,
       excludePaths: this.claimed(entry)
     })

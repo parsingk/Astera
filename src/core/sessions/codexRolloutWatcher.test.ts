@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, mkdir, writeFile, appendFile } from 'node:fs/promises'
+import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
@@ -316,6 +317,58 @@ describe('CodexRolloutWatcher', () => {
     expect(w.rolloutPathFor('live-1')).toBe(second)
     expect(w.codexSessionIdFor('live-1')).toBe('sess-b')
     w.stop()
+  })
+
+  // Limit L5 capped the date folders a search reads. A tab mapped weeks ago re-scans with that old
+  // mapping time, and the cap must still leave today's folder in view, where `/new` puts its file.
+  // birthtime cannot be set, so both files are born now and only the watcher's clock is moved back.
+  it('moves a tab mapped more than two weeks ago to the rollout /new opens today', async () => {
+    const DAY = 24 * 60 * 60_000
+    const today = Date.now()
+    const saved = now // module clock the other tests keep counting on
+    now = today - 15 * DAY
+    const cwd = path.join(dir, 'proj')
+    const first = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+
+    now = today
+    const second = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
+    await advance(TICK)
+    const after = w.rolloutPathFor('live-1')
+    w.stop()
+    now = saved
+    expect(after).toBe(second)
+  })
+
+  // The rescan runs every few seconds for every mapped tab. `/new` is a keystroke the previous rescan
+  // was seconds away from, so it only needs today's and yesterday's folders however long ago the tab
+  // was mapped, not the up to two weeks a search with that old mapping time would read.
+  it('re-scans a tab mapped days ago through the recent folders only', async () => {
+    const DAY = 24 * 60 * 60_000
+    const today = Date.now()
+    const saved = now
+    now = today - 10 * DAY
+    const cwd = path.join(dir, 'proj')
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    const mapped = w.rolloutPathFor('live-1')
+
+    now = today
+    const sessionsDir = path.join(dir, 'sessions')
+    const readdir = vi.spyOn(fsPromises, 'readdir')
+    await advance(TICK)
+    const read = readdir.mock.calls.filter(([p]) => String(p).startsWith(sessionsDir)).length
+    readdir.mockRestore()
+    w.stop()
+    now = saved
+    expect(mapped).not.toBeNull()
+    expect(read).toBeGreaterThan(0)
+    expect(read).toBeLessThanOrEqual(3)
   })
 
   it('writes the newer mapping down, so a restart adopts the conversation the session is really on', async () => {

@@ -388,7 +388,7 @@ describe('exec rollout 은 세션의 파일이 아니다', () => {
 // 생성 시각에 맞춘 뒤 '현재'(now)만 며칠 뒤로 민다.
 describe('locateSince 로부터 며칠 뒤의 인계 (L5)', () => {
   const DAY = 24 * 60 * 60_000
-  const CWD = 'D:\work\later'
+  const CWD = path.join('D:', 'work', 'later')
   const LOCATE_WINDOW = 60_000
   const partsOf = (ms: number): { y: string; m: string; d: string } => {
     const t = new Date(ms)
@@ -414,12 +414,23 @@ describe('locateSince 로부터 며칠 뒤의 인계 (L5)', () => {
     expect(r?.sessionId).toBe(uuid)
   })
 
-  it('bornBefore 없이 오래된 since 로 찾아도 since 날짜 폴더부터 본다 (최대 ROLLOUT_SCAN_DAYS_MAX 개)', async () => {
+  // The cap keeps the newest folders, not the oldest: a caller with an old `since` and no `bornBefore`
+  // (the rescan of a tab mapped weeks ago, a limit probe of a long worker) is looking for a file born
+  // lately, and "newest wins" among the files born after `since` anyway.
+  it('bornBefore 없이 since 가 ROLLOUT_SCAN_DAYS_MAX 일보다 오래되면 오늘 폴더에서 거꾸로 센다 (오늘 태어난 rollout 을 찾는다)', async () => {
     const uuid = '019f4524-e0ac-7571-a8af-5585504f0d7a'
+    const file = await makeRollout({ ...partsOf(Date.now()), uuid, cwd: CWD, mtimeMs: Date.now() })
+    const born = await bornOf(file)
+    const r = await findRollout({ configDir: home, cwd: CWD, since: born - 20 * DAY, now: () => born })
+    expect(r?.sessionId).toBe(uuid)
+  })
+
+  it('그 대신 오늘에서 ROLLOUT_SCAN_DAYS_MAX 개를 넘게 거슬러 간 since 날짜 폴더는 읽지 않는다', async () => {
+    const uuid = '019f4524-e0ac-7571-a8af-5585504f0d7b'
     const file = await makeRollout({ ...partsOf(Date.now()), uuid, cwd: CWD, mtimeMs: Date.now() })
     const since = (await bornOf(file)) - 1_000
     const r = await findRollout({ configDir: home, cwd: CWD, since, now: () => since + 20 * DAY })
-    expect(r?.sessionId).toBe(uuid)
+    expect(r).toBeNull()
   })
 
   it('며칠 뒤에 찾아도 locateSince 보다 먼저 태어난 rollout 은 쥐지 않는다', async () => {
