@@ -55,7 +55,7 @@ import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGua
 import { applyAdoptRolling } from './host/adoptRolling'
 import { chatAdoptPlan, hostCarryOnIsOurs, hostStartingDefers } from './chatAdopt'
 import { reattachSessions, type ReattachResult } from './host/reattach'
-import { createWorktreeRoute } from './host/worktreeRoute'
+import { createWorktreeRoute, NO_HOST_CONNECTION } from './host/worktreeRoute'
 import { createHostGitOps } from './host/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
 import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, HOST_ACT_SLACK_ANSWER, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
@@ -1156,11 +1156,12 @@ export function registerIpc(
       timer.unref?.()
       pendingOrchCalls.set(call, { resolve, reject, timer })
       // A send that does not go out is the connection having dropped. Answered now rather than after
-      // the deadline's wait for a reply to a question nobody heard.
+      // the deadline's wait for a reply to a question nobody heard. The sentence is the worktree route's
+      // signal that nothing was sent (leftovers Task 1): a write there waits for the next Host and retries.
       if (!hostClient?.send({ t: 'orch-call', call, cmd: m.cmd, args: m.args, session: m.sessionId })) {
         pendingOrchCalls.delete(call)
         clearTimeout(timer)
-        reject(new Error('there is no connection to the Host'))
+        reject(new Error(NO_HOST_CONNECTION))
       }
     })
   /** The app's copy of the orchestration state — the Host owns the file, this holds the last thing it

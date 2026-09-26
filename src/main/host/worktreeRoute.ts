@@ -16,6 +16,16 @@
 import type { RegistryFile, WorktreeRegistry, WorktreeWriter } from '../../core/worktrees/registry'
 import type { HostMessage } from '../../core/host/protocol'
 import { hostSpeaksWorktrees } from './outdated'
+import { RETIRE_SETTLE_MS } from './client'
+
+/** What the app's `orch-call` rejects with when the call went out on no socket (ipc.ts `orchCall`): nothing
+ *  was sent, so the Host never saw it, and trying it again cannot apply it twice. */
+export const NO_HOST_CONNECTION = 'there is no connection to the Host'
+
+/** How long a write that found no socket waits for a new Host's hello before it fails (leftovers Task 1,
+ *  S3-1): a Host replacement retires the old one, waits `RETIRE_SETTLE_MS`, then starts the new one, and
+ *  the new handshake follows within a few seconds. */
+export const REPLACE_WAIT_MS = RETIRE_SETTLE_MS + 5_000
 
 type Call = (m: { cmd: string; args: Record<string, unknown>; sessionId: string }) => Promise<{ status: number; body: unknown }>
 
@@ -31,6 +41,8 @@ export function createWorktreeRoute(a: {
   registry: Pick<WorktreeRegistry, 'writeThrough' | 'accept' | 'refresh'>
   call: Call
   log(m: string): void
+  /** Test seam; defaults to REPLACE_WAIT_MS. */
+  replaceWaitMs?: number
 }): {
   /** Every status change. To the Host when connected, answering and announcing worktrees; else local. */
   status(s: { connected: boolean; unresponsive?: boolean; features: readonly string[] }): Promise<void>
@@ -51,8 +63,43 @@ export function createWorktreeRoute(a: {
     if (a.registry.accept(file)) lastSeq = seq
   }
 
+  /** Told each time the route has switched to a Host and refilled from it: a new Host's hello. */
+  let hostBack: Array<() => void> = []
+  /** Resolves true at the next switch to a Host (after its refill), false after `ms`. */
+  const nextHost = (ms: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer)
+        resolve(true)
+      }
+      const timer = setTimeout(() => {
+        hostBack = hostBack.filter((f) => f !== done)
+        resolve(false)
+      }, ms)
+      timer.unref?.()
+      hostBack.push(done)
+    })
+
+  /** **A write that found no socket waits for the next Host and goes there once** (leftovers Task 1, S3-1).
+   *  During a Host replacement (`retire({announce:true})`, `stop()`, then `restart()`) this route still reads
+   *  `mode: 'host'` for about RETIRE_SETTLE_MS, so a write in that window used to answer "there is no
+   *  connection to the Host". Only that failure is retried: the call never left this app, so the Host did
+   *  not apply it. Any other failure (a refusal, a socket that dropped with the call out) is the caller's,
+   *  as before. Never written locally: the new Host owns the file, and a local write beside it is the
+   *  lost-entry race R1 exists to prevent. No new Host within the bound fails with the first error. */
+  const send = async (m: { cmd: string; args: Record<string, unknown>; sessionId: string }): Promise<{ status: number; body: unknown }> => {
+    try {
+      return await a.call(m)
+    } catch (err) {
+      if (!(err instanceof Error) || err.message !== NO_HOST_CONNECTION) throw err
+      a.log(`${m.cmd} found no connection to the Host — waiting for the next Host to send it there`)
+      if (!(await nextHost(a.replaceWaitMs ?? REPLACE_WAIT_MS))) throw err
+      return a.call(m)
+    }
+  }
+
   const write = (cmd: string, args: Record<string, unknown>): Promise<RegistryFile> =>
-    a.call({ cmd, args, sessionId: '' }).then((r) => {
+    send({ cmd, args, sessionId: '' }).then((r) => {
       const body = r.body as SnapshotBody
       if (r.status >= 400) throw new Error(body?.error ?? String(r.status))
       // The reply carries the same snapshot a push would, applied by the same rule, so this
@@ -108,6 +155,10 @@ export function createWorktreeRoute(a: {
         }
       } catch (err) {
         a.log(`worktree-list failed: ${err instanceof Error ? err.message : String(err)} — the next push or handshake fills it instead`)
+      } finally {
+        // A write waiting out a replacement goes now, after the refill, so its reply is judged against
+        // this Host life's seq. Only while still host: a status(off) that raced ahead leaves it waiting.
+        if (mode === 'host') for (const f of hostBack.splice(0)) f()
       }
       return
     }

@@ -1,6 +1,6 @@
 import { it, expect } from 'vitest'
 import path from 'node:path'
-import { createWorktreeRoute } from './worktreeRoute'
+import { createWorktreeRoute, NO_HOST_CONNECTION } from './worktreeRoute'
 import { WorktreeRegistry, type WorktreeWriter } from '../../core/worktrees/registry'
 import { tempDir } from '../../core/worktrees/testRepo'
 import type { WorktreeInfo } from '../../core/types'
@@ -298,4 +298,63 @@ it('a write reply that lands after the route has gone back to local is overwritt
   await statusOff
   expect(registry.list()).toEqual([])
   expect(registry.getRoot()).toBe('D:/root') // the default from disk, not 'late-write'
+})
+
+// Leftovers Task 1 (S3-1): a write sent while the Host is being replaced (retire, then restart) went to no
+// socket and failed. It now waits for the new Host's hello and goes there once; it never writes locally.
+const off = { connected: false, features: [] as string[] }
+const replacing = () => {
+  const reg = fakeRegistry()
+  const calls: string[] = []
+  let connected = true
+  const route = createWorktreeRoute({
+    registry: reg,
+    log: () => {},
+    replaceWaitMs: 200,
+    call: async (m) => {
+      calls.push(m.cmd)
+      if (!connected) throw new Error(NO_HOST_CONNECTION)
+      return { status: 200, body: { seq: calls.length, file: { items: m.cmd === 'worktree-add' ? [{ id: 'a' }] : [] } } }
+    }
+  })
+  return { reg, calls, route, drop: () => { connected = false }, back: () => { connected = true } }
+}
+
+it('a write during a Host replacement waits for the new Host and lands there, once', async () => {
+  const h = replacing()
+  await h.route.status(on)
+  h.drop() // retire: the old socket is gone, the route still reads host
+  const writing = h.reg.writer!.add({ id: 'a' } as never)
+  await new Promise((r) => setTimeout(r, 20))
+  void h.route.status(off) // restart()
+  h.back()
+  await h.route.status(on) // the new Host's hello
+  await expect(writing).resolves.toEqual({ items: [{ id: 'a' }] })
+  expect(h.calls).toEqual(['worktree-list', 'worktree-add', 'worktree-list', 'worktree-add'])
+})
+
+it('a write during a replacement that no new Host answers in time fails as before, and is not retried', async () => {
+  const h = replacing()
+  await h.route.status(on)
+  h.drop()
+  await expect(h.reg.writer!.add({ id: 'a' } as never)).rejects.toThrow(NO_HOST_CONNECTION)
+  expect(h.calls).toEqual(['worktree-list', 'worktree-add'])
+})
+
+it('a write the Host may have received (any other failure) is not retried', async () => {
+  const reg = fakeRegistry()
+  const calls: string[] = []
+  const route = createWorktreeRoute({
+    registry: reg,
+    log: () => {},
+    replaceWaitMs: 200,
+    call: async (m) => {
+      calls.push(m.cmd)
+      if (m.cmd === 'worktree-list') return { status: 200, body: { seq: 1, file: { items: [] } } }
+      throw new Error('the connection to the Host closed')
+    }
+  })
+  await route.status(on)
+  await expect(reg.writer!.add({ id: 'a' } as never)).rejects.toThrow(/closed/)
+  expect(calls).toEqual(['worktree-list', 'worktree-add'])
 })
