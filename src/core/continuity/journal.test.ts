@@ -128,10 +128,10 @@ describe('ContinuityJournal', () => {
 })
 
 describe('ContinuityJournal schema 2', () => {
-  it('creates at version 2 and reports itself usable', () => {
+  it('creates at the current version and reports itself usable', () => {
     const j = new ContinuityJournal(file())
     expect(j.usable).toBe(true)
-    expect(j.schemaVersion()).toBe(2)
+    expect(j.schemaVersion()).toBe(SCHEMA_VERSION)
     j.close()
   })
 
@@ -142,7 +142,7 @@ describe('ContinuityJournal schema 2', () => {
     j1.setSchemaVersionForTest(1)
     j1.close()
     const j2 = new ContinuityJournal(file())
-    expect(j2.schemaVersion()).toBe(2)
+    expect(j2.schemaVersion()).toBe(SCHEMA_VERSION)
     expect(j2.eventsFor('run_1')).toHaveLength(1)
     expect(j2.recoveryActionsFor('run_1')).toEqual([])
     j2.close()
@@ -232,6 +232,111 @@ describe('ContinuityJournal schema 2', () => {
     expect(j.eventsFor('run_2')).toEqual([])
     expect(j.recoveryActionsFor('run_2')).toEqual([])
     expect(j.eventsFor('run_1')).toHaveLength(1)
+    j.close()
+  })
+})
+
+/** The schema as version 2 shipped it, to make a file an older build left behind. */
+const V2_SCHEMA = `
+CREATE TABLE schema_meta (version INTEGER NOT NULL);
+CREATE TABLE journal_events (event_id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, run_id TEXT NOT NULL,
+  task_id TEXT, dispatch_id TEXT, event_type TEXT NOT NULL, created_at TEXT NOT NULL, idempotency_key TEXT UNIQUE,
+  payload_json TEXT NOT NULL);
+CREATE TABLE checkpoints (checkpoint_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL,
+  dispatch_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL, state_json TEXT NOT NULL, git_head TEXT,
+  worktree_path TEXT, native_session_id TEXT, handoff_ref TEXT);
+CREATE TABLE recovery_actions (recovery_action_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, task_id TEXT NOT NULL,
+  dispatch_id TEXT NOT NULL, strategy TEXT NOT NULL, class TEXT NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL,
+  started_at TEXT NOT NULL, completed_at TEXT, details_json TEXT);
+`
+const writeV2File = async (): Promise<void> => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const raw = new DatabaseSync(file())
+  raw.exec(V2_SCHEMA)
+  raw.prepare('INSERT INTO schema_meta (version) VALUES (2)').run()
+  raw
+    .prepare(
+      `INSERT INTO journal_events (event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json)
+       VALUES ('e1', 2, 'run_1', 'tsk_1', 'dsp_1', 'TASK_STARTED', '2026-09-08T10:00:00.000Z', 'k1', '{}')`
+    )
+    .run()
+  raw.close()
+}
+
+describe('ContinuityJournal v3 (Host journal J4)', () => {
+  it('writes who acted and reads it back, null where no actor was given', () => {
+    const j = new ContinuityJournal(file())
+    j.append([
+      { ...ev('TASK_STARTED', 'a'), actor: { surface: 'cli' } },
+      { ...ev('TASK_COMPLETED', 'b'), actor: { surface: 'agent', sessionId: 'ses_1' } },
+      ev('JOB_RUN_PAUSED', 'c')
+    ])
+    expect(j.eventsFor('run_1').map((e) => e.actor)).toEqual([{ surface: 'cli' }, { surface: 'agent', sessionId: 'ses_1' }, null])
+    expect(j.schemaVersion()).toBe(3)
+    expect(SCHEMA_VERSION).toBe(3)
+    j.close()
+  })
+
+  it('migrates a v2 file in place: its rows stay, read as actor null, and new rows carry one', async () => {
+    await writeV2File()
+    const j = new ContinuityJournal(file())
+    expect(j.usable).toBe(true)
+    expect(j.recovered).toBe(false)
+    expect(j.schemaVersion()).toBe(3)
+    expect(j.eventsFor('run_1')).toEqual([expect.objectContaining({ eventId: 'e1', schemaVersion: 2, actor: null })])
+    expect(j.append([{ ...ev('TASK_COMPLETED', 'k2'), actor: { surface: 'host' } }])).toBe(1)
+    expect(j.eventsFor('run_1').map((e) => e.actor)).toEqual([null, { surface: 'host' }])
+    j.close()
+  })
+
+  // The column and the stamp move together or not at all: a failure between them (here a trigger that
+  // refuses the stamp, standing in for a crash) leaves the file exactly as v2 left it.
+  it('rolls the whole v3 step back when it fails midway: no column without the stamp', async () => {
+    await writeV2File()
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(file())
+    raw.exec("CREATE TRIGGER no_stamp BEFORE UPDATE ON schema_meta BEGIN SELECT RAISE(ABORT, 'crash midway'); END")
+    raw.close()
+    const logs: string[] = []
+    const j = new ContinuityJournal(file(), { log: (m) => logs.push(m), now: () => '2026-09-26T10:00:00.000Z' })
+    // The failed open is handled as today's unopenable file: moved aside, a fresh file in its place.
+    expect(j.recovered).toBe(true)
+    expect(logs.some((l) => l.includes('crash midway'))).toBe(true)
+    j.close()
+    const aside = (await fs.readdir(dir)).find((n) => /^continuity\.sqlite\.corrupt-[^.]*$/.test(n))
+    expect(aside).toBeDefined()
+    const old = new DatabaseSync(path.join(dir, aside as string))
+    const cols = (old.prepare('PRAGMA table_info(journal_events)').all() as { name: string }[]).map((c) => c.name)
+    const version = (old.prepare('SELECT version FROM schema_meta').get() as { version: number }).version
+    const rows = old.prepare('SELECT event_id FROM journal_events').all() as { event_id: string }[]
+    old.close()
+    expect(cols).not.toContain('actor_json')
+    expect(version).toBe(2)
+    expect(rows.map((r) => r.event_id)).toEqual(['e1'])
+  })
+
+  it('reads an actor it cannot parse as null rather than failing the read', async () => {
+    const j = new ContinuityJournal(file())
+    j.append([ev('TASK_STARTED', 'a')])
+    j.close()
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(file())
+    raw.prepare("UPDATE journal_events SET actor_json = '{\"surface\":\"robot\"}'").run()
+    raw.close()
+    const again = new ContinuityJournal(file())
+    expect(again.eventsFor('run_1')[0].actor).toBeNull()
+    again.close()
+  })
+
+  it('keeps the recovery action id a caller minted (P14)', () => {
+    const j = new ContinuityJournal(file())
+    const row = j.startRecoveryAction({
+      recoveryActionId: 'rca_app_1', runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1',
+      strategy: 'redispatch', class: 'safe', reason: 'r', at: '2026-09-09T10:00:00.000Z'
+    })
+    expect(row.recoveryActionId).toBe('rca_app_1')
+    j.finishRecoveryAction('rca_app_1', 'completed', '2026-09-09T10:01:00.000Z', { newDispatchId: 'dsp_2' })
+    expect(j.recoveryActionsFor('run_1')).toEqual([expect.objectContaining({ recoveryActionId: 'rca_app_1', status: 'completed' })])
     j.close()
   })
 })

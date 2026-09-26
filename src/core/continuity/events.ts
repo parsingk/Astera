@@ -6,6 +6,7 @@ import { repairCountOf, reviewRoundOf } from '../orchestration/convergence'
 import { jobOf, runIdOf, type OrchState } from '../orchestration/state'
 import type { Dispatch, Gate, GateKind, TaskStatus } from '../orchestration/types'
 import { outcomeOf } from '../orchestration/view'
+import type { JournalActor } from './actor'
 
 export type ContinuityEventType =
   | 'JOB_RUN_STARTED'
@@ -73,6 +74,8 @@ export interface ContinuityEvent {
    *  end in the dispatch id (design §5 "Dedupe"). */
   idempotencyKey: string
   payload: Record<string, unknown>
+  /** Who acted (J4). Set by the writer, never derived; absent reads as null. */
+  actor?: JournalActor | null
 }
 
 const ev = (

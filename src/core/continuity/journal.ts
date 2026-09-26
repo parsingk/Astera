@@ -10,10 +10,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { existsSync, renameSync } from 'node:fs'
 import type { ContinuityEvent, ContinuityEventType } from './events'
+import { actorFromJson, type JournalActor } from './actor'
 import type { CheckpointKind } from './checkpointPolicy'
 import type { Checkpoint } from '../orchestration/checkpoint'
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export interface JournalEventRow {
   eventId: string
@@ -27,6 +28,8 @@ export interface JournalEventRow {
   at: string
   idempotencyKey: string | null
   payload: Record<string, unknown>
+  /** Who acted (J4). Null for a row written before v3, or one whose actor this build cannot read (P4). */
+  actor: JournalActor | null
 }
 
 export interface CheckpointRow {
@@ -63,7 +66,12 @@ export interface RecoveryActionRow {
 export type NewRecoveryActionRow = Omit<
   RecoveryActionRow,
   'recoveryActionId' | 'status' | 'startedAt' | 'completedAt' | 'details'
-> & { at: string }
+> & {
+  at: string
+  /** Kept when given, else a fresh UUID. The app mints it (P14) so a row it sends through the Host can
+   *  be returned synchronously and finished later under the same id. */
+  recoveryActionId?: string
+}
 
 export interface ContinuityJournalDeps {
   log?(message: string): void
@@ -81,7 +89,8 @@ CREATE TABLE IF NOT EXISTS journal_events (
   event_type      TEXT NOT NULL,
   created_at      TEXT NOT NULL,
   idempotency_key TEXT UNIQUE,
-  payload_json    TEXT NOT NULL
+  payload_json    TEXT NOT NULL,
+  actor_json      TEXT
 );
 CREATE INDEX IF NOT EXISTS journal_events_run ON journal_events(run_id);
 CREATE TABLE IF NOT EXISTS checkpoints (
@@ -114,6 +123,10 @@ CREATE TABLE IF NOT EXISTS recovery_actions (
 CREATE INDEX IF NOT EXISTS recovery_actions_run ON recovery_actions(run_id);
 `
 
+/** Whether `table` has `column`. PRAGMA table_info answers on any file, a v2 one included. */
+export const hasColumn = (db: DatabaseSync, table: string, column: string): boolean =>
+  (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column)
+
 interface OpenResult {
   db: DatabaseSync
   version: number
@@ -140,12 +153,26 @@ function open(filePath: string): OpenResult {
       ? (db.prepare('SELECT version FROM schema_meta LIMIT 1').get() as { version: number } | undefined)
       : undefined
     if (meta && meta.version > SCHEMA_VERSION) return { db, version: meta.version }
+    // A fresh file is born at v3. On a v1 file the CREATE TABLE IF NOT EXISTS adds what version 2
+    // added (recovery_actions); it does not touch an existing journal_events, hence the step below.
     db.exec(SCHEMA)
-    if (!meta) db.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(SCHEMA_VERSION)
-    else if (meta.version < SCHEMA_VERSION)
-      // The CREATE TABLE IF NOT EXISTS above already added what version 2 adds, so the migration is
-      // the stamp. A future version that changes an existing table gets its own step here.
-      db.prepare('UPDATE schema_meta SET version = ?').run(SCHEMA_VERSION)
+    // v3 (Host journal J4): who acted. A v2 table gains the column empty, so its rows read as actor
+    // null; nothing is inferred for them. In one transaction with the stamp, so a crash between the two
+    // cannot leave a v2 stamp on a v3 table or the reverse.
+    db.exec('BEGIN')
+    try {
+      if (!hasColumn(db, 'journal_events', 'actor_json')) db.exec('ALTER TABLE journal_events ADD COLUMN actor_json TEXT')
+      if (!meta) db.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(SCHEMA_VERSION)
+      else if (meta.version < SCHEMA_VERSION) db.prepare('UPDATE schema_meta SET version = ?').run(SCHEMA_VERSION)
+      db.exec('COMMIT')
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        /* the original error is the one worth reporting */
+      }
+      throw err
+    }
     return { db, version: SCHEMA_VERSION }
   } catch (err) {
     try {
@@ -204,8 +231,8 @@ export class ContinuityJournal {
     if (!this.usable || events.length === 0) return 0
     const insert = this.db.prepare(
       `INSERT INTO journal_events
-         (event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json, actor_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(idempotency_key) DO NOTHING`
     )
     this.db.exec('BEGIN')
@@ -221,7 +248,8 @@ export class ContinuityJournal {
           e.type,
           e.at,
           e.idempotencyKey,
-          JSON.stringify(e.payload)
+          JSON.stringify(e.payload),
+          e.actor ? JSON.stringify(e.actor) : null
         )
         inserted += Number(r.changes)
       }
@@ -265,7 +293,7 @@ export class ContinuityJournal {
   /** A recovery attempt selected for a Run, before it is known to succeed or fail (recovery work to
    *  follow). Inserted with `status: 'selected'`; `finishRecoveryAction` closes it out. */
   startRecoveryAction(row: NewRecoveryActionRow): RecoveryActionRow {
-    const recoveryActionId = randomUUID()
+    const recoveryActionId = row.recoveryActionId ?? randomUUID()
     const stored: RecoveryActionRow = {
       recoveryActionId,
       runId: row.runId,
@@ -302,10 +330,7 @@ export class ContinuityJournal {
   recoveryActionsFor(runId: string): RecoveryActionRow[] {
     return (
       this.db
-        .prepare(
-          `SELECT recovery_action_id, run_id, task_id, dispatch_id, strategy, class, reason, status, started_at, completed_at, details_json
-             FROM recovery_actions WHERE run_id = ? ORDER BY rowid`
-        )
+        .prepare(`${SELECT_RECOVERY_ACTION} WHERE run_id = ? ORDER BY rowid`)
         .all(runId) as unknown as RawRecoveryAction[]
     ).map(rowToRecoveryAction)
   }
@@ -333,7 +358,7 @@ export class ContinuityJournal {
   eventsFor(runId: string): JournalEventRow[] {
     return (
       this.db
-        .prepare(`${SELECT_EVENT} WHERE run_id = ? ORDER BY rowid`)
+        .prepare(`${selectEvents(true)} WHERE run_id = ? ORDER BY rowid`)
         // .all()'s typed return (Record<string, SQLOutputValue>[]) doesn't structurally overlap
         // RawEvent[] enough for a direct assertion (TS2352) the way the single-row .get() casts
         // below do; route through `unknown`, same as tsc's own suggestion.
@@ -342,7 +367,7 @@ export class ContinuityJournal {
   }
 
   lastEvent(): JournalEventRow | null {
-    const raw = this.db.prepare(`${SELECT_EVENT} ORDER BY rowid DESC LIMIT 1`).get() as RawEvent | undefined
+    const raw = this.db.prepare(`${selectEvents(true)} ORDER BY rowid DESC LIMIT 1`).get() as RawEvent | undefined
     return raw ? rowToEvent(raw) : null
   }
 
@@ -358,10 +383,7 @@ export class ContinuityJournal {
 
   private checkpointFor(dispatchId: string, order: 'ASC' | 'DESC'): CheckpointRow | null {
     const raw = this.db
-      .prepare(
-        `SELECT checkpoint_id, run_id, task_id, dispatch_id, kind, created_at, state_json, git_head, worktree_path, native_session_id, handoff_ref
-           FROM checkpoints WHERE dispatch_id = ? ORDER BY rowid ${order} LIMIT 1`
-      )
+      .prepare(`${SELECT_CHECKPOINT} WHERE dispatch_id = ? ORDER BY rowid ${order} LIMIT 1`)
       .get(dispatchId) as RawCheckpoint | undefined
     return raw ? rowToCheckpoint(raw) : null
   }
@@ -425,8 +447,22 @@ export class ContinuityJournal {
   }
 }
 
-const SELECT_EVENT =
-  'SELECT rowid AS sequence, event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json FROM journal_events'
+const SELECT_EVENT_COLUMNS =
+  'SELECT rowid AS sequence, event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json'
+
+/** The events SELECT prefix. `withActor` is false only for a v2 file the read-only reader must not
+ *  migrate (it has no actor_json column); the writer always passes true, its file is v3 once opened. */
+export function selectEvents(withActor: boolean): string {
+  return `${SELECT_EVENT_COLUMNS}${withActor ? ', actor_json' : ''} FROM journal_events`
+}
+
+export const SELECT_CHECKPOINT =
+  'SELECT checkpoint_id, run_id, task_id, dispatch_id, kind, created_at, state_json, git_head, worktree_path, native_session_id, handoff_ref FROM checkpoints'
+
+export const SELECT_RECOVERY_ACTION =
+  'SELECT recovery_action_id, run_id, task_id, dispatch_id, strategy, class, reason, status, started_at, completed_at, details_json FROM recovery_actions'
+
+export type { RawEvent, RawCheckpoint, RawRecoveryAction }
 
 interface RawEvent {
   sequence: number
@@ -439,6 +475,8 @@ interface RawEvent {
   created_at: string
   idempotency_key: string | null
   payload_json: string
+  /** Absent when read with `selectEvents(false)` (a v2 file). */
+  actor_json?: string | null
 }
 interface RawCheckpoint {
   checkpoint_id: string
@@ -467,7 +505,7 @@ interface RawRecoveryAction {
   details_json: string | null
 }
 
-const rowToEvent = (r: RawEvent): JournalEventRow => ({
+export const rowToEvent = (r: RawEvent): JournalEventRow => ({
   eventId: r.event_id,
   sequence: Number(r.sequence),
   schemaVersion: r.schema_version,
@@ -477,10 +515,11 @@ const rowToEvent = (r: RawEvent): JournalEventRow => ({
   type: r.event_type as ContinuityEventType,
   at: r.created_at,
   idempotencyKey: r.idempotency_key,
-  payload: JSON.parse(r.payload_json) as Record<string, unknown>
+  payload: JSON.parse(r.payload_json) as Record<string, unknown>,
+  actor: actorFromJson(r.actor_json)
 })
 
-const rowToCheckpoint = (r: RawCheckpoint): CheckpointRow => ({
+export const rowToCheckpoint = (r: RawCheckpoint): CheckpointRow => ({
   checkpointId: r.checkpoint_id,
   runId: r.run_id,
   taskId: r.task_id,
@@ -494,7 +533,7 @@ const rowToCheckpoint = (r: RawCheckpoint): CheckpointRow => ({
   handoffRef: r.handoff_ref
 })
 
-const rowToRecoveryAction = (r: RawRecoveryAction): RecoveryActionRow => ({
+export const rowToRecoveryAction = (r: RawRecoveryAction): RecoveryActionRow => ({
   recoveryActionId: r.recovery_action_id,
   runId: r.run_id,
   taskId: r.task_id,

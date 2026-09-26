@@ -1,0 +1,83 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { existsSync, promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { ContinuityJournal } from './journal'
+import { JournalReader } from './journalReader'
+import type { ContinuityEvent } from './events'
+
+let dir: string
+const open: Array<{ close(): void }> = []
+beforeEach(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-journal-reader-'))
+})
+afterEach(async () => {
+  for (const o of open.splice(0)) o.close()
+  await fs.rm(dir, { recursive: true, force: true })
+})
+const file = (): string => path.join(dir, 'continuity.sqlite')
+const ev = (key: string): ContinuityEvent => ({
+  runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'TASK_STARTED', at: '2026-09-26T10:00:00.000Z',
+  idempotencyKey: key, payload: {}, actor: { surface: 'host' }
+})
+const reader = (): JournalReader => {
+  const r = new JournalReader(file())
+  open.push(r)
+  return r
+}
+const writer = (): ContinuityJournal => {
+  const w = new ContinuityJournal(file())
+  open.push(w)
+  return w
+}
+
+describe('JournalReader (P13)', () => {
+  it('reads nothing for a file that does not exist yet, creates nothing, and sees the file once it exists', () => {
+    const r = reader()
+    expect(r.eventsFor('run_1')).toEqual([])
+    expect(r.firstCheckpointFor('dsp_1')).toBeNull()
+    expect(r.lastEvent()).toBeNull()
+    expect(r.schemaVersion()).toBeNull()
+    expect(existsSync(file())).toBe(false)
+    writer().append([ev('a')])
+    expect(r.eventsFor('run_1').map((e) => [e.idempotencyKey, e.actor])).toEqual([['a', { surface: 'host' }]])
+  })
+
+  it('sees what the writer appends after the reader opened (WAL)', () => {
+    const w = writer()
+    w.append([ev('a')])
+    const r = reader()
+    expect(r.eventsFor('run_1')).toHaveLength(1)
+    w.append([ev('b')])
+    expect(r.eventsFor('run_1').map((e) => e.idempotencyKey)).toEqual(['a', 'b'])
+    expect(r.lastEvent()?.idempotencyKey).toBe('b')
+  })
+
+  it('reads a v2 file without migrating it: actor null, and the file stays at version 2', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(file())
+    raw.exec(
+      "CREATE TABLE schema_meta (version INTEGER NOT NULL); INSERT INTO schema_meta VALUES (2);" +
+        'CREATE TABLE journal_events (event_id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, run_id TEXT NOT NULL, task_id TEXT, dispatch_id TEXT, event_type TEXT NOT NULL, created_at TEXT NOT NULL, idempotency_key TEXT UNIQUE, payload_json TEXT NOT NULL);' +
+        "INSERT INTO journal_events VALUES ('e1', 2, 'run_1', 'tsk_1', 'dsp_1', 'ATTEMPT_LOST', '2026-09-08T10:00:00.000Z', 'k1', '{}');"
+    )
+    raw.close()
+    const r = reader()
+    expect(r.eventsFor('run_1')).toEqual([expect.objectContaining({ eventId: 'e1', type: 'ATTEMPT_LOST', actor: null })])
+    expect(r.schemaVersion()).toBe(2)
+    r.close()
+    open.splice(open.indexOf(r), 1)
+    const check = new DatabaseSync(file())
+    const cols = (check.prepare('PRAGMA table_info(journal_events)').all() as { name: string }[]).map((c) => c.name)
+    check.close()
+    expect(cols).not.toContain('actor_json')
+  })
+
+  it('refuses to write: the connection is read-only', () => {
+    writer().append([ev('a')])
+    const r = reader()
+    r.eventsFor('run_1')
+    // A reader has no schema step to be tricked into, and the connection itself refuses a write.
+    expect(() => r.execForTest('DELETE FROM journal_events')).toThrow(/readonly/i)
+  })
+})
