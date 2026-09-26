@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ContinuityJournal, SCHEMA_VERSION, isBusyError, isCorruptionError } from './journal'
-import { holdLock, holdLockFor } from './sqliteLockFixtures'
+import { holdLock, holdLockFor, recoveryActionsIn, schemaVersionIn } from './sqliteLockFixtures'
 import type { ContinuityEvent } from './events'
 
 let dir: string
@@ -108,8 +108,8 @@ describe('ContinuityJournal', () => {
     expect(j.eventsFor('run_2')).toHaveLength(1)
     expect(j.latestCheckpointFor('d1')).toBeNull()
     expect(j.latestCheckpointFor('d2')).not.toBeNull()
-    expect(j.recoveryActionsFor('run_1')).toEqual([])
-    expect(j.recoveryActionsFor('run_2')).toHaveLength(1)
+    expect(recoveryActionsIn(file(), 'run_1')).toEqual([])
+    expect(recoveryActionsIn(file(), 'run_2')).toHaveLength(1)
     j.close()
   })
 
@@ -176,10 +176,10 @@ describe('ContinuityJournal', () => {
 })
 
 describe('ContinuityJournal schema 2', () => {
-  it('creates at the current version and reports itself usable', () => {
+  it('creates at the current version and takes writes', () => {
     const j = new ContinuityJournal(file())
-    expect(j.usable).toBe(true)
-    expect(j.schemaVersion()).toBe(SCHEMA_VERSION)
+    expect(j.append([ev('JOB_RUN_STARTED', 'a')])).toBe(1)
+    expect(schemaVersionIn(file())).toBe(SCHEMA_VERSION)
     j.close()
   })
 
@@ -190,9 +190,9 @@ describe('ContinuityJournal schema 2', () => {
     j1.setSchemaVersionForTest(1)
     j1.close()
     const j2 = new ContinuityJournal(file())
-    expect(j2.schemaVersion()).toBe(SCHEMA_VERSION)
+    expect(schemaVersionIn(file())).toBe(SCHEMA_VERSION)
     expect(j2.eventsFor('run_1')).toHaveLength(1)
-    expect(j2.recoveryActionsFor('run_1')).toEqual([])
+    expect(recoveryActionsIn(file(), 'run_1')).toEqual([])
     j2.close()
   })
 
@@ -202,7 +202,6 @@ describe('ContinuityJournal schema 2', () => {
     j1.close()
     const logs: string[] = []
     const j2 = new ContinuityJournal(file(), { log: (m) => logs.push(m) })
-    expect(j2.usable).toBe(false)
     expect(j2.recovered).toBe(false) // the file is intact, not moved aside
     expect(j2.append([ev('JOB_RUN_STARTED', 'b')])).toBe(0)
     expect(logs.some((l) => l.includes('newer'))).toBe(true)
@@ -221,9 +220,9 @@ describe('ContinuityJournal schema 2', () => {
     raw.close()
 
     const j = new ContinuityJournal(file())
-    expect(j.usable).toBe(false)
-    expect(j.schemaVersion()).toBe(99)
+    expect(j.append([ev('JOB_RUN_STARTED', 'a')])).toBe(0)
     j.close()
+    expect(schemaVersionIn(file())).toBe(99)
 
     const after = new DatabaseSync(file())
     const tables = (after.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[])
@@ -248,7 +247,7 @@ describe('ContinuityJournal schema 2', () => {
     })
     expect(row.status).toBe('selected')
     j.finishRecoveryAction(row.recoveryActionId, 'completed', '2026-09-09T10:00:01.000Z', { newDispatchId: 'dsp_2' })
-    const [stored] = j.recoveryActionsFor('run_1')
+    const [stored] = recoveryActionsIn(file(), 'run_1')
     expect(stored).toMatchObject({ status: 'completed', strategy: 'resume-native', details: { newDispatchId: 'dsp_2' } })
     expect(stored.completedAt).not.toBeNull()
     j.close()
@@ -278,7 +277,7 @@ describe('ContinuityJournal schema 2', () => {
     })
     expect(j.sweepOrphans(new Set(['run_1']))).toBe(1)
     expect(j.eventsFor('run_2')).toEqual([])
-    expect(j.recoveryActionsFor('run_2')).toEqual([])
+    expect(recoveryActionsIn(file(), 'run_2')).toEqual([])
     expect(j.eventsFor('run_1')).toHaveLength(1)
     j.close()
   })
@@ -320,7 +319,7 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
       ev('JOB_RUN_PAUSED', 'c')
     ])
     expect(j.eventsFor('run_1').map((e) => e.actor)).toEqual([{ surface: 'cli' }, { surface: 'agent', sessionId: 'ses_1' }, null])
-    expect(j.schemaVersion()).toBe(3)
+    expect(schemaVersionIn(file())).toBe(3)
     expect(SCHEMA_VERSION).toBe(3)
     j.close()
   })
@@ -328,9 +327,8 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
   it('migrates a v2 file in place: its rows stay, read as actor null, and new rows carry one', async () => {
     await writeV2File()
     const j = new ContinuityJournal(file())
-    expect(j.usable).toBe(true)
     expect(j.recovered).toBe(false)
-    expect(j.schemaVersion()).toBe(3)
+    expect(schemaVersionIn(file())).toBe(3)
     expect(j.eventsFor('run_1')).toEqual([expect.objectContaining({ eventId: 'e1', schemaVersion: 2, actor: null })])
     expect(j.append([{ ...ev('TASK_COMPLETED', 'k2'), actor: { surface: 'host' } }])).toBe(1)
     expect(j.eventsFor('run_1').map((e) => e.actor)).toEqual([null, { surface: 'host' }])
@@ -349,8 +347,6 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
     const logs: string[] = []
     const j = new ContinuityJournal(file(), { log: (m) => logs.push(m), now: () => '2026-09-26T10:00:00.000Z' })
     expect(j.recovered).toBe(false)
-    expect(j.usable).toBe(false)
-    expect(j.schemaVersion()).toBe(2)
     expect(logs.some((l) => l.includes('crash midway'))).toBe(true)
     expect(j.eventsFor('run_1')).toEqual([expect.objectContaining({ eventId: 'e1', actor: null })])
     expect(j.lastEvent()).toEqual(expect.objectContaining({ eventId: 'e1' }))
@@ -388,7 +384,7 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
     })
     expect(row.recoveryActionId).toBe('rca_app_1')
     j.finishRecoveryAction('rca_app_1', 'completed', '2026-09-09T10:01:00.000Z', { newDispatchId: 'dsp_2' })
-    expect(j.recoveryActionsFor('run_1')).toEqual([expect.objectContaining({ recoveryActionId: 'rca_app_1', status: 'completed' })])
+    expect(recoveryActionsIn(file(), 'run_1')).toEqual([expect.objectContaining({ recoveryActionId: 'rca_app_1', status: 'completed' })])
     j.close()
   })
 })
@@ -406,7 +402,7 @@ describe('ContinuityJournal.transaction', () => {
     })
     expect(seenInside).toBe(0)
     expect(other.eventsFor('run_1')).toHaveLength(1)
-    expect(other.recoveryActionsFor('run_1')).toHaveLength(1)
+    expect(recoveryActionsIn(file(), 'run_1')).toHaveLength(1)
     other.close()
     j.close()
   })
@@ -455,18 +451,20 @@ INSERT INTO schema_meta (version) VALUES (1);
 }
 
 describe('ContinuityJournal on a v1 file whose upgrade failed (Task 7 carry)', () => {
-  it('answers recoveryActionsFor with no rows and a log line instead of throwing', async () => {
+  it('keeps the file as v1 left it: reads work, and every write, a recovery action too, is a no-op that does not throw', async () => {
     await writeFailedV1File(file())
     const logs: string[] = []
     const j = new ContinuityJournal(file(), { log: (m) => logs.push(m) })
     try {
-      expect(j.usable).toBe(false)
-      expect(j.schemaVersion()).toBe(1)
-      logs.length = 0
-      expect(j.recoveryActionsFor('run_1')).toEqual([])
-      expect(logs.some((l) => /recovery_actions/.test(l))).toBe(true)
+      expect(logs.some((l) => /could not be upgraded/.test(l))).toBe(true)
+      expect(j.eventsFor('run_1')).toEqual([])
+      expect(j.append([ev('JOB_RUN_STARTED', 'a')])).toBe(0)
+      const row = j.startRecoveryAction({ runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', strategy: 'redispatch', class: 'safe', reason: 'r', at: 'x' })
+      expect(row.status).toBe('selected')
+      expect(() => j.finishRecoveryAction(row.recoveryActionId, 'completed', 'y')).not.toThrow()
     } finally {
       j.close()
     }
+    expect(schemaVersionIn(file())).toBe(1)
   })
 })

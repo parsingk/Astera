@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { ContinuityJournal } from './journal'
 import { JournalReader } from './journalReader'
-import { holdLock, holdLockFor } from './sqliteLockFixtures'
+import { holdLock, holdLockFor, schemaVersionIn } from './sqliteLockFixtures'
 import type { ContinuityEvent } from './events'
 
 let dir: string
@@ -38,7 +38,6 @@ describe('JournalReader (P13)', () => {
     expect(r.eventsFor('run_1')).toEqual([])
     expect(r.firstCheckpointFor('dsp_1')).toBeNull()
     expect(r.lastEvent()).toBeNull()
-    expect(r.schemaVersion()).toBeNull()
     expect(existsSync(file())).toBe(false)
     writer().append([ev('a')])
     expect(r.eventsFor('run_1').map((e) => [e.idempotencyKey, e.actor])).toEqual([['a', { surface: 'host' }]])
@@ -65,9 +64,9 @@ describe('JournalReader (P13)', () => {
     raw.close()
     const r = reader()
     expect(r.eventsFor('run_1')).toEqual([expect.objectContaining({ eventId: 'e1', type: 'ATTEMPT_LOST', actor: null })])
-    expect(r.schemaVersion()).toBe(2)
     r.close()
     open.splice(open.indexOf(r), 1)
+    expect(schemaVersionIn(file())).toBe(2)
     const check = new DatabaseSync(file())
     const cols = (check.prepare('PRAGMA table_info(journal_events)').all() as { name: string }[]).map((c) => c.name)
     check.close()
@@ -131,13 +130,10 @@ INSERT INTO schema_meta (version) VALUES (1);
 }
 
 describe('JournalReader on a v1 file whose upgrade failed (Task 7 carry)', () => {
-  it('answers recoveryActionsFor with no rows and a log line instead of throwing', async () => {
+  it('reads its events without throwing', async () => {
     await writeFailedV1File(file())
-    const logs: string[] = []
-    const r = new JournalReader(file(), { log: (m) => logs.push(m) })
-    open.push(r)
-    expect(r.recoveryActionsFor('run_1')).toEqual([])
-    expect(logs.some((l) => /recovery_actions/.test(l))).toBe(true)
+    const r = reader()
     expect(r.eventsFor('run_1')).toEqual([])
+    expect(r.lastEvent()).toBeNull()
   })
 })

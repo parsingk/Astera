@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createAppJournal, type AppJournal, type AppJournalDeps } from './appJournal'
 import { ContinuityJournal } from '../../core/continuity/journal'
 import { JournalReader } from '../../core/continuity/journalReader'
-import { holdLock } from '../../core/continuity/sqliteLockFixtures'
+import { holdLock, recoveryActionsIn } from '../../core/continuity/sqliteLockFixtures'
 import { stateFromLegacy } from '../../core/orchestration/legacyState'
 import type { OrchState } from '../../core/orchestration/state'
 
@@ -192,12 +192,7 @@ describe('createAppJournal', () => {
     await j.settled()
     expect(calls.map((c) => (c.args.ops as Array<{ op: string }>)[0].op)).toEqual(['events', 'recovery-start', 'recovery-finish'])
     expect(rowsIn()).toEqual(['RECOVERY_DETECTED'])
-    const r = new JournalReader(file())
-    try {
-      expect(r.recoveryActionsFor('run_1').map((a) => [a.recoveryActionId, a.status])).toEqual([[local.recoveryActionId, 'completed']])
-    } finally {
-      r.close()
-    }
+    expect(recoveryActionsIn(file(), 'run_1').map((a) => [a.recoveryActionId, a.status])).toEqual([[local.recoveryActionId, 'completed']])
   })
 
   // Task 7 carry (review 4-5 I1 b): the Host reads the toggle only at start and on journal-reload, so

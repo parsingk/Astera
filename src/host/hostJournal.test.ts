@@ -11,7 +11,7 @@ import { HOST_PROTOCOL, HOST_YIELD_JOURNAL } from '../core/host/protocol'
 import { versionOnlyOrchCall } from '../core/host/orchProtocol'
 import { JournalReader } from '../core/continuity/journalReader'
 import { ContinuityJournal } from '../core/continuity/journal'
-import { holdLock, holdLockFor } from '../core/continuity/sqliteLockFixtures'
+import { holdLock, holdLockFor, recoveryActionsIn } from '../core/continuity/sqliteLockFixtures'
 import { stateFromLegacy } from '../core/orchestration/legacyState'
 import type { OrchState } from '../core/orchestration/state'
 import type { Dispatch } from '../core/orchestration/types'
@@ -117,9 +117,7 @@ describe('createHostJournal', () => {
     ])
     expect(r).toEqual({ status: 200, body: { applied: 3, failed: 0 } })
     expect(rows()).toEqual([expect.objectContaining({ type: 'RECOVERY_DETECTED', actor: { surface: 'desktop' } })])
-    const reader = new JournalReader(journalFile())
-    opened.push(reader)
-    expect(reader.recoveryActionsFor('run_1')).toEqual([expect.objectContaining({ recoveryActionId: 'rca_app', status: 'completed', details: { newDispatchId: 'dsp_2' } })])
+    expect(recoveryActionsIn(journalFile(), 'run_1')).toEqual([expect.objectContaining({ recoveryActionId: 'rca_app', status: 'completed', details: { newDispatchId: 'dsp_2' } })])
   })
 
   // Review 4-5 M-2: the app's keys live in their own namespace, so no app row can take a key a later Host

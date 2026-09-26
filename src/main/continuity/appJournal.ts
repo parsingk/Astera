@@ -123,7 +123,7 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
     return local
   }
   let reader: JournalReader | null = null
-  const readerOf = (): JournalReader | null => (on ? (reader ??= new JournalReader(d.file, { log: d.log, busyTimeoutMs: d.busyTimeoutMs })) : null)
+  const readerOf = (): JournalReader | null => (on ? (reader ??= new JournalReader(d.file, { busyTimeoutMs: d.busyTimeoutMs })) : null)
   /** The Host's half (J3): one call per op, in order, never rejecting (Global Constraint 5). */
   let tail: Promise<void> = Promise.resolve()
   const send = (cmd: 'journal-append' | 'journal-reload', args: Record<string, unknown>): void => {

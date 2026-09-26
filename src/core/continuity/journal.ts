@@ -172,10 +172,6 @@ CREATE INDEX IF NOT EXISTS recovery_actions_run ON recovery_actions(run_id);
 export const hasColumn = (db: DatabaseSync, table: string, column: string): boolean =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column)
 
-/** Whether `table` exists. sqlite_master answers on any file, a failed-upgrade v1 one included. */
-export const hasTable = (db: DatabaseSync, table: string): boolean =>
-  db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined
-
 interface OpenResult {
   db: DatabaseSync
   version: number
@@ -267,8 +263,7 @@ export class ContinuityJournal {
   /** False when the file is intact but was written by a newer build (a higher schema version), or is
    *  an older one whose upgrade failed: it is left untouched, reads still work and every write becomes
    *  a no-op (a journal problem must never stop a Job). */
-  readonly usable: boolean
-  private readonly version: number
+  private readonly usable: boolean
   /** Whether journal_events has actor_json: false only on an older file whose upgrade failed. */
   private readonly withActor: boolean
   /** How deep `transaction` is nested right now: 0 outside, 1 inside the outer BEGIN, more inside
@@ -295,7 +290,6 @@ export class ContinuityJournal {
       recovered = true
     }
     this.db = opened.db
-    this.version = opened.version
     this.recovered = recovered
     this.usable = opened.version <= SCHEMA_VERSION && opened.upgradeFailed === undefined
     this.withActor = hasColumn(this.db, 'journal_events', 'actor_json')
@@ -436,20 +430,6 @@ export class ContinuityJournal {
       .run(status, at, details ? JSON.stringify(details) : null, id)
   }
 
-  /** No rows, logged, on a file with no recovery_actions table: a version 1 file whose upgrade failed
-   *  before the table was made is kept as it was (usable false), and a read must not throw on it. */
-  recoveryActionsFor(runId: string): RecoveryActionRow[] {
-    if (!hasTable(this.db, 'recovery_actions')) {
-      this.deps.log?.('journal has no recovery_actions table (an older file whose upgrade failed); no recovery actions to read')
-      return []
-    }
-    return (
-      this.db
-        .prepare(`${SELECT_RECOVERY_ACTION} WHERE run_id = ? ORDER BY rowid`)
-        .all(runId) as unknown as RawRecoveryAction[]
-    ).map(rowToRecoveryAction)
-  }
-
   /** Every table that names a Run. Called when a Run is pruned (30-day TTL) or deleted, so the file
    *  stays bounded — the same three tables sweepOrphans clears, for the same reason. */
   deleteRun(runId: string): void {
@@ -539,12 +519,6 @@ export class ContinuityJournal {
     return orphans.length
   }
 
-  /** The schema version this file was opened at (post-migration, or the newer version this class
-   *  refused to touch). */
-  schemaVersion(): number {
-    return this.version
-  }
-
   /** Test-only: stamps `schema_meta` to `v` so a test can produce a file as if written by another
    *  release, which there is otherwise no way to do. */
   setSchemaVersionForTest(v: number): void {
@@ -575,10 +549,7 @@ export function selectEvents(withActor: boolean): string {
 export const SELECT_CHECKPOINT =
   'SELECT checkpoint_id, run_id, task_id, dispatch_id, kind, created_at, state_json, git_head, worktree_path, native_session_id, handoff_ref FROM checkpoints'
 
-export const SELECT_RECOVERY_ACTION =
-  'SELECT recovery_action_id, run_id, task_id, dispatch_id, strategy, class, reason, status, started_at, completed_at, details_json FROM recovery_actions'
-
-export type { RawEvent, RawCheckpoint, RawRecoveryAction }
+export type { RawEvent, RawCheckpoint }
 
 interface RawEvent {
   sequence: number
@@ -607,19 +578,6 @@ interface RawCheckpoint {
   native_session_id: string | null
   handoff_ref: string | null
 }
-interface RawRecoveryAction {
-  recovery_action_id: string
-  run_id: string
-  task_id: string
-  dispatch_id: string
-  strategy: string
-  class: string
-  reason: string
-  status: string
-  started_at: string
-  completed_at: string | null
-  details_json: string | null
-}
 
 export const rowToEvent = (r: RawEvent): JournalEventRow => ({
   eventId: r.event_id,
@@ -647,18 +605,4 @@ export const rowToCheckpoint = (r: RawCheckpoint): CheckpointRow => ({
   worktreePath: r.worktree_path,
   nativeSessionId: r.native_session_id,
   handoffRef: r.handoff_ref
-})
-
-export const rowToRecoveryAction = (r: RawRecoveryAction): RecoveryActionRow => ({
-  recoveryActionId: r.recovery_action_id,
-  runId: r.run_id,
-  taskId: r.task_id,
-  dispatchId: r.dispatch_id,
-  strategy: r.strategy,
-  class: r.class,
-  reason: r.reason,
-  status: r.status as RecoveryActionRow['status'],
-  startedAt: r.started_at,
-  completedAt: r.completed_at,
-  details: r.details_json ? (JSON.parse(r.details_json) as Record<string, unknown>) : null
 })
