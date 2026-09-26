@@ -175,4 +175,37 @@ describe('createChatPolicy (chat takeover C3)', () => {
     await vi.advanceTimersByTimeAsync(UNATTENDED_DENY_MS * 5)
     expect(r.deny).toHaveBeenCalledTimes(2)
   })
+  // Final review M5: a session forgotten while its deny is in flight gets no retry when that deny fails,
+  // and a review that arms it again starts the retries from the first wait.
+  it('arms no retry for a session forgotten while its deny was in flight', async () => {
+    const r = rig()
+    let fail: () => void = () => {}
+    r.deny.mockImplementationOnce(() => new Promise<void>((_res, rej) => { fail = () => rej(new Error('pipe closed')) }))
+    r.p.review('c1')
+    await vi.advanceTimersByTimeAsync(UNATTENDED_DENY_MS)
+    expect(r.deny).toHaveBeenCalledTimes(1)
+    r.p.forget('c1')
+    fail()
+    await vi.advanceTimersByTimeAsync(UNATTENDED_DENY_MS * 5)
+    expect(r.deny).toHaveBeenCalledTimes(1)
+    expect(r.logs.join('\n')).not.toMatch(/retrying in/)
+  })
+  it('a review that arms a prompt again starts its retries from the first wait', async () => {
+    const r = rig()
+    r.deny.mockRejectedValueOnce(new Error('pipe closed'))
+    let fail: () => void = () => {}
+    r.deny.mockImplementationOnce(() => new Promise<void>((_res, rej) => { fail = () => rej(new Error('pipe closed')) }))
+    r.p.review('c1')
+    await vi.advanceTimersByTimeAsync(UNATTENDED_DENY_MS + 5_000) // the first deny fails, its 5 s retry is in flight
+    expect(r.deny).toHaveBeenCalledTimes(2)
+    r.p.forget('c1')
+    fail()
+    await vi.advanceTimersByTimeAsync(0)
+    r.deny.mockRejectedValueOnce(new Error('pipe closed'))
+    r.p.review('c1')
+    await vi.advanceTimersByTimeAsync(UNATTENDED_DENY_MS)
+    expect(r.deny).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(r.deny).toHaveBeenCalledTimes(4)
+  })
 })

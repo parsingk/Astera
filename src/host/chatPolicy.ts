@@ -56,6 +56,10 @@ export function createChatPolicy(d: {
   const inFlight = new Set<string>()
   /** `sessionId request id` → how many retries of its failed deny have been armed (CT-9). */
   const retries = new Map<string, number>()
+  /** `sessionId request id` of a deny that was in flight when its session was forgotten (final review
+   *  M5): when it fails, no retry is armed for a session nothing is watching any more. Cleared as the
+   *  deny settles. */
+  const forgotten = new Set<string>()
   let disposed = false
   const keyOf = (sid: string, rid: string): string => `${sid} ${rid}`
 
@@ -93,6 +97,10 @@ export function createChatPolicy(d: {
    *  the policy was disposed. Returns what the log line says about it. */
   const retryLater = (sid: string, rid: string): string => {
     const key = keyOf(sid, rid)
+    if (forgotten.delete(key)) {
+      retries.delete(key)
+      return '; the session was forgotten, no retry'
+    }
     const n = retries.get(key) ?? 0
     if (disposed || armed.get(sid)?.has(rid)) return ''
     const ms = DENY_RETRY_MS[n]
@@ -126,6 +134,7 @@ export function createChatPolicy(d: {
       .then(
         () => {
           inFlight.delete(key)
+          forgotten.delete(key)
           retries.delete(key)
           d.log(`unattended: denied ${r.about.tool} in session ${sid} after 60 s (policy deny-after-60s)`)
         },
@@ -144,6 +153,8 @@ export function createChatPolicy(d: {
     for (const rid of [...(armed.get(sid)?.keys() ?? [])]) if (!covered.has(rid)) drop(sid, rid)
     for (const rid of covered.keys()) {
       if (armed.get(sid)?.has(rid) || inFlight.has(keyOf(sid, rid))) continue
+      // A review's arm starts from the full 60 s, and so with a fresh set of retries (final review M5).
+      retries.delete(keyOf(sid, rid))
       arm(sid, rid, UNATTENDED_DENY_MS)
     }
   }
@@ -157,6 +168,7 @@ export function createChatPolicy(d: {
     },
     forget(sid) {
       for (const rid of [...(armed.get(sid)?.keys() ?? [])]) drop(sid, rid)
+      for (const key of inFlight) if (key.startsWith(`${sid} `)) forgotten.add(key)
     },
     dispose() {
       disposed = true
