@@ -52,12 +52,19 @@ export function createHostRollView(d: {
   /** Adopts the new session: its pty (ipc.ts's takeSessionsBack with that pty id) or, for a chat roll,
    *  its line process (`session-rolled.procId`, chat takeover). */
   adopt(ptyId: string | null, procId: string | null): Promise<void>
-  /** The app's fan-out (index.ts fanOutRollEvent). Always without orchestration: the Host rekeyed. */
-  forward(channel: 'session:rolled' | 'session:rollState', payload: unknown, opts: { orchestration: false }): void
+  /** The app's fan-out (index.ts fanOutRollEvent). Always without orchestration: the Host rekeyed.
+   *  `renderer: false` (S6-17): a rekey whose new session the app did not adopt goes to the app's own
+   *  taps but not to the renderer, which the next sweep's adopter brings up to date instead. */
+  forward(
+    channel: 'session:rolled' | 'session:rollState',
+    payload: unknown,
+    opts: { orchestration: false; renderer?: false }
+  ): void
   log(m: string): void
   /** Whether the app's orchestration mirror still names this session (orchHoldsSession). Absent: never. */
   orchHolds?(sessionId: string): boolean
-  /** Whether this session is one the app holds now. Absent: always. */
+  /** Whether this session is one the app holds now. Absent: always, and a push's adoption then counts
+   *  as done when `adopt` did not fail (S6-17). */
   isAdopted?(sessionId: string): boolean
   settleMs?: number
   pollMs?: number
@@ -139,8 +146,26 @@ export function createHostRollView(d: {
       // Wrapped so a synchronous throw from adopt is the same failed adoption as a rejection.
       void Promise.resolve()
         .then(() => d.adopt(m.ptyId, m.procId ?? null))
-        .catch((err) => d.log(`host roll view: the rolled session ${m.info.id} could not be adopted first: ${String(err)}`))
-        .then(() => {
+        .then(
+          () => true,
+          (err) => {
+            d.log(`host roll view: the rolled session ${m.info.id} could not be adopted first: ${String(err)}`)
+            return false
+          }
+        )
+        .then((adoptOk) => {
+          // S6-17: whether the app holds the new session now. The app's own answer when it has one (a
+          // sweep can resolve without adopting, or another sweep can have adopted it while this one
+          // threw); otherwise whether adopt failed.
+          const held = ((): boolean => {
+            if (!d.isAdopted) return adoptOk
+            try {
+              return d.isAdopted(m.info.id)
+            } catch (err) {
+              d.log(`host roll view: could not tell whether ${m.info.id} was adopted: ${String(err)}`)
+              return false
+            }
+          })()
           const was = last.get(m.oldSessionId)
           last.delete(m.oldSessionId)
           if (was) last.set(m.info.id, { ...was, sessionId: m.info.id })
@@ -152,12 +177,15 @@ export function createHostRollView(d: {
               d.forward(
                 'session:rolled',
                 { oldSessionId: m.oldSessionId, info: m.info, ...(m.dest ? { dest: m.dest } : {}) },
-                { orchestration: false }
+                // Not to the renderer when the app does not hold the new session: it would re-point the
+                // old tab at a session with nothing behind it, and the next sweep's adopter would then
+                // announce a second tab. The old tab closes on the released exit instead.
+                held ? { orchestration: false } : { orchestration: false, renderer: false }
               )
             )
           inFlight.delete(m.info.id)
           // The fan-out's forkSeen found no session to write into: the adopter writes it later.
-          if (d.isAdopted && !d.isAdopted(m.info.id)) pendingFork.set(m.info.id, m.oldSessionId)
+          if (!held) pendingFork.set(m.info.id, m.oldSessionId)
           settle(m.oldSessionId)
         })
     },

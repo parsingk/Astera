@@ -737,10 +737,12 @@ app.whenReady().then(async () => {
   const fanOutRollEvent = (
     channel: 'session:rolled' | 'session:rollState',
     payload: unknown,
-    opts: { orchestration: boolean; codex: boolean }
+    opts: { orchestration: boolean; codex: boolean; renderer?: boolean }
   ): void => {
+    // `renderer: false` (S6-17): a Host roll whose new session the app did not adopt. The app's own
+    // taps below still run; the renderer hears of the new session from the next sweep's adopter.
     try {
-      if (!win.isDestroyed()) win.webContents.send(channel, payload)
+      if (opts.renderer !== false && !win.isDestroyed()) win.webContents.send(channel, payload)
     } catch {
       /* renderer send failures are ignored */
     }

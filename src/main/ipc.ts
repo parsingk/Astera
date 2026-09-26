@@ -300,11 +300,12 @@ export interface HostWiring {
   /** index.ts's roll fan-out, for a roll the Host made and pushed (S6 §3.4): what it costs this app —
    *  the renderer, the Work Unit fork, the scheduler, Slack and the desktop sink. hostRollView always
    *  passes `orchestration: false` (the Host rekeyed); `codex` adds the codex rollout watcher's
-   *  re-register. Optional so a test wiring can omit it. */
+   *  re-register; `renderer: false` keeps a rekey whose new session the app did not adopt from the
+   *  renderer (S6-17). Optional so a test wiring can omit it. */
   fanOutRollEvent?: (
     channel: 'session:rolled' | 'session:rollState',
     payload: unknown,
-    opts: { orchestration: boolean; codex: boolean }
+    opts: { orchestration: boolean; codex: boolean; renderer?: boolean }
   ) => void
   /** The app's one block registry, shared by both coordinators (index.ts). Exchanged with a Host that
    *  announces `blocks` (S6 D4, blockSync.ts). Optional so a test wiring can omit it. */

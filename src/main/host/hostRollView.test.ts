@@ -77,14 +77,34 @@ describe('createHostRollView (S6 §3.4)', () => {
     v.pushed({ t: 'roll-state', event: { sessionId: 's2', state: 'none' } })
     expect(v.stateOf('s2')).toBeNull()
   })
-  it('an adoption that fails still forwards and releases the exit, and says why', async () => {
+  // S6-17: an adoption that fails forwards the rekey to the app's own taps (the Work Unit fork, the
+  // schedule, Slack) but not to the renderer, which would re-point the old tab at a session the app
+  // does not hold. The old tab closes on the released exit and the next sweep's adopter announces the
+  // new session.
+  it('an adoption that fails forwards the rekey without the renderer, releases the exit, and says why', async () => {
     const logs: string[] = []
     const delivered: string[] = []
-    const v = createHostRollView({ adopt: async () => { throw new Error('socket closed') }, forward: () => {}, log: (m) => logs.push(m) })
+    const calls: Array<[string, unknown]> = []
+    const v = createHostRollView({ adopt: async () => { throw new Error('socket closed') }, forward: (c, _p, o) => calls.push([c, o]), log: (m) => logs.push(m) })
     v.pushed({ t: 'session-rolled', oldSessionId: 's1', info: { id: 's2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't' }, ptyId: 'p2' })
     v.hold({ sessionId: 's1', exitCode: 1 }, (e) => delivered.push(e.sessionId))
     await vi.waitFor(() => expect(delivered).toEqual(['s1']))
+    expect(calls).toEqual([['session:rolled', { orchestration: false, renderer: false }]])
     expect(logs.join('\n')).toMatch(/socket closed/)
+  })
+  it('an adoption that resolves without holding the new session (the sweep was not answered) keeps the rekey from the renderer', async () => {
+    const calls: Array<[string, unknown]> = []
+    const v = createHostRollView({ adopt: async () => {}, forward: (c, _p, o) => calls.push([c, o]), log: () => {}, isAdopted: () => false })
+    v.pushed({ t: 'session-rolled', oldSessionId: 's1', info: rolled, ptyId: 'p2' })
+    await vi.waitFor(() => expect(v.adopting('s2')).toBe(false))
+    expect(calls).toEqual([['session:rolled', { orchestration: false, renderer: false }]])
+  })
+  it('an adoption that threw after another sweep took the new session back still tells the renderer', async () => {
+    const calls: Array<[string, unknown]> = []
+    const v = createHostRollView({ adopt: async () => { throw new Error('late') }, forward: (c, _p, o) => calls.push([c, o]), log: () => {}, isAdopted: () => true })
+    v.pushed({ t: 'session-rolled', oldSessionId: 's1', info: rolled, ptyId: 'p2' })
+    await vi.waitFor(() => expect(v.adopting('s2')).toBe(false))
+    expect(calls).toEqual([['session:rolled', { orchestration: false }]])
   })
 
   // Fix round 1, 5: a Host roll's fan-out never runs the app's orchestration tap — the Host rekeyed.
