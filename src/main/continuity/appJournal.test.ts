@@ -80,6 +80,26 @@ describe('createAppJournal', () => {
     expect(rowsIn()).toEqual(['JOB_RUN_RESUMED'])
   })
 
+  // Final review M4: an idle writer handle left open blocks the Host's move-aside on Windows.
+  it('closes its own writer once a journal Host takes over, and never writes through it after', async () => {
+    const { j, box } = make(OLDER_HOST)
+    j.record(on(), paused())
+    expect(rowsIn()).toEqual(['JOB_RUN_PAUSED'])
+    const closed = vi.spyOn(ContinuityJournal.prototype, 'close')
+    try {
+      box.status = JOURNAL_HOST
+      expect(j.appWrites()).toBe(false)
+      expect(closed).toHaveBeenCalledTimes(1)
+      j.record(paused(), on())
+      expect(closed).toHaveBeenCalledTimes(1)
+    } finally {
+      closed.mockRestore()
+    }
+    expect(rowsIn()).toEqual(['JOB_RUN_PAUSED'])
+    // With nothing of the app's holding the file, it can be moved (what the Host does with a broken one).
+    await fs.rename(file(), `${file()}.moved`)
+  })
+
   it('in front of a journal Host the app writes nothing and opens no writer', () => {
     const { j } = make(JOURNAL_HOST)
     expect(j.appWrites()).toBe(false)

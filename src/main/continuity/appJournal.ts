@@ -72,7 +72,19 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
   const hostWrites = (): boolean => {
     const s = d.status()
     if (s.connected || s.unresponsive === true) hostWritesLast = hostSpeaksJournal(s)
+    // Final review M4: the moment a journal Host is the writer, this app's own handle is idle for good, and
+    // left open it would block the Host's move-aside of a broken file on Windows.
+    if (hostWritesLast && local) closeLocal()
     return hostWritesLast
+  }
+  const closeLocal = (): void => {
+    const was = local
+    local = null
+    try {
+      was?.recorder.close()
+    } catch (err) {
+      d.log(`continuity: journal close failed: ${String(err)}`)
+    }
   }
   let local: { journal: ContinuityJournal; recorder: ContinuityRecorder } | null = null
   let localFailed = false
@@ -93,7 +105,9 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
           log: d.log,
           lang: d.lang,
           smartResume: d.smartResume,
-          handoffLookup: d.handoffLookup
+          handoffLookup: d.handoffLookup,
+          // After a checkpoint's wait on git: still on, still the writer, and this very handle still open.
+          stillWriting: () => on && !hostWrites() && local?.journal === journal
         })
       }
       localBusy = false
@@ -182,8 +196,7 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
     },
     close: () => {
       on = false
-      local?.recorder.close()
-      local = null
+      closeLocal()
       try {
         reader?.close()
       } catch (err) {
