@@ -1289,8 +1289,8 @@ other protocol serves the same profile before it says there is no Host or answer
 file. If one does, the answer is 9 rather than 3, the file is not read (that Host is writing it), and
 `error.details` carries `hostProtocol`, `hostAddress` and `cliProtocol`. `astera host status` answers
 9 in the same situation, and `astera host start` refuses with 9 instead of starting a second Host on
-the profile. Its `nextSteps` is only `astera version`, because running `host start` again would get
-the same answer.
+the profile. The `nextSteps` of every command that answers 9 this way is only `astera version`,
+because `host start` would get the same answer while that Host runs.
 
 `astera version` never fails. It answers 0 with whatever it knows, so it can be used to check
 whether the two halves agree.

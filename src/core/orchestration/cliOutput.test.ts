@@ -187,13 +187,12 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'HOST_NOT_RUNNING' })).toEqual(['astera host start'])
   })
 
-  // 감사 #12. 다른 판의 Host 가 이 프로필을 쥐고 있을 때 `host stop` 은 이 CLI 로는 닿지 않는다 —
-  // 그 Host 를 먼저 그만두게 하고(문구가 말한다), 그다음 이 판으로 다시 띄운다.
-  it('다른 판의 Host 를 찾은 9 는 버전을 보고 다시 띄우는 명령이다', () => {
-    expect(nextStepsFor({ code: 'VERSION_MISMATCH', details: { hostProtocol: 4 } })).toEqual([
-      'astera version',
-      'astera host start'
-    ])
+  // 감사 #12. 다른 판의 Host 가 이 프로필을 쥐고 있을 때 `host stop` 은 이 CLI 로는 닿지 않는다.
+  // `host start` 도 권하지 않는다: 그 Host 가 있는 동안에는 9 로 거절되는 돌고 도는 안내다. 칠 것은
+  // docs/cli.md 의 Exit 9 절이 말하는 하나, `astera version` 뿐이고, 무엇을 할지는 문구가 말한다.
+  it('다른 판의 Host 를 찾은 9 는 어느 명령에서든 astera version 하나다', () => {
+    for (const cmd of [undefined, 'jobs-list', 'status', 'host-status', 'host-start'])
+      expect(nextStepsFor({ code: 'VERSION_MISMATCH', cmd, details: { hostProtocol: 4 } })).toEqual(['astera version'])
     expect(nextStepsFor({ code: 'VERSION_MISMATCH' })).toEqual(['astera version', 'astera host stop'])
   })
 

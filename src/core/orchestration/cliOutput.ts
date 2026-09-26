@@ -381,15 +381,12 @@ const STEPS: Record<
   //
   // **다른 판의 Host 를 주소에서 찾은 9 는 `host stop` 이 아니다**(cli/host.ts 의 siblingHostError). 그
   // Host 는 이 CLI 의 주소에 없으므로 이 CLI 의 `host stop` 은 "없다" 고 답한다. 그만두게 하는 것은
-  // 문구가 말하고(앱을 닫고, 그 Host 를 띄운 빌드로 멈춘다), 칠 명령은 그다음 이 판으로 다시
-  // 띄우는 것이다 — `host start` 는 다른 판의 Host 가 아직 있으면 띄우지 않고 9 로 거절한다.
-  // 실패한 것이 `host start` 자신이면 그것을 다시 권하지 않는다. 돌고 도는 안내다(리뷰 I1).
-  VERSION_MISMATCH: (cmd, details) =>
-    typeof details.hostProtocol === 'number'
-      ? cmd === 'host-start'
-        ? ['astera version']
-        : ['astera version', 'astera host start']
-      : ['astera version', 'astera host stop'],
+  // 문구가 말한다(앱을 닫고, 그 Host 를 띄운 빌드로 멈춘다). **`host start` 도 권하지 않는다**: 그
+  // Host 가 아직 있으면 9 로 거절되므로, 권하면 돌고 도는 안내가 된다(리뷰 I1 이 `host start` 자신의
+  // 실패에서 걷어 낸 것과 같은 것이고, 이제 모든 명령에서 걷는다). 칠 것은 docs/cli.md 의 Exit 9 절이
+  // 말하는 하나, `astera version` 이다.
+  VERSION_MISMATCH: (_cmd, details) =>
+    typeof details.hostProtocol === 'number' ? ['astera version'] : ['astera version', 'astera host stop'],
   RUN_FAILED: () => ['astera tasks list --run <runId> --status failed']
 }
 

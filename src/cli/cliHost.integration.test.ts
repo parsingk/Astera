@@ -705,17 +705,16 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
     for (const argv of [['jobs', 'list'], ['status'], ['host', 'status']]) {
       const r = await astera(argv, env)
       expect(r.code, argv.join(' ')).toBe(9)
-      // `astera version` first: it is the step that tells the two builds apart. (Only `host start`
-      // leaves out `host start` — see below.)
-      expect(r.envelope.error?.nextSteps?.[0]).toBe('astera version')
-      expect({ ...r.envelope.error, nextSteps: undefined }).toEqual({
+      expect(r.envelope.error).toEqual({
         code: 'VERSION_MISMATCH',
         message:
           `a Host speaking protocol ${HOST_PROTOCOL + 1} serves this profile at ${other.address}, and this astera speaks protocol ${HOST_PROTOCOL}: ` +
           'they come from different builds of Astera. That Host is running, so its state was not read from the file. ' +
           'Quit Astera, stop that Host with the build that started it, then start the build you mean to use.',
         details: { hostProtocol: HOST_PROTOCOL + 1, hostAddress: other.address, cliProtocol: HOST_PROTOCOL },
-        nextSteps: undefined
+        // docs/cli.md, Exit 9: only `astera version`. `host start` would be refused with 9 while that
+        // Host runs, so it is never suggested.
+        nextSteps: ['astera version']
       })
     }
     // `host start` does not start a second Host on the profile.
