@@ -880,7 +880,8 @@ or `question` for a terminal one.
 terminal session, because Codex runs without the hooks and its turn leaves no event, and a chat
 session nothing holds right now (Astera starting and not yet holding it, with the Host holding no
 adapter for it either). Send without `--wait` and read the session instead. `--wait` with
-`--no-enter` is a 2, since no turn starts.
+`--no-enter` is a 2, since no turn starts. A Host from before `--wait` types the text and answers at once without
+waiting; that is a 9, because the two builds differ, and the text has been sent.
 
 While it waits it says on stderr every 15 seconds that it is still waiting, as `runs wait` does, and
 `--no-keepalive` turns that off. With `--request-id`, a retry after a lost answer is not typed a second
