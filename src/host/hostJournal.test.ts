@@ -381,6 +381,37 @@ describe('createHostJournal', () => {
     expect(logs.filter((l) => /could not open the journal/.test(l))).toHaveLength(1)
   })
 
+  // Final review M2: runs follow asks for the timeline every 50 ms. The rows are read again only when the
+  // journal changed; the lines are still built from the state of each call.
+  it('reads a Run’s rows again only once the journal changed, and the lines follow the state either way', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    const d: Dispatch = { id: 'dsp_1', taskId: 'tsk_1', provider: 'claude', accountId: 'acc', sessionId: 'ses_gone', cwd: dir, specPath: 's', startedAt: NOW, workerState: 'ready', retained: false }
+    const task = { id: 'tsk_1', runId: 'run_1', title: 'Auth refactor', spec: 's', deps: [], status: 'dispatched' as const, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    const before = stateFromLegacy({ runs: [run], tasks: [task], dispatches: [d] })
+    const after = stateFromLegacy({ runs: [run], tasks: [task], dispatches: [{ ...d, endedAt: NOW, workerState: 'outcome_unknown' }] })
+    j.loaded({ before, state: after })
+    const reads = vi.spyOn(JournalReader.prototype, 'eventsFor')
+    try {
+      const first = j.timeline('run_1', after)
+      expect(first).toEqual([expect.objectContaining({ kind: 'runtime-lost', taskTitle: 'Auth refactor' })])
+      expect(j.timeline('run_1', after)).toEqual(first)
+      expect(j.timeline('run_1', after)).toEqual(first)
+      expect(reads).toHaveBeenCalledTimes(1)
+      // A renamed Task with no new row: the same rows, the new title.
+      const renamed = { ...after, tasks: after.tasks.map((t) => ({ ...t, title: 'Renamed' })) }
+      expect(j.timeline('run_1', renamed)).toEqual([expect.objectContaining({ taskTitle: 'Renamed' })])
+      expect(reads).toHaveBeenCalledTimes(1)
+      // A new row: read again.
+      j.append([{ op: 'events', events: [{ runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'RECOVERY_STRATEGY_SELECTED', at: NOW, idempotencyKey: 'rs', payload: { strategy: 'redispatch', reason: 'r' } }] }])
+      expect(j.timeline('run_1', after).map((e) => e.kind)).toEqual(['runtime-lost', 'recovery'])
+      expect(reads).toHaveBeenCalledTimes(2)
+    } finally {
+      reads.mockRestore()
+    }
+  })
+
   // Final review I2: a busy file is not a corrupt one, and a busy open is not a failure for the Host's life.
   describe('a journal another process holds locked', () => {
     const corrupt = async (): Promise<string[]> => (await fs.readdir(path.dirname(journalFile()))).filter((n) => n.includes('.corrupt-'))

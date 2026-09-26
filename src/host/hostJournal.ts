@@ -5,7 +5,7 @@
 // stop a Job (continuity design §6), and nothing here may reject (R3).
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
-import { ContinuityJournal, isBusyError } from '../core/continuity/journal'
+import { ContinuityJournal, isBusyError, type JournalEventRow } from '../core/continuity/journal'
 import { ContinuityRecorder } from '../core/continuity/recorder'
 import { JournalReader } from '../core/continuity/journalReader'
 import { DESKTOP_ACTOR, HOST_ACTOR, commitStamp, type JournalActor } from '../core/continuity/actor'
@@ -82,6 +82,22 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   let shut = false
   /** Reads are free (J7): a reader, so a Host that is not the writer never runs the schema step. */
   const reader = new JournalReader(file, { busyTimeoutMs: d.busyTimeoutMs })
+  /** Each followed Run's rows, as last read, and the reader's change mark then (final review M2). runs
+   *  follow asks every 50 ms; the rows are read again only once the file changed. The lines are still
+   *  built from each call's state, so a renamed Task shows at once. A few Runs at most are followed. */
+  const rowsCache = new Map<string, { mark: string; rows: JournalEventRow[] }>()
+  const ROWS_CACHE_MAX = 16
+  const rowsOf = (runId: string): JournalEventRow[] => {
+    const mark = reader.changeMark()
+    if (mark === null) return []
+    const hit = rowsCache.get(runId)
+    if (hit && hit.mark === mark) return hit.rows
+    const rows = reader.eventsFor(runId)
+    rowsCache.delete(runId)
+    if (rowsCache.size >= ROWS_CACHE_MAX) rowsCache.delete(rowsCache.keys().next().value as string)
+    rowsCache.set(runId, { mark, rows })
+    return rows
+  }
   /** The baseline a journal-reload owed and could not write (Task 4 review CARRY): it turned journaling
    *  on while an attached app kept the journal, so neither side wrote CONTINUITY_ENABLED. Paid at the
    *  first write once this Host is the writer, unless the file got one since `since` (an older app that
@@ -294,7 +310,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     timeline: (runId, state) => {
       if (!settings.enabled) return []
       try {
-        return journalTimeline(reader.eventsFor(runId), state, 'en')
+        return journalTimeline(rowsOf(runId), state, 'en')
       } catch (err) {
         d.log(`continuity: reading run ${runId}'s journal rows failed: ${String(err)}`)
         return []

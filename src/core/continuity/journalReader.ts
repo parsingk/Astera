@@ -23,6 +23,8 @@ import {
 
 export class JournalReader {
   private db: DatabaseSync | null = null
+  /** How many times a handle was opened: `changeMark` restarts with a new connection. */
+  private opens = 0
   constructor(
     private readonly filePath: string,
     private readonly deps: { log?(message: string): void; busyTimeoutMs?: number } = {}
@@ -42,6 +44,7 @@ export class JournalReader {
       throw err
     }
     this.db = db
+    this.opens += 1
     return db
   }
 
@@ -94,6 +97,16 @@ export class JournalReader {
     return (
       db.prepare(`${SELECT_RECOVERY_ACTION} WHERE run_id = ? ORDER BY rowid`).all(runId) as unknown as RawRecoveryAction[]
     ).map(rowToRecoveryAction)
+  }
+
+  /** A value that changes whenever the file changed since the last call on this connection: another
+   *  connection committed (`PRAGMA data_version`), or this reader opened a new connection. Deletes count
+   *  too. null while the file does not exist. Cheap: it reads no table (final review M2). */
+  changeMark(): string | null {
+    const db = this.handle()
+    if (!db) return null
+    const row = db.prepare('PRAGMA data_version').get() as Record<string, number>
+    return `${this.opens}:${Object.values(row)[0]}`
   }
 
   /** null while the file does not exist. */
