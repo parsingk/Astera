@@ -11,7 +11,13 @@
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { HOST_MERGES_KEPT, parseHostMerges, type HostMergeRecord } from '../core/git/hostMerges'
+import {
+  HOST_MERGES_KEPT,
+  HOST_MERGES_KEPT_PER_PROJECT,
+  parseHostMerges,
+  type HostMergeRecord
+} from '../core/git/hostMerges'
+import { comparablePath } from '../core/files/tree'
 import { readFileRetrying, renameRetrying } from '../core/renameRetry'
 
 export interface MergeRecorder {
@@ -32,12 +38,37 @@ const isHostMergesFile = (text: string): boolean => {
   }
 }
 
+export interface MergesKept {
+  total: number
+  perProject: number
+}
+
+/** The records a write leaves on disk (limit L4): the newest `perProject` of each project, then the
+ *  newest `total` of those, in the file's own order (oldest first, which explainedByHostMerges walks).
+ *  Projects compare as the reader compares them (isSamePath: comparablePath on both sides). */
+export function keptHostMerges(records: readonly HostMergeRecord[], kept: MergesKept): HostMergeRecord[] {
+  const seen = new Map<string, number>()
+  const keep: HostMergeRecord[] = []
+  for (let i = records.length - 1; i >= 0 && keep.length < kept.total; i--) {
+    const r = records[i]!
+    const key = comparablePath(r.projectPath)
+    const n = seen.get(key) ?? 0
+    if (n >= kept.perProject) continue
+    seen.set(key, n + 1)
+    keep.push(r)
+  }
+  return keep.reverse()
+}
+
 export function createMergeRecorder(a: {
   file: string
   headOf(cwd: string): Promise<string | null>
   now(): string
   log(m: string): void
+  /** What the file keeps. Tests pass small caps; the Host takes the default. */
+  kept?: MergesKept
 }): MergeRecorder {
+  const kept = a.kept ?? { total: HOST_MERGES_KEPT, perProject: HOST_MERGES_KEPT_PER_PROJECT }
   /** One chain, so the writes run in order: each reads the file the previous one left. */
   let chain: Promise<void> = Promise.resolve()
 
@@ -61,7 +92,7 @@ export function createMergeRecorder(a: {
   }
 
   const write = async (change: (records: HostMergeRecord[]) => HostMergeRecord[]): Promise<void> => {
-    const next = change(await current()).slice(-HOST_MERGES_KEPT)
+    const next = keptHostMerges(change(await current()), kept)
     await fs.mkdir(path.dirname(a.file), { recursive: true })
     // Atomic (tmp + rename), as the other profile stores are: the app may be reading it right now.
     const tmp = `${a.file}.${randomUUID()}.tmp`

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createMergeRecorder } from './mergeRecords'
-import { HOST_MERGES_KEPT, parseHostMerges } from '../core/git/hostMerges'
+import { HOST_MERGES_KEPT, HOST_MERGES_KEPT_PER_PROJECT, parseHostMerges, type HostMergeRecord } from '../core/git/hostMerges'
 
 /** A read that fails with something other than ENOENT (review m1): EMFILE or a busy file past its
  *  retries cannot be produced portably by a real file, so the read is failed here once. */
@@ -43,22 +43,82 @@ describe('createMergeRecorder (carry 1)', () => {
     await rec.end(id)
     expect(await read()).toMatchObject([{ id, headBefore: 'c0', headAfter: 'c1', endedAt: '2026-09-24T10:00:00.000Z' }])
   })
-  // Real disk I/O, HOST_MERGES_KEPT + 3 times over (each begin/end reads, writes a tmp file and
-  // renames it): on a loaded machine the retries in renameRetrying/readFileRetrying (real setTimeout
-  // backoff on a transient Windows EBUSY/EPERM) push this past the suite's default 10s testTimeout,
-  // the way a loaded CI runner overran hookTimeout for the worktree fixtures (vitest.config.ts). Not
-  // fewer records — the point is exactly that HOST_MERGES_KEPT are kept — so it gets its own budget.
-  it(
-    'keeps the newest HOST_MERGES_KEPT records',
-    async () => {
-      const rec = createMergeRecorder({ file, headOf: async () => 'h', now: () => '2026-09-24T10:00:00.000Z', log: () => {} })
-      for (let i = 0; i < HOST_MERGES_KEPT + 3; i++) await rec.end(await rec.begin(path.join(dir, `r${i}`)))
+  // Limit L4 (2026-09-26). The kept rule is proven on a file seeded once with synthetic records and one
+  // begin + end, not on HOST_MERGES_KEPT real cycles: each cycle reads, writes a tmp file and renames
+  // it, and a few hundred of those overran the suite's timeout under full-suite load.
+  describe('what the file keeps', () => {
+    const at = '2026-09-24T10:00:00.000Z'
+    const synthetic = (project: string, n: number, tag = project): HostMergeRecord[] =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `${tag}-${i}`,
+        projectPath: path.join(dir, project),
+        headBefore: `a${i}`,
+        headAfter: `b${i}`,
+        startedAt: at,
+        endedAt: at
+      }))
+    const seed = async (records: HostMergeRecord[]) => {
+      await fs.mkdir(path.dirname(file), { recursive: true })
+      await fs.writeFile(file, JSON.stringify({ merges: records }), 'utf8')
+    }
+    const recorder = (kept?: { total: number; perProject: number }) =>
+      createMergeRecorder({ file, headOf: async () => 'h', now: () => at, log: () => {}, ...(kept ? { kept } : {}) })
+    const countOf = (records: HostMergeRecord[], project: string) =>
+      records.filter((r) => r.projectPath === path.join(dir, project)).length
+
+    it('keeps the newest HOST_MERGES_KEPT records in all, oldest dropped first, in file order', async () => {
+      const projects = Math.ceil(HOST_MERGES_KEPT / HOST_MERGES_KEPT_PER_PROJECT) + 1
+      const per = Math.ceil(HOST_MERGES_KEPT / projects) // under the per-project cap, so only the total bites
+      const earlier = Array.from({ length: projects }, (_, p) => synthetic(`p${p}`, per)).flat()
+      expect(earlier.length).toBeGreaterThanOrEqual(HOST_MERGES_KEPT)
+      await seed(earlier)
+      const rec = recorder()
+      const id = await rec.begin(path.join(dir, 'fresh'))
+      await rec.end(id)
       const kept = await read()
       expect(kept).toHaveLength(HOST_MERGES_KEPT)
-      expect(kept.at(-1)?.projectPath).toBe(path.join(dir, `r${HOST_MERGES_KEPT + 2}`))
-    },
-    30_000
-  )
+      expect(kept.map((r) => r.id)).toEqual([...earlier.slice(earlier.length + 1 - HOST_MERGES_KEPT).map((r) => r.id), id])
+      expect(kept.at(-1)).toMatchObject({ id, projectPath: path.join(dir, 'fresh'), headAfter: 'h', endedAt: at })
+    })
+    it("a busy project does not push out another project's records", async () => {
+      const quiet = synthetic('quiet', 3)
+      await seed([...quiet, ...synthetic('busy', HOST_MERGES_KEPT)])
+      const rec = recorder()
+      const id = await rec.begin(path.join(dir, 'busy'))
+      await rec.end(id)
+      const kept = await read()
+      expect(kept.slice(0, 3).map((r) => r.id)).toEqual(quiet.map((r) => r.id))
+      expect(countOf(kept, 'busy')).toBe(HOST_MERGES_KEPT_PER_PROJECT)
+      expect(kept.at(-1)?.id).toBe(id)
+    })
+    it('keeps the newest HOST_MERGES_KEPT_PER_PROJECT records of one project', async () => {
+      const earlier = synthetic('one', HOST_MERGES_KEPT_PER_PROJECT)
+      await seed([...synthetic('other', 2), ...earlier])
+      const rec = recorder()
+      const id = await rec.begin(path.join(dir, 'one'))
+      await rec.end(id)
+      const kept = await read()
+      expect(countOf(kept, 'other')).toBe(2)
+      expect(kept.filter((r) => r.projectPath === path.join(dir, 'one')).map((r) => r.id)).toEqual([
+        ...earlier.slice(1).map((r) => r.id),
+        id
+      ])
+    })
+    it('the rule holds over real begin/end cycles, with small caps', async () => {
+      const rec = recorder({ total: 4, perProject: 2 })
+      const ids: Record<string, string[]> = {}
+      for (const p of ['a', 'b', 'a', 'a', 'b', 'c', 'a']) {
+        const id = await rec.begin(path.join(dir, p))
+        await rec.end(id)
+        ;(ids[p] ??= []).push(id)
+      }
+      const kept = await read()
+      // Each write applies the rule: a keeps its newest 2 (a3, a4), and when c's record made five, the
+      // oldest in all (b's first) went.
+      expect(kept.map((r) => r.id)).toEqual([ids.a![2], ids.b![1], ids.c![0], ids.a![3]])
+      expect(kept.every((r) => r.endedAt === at)).toBe(true)
+    })
+  })
   it('a file it cannot write costs the merge nothing: begin still answers an id, and the failure is logged', async () => {
     await fs.mkdir(file, { recursive: true }) // a directory where the file should be
     const logs: string[] = []

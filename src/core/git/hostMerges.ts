@@ -22,8 +22,19 @@ export interface HostMergeRecord {
   endedAt?: string
 }
 
-/** How many records the file keeps, newest last. */
-export const HOST_MERGES_KEPT = 200
+/** How many records the file keeps in all, newest last (the order is the file's, oldest first).
+ *
+ *  **Per project first, then in all (limit L4, 2026-09-26).** One list shared by every project let a
+ *  busy one push another's records out, and a HEAD move only a dropped record explained then read as an
+ *  outside change. So the writer keeps the newest `HOST_MERGES_KEPT_PER_PROJECT` of each `projectPath`
+ *  and then the newest `HOST_MERGES_KEPT` of what is left (keptHostMerges in src/host/mergeRecords.ts).
+ *  The per-project count is half the old shared total: a record matters only until the app's next look
+ *  at that folder after the merge ends (explainedByHostMerges' `sinceMs`), so 100 covers a long
+ *  unattended run of one project with the app closed. The total lets ten projects keep that many each;
+ *  a file of 1000 records is about a quarter of a megabyte, read and rewritten on each begin and end. */
+export const HOST_MERGES_KEPT = 1000
+/** How many records of one `projectPath` the file keeps, newest last. */
+export const HOST_MERGES_KEPT_PER_PROJECT = 100
 /** How long an open record (no `endedAt`) counts as a merge in progress: above git's 30-second merge
  *  timeout, so a Host that died mid-merge leaves a record that stops explaining anything. */
 export const MERGE_OPEN_MAX_MS = 120_000
