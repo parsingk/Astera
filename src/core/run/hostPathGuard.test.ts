@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import { hostPathGuard } from './hostPathGuard'
+import { hostPathGuard, tooBroadJobCwd } from './hostPathGuard'
 
 const root = path.join(os.tmpdir(), 'astera-guard')
 const guard = hostPathGuard({
@@ -62,6 +62,40 @@ describe('hostPathGuard, a Job cwd too broad to allow (S45-11)', () => {
   })
   it('a Job below the home folder is still allowed', async () => {
     expect(await broad(path.join(home, 'proj'))(path.join(home, 'proj', 'a'))).toBe(path.join(home, 'proj'))
+  })
+  // Final review M6: table cases through each platform's path rules, so every platform runs all of them.
+  it.each([
+    ['win32', 'C:\\'],
+    ['win32', 'c:\\'],
+    ['win32', 'C:/'],
+    ['win32', 'C:'],
+    ['win32', 'd:'],
+    ['win32', '\\\\srv\\share\\'],
+    ['posix', '/']
+  ] as const)('on %s, %s is a filesystem root', (platform, cwd) => {
+    expect(tooBroadJobCwd(cwd, '', { platform: platform === 'posix' ? 'linux' : platform, realpath: (p) => p })).toBe(true)
+  })
+  it.each([
+    ['win32', 'C:\\proj'],
+    ['win32', 'C:proj'],
+    ['win32', '\\\\srv\\share\\proj'],
+    ['posix', '/proj']
+  ] as const)('on %s, %s is not a root', (platform, cwd) => {
+    expect(tooBroadJobCwd(cwd, '', { platform: platform === 'posix' ? 'linux' : platform, realpath: (p) => p })).toBe(false)
+  })
+  it('a home folder that is a symlink is the same folder as its target, either way round', () => {
+    const links: Record<string, string> = { '/home/me': '/data/me' }
+    const realpath = (p: string): string => links[p] ?? p
+    expect(tooBroadJobCwd('/data/me', '/home/me', { platform: 'linux', realpath })).toBe(true)
+    expect(tooBroadJobCwd('/home/me', '/data/me', { platform: 'linux', realpath })).toBe(true)
+    expect(tooBroadJobCwd('/data/me/proj', '/home/me', { platform: 'linux', realpath })).toBe(false)
+  })
+  it('a realpath that throws falls back to the path as written', () => {
+    const realpath = (): string => {
+      throw new Error('ENOENT')
+    }
+    expect(tooBroadJobCwd('C:\\Users\\Me', 'c:\\users\\me', { platform: 'win32', realpath })).toBe(true)
+    expect(tooBroadJobCwd('/home/me/proj', '/home/me', { platform: 'linux', realpath })).toBe(false)
   })
   it('the home folder defaults to the OS home', async () => {
     const g = hostPathGuard({ jobCwds: () => [os.homedir()], runWorktrees: () => [], registeredWorktrees: () => [], refusal: 'no' })
