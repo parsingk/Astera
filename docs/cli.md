@@ -18,6 +18,11 @@ Astera binary in Node mode, so the CLI and the app can never be different versio
 Astera never edits your shell profile. The line is shown for you to run, so that the change is one
 you made and can find again.
 
+On Windows, when Astera is installed in a folder whose name has characters outside ASCII and that is
+not inside your user folder, the install also makes the directory junction `%LOCALAPPDATA%\astera\app`
+pointing at that folder, and `astera.cmd` reaches Astera through it, because cmd.exe cannot read such
+a name from a script (see Troubleshooting). A junction needs no administrator rights.
+
 Check the install:
 
 ```bash
@@ -33,10 +38,13 @@ Once the command is installed, the same panel has an **Uninstall** button. It re
 Astera wrote into the folder: `astera.cmd` and `astera` on Windows, `astera` on macOS and Linux. A
 file there is removed only when its content is exactly what Astera writes, so a file of the same name
 that you or another tool put there stays. The folder itself is never removed, and neither is anything
-else in it. The `PATH` line you ran is yours to take out again.
+else in it. The `PATH` line you ran is yours to take out again. On Windows the `%LOCALAPPDATA%\astera\app`
+junction goes too, as a link only: the Astera folder it points at is never entered, and a real folder
+at that path is left alone.
 
 On Windows, uninstalling Astera from the system does the same thing: the uninstaller removes those
-two files from `%LOCALAPPDATA%\astera\bin` under the same rule and leaves the folder. An update does
+two files from `%LOCALAPPDATA%\astera\bin` under the same rule, and the `app` junction as a link only,
+and leaves the folder. An update does
 not count as an uninstall, so the command keeps working across updates.
 
 ### Staying current
@@ -44,7 +52,8 @@ not count as an uninstall, so the command keeps working across updates.
 The command is a small script that names the Astera binary it runs. When Astera starts, it checks
 the installed script. If the script is Astera's and names a different binary (after an update, a
 reinstall into another folder, or a moved AppImage), Astera rewrites it to name the one that is
-running. If the command was never installed, nothing is written. If a file of that name is not
+running, and on Windows points the `%LOCALAPPDATA%\astera\app` junction at the new folder when the
+script goes through it. If the command was never installed, nothing is written. If a file of that name is not
 Astera's, it is left alone. `PATH` and your shell profile are never touched. Development builds skip
 this check, so running Astera from source never repoints the command you installed.
 
@@ -1422,7 +1431,16 @@ The install folder is not on your `PATH`, or this shell was opened before you ad
 **Settings → Agents → Command line tool (astera)**, run the line it shows, and open a new shell.
 
 **"Cannot find module" from `astera` in cmd or PowerShell on Windows**
-Astera is installed in a folder whose name has characters outside ASCII and that is not inside `%LOCALAPPDATA%`, `%APPDATA%` or your user folder, which `astera.cmd` cannot name; reinstall Astera into a folder with an ASCII name or into its default folder.
+cmd.exe reads `astera.cmd` in the console's code page, so a folder name with characters outside ASCII
+comes back garbled. Inside `%LOCALAPPDATA%`, `%APPDATA%` or your user folder the script names the
+folder by that variable. Anywhere else, **Install** makes the directory junction
+`%LOCALAPPDATA%\astera\app`, pointing at the Astera folder, and the script goes through it; installing
+again, or starting Astera once, repairs it. You still see this error only when the junction could not
+be made: the drive does not support junctions (a network drive, a FAT volume), a real folder already
+sits at `%LOCALAPPDATA%\astera\app` (Astera never touches it), or the part below the Astera folder has
+such characters too. The settings panel then says why under the install button. Clear the cause, or
+reinstall Astera into a folder with an ASCII name or into its default folder. `astera` from Git Bash
+works either way.
 
 **Exit 3, "cannot reach the Host"**
 No Host is running and the command needs one. Run `astera host start`. If it does not come up,

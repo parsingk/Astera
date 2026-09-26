@@ -2179,6 +2179,50 @@ source text) was left as it is.
   this Host stopped being the writer writes nothing"; `appJournal.test.ts`, "closes its own writer once
   a journal Host takes over, and never writes through it after".
 
+## Amendments (public shim junction, 2026-09-26)
+
+This closes the Windows limit that `docs/cli.md` named under Troubleshooting ("Cannot find module" from
+`astera` in cmd or PowerShell): the public `astera.cmd` could not name a non-ASCII install folder that
+sits outside `%LOCALAPPDATA%`, `%APPDATA%` and `%USERPROFILE%`. `5c3a318e` had already written a user
+folder as its variable; a folder like `D:\프로그램\Astera` had no variable and was written raw, and cmd.exe
+reads a batch file in the OEM code page, so the name broke. This list is the record, in A1's form; what
+it leaves is under "Known limits after the public shim junction".
+
+- **A140. The public `.cmd` reaches such a folder through a directory junction.** When the public shim
+  is installed or synced on win32 and, after `forCmd`, either path still has a character outside
+  printable ASCII, the installer makes `%LOCALAPPDATA%\astera\app` (the `app` beside the public `bin`)
+  a junction to the install root, the folder that holds the executable, with `fs.symlink(root, link,
+  'junction')`, which needs no admin. Both paths in the shim are then written as
+  `%LOCALAPPDATA%\astera\app\` plus their remainder below the root. `shuttleFiles` stays pure: it takes
+  the junction as `link` (`CmdLink`) and only writes paths through it, and `cmdLinkFor` decides, also
+  pure. The filesystem steps are in `installShuttle`, `syncShuttle` and `removeShuttle`
+  (`src/core/orchestration/exec/shuttle.ts`) behind an injected `LinkFs`. The rules:
+  - A junction that points elsewhere is re-pointed, because the app moved; one that points at the root
+    already is left alone (compared without case, trailing separator or `\\?\` prefix). A real folder or
+    file at that path is never touched.
+  - It falls back to the raw path, as before, when the junction cannot be made (a network drive, a FAT
+    volume), when something that is not a junction sits at that path, or when the entry is not below the
+    root or the remainder is not ASCII either. Each fallback is a `ShuttleWarning` (`junction-failed`,
+    `link-path-taken`, `junction-unsuitable`): `cli.install` returns them as `warnings` beside its status,
+    the settings panel shows them under the button, and the boot sync logs them.
+  - Boot sync makes or re-points the junction only when the shim is installed and ours, and checks the
+    junction's target separately from the shim, because a move that keeps the remainder leaves the
+    `.cmd` byte for byte the same. A shim written through the junction is still ours
+    (`isShuttleContent` accepts any quoted path), and a junction the shim no longer needs is removed.
+  - Uninstall removes the junction as a link only (`unlink`, never recursing into the target), and only
+    when no foreign `astera.cmd` is left. The NSIS uninstaller (`build/installer.nsh`,
+    `customUnInstall`) does the same with `[IO.Directory]::Delete` on a path whose `LinkType` is
+    `Junction`, also when the target is already gone.
+
+  What shipped: `shuttle.junction.test.ts` (junction chosen for an outside non-ASCII path, ASCII
+  unchanged, user folders still variables, fallback with a warning when the junction fails, a foreign
+  folder not touched, re-point on a move also when the `.cmd` is unchanged, uninstall removes only the
+  junction, and a real junction run through cmd.exe); `shuttle.nsis.test.ts`, "removes the app junction
+  with the shuttle, as a link only, also when its target is gone" and "leaves the app path alone when it
+  is a real folder, or when a foreign astera.cmd stays". Checked by hand on Windows with OEM code page
+  949: a raw shim for `…\설치 폴더\Astera.exe` failed with "지정된 경로를 찾을 수 없습니다", and the
+  junction shim printed its argv.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -2765,6 +2809,24 @@ Each was found while building or reviewing the Host journal and left as it is, w
   life. The app's own idle writer no longer holds it open (A139); its reader still does.
 - **The Host prints Node's one `ExperimentalWarning` for `node:sqlite` on stderr.** It lands in the
   Host's log once per start and means nothing is wrong.
+
+## Known limits after the public shim junction
+
+Each was left as it is when A140 closed the non-ASCII install folder limit of the public `astera.cmd`.
+
+- **A drive without junctions still gets the raw path** (A140). A network drive or a FAT volume cannot
+  hold the junction, so the `.cmd` is written raw as before and cmd or PowerShell may still fail. The
+  install reply and the settings panel say so, and the boot sync logs it; Git Bash works either way.
+- **A non-ASCII name below the install folder, or an entry outside it, still gets the raw path** (A140).
+  The junction only renames the install root. Neither happens with Astera's own layout, where the entry
+  is `resources\app.asar\…` below the executable's folder.
+- **Any link at `%LOCALAPPDATA%\astera\app` counts as ours.** Node's `lstat` reports a junction and a
+  directory symlink alike, so a symlink someone put there would be re-pointed or removed. Removing a
+  link never touches what it points at, and the path is inside Astera's own folder.
+- **The session shuttle has the same limit.** A140 covers only the public shim. The one Astera writes
+  for its own sessions still names such a folder raw in its `.cmd`. A session whose shell is bash
+  reaches the sh shuttle, read as UTF-8, and works; one whose shell is cmd or PowerShell (codex on
+  Windows runs PowerShell) goes through the `.cmd` and would fail.
 
 ## 0. The problem, measured
 
