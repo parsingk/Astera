@@ -21,7 +21,8 @@ you made and can find again.
 On Windows, when Astera is installed in a folder whose name has characters outside ASCII and that is
 not inside your user folder, the install also makes the directory junction `%LOCALAPPDATA%\astera\app`
 pointing at that folder, and `astera.cmd` reaches Astera through it, because cmd.exe cannot read such
-a name from a script (see Troubleshooting). A junction needs no administrator rights.
+a name from a script (see Troubleshooting). A junction needs no administrator rights. The command
+Astera gives its own sessions goes through the same junction, which Astera makes when it starts.
 
 Check the install:
 
@@ -40,7 +41,8 @@ file there is removed only when its content is exactly what Astera writes, so a 
 that you or another tool put there stays. The folder itself is never removed, and neither is anything
 else in it. The `PATH` line you ran is yours to take out again. On Windows the `%LOCALAPPDATA%\astera\app`
 junction goes too, as a link only: the Astera folder it points at is never entered, and a real folder
-at that path is left alone.
+at that path is left alone. It stays while the running Astera itself needs it, because the sessions
+Astera starts reach it through the same junction.
 
 On Windows, uninstalling Astera from the system does the same thing: the uninstaller removes those
 two files from `%LOCALAPPDATA%\astera\bin` under the same rule, and the `app` junction as a link only,

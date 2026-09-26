@@ -2209,19 +2209,31 @@ it leaves is under "Known limits after the public shim junction".
     junction's target separately from the shim, because a move that keeps the remainder leaves the
     `.cmd` byte for byte the same. A shim written through the junction is still ours
     (`isShuttleContent` accepts any quoted path), and a junction the shim no longer needs is removed.
+  - The session shuttle (`<userData>\orch`) uses the same junction and the same decision
+    (`sessionCmdLink`). The app makes or re-points it in `bootOrch` before any session starts, and the
+    Host's `ensureShuttle` (`src/host/spawner.ts`) does the same at its first spawn, so both writers of
+    that file write the same `.cmd` and neither turns the other's back to the raw path. The session
+    path never removes the junction; when it cannot be made, the `.cmd` is raw and the reason is logged.
   - Uninstall removes the junction as a link only (`unlink`, never recursing into the target), and only
-    when no foreign `astera.cmd` is left. The NSIS uninstaller (`build/installer.nsh`,
+    when no foreign `astera.cmd` is left and the running app's own session shuttle does not need it
+    (`removeShuttle`'s `keepFor`: the junction stays while `cmdLinkFor` says `link` for this app's own
+    executable and entry, so the Settings uninstall of a build in such a folder keeps it, and the next
+    public install or boot finds it in place). The NSIS uninstaller (`build/installer.nsh`,
     `customUnInstall`) does the same with `[IO.Directory]::Delete` on a path whose `LinkType` is
     `Junction`, also when the target is already gone.
 
   What shipped: `shuttle.junction.test.ts` (junction chosen for an outside non-ASCII path, ASCII
   unchanged, user folders still variables, fallback with a warning when the junction fails, a foreign
   folder not touched, re-point on a move also when the `.cmd` is unchanged, uninstall removes only the
-  junction, and a real junction run through cmd.exe); `shuttle.nsis.test.ts`, "removes the app junction
-  with the shuttle, as a link only, also when its target is gone" and "leaves the app path alone when it
-  is a real folder, or when a foreign astera.cmd stays". Checked by hand on Windows with OEM code page
-  949: a raw shim for `…\설치 폴더\Astera.exe` failed with "지정된 경로를 찾을 수 없습니다", and the
-  junction shim printed its argv.
+  junction, and a real junction run through cmd.exe; and for the session shuttle, `sessionCmdLink`
+  making and re-pointing but never removing, the app's and the Host's writers agreeing on one `.cmd`,
+  the public uninstall keeping the junction while this app needs it, and a real session `.cmd` run at
+  code page 949); `spawner.test.ts`, "writes the session .cmd through the app junction it makes, beside
+  the public bin"; `shuttle.nsis.test.ts`, "removes the app junction with the shuttle, as a link only,
+  also when its target is gone" and "leaves the app path alone when it is a real folder, or when a
+  foreign astera.cmd stays". Checked by hand on Windows with OEM code page 949, for the public and the
+  session shuttle alike: a raw shim for `…\설치 폴더\Astera.exe` failed with "지정된 경로를 찾을 수
+  없습니다", and the junction shim printed its argv.
 
 ## Known limits after S3
 
@@ -2823,10 +2835,17 @@ Each was left as it is when A140 closed the non-ASCII install folder limit of th
 - **Any link at `%LOCALAPPDATA%\astera\app` counts as ours.** Node's `lstat` reports a junction and a
   directory symlink alike, so a symlink someone put there would be re-pointed or removed. Removing a
   link never touches what it points at, and the path is inside Astera's own folder.
-- **The session shuttle has the same limit.** A140 covers only the public shim. The one Astera writes
-  for its own sessions still names such a folder raw in its `.cmd`. A session whose shell is bash
-  reaches the sh shuttle, read as UTF-8, and works; one whose shell is cmd or PowerShell (codex on
-  Windows runs PowerShell) goes through the `.cmd` and would fail.
+- **The session shuttle falls back the same way** (A140). Where the junction cannot be made, the
+  session `.cmd` is raw too: a session whose shell is bash reaches the sh shuttle, read as UTF-8, and
+  works; one whose shell is cmd or PowerShell (codex on Windows runs PowerShell) would fail. The reason
+  is only logged, since no screen asked for it.
+- **Two installs in different non-ASCII folders share one junction.** Each points it at itself when it
+  boots, so while both run, the one that booted first finds its session `.cmd` naming the other's
+  files until it boots again. One Astera per machine is the usual case.
+- **Another build's Settings uninstall can take the junction a running app needs.** `keepFor` asks only
+  about the app doing the uninstall. A development build in an ASCII folder that uninstalls the public
+  shim removes the junction a running installed build's sessions use; the Host puts it back at its next
+  first spawn after a restart, and the app at its next boot.
 
 ## 0. The problem, measured
 
