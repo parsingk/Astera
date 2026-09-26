@@ -13,7 +13,7 @@ import type { JobEvent } from '../../core/types'
 import type { OrchState } from '../../core/orchestration/state'
 import type { HandoffLookup } from '../../core/handoff/types'
 import type { ContinuityEvent } from '../../core/continuity/events'
-import { ContinuityJournal, type NewRecoveryActionRow, type RecoveryActionRow } from '../../core/continuity/journal'
+import { ContinuityJournal, isBusyError, type NewRecoveryActionRow, type RecoveryActionRow } from '../../core/continuity/journal'
 import { ContinuityRecorder } from '../../core/continuity/recorder'
 import { JournalReader } from '../../core/continuity/journalReader'
 import { journalTimeline } from '../../core/continuity/timelineRows'
@@ -29,6 +29,8 @@ export interface AppJournalDeps {
   lang(): Lang
   smartResume(): boolean
   handoffLookup(sessionId: string): HandoffLookup
+  /** How long the writer and the reader wait for another process's lock; BUSY_TIMEOUT_MS when left out. */
+  busyTimeoutMs?: number
 }
 
 export interface AppJournal {
@@ -71,12 +73,15 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
   }
   let local: { journal: ContinuityJournal; recorder: ContinuityRecorder } | null = null
   let localFailed = false
+  /** Whether the last open failed busy (final review I2): not a failure until the next start, so the next
+   *  write tries again, and a run of them is one log line. */
+  let localBusy = false
   /** The app's own writer: only when on and the Host it last greeted does not write. Opened lazily. */
   const writer = (): typeof local => {
     if (!on || hostWrites()) return null
     if (local || localFailed) return local
     try {
-      const journal = new ContinuityJournal(d.file, { log: d.log })
+      const journal = new ContinuityJournal(d.file, { log: d.log, busyTimeoutMs: d.busyTimeoutMs })
       if (journal.recovered) d.log('continuity journal was unreadable, moved aside, started a new one')
       local = {
         journal,
@@ -88,14 +93,20 @@ export function createAppJournal(d: AppJournalDeps): AppJournal {
           handoffLookup: d.handoffLookup
         })
       }
+      localBusy = false
     } catch (err) {
+      if (isBusyError(err)) {
+        if (!localBusy) d.log(`continuity: the journal is locked by another process, tried again at the next write: ${String(err)}`)
+        localBusy = true
+        return null
+      }
       localFailed = true
       d.log(`continuity: journal could not be opened, journaling stays off until the next start: ${String(err)}`)
     }
     return local
   }
   let reader: JournalReader | null = null
-  const readerOf = (): JournalReader | null => (on ? (reader ??= new JournalReader(d.file, { log: d.log })) : null)
+  const readerOf = (): JournalReader | null => (on ? (reader ??= new JournalReader(d.file, { log: d.log, busyTimeoutMs: d.busyTimeoutMs })) : null)
   /** The Host's half (J3): one call per op, in order, never rejecting (Global Constraint 5). */
   let tail: Promise<void> = Promise.resolve()
   const send = (cmd: 'journal-append' | 'journal-reload', args: Record<string, unknown>): void => {

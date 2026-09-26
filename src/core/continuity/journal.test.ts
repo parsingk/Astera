@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ContinuityJournal, SCHEMA_VERSION } from './journal'
+import { ContinuityJournal, SCHEMA_VERSION, isBusyError, isCorruptionError } from './journal'
+import { holdLock, holdLockFor } from './sqliteLockFixtures'
 import type { ContinuityEvent } from './events'
 
 let dir: string
@@ -124,6 +125,53 @@ describe('ContinuityJournal', () => {
     expect(names.some((n) => n.startsWith('continuity.sqlite.corrupt-'))).toBe(true)
     expect(logs.some((l) => l.includes('moved aside'))).toBe(true)
     j.close()
+  })
+
+  // Final review I2: a lock is not corruption. Another process (the app's reader, the Host's writer) can
+  // hold the file for a moment; the open waits it out (busy_timeout) instead of moving a healthy file aside.
+  it('waits out a lock another connection holds for a moment, and keeps the file and its rows', async () => {
+    const first = new ContinuityJournal(file())
+    first.append([ev('JOB_RUN_STARTED', 'a')])
+    first.close()
+    const held = await holdLockFor(file(), 300)
+    const j = new ContinuityJournal(file())
+    expect(j.recovered).toBe(false)
+    expect(j.eventsFor('run_1')).toHaveLength(1)
+    j.close()
+    await held.done
+    expect((await fs.readdir(dir)).filter((n) => n.includes('.corrupt-'))).toEqual([])
+  })
+
+  it('a lock held past the timeout leaves the file where it is: the open throws, and a later open finds the rows', async () => {
+    const first = new ContinuityJournal(file())
+    first.append([ev('JOB_RUN_STARTED', 'a')])
+    first.close()
+    const lock = holdLock(file())
+    const logs: string[] = []
+    try {
+      expect(() => new ContinuityJournal(file(), { log: (m) => logs.push(m), busyTimeoutMs: 20 })).toThrow(/database is locked/)
+    } finally {
+      lock.release()
+    }
+    expect((await fs.readdir(dir)).filter((n) => n.includes('.corrupt-'))).toEqual([])
+    expect(logs.some((l) => l.includes('moved aside'))).toBe(false)
+    const j = new ContinuityJournal(file())
+    expect(j.eventsFor('run_1')).toHaveLength(1)
+    j.close()
+  })
+
+  it('tells corruption from a lock by the SQLite error code', () => {
+    const sqliteError = (errcode: number): Error => Object.assign(new Error('x'), { code: 'ERR_SQLITE_ERROR', errcode })
+    expect(isCorruptionError(sqliteError(11))).toBe(true) // SQLITE_CORRUPT
+    expect(isCorruptionError(sqliteError(26))).toBe(true) // SQLITE_NOTADB
+    expect(isCorruptionError(sqliteError(11 | (1 << 8)))).toBe(true) // SQLITE_CORRUPT_VTAB, an extended code
+    expect(isCorruptionError(sqliteError(5))).toBe(false) // SQLITE_BUSY
+    expect(isCorruptionError(sqliteError(6))).toBe(false) // SQLITE_LOCKED
+    expect(isCorruptionError(new Error('EISDIR'))).toBe(false)
+    expect(isBusyError(sqliteError(5))).toBe(true)
+    expect(isBusyError(sqliteError(5 | (1 << 8)))).toBe(true) // SQLITE_BUSY_RECOVERY
+    expect(isBusyError(sqliteError(6))).toBe(true)
+    expect(isBusyError(sqliteError(26))).toBe(false)
   })
 })
 

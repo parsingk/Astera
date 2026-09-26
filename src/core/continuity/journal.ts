@@ -8,7 +8,7 @@
 // Lives in core/continuity since the Host journal (Task 1), so the Host writes with the same code the app did.
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
-import { existsSync, renameSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readSync, renameSync } from 'node:fs'
 import type { ContinuityEvent, ContinuityEventType } from './events'
 import { actorFromJson, type JournalActor } from './actor'
 import type { CheckpointKind } from './checkpointPolicy'
@@ -76,6 +76,51 @@ export type NewRecoveryActionRow = Omit<
 export interface ContinuityJournalDeps {
   log?(message: string): void
   now?(): string
+  /** How long a statement waits for another connection's lock before it fails; BUSY_TIMEOUT_MS when left out. */
+  busyTimeoutMs?: number
+}
+
+/** How long a connection waits for another's lock (final review I2). Since the Host journal two processes
+ *  open this file, the Host's writer and the app's reader, and one can meet the other's lock for a moment
+ *  (WAL recovery, a checkpoint). Waiting is the answer; failing at once made a lock look like a broken file. */
+export const BUSY_TIMEOUT_MS = 5000
+
+/** Sets the busy timeout on a connection: the first statement on every connection to this file. */
+export function setBusyTimeout(db: DatabaseSync, ms: number = BUSY_TIMEOUT_MS): void {
+  db.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(ms))}`)
+}
+
+/** The primary SQLite result code of a node:sqlite error (its extended code's low byte), or null. */
+const sqliteCode = (err: unknown): number | null => {
+  const code = (err as { errcode?: unknown } | null)?.errcode
+  return typeof code === 'number' ? code & 0xff : null
+}
+/** SQLITE_CORRUPT (11) or SQLITE_NOTADB (26): the file is not a database this build can read. */
+export const isCorruptionError = (err: unknown): boolean => {
+  const code = sqliteCode(err)
+  return code === 11 || code === 26
+}
+/** SQLITE_BUSY (5) or SQLITE_LOCKED (6): another connection holds the file for now. */
+export const isBusyError = (err: unknown): boolean => {
+  const code = sqliteCode(err)
+  return code === 5 || code === 6
+}
+
+const SQLITE_HEADER = 'SQLite format 3\0'
+/** Whether a file that exists and has bytes does not begin with SQLite's header. A missing or empty file,
+ *  or one this process cannot read (a folder, a permission), says nothing about corruption: false. */
+function headerIsBad(filePath: string): boolean {
+  let fd: number | null = null
+  try {
+    fd = openSync(filePath, 'r')
+    const buf = Buffer.alloc(SQLITE_HEADER.length)
+    const n = readSync(fd, buf, 0, buf.length, 0)
+    return n > 0 && buf.toString('latin1', 0, n) !== SQLITE_HEADER
+  } catch {
+    return false
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
 }
 
 const SCHEMA = `
@@ -140,9 +185,11 @@ interface OpenResult {
 }
 
 /** Opens (or creates) the file and brings it to the schema. Throws when the file is not a database. */
-function open(filePath: string): OpenResult {
+function open(filePath: string, busyTimeoutMs?: number): OpenResult {
   const db = new DatabaseSync(filePath)
   try {
+    // First, before anything reads the file: a lock another process holds for a moment is waited out.
+    setBusyTimeout(db, busyTimeoutMs)
     // FULL, not NORMAL: writes happen once per state transition and the durability of an intent
     // record is the point (spec §6.1). WAL keeps readers (P1's reconciler) off the writer's lock.
     db.exec('PRAGMA journal_mode = WAL')
@@ -213,7 +260,9 @@ function moveAside(filePath: string, stamp: string): void {
 
 export class ContinuityJournal {
   private readonly db: DatabaseSync
-  /** True when the file could not be opened as a database and was moved aside (design §4). */
+  /** True when the file was not a database (SQLite said it is corrupt or not a database, or its header
+   *  is not SQLite's) and was moved aside (design §4). Any other failure to open, a lock held past the
+   *  busy timeout above all, leaves the file where it is and throws from the constructor (final review I2). */
   readonly recovered: boolean
   /** False when the file is intact but was written by a newer build (a higher schema version), or is
    *  an older one whose upgrade failed: it is left untouched, reads still work and every write becomes
@@ -234,12 +283,15 @@ export class ContinuityJournal {
     let opened: OpenResult
     let recovered = false
     try {
-      opened = open(filePath)
+      opened = open(filePath, deps.busyTimeoutMs)
     } catch (err) {
+      // Only a file SQLite calls broken is moved aside. A lock (another process holds the file) or any
+      // other failure leaves a healthy journal where it is; the caller logs it and may try again.
+      if (!isCorruptionError(err) && !headerIsBad(filePath)) throw err
       const stamp = deps.now?.() ?? new Date().toISOString()
       moveAside(filePath, stamp)
       deps.log?.(`continuity journal could not be opened and was moved aside (${String(err)})`)
-      opened = open(filePath)
+      opened = open(filePath, deps.busyTimeoutMs)
       recovered = true
     }
     this.db = opened.db

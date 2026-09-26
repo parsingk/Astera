@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { ContinuityJournal } from './journal'
 import { JournalReader } from './journalReader'
+import { holdLock, holdLockFor } from './sqliteLockFixtures'
 import type { ContinuityEvent } from './events'
 
 let dir: string
@@ -79,6 +80,37 @@ describe('JournalReader (P13)', () => {
     r.eventsFor('run_1')
     // A reader has no schema step to be tricked into, and the connection itself refuses a write.
     expect(() => r.execForTest('DELETE FROM journal_events')).toThrow(/readonly/i)
+  })
+
+  // Final review I2: the reader waits out a lock the writer holds for a moment (busy_timeout), and a lock
+  // held past it is a failed read (P13: it throws), never a reason to touch the file.
+  it('waits out a lock another connection holds for a moment', async () => {
+    const w = new ContinuityJournal(file())
+    w.append([ev('a')])
+    w.close()
+    const held = await holdLockFor(file(), 300)
+    const r = reader()
+    expect(r.eventsFor('run_1')).toHaveLength(1)
+    await held.done
+  })
+
+  it('a lock held past its timeout throws after waiting for it, and the next read after it is let go works', () => {
+    const w = new ContinuityJournal(file())
+    w.append([ev('a')])
+    w.close()
+    const r = new JournalReader(file(), { busyTimeoutMs: 100 })
+    open.push(r)
+    const lock = holdLock(file())
+    try {
+      const t0 = Date.now()
+      expect(() => r.eventsFor('run_1')).toThrow(/database is locked/)
+      // It waited for the lock before it gave up: the timeout is set on this connection.
+      expect(Date.now() - t0).toBeGreaterThanOrEqual(90)
+    } finally {
+      lock.release()
+    }
+    expect(r.eventsFor('run_1')).toHaveLength(1)
+    expect(existsSync(file())).toBe(true)
   })
 })
 

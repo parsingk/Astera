@@ -11,6 +11,7 @@ import { HOST_PROTOCOL, HOST_YIELD_JOURNAL } from '../core/host/protocol'
 import { versionOnlyOrchCall } from '../core/host/orchProtocol'
 import { JournalReader } from '../core/continuity/journalReader'
 import { ContinuityJournal } from '../core/continuity/journal'
+import { holdLock, holdLockFor } from '../core/continuity/sqliteLockFixtures'
 import { stateFromLegacy } from '../core/orchestration/legacyState'
 import type { OrchState } from '../core/orchestration/state'
 import type { Dispatch } from '../core/orchestration/types'
@@ -323,14 +324,76 @@ describe('createHostJournal', () => {
 
   it('a journal it cannot open is logged once and journals nothing, and nothing throws', async () => {
     await settings({ jobContinuityEnabled: true })
-    // A file where the orch folder should be: the mkdir fails. (A folder at the journal's own path would
-    // not do: ContinuityJournal moves an unopenable path aside and starts a new file.)
+    // A file where the orch folder should be: the mkdir fails. Any failure that is neither corruption nor
+    // a lock is given up on for this Host's life (a lock is tried again, see below).
     await fs.writeFile(path.join(dir, 'orch'), 'not a folder')
     const { j, logs } = make()
     await j.start()
     expect(() => j.committed({ prev: on(), next: paused(), version: 1, actor: cli })).not.toThrow()
     expect(() => j.loaded({ before: on(), state: paused() })).not.toThrow()
     expect(logs.filter((l) => /could not open the journal/.test(l))).toHaveLength(1)
+  })
+
+  // Final review I2: a busy file is not a corrupt one, and a busy open is not a failure for the Host's life.
+  describe('a journal another process holds locked', () => {
+    const corrupt = async (): Promise<string[]> => (await fs.readdir(path.dirname(journalFile()))).filter((n) => n.includes('.corrupt-'))
+    const seedFile = async (): Promise<void> => {
+      await fs.mkdir(path.dirname(journalFile()), { recursive: true })
+      new ContinuityJournal(journalFile()).close()
+    }
+
+    it('a busy open is logged, moves nothing aside, and is tried again at the next write', async () => {
+      await settings({ jobContinuityEnabled: true })
+      await seedFile()
+      const { j, logs } = make({ busyTimeoutMs: 20 })
+      await j.start()
+      const lock = holdLock(journalFile())
+      try {
+        j.committed({ prev: on(), next: paused(), version: 1, actor: cli })
+      } finally {
+        lock.release()
+      }
+      expect(logs.some((l) => /database is locked/.test(l))).toBe(true)
+      expect(await corrupt()).toEqual([])
+      j.committed({ prev: paused(), next: on(), version: 2, actor: cli })
+      expect(rows().map((e) => e.type)).toEqual(['JOB_RUN_RESUMED'])
+    })
+
+    it('the timeline waits out a brief lock, and one held past the timeout is logged, reads as no rows and moves nothing', async () => {
+      // Each profile's file is seeded and closed first: a lock can be taken only while no other connection
+      // has the file open, so each reader meets the lock at its very first read.
+      const seedLost = async (profileDir: string): Promise<void> => {
+        await fs.mkdir(path.join(profileDir, 'orch'), { recursive: true })
+        await fs.writeFile(path.join(profileDir, 'app-settings.json'), JSON.stringify({ jobContinuityEnabled: true }))
+        const w = new ContinuityJournal(path.join(profileDir, 'orch', 'continuity.sqlite'))
+        w.append([{ runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'ATTEMPT_LOST', at: NOW, idempotencyKey: 'lost', payload: {} }])
+        w.close()
+      }
+      const task = { id: 'tsk_1', runId: 'run_1', title: 'Auth refactor', spec: 's', deps: [], status: 'dispatched' as const, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      const state = stateFromLegacy({ runs: [run], tasks: [task], dispatches: [] })
+
+      const brief = path.join(dir, 'brief')
+      await seedLost(brief)
+      const a = make({ profileDir: brief, busyTimeoutMs: 5000 })
+      await a.j.start()
+      const held = await holdLockFor(path.join(brief, 'orch', 'continuity.sqlite'), 150)
+      expect(a.j.timeline('run_1', state)).toEqual([expect.objectContaining({ kind: 'runtime-lost', taskTitle: 'Auth refactor' })])
+      await held.done
+
+      const long = path.join(dir, 'long')
+      await seedLost(long)
+      const b = make({ profileDir: long, busyTimeoutMs: 20 })
+      await b.j.start()
+      const lock = holdLock(path.join(long, 'orch', 'continuity.sqlite'))
+      try {
+        expect(b.j.timeline('run_1', state)).toEqual([])
+      } finally {
+        lock.release()
+      }
+      expect(b.logs.some((l) => /run_1's journal rows failed: .*database is locked/.test(l))).toBe(true)
+      expect((await fs.readdir(path.join(long, 'orch'))).filter((n) => n.includes('.corrupt-'))).toEqual([])
+      expect(b.j.timeline('run_1', state)).toHaveLength(1)
+    })
   })
 
   // J2 and P9 through the real server's appsKeep, the gate index.ts hands in: every attach and leave.

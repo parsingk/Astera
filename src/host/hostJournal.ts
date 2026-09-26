@@ -5,7 +5,7 @@
 // stop a Job (continuity design §6), and nothing here may reject (R3).
 import path from 'node:path'
 import { mkdirSync } from 'node:fs'
-import { ContinuityJournal } from '../core/continuity/journal'
+import { ContinuityJournal, isBusyError } from '../core/continuity/journal'
 import { ContinuityRecorder } from '../core/continuity/recorder'
 import { JournalReader } from '../core/continuity/journalReader'
 import { DESKTOP_ACTOR, HOST_ACTOR, commitStamp, type JournalActor } from '../core/continuity/actor'
@@ -33,6 +33,8 @@ export interface HostJournalDeps {
   git?: GitSummaryDeps['git']
   /** A monotonic clock in milliseconds, for the slow-write warning; defaults to `performance.now()`. */
   clockMs?(): number
+  /** How long the writer and the reader wait for another process's lock; BUSY_TIMEOUT_MS when left out. */
+  busyTimeoutMs?: number
 }
 export interface HostJournal {
   /** Reads app-settings.json; opens the file only when Job Continuity is on and this Host writes. Never rejects. */
@@ -64,13 +66,17 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   const read = d.readSettings ?? readContinuitySettings
   let settings = OFF
   let open: { journal: ContinuityJournal; recorder: ContinuityRecorder } | null = null
-  /** A failed open is not retried in this Host's life: the app's rule, and one log line, not one per commit. */
+  /** A failed open is not retried in this Host's life: the app's rule, and one log line, not one per commit.
+   *  Except a busy one (final review I2): another process held the file past the busy timeout, which
+   *  says nothing about the file, so the next write tries again. */
   let openFailed = false
+  /** Whether the last open failed busy, so a run of them is one log line and the recovery is another. */
+  let openBusy = false
   /** Set by the public close() (the Host leaving): no write reopens the file after it, so the exits
    *  the leave causes cannot leave a handle behind. */
   let shut = false
   /** Reads are free (J7): a reader, so a Host that is not the writer never runs the schema step. */
-  const reader = new JournalReader(file)
+  const reader = new JournalReader(file, { busyTimeoutMs: d.busyTimeoutMs })
   /** The baseline a journal-reload owed and could not write (Task 4 review CARRY): it turned journaling
    *  on while an attached app kept the journal, so neither side wrote CONTINUITY_ENABLED. Paid at the
    *  first write once this Host is the writer, unless the file got one since `since` (an older app that
@@ -103,7 +109,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   const openJournal = (): void => {
     try {
       mkdirSync(path.dirname(file), { recursive: true })
-      const journal = new ContinuityJournal(file, { log: d.log, now: d.now })
+      const journal = new ContinuityJournal(file, { log: d.log, now: d.now, busyTimeoutMs: d.busyTimeoutMs })
       if (journal.recovered) d.log('continuity journal was unreadable, moved aside, started a new one')
       const recorder = new ContinuityRecorder({
         journal, log: d.log, now: d.now, git: d.git,
@@ -113,7 +119,14 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
         handoffLookup: (sessionId) => lookupHandoffFile(handoffPath, sessionId)
       })
       open = { journal, recorder }
+      if (openBusy) d.log('continuity: the journal is no longer locked, the Host journals again')
+      openBusy = false
     } catch (err) {
+      if (isBusyError(err)) {
+        if (!openBusy) d.log(`continuity: the journal is locked by another process, the Host tries again at its next write: ${String(err)}`)
+        openBusy = true
+        return
+      }
       openFailed = true
       d.log(`continuity: the Host could not open the journal, it journals nothing until it restarts: ${String(err)}`)
     }

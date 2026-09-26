@@ -12,6 +12,7 @@ import {
   rowToEvent,
   rowToRecoveryAction,
   selectEvents,
+  setBusyTimeout,
   type CheckpointRow,
   type JournalEventRow,
   type RawCheckpoint,
@@ -24,15 +25,24 @@ export class JournalReader {
   private db: DatabaseSync | null = null
   constructor(
     private readonly filePath: string,
-    private readonly deps: { log?(message: string): void } = {}
+    private readonly deps: { log?(message: string): void; busyTimeoutMs?: number } = {}
   ) {}
 
   /** Opened at the first read that finds the file; a missing file is no rows, and is asked again next time. */
   private handle(): DatabaseSync | null {
     if (this.db) return this.db
     if (!existsSync(this.filePath)) return null
-    this.db = new DatabaseSync(this.filePath, { readOnly: true })
-    return this.db
+    const db = new DatabaseSync(this.filePath, { readOnly: true })
+    // A lock the writer holds for a moment is waited out (final review I2); one held past the timeout is a
+    // failed read, which throws (P13). Nothing here ever moves the file.
+    try {
+      setBusyTimeout(db, this.deps.busyTimeoutMs)
+    } catch (err) {
+      db.close()
+      throw err
+    }
+    this.db = db
+    return db
   }
 
   /** Asked per read, not once: the Host may migrate the file to v3 while this connection is open. */

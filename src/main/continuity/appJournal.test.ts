@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { createAppJournal, type AppJournal, type AppJournalDeps } from './appJournal'
 import { ContinuityJournal } from '../../core/continuity/journal'
 import { JournalReader } from '../../core/continuity/journalReader'
+import { holdLock } from '../../core/continuity/sqliteLockFixtures'
 import { stateFromLegacy } from '../../core/orchestration/legacyState'
 import type { OrchState } from '../../core/orchestration/state'
 
@@ -61,6 +62,22 @@ describe('createAppJournal', () => {
     expect(j.appWrites()).toBe(true)
     j.record(on(), paused())
     expect(rowsIn()).toEqual(['JOB_RUN_PAUSED'])
+  })
+
+  // Final review I2: a busy file is neither moved aside nor given up on until the next start.
+  it('in front of an older Host, a busy open is logged, moves nothing aside, and is tried again at the next write', async () => {
+    new ContinuityJournal(file()).close()
+    const { j, logs } = make(OLDER_HOST, { busyTimeoutMs: 20 })
+    const lock = holdLock(file())
+    try {
+      expect(j.record(on(), paused())).toEqual([])
+    } finally {
+      lock.release()
+    }
+    expect(logs.some((l) => /database is locked/.test(l))).toBe(true)
+    expect((await fs.readdir(dir)).filter((n) => n.includes('.corrupt-'))).toEqual([])
+    j.record(paused(), on())
+    expect(rowsIn()).toEqual(['JOB_RUN_RESUMED'])
   })
 
   it('in front of a journal Host the app writes nothing and opens no writer', () => {
