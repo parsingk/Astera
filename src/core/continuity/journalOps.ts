@@ -6,8 +6,20 @@ import type { NewRecoveryActionRow } from './journal'
 
 /** Ops in one call. The reconciler sends one op per call; this bounds what a bad sender can queue. */
 export const JOURNAL_OPS_MAX = 64
-/** Events in one `events` op. */
-const EVENTS_MAX = 64
+/** Events in one call, all its `events` ops together (and so in any one op). */
+export const JOURNAL_EVENTS_MAX = 64
+/** The JSON of one event's payload, or of one recovery finish's details, in UTF-8 bytes. */
+export const JOURNAL_PAYLOAD_MAX_BYTES = 64 * 1024
+/** What the Host puts in front of every key the app sends (review 4-5 M-2): the app's rows live in a
+ *  namespace no Host key begins with (a Host key begins with its event type), so an app row can never
+ *  take a key a later Host row needs. */
+export const APP_KEY_PREFIX = 'app:'
+
+/** Why this value is too big to journal, or null. Measured as the journal stores it: JSON, in bytes. */
+const tooBig = (what: string, v: unknown): string | null => {
+  const bytes = new TextEncoder().encode(JSON.stringify(v)).length
+  return bytes > JOURNAL_PAYLOAD_MAX_BYTES ? `${what} is ${bytes} bytes of JSON, over the ${JOURNAL_PAYLOAD_MAX_BYTES} a row may carry` : null
+}
 
 export type JournalOp =
   | { op: 'events'; events: ContinuityEvent[] }
@@ -25,8 +37,10 @@ function eventOf(v: unknown, i: number): ContinuityEvent | string {
   if (!isNonEmpty(v.runId)) return `event ${i}: runId must be a non-empty string`
   if (!isContinuityEventType(v.type)) return `event ${i}: unknown type ${JSON.stringify(v.type)}`
   if (!isStr(v.at)) return `event ${i}: at must be a string`
-  if (!isStr(v.idempotencyKey)) return `event ${i}: idempotencyKey must be a string`
+  if (!isNonEmpty(v.idempotencyKey)) return `event ${i}: idempotencyKey must be a non-empty string`
   if (!isObj(v.payload)) return `event ${i}: payload must be an object`
+  const big = tooBig(`event ${i}: payload`, v.payload)
+  if (big) return big
   if (v.taskId !== undefined && !isStr(v.taskId)) return `event ${i}: taskId must be a string`
   if (v.dispatchId !== undefined && !isStr(v.dispatchId)) return `event ${i}: dispatchId must be a string`
   return {
@@ -45,8 +59,8 @@ const RECOVERY_START_FIELDS = ['runId', 'taskId', 'dispatchId', 'strategy', 'cla
 function opOf(v: unknown): JournalOp | string {
   if (!isObj(v)) return 'not an object'
   if (v.op === 'events') {
-    if (!Array.isArray(v.events) || v.events.length === 0 || v.events.length > EVENTS_MAX)
-      return `events must be an array of 1 to ${EVENTS_MAX}`
+    if (!Array.isArray(v.events) || v.events.length === 0 || v.events.length > JOURNAL_EVENTS_MAX)
+      return `events must be an array of 1 to ${JOURNAL_EVENTS_MAX}`
     const events: ContinuityEvent[] = []
     for (let i = 0; i < v.events.length; i++) {
       const e = eventOf(v.events[i], i)
@@ -79,6 +93,8 @@ function opOf(v: unknown): JournalOp | string {
     if (!isStr(v.at)) return 'at must be a string'
     if (v.status !== 'completed' && v.status !== 'failed') return 'status must be completed or failed'
     if (v.details !== undefined && !isObj(v.details)) return 'details must be an object'
+    const big = v.details !== undefined ? tooBig('details', v.details) : null
+    if (big) return big
     return {
       op: 'recovery-finish',
       id: v.id,
@@ -95,9 +111,12 @@ export function parseJournalOps(v: unknown): { ops: JournalOp[] } | { error: str
   if (!Array.isArray(v) || v.length === 0 || v.length > JOURNAL_OPS_MAX)
     return { error: `journal-append: ops must be an array of 1 to ${JOURNAL_OPS_MAX}` }
   const ops: JournalOp[] = []
+  let events = 0
   for (let i = 0; i < v.length; i++) {
     const op = opOf(v[i])
     if (typeof op === 'string') return { error: `journal-append op ${i}: ${op}` }
+    if (op.op === 'events') events += op.events.length
+    if (events > JOURNAL_EVENTS_MAX) return { error: `journal-append: at most ${JOURNAL_EVENTS_MAX} events in one call` }
     ops.push(op)
   }
   return { ops }

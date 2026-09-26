@@ -11,7 +11,7 @@ import { JournalReader } from '../core/continuity/journalReader'
 import { DESKTOP_ACTOR, HOST_ACTOR, commitStamp, type JournalActor } from '../core/continuity/actor'
 import { journalTimeline } from '../core/continuity/timelineRows'
 import { promptWriteEventOf } from '../core/continuity/promptWrite'
-import type { JournalOp } from '../core/continuity/journalOps'
+import { APP_KEY_PREFIX, type JournalOp } from '../core/continuity/journalOps'
 import { readContinuitySettings, type ContinuitySettingsRead } from '../core/settings/continuitySettings'
 import { lookupHandoffFile } from '../core/handoff/fileLookup'
 import type { JobEvent } from '../core/types'
@@ -175,17 +175,31 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
       if (!w) return { status: 409, body: { error: 'this Host could not open the journal', enabled: true, writer } }
       let applied = 0
       let failed = 0
-      for (const op of ops) {
-        try {
-          // The Host stamps who sent these (P5): the app, whatever the rows said.
-          if (op.op === 'events') w.journal.append(op.events.map((e) => ({ ...e, actor: DESKTOP_ACTOR })))
-          else if (op.op === 'recovery-start') w.journal.startRecoveryAction(op.row)
-          else w.journal.finishRecoveryAction(op.id, op.status, op.at, op.details)
-          applied += 1
-        } catch (err) {
-          failed += 1
-          d.log(`continuity: journal-append ${op.op} failed: ${String(err)}`)
-        }
+      try {
+        // One call, one transaction (one sync); each op a savepoint inside it, so one that fails costs
+        // only itself (P14).
+        w.journal.transaction(() => {
+          for (const op of ops) {
+            try {
+              w.journal.transaction(() => {
+                // The Host stamps who sent these (P5): the app, whatever the rows said; and puts the app's
+                // keys in their own namespace (review 4-5 M-2).
+                if (op.op === 'events')
+                  w.journal.append(op.events.map((e) => ({ ...e, idempotencyKey: APP_KEY_PREFIX + e.idempotencyKey, actor: DESKTOP_ACTOR })))
+                else if (op.op === 'recovery-start') w.journal.startRecoveryAction(op.row)
+                else w.journal.finishRecoveryAction(op.id, op.status, op.at, op.details)
+              })
+              applied += 1
+            } catch (err) {
+              failed += 1
+              d.log(`continuity: journal-append ${op.op} failed: ${String(err)}`)
+            }
+          }
+        })
+      } catch (err) {
+        // The commit itself failed: nothing of this call landed.
+        d.log(`continuity: journal-append could not commit: ${String(err)}`)
+        return { status: 200, body: { applied: 0, failed: ops.length } }
       }
       return { status: 200, body: { applied, failed } }
     },

@@ -218,6 +218,10 @@ export class ContinuityJournal {
   private readonly version: number
   /** Whether journal_events has actor_json: false only on an older file whose upgrade failed. */
   private readonly withActor: boolean
+  /** How deep `transaction` is nested right now: 0 outside, 1 inside the outer BEGIN, more inside
+   *  savepoints. Counted here rather than asked of the connection (`isTransaction` is newer than the
+   *  oldest Node this package allows). */
+  private depth = 0
 
   constructor(
     private readonly filePath: string,
@@ -247,7 +251,41 @@ export class ContinuityJournal {
       deps.log?.(`journal written by a newer build (version ${opened.version}); journaling is off for this session`)
   }
 
-  /** Appends in one transaction. A row whose idempotency key is already present is skipped — the
+  /** Runs `fn` in one transaction: every write inside it lands at once, with one sync (J3: one
+   *  journal-append call is one transaction). Nested, it is a savepoint: a nested call that throws undoes
+   *  only its own writes and rethrows, and the outer one can go on and commit. An outer call that throws
+   *  undoes everything and rethrows. */
+  transaction<T>(fn: () => T): T {
+    const outer = this.depth === 0
+    const name = `j${this.depth}`
+    const undo = (): void => {
+      try {
+        this.db.exec(outer ? 'ROLLBACK' : `ROLLBACK TO ${name}; RELEASE ${name}`)
+      } catch {
+        /* the original error is the one worth reporting */
+      }
+    }
+    this.db.exec(outer ? 'BEGIN' : `SAVEPOINT ${name}`)
+    this.depth += 1
+    let out: T
+    try {
+      out = fn()
+    } catch (err) {
+      this.depth -= 1
+      undo()
+      throw err
+    }
+    this.depth -= 1
+    try {
+      this.db.exec(outer ? 'COMMIT' : `RELEASE ${name}`)
+    } catch (err) {
+      undo()
+      throw err
+    }
+    return out
+  }
+
+  /** Appends in one transaction (a savepoint inside `transaction`). A row whose idempotency key is already present is skipped — the
    *  same diff derived twice lands once. The conflict target is the key alone (not `INSERT OR
    *  IGNORE`, which would also swallow a NOT NULL violation and drop a bad event silently instead of
    *  failing the batch). Returns how many rows landed. */
@@ -259,9 +297,8 @@ export class ContinuityJournal {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(idempotency_key) DO NOTHING`
     )
-    this.db.exec('BEGIN')
     let inserted = 0
-    try {
+    this.transaction(() => {
       for (const e of events) {
         const r = insert.run(
           randomUUID(),
@@ -277,15 +314,7 @@ export class ContinuityJournal {
         )
         inserted += Number(r.changes)
       }
-      this.db.exec('COMMIT')
-    } catch (err) {
-      try {
-        this.db.exec('ROLLBACK')
-      } catch {
-        /* the original error is the one worth reporting */
-      }
-      throw err
-    }
+    })
     return inserted
   }
 

@@ -344,3 +344,48 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
     j.close()
   })
 })
+
+// Review 4-5: one journal-append call is one transaction (one fsync), each of its ops isolated inside it.
+describe('ContinuityJournal.transaction', () => {
+  it('commits every write inside it at once: another connection sees none of them before the end', () => {
+    const j = new ContinuityJournal(file())
+    const other = new ContinuityJournal(file())
+    let seenInside = -1
+    j.transaction(() => {
+      j.append([ev('JOB_RUN_STARTED', 'a')])
+      j.startRecoveryAction({ recoveryActionId: 'rca_1', runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', strategy: 's', class: 'safe', reason: 'r', at: 'x' })
+      seenInside = other.eventsFor('run_1').length
+    })
+    expect(seenInside).toBe(0)
+    expect(other.eventsFor('run_1')).toHaveLength(1)
+    expect(other.recoveryActionsFor('run_1')).toHaveLength(1)
+    other.close()
+    j.close()
+  })
+
+  it('a nested one that throws undoes only its own writes, and the outer one still commits', () => {
+    const j = new ContinuityJournal(file())
+    const bad = { ...ev('TASK_STARTED', 'b'), runId: null as unknown as string }
+    j.transaction(() => {
+      j.append([ev('JOB_RUN_STARTED', 'a')])
+      expect(() => j.transaction(() => j.append([ev('TASK_STARTED', 'c'), bad]))).toThrow()
+      j.append([ev('TASK_COMPLETED', 'd')])
+    })
+    expect(j.eventsFor('run_1').map((e) => e.idempotencyKey)).toEqual(['a', 'd'])
+    j.close()
+  })
+
+  it('an outer one that throws undoes everything inside it', () => {
+    const j = new ContinuityJournal(file())
+    expect(() =>
+      j.transaction(() => {
+        j.append([ev('JOB_RUN_STARTED', 'a')])
+        throw new Error('stop')
+      })
+    ).toThrow('stop')
+    expect(j.eventsFor('run_1')).toEqual([])
+    j.append([ev('JOB_RUN_STARTED', 'a')])
+    expect(j.eventsFor('run_1')).toHaveLength(1)
+    j.close()
+  })
+})

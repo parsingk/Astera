@@ -109,6 +109,49 @@ describe('createHostJournal', () => {
     expect(reader.recoveryActionsFor('run_1')).toEqual([expect.objectContaining({ recoveryActionId: 'rca_app', status: 'completed', details: { newDispatchId: 'dsp_2' } })])
   })
 
+  // Review 4-5 M-2: the app's keys live in their own namespace, so no app row can take a key a later Host
+  // row needs (a GATE_RESOLVED:<gateId> sent by the app would otherwise drop the Host's).
+  it('journal-append writes the app’s keys under app:, and a Host row with the same key still lands', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    expect(j.append([{ op: 'events', events: [{ runId: 'run_1', type: 'JOB_RUN_PAUSED', at: NOW, idempotencyKey: `JOB_RUN_PAUSED:run_1:${STARTED}#1`, payload: {} }] }]).status).toBe(200)
+    j.committed({ prev: on(), next: paused(), version: 1, actor: cli })
+    expect(rows().map((e) => [e.idempotencyKey, e.actor?.surface])).toEqual([
+      [`app:JOB_RUN_PAUSED:run_1:${STARTED}#1`, 'desktop'],
+      [`JOB_RUN_PAUSED:run_1:${STARTED}#1`, 'cli']
+    ])
+  })
+
+  it('journal-append writes one call in one transaction, and an op that fails costs only itself', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    // The depth each transaction was entered at: 0 is a BEGIN (one sync), anything deeper a savepoint.
+    const depths: number[] = []
+    const real = ContinuityJournal.prototype.transaction
+    const tx = vi.spyOn(ContinuityJournal.prototype, 'transaction').mockImplementation(function <T>(this: ContinuityJournal, fn: () => T): T {
+      depths.push((this as unknown as { depth: number }).depth)
+      return real.call(this, fn) as T
+    })
+    try {
+      const start = { recoveryActionId: 'rca_1', runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', strategy: 'redispatch', class: 'safe', reason: 'r', at: NOW }
+      const r = j.append([
+        { op: 'events', events: [{ runId: 'run_1', type: 'RECOVERY_DETECTED', at: NOW, idempotencyKey: 'r1', payload: {} }] },
+        { op: 'recovery-start', row: start },
+        { op: 'recovery-start', row: start }, // the same id again: its insert fails
+        { op: 'events', events: [{ runId: 'run_1', type: 'RECOVERY_DETECTED', at: NOW, idempotencyKey: 'r2', payload: {} }] }
+      ])
+      expect(r).toEqual({ status: 200, body: { applied: 3, failed: 1 } })
+      // One BEGIN for the whole call; every op (and the append inside it) a savepoint.
+      expect(depths.filter((x) => x === 0)).toHaveLength(1)
+      expect(depths[0]).toBe(0)
+      expect(rows().map((e) => e.idempotencyKey)).toEqual(['app:r1', 'app:r2'])
+    } finally {
+      tx.mockRestore()
+    }
+  })
+
   it('journal-reload that turns journaling on writes the baseline; turning it off closes the handle and keeps the file', async () => {
     const { j } = make()
     await j.start()
