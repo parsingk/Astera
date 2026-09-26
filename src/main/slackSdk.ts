@@ -5,7 +5,7 @@
 import { WebClient } from '@slack/web-api'
 import { SocketModeClient } from '@slack/socket-mode'
 import { WEB_CLIENT_OPTIONS, type SlackPoster } from '../core/slack/transport'
-import type { SocketClient } from '../core/slack/inbox'
+import { SOCKET_WEB_CLIENT_OPTIONS, type SocketClient } from '../core/slack/inbox'
 import { slackApiUrlFrom } from '../core/slack/apiUrl'
 
 /** Confines SDK construction to one place — so no other file imports @slack/web-api. The options and why
@@ -21,6 +21,11 @@ export function createWebClient(token: string, env: Record<string, string | unde
 export function createSocketClient(appToken: string, env: Record<string, string | undefined> = process.env): SocketClient {
   const url = slackApiUrlFrom(env)
   // The SDK's own reconnect is off (final review C1): it dropped its promise, so a reconnect that failed for
-  // good was an unhandled rejection. SlackInbox reconnects with its own backoff.
-  return new SocketModeClient({ appToken, autoReconnectEnabled: false, ...(url ? { clientOptions: { slackApiUrl: url } } : {}) }) as unknown as SocketClient
+  // good was an unhandled rejection. SlackInbox reconnects with its own backoff, and the WebClient inside retries
+  // nothing itself (SOCKET_WEB_CLIENT_OPTIONS).
+  return new SocketModeClient({
+    appToken,
+    autoReconnectEnabled: false,
+    clientOptions: { ...SOCKET_WEB_CLIENT_OPTIONS, ...(url ? { slackApiUrl: url } : {}) }
+  }) as unknown as SocketClient
 }

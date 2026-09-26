@@ -31,4 +31,13 @@ describe('createSocketClient', () => {
     const c = createSocketClient('xapp-test', {}) as unknown as { autoReconnectEnabled: boolean }
     expect(c.autoReconnectEnabled).toBe(false)
   })
+
+  // Reconnect e2e: the SDK's own WebClient retried apps.connections.open 100 times with no ceiling, inside
+  // start(), so SlackInbox's capped backoff never ran during an outage.
+  it('gives its WebClient no retries of its own and a finite timeout: SlackInbox owns every retry', () => {
+    const c = createSocketClient('xapp-test', {}) as unknown as { webClient: { timeout: number; retryConfig: { retries?: number } } }
+    expect(c.webClient.retryConfig.retries).toBe(0)
+    expect(c.webClient.timeout).toBeGreaterThan(0)
+    expect(c.webClient.timeout).toBeLessThanOrEqual(10_000)
+  })
 })

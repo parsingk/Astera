@@ -44,6 +44,16 @@ export const RECONNECT_CAP_MS = 5 * 60_000
 export function reconnectDelayMs(attempt: number): number {
   return Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.min(Math.max(0, attempt), 30))
 }
+/** The options of the WebClient inside every socket-mode client, which only calls apps.connections.open
+ *  (reconnect e2e). Left alone, the SDK gives it `{ retries: 100, factor: 1.3 }` with no ceiling and no
+ *  timeout, so an HTTP error or a network error was retried inside start() with waits that grow past an hour:
+ *  the backoff below and its cap never ran, and a stop could not end that loop, so a replaced client kept
+ *  calling with the old token. With no retries of its own, start() rejects at once and every retry is ours.
+ *  The timeout ends a request nobody answers, which would otherwise hold the start forever. */
+export const SOCKET_WEB_CLIENT_OPTIONS: { timeout: number; retryConfig: { retries: number } } = {
+  timeout: 10_000,
+  retryConfig: { retries: 0 }
+}
 /** The start errors a retry cannot fix: the token was refused, or the app or workspace is gone. The same
  *  list as the SDK's UnrecoverableSocketModeStartError. Retrying those only hammers Slack, so the inbox
  *  stops until the config is applied again (a settings save, or the Host's slack-reload). A network error
