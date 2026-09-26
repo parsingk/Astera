@@ -709,7 +709,9 @@ at the sentence it replaces. What is still open is under "Known limits after S4+
   for its own loop in front of an older Host (D5), and a `--worktree new` start from a shell or a
   coordinator goes to the new Host, which cleans up. Carry 7's other limits stay as recorded: a pre-S3
   app writes no `app.pid`, the ~2 s replacement window for the app's worktree writes, and A17's
-  conhost per self-exiting pty, which grows with long-lived headless Hosts. A19 (no `PROMPT_WRITE_*`
+  conhost per self-exiting pty, which grows with long-lived headless Hosts. (The replacement window and
+  the conhost leak are resolved in the left-over limits pass, see Amendments A111 and A124; a pre-S3 app
+  writing no `app.pid` is unchanged.) A19 (no `PROMPT_WRITE_*`
   rows for Host-spawned workers) now covers every headless worker, and recovery's reason still reads
   `promptNeverLeft` for them. No code; recorded.
 
@@ -1820,6 +1822,201 @@ here.
   more than two weeks ago still moves to the rollout `/new` opens today, and a rescan of a tab mapped days
   ago reads only the recent folders (at most 3 `readdir` calls, not the cap).
 
+## Amendments (left-over limits pass, 2026-09-26)
+
+The plan `.superpowers/sdd/2026-09-26-leftovers/plan.md` (Tasks 1 to 5, in that plan's own numbering)
+closed limits from a fresh triage of 76 open entries: fixed what was feasible, guarded against old apps
+where it was cheap, and reaped the node-pty conhost leak this document already named. Its execution
+ledger is `progress.md` in the same folder, and its five tasks' reports are `task-1-report.md` through
+`task-5-report.md`. Landed on `develop` from `0b85d7dc` through `1c8e0ba0`. This list is the record, in
+A1's form; the limits it closes point back here.
+
+- **A111. Task 1: an app's pid rides its `hello`, and a registry write during a Host replacement waits
+  and retries once (task-1-report.md).** `hello.pid` is additive (`HOST_PROTOCOL` stays 3);
+  `src/main/host/client.ts` sends `process.pid`, and `src/host/server.ts` keeps it as `lastAppPid()` from
+  any `role: 'app'` hello with a positive integer pid, past that socket's close. The new
+  `liveAppPid(profileDir, fallbackPid?)` (`src/core/host/pidFile.ts`) reads the pid file and, when it is
+  missing, junk or names a dead pid, falls back to the given pid, both probed with a guarded
+  `process.kill(pid, 0)` (EPERM counts as alive); `driving.ts`, `rollingWiring.ts`'s app-gone watch and
+  `worktrees.ts`'s detached-app refusal all pass the server's `lastAppPid` as that fallback. One app-left
+  rule now backs both watchers: `createAppLeftGrace` in the new `src/host/appGone.ts`, run by `driving.ts`
+  with `attachCancels: false` and by `createAppGoneWatch` with `attachCancels: true` (A69's own difference
+  kept as a parameter); `APP_LEFT_GRACE_MS` moved there, and `driving.ts` re-exports it. Separately,
+  `src/main/host/worktreeRoute.ts`: a write whose call rejects with `NO_HOST_CONNECTION` (it never left
+  the app, so a retry cannot apply twice) now waits for the next switch to host mode, up to
+  `REPLACE_WAIT_MS = RETIRE_SETTLE_MS + 5 s`, and retries once, with no local write; any other failure is
+  not retried, as before. Pinned by `pidFile.test`, `server.test`, `client.test`, `driving.test`,
+  `worktrees.test`, `appGone.test` (one table of 9 scenarios through both watchers) and
+  `worktreeRoute.test`. This closes "An app whose `app.pid` is missing or unreadable... cannot be told
+  from a new instance" below, "A missing `app.pid` makes a live app look gone" under "Known limits after
+  S6", and "A registry write during a Host replacement window fails rather than falling back to local"
+  under "Known limits after S3". An Astera from before S3, which writes no `app.pid` and sends no `pid`
+  in its `hello` either, is unchanged and stays a separate, open limit.
+- **A112. Task 2, S45-11: a Job `cwd` that is the filesystem root or the home folder opens nothing
+  (task-2-report.md).** `hostPathGuard` (`src/core/run/hostPathGuard.ts`, not the brief's
+  `src/host/hostPathGuard.ts`, which does not exist) adds `tooBroadJobCwd`, with `home` injectable and
+  defaulting to `os.homedir()`; only the Job list is judged, so a Run's own `cwd` and the registered
+  worktrees are unchanged. `checks.ts` keeps the default home. Pinned by `hostPathGuard.test.ts` (root,
+  home, home with a trailing separator, a folder below home still allowed, the default home). Closes "A
+  broad Job `cwd` allows its whole subtree to the path guard" under "Known limits after S4+S5".
+- **A113. Task 2, LP-1/2: a coordinator stop retried at the ten minute cap gives up after six tries
+  (task-2-report.md).** `dispatchLoop.ts` adds `COORDINATOR_STOP_RETRY_CAP_TRIES = 6`; once a slot has
+  been stopped six times at the cap it logs one `gave up stopping its coordinator ...` line and is not
+  asked again, in memory only, so a restart or a new driver asks again from the start. `sessionGone`'s
+  release still runs before the backoff check, so a slot given up on is released the moment the session
+  is confirmed gone by whichever process can see that (the Host from its own registry, the app from its
+  own session list with a real exit code). Pinned by `dispatchLoop.test.ts` (gives up once past the cap;
+  a given-up slot is still released once `sessionGone` answers true). Narrows both "A stop the live
+  session always refuses is retried every 10 minutes, forever" and "A slot this process never held can be
+  retried even once the session is actually gone, because liveness cannot be told" under "Known limits
+  after the limits pass": the endless part is gone, and what is left is that giving up itself does not
+  survive a restart (see "Known limits after the left-over pass").
+- **A114. Task 2, S6-11: the Jobs sidebar says the Host is still reading its settings
+  (task-2-report.md).** `jobsStall` takes optional `parkedSinceMs`/`nowMs` and answers
+  `{ kind: 'reading' }` for `parked` with `gate: null` once `JOBS_STALL_READING_MS = 10_000` has passed;
+  `jobsStallRecheckInMs` tells the caller when to ask again. `App.tsx` times the parked-unread report and
+  arms a one-shot timer 50 ms past the threshold; `JobsView` draws the new `jobs.stall.reading` line (en,
+  ko; es and ja have no `jobs.stall` keys yet and fall back as before). Pinned by `jobsView.test.ts` (the
+  reading threshold and its precedence, and the recheck delay). Narrows "The Jobs sidebar stays silent
+  while the Host's first settings read hangs" under "Known limits after the limits pass" to just the
+  moment before that first read has even started.
+- **A115. Task 2, LP-3: a rollout search whose window is longer than 14 days also reads the folders
+  around `since` (task-2-report.md).** `codexLocate.scanDays`: with no `bornBefore` and a window past
+  `ROLLOUT_SCAN_DAYS_MAX`, the three folders anchored at `since` (the day before, its day and the day
+  after) replace the oldest three of the newest folders the cap otherwise keeps; the cap still reads 14
+  folders in all, and the folders between the two ends are not read. `limitProbe.ts` needed no change,
+  since it benefits through `findRollout`. Pinned by the rewritten `codexLocate.test.ts` case (a `since`
+  20 days back now finds its rollout; 14 folders read, `since`'s own folder and today's both among them).
+  Narrows "The codex rollout search no longer reaches a worker's own birth folder..." under "Known limits
+  after the limits pass": a limit probe of a worker over 14 days old now reads that worker's own birth
+  folder again, but a window wider than 14 days still skips whatever sits between the two anchors (see
+  "Known limits after the left-over pass").
+- **A116. Task 2, LP-4: `locateSince` is written at every codex locate, not only a blank-slate roll
+  (task-2-report.md).** `codexCoordinator.startLocate` now writes `chain.locateSince` for a fresh spawn
+  (via register), a blank-slate roll and a restore alike, so a fresh codex session that dies before its
+  rollout is found is restored mapped instead of stuck. The snapshot still carries the field only while
+  `rolloutPath` is null, and a hit clears it, as before. Pinned by two new `codexCoordinator.test.ts`
+  cases (a fresh spawn's snapshot carries `locateSince` and restores mapped; a found rollout still drops
+  it). Closes "A codex chain snapshotted before its rollout was found, with no `locateSince`, is restored
+  unmapped and cannot roll" and "Only a blank-slate respawn records `locateSince`" under "The snapshot and
+  the takeover".
+- **A117. Task 3, CT-8: the codex adapter writes `answered` ids too (task-3-report.md).**
+  `src/core/chat/codexAdapter.ts`'s `doAnswer` adds the request id to an `answered` list, the same 32-id
+  bound claude's adapter keeps, and calls `proc.remember({ answered })` only after `takeRequest` wrote the
+  answer; a write that throws notes nothing. On adopt it starts from `mode.answered` and rewrites the
+  whole list each time. codex's replay already carries `serverRequest/resolved`, so the adapter does not
+  itself skip a replayed id; only the Host reader's own views (`openOf`, `prompts`, the deny policy) need
+  the list. A roll's new proc gets a fresh note, so an id cannot leak from an old proc into a new one.
+  Pinned by `codexAdapter.test.ts` and the wider `src/core/chat` suite (234 tests). Closes "A codex answer
+  writes no `answered` id, so for codex the echo is the only thing that clears it" under "Known limits
+  after the chat takeover".
+- **A118. Task 3, CT-9: a failed auto-deny retries itself at 5, 15 and 60 seconds
+  (task-3-report.md).** `src/host/chatPolicy.ts` adds `DENY_RETRY_MS = [5_000, 15_000, 60_000]`; a deny
+  that rejects arms its next retry in the same `armed` map, so review, forget and dispose cancel it like
+  any other timer, and `fire` asks every condition again on each try (writer, policy, open, answered).
+  Once the retries run out the log says so, and the next review trigger arms a fresh 60 s timer with a
+  full set of retries again; a success, a drop, or a request no longer covered resets the count. Pinned by
+  `chatPolicy.test.ts` (13 tests, fake timers). Closes "A failed auto-deny is retried only on the next
+  review trigger, not on a timer of its own" under "Known limits after the chat takeover".
+- **A119. Task 3, CT-16: a re-pointed tab keeps the codex `dest` (task-3-report.md).** The Host
+  (`src/host/rolling.ts`'s `send`) writes `{ rollDest: dest }` into the new proc's note through the new
+  `HostChats.note(sessionId, patch)`, before the push, whenever the roll carries a `dest`; `note` is
+  optional on `HostChatsForRolling`, so existing fakes still fit. A separate key from `rolloutPath` was
+  chosen on purpose, since a blank-slate roll's own `ready` writes that one too. The app's `chatAdoptPlan`
+  returns the note's `rollDest` alongside a re-point, and `hostRollView.repointed(oldId, info, dest)`
+  forwards it the same way a push forwards its own `dest`; in `ipc.ts` only the adopter line changed.
+  Pinned by the updated `chatAdopt.test.ts` guard and `rolling`/`hostChats`/`hostRollView` tests (105).
+  Closes "A re-pointed tab after a reconnect carries no codex `dest`" under "Known limits after the chat
+  takeover".
+- **A120. Task 3, CT-11: the history guard refuses a Host chat the app has not adopted
+  (task-3-report.md).** `src/main/host/hostNativeGuard.ts` adds `findHostHeld`, returning
+  `{ id, kind: 'session' | 'chat' }` (`findHostHeldNative` stays a wrapper around it), and
+  `hostHeldLive(found, liveOf, refusal)`; for a Host chat proc with no live session held here it throws
+  the new i18n key `session.resume.hostChatNotAdopted` (en, ko, ja, es), which the renderer's spawn catch
+  shows through `worktree.error.raw`. Only `liveByHostNative` and its import changed in `ipc.ts`; the Host
+  proc list was already being asked, the gap was only that nothing was handed back. Pinned by
+  `hostNativeGuard.test.ts` and the i18n suite (50). Closes the chat half of "The history guard only
+  returns a chat the app holds" under "Known limits after the chat takeover". The pty guard's own version
+  of the same limit is untouched on purpose, out of this task's scope.
+- **A121. Task 4, S6-17 and S6-20: a rekey reaches the renderer only once the adopt succeeded, and the
+  exit composition is a tested function (task-4-report.md).** `src/main/host/hostRollView.ts`: after
+  `adopt`, the view decides whether the app now holds the new session, from `isAdopted` when the caller
+  gives one, otherwise from whether `adopt` itself failed; `ipc.ts` always passes `isAdopted`. When it
+  does not hold the session, the rekey is still forwarded, with
+  `{ orchestration: false, renderer: false }`, so the app's own taps (the Work Unit fork, the schedule
+  rekey, the codex watcher, Slack) still run, but `fanOutRollEvent` (`src/main/index.ts`) skips only the
+  `win.webContents.send`, so the renderer does not re-point the old tab at a session with nothing behind
+  it; the held exit still releases, the old tab closes, and the next sweep's adopter announces the new
+  session. `pendingFork` now follows the same verdict. Separately, the new
+  `installHostRollExit(view, managers, handler)` wraps the handler once with `withHostRollHold`, sets it
+  as `onExit` on every manager given, and returns it; `ipc.ts` calls it with `[core.sessions, core.chat]`
+  in place of its own two assignment lines. Pinned by `hostRollView.test.ts` (24, including one function
+  set on both managers and each roll kind's own exit waiting for its own adoption). Closes "A rekey is
+  forwarded to the renderer even when adopting the new pty failed" and "The ordering hold's wiring in
+  `ipc.ts` is not pinned by a test" under "The app beside a Host that rolls".
+- **A122. Task 4, S6-22 (the CA half): the Host adds the OS certificate store to its default CAs
+  (task-4-report.md).** New `src/host/systemCa.ts` `trustSystemCa(tls, log)`, with an injectable
+  `TlsCaSeam`, reads Node 24's `'default'` and `'system'` certificate stores, appends whatever the system
+  store has that the default does not, and calls `setDefaultCACertificates` only when something is new;
+  it returns `added`, `nothing-new`, `unsupported` or `failed` and never throws, logging on any error and
+  leaving the defaults in place. `src/host/index.ts` calls it right after `logUnhandledRejections`, before
+  any HTTPS. On the built Windows binary the OS store added 99 roots to the default 145, and a real
+  usage-endpoint `fetch` still completed after the swap. Pinned by `systemCa.test.ts` (6). Narrows "The
+  Host's usage lookup goes without the system proxy and the OS certificate store" under "`runs wait` and
+  the usage lookup": the OS store is now trusted at start; the system proxy itself is unchanged and stays
+  open (see "Known limits after the left-over pass").
+- **A123. Task 5, part A: a role-less `hello` is a `legacy-app`, Astera 1.3.25 or older
+  (task-5-report.md).** Checked first: `git show v1.3.25:src/main/host/client.ts` sends
+  `{ t: 'hello', protocol, app }` with no role and no `yields`; role arrived in `c8e86a00`, after v1.3.25,
+  and the only CLI hello (`core/host/connect.ts`) always sends `role: 'cli'`. In `src/host/server.ts`,
+  `roles` gains `'legacy-app'`: a missing `role` means one, any other value that is not `'app'` means
+  `'cli'`. `hasApp()` counts both kinds of app; the new `hasCurrentApp()` counts only `role: 'app'`.
+  `appsKeep(duty)` and `appKeeps(duty)` both count a legacy app, which yields nothing, so it keeps every
+  duty, closing S6-6 (the Host no longer drives beside it) and SL-11 (the Host no longer opens its own
+  Slack socket beside it: `slackWiring.ts`'s `want()` reads `!appsKeep(slack)`). `act()` still goes only
+  to a `role: 'app'` socket, so with only a legacy app attached it rejects at once with
+  `AppUnreachable("APP_REQUIRED: <name> needs a newer Astera app: Astera 1.3.25 or older is attached;
+  update it")`; `onAppGreeted` does not fire for it, and it never records `lastAppPid`. The Host logs
+  `LEGACY_APP_NOTICE` once per attach, and the hello reply carries `legacyApp: true` while one is
+  attached, additive in `protocol.ts`; `connectHost` passes it through, and `hostStatus` adds
+  `legacyApp: true, warning: LEGACY_APP_NOTICE`, which `--human` prints (`astera host status`, and
+  `docs/cli.md`). Toward the command layer and the hooks a legacy app is still `'cli'`, so the doors only
+  an app may use stay closed to it; no `protocol-mismatch` path was touched, and `HOST_PROTOCOL` stays 3.
+  Every `roles`, `hasApp`, `appsKeep` and `appKeeps` consumer was audited (server.ts, index.ts, orch.ts,
+  driving.ts, drivingWiring.ts, appGone.ts, takeover.ts, rollingWiring.ts's journal, rollOwner,
+  slackWiring.ts, slackRoutes.ts, orchDeps.ts, worktrees.ts's `askApp`, spawner.ts's `appKeepsWorktrees`);
+  `rollingWiring.ts`'s journal now reads `hasCurrentApp?.() ?? hasApp()`, since a legacy app cannot read
+  `session-rolled`. Pinned by a rewritten `server.test.ts` and two new tests, `connect.test.ts`,
+  `cli/host.test.ts` and a new `rolling.integration.test.ts` case. Closes "A role-less older app (v1.3.17
+  to v1.3.25) counts as `cli`, so `hasApp()` is false while it is attached and a takeover can run beside
+  it" under "Known limits after S6" (applies only to Astera 1.3.25 and older; the pty-list race in the
+  same bullet's last sentence is untouched) and "A role-less app from before this feature (v1.3.17 to
+  v1.3.25) is not seen by `appsKeep`, and counts as a CLI" under "Known limits after Slack in the Host"
+  (applies only to Astera 1.3.25 and older).
+- **A124. Task 5, part B: the Host reaps the conhost it leaks, on Windows (task-5-report.md).** Measured
+  first on a Windows 11 machine: after `cmd /c exit 0` in a pty, a `conhost.exe` stays a child of the
+  spawning node process even though the parent and a later pty both keep working;
+  `powershell.exe Get-CimInstance Win32_Process -Filter "ParentProcessId=<pid>"` (about 0.6 s) replaces
+  the deprecated `wmic`. New `src/host/conhostReaper.ts`:
+  `createConhostReaper({ platform, hostPid, livePtys, listChildren, kill, log, now?, after?, debounceMs?
+  })` is fully injectable. `spawned()` records the last spawn's return time and cancels an armed reap.
+  `exited()`, on win32 only, once at least one spawn has happened and live ptys are at zero, arms one
+  debounced reap (`CONHOST_REAP_DEBOUNCE_MS = 10 s`); the reap re-lists the Host's children, checks the
+  live count again and aborts if it is no longer zero, then kills only rows whose `parentPid` is the
+  Host's own, whose name is `conhost.exe` or `OpenConsole.exe` (case-insensitive), and whose creation time
+  falls between the reaper's own creation and the last spawn, which protects the Host's own console host
+  when it runs as a console program; listing and kill failures are logged, the reap never rejects, and
+  `dispose()` stops it. `listWindowsChildren(pid, exec?)` runs the query and refuses a pid that is not a
+  positive integer. `index.ts` wires `registry` to call `spawned()` after `pty.spawn` returns, `exited()`
+  from `registry.onExit`, and `dispose()` from `leave()`. On other platforms this does nothing. Pinned by
+  `conhostReaper.test.ts` (9, the module did not exist before) plus new cases in `server.test.ts`,
+  `connect.test.ts`, `cli/host.test.ts` and `rolling.integration.test.ts` from part A. Closes "One
+  `conhost.exe` leaks per pty that exits on its own" under "Known limits after S3", and the matching
+  clause of A63's own carry list. What is left: a `conhost.exe` that exits between the listing and the
+  kill could, in theory, have its pid reused within that sub-second window before the kill checks it
+  again, and a Host that always holds at least one live pty keeps its leaks until every such tab closes
+  (see "Known limits after the left-over pass").
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -1828,14 +2025,17 @@ here.
   read racing a rename can hit a transient sharing violation, which `refresh()` surfaces as a rejection
   rather than riding out. Safe, because nothing is wiped, but the app's mirror stays stale until the
   next local write or refill (task-9-report.md).
-- **A registry write during a Host replacement window fails rather than falling back to local.** For
-  about `RETIRE_SETTLE_MS` (2s) around a Host's `retire({announce:true})` → `stop()` → `restart()`, the
-  app's write-through route still reads `mode: 'host'`, so a write in that window answers "there is no
-  connection to the Host" instead of writing the file itself. Nothing is lost silently; the caller sees
-  the error (task-9-report.md, M1).
-- **One `conhost.exe` leaks per pty that exits on its own.** node-pty 1.1.0 closes the pseudo console
-  only when a live pty is killed (A17). S3 makes Hosts that live long with the app closed more common,
-  and so this leak more common with them, but does not change the underlying behaviour.
+- **A registry write during a Host replacement window fails rather than falling back to local.**
+  (resolved in the left-over limits pass, see Amendments A111: the write waits for the new Host's hello
+  and retries once, with no local write) For about `RETIRE_SETTLE_MS` (2s) around a Host's
+  `retire({announce:true})` → `stop()` → `restart()`, the app's write-through route still reads
+  `mode: 'host'`, so a write in that window answers "there is no connection to the Host" instead of
+  writing the file itself. Nothing is lost silently; the caller sees the error (task-9-report.md, M1).
+- **One `conhost.exe` leaks per pty that exits on its own.** (resolved in the left-over limits pass, see
+  Amendments A124: the Host reaps `conhost.exe`/`OpenConsole.exe` children of its own process once no
+  pty is live) node-pty 1.1.0 closes the pseudo console only when a live pty is killed (A17). S3 makes
+  Hosts that live long with the app closed more common, and so this leak more common with them, but does
+  not change the underlying behaviour.
 - **A later `jobs run` of a coordinator Job starts a run that nothing drives.** (resolved in S4+S5, see
   Amendments A57: a later run starts its coordinator; the loop was never the fix) Only the first run of a
   coordinator Job works headless in S3 (its coordinator starts, and the Host makes its worktree). A Job
@@ -1886,7 +2086,9 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   If that app quits without reconnecting, the first tick with no app attached after `app.pid` stops
   naming it runs the steps it kept. Three things are outside that guard. First, an app whose
   `app.pid` is missing or unreadable (a profile it could not write) cannot be told from a new
-  instance. If it reconnects within the grace, the steps run at that attach, at once and beside it;
+  instance (resolved in the left-over limits pass, see Amendments A111: the Host's own record of the
+  app's `hello` pid, `lastAppPid`, stands in when the file cannot be read). If it reconnects within the
+  grace, the steps run at that attach, at once and beside it;
   if it stays away, they run when the grace ends. Either way, if the Host is starting a repair the
   app was starting too, two agents can land on one Dispatch. Second, the tick's own no-app
   steps do not wait for the grace: the lost-worker Gate, the spec sweep and the restart Gate's arming
@@ -1929,14 +2131,16 @@ Each was found while building or reviewing S4+S5 and left as it is, with its rea
   keeps its own newest 100, within a total of 1000) A busy project can push another's records out, and
   a HEAD move that only a dropped record explained then reads as an outside change (Task 3 review m2).
 - **A broad Job `cwd` allows its whole subtree to the path guard** (A45,
-  `src/core/run/hostPathGuard.ts:20-21`). A Job whose `cwd` is a drive root lets a validation or review
-  run anywhere below it (Task 9 review m4).
+  `src/core/run/hostPathGuard.ts:20-21`). (resolved in the left-over limits pass, see Amendments A112:
+  `hostPathGuard` refuses a Job `cwd` that is the filesystem root or the home folder) A Job whose `cwd`
+  is a drive root lets a validation or review run anywhere below it (Task 9 review m4).
 - **A worktree removal already in flight when the drive moves still finishes.** The loop asks
   `mayStart` before each removal (`driving.ts:191-197`), but one already started goes on. It asks the
   attached app first, two removals of one folder make one of them fail, and a removal never throws
   (Task 12 review m2).
-- **Carried from S3, unchanged:** the ~2 s replacement window for the app's worktree writes, the conhost
-  per self-exiting pty (A17), and a pre-S3 app that writes no `app.pid` (A63).
+- **Carried from S3:** a pre-S3 app that writes no `app.pid` (A63), unchanged. The ~2 s replacement
+  window for the app's worktree writes and A17's conhost per self-exiting pty are resolved in the
+  left-over limits pass (see Amendments A111 and A124).
 
 ## Known limits after S6
 
@@ -1973,16 +2177,20 @@ Amendments (S6 as shipped) preamble).
 - **The app-gone rule has two watchers**, `driving.ts` for the app-left steps and `appGone.ts` for the
   takeover (plan R25). They share `APP_LEFT_GRACE_MS` and `liveAppPid` and differ on purpose in one
   point (A69), but a change to one must be made to the other by hand.
-- **A missing `app.pid` makes a live app look gone** (preflight R11). `markAppRunning` swallows a failed
-  write, so a live app whose socket stays down past the 5 s grace is judged gone, and its sessions are
-  taken. That is safe because the drop already disposed its chains (A69, preflight R10); the chain in the
-  next entry is the exception.
+- **A missing `app.pid` makes a live app look gone** (preflight R11). (resolved in the left-over limits
+  pass, see Amendments A111: the Host's own `lastAppPid`, kept from the app's `hello`, stands in for the
+  file) `markAppRunning` swallows a failed write, so a live app whose socket stays down past the 5 s grace
+  is judged gone, and its sessions are taken. That is safe because the drop already disposed its chains
+  (A69, preflight R10); the chain in the next entry is the exception.
 - **A chain that was mid-roll when its app's socket dropped is not disposed by the drop** (preflight
   R10). It finishes its roll inside the app. If the Host then owns the pty, the adopter's unregister belt
   drops that chain when the app returns (A69, preflight R11).
 - **A role-less older app (v1.3.17 to v1.3.25) counts as `cli`** (preflight C17), so `hasApp()` is false
-  while it is attached and a takeover can run beside it. The holders check protects every pty it has
-  attached; a pty it is about to attach, with its `pty-list` answer still in flight, is not protected.
+  while it is attached and a takeover can run beside it. (Resolved in the left-over limits pass, see
+  Amendments A123: a role-less `hello` is now a `legacy-app`, counted by `hasApp()`, so the Host no longer
+  drives or takes over beside one. Applies only to Astera 1.3.25 and older.) The holders check protects
+  every pty it has attached; a pty it is about to attach, with its `pty-list` answer still in flight, is
+  not protected, unchanged.
 - **An older app that attaches while a Host roll is past its last gate sees that roll finish beside
   it** (the residue of preflight B1). The gate in `roll()` is asked last after `prepareSpawn`, just before
   the kill. A roll past that point kills and respawns, and the older app's own chain for the old pty dies
@@ -2000,8 +2208,9 @@ Amendments (S6 as shipped) preamble).
   takeover asks for it again. For a tab session the Host has no tab briefing, so that yields the plain
   carry-on line.
 - **A codex chain snapshotted before its rollout was found, with no `locateSince`, is restored unmapped**
-  and cannot roll (preflight R6, the Task 6 review). Only a blank-slate respawn records
-  `locateSince`.
+  and cannot roll (preflight R6, the Task 6 review). (resolved in the left-over limits pass, see
+  Amendments A116: `locateSince` is now written at every codex locate, not only a blank-slate roll) Only
+  a blank-slate respawn records `locateSince`.
 - **If the first accounts read fails, the takeover is held until a read succeeds**, which is up to one
   15 s tick later (the Task 16 review). A takeover with no accounts would map nothing.
 - **A Dispatch the app started and the Host rolled after a takeover** gets a Host tail from that roll on
@@ -2023,15 +2232,17 @@ Amendments (S6 as shipped) preamble).
 
 **The app beside a Host that rolls**
 
-- **A rekey is forwarded to the renderer even when adopting the new pty failed.** The renderer catches
-  up at the next sweep.
+- **A rekey is forwarded to the renderer even when adopting the new pty failed.** (resolved in the
+  left-over limits pass, see Amendments A121: the renderer is told only once the app holds the new
+  session; the app's own taps still run either way) The renderer catches up at the next sweep.
 - **A history resume that misses the app's local indexes while the Host rolls costs one `pty-list`
   round trip**, up to 5 s (`hostNativeGuard.ts`).
 - **The app holds the old session's exit for up to 15 s** until its orchestration mirror shows the rekey
   (`HOST_ROLL_SETTLE_MS`). After 15 s it delivers the exit anyway.
-- **The ordering hold's wiring in `ipc.ts` is not pinned by a test.** The `withHostRollHold` wrapper is
-  tested alone; the swap that puts it in front of the exit handler needs a `registerIpc` harness (the
-  Task 14 re-review).
+- **The ordering hold's wiring in `ipc.ts` is not pinned by a test.** (resolved in the left-over limits
+  pass, see Amendments A121: the composition moved into `installHostRollExit`, which is itself tested)
+  The `withHostRollHold` wrapper is tested alone; the swap that puts it in front of the exit handler
+  needs a `registerIpc` harness (the Task 14 re-review).
 
 **`runs wait` and the usage lookup**
 
@@ -2043,10 +2254,12 @@ Amendments (S6 as shipped) preamble).
   The reset it names is the earliest among the waiting workers (A68), and, since A74, among the
   coordinator's own stop too; a ready Task no longer holds `limited` back in a Run a coordinator drives,
   since only that stopped coordinator can start it.
-- **The Host's usage lookup goes without the system proxy and the OS certificate store.** Node's
-  `fetch` honours neither by default, so behind a corporate proxy the lookup fails, and a failed lookup
-  accepts the limit (Q4): detection is kept, and the brake against a false roll is weaker, as in the app
-  when its lookup fails.
+- **The Host's usage lookup goes without the system proxy and the OS certificate store.** (resolved in
+  part in the left-over limits pass, see Amendments A122: the Host trusts the OS certificate store at
+  start, so a TLS-inspecting proxy no longer fails the lookup on its own; the system proxy itself is
+  unchanged, see "Known limits after the left-over pass") Node's `fetch` honours neither by default, so
+  behind a corporate proxy the lookup fails, and a failed lookup accepts the limit (Q4): detection is
+  kept, and the brake against a false roll is weaker, as in the app when its lookup fails.
 - **The Host's usage lookup under plain Node is unmeasured.** Task 18 does not measure it with a real
   account: the standing rule forbids copying a person's accounts or credentials into a scratch profile.
 - **The Host's usage gate reads the claude credentials file or Keychain for the usage lookup**, the same
@@ -2172,16 +2385,20 @@ at `3db032df`.
 - **A prompt the app answered while the Host was a reader stays in the Host adapter's queue until its
   echo.** Every Host view of it (`prompts`, `requests`, `hasOpenRequest`, the deny policy) filters the
   note's `answered` ids, which claude's adapter writes on every answer (A94). The queue itself clears
-  only on the CLI's own echo, a `tool_result` line for claude or `serverRequest/resolved` for codex. A
-  codex answer writes no `answered` id, so for codex the echo is the only thing that clears it.
+  only on the CLI's own echo, a `tool_result` line for claude or `serverRequest/resolved` for codex.
+  (resolved in the left-over limits pass, see Amendments A117: the codex adapter writes `answered` ids
+  too) A codex answer writes no `answered` id, so for codex the echo is the only thing that clears it.
 - **A failed auto-deny is retried only on the next review trigger** (Task 7 review), not on a timer of
-  its own: a request or status event, a writer change, or an adopt, not immediately.
+  its own: a request or status event, a writer change, or an adopt, not immediately. (resolved in the
+  left-over limits pass, see Amendments A118: a failed deny now retries itself at 5, 15 and 60 seconds)
 - **A limit that arrives while a prompt is open is dropped, not deferred** (Task 6 fix round 1). The
   chain simply does not act on it; the CLI reports the same limit again on its next call once the prompt
   is answered.
-- **The history guard only returns a chat the app holds.** A Host chat proc the app has not adopted yet,
-  deferred or simply never adopted, is found in its note, but there is no live `SessionInfo` to hand back,
-  so a resume by history id goes ahead unguarded. The pty guard has the same limit.
+- **The history guard only returns a chat the app holds.** (resolved in part in the left-over limits
+  pass, see Amendments A120: a Host chat proc the app has not adopted now refuses the resume instead of
+  going ahead unguarded) A Host chat proc the app has not adopted yet, deferred or simply never adopted,
+  is found in its note, but there is no live `SessionInfo` to hand back, so a resume by history id goes
+  ahead unguarded. The pty guard has the same limit, unchanged, out of that task's scope.
 - **`chats answer` is for a person; an agent session gets 403, by its environment** (the controller's
   ruling, Task 8 fix round 1; A94). A worker, a coordinator or a chat agent calling it from inside its own
   session is refused; only the shell and the app may call it. `chats pending` stays open to every caller.
@@ -2207,9 +2424,10 @@ at `3db032df`.
 - **An app without the `chat-takeover` yield is not forwarded an answer.** Such an app has no
   `chatAnswer` to answer with, so the call is refused `not-held`, "answer it in Astera", instead of being
   forwarded to fail there.
-- **A re-pointed tab after a reconnect carries no codex `dest`.** The note the re-point reads from keeps
-  none, so a codex chat roll's rollout watcher falls back to its own search after a re-point, until the
-  chat's own `ready` registers the path.
+- **A re-pointed tab after a reconnect carries no codex `dest`.** (resolved in the left-over limits pass,
+  see Amendments A119: the Host notes `rollDest` on the new proc, and a re-point reads it back) The note
+  the re-point reads from keeps none, so a codex chat roll's rollout watcher falls back to its own search
+  after a re-point, until the chat's own `ready` registers the path.
 
 ## Known limits after Slack in the Host
 
@@ -2246,8 +2464,11 @@ Each was found while building or reviewing Slack in the Host and left as it is, 
 - **At most 200 forwarded events are held while a Slack-owning Host is away** (Amendments A105). A grace is
   15 seconds, so this is far more than one holds; past it the oldest go first, and the log says so once.
 - **A role-less app from before this feature (v1.3.17 to v1.3.25) is not seen by `appsKeep`, and counts as a
-  CLI** (the S6 pre-flight finding this document already carries, preflight C17). Such an app opens its own
-  Slack socket beside a Host that, seeing no attached app keep Slack, believes itself active too.
+  CLI** (the S6 pre-flight finding this document already carries, preflight C17). (Resolved in the
+  left-over limits pass, see Amendments A123: a role-less `hello` is now a `legacy-app`, counted by
+  `appsKeep`, so the Host no longer opens its own Slack socket beside one. Applies only to Astera 1.3.25
+  and older.) Such an app opens its own Slack socket beside a Host that, seeing no attached app keep
+  Slack, believes itself active too.
 - **The first roll event a Host misses because it was not yet running leaves its new session to the next
   tick's reconcile, briefly a new root.** The deferral that holds a rolled session's new pty back (Amendments
   A99, plan P7) works only while the notifier already holds the session its `rolledFrom` names; a Host that
@@ -2279,27 +2500,65 @@ Each was found while building or reviewing Slack in the Host and left as it is, 
 Each was found while building or reviewing the remaining limits pass and left as it is, with its reason.
 Checked at `68a2bfca`.
 
-- **A stop the live session always refuses is retried every 10 minutes, forever** (Amendments A106). A
-  finished Run that `runMoves` still counts as moving, or any other stop a session keeps refusing for
-  good, used to be asked once; now the backoff caps at `COORDINATOR_STOP_RETRY_MAX_MS` and the loop keeps
-  asking, with a log line each time, since nothing tells it the refusal is permanent.
+- **A stop the live session always refuses is retried every 10 minutes, forever** (Amendments A106).
+  (resolved in the left-over limits pass, see Amendments A113: after six tries at the cap the loop gives
+  up and logs once, in that process) A finished Run that `runMoves` still counts as moving, or any other
+  stop a session keeps refusing for good, used to be asked once; now the backoff caps at
+  `COORDINATOR_STOP_RETRY_MAX_MS` and the loop keeps asking, with a log line each time, since nothing
+  tells it the refusal is permanent.
 - **A slot this process never held can be retried even once the session is actually gone, because
-  liveness cannot be told** (Amendments A106). `sessionGone` only answers from what this process itself
-  can see: the Host from an ended pty in its own registry, the app from its own session list, which must
-  show a real exit code. A lost-sight exit, or a session spawned or adopted by a different process,
-  answers `false` either way, so such a slot keeps being retried at the 10 minute cap instead of being
-  confirmed and released.
-- **The Jobs sidebar stays silent while the Host's first settings read hangs** (Amendments A108). Parked
-  with no gate read yet, the moment before the Host has ever read its settings, answers `null` from
-  `jobsStall`; if that first read itself hangs, the sidebar says nothing until it lands, the same silence
-  as before this pass, now narrowed to just that one moment.
+  liveness cannot be told** (Amendments A106). (resolved in the left-over limits pass, see Amendments
+  A113: bounded by the same give-up-after-six-tries rule, though liveness still cannot be told any
+  sooner) `sessionGone` only answers from what this process itself can see: the Host from an ended pty in
+  its own registry, the app from its own session list, which must show a real exit code. A lost-sight
+  exit, or a session spawned or adopted by a different process, answers `false` either way, so such a
+  slot keeps being retried at the 10 minute cap instead of being confirmed and released.
+- **The Jobs sidebar stays silent while the Host's first settings read hangs** (Amendments A108).
+  (resolved in the left-over limits pass, see Amendments A114: after about 10 s of a parked Host with no
+  gate read yet, the sidebar now says it is still reading its settings) Parked with no gate read yet, the
+  moment before the Host has ever read its settings, answers `null` from `jobsStall`; if that first read
+  itself hangs, the sidebar says nothing until it lands, the same silence as before this pass, now
+  narrowed to just that one moment.
 - **The codex rollout search no longer reaches a worker's own birth folder once that folder is more than
-  14 days behind today or `bornBefore`** (`ROLLOUT_SCAN_DAYS_MAX`, Amendments A110). The cap keeps the
-  newest folders, ending at today or at `bornBefore`'s next day, not the ones nearest `since`, so a live
-  locate and a restore, whose window sits close to `now` or to `bornBefore` either way, are unaffected. A
-  caller with an old `since` and no `bornBefore` is the one this bites: a limit probe asked about a worker
-  started more than 14 days ago no longer reads the date folder that worker's rollout was actually born
-  in, since the folders read now run backward from today instead.
+  14 days behind today or `bornBefore`** (`ROLLOUT_SCAN_DAYS_MAX`, Amendments A110). (resolved in part in
+  the left-over limits pass, see Amendments A115: the folders around `since` are read too, so this caller
+  reaches its own birth folder again; a window wider than 14 days still skips what sits between the two
+  anchors, see "Known limits after the left-over pass") The cap keeps the newest folders, ending at today
+  or at `bornBefore`'s next day, not the ones nearest `since`, so a live locate and a restore, whose
+  window sits close to `now` or to `bornBefore` either way, are unaffected. A caller with an old `since`
+  and no `bornBefore` is the one this bites: a limit probe asked about a worker started more than 14 days
+  ago no longer reads the date folder that worker's rollout was actually born in, since the folders read
+  now run backward from today instead.
+
+## Known limits after the left-over pass
+
+Each was found while building or reviewing the left-over limits pass and left as it is, with its reason.
+Checked at `1c8e0ba0`.
+
+- **The Host's usage lookup still goes without the system proxy** (Amendments A122). The OS certificate
+  store is trusted now, so a TLS-inspecting proxy no longer fails the lookup on its own, but Node's
+  `fetch` still does not read the system proxy, so a corporate proxy that requires one still fails the
+  lookup the same way it always did (Q4).
+- **On Windows, the Host inherits the app's DevTools socket** (see "Known limits after the chat
+  takeover"). Unchanged: a dev build started with `--remote-debugging-port` leaves that port listening
+  in the Host after the app quits, so the next dev build on the same port has no DevTools. Dev only;
+  relaunch on a fresh port.
+- **The conhost reaper runs only when no pty is live, and a pid it is about to kill could in theory be
+  reused** (Amendments A124). A Host that always holds at least one live pty keeps its leaks until every
+  such tab closes, and the sub-second window between the reaper's last look and its kill could, in
+  theory, see an unrelated process take the same pid; nothing checks the name again at kill time.
+- **Giving up on a stop lasts only for the process** (Amendments A113). The six-tries give-up is in
+  memory: a Host restart or a new driving process asks that coordinator to stop again from the start,
+  at 30 seconds, so a permanent refusal is quiet for a while and then noisy again after any handover.
+- **A rollout search window longer than 14 days skips its middle folders** (Amendments A115). The cap
+  still reads only 14 date folders; reading `since`'s own neighbourhood as well as the newest ones means
+  whatever sits between the two, on a search that spans weeks, is not read.
+- **`jobs run` beside an idle coordinator waits for the user's decision.** Kept as a ruling, not changed
+  by this pass (`.superpowers/sdd/2026-09-26-leftovers/plan.md`, "Kept as they are"; see also "`jobs run`
+  does not ask the idle rule" under "Known limits after the control plane follow-ups"). A Run with only
+  its coordinator left does not count as running whether or not that coordinator is busy, so `jobs run`
+  can start a new Run beside one still doing the work itself; nothing is lost, but two Runs of one Job
+  can then be going at once, and closing that gap needs a person's call on which Run should win.
 
 ## 0. The problem, measured
 

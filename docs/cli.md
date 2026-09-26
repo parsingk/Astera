@@ -114,7 +114,11 @@ Astera can release it. A damaged `app-settings.json` parks the Host too, until A
 repairs the file. Astera's Jobs sidebar says so too, once it has read a Host's first report, with one
 line naming why: the settings file cannot be read, or the settings migration has not finished yet.
 `data.appAttached` says whether Astera is connected. A Host that does not announce `dispatch` leaves
-both fields out.
+both fields out. An Astera 1.3.25 or older counts as attached too, even though its `hello` names no
+role: `data.driver` reads `app` and `data.appAttached` is `true` while one runs. `astera host status`
+says the same thing on its own: `data.legacyApp` is `true` once such an Astera has said hello, and
+`data.warning` carries the notice, "Astera 1.3.25 or older is attached; update it", which `--human`
+prints. The Host also writes it to its own log, once for each attach.
 
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
 one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
@@ -185,6 +189,14 @@ over Astera's sessions once Astera has quit (see below). A Host started by an ol
 could not name the files a worker needs. With such a Host, these commands need the app as they did
 before.
 
+**An Astera 1.3.25 or older attached answers the same commands with an update notice, not a race.**
+Such an app says nothing about its own role, so the Host counts it as attached and holding its own
+worktree work exactly as it counts a current one, but it can never be handed the call these commands
+need. Each is refused at once, exit 6, with a message that starts `APP_REQUIRED` and names the update:
+"needs a newer Astera app: Astera 1.3.25 or older is attached; update it." `astera host status` carries
+the same word beforehand, through `data.legacyApp` and `data.warning` (see above), so a script can tell
+before it tries.
+
 The Host reads the permission setting, **Run agents without permission checks**, from the profile's
 `app-settings.json` at every start. With no such file it uses the app's default, which is on. A
 damaged file refuses the start with exit 6 and `error.details.repair`, rather than guessing. A start
@@ -242,7 +254,11 @@ below).
 every one of its tasks is done, the process that drives stops that run's coordinator. It keeps asking
 until the session is confirmed gone, backing off from 30 seconds up to 10 minutes rather than asking
 once, so a run whose coordinator resists stopping can still show that coordinator, paused, for a while
-after the run itself finished. A run that `jobs run` started for a Job with no schedule keeps its
+after the run itself finished. A stop that keeps failing or keeps being refused at the 10 minute cap is
+asked six times there, then the process gives up and logs one line, since nothing tells it the refusal
+is permanent; a session confirmed gone in the meantime is still released at once. Giving up lasts only
+for that process: a Host restart or a new driving process asks the same coordinator to stop again from
+30 seconds. A run that `jobs run` started for a Job with no schedule keeps its
 coordinator, because you may be reading its tab. That stop once the session is gone
 (`run-coordinator-stop --gone`) and the sweep that clears a stale coordinator start mark
 (`run-start-marks-clear`) are the driving loop's own commands: called from inside an agent session they
