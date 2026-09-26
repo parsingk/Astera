@@ -7,6 +7,7 @@
 // floor and a person with four dead features read "no project is open". Ordering matters here and the
 // renderer has no test environment (vitest runs `environment: 'node'`), so the order lives where a
 // test can hold it.
+import { HOST_FEATURE_DISPATCH } from '../host/protocol'
 import type { HostDriverReport, HostStatus, OrchHostGate, OrchSnapshot } from '../types'
 
 /** `host` — the Host gate's own screen. `blank` — nothing is known yet, so nothing is drawn (drawing
@@ -38,16 +39,20 @@ export type JobsStall = { kind: 'unresponsive' } | { kind: 'parked'; gate: 'not-
 
 /**
  * **Not answering comes first.** What a Host that stopped answering last said about itself is stale,
- * and the one fact that is true now is that it does not answer. A parked Host is named only with the
+ * and the one fact that is true now is that it does not answer. **Only for a Host the app yields
+ * Jobs to** (final review M1): one that announces `dispatch`, the same test the app's own
+ * `hostSpeaksDispatch` makes (src/main/host/outdated.ts, which this renderer-safe file cannot import).
+ * In front of a Host without it (no spawner, or an older Host) the app drives by itself, Jobs move,
+ * and saying they do not would be false. A parked Host is named only with the
  * reason that parks it: a parked driver with no gate read yet is the Host's first moment (N2) and
  * lasts until its first read, so it has no reason to show. A Host that drives, an app that drives,
  * and an older Host that says nothing all draw nothing.
  */
 export function jobsStall(a: {
-  hostStatus: Pick<HostStatus, 'unresponsive'> | null
+  hostStatus: Pick<HostStatus, 'unresponsive' | 'features'> | null
   driver: HostDriverReport | null
 }): JobsStall | null {
-  if (a.hostStatus?.unresponsive === true) return { kind: 'unresponsive' }
+  if (a.hostStatus?.unresponsive === true && a.hostStatus.features.includes(HOST_FEATURE_DISPATCH)) return { kind: 'unresponsive' }
   const d = a.driver
   if (d?.driver === 'parked' && (d.gate === 'not-migrated' || d.gate === 'unreadable')) return { kind: 'parked', gate: d.gate }
   return null

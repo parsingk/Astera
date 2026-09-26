@@ -36,7 +36,8 @@ describe('jobsViewScreen', () => {
 
 // 한도 L3: 아무것도 움직이지 않을 때 사이드바가 그 까닭을 적는다.
 describe('jobsStall', () => {
-  const ok = { unresponsive: false }
+  const ok = { unresponsive: false, features: ['dispatch'] }
+  const silent = { unresponsive: true, features: ['dispatch'] }
 
   it('Host 가 작업을 멈춰 두면 그 사유를 준다', () => {
     expect(jobsStall({ hostStatus: ok, driver: { driver: 'parked', gate: 'unreadable' } })).toEqual({ kind: 'parked', gate: 'unreadable' })
@@ -44,12 +45,19 @@ describe('jobsStall', () => {
   })
 
   it('Host 가 응답하지 않으면 그 알림을 준다', () => {
-    expect(jobsStall({ hostStatus: { unresponsive: true }, driver: null })).toEqual({ kind: 'unresponsive' })
+    expect(jobsStall({ hostStatus: silent, driver: null })).toEqual({ kind: 'unresponsive' })
   })
 
   // 응답하지 않는 Host 가 마지막으로 한 말은 낡았다: 멈춰 둔 사유보다 응답하지 않는다는 사실이 앞선다.
   it('응답하지 않는다는 사실이 멈춰 둔 사유보다 앞선다', () => {
-    expect(jobsStall({ hostStatus: { unresponsive: true }, driver: { driver: 'parked', gate: 'unreadable' } })).toEqual({ kind: 'unresponsive' })
+    expect(jobsStall({ hostStatus: silent, driver: { driver: 'parked', gate: 'unreadable' } })).toEqual({ kind: 'unresponsive' })
+  })
+
+  // 최종 리뷰 M1. dispatch 를 알리지 않은 Host(spawner 가 없거나 옛 Host)에게 앱은 양보하지 않고
+  // 스스로 몬다. 그런 Host 가 응답하지 않아도 작업은 움직이므로 "작업이 움직이지 않는다" 는 거짓이다.
+  it('앱이 스스로 모는 동안에는 응답하지 않는 Host 도 적지 않는다', () => {
+    expect(jobsStall({ hostStatus: { unresponsive: true, features: [] }, driver: null })).toBeNull()
+    expect(jobsStall({ hostStatus: { unresponsive: true, features: ['proc'] }, driver: null })).toBeNull()
   })
 
   it('Host 가 몰거나 앱이 몰면 아무것도 적지 않는다', () => {
