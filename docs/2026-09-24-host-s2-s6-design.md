@@ -2067,7 +2067,7 @@ limits after the Host journal".
   as actor null, and new rows carry one"; `journalReader.test.ts`, "reads a v2 file without migrating
   it: actor null, and the file stays at version 2" and "refuses to write: the connection is read-only";
   `actor.test.ts`).
-- **A128. The actor rule (P5).** `actorOf({ sessionId, role, state })` judges each call on the state it
+- **A128. The actor rule (P5) (amended by A137).** `actorOf({ sessionId, role, state })` judges each call on the state it
   found, after `ready()` and before `handleCommand`. The Host's own caller is `host`; the app (its caller
   id, or a hello with `role: 'app'`) is `desktop`; a session naming an open Dispatch or a Run's
   coordinator is `agent` with that session; anything else is `cli`. Fixed actors: `state-put` and every
@@ -2098,7 +2098,7 @@ limits after the Host journal".
   "reports each prompt write of a worker it starts" and "a prompt-write listener that throws costs the
   row, never the start"; the `index.ts` guard in `driving.integration.test.ts`).
 - **A132. `journal-append` and `journal-reload`, and the toggle read from `app-settings.json` (J3, P7,
-  P14).** Both are app-only orch-calls: 403 to any other caller, 501 on a Host with no journal, and both
+  P14) (amended by A135).** Both are app-only orch-calls: 403 to any other caller, 501 on a Host with no journal, and both
   refuse a request id. `journal-append` takes `{ ops }` (1 to 64) and answers 200 `{ applied, failed }`,
   all in one transaction, where one failing op costs only itself; the Host stamps every row `desktop` and
   keys it under `app:`. It answers 409 `{ error, enabled, writer }` when Job Continuity is off there or
@@ -2113,7 +2113,7 @@ limits after the Host journal".
   append and reload tests and the owed baseline tests), Task 7 (`appJournal.test.ts`, "sends the
   reconciler's rows in order, the finish under the id the app minted (J3, P14)" and "writes each
   reconciler row exactly one way: locally in front of an older Host, through the Host otherwise").
-- **A133. `runs follow` shows the journal's rows (J7, P10).** The Host read call is the existing
+- **A133. `runs follow` shows the journal's rows (J7, P10) (amended by A138).** The Host read call is the existing
   `runs-follow`: its answer merges the Host journal's timeline rows (a worker lost, a recovery decision)
   through the optional `OrchServerDeps.journalTimeline`, in the timeline's own order, and `count`
   includes them so a row landing mid-window wakes the poll. A read that throws costs its rows, never the
@@ -2128,6 +2128,56 @@ limits after the Host journal".
   puts `JobEvent`s of the existing kinds `runtime-lost` and `recovery` in a `runs-follow` answer. None is
   a protocol change: `HOST_PROTOCOL` stays 3, and nothing in `src/core/host/protocol.ts` was renamed or
   removed.
+
+The final review of the Host journal (`.superpowers/sdd/2026-09-26-host-journal/review-final.md`) found two
+important issues and four minor ones. A135 to A139 are its fixes; M5 (the wiring guards that match
+source text) was left as it is.
+
+- **A135. A setting changed while the socket is down reaches the Host at the next greeting (review I1).**
+  A `journal-reload` the app sent while its socket was down never arrived, and the Host kept the old
+  setting until it restarted. Now the Host reads `app-settings.json` again whenever an app greets it
+  (`hostJournal.appGreeted`, from `onAppGreeted` in `index.ts`), and the app sends `journal-reload` after
+  every greeting of a Host that announces `journal` (`appJournal.greeted`, beside `remirrorOrchState` in
+  `ipc.ts`). Either one alone closes the gap; both are cheap and idempotent. A greeting never loads the
+  state: before the load the Host has none, so a baseline that turning on owes is paid at its first write.
+  What shipped: `hostJournal.test.ts`, "turned on while no app was connected: the Host journals after
+  the greeting, and off again stops it" and "a greeting before the Host holds any state owes the
+  baseline, and the first write pays it"; `appJournal.test.ts`, "after a reconnect to a journal Host, it
+  sends journal-reload again; to an older Host it sends nothing"; the two wiring guards.
+- **A136. A lock is not corruption (review I2).** Both connections, the writer (`ContinuityJournal`) and
+  the reader (`JournalReader`), set `PRAGMA busy_timeout` (`BUSY_TIMEOUT_MS`, 5000 ms) before anything
+  else, so a lock the other process holds for a moment is waited out. The file is moved aside only when
+  SQLite reports corruption (`SQLITE_CORRUPT` or `SQLITE_NOTADB`) or its header is not SQLite's. Any
+  other failure leaves the file where it is and the open throws. A busy open is not remembered as a
+  failure: the Host, and an app in front of an older Host, try again at the next write. Other failures
+  stay off until the next start, as before. A reader that meets a lock past its timeout throws (P13),
+  and the timeline readers log it and show no rows. What shipped: `journal.test.ts`, "waits out a lock
+  another connection holds for a moment, and keeps the file and its rows", "a lock held past the timeout
+  leaves the file where it is" and "tells corruption from a lock by the SQLite error code";
+  `journalReader.test.ts`, the two lock tests; `hostJournal.test.ts`, "a journal another process holds
+  locked"; `appJournal.test.ts`, "in front of an older Host, a busy open is logged, moves nothing aside,
+  and is tried again at the next write".
+- **A137. The reserved caller ids name only their owners (review M1).** `astera:host` and `astera:app`
+  are one environment variable away for any shell or agent, so `actorOf` no longer trusts them. The app
+  is `desktop` by its connection's `role: 'app'`, and the Host's own commands carry `host` without being
+  judged. A caller that is not the app and sends either id is `cli`, with that id as its session. The
+  trust `chats answer` gives these ids is unchanged. What shipped: `actor.test.ts`, "a caller that is
+  not the app claiming a reserved caller id is the CLI"; `orch.test.ts`, "a CLI caller that sends a
+  reserved caller id is journaled as cli".
+- **A138. `runs follow` reads the rows only when the journal changed (review M2).** The follow polls every
+  50 ms. `hostJournal.timeline` now keeps each followed Run's rows with the reader's change mark
+  (`JournalReader.changeMark`: `PRAGMA data_version`, which moves with every commit of another
+  connection, deletes included) and reads them again only when the mark moved. The lines are still
+  built from each call's state, so the output is the same. What shipped: `hostJournal.test.ts`, "reads a
+  Run's rows again only once the journal changed, and the lines follow the state either way".
+- **A139. One writer, also after a wait (review M3, M4).** A checkpoint waits on git after its commit.
+  The recorder now asks `stillWriting()` before it writes, and the Host answers with the same gate as
+  every write (on, the writer, not closed, the same handle), so a checkpoint that finishes after an
+  older app attached writes nothing. The app's recorder asks the same of its own handle. And the app
+  closes its idle writer the moment a journal Host is the writer, so that handle no longer blocks the
+  Host's move aside on Windows. What shipped: `hostJournal.test.ts`, "a checkpoint that finishes after
+  this Host stopped being the writer writes nothing"; `appJournal.test.ts`, "closes its own writer once
+  a journal Host takes over, and never writes through it after".
 
 ## Known limits after S3
 
@@ -2701,12 +2751,18 @@ Each was found while building or reviewing the Host journal and left as it is, w
 - **A `state-put` taken before the Host held any state is not journaled** (P15). Only an older app sends
   one, and the Host logs and skips it rather than journal the whole state as new.
 - **A toggle turned on while the app has no orchestration handle reaches the Host only at the next
-  change.** The app sends `journal-reload` from its toggle handler only when it holds that handle, which
-  it normally does. Otherwise the running Host learns of it at the next settings change or its next
-  start.
+  change or greeting.** The app sends `journal-reload` from its toggle handler only when it holds that
+  handle, which it normally does. Otherwise the running Host learns of it at the next settings change,
+  the next time an app greets it (A135), or its next start.
+- **A role-less app 1.3.25 or older greeting the Host does not make it read the settings again** (A135).
+  The server calls `onAppGreeted` only for a hello that says `role: 'app'`. Such an app holds the Host
+  off anyway (P9), and a newer app's greeting reads the file.
+- **A lock held for long stalls the Host's one thread for up to the busy timeout** (A136). `node:sqlite`
+  is synchronous, so a write that meets another process's lock waits up to 5 seconds before it fails.
+  The slow write warning logs it. A lock that long is not expected: the app only reads, in WAL mode.
 - **A corrupt journal cannot be moved aside on Windows while an app holds its reader open.** The rename
   fails, so the Host logs that it could not open the journal and journals nothing for the rest of its
-  life.
+  life. The app's own idle writer no longer holds it open (A139); its reader still does.
 - **The Host prints Node's one `ExperimentalWarning` for `node:sqlite` on stderr.** It lands in the
   Host's log once per start and means nothing is wrong.
 

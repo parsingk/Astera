@@ -992,7 +992,8 @@ which keeps the journal whether Astera is open or not.
 **Every journal row records who acted.** With Job Continuity on, the run's
 journal keeps each change with the one who made it: Astera, the CLI, an agent (a worker or a
 coordinator, by its session) or the Host itself, such as when it places a worker or finds one lost
-after a restart. Rows written by an Astera from before this record nobody.
+after a restart. Rows written by an Astera from before this record nobody. A shell or an agent that
+sends Astera's or the Host's own caller id is still recorded as the CLI.
 
 **`runs checks` shows each task's completion checks and what they came to.** It reads what the
 checks already recorded and runs nothing, so it answers the same with Astera closed, and from the
