@@ -66,6 +66,9 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   let open: { journal: ContinuityJournal; recorder: ContinuityRecorder } | null = null
   /** A failed open is not retried in this Host's life: the app's rule, and one log line, not one per commit. */
   let openFailed = false
+  /** Set by the public close() (the Host leaving): no write reopens the file after it, so the exits
+   *  the leave causes cannot leave a handle behind. */
+  let shut = false
   /** Reads are free (J7): a reader, so a Host that is not the writer never runs the schema step. */
   const reader = new JournalReader(file)
   /** The baseline a journal-reload owed and could not write (Task 4 review CARRY): it turned journaling
@@ -92,7 +95,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   }
   /** The one gate every write passes: on, the writer, and opened. */
   const writing = (): { journal: ContinuityJournal; recorder: ContinuityRecorder } | null => {
-    if (!settings.enabled || !isWriter()) return null
+    if (shut || !settings.enabled || !isWriter()) return null
     if (!open && !openFailed) openJournal()
     if (open && owed) payOwed(open, owed)
     return open
@@ -267,6 +270,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     },
     close: () =>
       guarded('closing', () => {
+        shut = true
         close()
         reader.close()
       })

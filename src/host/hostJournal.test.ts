@@ -65,6 +65,18 @@ describe('createHostJournal', () => {
     expect(rows()).toEqual([expect.objectContaining({ type: 'JOB_RUN_PAUSED', actor: cli, idempotencyKey: `JOB_RUN_PAUSED:run_1:${STARTED}#4` })])
   })
 
+  it('once closed (the Host leaving), a later commit writes nothing and reopens no handle', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    j.committed({ prev: on(), next: paused(), version: 1, actor: cli })
+    expect(rows()).toHaveLength(1)
+    j.close()
+    // The exits leave() causes commit after the close; none of them may open the file again.
+    j.committed({ prev: paused(), next: on(), version: 2, actor: { surface: 'host' } })
+    expect(rows()).toHaveLength(1)
+  })
+
   // Review Focus 1 (J2, P9).
   it('writes nothing while an attached app keeps the journal, and writes again once it leaves', async () => {
     await settings({ jobContinuityEnabled: true })
