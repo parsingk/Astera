@@ -61,7 +61,7 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
   recovery: 'jobs.event.recovery'
 }
 
-/** A recovery line's summary is the strategy as the journal stored it (main/continuity/recorder.ts
+/** A recovery line's summary is the strategy as the journal stored it (core/continuity/timelineRows.ts
  *  carries the row through verbatim) — the journal is the source of truth, so the data stays raw and
  *  the wording happens here. A strategy this map does not know falls back to the raw string: a new
  *  strategy showing as `resume-native` reads better than showing as nothing. */
