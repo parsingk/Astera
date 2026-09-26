@@ -850,4 +850,16 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(slackCall).toMatch(/rolling: rollingWiring\.rolling/)
     expect(src).not.toMatch(/createAccountSnapshot/)
   })
+
+  // Host journal Task 5. Mutation that fails it: `writer: () => server.appsKeep(HOST_YIELD_JOURNAL)` (the
+  // `!` dropped), which makes the Host write exactly while an older app does.
+  it('index.ts builds the Host journal behind the journal yield and hands it to the orch and the spawner', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+    expect(src).toMatch(/const hostJournal = createHostJournal\(\{/)
+    expect(src).toMatch(/writer:\s*\(\)\s*=>\s*!server\.appsKeep\(HOST_YIELD_JOURNAL\)/)
+    expect(src).toMatch(/await hostJournal\.start\(\)/)
+    expect(src).toMatch(/onPromptWrite:\s*\(e\)\s*=>\s*hostJournal\.promptWrite\(e, orch\.state\(\)\)/)
+    expect(src).toMatch(/journal:\s*hostJournal/)
+    expect(src).toMatch(/hostJournal\.close\(\)/)
+  })
 })

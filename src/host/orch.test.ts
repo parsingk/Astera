@@ -46,6 +46,7 @@ import { createHostProjectRoots } from './projectRoots'
 import { createHostExits } from './exits'
 import { createHostRollTap } from './rollTapHost'
 import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
+import type { HostJournal } from './hostJournal'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -3190,5 +3191,124 @@ describe('OBSERVED — sessions send --wait', () => {
     for (const state of ['ended', 'prompt', 'exited'])
       expect(entry.stale({ status: 200, body: { id: 's1', sent: true, turn: { state } } }), state).toBe(false)
     expect(entry.stale({ status: 200, body: { id: 's1', sent: true } })).toBe(false)
+  })
+})
+
+describe('the Host journal at the commit points (Host journal Task 5)', () => {
+  type Committed = Parameters<HostJournal['committed']>[0]
+  const fake = () => {
+    const committed: Committed[] = []
+    const loaded: Parameters<HostJournal['loaded']>[0][] = []
+    const journal = {
+      committed: (c: Committed) => void committed.push(c),
+      loaded: (l: Parameters<HostJournal['loaded']>[0]) => void loaded.push(l),
+      append: vi.fn(() => ({ status: 200, body: { applied: 1, failed: 0 } })),
+      reload: vi.fn(async () => ({ enabled: true, writer: true })),
+      timeline: () => []
+    }
+    return { committed, loaded, journal }
+  }
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  const seedWorker = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+
+  // Review Focus 3 (P5).
+  it('a worker_done that closes its own Dispatch is recorded as agent', async () => {
+    const { taskId, dispatchId } = await seedWorker()
+    const f = fake()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), journal: f.journal })
+    const r = await orch.call({
+      cmd: 'send',
+      args: { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+      sessionId: 'ses_w'
+    })
+    expect(r.status).toBe(200)
+    expect(orch.state().dispatches.find((d) => d.id === dispatchId)?.endedAt).toBeDefined()
+    expect(f.committed.length).toBeGreaterThan(0)
+    expect(f.committed.map((c) => c.actor)).toEqual(f.committed.map(() => ({ surface: 'agent', sessionId: 'ses_w' })))
+  })
+
+  it('a shell is cli, the Host’s own command is host, the app’s state-put is desktop, each under a new version', async () => {
+    await seed()
+    const f = fake()
+    const orch = orchOver({ journal: f.journal })
+    await orch.ready()
+    const runId = orch.state().runs[0].id
+    expect((await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: '' })).status).toBe(200)
+    expect((await orch.handle('runs-resume', { id: runId })).status).toBe(200)
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    expect((await orch.call({ cmd: 'state-put', args: { state: got.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect([...new Set(f.committed.map((c) => c.actor.surface))]).toEqual(['cli', 'host', 'desktop'])
+    const versions = f.committed.map((c) => c.version)
+    expect(new Set(versions).size).toBe(versions.length)
+    expect(versions).toEqual([...versions].sort((a, b) => a - b))
+    // The diff base is the state before each commit.
+    expect(f.committed[0].prev.runs[0].paused).toBeFalsy()
+    expect(f.committed[0].next.runs[0].paused).toBe(true)
+  })
+
+  it('hands the load’s restart cleanup to the journal once', async () => {
+    await seedWorker()
+    const f = fake()
+    const orch = orchOver({ aliveSessionIds: () => new Set<string>(), journal: f.journal })
+    await orch.ready()
+    await orch.ready()
+    expect(f.loaded).toHaveLength(1)
+    expect(f.loaded[0].before?.dispatches[0].endedAt).toBeUndefined()
+    expect(f.loaded[0].state.dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
+  // P15.
+  it('a state-put taken before the Host held any state is not journaled as a diff from nothing', async () => {
+    const { state } = await (async () => {
+      await seed()
+      return { state: JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState }
+    })()
+    const f = fake()
+    const orch = orchOver({ journal: f.journal })
+    expect((await orch.call({ cmd: 'state-put', args: { state }, sessionId: '', from: app })).status).toBe(200)
+    expect(f.committed).toEqual([])
+    expect(logs.some((l) => /not journaled/.test(l))).toBe(true)
+  })
+
+  // Review Focus 5 (R3).
+  it('a journal that throws at every entry point leaves the command answered and the state committed', async () => {
+    await seed()
+    const boom = (): never => {
+      throw new Error('disk full')
+    }
+    const orch = orchOver({ journal: { committed: boom, loaded: boom, append: boom, reload: async () => boom(), timeline: boom } })
+    await orch.ready()
+    const runId = orch.state().runs[0].id
+    const r = await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: '' })
+    expect(r.status).toBe(200)
+    expect(orch.state().runs[0].paused).toBe(true)
+    expect(logs.filter((l) => l.includes('disk full')).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('journal-append and journal-reload are the app’s alone, need a journal, and take no request id', async () => {
+    await seed()
+    const f = fake()
+    const orch = orchOver({ journal: f.journal })
+    const cli: OrchCaller = { role: 'cli', toOthers: () => {} }
+    const ops = [{ op: 'recovery-finish', id: 'rca_1', status: 'failed', at: NOW }]
+    expect((await orch.call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: cli })).status).toBe(403)
+    expect((await orch.call({ cmd: 'journal-reload', args: {}, sessionId: '', from: cli })).status).toBe(403)
+    expect((await orchOver().call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: app })).status).toBe(501)
+    expect((await orch.call({ cmd: 'journal-append', args: { ops: [{ op: 'nope' }] }, sessionId: '', from: app })).status).toBe(400)
+    expect((await orch.call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: app, request: 'r1' })).status).toBe(400)
+    expect(await orch.call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: app })).toEqual({ status: 200, body: { applied: 1, failed: 0 } })
+    expect(f.journal.append).toHaveBeenCalledWith([{ op: 'recovery-finish', id: 'rca_1', status: 'failed', at: NOW }])
+    expect(await orch.call({ cmd: 'journal-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: { enabled: true, writer: true } })
   })
 })

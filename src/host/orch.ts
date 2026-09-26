@@ -26,6 +26,9 @@ import type { HostChats } from './hostChats'
 import type { RollJournal } from './rollJournal'
 import type { HostSlackWiring } from './slackWiring'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
+import type { HostJournal } from './hostJournal'
+import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
+import { parseJournalOps } from '../core/continuity/journalOps'
 
 /** One reply — today's HTTP status and body, the shape `OrchCall.call` already answers with. Named
  *  only because the receipt store below holds one. */
@@ -431,8 +434,21 @@ export function createHostOrch(a: {
   /** `sessions create` (sessionCreate.ts), passed through to `hostOrchDeps`. Absent: the command
    *  answers 409. */
   createSession?: OrchServerDeps['createSession']
+  /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
+   *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
+  journal?: Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> | null
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
+
+  /** The journal, isolated (R3): hostJournal.ts never throws, and a journal that does anyway must not
+   *  turn a landed commit into a failed command. */
+  const journalSafely = (what: string, fn: () => void): void => {
+    try {
+      fn()
+    } catch (err) {
+      a.log(`continuity: ${what} failed on the Host: ${String(err)}`)
+    }
+  }
 
   /** **Nothing is read at construction, and `host/index.ts` never calls `ready()`.**
    *
@@ -478,6 +494,9 @@ export function createHostOrch(a: {
         aliveSessionIds: alive,
         reportedDispatchIds: reportedDispatchIdsOf(queued.map((q) => q.report))
       })
+      // The restart cleanup is a transition like any other (the app did this at its boot): every worker it
+      // closed as outcome_unknown lands as ATTEMPT_LOST, by the Host (P5).
+      journalSafely('recording the load', () => a.journal?.loaded({ before: loadResult!.before, state: store.get() }))
       // **The stale spec sweep, once, here** (§2.7), after the cleanup because only the cleanup knows
       // which Dispatches are still open. This load is the one place every writer of that folder is
       // past its restart: the Host's own spawns wait on `ready()`, and an app in front of a Host
@@ -550,11 +569,13 @@ export function createHostOrch(a: {
   /** The `check --wait` calls this Host serves, for its whole life (final round 2, I-A): built once, not
    *  per call like the deps below, since a wait entered by one call is asked about by another. */
   const checkWaits = createCheckWaits()
-  const depsFor = (marks: CallMarks): OrchServerDeps =>
+  const depsFor = (marks: CallMarks, actor: JournalActor): OrchServerDeps =>
     hostOrchDeps({
       checkWaits,
       getState: () => store.get(),
       setState: async (next, how) => {
+        // The diff base, read before the save moves memory: each commit is journaled once, from here.
+        const prev = store.get()
         // Reserved before the write, for `reserveVersion`'s reason and for one that is this path's
         // own: a `state-put` arriving while this commit is still writing would otherwise read the
         // pre-commit number, pass the check, and land a whole state that does not contain this
@@ -568,6 +589,9 @@ export function createHostOrch(a: {
         marks.commits += how?.rollsBack ? -1 : 1
         await store.save(next)
         a.onState(next, committed)
+        // J1: journaled after the commit landed (the spec's accepted crash window), with who made it (J4,
+        // P5) and its version under this Host's life as the key (J6, P1).
+        journalSafely('recording a commit', () => a.journal?.committed({ prev, next, version: committed, actor }))
         kickDriver()
       },
       now: a.now,
@@ -675,7 +699,7 @@ export function createHostOrch(a: {
     const drainedNow = await applyPendingReports({
       queued,
       apply: (r) =>
-        handleCommand(depsFor(throwaway()), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
+        handleCommand(depsFor(throwaway(), { surface: 'agent', sessionId: r.sessionId }), { sessionId: r.sessionId }, r.cmd, r.args).then((reply) => ({
           ok: reply.status >= 200 && reply.status < 300,
           detail: `${reply.status} ${JSON.stringify(reply.body)}`
         })),
@@ -684,7 +708,7 @@ export function createHostOrch(a: {
         if (!heldOnlyByReport.has(dispatchId)) return
         const res = writeOffDispatch(store.get(), { dispatchId }, a.now())
         if (!res.closed) return
-        await depsFor(throwaway()).setState(res.state)
+        await depsFor(throwaway(), HOST_ACTOR).setState(res.state)
         a.log(
           `pending reports — dispatch=${dispatchId} is written off: it was left open only for a report that could not be applied, and recovery can take its Task at this start` +
             (res.interrupted === 'validation' ? '. Its Task was validating and is now gated' : '') +
@@ -731,6 +755,10 @@ export function createHostOrch(a: {
     // carries the file's state, which is what the app's mirror needs.
     const sent = args.version
     if (!loading && typeof sent === 'number' && sent !== version) await ready()
+    // P15: whether this put has a base to diff against. Read before the lines below, where a put on a
+    // Host that never loaded stands in for the load. A load (or an earlier put) already started counts:
+    // it is awaited below, so memory holds its state by the time `prev` is read.
+    const hadState = loading !== null
     if (loading) await loading
     else loading = Promise.resolve()
     // **The write the app built is against a state this Host has since replaced** (ruling F56). It
@@ -754,6 +782,8 @@ export function createHostOrch(a: {
           version
         }
       }
+    // The diff base, read before the save moves memory.
+    const prev = store.get()
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
     await store.save(state)
@@ -761,6 +791,9 @@ export function createHostOrch(a: {
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state, version: committed })
+    // P15: a put that stood in for the load has no base to diff against.
+    if (hadState) journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: state, version: committed, actor: DESKTOP_ACTOR }))
+    else a.log('state-put: taken before this Host held a state, so it is not journaled as a diff from nothing')
     // An accepted whole state is a commit like any other (R5): the app may have just added the work
     // the driver is to place. A refused one above changed nothing, so it kicks nothing.
     kickDriver()
@@ -1115,7 +1148,7 @@ export function createHostOrch(a: {
         return
       }
       // Marks nobody reads: this is not a command, so there is no reply to correct and no receipt.
-      const deps = depsFor(throwaway())
+      const deps = depsFor(throwaway(), HOST_ACTOR)
       await handleExit(deps, e)
       // The slot rule is `releaseCoordinator`'s in the app, whole, and the same function
       // (`coordinatorReleaseOf`, S6 R14): an exit that only says the session was lost sight of keeps
@@ -1143,12 +1176,12 @@ export function createHostOrch(a: {
       // Inside the try for `call`'s reason: the loop that asks this must be told, not thrown at.
       try {
         await ready()
-        return answerOf(await handleCommand(depsFor(marks), { sessionId: HOST_CALLER }, cmd, args), marks)
+        return answerOf(await handleCommand(depsFor(marks, HOST_ACTOR), { sessionId: HOST_CALLER }, cmd, args), marks)
       } catch (err) {
         return failureOf(err, marks)
       }
     },
-    internalDeps: () => depsFor(throwaway()),
+    internalDeps: () => depsFor(throwaway(), HOST_ACTOR),
     loaded: () => loaded,
     drainOnce: async () => {
       // The load first, and only then the question: a load this call triggers may drain by itself,
@@ -1201,6 +1234,8 @@ export function createHostOrch(a: {
             cmd === 'roll-force' ||
             cmd === 'roll-journal' ||
             cmd === 'slack-reload' ||
+            cmd === 'journal-append' ||
+            cmd === 'journal-reload' ||
             cmd === 'coordinator-idle' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
@@ -1286,6 +1321,19 @@ export function createHostOrch(a: {
           await a.slack.reload()
           return { status: 200, body: { reloaded: true, active: a.slack.active() } }
         }
+        // **Beside slack-reload, for its reason (Host journal J3, P7).** The app's reconciler rows and its
+        // settings changes. Never a command layer command, never a receipt.
+        if (cmd === 'journal-append' || cmd === 'journal-reload') {
+          if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
+          if (!a.journal) return { status: 501, body: { error: 'this Host keeps no journal' } }
+          if (cmd === 'journal-reload') {
+            await ready()
+            return { status: 200, body: await a.journal.reload(() => store.get()) }
+          }
+          const parsed = parseJournalOps(args.ops)
+          if ('error' in parsed) return { status: 400, body: { error: parsed.error } }
+          return a.journal.append(parsed.ops)
+        }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing
         // above has awaited on this path, so the lookup and the claim cannot be split by a second
         // `orch-call` arriving in between (§7). The three groups above are deliberately on the other
@@ -1327,7 +1375,10 @@ export function createHostOrch(a: {
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()
-        const r = await handleCommand(depsFor(marks), { sessionId }, cmd, runArgs)
+        // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
+        // still the agent's.
+        const actor = actorOf({ sessionId, role: from?.role, state: store.get() })
+        const r = await handleCommand(depsFor(marks, actor), { sessionId }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.

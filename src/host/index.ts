@@ -25,7 +25,8 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { createHostJournal } from './hostJournal'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
@@ -190,6 +191,9 @@ async function main(): Promise<void> {
         .close()
         .catch((err) => log.write(`the server did not close cleanly: ${String(err)}`))
         .finally(() => {
+          // The journal's handle, once no command can reach a commit any more: the spawns have settled and
+          // the server has closed. Never throws.
+          hostJournal.close()
           registry.killAll()
           procs.killAll()
           // Both deferred, and both unref'd: see EXIT_SETTLE_MS. Unref'd so that a Host whose loop
@@ -224,6 +228,17 @@ async function main(): Promise<void> {
     app: { hasApp: () => server.hasApp(), act: (name, args) => server.act(name, args), lastAppPid: () => server.lastAppPid() }
   })
 
+  // The Job Journal (Host journal J1, J2): this Host writes it while every attached app yields it, or none
+  // is attached. `server` is assigned below; `writer` and `hostStartedAt` run only inside a commit.
+  const hostJournal = createHostJournal({
+    profileDir,
+    writer: () => !server.appsKeep(HOST_YIELD_JOURNAL),
+    hostStartedAt: () => server.startedAt,
+    now: () => new Date().toISOString(),
+    log: (m) => log.write(m)
+  })
+  await hostJournal.start()
+
   // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in
   // this registry, so a coordinator's worker-start works with no Astera window open. Null when the
   // Host was started without the CLI paths, and then those commands go to the app as before (R1).
@@ -242,7 +257,9 @@ async function main(): Promise<void> {
     worktrees,
     // R4: an app old enough to have no S3 worktree module of its own still keeps doing this work
     // itself, and says so in its `hello.yields` (HOST_YIELD_WORKTREES).
-    appKeepsWorktrees: () => server.appKeeps(HOST_YIELD_WORKTREES)
+    appKeepsWorktrees: () => server.appKeeps(HOST_YIELD_WORKTREES),
+    // Host journal (A19 lifted): the prompt rows of the workers this Host starts, read against its state.
+    onPromptWrite: (e) => hostJournal.promptWrite(e, orch.state())
   })
 
   // R10: the one read that may heal a damaged worktrees.json, done once — and only when the Host
@@ -392,6 +409,8 @@ async function main(): Promise<void> {
       log: (m) => log.write(m)
     }),
     local: spawner,
+    // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
+    journal: hostJournal,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
     // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
     specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,

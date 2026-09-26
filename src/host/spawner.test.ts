@@ -13,6 +13,7 @@ import { SessionManager } from '../core/sessions/manager'
 import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
+import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 let dir: string
@@ -38,6 +39,7 @@ const rig = (over: {
   failSpawn?: boolean
   appKeepsWorktrees?: HostSpawnerDeps['appKeepsWorktrees']
   worktrees?: HostSpawnerDeps['worktrees']
+  onPromptWrite?: HostSpawnerDeps['onPromptWrite']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -58,6 +60,7 @@ const rig = (over: {
     broadcast: (m) => sent.push(m), getState: over.state ?? (() => emptyState()), log: (m) => logs.push(m),
     findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts,
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
+    onPromptWrite: over.onPromptWrite,
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -88,6 +91,24 @@ const rigWith = (hooks: LocateHooks) => {
 }
 
 describe('createHostSpawner', () => {
+  // Host journal, A19 lifted: the Host's coordinator reports the prompt writes the journal reasons from.
+  it('reports each prompt write of a worker it starts', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const writes: PromptWriteEvent[] = []
+    const h = rig({ state: () => s, onPromptWrite: (e) => void writes.push(e) })
+    await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    expect(writes.length).toBeGreaterThan(0)
+    expect(writes.every((w) => w.dispatchId === dispatchId && w.taskId === taskId)).toBe(true)
+    expect(writes.map((w) => w.phase)).toContain('requested')
+  })
+
+  it('a prompt-write listener that throws costs the row, never the start', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s, onPromptWrite: () => { throw new Error('journal locked') } })
+    await expect(h.spawner!.startWorker(startArgs(taskId, dispatchId))).resolves.toMatchObject({ sessionId: expect.any(String) })
+    expect(h.logs.some((l) => l.includes('journal locked'))).toBe(true)
+  })
+
   it('is null, and says which paths are missing, when the Host was started without them', () => {
     const h = rig({ env: { PATH: '/x' } })
     expect(h.spawner).toBeNull()

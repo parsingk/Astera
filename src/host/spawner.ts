@@ -17,7 +17,7 @@ import type { HostMessage, PtyEntry } from '../core/host/protocol'
 import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
-import { OrchCoordinator, type CoordinatorDeps } from '../core/orchestration/exec/coordinator'
+import { OrchCoordinator, type CoordinatorDeps, type PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
@@ -101,6 +101,9 @@ export interface HostSpawnerDeps {
   locateForMs?: number
   /** Test injection; defaults to readAccountEntries. */
   readAccounts?: (file: string) => Promise<Account[]>
+  /** Each prompt write of a worker this Host's coordinator starts (Host journal, A19 lifted). Isolated: a
+   *  throw is logged and the start goes on. */
+  onPromptWrite?(e: PromptWriteEvent): void
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -525,8 +528,16 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         return a ? providerOf(a) : null
       },
       specsDir,
-      log
-      // No onPromptWrite: the journal is the app's (R9).
+      log,
+      // Host journal (A19 lifted): the prompt rows recovery reasons from. Isolated: the coordinator calls
+      // this inside the start, and a journal problem must not fail a start.
+      onPromptWrite: (e) => {
+        try {
+          d.onPromptWrite?.(e)
+        } catch (err) {
+          log(`continuity: prompt write for dispatch ${e.dispatchId} not journaled: ${String(err)}`)
+        }
+      }
     })
 
   /** The spawns under way, and who is waiting for them to finish (§8.4, R8). A Host that leaves in
