@@ -2560,7 +2560,8 @@ Checked at `1c8e0ba0`.
 - **A rollout search window longer than 14 days skips its middle folders** (Amendments A115). The cap
   still reads only 14 date folders; reading `since`'s own neighbourhood as well as the newest ones means
   whatever sits between the two, on a search that spans weeks, is not read.
-- **`jobs run` beside an idle coordinator waits for the user's decision.** Kept as a ruling, not changed
+- **`jobs run` beside an idle coordinator stays as it is (user decision, 2026-09-26).** The user chose
+  not to make a manual `jobs run` replace a Run whose coordinator only waits, as a fire does. Kept as a ruling, not changed
   by this pass (`.superpowers/sdd/2026-09-26-leftovers/plan.md`, "Kept as they are"; see also "`jobs run`
   does not ask the idle rule" under "Known limits after the control plane follow-ups"). A Run with only
   its coordinator left does not count as running whether or not that coordinator is busy, so `jobs run`
