@@ -10,6 +10,7 @@ import { startHostServer, type HostServer } from './server'
 import { HOST_PROTOCOL, HOST_YIELD_JOURNAL } from '../core/host/protocol'
 import { versionOnlyOrchCall } from '../core/host/orchProtocol'
 import { JournalReader } from '../core/continuity/journalReader'
+import { ContinuityJournal } from '../core/continuity/journal'
 import { stateFromLegacy } from '../core/orchestration/legacyState'
 import type { OrchState } from '../core/orchestration/state'
 import type { Dispatch } from '../core/orchestration/types'
@@ -124,6 +125,72 @@ describe('createHostJournal', () => {
     j.committed({ prev: on(), next: paused(), version: 9, actor: cli })
     expect(rows().some((e) => e.type === 'JOB_RUN_PAUSED')).toBe(false)
     expect(existsSync(journalFile())).toBe(true)
+  })
+
+  // Task 4 review CARRY: a reload that turned journaling on while an older app kept the journal wrote no
+  // baseline, and nobody did. The Host owes it, and pays it the moment it becomes the writer.
+  describe('the baseline a reload owes while this Host is not the writer', () => {
+    const withOpen = (): OrchState =>
+      stateFromLegacy({
+        runs: [run],
+        tasks: [{ id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'dispatched', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }],
+        dispatches: [{ id: 'dsp_1', taskId: 'tsk_1', provider: 'claude', accountId: 'acc', sessionId: 'ses_1', cwd: dir, specPath: 's', startedAt: NOW, workerState: 'ready', retained: false }]
+      })
+    const pausedOpen = (): OrchState => {
+      const st = withOpen()
+      return { ...st, runs: st.runs.map((r) => ({ ...r, paused: true })) }
+    }
+    const enabledRows = () => rows().filter((e) => e.type === 'CONTINUITY_ENABLED')
+    // The owed baseline's checkpoint is fired and forgotten; a real git would still hold the folder open
+    // when afterEach removes it.
+    const noGit: HostJournalDeps['git'] = async () => ({ ok: false, stdout: '', stderr: 'no git in this test' })
+
+    it('is written, as desktop, at the first write once this Host becomes the writer, and only once', async () => {
+      const { j, box } = make({ git: noGit })
+      await j.start()
+      box.writer = false
+      await settings({ jobContinuityEnabled: true })
+      expect(await j.reload(() => withOpen())).toEqual({ enabled: true, writer: false })
+      expect(existsSync(journalFile()) ? rows() : []).toEqual([])
+      box.writer = true
+      j.committed({ prev: withOpen(), next: pausedOpen(), version: 1, actor: cli })
+      expect(enabledRows()).toEqual([expect.objectContaining({ actor: { surface: 'desktop' } })])
+      expect(rows().map((e) => e.type)).toContain('JOB_RUN_PAUSED')
+      j.committed({ prev: pausedOpen(), next: withOpen(), version: 2, actor: cli })
+      expect(enabledRows()).toHaveLength(1)
+    })
+
+    it('is not written when the file already has one since the reload', async () => {
+      const { j, box } = make({ git: noGit })
+      await j.start()
+      box.writer = false
+      await settings({ jobContinuityEnabled: true })
+      await j.reload(() => withOpen())
+      // An older app that could still open the file wrote its own baseline for the same toggle.
+      await fs.mkdir(path.dirname(journalFile()), { recursive: true })
+      const other = new ContinuityJournal(journalFile(), { log: () => {}, now: () => NOW })
+      other.append([{ runId: 'run_1', type: 'CONTINUITY_ENABLED', at: NOW, idempotencyKey: 'CONTINUITY_ENABLED:run_1:app', payload: {} }])
+      other.close()
+      box.writer = true
+      j.committed({ prev: withOpen(), next: pausedOpen(), version: 1, actor: cli })
+      expect(enabledRows()).toHaveLength(1)
+    })
+
+    it('is dropped by a reload that turns journaling off again', async () => {
+      const { j, box } = make({ git: noGit })
+      await j.start()
+      box.writer = false
+      await settings({ jobContinuityEnabled: true })
+      await j.reload(() => withOpen())
+      await settings({ jobContinuityEnabled: false })
+      await j.reload(() => withOpen())
+      // On again with no reload behind it (a restart reads it at start): the app's toggle off ended the debt.
+      await settings({ jobContinuityEnabled: true })
+      await j.start()
+      box.writer = true
+      j.committed({ prev: withOpen(), next: pausedOpen(), version: 1, actor: cli })
+      expect(rows().map((e) => e.type)).toEqual(['JOB_RUN_PAUSED'])
+    })
   })
 
   it('a journal it cannot open is logged once and journals nothing, and nothing throws', async () => {

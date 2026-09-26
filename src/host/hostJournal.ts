@@ -63,6 +63,11 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   let openFailed = false
   /** Reads are free (J7): a reader, so a Host that is not the writer never runs the schema step. */
   const reader = new JournalReader(file)
+  /** The baseline a journal-reload owed and could not write (Task 4 review CARRY): it turned journaling
+   *  on while an attached app kept the journal, so neither side wrote CONTINUITY_ENABLED. Paid at the
+   *  first write once this Host is the writer, unless the file got one since `since` (an older app that
+   *  could still open the file wrote its own); dropped by a reload that turns journaling off. */
+  let owed: { since: string; state: () => OrchState } | null = null
 
   const readSettings = async (): Promise<ContinuitySettingsRead> => {
     try {
@@ -83,7 +88,11 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
   /** The one gate every write passes: on, the writer, and opened. */
   const writing = (): { journal: ContinuityJournal; recorder: ContinuityRecorder } | null => {
     if (!settings.enabled || !isWriter()) return null
-    if (open || openFailed) return open
+    if (!open && !openFailed) openJournal()
+    if (open && owed) payOwed(open, owed)
+    return open
+  }
+  const openJournal = (): void => {
     try {
       mkdirSync(path.dirname(file), { recursive: true })
       const journal = new ContinuityJournal(file, { log: d.log, now: d.now })
@@ -100,7 +109,19 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
       openFailed = true
       d.log(`continuity: the Host could not open the journal, it journals nothing until it restarts: ${String(err)}`)
     }
-    return open
+  }
+  /** Pays `owed` once: the moment this Host writes for the first time after the reload that owed it. */
+  const payOwed = (w: { journal: ContinuityJournal; recorder: ContinuityRecorder }, o: { since: string; state: () => OrchState }): void => {
+    owed = null
+    try {
+      const state = o.state()
+      const already = state.runs.some((r) => w.journal.eventsFor(r.id).some((e) => e.type === 'CONTINUITY_ENABLED' && e.at >= o.since))
+      if (already) return
+      // The toggle was the app's (P7), whenever it lands.
+      void w.recorder.enable(state, DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
+    } catch (err) {
+      d.log(`continuity: the baseline owed since ${o.since} could not be written: ${String(err)}`)
+    }
   }
   const close = (): void => {
     open?.recorder.close()
@@ -172,11 +193,14 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
       const was = settings.enabled
       settings = await readSettings()
       if (!settings.enabled) {
+        owed = null
         if (was) close()
         return { enabled: false, writer: isWriter() }
       }
       const w = writing()
       if (!was && w) await w.recorder.enable(state(), DESKTOP_ACTOR).catch((e) => d.log(`continuity: enable failed: ${String(e)}`))
+      // Turned on while an attached app keeps the journal: nobody writes the baseline now, so it is owed.
+      else if (!was && !w && !openFailed) owed = { since: d.now(), state }
       return { enabled: true, writer: w !== null }
     },
     timeline: (runId, state) => {
@@ -188,9 +212,10 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
         return []
       }
     },
-    close: () => {
-      close()
-      reader.close()
-    }
+    close: () =>
+      guarded('closing', () => {
+        close()
+        reader.close()
+      })
   }
 }
