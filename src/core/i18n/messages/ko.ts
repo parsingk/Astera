@@ -134,6 +134,7 @@ export const ko = {
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees, so it uses
   // session.* rather than worktree.*. The MESSAGES array in worktreeErrors.ts maps to this key
   'session.roll.mixedProvider': 'Claude와 Codex 계정을 섞어 롤링할 수 없습니다',
+  'session.resume.hostChatNotAdopted': '이 대화는 아직 Astera Host 에서 돌고 있고 이 창이 아직 넘겨받지 못했습니다. 잠시 뒤 다시 시도하세요.',
   // ---- github ----
   'github.settings.status': '연결 상태',
   'github.settings.connected': '연결됨 — {account}',

@@ -125,6 +125,7 @@ export const en: Record<keyof typeof ko, string> = {
   'worktree.inUse.run': 'Process “{name}” is running and using this worktree. Stop it first.',
   'worktree.inUse.unknown': 'This worktree is in use.',
   'session.roll.mixedProvider': 'Rolling cannot mix Claude and Codex accounts.',
+  'session.resume.hostChatNotAdopted': 'This conversation is still running in the Astera Host and this window has not taken it back yet. Try again in a moment.',
   // ---- github ----
   'github.settings.status': 'Connection',
   'github.settings.connected': 'Connected — {account}',

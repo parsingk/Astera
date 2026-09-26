@@ -37,36 +37,61 @@ export function hostChatByNative(entries: readonly PtyEntry[], native: string): 
   return null
 }
 
+export interface HostHeldDeps {
+  hostRolls: boolean
+  list: (() => Promise<PtyEntry[] | null>) | null
+  /** The Host's line processes; given only in front of a Host that takes chats over. */
+  listProcs?: (() => Promise<PtyEntry[] | null>) | null
+  isCodexAccount: (accountId: string) => boolean
+}
+
+/** What the Host holds on this native id: a session pty or a chat proc, by session id. */
+export type HostHeld = { id: string; kind: 'session' | 'chat' }
+
 /** Asks the Host (its `pty-list`, and its `proc-list` when `listProcs` is given, each bounded by that
  *  call's own deadline) only when it rolls. Any failure — no list, no answer, a throw — is null: the guard
  *  then behaves as it did before, rather than blocking a resume on a Host that is not there. */
-export async function findHostHeldNative(
-  d: {
-    hostRolls: boolean
-    list: (() => Promise<PtyEntry[] | null>) | null
-    /** The Host's line processes; given only in front of a Host that takes chats over. */
-    listProcs?: (() => Promise<PtyEntry[] | null>) | null
-    isCodexAccount: (accountId: string) => boolean
-  },
-  native: string
-): Promise<string | null> {
+export async function findHostHeld(d: HostHeldDeps, native: string): Promise<HostHeld | null> {
   if (!d.hostRolls) return null
-  let found: string | null = null
   if (d.list) {
     try {
       const entries = await d.list()
-      found = entries ? hostSessionByNative(entries, native, d.isCodexAccount) : null
+      const id = entries ? hostSessionByNative(entries, native, d.isCodexAccount) : null
+      if (id !== null) return { id, kind: 'session' }
     } catch {
-      found = null
+      /* the proc list may still know it */
     }
   }
-  if (found !== null || !d.listProcs) return found
+  if (!d.listProcs) return null
   try {
     const procs = await d.listProcs()
-    return procs ? hostChatByNative(procs, native) : null
+    const id = procs ? hostChatByNative(procs, native) : null
+    return id !== null ? { id, kind: 'chat' } : null
   } catch {
     return null
   }
+}
+
+/** `findHostHeld`'s session id alone. */
+export async function findHostHeldNative(d: HostHeldDeps, native: string): Promise<string | null> {
+  return (await findHostHeld(d, native))?.id ?? null
+}
+
+/** CT-11: the live session the app holds for what the Host found, handed back so its tab is focused.
+ *  A Host chat proc the app has not adopted (deferred while the Host starts it, or not swept yet) has no
+ *  live session here to hand back, and a resume let through would start a second process on the same
+ *  thread, so it is refused with `refusal`. A session pty in that state goes through as before (the pty
+ *  guard's own limit). */
+export function hostHeldLive(
+  found: HostHeld | null,
+  liveOf: (sessionId: string) => SessionInfo | null,
+  refusal: string
+): SessionInfo | null {
+  if (!found) return null
+  const live = liveOf(found.id)
+  if (live) return live
+  if (found.kind === 'chat') throw new Error(refusal)
+  return null
 }
 
 /** I1b: the native id a forwarded Host rekey already names — a codex roll's respawn resumes the same

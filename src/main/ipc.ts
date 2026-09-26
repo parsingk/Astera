@@ -51,7 +51,7 @@ import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, withHostRollHold, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
-import { findHostHeldNative, nativeOfForwardedRekey } from './host/hostNativeGuard'
+import { findHostHeld, hostHeldLive, nativeOfForwardedRekey } from './host/hostNativeGuard'
 import { applyAdoptRolling } from './host/adoptRolling'
 import { chatAdoptPlan, hostCarryOnIsOurs, hostStartingDefers } from './chatAdopt'
 import { reattachSessions, type ReattachResult } from './host/reattach'
@@ -1056,7 +1056,7 @@ export function registerIpc(
    *  known. Only in front of a Host that rolls, bounded by the pty list's own deadline, and null on any
    *  failure: the guard then behaves as before rather than blocking the resume. */
   const liveByHostNative = async (native: string): Promise<SessionInfo | null> => {
-    const id = await findHostHeldNative(
+    const found = await findHostHeld(
       {
         hostRolls: hostSpeaksRolling(hostClient?.status() ?? { connected: false, features: [] }),
         list: hostPtyList,
@@ -1073,11 +1073,15 @@ export function registerIpc(
       },
       native
     )
-    if (!id) return null
-    return (
-      core.sessions.list().find((x) => x.id === id && x.status === 'running') ??
-      core.chat.list().find((x) => x.id === id && x.status === 'running') ??
-      null
+    // CT-11: a Host chat this app has not adopted yet has no live session to hand back; the resume is
+    // refused rather than started beside it on the same thread.
+    return hostHeldLive(
+      found,
+      (id) =>
+        core.sessions.list().find((x) => x.id === id && x.status === 'running') ??
+        core.chat.list().find((x) => x.id === id && x.status === 'running') ??
+        null,
+      t(core.lang, 'session.resume.hostChatNotAdopted')
     )
   }
   /** The app's view of the Host's rolls (S6 §3.4) — the two pushes, turned into the app's own roll

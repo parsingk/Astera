@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { hostSessionByNative, hostChatByNative, findHostHeldNative, nativeOfForwardedRekey } from './hostNativeGuard'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { hostSessionByNative, hostChatByNative, findHostHeldNative, findHostHeld, hostHeldLive, nativeOfForwardedRekey } from './hostNativeGuard'
 import type { PtyEntry } from '../../core/host/protocol'
 
 const entry = (id: string, restore: Record<string, unknown>, o: { alive?: boolean; kind?: 'session' | 'chat' } = {}): PtyEntry => ({
@@ -71,6 +74,40 @@ describe('hostChatByNative (chat takeover, the history guard)', () => {
       await findHostHeldNative({ hostRolls: true, list: async () => [], listProcs: async () => { throw new Error('gone') }, isCodexAccount: codexAccounts }, 'th2')
     ).toBeNull()
     expect(await findHostHeldNative({ hostRolls: false, list: async () => [], listProcs, isCodexAccount: codexAccounts }, 'th2')).toBeNull()
+  })
+})
+
+// CT-11: a Host chat proc the app has not adopted yet (deferred while the Host starts it, or never swept)
+// is found in its note, but there is no live SessionInfo here to hand back. The resume is refused rather
+// than let through, since it would start a second process on the same thread.
+describe('findHostHeld and hostHeldLive (CT-11)', () => {
+  const info = { id: 'c2', accountId: 'a1', cwd: 'D:/p', status: 'running' as const, title: 't', kind: 'chat' as const }
+  it('says whether the id it found is a session pty or a chat proc', async () => {
+    const list = async () => [entry('s2', { accountId: 'a1', nativeSessionId: 'n1' })]
+    const listProcs = async () => [entry('c2', { accountId: 'a1', threadId: 'th2' }, { kind: 'chat' })]
+    expect(await findHostHeld({ hostRolls: true, list, listProcs, isCodexAccount: codexAccounts }, 'n1')).toEqual({ id: 's2', kind: 'session' })
+    expect(await findHostHeld({ hostRolls: true, list, listProcs, isCodexAccount: codexAccounts }, 'th2')).toEqual({ id: 'c2', kind: 'chat' })
+    expect(await findHostHeld({ hostRolls: true, list, listProcs, isCodexAccount: codexAccounts }, 'zz')).toBeNull()
+  })
+  it('hands back the live session the app holds for what the Host found', () => {
+    expect(hostHeldLive({ id: 'c2', kind: 'chat' }, (id) => (id === 'c2' ? info : null), 'refused')).toBe(info)
+    expect(hostHeldLive(null, () => info, 'refused')).toBeNull()
+  })
+  it('refuses the resume of a Host chat the app has not adopted', () => {
+    expect(() => hostHeldLive({ id: 'c2', kind: 'chat' }, () => null, 'still in the Host')).toThrow('still in the Host')
+  })
+  it('lets a Host session pty the app has not adopted through, as before (its own limit)', () => {
+    expect(hostHeldLive({ id: 's2', kind: 'session' }, () => null, 'refused')).toBeNull()
+  })
+  // registerIpc cannot run without Electron: its guard is checked by its text (chatAdopt.test.ts's style).
+  it('ipc.ts guards the resume through hostHeldLive with the translated refusal', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ipc.ts'), 'utf8')
+    const start = src.indexOf('const liveByHostNative = async')
+    const body = src.slice(start, src.indexOf('const isCodexPayload', start))
+    expect(start).toBeGreaterThan(-1)
+    expect(body).toMatch(/const found = await findHostHeld\(/)
+    expect(body).toMatch(/return hostHeldLive\(\s*found,/)
+    expect(body).toMatch(/t\(core\.lang, 'session\.resume\.hostChatNotAdopted'\)/)
   })
 })
 

@@ -122,6 +122,7 @@ export const ja: Catalog = {
   'worktree.inUse.unknown': 'この worktree は使用中です。',
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees
   'session.roll.mixedProvider': 'Claude と Codex のアカウントを混在させてローリングはできません',
+  'session.resume.hostChatNotAdopted': 'この会話はまだ Astera Host で動いていて、このウィンドウはまだ引き継いでいません。しばらくしてからもう一度お試しください。',
   // App.tsx — shared window controls, resizer, separator
   'common.minimize': '最小化',
   'common.maximize': '最大化',

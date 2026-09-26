@@ -123,6 +123,7 @@ export const es: Catalog = {
   'worktree.inUse.unknown': 'Este worktree está en uso.',
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees
   'session.roll.mixedProvider': 'La rotación no puede mezclar cuentas de Claude y de Codex',
+  'session.resume.hostChatNotAdopted': 'Esta conversación sigue ejecutándose en el Host de Astera y esta ventana aún no la ha recuperado. Vuelve a intentarlo en un momento.',
   // App.tsx — shared window controls, resizer, separator
   'common.minimize': 'Minimizar',
   'common.maximize': 'Maximizar',
