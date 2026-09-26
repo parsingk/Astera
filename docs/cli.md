@@ -950,7 +950,8 @@ held open on purpose.
 **`runs follow` prints a run's events as they happen**, and stops where `runs wait` stops. The events
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
 reviewers and repair workers starting, their reports and status messages, questions opened and
-answered, and usage limits hit and resumed. It prints every event so far first, then each new one as
+answered, usage limits hit and resumed, and, with Job Continuity on, the rows of the run's journal: a
+worker lost when the Host restarted, and each recovery decision. It prints every event so far first, then each new one as
 it lands, each exactly once.
 
 With `--human` each event is one line, the local time first:
@@ -985,8 +986,13 @@ seconds that it is still following, and `--no-keepalive` turns that off.
 
 How it works: each call asks the Host for the run's events and holds for up to 20 seconds until there
 are more than the follow has printed, or the run reaches an ending. The follow asks again at once, so
-a new event is printed within a moment of being recorded. Events the app adds from its own journal,
-such as a worker lost when the app restarted, are not part of the run's state and are not printed.
+a new event is printed within a moment of being recorded. The journal's rows come from the Host,
+which keeps the journal whether Astera is open or not.
+
+**Every journal row records who acted.** With Job Continuity on, the run's
+journal keeps each change with the one who made it: Astera, the CLI, an agent (a worker or a
+coordinator, by its session) or the Host itself, such as when it places a worker or finds one lost
+after a restart. Rows written by an Astera from before this record nobody.
 
 **`runs checks` shows each task's completion checks and what they came to.** It reads what the
 checks already recorded and runs nothing, so it answers the same with Astera closed, and from the

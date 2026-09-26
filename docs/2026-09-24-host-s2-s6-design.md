@@ -24,7 +24,7 @@ reasoning; this list is what was chosen.
 | D5 | New app, old Host holding work | The app keeps today's loop until that Host is replaced | controller |
 | D6 | A worker lost to a Host restart with no journal | Open a Gate at load | controller |
 | D7 | A usage limit with no app | A Gate carrying the reset time, so `runs wait` ends with 8 (left out of S4+S5 by the user; S6, see Amendments A58; replaced in S6 by the `limited` ending with no Gate, see Amendments A68; the coordinator's own wait counts too, see Amendments A74) | controller |
-| D8 | Journal and reconciler | Stay in the app | controller |
+| D8 | Journal and reconciler | Stay in the app (reversed 2026-09-26 by the Host journal, A125) | controller |
 | D9 | A second app | Left as S1 recorded it | controller |
 | D10 | Release shape | S2 and S3 merge separately; S4 and S5 release together | controller |
 | D11 | `jobs run` with no Host | Keep exit 3 and point at `astera host start`; no auto-start | controller |
@@ -182,7 +182,7 @@ entry gives the section, what it said, what shipped, why, and the tests that pin
   does nothing and records the Dispatch stopped while the worker runs. The fix of A7 lives in the
   new app and cannot reach an old one. Rare, because it needs a downgrade or a newer CLI's
   `host start`.
-- **A19. No `PROMPT_WRITE_*` journal rows for Host-spawned workers (plan ruling R9).** The journal
+- **A19. No `PROMPT_WRITE_*` journal rows for Host-spawned workers (plan ruling R9) (lifted by A131).** The journal
   is the app's (D8). This holds with the app attached too, not only with it closed. Recovery reaches
   the same decision, `redispatch/safe`, but its reason reads `promptNeverLeft`, which is untrue for
   these workers. For the S4 notes.
@@ -2024,6 +2024,111 @@ A1's form; the limits it closes point back here.
   window. Ending a leaked console host also ends any process a worker left attached to it, as
   `ClosePseudoConsole` would.
 
+## Amendments (Host journal, 2026-09-26)
+
+The plan `docs/superpowers/plans/2026-09-26-host-journal.md` (Tasks 1 to 8) carried out the spec
+`docs/superpowers/specs/2026-09-26-host-journal-design.md` (decisions J1 to J7): the long-lived Host now
+writes the Job Journal, and the app only reads it. Its rulings are P1 to P15 in the plan, its execution
+ledger is `.superpowers/sdd/2026-09-26-host-journal/progress.md`, and each task's report is
+`task-N-report.md` in the same folder. Landed on `develop` from `c55dcf05` through `17ab4c08` and the
+commit of these docs. This list is the record, in A1's form; the limits it leaves are under "Known
+limits after the Host journal".
+
+- **A125. D8 reversed: the Host writes the journal, the reconciler stays in the app (J1, J3).** The
+  journal and its recorder moved unchanged to `src/core/continuity/` (Task 1), so the Host builds the
+  same recorder over the same file, `<profile>/orch/continuity.sqlite`. `src/host/hostJournal.ts` (Task 4)
+  records at the Host's three commit points (`depsFor().setState`, `statePut`, the load's restart
+  cleanup) and at the prompt writes of the workers it starts (Task 5). The reconciler still runs in the
+  app, which reads the file through a read-only `JournalReader` and sends its own rows to the Host
+  (Task 7, A132). What shipped: Task 4 (`hostJournal.test.ts`, "records a commit with its actor and its
+  Host-life stamp"), Task 5 (`orch.test.ts`, "hands the load's restart cleanup to the journal once"),
+  Task 7 (`appJournal.test.ts`, "reads the rows the Host wrote, through a read-only connection"), and the
+  end to end tests in `src/cli/cliHost.integration.test.ts`, "the Job Journal with Astera closed (Host
+  journal)".
+- **A126. One writer, and the `journal` feature and yield (J2, P6, P9).** At most one process appends to
+  the file. The Host writes while it announces `journal`, Job Continuity is on in `app-settings.json`,
+  and every attached app yields `journal` (or none is attached): `writer: () =>
+  !server.appsKeep(HOST_YIELD_JOURNAL)` in `index.ts`. An app writes only when the Host it last greeted
+  does not announce `journal`, and that answer is sticky per greeting (P8), so a dropped socket never
+  makes it a second writer. Every Host announces the feature, spawner or not (P6), since every Host
+  commits. An older app that yields nothing holds the Host off, legacy role-less apps included (P9).
+  What shipped: Task 4 (`features.test.ts`; Review Focus 1, `hostJournal.test.ts`, "writes nothing while
+  an attached app keeps the journal, and writes again once it leaves", plus the same rule through a real
+  server and real sockets), Task 7 (Review Focus 2, `appJournal.test.ts`, "after the socket drops in
+  front of a journal Host, the app still writes nothing locally"), and Task 8 ("an older app attached
+  holds the Host off; once it leaves the Host journals again (J2, P9)").
+- **A127. Schema v3: who acted, and a read-only reader (J4, P4, P13).** `SCHEMA_VERSION` is 3 and
+  `journal_events` gains `actor_json`. A v2 file is migrated in place in one transaction, and its rows
+  read as actor null; nothing is inferred (P4). Checkpoints and recovery actions are not reshaped: each
+  has an event twin that carries the actor. A v3 step that fails leaves the file where it was, readable,
+  with journaling off for that profile (Task 3's carry). `JournalReader` opens the file read-only, never
+  creates it, never runs the schema step, reads a v2 file as it is, and answers a missing file with no
+  rows (P13). What shipped: Task 2 (`journal.test.ts`, "migrates a v2 file in place: its rows stay, read
+  as actor null, and new rows carry one"; `journalReader.test.ts`, "reads a v2 file without migrating
+  it: actor null, and the file stays at version 2" and "refuses to write: the connection is read-only";
+  `actor.test.ts`).
+- **A128. The actor rule (P5).** `actorOf({ sessionId, role, state })` judges each call on the state it
+  found, after `ready()` and before `handleCommand`. The Host's own caller is `host`; the app (its caller
+  id, or a hello with `role: 'app'`) is `desktop`; a session naming an open Dispatch or a Run's
+  coordinator is `agent` with that session; anything else is `cli`. Fixed actors: `state-put` and every
+  `journal-append` row are `desktop`; the load cleanup, the exits, the driving, the checks and the Host's
+  prompt writes are `host`; a report the load drains is `agent` with the report's session. What shipped:
+  Task 3 (`actor.test.ts`), Task 5 (Review Focus 3, `orch.test.ts`, "a worker_done that closes its own
+  Dispatch is recorded as agent"; "a shell is cli, the Host's own command is host, the app's state-put is
+  desktop, each under a new version"; "a queued report the load drains is recorded as the agent that
+  wrote it"), and Task 8 (the question test below checks `cli` and `host` on real rows).
+- **A129. `GATE_RESOLVED` (J5, P3).** An answered question is its own row, derived for every Gate that is
+  resolved in the next state and was not in the previous one (a Gate made and answered in one write
+  counts). Its key is `GATE_RESOLVED:<gateId>`, its `at` the Gate's `resolvedAt`, its payload `{ gateId,
+  kind, question, resolution }`, and it comes after the Task rows of the same write. What shipped: Task 3
+  (`events.test.ts`, "an answer is its own row" and its two neighbours) and Task 8 ("a question answered
+  from the CLI lands one GATE_RESOLVED row, and says the CLI did it", which also checks that a second
+  answer adds none).
+- **A130. Keys name the Host life and the version (J6, P1, P2).** The rows derived from a commit are
+  keyed on `commitStamp(hostStartedAt, version)`, that is `<hostStartedAt>#<version>`, and the load's
+  cleanup on `<hostStartedAt>#load`. The version alone restarts at 0 with every Host, so it would drop a
+  real transition after a restart. Rows that are not a commit keep their keys (P2): `CONTINUITY_ENABLED`,
+  the reconciler's `RECOVERY_*`, prompt writes and checkpoints. What shipped: Task 3 (Review Focus 4,
+  `recorder.test.ts`, "the same version in two Host lives lands twice, the same commit recorded twice
+  lands once").
+- **A131. A19 lifted: the Host's workers' prompt writes are journaled.** `HostSpawnerDeps.onPromptWrite`
+  reaches the Host's coordinator, and `index.ts` wires it to `hostJournal.promptWrite` (actor `host`). A
+  listener that throws costs the row, never the start. Recovery of a Host-started worker now finds the
+  prompt rows it reads instead of reporting `promptNeverLeft`. What shipped: Task 5 (`spawner.test.ts`,
+  "reports each prompt write of a worker it starts" and "a prompt-write listener that throws costs the
+  row, never the start"; the `index.ts` guard in `driving.integration.test.ts`).
+- **A132. `journal-append` and `journal-reload`, and the toggle read from `app-settings.json` (J3, P7,
+  P14).** Both are app-only orch-calls: 403 to any other caller, 501 on a Host with no journal, and both
+  refuse a request id. `journal-append` takes `{ ops }` (1 to 64) and answers 200 `{ applied, failed }`,
+  all in one transaction, where one failing op costs only itself; the Host stamps every row `desktop` and
+  keys it under `app:`. It answers 409 `{ error, enabled, writer }` when Job Continuity is off there or
+  the Host is not the writer, and the app logs and drops the rows (P14). The app mints the recovery
+  action id, so the later finish names the same one. The Host reads `jobContinuityEnabled` and
+  `resumeStrategy` from `app-settings.json` at start (missing or damaged reads as off) and again on
+  `journal-reload`, which the app sends after its continuity toggle and its resume strategy change. A
+  reload that turns journaling on writes the baseline as `desktop`; one that turns it off closes the
+  handle and keeps the file (P7). A baseline owed while an older app held the journal is paid at the
+  Host's first write as the writer. What shipped: Task 5 (`orch.test.ts`, "journal-append and
+  journal-reload are the app's alone, need a journal, and take no request id"; `hostJournal.test.ts`, the
+  append and reload tests and the owed baseline tests), Task 7 (`appJournal.test.ts`, "sends the
+  reconciler's rows in order, the finish under the id the app minted (J3, P14)" and "writes each
+  reconciler row exactly one way: locally in front of an older Host, through the Host otherwise").
+- **A133. `runs follow` shows the journal's rows (J7, P10).** The Host read call is the existing
+  `runs-follow`: its answer merges the Host journal's timeline rows (a worker lost, a recovery decision)
+  through the optional `OrchServerDeps.journalTimeline`, in the timeline's own order, and `count`
+  includes them so a row landing mid-window wakes the poll. A read that throws costs its rows, never the
+  follow. The Host reads its rows in English, and the recovery row's localized body is hidden by the
+  public field filter. What shipped: Task 6 (`commandRunsFollow.test.ts`, "merges the journal rows into
+  the timeline and counts them" and "a journal read that throws costs its rows, never the follow";
+  `follow.test.ts`), Task 8 ("a worker the restart lost is a journal row written by the Host, and runs
+  follow prints it").
+- **A134. §7.2's additions.** The feature `journal` (Host hello), the `hello.yields` value `journal` (app
+  to Host, sent by the app from Task 7 on and not before), the internal orch-calls `journal-append` and
+  `journal-reload` (app to Host, role app only), and the optional `OrchServerDeps.journalTimeline`, which
+  puts `JobEvent`s of the existing kinds `runtime-lost` and `recovery` in a `runs-follow` answer. None is
+  a protocol change: `HOST_PROTOCOL` stays 3, and nothing in `src/core/host/protocol.ts` was renamed or
+  removed.
+
 ## Known limits after S3
 
 - **`refresh()` does not retry a Windows rename-busy read.** (resolved in S4+S5, see Amendments A60)
@@ -2567,6 +2672,43 @@ Checked at `1c8e0ba0`.
   its coordinator left does not count as running whether or not that coordinator is busy, so `jobs run`
   can start a new Run beside one still doing the work itself; nothing is lost, but two Runs of one Job
   can then be going at once, and closing that gap needs a person's call on which Run should win.
+
+## Known limits after the Host journal
+
+Each was found while building or reviewing the Host journal and left as it is, with its reason.
+
+- **A crash between the state save and the journal append can drop that change's rows** (spec, A125).
+  The Host journals after the commit lands, as the app did (F56). A crash in between keeps the state and
+  loses the rows for that change.
+- **An older app that opened the file before the v3 bump keeps writing for that session** (spec). It
+  opened a v2 file it could use, so it goes on appending until it restarts, while the Host holds off
+  because that app does not yield `journal`.
+- **The reconciler runs only while the app is open** (spec, A125). Recovery decisions are still the
+  app's. A worker the Host lost is journaled with Astera closed, but nothing recovers it until Astera
+  opens.
+- **While an older app is attached to a v3 file, nobody journals** (P9, A126). The Host holds off because
+  the app does not yield `journal`, and the older app refuses a file at version 3. Once it leaves, the
+  Host journals again.
+- **Reconciler rows made while the app's socket is down are lost** (P8). With a journal Host last seen,
+  the app writes nothing locally, so a row that cannot reach the Host is logged and dropped.
+- **The owed baseline lives in the Host's memory** (A132). A `journal-reload` that turned journaling on
+  while an older app held the journal owes a `CONTINUITY_ENABLED` baseline. If the Host restarts before
+  it becomes the writer, that baseline is never written.
+- **A failed v3 migration leaves journaling off for that profile until the file is fixed** (A127). The
+  file stays where it was, readable, and every start logs that it could not be upgraded.
+- **The Host's validation diff base stays null** (P11). The spec did not move it; it is a one line
+  follow-up now that the Host holds the journal.
+- **A `state-put` taken before the Host held any state is not journaled** (P15). Only an older app sends
+  one, and the Host logs and skips it rather than journal the whole state as new.
+- **A toggle turned on while the app has no orchestration handle reaches the Host only at the next
+  change.** The app sends `journal-reload` from its toggle handler only when it holds that handle, which
+  it normally does. Otherwise the running Host learns of it at the next settings change or its next
+  start.
+- **A corrupt journal cannot be moved aside on Windows while an app holds its reader open.** The rename
+  fails, so the Host logs that it could not open the journal and journals nothing for the rest of its
+  life.
+- **The Host prints Node's one `ExperimentalWarning` for `node:sqlite` on stderr.** It lands in the
+  Host's log once per start and means nothing is wrong.
 
 ## 0. The problem, measured
 
@@ -3148,7 +3290,8 @@ commit hook from pushes (`commitHook.ts:62`, ruling F54), so while the app is cl
 journalled, and the reconciler refuses to act on an attempt with no rows (`reconciler.ts:108-122`).
 That is the safe direction: no replacement agent is ever started on missing evidence. What it costs:
 an attempt lost while the app was closed is never recovered automatically. Moving the journal would
-make SQLite a two-process file or make the Host its owner; that is D8.
+make SQLite a two-process file or make the Host its owner; that is D8. Reversed by A125: the Host
+writes the journal.
 
 ### 5.3 What the app becomes for validation
 
@@ -3239,6 +3382,10 @@ Host. No change here needs a bump:
 | Slack in the Host | internal `orch-call` `slack-reload` | app to Host, role app only |
 | Slack in the Host | internal `orch-act` `slackChatAnswer` (`HOST_ACT_SLACK_ANSWER`) | Host to app, role app only |
 | Slack in the Host | note keys `slackThreadTs`, `slackChannel` | session/proc note (not the wire) |
+| Host journal | feature `journal` | Host hello |
+| Host journal | `hello.yields` value `journal` | app to Host |
+| Host journal | internal `orch-call` `journal-append`, `journal-reload` | app to Host, role app only |
+| Host journal | `runs-follow` answer gains `JobEvent`s of the kinds `runtime-lost` and `recovery` (optional `OrchServerDeps.journalTimeline`) | orch-result |
 
 (amended 2026-09-24, see Amendments A20: the S3 rows are not the whole mechanism; an internal
 `orch-call` `worktree-list` (app to Host, role app only) and a push `{ t: 'worktrees-state', seq, file
@@ -3251,6 +3398,9 @@ and the note keys above, none of which bumps the protocol)
 
 (amended for Slack in the Host, see Amendments A103: the feature, the yield, `slack-event`, `slack-reload`,
 `slackChatAnswer` and the note keys above, none of which bumps the protocol)
+
+(amended for the Host journal, see Amendments A134: the feature, the yield, the two calls and the optional
+dependency above, none of which bumps the protocol)
 
 ### 7.3 Version skew
 
