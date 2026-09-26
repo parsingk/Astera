@@ -756,6 +756,22 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         return refuse(`task ${taskId} names no account to run on; give it one with tasks add --account`)
       if (s.dispatches.some((d) => d.taskId === taskId && !d.outcome && !d.endedAt))
         return refuse(`task ${taskId} already has a worker`)
+      // **The run is judged here, after the wait, not only by the command layer** (review 3, M1): the
+      // command read a state from before a pass it may have waited through, and `worker-start` checks
+      // neither a pause nor a coordinator. A run paused, handed to a coordinator or finished meanwhile
+      // gets no worker.
+      const run = s.runs.find((r) => r.id === task.runId)
+      const job = run ? jobOf(s, run) : undefined
+      if (!run) return refuse(`task ${taskId} names a run that is gone`)
+      if (run.coordinatorSessionId !== undefined || coordinatorStarting(run, c.nowMs()))
+        return refuse(`run ${run.id} is driven by its coordinator, which places its tasks`)
+      if (run.paused === true || job?.paused === true) return refuse(`run ${run.id} is paused`)
+      if (job?.pendingStart === true || outcomeOf(s, run.id) !== 'running')
+        return refuse(`run ${run.id} is not running`)
+      const limit = job?.concurrency ?? DEFAULT_CONCURRENCY
+      const mine = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
+      const openHere = s.dispatches.filter((d) => mine.has(d.taskId) && !d.outcome && !d.endedAt).length
+      if (openHere >= limit) return refuse(`run ${run.id} is at its concurrency limit: ${openHere} of ${limit} workers are open`)
       const accounts = await c.accounts()
       const loggedIn = new Set(
         (await Promise.all(accounts.map(async (a) => ((await c.loginStatus(a.id)) ? a.id : null)))).filter(

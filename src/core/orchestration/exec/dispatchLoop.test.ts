@@ -1058,3 +1058,59 @@ describe('dispatchOne — one ready Task placed on request (tasks dispatch)', ()
     expect(h.handled()).toEqual(['worker-start'])
   })
 })
+
+// Review 3, I4 and M1: `dispatchOne` never runs beside a pass, and judges the run after it waited.
+describe('dispatchOne — alone, after the pass', () => {
+  it('waits for a pass blocked in its fork, and the Task gets exactly one worker-start', async () => {
+    const h = rig({ runWithoutWorktree: true })
+    let release: () => void = () => {}
+    const forkHeld = new Promise<void>((r) => {
+      release = r
+    })
+    let forks = 0
+    h.ctx.forkRunWorktree = async () => {
+      forks++
+      await forkHeld
+      return '/wt-forked'
+    }
+    const pass = h.loop.run()
+    await new Promise((r) => setImmediate(r))
+    expect(forks).toBe(1) // the pass is inside its fork for tsk_1
+    let settled = false
+    const asked = h.loop.dispatchOne('tsk_1').then((r) => {
+      settled = true
+      return r
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(settled).toBe(false) // it waits for the pass
+    expect(forks).toBe(1) // and forks nothing beside it
+    release()
+    await pass
+    const r = await asked
+    await h.settle()
+    // The pass placed tsk_1; the request then finds it placed and starts nothing.
+    expect(r.status).toBe(409)
+    expect(h.handled().filter((c) => c === 'worker-start')).toHaveLength(1)
+    expect(forks).toBe(1)
+  })
+
+  const unplaced = () => {
+    const h = rig()
+    const s = h.state()
+    h.setState({ ...s, jobs: s.jobs.map((j) => ({ ...j, autoDispatch: undefined })) })
+    return h
+  }
+
+  it('a run paused, coordinator-driven or not running by the time it runs is refused, and nothing starts', async () => {
+    const paused = unplaced()
+    paused.setState({ ...paused.state(), runs: paused.state().runs.map((r) => ({ ...r, paused: true })) })
+    expect(((await paused.loop.dispatchOne('tsk_1')).body as { error: string }).error).toContain('paused')
+    const coordinated = unplaced()
+    coordinated.setState({ ...coordinated.state(), runs: coordinated.state().runs.map((r) => ({ ...r, coordinatorSessionId: 'coord-1' })) })
+    expect(((await coordinated.loop.dispatchOne('tsk_1')).body as { error: string }).error).toContain('coordinator')
+    const pending = unplaced()
+    pending.setState({ ...pending.state(), jobs: pending.state().jobs.map((j) => ({ ...j, pendingStart: true })) })
+    expect(((await pending.loop.dispatchOne('tsk_1')).body as { error: string }).error).toContain('not running')
+    for (const h of [paused, coordinated, pending]) expect(h.handled()).toEqual([])
+  })
+})

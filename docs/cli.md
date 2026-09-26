@@ -646,7 +646,12 @@ What would open a question in the app, such as no usable account or a worktree t
 a 6 carrying the reason instead, and no question is opened: you asked, so you get the answer. When the
 task first needs the worktrees it depends on merged, the Host makes the merge task and says so with a 6;
 the merge task runs first and the task after it. A start that fails is handed back as `worker-start`
-answered it. A worker session is refused with 5, as it is for `worker-start`. With `--request-id` a
+answered it. A worker session is refused with 5, as it is for `worker-start`. The Host places the
+task only when its loop is not in the middle of a pass, and judges the run again once it may, so a run
+paused or handed to a coordinator meanwhile gets no worker. That wait can outlast the command's own
+deadline: a 7 then leaves the placement going on the Host, and the task may still get its worker.
+Retry with the same `--request-id` (the one the 7 hands back) and the retry answers what happened
+rather than placing a second worker. With `--request-id` a
 retry does not place a second worker; a refusal leaves no receipt, so the same id works once the cause
 is fixed.
 
