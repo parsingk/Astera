@@ -875,7 +875,12 @@ export function hostOrchDeps(a: {
   const hostTurn = (id: string): Promise<unknown> => {
     const mine = a.chats?.turnOf?.(id) ?? null
     if (mine !== null) return Promise.resolve({ ...mine, prompt: a.chats?.prompts(id)[0] ?? null })
-    return askTurn(id)
+    // An app that answered and failed (one too old to know the name) is nobody able to say too, as
+    // `chatPrompts` treats it: the wait keeps asking, or is refused before a send, and never fails whole.
+    return askTurn(id).catch((err: unknown) => {
+      a.log(`chatTurn could not be answered by the app (${err instanceof Error ? err.message : String(err)}) — reading it as not known`)
+      return undefined
+    })
   }
 
   const own = <K extends (typeof HOST_SESSIONS)[number]>(name: K): HostSessions[K] => {

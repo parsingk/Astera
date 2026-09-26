@@ -1310,6 +1310,14 @@ describe('hostOrchDeps — chatTurn and sessionTurn', () => {
     expect(await alone.chatTurn!('c1')).toBeUndefined()
   })
 
+  it('an older app that cannot answer chatTurn reads as nobody able to say, not as a failure', async () => {
+    const logs: string[] = []
+    const act = vi.fn().mockRejectedValue(new Error('this app cannot do chatTurn'))
+    const deps = hostOrchDeps(base({ act, log: (m) => logs.push(m), chats: chatsWith(null) }))
+    expect(await deps.chatTurn!('c1')).toBeUndefined()
+    expect(logs.some((l) => l.includes('chatTurn'))).toBe(true)
+  })
+
   it("sessionTurn is the Host's own registry, a read that marks nothing", async () => {
     let acted = 0
     const sessionTurn = vi.fn(async () => ({ alive: true, state: 'waiting' as const, prompt: null }))
