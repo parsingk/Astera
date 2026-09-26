@@ -44,3 +44,21 @@ export function parseSlackForwarded(v: unknown): SlackForwardedEvent | null {
   }
   return null
 }
+
+/** The notifier inputs a forwarded event came from. */
+export interface ForwardedHearer {
+  onChatEvent(sessionId: string, event: ChatEvent, at: { provider: Provider; transcriptPath: () => string | null }): void
+  onRolled(oldSessionId: string, info: SessionInfo): void
+  onRollState(event: RollStateEvent): void
+}
+
+/** Tells a forwarded event to a notifier as if it had heard it itself: an app that held forwards while the
+ *  Host was away, and then took Slack, tells them to its own notifier (final review M2). */
+export function hearForwarded(n: ForwardedHearer, ev: SlackForwardedEvent): void {
+  if (ev.kind === 'chat') {
+    const p = ev.transcriptPath
+    return n.onChatEvent(ev.sessionId, ev.event, { provider: ev.provider, transcriptPath: () => p })
+  }
+  if (ev.kind === 'rolled') return n.onRolled(ev.oldSessionId, ev.info)
+  n.onRollState(ev.event)
+}

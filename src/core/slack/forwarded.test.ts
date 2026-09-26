@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isForwardedChatEvent, parseSlackForwarded } from './forwarded'
+import { hearForwarded, isForwardedChatEvent, parseSlackForwarded } from './forwarded'
 
 const info = { id: 's2', accountId: 'a1', cwd: 'D:/p', status: 'running', title: 't', slackNotify: true }
 
@@ -31,5 +31,25 @@ describe('parseSlackForwarded (Slack in the Host Task 3, spec §3.3)', () => {
     expect(isForwardedChatEvent({ type: 'request', request: null })).toBe(true)
     expect(isForwardedChatEvent({ type: 'ready', threadId: 't', rolloutPath: null })).toBe(true)
     expect(isForwardedChatEvent({ type: 'exit', code: 0, errorDetail: null })).toBe(false)
+  })
+})
+
+// Final review M2: what an app held while the Host was away is told to its own notifier when it takes Slack.
+describe('hearForwarded', () => {
+  it('tells each kind to the notifier input it came from, with the chat transcript path as a getter', () => {
+    const calls: unknown[] = []
+    const notifier = {
+      onChatEvent: (sid: string, e: unknown, at: { provider: string; transcriptPath: () => string | null }) => calls.push(['chat', sid, e, at.provider, at.transcriptPath()]),
+      onRolled: (old: string, i: unknown) => calls.push(['rolled', old, i]),
+      onRollState: (e: unknown) => calls.push(['roll-state', e])
+    }
+    hearForwarded(notifier, { kind: 'chat', sessionId: 'c1', accountId: 'a1', event: { type: 'status', status: 'idle' }, provider: 'claude', transcriptPath: 'D:/t.jsonl' })
+    hearForwarded(notifier, { kind: 'rolled', oldSessionId: 's1', info: info as never })
+    hearForwarded(notifier, { kind: 'roll-state', event: { sessionId: 's1', state: 'nudged' } })
+    expect(calls).toEqual([
+      ['chat', 'c1', { type: 'status', status: 'idle' }, 'claude', 'D:/t.jsonl'],
+      ['rolled', 's1', info],
+      ['roll-state', { sessionId: 's1', state: 'nudged' }]
+    ])
   })
 })

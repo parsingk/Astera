@@ -14,18 +14,20 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 
 function rig() {
   const trail: string[] = []
+  const heard: unknown[] = []
   let fire: (() => void) | null = null
   let armedFor = 0
   const o = createSlackOwnership({
     load: async () => ({ ...CFG }),
     apply: () => trail.push('apply'),
     yieldAll: () => trail.push('yield'),
+    hear: (ev) => heard.push(ev),
     after: (ms, fn) => { armedFor = ms; fire = fn; return () => { fire = null } },
     log: () => {}
   })
   const sent: unknown[] = []
   o.setHost({ reload: async () => { trail.push('reload') }, forward: (ev) => sent.push(ev) })
-  return { o, trail, sent, fire: () => fire?.(), armed: () => fire !== null, armedFor: () => armedFor }
+  return { o, trail, sent, heard, fire: () => fire?.(), armed: () => fire !== null, armedFor: () => armedFor }
 }
 
 describe('createSlackOwnership (Slack in the Host Task 8, S1, S2, P5)', () => {
@@ -111,6 +113,57 @@ describe('createSlackOwnership (Slack in the Host Task 8, S1, S2, P5)', () => {
     expect(h.sent).toEqual([ev])
     h.o.setHost({ reload: async () => {}, forward: () => { throw new Error('socket gone') } })
     expect(h.o.forward(ev)).toBe(false)
+  })
+
+  // Final review M2: a forward during the hand-back grace went to a closed client and was lost; a lost
+  // `request` left a Slack reply to that card read as a turn.
+  it('a forward while the Host is away is held, and reaches the Host when it answers again', () => {
+    const h = rig()
+    h.o.status(owner)
+    h.o.status(closed)
+    const ev = { kind: 'roll-state' as const, event: { sessionId: 's1', state: 'nudged' as const } }
+    expect(h.o.forward(ev)).toBe(true)
+    expect(h.sent).toEqual([])
+    h.o.status(owner)
+    expect(h.sent).toEqual([ev])
+    expect(h.heard).toEqual([])
+  })
+
+  it("held forwards go to the app's own notifier once the grace ends and the app takes Slack", async () => {
+    const h = rig()
+    h.o.status(owner)
+    h.o.settled()
+    h.o.status(closed)
+    const ev = { kind: 'roll-state' as const, event: { sessionId: 's1', state: 'nudged' as const } }
+    h.o.forward(ev)
+    h.fire()
+    await flush()
+    expect(h.trail).toEqual(['yield', 'apply'])
+    expect(h.heard).toEqual([ev])
+    expect(h.sent).toEqual([])
+  })
+
+  // Final review M3: a save while ownership was undecided was dropped, and a Host that had already
+  // activated kept the config it read before the save.
+  it('a settings save before ownership is decided, or while the Host is away, is sent as slack-reload once it speaks slack-owner', async () => {
+    const early = rig()
+    await early.o.configChanged(CFG)
+    expect(early.trail).toEqual([])
+    early.o.status(owner)
+    await flush()
+    expect(early.trail).toEqual(['yield', 'reload'])
+    const away = rig()
+    away.o.status(owner)
+    away.o.status(closed)
+    await away.o.configChanged(CFG)
+    expect(away.trail).toEqual(['yield'])
+    away.o.status(owner)
+    await flush()
+    expect(away.trail).toEqual(['yield', 'reload'])
+    // Sent once: a later status says nothing new.
+    away.o.status(owner)
+    await flush()
+    expect(away.trail).toEqual(['yield', 'reload'])
   })
 })
 
@@ -263,6 +316,10 @@ describe('the app Slack wiring (Slack in the Host Task 8, text guards: ipc.ts an
     expect(tap).toMatch(/if \(slackOwnership\.local\(\)\)/)
     // Mutation: forward a Host roll back to the Host (orchestration false), and it is announced twice.
     expect(tap).toMatch(/else if \(opts\.orchestration\)/)
+    // Final review M2: forwards held while the Host was away reach this app's notifier when it takes Slack.
+    // Mutation: drop `hear`, and what the grace held is lost when the app takes over.
+    const own = index.slice(index.indexOf('createSlackOwnership({'))
+    expect(own.slice(0, own.indexOf('slackOwnershipRef = slackOwnership'))).toMatch(/hear: \(ev\) => hearForwarded\(slack, ev\)/)
   })
 
   it('ipc.ts decides after the startup chain, follows the status, forwards chat events and reloads the Host', () => {

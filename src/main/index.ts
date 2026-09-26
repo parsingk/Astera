@@ -43,6 +43,7 @@ import { SlackConfigStore } from './slackConfigStore'
 import { SlackInboxController } from '../core/slack/inbox'
 import { createSocketClient, createWebClient } from './slackSdk'
 import { createSlackOwnership, type SlackOwnership } from './slackOwnership'
+import { hearForwarded } from '../core/slack/forwarded'
 import { HookEventWatcher } from '../core/hooks/eventWatcher'
 import { fanOutHookEvent } from './hookFanOut'
 import { DesktopNotifier } from './desktopNotifier'
@@ -557,6 +558,8 @@ app.whenReady().then(async () => {
       slack.setTransport(null)
       void slackInboxController.stop()
     },
+    // Final review M2: what was held while a Slack-owning Host was away, told here once this app takes Slack.
+    hear: (ev) => hearForwarded(slack, ev),
     after: (ms, fn) => {
       const t = setTimeout(fn, ms)
       return () => clearTimeout(t)
