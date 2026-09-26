@@ -108,6 +108,11 @@ export interface HostRollingDeps {
   /** Every hook event, after the coordinators have it (Slack in the Host Task 6: the Host's Slack reads
    *  the same watcher). Its own try: a tap that throws costs the coordinators nothing. */
   hookTap?(sessionId: string, payload: unknown): void
+  /** Every roll event the moment a coordinator sends it (Slack in the Host: the Host's own rolls are its
+   *  Slack's source). Not `onEvent`: a chat roll is announced only once its new proc has started, and the
+   *  carry-on turn runs inside that wait, so a tap that heard the roll then would get that turn's notices
+   *  for an id it did not know yet. Its own try: a tap that throws costs neither the apps nor the journal. */
+  onRollHeard?(e: HostRollEvent): void
 }
 
 export interface HostRolling {
@@ -224,6 +229,14 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
     const p = ptyOf(id)
     return p !== null && d.mayAct(p)
   }
+  /** The Slack tap, isolated (constraint 11). */
+  const heard = (e: HostRollEvent): void => {
+    try {
+      d.onRollHeard?.(e)
+    } catch (err) {
+      log(`the Slack roll tap failed: ${String(err)}`)
+    }
+  }
   /** The fan-out of a coordinator's send (§1.6): the tap, then the apps. Each isolated (constraint 11). */
   const send = (channel: 'session:rolled' | 'session:rollState', payload: unknown): void => {
     try {
@@ -242,6 +255,7 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
           }
         }
         const event: HostRollEvent = { t: 'session-rolled', oldSessionId: p.oldSessionId, info: p.info, ...(p.dest !== undefined ? { dest: p.dest } : {}) }
+        heard(event)
         if (isChat(p.info.id)) {
           // P5: a Host-spawned chat proc is announced once its handshake and carry-on settled, so an
           // app adopting it never becomes its writer mid-handshake. started() never rejects; the catch
@@ -267,7 +281,9 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
         } else d.onEvent(event)
       } else {
         d.tap.onRollState(payload as RollStateEvent)
-        d.onEvent({ t: 'roll-state', event: payload as RollStateEvent })
+        const event: HostRollEvent = { t: 'roll-state', event: payload as RollStateEvent }
+        heard(event)
+        d.onEvent(event)
       }
     } catch (err) {
       log(`a roll event could not be delivered: ${String(err)}`)

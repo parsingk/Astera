@@ -88,8 +88,10 @@ export function composeHostRolling(a: {
   lang(): Lang
   log(m: string): void
   nowIso(): string
-  /** Every roll event, after the broadcast (Slack in the Host Task 6: the Host's own rolls are the Host's
-   *  Slack's source). Its own try: a tap that throws costs neither the apps nor the journal. */
+  /** Every roll event, the moment the coordinator sends it (Slack in the Host Task 6: the Host's own rolls
+   *  are the Host's Slack's source), handed to the rolling as `onRollHeard`: a chat roll's broadcast waits
+   *  for the new proc to start, and the carry-on turn's notices must find the thread already moved. Its own
+   *  try: a tap that throws costs neither the apps nor the journal. */
   onRollEvent?(e: HostRollEvent): void
   /** Every hook event the rolling's watcher reads, after the coordinators (Slack in the Host Task 6). */
   hookTap?(sessionId: string, payload: unknown): void
@@ -209,11 +211,6 @@ export function composeHostRolling(a: {
       if (m.t === 'session-rolled' && m.procId !== undefined) a.server().broadcast(m, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
       else a.server().broadcast(m)
       try {
-        a.onRollEvent?.(e)
-      } catch (err) {
-        log(`the Slack roll tap failed: ${String(err)}`)
-      }
-      try {
         if (!a.server().hasApp()) journal.append(e)
       } catch (err) {
         log(`a roll event could not be journaled: ${String(err)}`)
@@ -221,6 +218,18 @@ export function composeHostRolling(a: {
     },
     lang: () => a.lang(),
     ...(a.hookTap ? { hookTap: a.hookTap } : {}),
+    // Its own try here too, so the line lands in this wiring's log, where it always went.
+    ...(a.onRollEvent
+      ? {
+          onRollHeard: (e: HostRollEvent) => {
+            try {
+              a.onRollEvent?.(e)
+            } catch (err) {
+              log(`the Slack roll tap failed: ${String(err)}`)
+            }
+          }
+        }
+      : {}),
     ...a.rollingDeps
   })
 

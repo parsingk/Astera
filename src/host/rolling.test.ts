@@ -369,6 +369,7 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
   const harness = (over: { chats: unknown; chatMayAct: (p: string) => boolean }) => {
     const spawned: RollSpawnOpts[] = []
     const events: HostRollEvent[] = []
+    const heard: HostRollEvent[] = []
     const registry = new PtyRegistry({ spawn: () => fakePty(), log: () => {} })
     const before = captured.deps.length
     const rolling = createHostRolling({
@@ -395,7 +396,8 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
       logCodex: () => {},
       watchHooks: false,
       chats: over.chats as never,
-      chatMayAct: over.chatMayAct
+      chatMayAct: over.chatMayAct,
+      onRollHeard: (e) => heard.push(e)
     })
     const deps = captured.deps[before] as Deps
     disposers.push(() => rolling.dispose())
@@ -403,6 +405,7 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
       accounts,
       spawned,
       events,
+      heard,
       writeDep: (id: string, d: string) => deps.write(id, d),
       killDep: (id: string) => deps.kill(id),
       mayActDep: (id: string) => deps.mayAct(id),
@@ -468,5 +471,18 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     expect(h.events.filter((e) => e.t === 'session-rolled')).toEqual([])
     started()
     await vi.waitFor(() => expect(h.events.filter((e) => e.t === 'session-rolled')).toHaveLength(1))
+  })
+  // Slack in the Host e2e (Task 10): the carry-on turn runs inside the wait above, so a Slack tap that heard
+  // the roll only with the announcement left that turn's notices on an id it did not know yet.
+  it('hands a chat roll to the Slack tap at once, before the new proc has started, and only once', async () => {
+    let started: () => void = () => {}
+    const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', started: vi.fn(() => new Promise<boolean>((r) => { started = () => r(true) })) }
+    const h = harness({ chats, chatMayAct: () => true })
+    h.sendDep('session:rolled', { oldSessionId: 'c1', info: { id: 'c2', accountId: 'a2', cwd: 'D:/p', status: 'running', title: 't', kind: 'chat' } })
+    expect(h.heard).toEqual([{ t: 'session-rolled', oldSessionId: 'c1', info: expect.objectContaining({ id: 'c2' }) }])
+    expect(h.events.filter((e) => e.t === 'session-rolled')).toEqual([])
+    started()
+    await vi.waitFor(() => expect(h.events.filter((e) => e.t === 'session-rolled')).toHaveLength(1))
+    expect(h.heard).toHaveLength(1)
   })
 })
