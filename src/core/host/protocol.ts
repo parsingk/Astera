@@ -327,6 +327,10 @@ export type HostMessage =
        *  send it — absent means none. Additive on purpose: the protocol stays 3 (see HOST_PROTOCOL's
        *  comment). */
       features?: string[]
+      /** True while an app 1.3.25 or older is attached (leftovers Task 5): one whose hello carried no
+       *  role. `astera host status` says so and asks for the update. Absent otherwise, and from an
+       *  older Host. Additive, so HOST_PROTOCOL stays 3. */
+      legacyApp?: true
     }
   | { t: 'protocol-mismatch'; protocol: number }
   /** Answered instead of leaving, to a `{ t: 'retire', reason: 'user' }` while something is holding

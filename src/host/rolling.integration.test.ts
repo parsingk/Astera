@@ -96,7 +96,8 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   let appPid = o.appPid ?? null
   const apps = new Map<number, Set<string>>() // socket → yields
   const broadcasts: HostMessage[] = []
-  const server = { hasApp: () => apps.size > 0, yieldsOf: (s: number) => apps.get(s) ?? null, broadcast: (m: HostMessage) => { broadcasts.push(m) }, act: async () => null }
+  let legacyApps = 0 // Task 5: apps 1.3.25 or older, counted by hasApp and not by hasCurrentApp
+  const server = { hasApp: () => apps.size > 0 || legacyApps > 0, hasCurrentApp: () => apps.size > 0, yieldsOf: (s: number) => apps.get(s) ?? null, broadcast: (m: HostMessage) => { broadcasts.push(m) }, act: async () => null }
 
   const payloads = new Map<string, unknown>()
   let seq = 1
@@ -184,6 +185,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
       ptys.get(oldP)!.exit(1)
     },
     attachApp: (socket: number, yields: string[], held: string[]) => { apps.set(socket, new Set(yields)); for (const p of held) exits.heldBy(p, socket); wiring.onAppsChanged() },
+    attachLegacyApp: () => { legacyApps += 1; wiring.onAppsChanged() },
     detachApp: (socket: number) => { apps.delete(socket); exits.appGone(socket); wiring.onAppsChanged() },
     setAppPid: (p: number | null) => { appPid = p },
     graceEnds: () => { for (const fn of afters.splice(0)) fn() },
@@ -539,6 +541,19 @@ describe('the Host journals the rolls no app saw (S6 limits Task 4, D5)', () => 
     await h.settle()
     await vi.waitFor(() => expect(h.broadcasts.some((m) => m.t === 'session-rolled' && m.oldSessionId === 's1')).toBe(true))
     expect((await h.journal()).body).toEqual({ entries: [], lastSeq: 0 })
+  })
+  // Leftovers Task 5: an app 1.3.25 or older counts as attached but reads no session-rolled push, so a roll
+  // of the Host's own session is still journaled for the newer app that comes after it.
+  it('only an app 1.3.25 or older attached: the roll is still journaled', async () => {
+    const h = await rig()
+    await h.spawnWorker('p1', 's1', ['a1', 'a2'])
+    h.attachLegacyApp()
+    h.limit('p1', 's1')
+    await h.settle()
+    await vi.waitFor(async () => {
+      const body = (await h.journal()).body as Journal
+      expect(body.entries.some((e) => e.kind === 'rolled' && e.oldSessionId === 's1')).toBe(true)
+    })
   })
   it('the Slack roll tap hears every roll event, and a throwing tap costs the journal nothing (Slack in the Host Task 6)', async () => {
     const heard: HostRollEvent[] = []

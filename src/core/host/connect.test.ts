@@ -50,6 +50,20 @@ describe('connectHost', () => {
     conn.close()
   })
 
+  // 남은 한계 Task 5: 옛 앱(1.3.25 이하)이 붙어 있다는 Host 의 말이 `astera host status` 까지 간다.
+  it('hello 의 legacyApp 을 넘기고, 없으면 싣지 않는다', async () => {
+    const hello = (extra: Record<string, unknown>) => async (): Promise<string> =>
+      listen((sock) => {
+        sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, host: '1.3.26', pid: 7, startedAt: 'T', features: [], ...extra }))
+      })
+    for (const [extra, want] of [[{ legacyApp: true }, true], [{}, undefined]] as const) {
+      const conn = await connectHost({ address: await hello(extra)(), app: 'test', timeoutMs: 2000, log: () => {} })
+      if ('error' in conn) throw new Error(conn.error)
+      expect(conn.hello.legacyApp).toBe(want)
+      conn.close()
+    }
+  })
+
   // 아무도 없는 주소는 기다리는 것이 아니라 바로 답이 나와야 한다
   it('아무도 없으면 unreachable 이다', async () => {
     const address =

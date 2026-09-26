@@ -13,7 +13,7 @@ import { hostSpawnPlan, resolveHostEntry, type HostCliPaths } from '../core/host
 import { hostRuntimeBase, hostRuntimePaths } from '../core/host/runtime'
 import { HOST_STOP_WAIT_MS } from '../core/host/unresponsive'
 import { hostAddress, siblingHostAddresses } from '../host/address'
-import { answers } from '../host/server'
+import { answers, LEGACY_APP_NOTICE } from '../host/server'
 import { resolveSkillsDir } from './skills'
 import { nativePath, userDataDir } from '../core/orchestration/cliDiscovery'
 import type { CliError } from '../core/orchestration/cliOutput'
@@ -37,7 +37,10 @@ export function hostStatus(a: {
     protocol: HOST_PROTOCOL,
     features: a.conn.hello.features,
     profile: a.profileDir,
-    jobsInProfile: a.jobsInProfile
+    jobsInProfile: a.jobsInProfile,
+    // Leftovers Task 5: an app 1.3.25 or older is attached. The Host counts it as the app, and the
+    // commands that need the app still answer APP_REQUIRED until it is updated.
+    ...(a.conn.hello.legacyApp === true ? { legacyApp: true, warning: LEGACY_APP_NOTICE } : {})
   }
 }
 

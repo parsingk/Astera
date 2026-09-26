@@ -73,6 +73,18 @@ describe('hostStatus', () => {
       jobsInProfile: 3
     })
   })
+
+  // 남은 한계 Task 5: 옛 앱이 붙은 Host 는 그 사실을 hello 에 싣고, status 가 사람에게 그대로 말한다.
+  it('옛 앱(1.3.25 이하)이 붙어 있으면 그렇다고 말한다', () => {
+    const conn = {
+      hello: { host: '1.3.26', pid: 42, startedAt: 'T', features: [], legacyApp: true }
+    } as never
+    expect(hostStatus({ conn, profileDir: 'D:/p', jobsInProfile: 0 })).toMatchObject({
+      running: true,
+      legacyApp: true,
+      warning: 'Astera 1.3.25 or older is attached; update it'
+    })
+  })
 })
 
 // Host S2 fix round, ruling (b): a Host that is leaving may wait up to SPAWN_DEADLINE_MS for its

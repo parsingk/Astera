@@ -6,7 +6,8 @@ import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from './protocol'
 import { createLineReader, encodeLine } from '../../host/framing'
 
 export interface HostConnection {
-  hello: { host: string; pid: number; startedAt: string; features: string[] }
+  /** `legacyApp`: the Host has an app 1.3.25 or older attached (HostMessage `hello`). Absent otherwise. */
+  hello: { host: string; pid: number; startedAt: string; features: string[]; legacyApp?: true }
   call(m: ClientMessage): void
   onMessage(cb: (m: HostMessage) => void): () => void
   /** Fires once the connection ends, however that happens — including the Host closing its side,
@@ -53,7 +54,13 @@ export async function connectHost(a: {
           if (m.t === 'protocol-mismatch') return done({ error: 'protocol' })
           if (m.t === 'hello')
             return done({
-              hello: { host: m.host, pid: m.pid, startedAt: m.startedAt, features: m.features ?? [] },
+              hello: {
+                host: m.host,
+                pid: m.pid,
+                startedAt: m.startedAt,
+                features: m.features ?? [],
+                ...(m.legacyApp === true ? { legacyApp: true as const } : {})
+              },
               call: (out) => socket.write(encodeLine(out)),
               onMessage: (cb) => {
                 listeners.add(cb)

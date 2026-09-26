@@ -84,7 +84,7 @@ export function composeHostRolling(a: {
   spawner: HostSpawner
   exits(): Pick<HostExits, 'holdersOf'>
   /** `lastAppPid` (leftovers Task 1) is optional for the rigs: the app-gone rule's fallback pid. */
-  server(): Pick<HostServer, 'hasApp' | 'yieldsOf' | 'broadcast' | 'act'> & Partial<Pick<HostServer, 'lastAppPid'>>
+  server(): Pick<HostServer, 'hasApp' | 'yieldsOf' | 'broadcast' | 'act'> & Partial<Pick<HostServer, 'lastAppPid' | 'hasCurrentApp'>>
   orch(): Pick<HostOrch, 'ready' | 'state' | 'internalDeps'>
   lang(): Lang
   log(m: string): void
@@ -196,7 +196,7 @@ export function composeHostRolling(a: {
     },
     // Both pushes go to every greeted app (Task 13). `session-rolled` carries the new session's pty, which
     // the app adopts before it forwards the rekey (Task 14).
-    // With no app attached, the event is journaled too (D5): nobody else hears it. Its own try, after the
+    // With no app attached that reads it, the event is journaled too (D5): nobody else hears it. Its own try, after the
     // broadcast, so neither costs the other.
     // A chat roll's push has no pty and names the new proc instead (Task 6), for the app to adopt it.
     onEvent: (e) => {
@@ -212,7 +212,10 @@ export function composeHostRolling(a: {
       if (m.t === 'session-rolled' && m.procId !== undefined) a.server().broadcast(m, (y) => y.has(HOST_YIELD_CHAT_TAKEOVER))
       else a.server().broadcast(m)
       try {
-        if (!a.server().hasApp()) journal.append(e)
+        // Leftovers Task 5: an app 1.3.25 or older counts as attached but reads no `session-rolled`, so
+        // only an app that said `role: 'app'` hearing it spares the journal.
+        const heard = a.server().hasCurrentApp?.() ?? a.server().hasApp()
+        if (!heard) journal.append(e)
       } catch (err) {
         log(`a roll event could not be journaled: ${String(err)}`)
       }
