@@ -1069,6 +1069,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.stall.gate.unreadable': 'the settings file cannot be read. Restarting Astera repairs it',
   'jobs.stall.gate.notMigrated': 'the settings migration has not finished yet. It finishes while Astera is open',
   'jobs.stall.unresponsive': 'The Host is not answering, so Jobs do not move. You can restart it from Settings, Info',
+  'jobs.stall.reading': 'The Host is still reading its settings, so Jobs do not move yet',
   // Tooltips for the eight state glyphs (JobIcons.tsx). The sidebar no longer spells a state out, so
   // these are not on screen all the time — they are where someone meeting the icons learns them.
   // pending and blocked have to read differently: a dependency holds the first, a person the second.

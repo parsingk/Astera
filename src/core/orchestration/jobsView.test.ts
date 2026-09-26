@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { jobsStall, jobsViewScreen } from './jobsView'
+import { JOBS_STALL_READING_MS, jobsStall, jobsStallRecheckInMs, jobsViewScreen } from './jobsView'
 import type { JobRow, OrchHostGate, OrchSnapshot } from '../types'
 
 const gate: OrchHostGate = { state: 'unreachable', reason: 'no connection', logPath: 'C:/o.log' }
@@ -71,5 +71,26 @@ describe('jobsStall', () => {
     expect(jobsStall({ hostStatus: ok, driver: { driver: 'parked', gate: null } })).toBeNull()
     expect(jobsStall({ hostStatus: ok, driver: null })).toBeNull()
     expect(jobsStall({ hostStatus: null, driver: null })).toBeNull()
+  })
+
+  // S6-11. 사유 없는 parked 가 10초 넘게 이어지면 첫 설정 읽기가 걸린 것이다: 그때부터는 "설정을 읽는 중" 을 적는다.
+  it('사유 없는 parked 가 JOBS_STALL_READING_MS 이상 이어지면 설정을 읽는 중이라고 적는다', () => {
+    const parked = { driver: 'parked' as const, gate: null }
+    expect(jobsStall({ hostStatus: ok, driver: parked, parkedSinceMs: 1000, nowMs: 1000 + JOBS_STALL_READING_MS - 1 })).toBeNull()
+    expect(jobsStall({ hostStatus: ok, driver: parked, parkedSinceMs: 1000, nowMs: 1000 + JOBS_STALL_READING_MS })).toEqual({ kind: 'reading' })
+    // 응답하지 않는 Host 가 여전히 앞선다.
+    expect(jobsStall({ hostStatus: silent, driver: parked, parkedSinceMs: 0, nowMs: 60_000 })).toEqual({ kind: 'unresponsive' })
+    // 사유가 있는 parked, 모는 Host, 시각을 모르는 경우는 그대로다.
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'parked', gate: 'unreadable' }, parkedSinceMs: 0, nowMs: 60_000 })).toEqual({ kind: 'parked', gate: 'unreadable' })
+    expect(jobsStall({ hostStatus: ok, driver: { driver: 'host', gate: null }, parkedSinceMs: 0, nowMs: 60_000 })).toBeNull()
+    expect(jobsStall({ hostStatus: ok, driver: parked, parkedSinceMs: null, nowMs: 60_000 })).toBeNull()
+  })
+
+  it('다시 볼 때까지 남은 시간: 사유 없는 parked 가 문턱에 닿기 전에만 답한다', () => {
+    const parked = { driver: 'parked' as const, gate: null }
+    expect(jobsStallRecheckInMs({ driver: parked, parkedSinceMs: 1000, nowMs: 4000 })).toBe(JOBS_STALL_READING_MS - 3000)
+    expect(jobsStallRecheckInMs({ driver: parked, parkedSinceMs: 1000, nowMs: 1000 + JOBS_STALL_READING_MS })).toBeNull()
+    expect(jobsStallRecheckInMs({ driver: { driver: 'host', gate: null }, parkedSinceMs: 1000, nowMs: 4000 })).toBeNull()
+    expect(jobsStallRecheckInMs({ driver: parked, parkedSinceMs: null, nowMs: 4000 })).toBeNull()
   })
 })

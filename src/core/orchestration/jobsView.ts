@@ -35,7 +35,17 @@ export function jobsViewScreen(a: {
  *  above's question (limits pass L3, design A38 and A52). `parked` — the Host holds the state and will
  *  not start work, and `gate` says why. `unresponsive` — the Host is there and is not answering, so
  *  the app keeps yielding to it and no Job moves. */
-export type JobsStall = { kind: 'unresponsive' } | { kind: 'parked'; gate: 'not-migrated' | 'unreadable' }
+export type JobsStall =
+  | { kind: 'unresponsive' }
+  | { kind: 'parked'; gate: 'not-migrated' | 'unreadable' }
+  | { kind: 'reading' }
+
+/** How long a parked Host with no gate read yet stays unnamed before the sidebar says it is still
+ *  reading its settings (S6-11). The first read normally lands well inside it; one that hangs past it
+ *  is the silence the limits pass left (A108), now named. */
+export const JOBS_STALL_READING_MS = 10_000
+
+const parkedUnread = (d: HostDriverReport | null): boolean => d?.driver === 'parked' && d.gate === null
 
 /**
  * **Not answering comes first.** What a Host that stopped answering last said about itself is stale,
@@ -47,13 +57,33 @@ export type JobsStall = { kind: 'unresponsive' } | { kind: 'parked'; gate: 'not-
  * reason that parks it: a parked driver with no gate read yet is the Host's first moment (N2) and
  * lasts until its first read, so it has no reason to show. A Host that drives, an app that drives,
  * and an older Host that says nothing all draw nothing.
+ *
+ * **Unless that first moment lasts** (S6-11): parked with no gate read for `JOBS_STALL_READING_MS`
+ * since `parkedSinceMs` (when the caller first saw that report) answers `reading`, so a first read that
+ * hangs is named instead of silent. With no `parkedSinceMs` the moment is not timed and stays unnamed.
  */
 export function jobsStall(a: {
   hostStatus: Pick<HostStatus, 'unresponsive' | 'features'> | null
   driver: HostDriverReport | null
+  parkedSinceMs?: number | null
+  nowMs?: number
 }): JobsStall | null {
   if (a.hostStatus?.unresponsive === true && a.hostStatus.features.includes(HOST_FEATURE_DISPATCH)) return { kind: 'unresponsive' }
   const d = a.driver
   if (d?.driver === 'parked' && (d.gate === 'not-migrated' || d.gate === 'unreadable')) return { kind: 'parked', gate: d.gate }
+  if (parkedUnread(d) && a.parkedSinceMs != null && a.nowMs !== undefined && a.nowMs - a.parkedSinceMs >= JOBS_STALL_READING_MS)
+    return { kind: 'reading' }
   return null
+}
+
+/** How long until `jobsStall` could answer `reading` for this report, so the caller knows when to look
+ *  again: null when it never will (not parked unread, not timed) or already does. */
+export function jobsStallRecheckInMs(a: {
+  driver: HostDriverReport | null
+  parkedSinceMs: number | null
+  nowMs: number
+}): number | null {
+  if (!parkedUnread(a.driver) || a.parkedSinceMs === null) return null
+  const left = a.parkedSinceMs + JOBS_STALL_READING_MS - a.nowMs
+  return left > 0 ? left : null
 }

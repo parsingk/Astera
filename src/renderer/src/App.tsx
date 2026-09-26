@@ -20,7 +20,7 @@ import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
-import { jobsStall } from '../../core/orchestration/jobsView'
+import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
 import { UnderstandingView } from './components/UnderstandingView'
 import { RecordDetailHost } from './components/RecordDetail'
 import { RunDetail } from './components/RunDetail'
@@ -2249,6 +2249,11 @@ export default function App(): React.JSX.Element {
    *  `hostStatus` it tells the Jobs sidebar why nothing moves (jobsStall). One fact about the app's
    *  Host, like the gate above, so it is not carried in the snapshot either. */
   const [hostDriver, setHostDriver] = useState<HostDriverReport | null>(null)
+  /** When this window first saw the Host parked with no gate read yet (S6-11), null otherwise. A first
+   *  settings read that hangs past JOBS_STALL_READING_MS then shows as "still reading" (jobsStall). */
+  const [parkedSinceMs, setParkedSinceMs] = useState<number | null>(null)
+  /** Bumped when that threshold comes due, so the sidebar draws again with no other change. */
+  const [, setStallTick] = useState(0)
   /** 상세 창이 열려 있는 Run. null 이면 닫혀 있다.
    *
    *  **runId 만 들지 않고 프로젝트를 함께 든다.** 프로젝트가 바뀌는 커밋에서는 리셋 효과의
@@ -3019,6 +3024,19 @@ export default function App(): React.JSX.Element {
       off()
     }
   }, [])
+
+  // S6-11: time a parked Host with no gate read yet, and draw again when it has lasted long enough to name.
+  const parkedUnread = hostDriver?.driver === 'parked' && hostDriver.gate === null
+  useEffect(() => {
+    setParkedSinceMs(parkedUnread ? Date.now() : null)
+  }, [parkedUnread])
+  useEffect(() => {
+    const wait = jobsStallRecheckInMs({ driver: hostDriver, parkedSinceMs, nowMs: Date.now() })
+    if (wait === null) return
+    // A little past the threshold, so a timer that fires a millisecond early still finds it crossed.
+    const timer = setTimeout(() => setStallTick((n) => n + 1), wait + 50)
+    return () => clearTimeout(timer)
+  }, [hostDriver, parkedSinceMs])
 
   // Who drives Jobs (limits L3): read once, then listened for, the same shape and the same reason as
   // the gate above.
@@ -3803,7 +3821,7 @@ export default function App(): React.JSX.Element {
                 snapshot={orchSnapshot}
                 hostGate={orchHostGate}
                 // 아무것도 움직이지 않을 때 그 까닭(한도 L3): 멈춰 둔 Host, 응답하지 않는 Host.
-                stall={jobsStall({ hostStatus, driver: hostDriver })}
+                stall={jobsStall({ hostStatus, driver: hostDriver, parkedSinceMs, nowMs: Date.now() })}
                 // 빈 상태의 "+ 새 작업" 버튼을 가리는 신호 — snapshot 만으로는 프로젝트가 없는
                 // 경우와 프로젝트가 있는데 Run 이 없는 경우를 구별할 수 없다(JobsView 의
                 // hasProject 주석). onNewRun 의 가드(아래)와 함께 newRunOpen 이 프로젝트 없이

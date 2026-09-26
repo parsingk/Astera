@@ -708,7 +708,9 @@ export function JobsView({
     <p className="jobs-stall" role="status">
       {stall.kind === 'unresponsive'
         ? t('jobs.stall.unresponsive')
-        : t('jobs.stall.parked', { reason: t(stall.gate === 'unreadable' ? 'jobs.stall.gate.unreadable' : 'jobs.stall.gate.notMigrated') })}
+        : stall.kind === 'reading'
+          ? t('jobs.stall.reading')
+          : t('jobs.stall.parked', { reason: t(stall.gate === 'unreadable' ? 'jobs.stall.gate.unreadable' : 'jobs.stall.gate.notMigrated') })}
     </p>
   )
 

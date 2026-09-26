@@ -1267,6 +1267,7 @@ export const ko = {
   'jobs.stall.gate.unreadable': '설정 파일을 읽을 수 없습니다. Astera 를 다시 켜면 고칩니다',
   'jobs.stall.gate.notMigrated': '설정 이전이 아직 끝나지 않았습니다. Astera 를 켜 두면 끝납니다',
   'jobs.stall.unresponsive': 'Host 가 응답하지 않아 작업이 움직이지 않습니다. 설정의 정보 탭에서 Host 를 다시 시작할 수 있습니다',
+  'jobs.stall.reading': 'Host 가 아직 설정을 읽는 중이라 작업이 움직이지 않습니다',
   // 여덟 상태의 툴팁 — JobIcons.tsx 의 글리프가 달고 다닌다. 사이드바가 상태를 말로 적지 않게 된
   // 뒤로 이 문구들은 상시로 보이지 않는다: 아이콘을 처음 보는 사람이 배우는 자리다.
   // pending 과 blocked 를 다르게 적는 것이 특히 중요하다 — 앞은 의존이, 뒤는 사람이 막고 있다
