@@ -49,3 +49,30 @@
     ${endIf}
   ${endIf}
 !macroend
+
+; ---------------------------------------------------------------------------------------------
+; customUnInstall — take away the public `astera` shuttle that Settings installed (docs/cli.md).
+;
+; The Install button writes `astera.cmd` and `astera` into %LOCALAPPDATA%\astera\bin. Uninstalling
+; the app leaves them pointing at an Astera.exe that is gone, so they go with it.
+;
+; **Only those two files, and only when Astera wrote them.** %LOCALAPPDATA%\astera is a shared folder
+; (the Host's runtime and other state live there), so nothing here deletes a folder, and a file of the
+; same name whose content is not the shuttle's exact shape is someone else's and stays. The shapes are
+; the ones isShuttleContent (src/core/orchestration/exec/shuttle.ts) recognises; `\x22` is a double
+; quote, written that way so the command line needs no escaping. -cmatch, because -match ignores case.
+;
+; **Not during an update.** electron-builder runs the old version's uninstaller before installing the
+; new one; removing the shuttle then would take the command away from everyone who updates. The new
+; app rewrites it to point at itself when it starts.
+;
+; %LOCALAPPDATA% is read from the environment rather than NSIS's $LOCALAPPDATA, which follows the
+; shell var context and names another folder in an all-users uninstall.
+;
+; Tested by src/core/orchestration/exec/shuttle.nsis.test.ts, which runs this exact command.
+!macro customUnInstall
+  ${ifNot} ${isUpdated}
+    nsExec::Exec `"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -C "$$d = Join-Path $$env:LOCALAPPDATA 'astera\bin'; $$w = @{ 'astera.cmd' = '^@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n\x22[^\x22\r\n]*\x22 \x22[^\x22\r\n]*\x22 %\*\r\n\z'; 'astera' = '^#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec \x22[^\x22\n]*\x22 \x22[^\x22\n]*\x22 \x22\$$@\x22\n\z' }; foreach ($$n in $$w.Keys) { $$f = Join-Path $$d $$n; if ((Test-Path -LiteralPath $$f -PathType Leaf) -and ([IO.File]::ReadAllText($$f) -cmatch $$w[$$n])) { Remove-Item -LiteralPath $$f -Force -ErrorAction SilentlyContinue } }"`
+    Pop $R0
+  ${endIf}
+!macroend
