@@ -294,6 +294,12 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
       }
       return [`${head}. Do not ask again; keep waiting:`, ...steps.map((s) => `  ${s}`)].join('\n')
     }
+    // The last line of a follow that ended well, under the event lines. The other endings are errors
+    // and go out as one (run.ts), the same as `runs wait`'s.
+    case 'runs-follow': {
+      const p = data.progress !== null && typeof data.progress === 'object' ? (data.progress as { done?: unknown; total?: unknown }) : {}
+      return `run ${str(data.runId)} ${str(data.state)}, ${str(p.done)}/${str(p.total)} tasks done`
+    }
     // 잘 끝난 때만 여기까지 온다 — 나머지 끝은 종료 코드와 한 줄로 나간다(run.ts).
     case 'jobs-wait':
     case 'runs-wait':

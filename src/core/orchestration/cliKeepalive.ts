@@ -59,7 +59,9 @@ export const KEEPALIVE_PING_MS = PING_MS
  * keepalive would be noise on a command whose output is not a wait.
  */
 export function waitingCommand(a: { cmd: string; args: Record<string, unknown> }): boolean {
-  if (a.cmd === 'ask' || a.cmd === 'jobs-wait' || a.cmd === 'runs-wait') return true
+  // `runs follow` prints events on stdout as they land, and between two of them it can be as quiet as
+  // a wait. These lines go to stderr, so the event stream on stdout stays exactly one line per event.
+  if (a.cmd === 'ask' || a.cmd === 'jobs-wait' || a.cmd === 'runs-wait' || a.cmd === 'runs-follow') return true
   // `check` blocks only when asked to. Without --wait it answers at once, and a keepalive on it
   // would be a line about a wait that never happened.
   return a.cmd === 'check' && a.args.wait === true

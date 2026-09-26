@@ -460,6 +460,7 @@ astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--c
 astera runs    list   [--job <jobId>]
 astera runs    get    --id <runId>
 astera runs    wait   --id <runId>  [--timeout-ms <n>]
+astera runs    follow --id <runId>  [--timeout-ms <n>]
 astera runs    stop   --id <runId>
 astera runs    resume --id <runId>
 astera runs    checks --id <runId>
@@ -787,6 +788,46 @@ rather than typed a second time.
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
 held open on purpose.
 
+**`runs follow` prints a run's events as they happen**, and stops where `runs wait` stops. The events
+are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
+reviewers and repair workers starting, their reports and status messages, questions opened and
+answered, and usage limits hit and resumed. It prints every event so far first, then each new one as
+it lands, each exactly once.
+
+With `--human` each event is one line, the local time first:
+
+```text
+[14:21:02] worker started: tsk_1
+[14:24:14] validation failed (tsk_1)
+[14:25:03] repair worker started: tsk_1 (check-failure)
+[14:31:40] worker done: tsk_1 (succeeded): the build passes
+run run_9f8e completed, 1/1 tasks done
+```
+
+**In JSON the output is NDJSON: one envelope per line, never one document.** Each event is a line
+`{"ok":true,"data":{"event":{…}}}` with the event's `at`, `kind`, `sourceId`, `taskId`, `taskTitle`,
+`summary`, and for some kinds `messageType`, `outcome`, `provider`, `retry`, `review` or `repair`.
+A message's body is not included; `tasks list` carries a task's result. The last line is the ending:
+exactly the envelope `runs wait` prints, `{"ok":true,"data":{"state":"completed",…}}` for a run that
+finished well, and otherwise its error envelope. Read the stream line by line, and tell the last line
+by `data.state` or `ok: false` rather than by `data.event`. `--quiet` prints no events at all; the exit
+code is the answer.
+
+**The exit code is `runs wait`'s**: 0 when the run finished well, 8 when a question is open, the run is
+paused or every worker waits for a usage limit to reset, 10 when it failed, 7 when `--timeout-ms`
+(default one hour) passes first, and 4 for an unknown run. A follow stops at an open question for
+the same reason a wait does: nothing moves until someone answers it. Answer it and follow again.
+
+**Ctrl+C ends only the follow.** The run is not touched, and nothing is left behind on the Host. The
+follow works through the Host with Astera open or closed, and needs one: with no Host it is a 3, since
+the state file does not change while nobody writes it. Like a wait, it says on stderr every 15
+seconds that it is still following, and `--no-keepalive` turns that off.
+
+How it works: each call asks the Host for the run's events and holds for up to 20 seconds until there
+are more than the follow has printed, or the run reaches an ending. The follow asks again at once, so
+a new event is printed within a moment of being recorded. Events the app adds from its own journal,
+such as a worker lost when the app restarted, are not part of the run's state and are not printed.
+
 **`runs checks` shows each task's completion checks and what they came to.** It reads what the
 checks already recorded and runs nothing, so it answers the same with Astera closed, and from the
 state file with no Host at all. `data.tasks` has one row per task of the run, in the order they were
@@ -1010,6 +1051,9 @@ heartbeat question the app asks it, and reports how long ago the Host last answe
 event loop has stopped turning answers nothing, so that number grows, and past 15 seconds the line
 says so plainly instead of reassuring you. A Host too old to know the heartbeat gets no question and
 the line ends after `so far`.
+
+`runs follow` prints the same lines while it follows, on stderr as well, so its event lines on stdout
+stay one per event.
 
 **Nothing of this reaches stdout**, which carries one result and nothing else, so there is nothing to
 filter out of a pipeline: `astera runs wait --id "$run" | jq .data` is unaffected. `--no-keepalive`

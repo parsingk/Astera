@@ -293,6 +293,13 @@ describe('humanFor', () => {
     expect(humanFor('runs-checks', { runId: 'run_1', tasks: [] })).toBe('(no tasks in run_1)')
   })
 
+  // The last line of a follow that ended well. The other endings are errors and print as one (run.ts).
+  it('runs follow 의 끝은 한 줄이다', () => {
+    expect(humanFor('runs-follow', { state: 'completed', runId: 'run_1', progress: { done: 3, total: 3 } })).toBe(
+      'run run_1 completed, 3/3 tasks done'
+    )
+  })
+
   it('sessions list 는 살았는지·하는 일·id·종류·제목이다', () => {
     expect(
       humanFor('sessions-list', {

@@ -8,7 +8,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import path from 'node:path'
 import os, { homedir } from 'node:os'
 import { parseArgs } from '../core/orchestration/cliArgs'
-import { publicFor } from '../core/orchestration/cliPublic'
+import { publicEvent, publicFor } from '../core/orchestration/cliPublic'
+import { eventKey, followLine } from '../core/orchestration/cliFollow'
+import { FOLLOW_WINDOW_MS } from '../core/orchestration/command'
+import type { JobEvent } from '../core/types'
 import { spelledCommand, unknownFlagError, usageFor } from '../core/orchestration/cliUsage'
 import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
@@ -628,6 +631,78 @@ export function callHost(a: {
   })
 }
 
+/** How `followRun` ended. `ended` carries the body `runs wait` would have answered with (the Host's
+ *  `waitEndingFor`, or a `timeout` built here), so the caller turns it into the same exit code. */
+export type FollowEnd =
+  | { ended: Record<string, unknown> }
+  | { refused: HostAnswer }
+  | { unreachable: string }
+  | { stuck: string }
+
+/**
+ * `astera runs follow` (CLI spec §22): the timeline of a run, printed as it happens, until the run ends.
+ *
+ * **Why a loop of long polls and not a push.** The Host does push state, but only to the app: its
+ * `orch-state` message goes to the attached app's connection, and a CLI client has no subscription to
+ * ask for. Adding one would be a new message, a new feature flag and a new failure mode (a subscriber
+ * that stops reading) on the Host. A `runs-follow` call is an ordinary `orch-call` instead, answered by
+ * the same command layer as `runs wait` with the same `pollUntil`: it comes back as soon as there are
+ * more events than this loop has printed, or the run reaches an ending, or its window passes. Every
+ * Host that answers orchestration commands can answer it, a lost connection is the ordinary 3, and
+ * there is nothing on the Host to clean up when this process goes away.
+ *
+ * **Each event is printed once**, keyed by `eventKey`, in the order the Host's timeline gives. When
+ * there are new events the Host sends the whole timeline, so an event whose time is earlier than one
+ * already printed is still printed when it appears. `seen` is how many this loop has printed.
+ *
+ * **Ctrl+C ends this process only.** Nothing here writes, and the Host's poll ends at its window.
+ */
+export async function followRun(a: {
+  id: unknown
+  mode: OutputMode
+  /** The whole follow's deadline, `--timeout-ms`. */
+  timeoutMs: number
+  write: (line: string) => void
+  /** One `runs-follow` call, with the client-side deadline for it. */
+  call: (
+    args: Record<string, unknown>,
+    timeoutMs: number
+  ) => Promise<HostAnswer | { unreachable: string } | { stuck: string }>
+  /** How long one call may hold on the Host. Shorter in tests. */
+  windowMs?: number
+  now?: () => number
+}): Promise<FollowEnd> {
+  const now = a.now ?? Date.now
+  const windowMs = a.windowMs ?? FOLLOW_WINDOW_MS
+  const deadline = now() + a.timeoutMs
+  const printed = new Set<string>()
+  for (;;) {
+    const waitMs = Math.max(0, Math.min(windowMs, deadline - now()))
+    const r = await a.call({ id: a.id, seen: printed.size, waitMs }, waitMs + TIMEOUT_HEADROOM_MS)
+    if ('unreachable' in r || 'stuck' in r) return r
+    if (r.status < 200 || r.status >= 300) return { refused: r }
+    const page = (r.body ?? {}) as {
+      runId?: unknown
+      jobId?: unknown
+      progress?: unknown
+      events?: JobEvent[]
+      ending?: Record<string, unknown> | null
+    }
+    for (const e of page.events ?? []) {
+      const key = eventKey(e)
+      if (printed.has(key)) continue
+      printed.add(key)
+      // One envelope per line in JSON (NDJSON), one sentence per line for a person, and nothing for
+      // `--quiet`, whose answer is the exit code.
+      if (a.mode === 'json') a.write(okEnvelope('runs-follow', { event: publicEvent(e) }))
+      else if (a.mode === 'human') a.write(followLine(e))
+    }
+    if (page.ending) return { ended: page.ending }
+    if (now() >= deadline)
+      return { ended: { state: 'timeout', runId: page.runId, jobId: page.jobId, progress: page.progress } }
+  }
+}
+
 /**
  * Says on **stderr**, every `KEEPALIVE_MS`, that a waiting command is still waiting — and whether the
  * Host is still answering (cliKeepalive.ts has the why and the interval's argument).
@@ -1159,6 +1234,23 @@ export async function main(): Promise<void> {
       args,
       enabled: !parsed.noKeepalive
     })
+    // **`runs follow` is a loop of calls on this one connection** (followRun). It prints as it goes, and
+    // its ending comes back here as the body `runs wait` answers with, so the exit code below is the
+    // same code. It carries no request id: it reads, and a receipt is kept only for a call that acted.
+    if (parsed.cmd === 'runs-follow') {
+      const followed = await followRun({
+        id: args.id,
+        mode,
+        timeoutMs: typeof args.timeoutMs === 'number' ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS,
+        write: out,
+        call: (callArgs, timeoutMs) => callHost({ conn, cmd: parsed.cmd, args: callArgs, sessionId, timeoutMs })
+      }).finally(() => keepalive.stop())
+      conn.close()
+      if ('stuck' in followed) fail({ code: SILENT_HOST_CODE, message: followed.stuck })
+      if ('unreachable' in followed) fail({ code: 'HOST_NOT_RUNNING', message: followed.unreachable })
+      if ('refused' in followed) return followed.refused
+      return { status: 200, body: followed.ended }
+    }
     // Held rather than passed inline: the retry line below has to carry what this actually sent,
     // and `argsForCall` fills a missing `--cwd` that the typed line does not have (`implicitArgs`).
     const sentArgs = argsForCall({ cmd: parsed.cmd, args, cwd: process.cwd() })
@@ -1221,7 +1313,7 @@ export async function main(): Promise<void> {
     const body = parsed.cmd === 'ask' ? askTimeoutBody({ body: answered, args }) : answered
     // **`wait` 만 성공을 다시 판정한다.** 저쪽은 200 으로 무엇으로 끝났는지만 말하고,
     // 그것을 종료 코드로 바꾸는 것은 이쪽의 일이다(cliOutput 의 waitEnd).
-    if (parsed.cmd === 'jobs-wait' || parsed.cmd === 'runs-wait') {
+    if (parsed.cmd === 'jobs-wait' || parsed.cmd === 'runs-wait' || parsed.cmd === 'runs-follow') {
       const end = waitEnd(body)
       if (end !== null) {
         fail(end)

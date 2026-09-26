@@ -49,6 +49,7 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
+import { eventCountFor, timelineFor } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
 import {
@@ -850,6 +851,12 @@ function enumFilter<T extends string>(
 }
 
 const POLL_MS = 50
+
+/** How long one `runs-follow` call holds before it answers with nothing new (CLI spec §22). The client
+ *  asks again at once, so this bounds only how long a poll outlives a client that went away, and how
+ *  often an idle follow costs a round trip. `FOLLOW_WINDOW_MAX_MS` caps what a caller may ask for. */
+export const FOLLOW_WINDOW_MS = 20_000
+const FOLLOW_WINDOW_MAX_MS = 60_000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -1713,6 +1720,48 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
       return run ? okBody(runView(s, run)) : notFound(`unknown run: ${id}`)
+    }
+    /**
+     * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
+     *
+     * It answers as soon as the run has more timeline events than the caller says it has seen
+     * (`seen`), or has reached an ending of `runs wait` (`waitEndingFor`, the same body), or when its
+     * window (`waitMs`) passes with neither. The events are the Jobs view's own (timeline.ts), counted
+     * with `eventCountFor`, the count the sidebar push already uses to notice a new one; when there are
+     * more, all of them come back, in order, and the client prints the ones it has not printed. So
+     * nothing depends on the events' times being in the order they were written.
+     *
+     * **It never writes.** A client that goes away (Ctrl+C) leaves a poll that ends at its window and
+     * an answer nobody reads; the run is not touched. A run deleted while followed is a 404.
+     */
+    case 'runs-follow': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      if (!s.runs.some((r) => r.id === id)) return notFound(`unknown run: ${id}`)
+      const seen = typeof args.seen === 'number' && args.seen >= 0 ? args.seen : 0
+      const waitMs =
+        typeof args.waitMs === 'number' && args.waitMs >= 0 ? Math.min(args.waitMs, FOLLOW_WINDOW_MAX_MS) : FOLLOW_WINDOW_MS
+      type Seen = { gone: true } | { cur: OrchState; count: number; ending: Record<string, unknown> | null }
+      const look = (): Seen => {
+        const cur = deps.getState()
+        if (!cur.runs.some((r) => r.id === id)) return { gone: true }
+        return { cur, count: eventCountFor(cur, id), ending: waitEndingFor(cur, id, deps.now?.() ?? new Date().toISOString()) }
+      }
+      const waited = await pollUntil(() => {
+        const l = look()
+        return 'gone' in l || l.ending !== null || l.count > seen ? l : null
+      }, waitMs)
+      const at = 'value' in waited ? waited.value : look()
+      if ('gone' in at) return notFound(`unknown run: ${id} (it was deleted)`)
+      const run = at.cur.runs.find((r) => r.id === id)!
+      return okBody({
+        runId: id,
+        jobId: run.jobId,
+        count: at.count,
+        progress: progressOf(at.cur, id),
+        events: at.count > seen ? timelineFor(at.cur, id, () => false) : [],
+        ending: at.ending
+      })
     }
     // **Each Task's completion checks, read and never run** (CLI spec §20: no new validation engine).
     // runChecks.ts reads `Task.checks`, the review Dispatches and `Task.reviewIssues`; cliPublic.ts

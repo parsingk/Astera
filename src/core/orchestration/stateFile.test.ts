@@ -10,6 +10,7 @@ describe('fileAnswerable', () => {
   it('기다리는 명령은 파일로 답할 수 없다', () => {
     expect(fileAnswerable('jobs-wait')).toBe(false)
     expect(fileAnswerable('runs-wait')).toBe(false)
+    expect(fileAnswerable('runs-follow')).toBe(false)
     expect(fileAnswerable('check')).toBe(false)
     expect(fileAnswerable('ask')).toBe(false)
   })

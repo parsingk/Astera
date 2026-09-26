@@ -18,6 +18,12 @@ describe('cliKeepalive — 기다리는 명령만', () => {
     expect(waitingCommand({ cmd: 'check', args: { wait: true } })).toBe(true)
   })
 
+  // `runs follow` can go quiet for as long as a wait does, between two events, and then a silent
+  // stderr says nothing about whether the Host is still there. Its events go to stdout, never these.
+  it('runs follow 도 기다리는 명령이다', () => {
+    expect(waitingCommand({ cmd: 'runs-follow', args: { id: 'run_1' } })).toBe(true)
+  })
+
   // 기다리지 않는 출력에 살아 있다는 줄이 붙으면, 그 줄은 아무것도 뜻하지 않게 된다.
   it('--wait 없는 check 는 기다리는 것이 아니다', () => {
     expect(waitingCommand({ cmd: 'check', args: {} })).toBe(false)

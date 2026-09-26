@@ -192,6 +192,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       'Five endings, and the exit code says which: finished well (0), a question is open, the run is paused, or the run is still running and every open worker, and the coordinator when it is stopped, is waiting for a usage limit to reset (8, `details` says which), the run failed (10). If the deadline passes first, it exits 7.',
     flags: [ID('<runId>', 'the run to wait for'), TIMEOUT]
   },
+  'runs-follow': {
+    summary: "print this run's events as they happen, until it ends",
+    detail:
+      "Every event of the run's timeline so far, then each new one as it lands: one line each with --human, like `[14:21:02] worker started: task_1`, and one envelope per line in JSON (NDJSON), each with `data.event`. It stops where `runs wait` stops, with the same last line and the same exit code: finished well (0), a question open, the run paused or waiting for a usage limit (8), the run failed (10), or the deadline passed (7). Ctrl+C ends this command only; the run goes on.",
+    flags: [ID('<runId>', 'the run to follow'), TIMEOUT]
+  },
   'runs-stop': {
     summary: "close this run's open workers and pause it",
     detail:

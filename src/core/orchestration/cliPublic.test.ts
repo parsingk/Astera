@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { publicFor } from './cliPublic'
+import { publicEvent, publicFor } from './cliPublic'
 import type { Task } from './types'
 
 describe('publicFor', () => {
@@ -252,6 +252,34 @@ describe('publicFor', () => {
           completionOverride: { reason: 'r', at: 'T' }
         }
       ]
+    })
+  })
+
+  // `runs follow` prints timeline events (CLI spec §22). A message event's body is a worker's whole
+  // report, and a session id is the app's link to a tab: the line carries what happened, not those.
+  it('runs follow 의 이벤트는 body 와 sessionId 를 내지 않는다', () => {
+    expect(
+      publicEvent({
+        at: 'T',
+        kind: 'message',
+        sourceId: 'm1',
+        taskId: 't1',
+        taskTitle: 'a',
+        messageType: 'worker_done',
+        summary: 's',
+        body: 'the whole report',
+        outcome: 'succeeded',
+        sessionId: 'sess_1'
+      })
+    ).toEqual({
+      at: 'T',
+      kind: 'message',
+      sourceId: 'm1',
+      taskId: 't1',
+      taskTitle: 'a',
+      messageType: 'worker_done',
+      summary: 's',
+      outcome: 'succeeded'
     })
   })
 

@@ -13,6 +13,7 @@
 // 이름을 대며 깨진다. 허용 목록의 유일한 실패 방식이 "낡는 것" 이고, 막을 것은 그것뿐이다.
 import type { CheckResult, Gate, Job, JobRun, Project, ReviewIssue, Task } from './types'
 import type { RunChecks, TaskChecks, TaskReview, TaskValidation } from './runChecks'
+import type { JobEvent } from '../types'
 import type { HostSession, OrchAccount, OrchRunConfig } from './command'
 import type { ChatPending, ChatPrompt, ChatTurn } from '../sessions/chatRead'
 import type { SkillInstalled, SkillListed, SkillNotEnabled, SkillsAccount } from './skills'
@@ -215,6 +216,32 @@ const CHECK = ['configId', 'name', 'status', 'exitCode', 'outputTail', 'startedA
 type _check = NothingLeft<Unlisted<CheckResult, typeof CHECK, []>>
 const REVIEW_ISSUE = ['id', 'severity', 'blocking', 'title', 'description', 'file', 'line', 'suggestedFix'] as const
 type _reviewIssue = NothingLeft<Unlisted<ReviewIssue, typeof REVIEW_ISSUE, []>>
+
+/** One timeline event as `runs follow` prints it (CLI spec §22). **Held back:** `body`, the whole of a
+ *  message (a worker's report can be pages long, and `tasks list` already carries the result that
+ *  matters), and `sessionId`, the app's link from an event to a tab, which means nothing in a shell. */
+const FOLLOW_EVENT = [
+  'at',
+  'kind',
+  'sourceId',
+  'taskId',
+  'taskTitle',
+  'messageType',
+  'summary',
+  'outcome',
+  'provider',
+  'retry',
+  'review',
+  'repair'
+] as const
+const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId'] as const
+type _followEvent = NothingLeft<Unlisted<JobEvent, typeof FOLLOW_EVENT, typeof FOLLOW_EVENT_HIDDEN>>
+
+/** The public fields of one followed event. Not in `SHAPE`: `runs follow` answers a stream of these
+ *  and then one ending, and the ending is `runs wait`'s body, which no table shapes either. */
+export function publicEvent(e: unknown): unknown {
+  return e !== null && typeof e === 'object' ? pick(FOLLOW_EVENT, e) : e
+}
 
 function shapeRunChecks(body: unknown): unknown {
   if (body === null || typeof body !== 'object') return body
