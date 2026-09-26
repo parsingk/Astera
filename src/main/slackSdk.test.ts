@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createWebClient } from './slackSdk'
+import { createWebClient, createSocketClient } from './slackSdk'
 
 describe('createWebClient', () => {
   it('SDK 기본값(무제한 타임아웃 + 약 30분간 10회 재시도) 대신 유한한 타임아웃·적은 재시도를 쓴다', () => {
@@ -22,5 +22,13 @@ describe('createWebClient', () => {
     const c = createWebClient('xoxb-test', { ASTERA_SLACK_API_URL: 'http://127.0.0.1:9/api/' }) as unknown as { slackApiUrl: string }
     expect(c.slackApiUrl).toBe('http://127.0.0.1:9/api/')
     expect((createWebClient('xoxb-test', {}) as unknown as { slackApiUrl: string }).slackApiUrl).toBe('https://slack.com/api/')
+  })
+})
+
+describe('createSocketClient', () => {
+  // Final review C1: the SDK's own reconnect drops its promise, so a failed one is an unhandled rejection.
+  it('turns the SDK reconnect off: SlackInbox reconnects with its own backoff', () => {
+    const c = createSocketClient('xapp-test', {}) as unknown as { autoReconnectEnabled: boolean }
+    expect(c.autoReconnectEnabled).toBe(false)
   })
 })

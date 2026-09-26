@@ -33,6 +33,33 @@ const ENTER_DELAY_MS = 150 // text -> Enter gap (same convention as scheduler.ts
 // TUI has finished digesting the paste, which can submit empty or truncated input.
 const PROCESSED_TS_LIMIT = 500 // suppresses redelivery from a failed ack — capped so it cannot grow forever
 
+/** The first reconnect waits this long, and each failure after it doubles the wait (final review C1). A
+ *  healthy socket is recycled by Slack every few hours ("disconnect" with a refresh reason), so the first
+ *  wait stays short. */
+export const RECONNECT_BASE_MS = 1_000
+/** The longest wait between two reconnects: an outage of an hour costs at most five minutes of intake after
+ *  it ends, and a Host left running for days never gives up. */
+export const RECONNECT_CAP_MS = 5 * 60_000
+/** The wait before the reconnect that follows `attempt` consecutive failures (0 for the first). */
+export function reconnectDelayMs(attempt: number): number {
+  return Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.min(Math.max(0, attempt), 30))
+}
+/** The start errors a retry cannot fix: the token was refused, or the app or workspace is gone. The same
+ *  list as the SDK's UnrecoverableSocketModeStartError. Retrying those only hammers Slack, so the inbox
+ *  stops until the config is applied again (a settings save, or the Host's slack-reload). A network error
+ *  is never on this list: it is retried however long it lasts. */
+const FATAL_START_ERRORS: ReadonlySet<string> = new Set([
+  'not_authed',
+  'invalid_auth',
+  'account_inactive',
+  'user_removed_from_team',
+  'team_disabled'
+])
+function isFatalStartError(err: unknown): boolean {
+  const code = (err as { data?: { error?: unknown } } | null)?.data?.error
+  return typeof code === 'string' && FATAL_START_ERRORS.has(code)
+}
+
 export interface SlackInboxDeps {
   /** The channel whose replies we accept. If the bot is invited to other channels too, their events
    *  are dropped */
@@ -96,39 +123,134 @@ export class SlackInbox {
   // ts we handled and skip every repeat. A Set is enough rather than a Map: we need only the order,
   // not a value — insertion order is preserved, so the oldest entry can be dropped first.
   private processedTs = new Set<string>()
+  // Reconnection is ours, not the SDK's (final review C1). The SDK's auto-reconnect called its own start()
+  // from a timer and dropped the promise, so a reconnect that failed for good (invalid_auth after a token
+  // was regenerated, account_inactive, or its network retries used up) was an unhandled rejection, which
+  // ends node.exe and every session the Host holds. Both SDK constructors now pass
+  // `autoReconnectEnabled: false`, and every start below ends in a catch.
+  private nextClient: (() => SocketClient) | null = null
+  private stopped = false
+  private halt = false
+  private attempt = 0
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private deps: SlackInboxDeps) {}
 
-  /** Opens the connection. A failure is only logged — even with no intake, notification sending
-   *  (REST) must keep working. */
-  async start(client: SocketClient): Promise<void> {
-    this.client = client
-    // R3 (Slack in the Host): the Host has no unhandledRejection handler, so a route that throws is logged
-    // here by error name only (a message could carry reply text) and never escapes the socket's emit.
-    client.on('message', ((env: MessageEnvelope) => {
-      this.handleMessage(env).catch((err: unknown) => {
-        try {
-          this.deps.log(`slack inbound failed(${err instanceof Error ? err.name : 'unknown'})`)
-        } catch {
-          /* a log line never throws */
-        }
-      })
-    }) as never)
-    // Connection state is logged for diagnostics only. Reconnection is the SDK's job
-    // (autoReconnectEnabled defaults to true)
-    client.on('disconnected', (() => this.deps.log('slack socket disconnected')) as never)
-    client.on('connected', (() => this.deps.log('slack socket connected')) as never)
+  /** Opens the connection and keeps it open. A failure is only logged — even with no intake, notification
+   *  sending (REST) must keep working. With `nextClient`, a drop or a failed start builds a fresh client
+   *  after a backoff (reconnectDelayMs), until `stop` or a start error no retry can fix (`halted`). Never
+   *  rejects. */
+  async start(client: SocketClient, nextClient?: () => SocketClient): Promise<void> {
+    this.stopped = false
+    this.halt = false
+    this.attempt = 0
+    this.nextClient = nextClient ?? null
+    await this.connect(client)
+  }
+
+  /** The last start was refused for good (FATAL_START_ERRORS): nothing retries until the config is applied
+   *  again. */
+  halted(): boolean {
+    return this.halt
+  }
+
+  private log(m: string): void {
     try {
-      await client.start()
-    } catch (err) {
-      // botErrorReason pulls only err.name, err.code and err.data?.error — err.message is never used
-      // because the app token can be mixed into it (transport.ts; the docs point at invalid_auth
-      // and the like as what to look for)
-      this.deps.log(`slack socket start failed(${botErrorReason(err)})`)
+      this.deps.log(m)
+    } catch {
+      /* a log line never throws */
     }
   }
 
+  private async connect(client: SocketClient): Promise<void> {
+    this.client = client
+    // Every listener and the start's outcome check this: a client this inbox has since stopped or replaced
+    // speaks for nobody. Without it, a start that resolved after a stop kept a socket whose messages still
+    // reached this inbox (the zombie of final review C1).
+    const current = (): boolean => this.client === client && !this.stopped
+    // R3 (Slack in the Host): a route that throws is logged here by error name only (a message could carry
+    // reply text) and never escapes the socket's emit.
+    client.on('message', ((env: MessageEnvelope) => {
+      if (!current()) return
+      this.handleMessage(env).catch((err: unknown) => {
+        this.log(`slack inbound failed(${err instanceof Error ? err.name : 'unknown'})`)
+      })
+    }) as never)
+    client.on('disconnected', (() => {
+      if (!current()) return
+      this.log('slack socket disconnected')
+      this.scheduleRetry()
+    }) as never)
+    client.on('connected', (() => {
+      if (!current()) return
+      this.attempt = 0
+      this.log('slack socket connected')
+    }) as never)
+    try {
+      await client.start()
+    } catch (err) {
+      if (!current()) return // stopped or replaced while it was starting: nothing to retry
+      // botErrorReason pulls only err.name, err.code and err.data?.error — err.message is never used
+      // because the app token can be mixed into it (transport.ts; the docs point at invalid_auth
+      // and the like as what to look for)
+      const reason = botErrorReason(err)
+      if (isFatalStartError(err)) {
+        this.halt = true
+        this.log(`slack socket start failed(${reason}): Slack refused the app token or the app, not retrying until the Slack settings are applied again`)
+        return
+      }
+      this.log(`slack socket start failed(${reason})`)
+      this.scheduleRetry()
+      return
+    }
+    if (!current()) {
+      // It opened after a stop (or after being replaced): close what it opened.
+      this.closeQuietly(client)
+      return
+    }
+    this.attempt = 0
+  }
+
+  /** One pending retry at most: a failed start both rejects and emits `disconnected`. */
+  private scheduleRetry(): void {
+    if (this.stopped || this.halt || this.retryTimer !== null || this.nextClient === null) return
+    const ms = reconnectDelayMs(this.attempt)
+    this.attempt++
+    this.log(`slack socket reconnecting in ${Math.round(ms / 1000)} s (attempt ${this.attempt})`)
+    const timer = setTimeout(() => {
+      this.retryTimer = null
+      if (this.stopped || this.halt || this.nextClient === null) return
+      let next: SocketClient
+      try {
+        next = this.nextClient()
+      } catch (err) {
+        this.log(`slack socket could not be built(${botErrorReason(err)})`)
+        this.scheduleRetry()
+        return
+      }
+      this.connect(next).catch((err: unknown) => this.log(`slack socket reconnect failed(${botErrorReason(err)})`))
+    }, ms)
+    ;(timer as { unref?: () => void }).unref?.()
+    this.retryTimer = timer
+  }
+
+  private closeQuietly(client: SocketClient): void {
+    try {
+      client.disconnect().catch(() => {
+        /* a disconnect failure must not block anything */
+      })
+    } catch {
+      /* the same */
+    }
+  }
+
+  /** Closes the socket, and cancels a pending retry: nothing opens after a stop. */
   async stop(): Promise<void> {
+    this.stopped = true
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
     const client = this.client
     this.client = null
     if (!client) return
@@ -430,13 +552,23 @@ export class SlackInboxController {
     const target = inboxTargetFor(cfg)
     // A space cannot appear in either a token or a channel ID, so it is safe as a separator
     const key = target ? `${target.appToken} ${target.channelId}` : null
-    if (key === this.currentKey) return // no change — do not reconnect
+    // No change: do not reconnect. The one exception is an inbox that Slack refused for good (invalid_auth
+    // and the like): applying the config again is what retries it (final review C1).
+    if (key === this.currentKey && !(this.current?.halted() ?? false)) return
     await this.teardown()
     if (!target || this.deps.isQuitting()) return
     const inbox = new SlackInbox(this.deps.makeDeps(target.channelId, () => this.memberId))
     this.current = inbox
     this.currentKey = key
-    await inbox.start(this.deps.createClient(target.appToken))
+    const appToken = target.appToken
+    // Not awaited: a start can sit in the SDK's network retries for as long as an outage lasts, and a stop
+    // queued behind it would wait that long while the socket it should close opens. The inbox closes a
+    // start that resolves after its stop, and start never rejects.
+    void inbox
+      .start(this.deps.createClient(appToken), () => this.deps.createClient(appToken))
+      .catch(() => {
+        /* start never rejects; this only keeps a surprise from becoming an unhandled rejection */
+      })
   }
 
   private async teardown(): Promise<void> {

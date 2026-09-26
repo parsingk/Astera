@@ -20,5 +20,7 @@ export function createWebClient(token: string, env: Record<string, string | unde
  *  goes through `clientOptions`, so `apps.connections.open` and the WebSocket URL both come from it (P15). */
 export function createSocketClient(appToken: string, env: Record<string, string | undefined> = process.env): SocketClient {
   const url = slackApiUrlFrom(env)
-  return new SocketModeClient({ appToken, ...(url ? { clientOptions: { slackApiUrl: url } } : {}) }) as unknown as SocketClient
+  // The SDK's own reconnect is off (final review C1): it dropped its promise, so a reconnect that failed for
+  // good was an unhandled rejection. SlackInbox reconnects with its own backoff.
+  return new SocketModeClient({ appToken, autoReconnectEnabled: false, ...(url ? { clientOptions: { slackApiUrl: url } } : {}) }) as unknown as SocketClient
 }

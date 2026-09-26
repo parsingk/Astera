@@ -3,6 +3,9 @@ import {
   SlackInbox,
   SlackInboxController,
   inboxTargetFor,
+  reconnectDelayMs,
+  RECONNECT_BASE_MS,
+  RECONNECT_CAP_MS,
   type SlackInboxDeps,
   type SlackInboxControllerDeps,
   type SocketClient
@@ -796,5 +799,184 @@ describe('chat sessions', () => {
 
     expect(h.writes.map((w) => w.data)).toEqual(['ls'])
     expect(h.delivered).toEqual([])
+  })
+})
+
+// Final review C1: the SDK's own reconnect is switched off (autoReconnectEnabled: false), because its
+// promise was dropped and a failed reconnect ended the Host. SlackInbox reconnects itself, with a backoff,
+// and every start it makes ends in a catch.
+describe('SlackInbox reconnects itself (final review C1)', () => {
+  type Outcome = 'ok' | 'pending' | Error
+  interface Built {
+    emit(event: string, arg?: unknown): void
+    starts: number
+    disconnects: number
+    resolve(): void
+    reject(err: unknown): void
+  }
+  /** A client factory whose n-th client's start behaves as `outcomes[n]` (the last one repeats). */
+  function factory(outcomes: Outcome[]): { next: () => SocketClient; built: Built[] } {
+    const built: Built[] = []
+    const next = (): SocketClient => {
+      const outcome = outcomes[Math.min(built.length, outcomes.length - 1)]
+      const listeners = new Map<string, Array<(arg: never) => void>>()
+      let resolve = (): void => {}
+      let reject = (_err: unknown): void => {}
+      const b: Built = {
+        emit: (event, arg) => (listeners.get(event) ?? []).forEach((l) => l(arg as never)),
+        starts: 0,
+        disconnects: 0,
+        resolve: () => resolve(),
+        reject: (err) => reject(err)
+      }
+      built.push(b)
+      return {
+        on: (event, listener) => listeners.set(event, [...(listeners.get(event) ?? []), listener]),
+        start: () => {
+          b.starts++
+          if (outcome === 'ok') return Promise.resolve({})
+          if (outcome === 'pending')
+            return new Promise((res, rej) => {
+              resolve = () => res({})
+              reject = rej
+            })
+          return Promise.reject(outcome)
+        },
+        disconnect: async () => {
+          b.disconnects++
+        }
+      }
+    }
+    return { next, built }
+  }
+  const platformError = (code: string): Error => Object.assign(new Error(`An API error occurred: ${code}`), { name: 'Error', code: 'slack_webapi_platform_error', data: { error: code } })
+  const realTick = (): Promise<void> => new Promise((r) => setTimeout(r, 20))
+
+  it('a reconnect whose start rejects neither throws nor leaves an unhandled rejection, and it tries again', async () => {
+    const seen: unknown[] = []
+    const on = (e: unknown): void => {
+      seen.push(e)
+    }
+    process.on('unhandledRejection', on)
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      const f = factory(['ok', new Error('ECONNRESET'), 'ok'])
+      await h.inbox.start(f.next(), f.next)
+      f.built[0].emit('disconnected')
+      await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS)
+      expect(f.built).toHaveLength(2)
+      expect(f.built[1].starts).toBe(1)
+      await vi.advanceTimersByTimeAsync(2 * RECONNECT_BASE_MS)
+      expect(f.built).toHaveLength(3)
+      vi.useRealTimers()
+      await realTick()
+      expect(seen).toEqual([])
+      expect(h.logs.join('\n')).toMatch(/slack socket start failed\(Error\)/)
+    } finally {
+      vi.useRealTimers()
+      process.off('unhandledRejection', on)
+    }
+  })
+
+  it('the backoff grows with each failure and is capped at five minutes', async () => {
+    expect([0, 1, 2, 3].map(reconnectDelayMs)).toEqual([1_000, 2_000, 4_000, 8_000])
+    expect(reconnectDelayMs(9)).toBe(RECONNECT_CAP_MS)
+    expect(reconnectDelayMs(500)).toBe(RECONNECT_CAP_MS)
+    expect(RECONNECT_CAP_MS).toBe(5 * 60_000)
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      const f = factory([new Error('ECONNRESET')])
+      await h.inbox.start(f.next(), f.next)
+      // Failures 1, 2 and 3 wait 1 s, 2 s and 4 s: one tick short of each, nothing new is built.
+      for (const [wait, count] of [[1_000, 2], [2_000, 3], [4_000, 4]] as const) {
+        await vi.advanceTimersByTimeAsync(wait - 1)
+        expect(f.built).toHaveLength(count - 1)
+        await vi.advanceTimersByTimeAsync(1)
+        expect(f.built).toHaveLength(count)
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a stop while a retry is pending cancels it: no socket is built afterwards', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      const f = factory(['ok'])
+      await h.inbox.start(f.next(), f.next)
+      f.built[0].emit('disconnected')
+      expect(h.logs.join('\n')).toMatch(/slack socket reconnecting in 1 s/)
+      await h.inbox.stop()
+      await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS * 2)
+      expect(f.built).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a start that resolves after a stop is closed, and its messages reach nobody', async () => {
+    const h = setup()
+    const f = factory(['pending'])
+    const started = h.inbox.start(f.next(), f.next)
+    await h.inbox.stop()
+    expect(f.built[0].disconnects).toBe(1)
+    f.built[0].resolve()
+    await started
+    await flush()
+    expect(f.built[0].disconnects).toBe(2)
+    f.built[0].emit('message', { ack: async () => {}, event: message() })
+    await flush()
+    expect(h.writes).toEqual([])
+  })
+
+  it('invalid_auth stops the retries and says so, until the config is applied again', async () => {
+    vi.useFakeTimers()
+    try {
+      const sockets: Built[] = []
+      const f = factory(['ok', platformError('invalid_auth'), 'ok'])
+      const logs: string[] = []
+      const controller = new SlackInboxController({
+        makeDeps: (channelId, memberId) => ({ ...setup().deps, channelId, memberId, log: (m) => logs.push(m) }),
+        createClient: () => {
+          const c = f.next()
+          sockets.push(f.built[f.built.length - 1])
+          return c
+        },
+        isQuitting: () => false
+      })
+      const cfg = { appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1', memberId: ME }
+      await controller.apply(cfg)
+      sockets[0].emit('disconnected')
+      await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS)
+      expect(sockets).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(RECONNECT_CAP_MS * 3)
+      expect(sockets).toHaveLength(2)
+      expect(logs.join('\n')).toMatch(/invalid_auth.*not retrying until the Slack settings are applied again/)
+      // slack-reload (or a settings save) with the same token builds it again.
+      await controller.apply({ ...cfg })
+      expect(sockets).toHaveLength(3)
+      expect(sockets[2].starts).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the controller does not hold a stop behind a start that is still retrying', async () => {
+    const f = factory(['pending'])
+    const controller = new SlackInboxController({
+      makeDeps: (channelId, memberId) => ({ ...setup().deps, channelId, memberId }),
+      createClient: () => f.next(),
+      isQuitting: () => false
+    })
+    await controller.apply({ appToken: 'xapp-1', botToken: 'xoxb-1', channelId: 'C1', memberId: ME })
+    await controller.stop()
+    expect(f.built[0].disconnects).toBe(1)
+    f.built[0].resolve()
+    await flush()
+    await flush()
+    expect(f.built[0].disconnects).toBe(2)
   })
 })

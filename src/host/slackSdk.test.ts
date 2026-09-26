@@ -17,7 +17,7 @@ describe('loadSlackSdk (Slack in the Host Task 3, P1)', () => {
     sdk!.createClient('xapp-t')
     expect(made).toEqual([
       ['web', 'xoxb-t', { timeout: 10_000, retryConfig: { retries: 2 }, slackApiUrl: 'http://127.0.0.1:9/api/' }],
-      ['socket', { appToken: 'xapp-t', clientOptions: { slackApiUrl: 'http://127.0.0.1:9/api/' } }]
+      ['socket', { appToken: 'xapp-t', autoReconnectEnabled: false, clientOptions: { slackApiUrl: 'http://127.0.0.1:9/api/' } }]
     ])
   })
 
@@ -35,5 +35,11 @@ describe('loadSlackSdk (Slack in the Host Task 3, P1)', () => {
   it('loads the installed SDK for real, and constructing a client sends nothing', async () => {
     const sdk = await loadSlackSdk({ env: {}, log: () => {} })
     expect(typeof sdk?.createPoster('xoxb-test').chat.postMessage).toBe('function')
+  })
+
+  // Final review C1: the SDK's own reconnect drops its promise, so a failed one ended the Host.
+  it('builds the real socket-mode client with its own reconnect off: SlackInbox reconnects instead', async () => {
+    const sdk = await loadSlackSdk({ env: {}, log: () => {} })
+    expect((sdk!.createClient('xapp-test') as unknown as { autoReconnectEnabled: boolean }).autoReconnectEnabled).toBe(false)
   })
 })

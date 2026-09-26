@@ -31,7 +31,9 @@ function fakeSlack(o: { delay?: number } = {}) {
       const c = {
         on: (e: string, l: (arg: never) => void) => { handlers.set(e, l) },
         start: async () => { trail.push(`open ${n}`); live.add(c); peak = Math.max(peak, live.size); await wait() },
-        disconnect: async () => { await wait(); live.delete(c); trail.push(`close ${n}`) },
+        // A disconnect of a socket already closed closes nothing (the inbox closes a start that resolves
+        // after its stop, final review C1).
+        disconnect: async () => { await wait(); if (live.delete(c)) trail.push(`close ${n}`) },
         emit: (e: string, arg: unknown) => handlers.get(e)?.(arg as never)
       }
       clients.push(c)

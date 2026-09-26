@@ -32,7 +32,10 @@ export async function loadSlackSdk(a: {
     const url = slackApiUrlFrom(a.env)
     return {
       createPoster: (token) => new WebClient(token, { ...WEB_CLIENT_OPTIONS, ...(url ? { slackApiUrl: url } : {}) }),
-      createClient: (appToken) => new SocketModeClient({ appToken, ...(url ? { clientOptions: { slackApiUrl: url } } : {}) })
+      // The SDK's own reconnect is off (final review C1): it dropped its promise, and on node.exe a
+      // reconnect that failed for good was an unhandled rejection that ended the Host. SlackInbox reconnects.
+      createClient: (appToken) =>
+        new SocketModeClient({ appToken, autoReconnectEnabled: false, ...(url ? { clientOptions: { slackApiUrl: url } } : {}) })
     }
   } catch (err) {
     // The name only: an SDK error message can carry a path or a token.
