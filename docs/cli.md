@@ -548,8 +548,10 @@ list. Filters on one command combine.
   stopped with `runs stop` is paused on the run, and `runs get` shows it.
 - **`jobs list --project <path>`** keeps the Jobs of the project a folder belongs to, found the way
   `projects find` finds it (below). A folder no project holds is a 4 with `astera projects list` as its
-  step. A Job belongs to the project it was created in; one made before projects were registered
-  belongs by its folder.
+  step. A Job belongs to the project it was created in. A Job with no project of its own, such as one
+  made before projects were registered or one made from a project's subfolder with Astera closed,
+  belongs by its folder, with the rule `projects find` uses: the longest registered folder that is its
+  folder or holds it.
 - **`questions list --run <runId>`** keeps one run's questions. An unknown run is a 4, as it is for
   `tasks list --run`, with `astera runs list` as its step.
 - **`questions list --status`** is `open` or `resolved`. Any other value is a 2, as for the other

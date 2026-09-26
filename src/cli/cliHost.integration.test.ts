@@ -781,9 +781,10 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
       expect(onDisk.jobs.map((j) => j.cwd).sort()).toEqual([project, sub].sort())
     })
 
-    // The global --project, given the Hangul subfolder, finds the project and lists its Job.
+    // The global --project, given the Hangul subfolder, finds the project and lists both its Jobs: the
+    // one at the root by its projectId, the one in the subfolder by the folder it is inside.
     const inProject = okData(await astera(['--project', sub, 'jobs', 'list'], h.env), 'jobs list --project')
-    expect((inProject.jobs as Array<{ id: string }>).map((j) => j.id)).toEqual([job.id])
+    expect((inProject.jobs as Array<{ id: string }>).map((j) => j.id).sort()).toEqual([job.id, inSub.id].sort())
     const got = okData(await astera(['jobs', 'get', '--id', inSub.id as string], h.env), 'jobs get')
     expect(got).toMatchObject({ objective: '하위', cwd: sub })
 

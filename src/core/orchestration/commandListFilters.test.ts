@@ -312,6 +312,30 @@ describe('projects find — a path inside a project names that project', () => {
     expect(r.status).toBe(200)
     expect(ids(r.body)).toEqual([deps.getState().jobs[0].id])
   })
+
+  // A Job created from a subfolder keeps that folder and gets no projectId (with Astera closed nothing
+  // moves it up to the root; run-create attaches a project only by an exact path). It still belongs to
+  // the project `projects find` names for its folder: the longest registered root that holds it.
+  it('a Job made from a subfolder is listed under the project that folder is inside, by the longest root', async () => {
+    const deps = seeded()
+    const made = async (objective: string, cwd: string): Promise<string> => {
+      await call(deps, 'jobs-create', { objective, cwd })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const inRoot = await made('in the root', absPath('work', 'proj', 'src', 'core'))
+    const inNested = await made('in the package', absPath('work', 'proj', 'packages', 'sub', 'lib'))
+    const beside = await made('beside it', absPath('work', 'proj2'))
+    expect(deps.getState().jobs.find((j) => j.id === inRoot)?.projectId).toBeUndefined()
+    const listed = async (p: string): Promise<string[]> => ids((await call(deps, 'jobs-list', { project: p })).body).sort()
+    expect(await listed(root)).toEqual([inRoot])
+    expect(await listed(nested)).toEqual([inNested])
+    expect(await listed(absPath('work', 'proj', 'src'))).toEqual([inRoot])
+    expect([...(await listed(root)), ...(await listed(nested))]).not.toContain(beside)
+    // runs list --project reads the same rule.
+    await call(deps, 'jobs-run', { id: inRoot })
+    const runs = (await call(deps, 'runs-list', { project: root })).body as { jobId: string }[]
+    expect(runs.map((r) => r.jobId)).toEqual([inRoot])
+  })
 })
 
 describe('runs list --project and sessions list --project', () => {

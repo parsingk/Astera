@@ -50,15 +50,21 @@ export function findProject(s: OrchState, id: string): Project | undefined {
 /**
  * Whether this Job belongs to this project, for `jobs list --project` (CLI spec §16).
  *
- * **The rule `jobsForProject` uses (view.ts), minus its worktree mapping.** `projectId` wins when it
- * resolves; a Job made before projects were registered, or one whose project record is gone, belongs
- * by its folder, compared with `isSamePath`. The worktree registry that lets the sidebar map a
- * worktree folder back to its repository is the app's (`core.worktrees`) and this layer has none, so
- * an old Job created inside a worktree is not matched here. Every Job made since has a `projectId`.
+ * `projectId` wins when it resolves. A Job without one belongs by its folder, **with the rule
+ * `projects find` uses** (`findProjectContaining`): the longest registered root that is its folder or
+ * holds it. That covers a Job made before projects were registered, one whose project record is gone,
+ * and one made from a subfolder of a project, which keeps that folder and gets no `projectId` when
+ * nothing moved it up to the root (with Astera closed, `run-create` attaches a project only by an
+ * exact path). Comparing with `isSamePath` alone left that last Job under no project at all, although
+ * `projects find` named one for its folder.
+ *
+ * The worktree registry that lets the sidebar map a worktree folder back to its repository is the
+ * app's (`core.worktrees`) and this layer has none, so an old Job created inside a worktree is not
+ * matched here.
  */
 export function jobInProject(s: OrchState, job: Pick<Job, 'projectId' | 'cwd'>, project: Project): boolean {
   if (job.projectId !== undefined && findProject(s, job.projectId)) return job.projectId === project.id
-  return isSamePath(project.path, job.cwd)
+  return findProjectContaining(s, job.cwd)?.id === project.id
 }
 
 /**
