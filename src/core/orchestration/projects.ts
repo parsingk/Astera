@@ -5,7 +5,7 @@
 // in. `state.ts` is listed in tsconfig.web.json and the renderer imports it, so it cannot have that.
 // The state operations that need a path live here instead; `OrchState.projects` is still just an
 // array on the state those functions return.
-import { isSamePath } from '../files/tree'
+import { comparablePath, isPathWithin, isSamePath } from '../files/tree'
 import { newId, type Job, type Project } from './types'
 import type { OrchState, Res } from './state'
 
@@ -21,6 +21,26 @@ export function nameFromPath(p: string): string {
 
 export function findProjectByPath(s: OrchState, path: string): Project | undefined {
   return s.projects.find((p) => isSamePath(p.path, path))
+}
+
+/**
+ * The registered project a path belongs to, for `projects find` and every `--project` filter: the
+ * project whose root is that path or holds it, and **the longest such root** when projects nest (a
+ * package registered inside a monorepo that is registered too). A sibling that only shares a prefix
+ * (`proj2` beside `proj`) is not inside: `isPathWithin` asks for a separator boundary.
+ */
+export function findProjectContaining(s: OrchState, path: string): Project | undefined {
+  let best: Project | undefined
+  let bestLength = -1
+  for (const p of s.projects) {
+    if (!isPathWithin(p.path, path)) continue
+    const length = comparablePath(p.path).length
+    if (length > bestLength) {
+      best = p
+      bestLength = length
+    }
+  }
+  return best
 }
 
 export function findProject(s: OrchState, id: string): Project | undefined {

@@ -119,13 +119,15 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'projects-find': {
     summary: 'the registered project a folder belongs to',
-    flags: [{ name: 'path', value: '<path>', required: true, about: 'an absolute path inside the project' }]
+    detail:
+      'The registered project whose folder is that path or holds it. When projects nest, the one with the longest folder wins. A folder no project holds is 4.',
+    flags: [{ name: 'path', value: '<path>', required: true, about: 'the project folder, or any path inside it' }]
   },
 
   'jobs-list': {
     summary: 'every Job, with the state of its latest run',
     detail:
-      'Two filters, and they combine. --status keeps the Jobs whose state is that word: the word the first column of --human shows, in lower case, where completed is COMPLETE. Any other value is refused with 2. --project keeps the Jobs of the project a folder is registered as, found the way `projects find` finds it; a folder no project is registered for is 4.',
+      'Two filters, and they combine. --status keeps the Jobs whose state is that word: the word the first column of --human shows, in lower case, where completed is COMPLETE. Any other value is refused with 2. --project keeps the Jobs of the project a folder belongs to, found the way `projects find` finds it; a folder no project holds is 4.',
     flags: [
       {
         name: 'status',
@@ -263,7 +265,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [
       { name: 'run', value: '<runId>', about: 'only the questions of this run (an unknown run is 4)' },
       { name: 'task', value: '<taskId>', about: 'only the questions of this task' },
-      { name: 'status', value: '<open|resolved>', about: 'only questions in this state' }
+      { name: 'status', value: '<open|resolved>', about: 'only questions in this state (any other value is 2)' }
     ]
   },
   'questions-get': {

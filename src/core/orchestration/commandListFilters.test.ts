@@ -238,3 +238,78 @@ describe('sessions list --status and --provider', () => {
     expect((await call(hostDeps(), 'sessions-list', { provider: true })).status).toBe(400)
   })
 })
+
+describe('questions list --status — open or resolved, nothing else', () => {
+  const oneOfEach = async (): Promise<{ deps: OrchServerDeps; open: string; resolved: string }> => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs.at(-1)!.id
+    const gates: string[] = []
+    for (const title of ['a', 'b']) {
+      const t = await call(deps, 'task-create', { run: runId, title, spec: 's', account: 'acc_x' })
+      const g = await call(deps, 'gate-create', { task: (t.body as { id: string }).id, question: 'q' })
+      gates.push((g.body as { id: string }).id)
+    }
+    await call(deps, 'gate-resolve', { id: gates[1], resolution: 'yes' })
+    return { deps, open: gates[0], resolved: gates[1] }
+  }
+
+  it('keeps only the questions in that state', async () => {
+    const { deps, open, resolved } = await oneOfEach()
+    expect(ids((await call(deps, 'questions-list', { status: 'open' })).body)).toEqual([open])
+    expect(ids((await call(deps, 'questions-list', { status: 'resolved' })).body)).toEqual([resolved])
+  })
+
+  it('an unknown value is a 400 that names the two it knows, not an empty list', async () => {
+    const { deps } = await oneOfEach()
+    const r = await call(deps, 'questions-list', { status: 'answered' })
+    expect(r.status).toBe(400)
+    const error = (r.body as { error: string }).error
+    expect(error).toContain('answered')
+    expect(error).toContain('open')
+    expect(error).toContain('resolved')
+  })
+
+  it('a --status with no value is a 400', async () => {
+    const { deps } = await oneOfEach()
+    expect((await call(deps, 'questions-list', { status: true })).status).toBe(400)
+    expect((await call(deps, 'questions-list', { status: '' })).status).toBe(400)
+  })
+})
+
+describe('projects find — a path inside a project names that project', () => {
+  const root = absPath('work', 'proj')
+  const nested = absPath('work', 'proj', 'packages', 'sub')
+  const seeded = (): OrchServerDeps => {
+    const a = ensureProject(emptyState(), { path: root, now: NOW })
+    const b = ensureProject(a.state, { path: nested, now: NOW })
+    return makeDeps(b.state)
+  }
+  const found = async (deps: OrchServerDeps, p: string): Promise<string | number> => {
+    const r = await call(deps, 'projects-find', { path: p })
+    return r.status === 200 ? (r.body as { path: string }).path : r.status
+  }
+
+  it('a folder below a project root is that project', async () => {
+    expect(await found(seeded(), absPath('work', 'proj', 'src', 'core'))).toBe(root)
+  })
+
+  it('the longest registered root that holds the path wins', async () => {
+    expect(await found(seeded(), absPath('work', 'proj', 'packages', 'sub', 'lib'))).toBe(nested)
+    expect(await found(seeded(), nested)).toBe(nested)
+    expect(await found(seeded(), absPath('work', 'proj', 'packages'))).toBe(root)
+  })
+
+  it('a sibling that only shares a prefix is not inside', async () => {
+    expect(await found(seeded(), absPath('work', 'proj2'))).toBe(404)
+    expect(await found(seeded(), absPath('work'))).toBe(404)
+  })
+
+  it('jobs list --project finds its project the same way', async () => {
+    const deps = seeded()
+    await call(deps, 'jobs-create', { objective: 'mine', cwd: root })
+    const r = await call(deps, 'jobs-list', { project: absPath('work', 'proj', 'src') })
+    expect(r.status).toBe(200)
+    expect(ids(r.body)).toEqual([deps.getState().jobs[0].id])
+  })
+})

@@ -46,7 +46,7 @@ import {
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
 import type { SwitchedCommand } from './cliAgentContext'
-import { findProject, findProjectByPath, jobInProject } from './projects'
+import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
 import { eventCountFor, timelineFor } from './timeline'
@@ -1463,12 +1463,13 @@ export async function handleCommand(
       const project = findProject(s, id)
       return project ? okBody(project) : notFound(`unknown project: ${id}`)
     }
-    // **경로로 찾는다.** 셸에서 치는 쪽은 id 를 모르고 자기가 선 폴더를 안다. 비교는 isSamePath 다
-    // — win32 은 대소문자를 가리지 않고 같은 저장소가 여러 철자로 들어온다.
+    // **경로로 찾는다.** 셸에서 치는 쪽은 id 를 모르고 자기가 선 폴더를 안다. 그 폴더가 프로젝트의
+    // 뿌리이거나 그 아래이면 그 프로젝트이고, 중첩되어 있으면 가장 긴 뿌리다(findProjectContaining).
+    // 비교는 comparablePath 다 — win32 은 대소문자를 가리지 않고 같은 저장소가 여러 철자로 들어온다.
     case 'projects-find': {
       const p = str(args.path)
       if (!p) return bad('--path is required')
-      const project = findProjectByPath(s, p)
+      const project = findProjectContaining(s, p)
       return project ? okBody(project) : notFound(`no project registered for: ${p}`)
     }
     // **회차를 낸다, 계획이 아니라.** `--job` 은 한 계획의 회차만 추린다. 번호순으로 내보내는
@@ -1786,7 +1787,7 @@ export async function handleCommand(
       if (args.project !== undefined) {
         const p = str(args.project)
         if (p === null) return bad('--project needs a value: a project folder (from `projects list`)')
-        const project = findProjectByPath(s, p)
+        const project = findProjectContaining(s, p)
         if (!project) return notFound(`no project registered for: ${p}`)
         jobs = jobs.filter((j) => jobInProject(s, j, project))
       }
@@ -3368,7 +3369,10 @@ export async function handleCommand(
         gates = gates.filter((g) => g.runId === run)
       }
       if (str(args.task)) gates = gates.filter((g) => g.taskId === args.task)
-      if (str(args.status)) gates = gates.filter((g) => g.status === args.status)
+      // An unknown value used to list nothing at exit 0, which reads as "no such questions".
+      const status = enumFilter('status', args.status, ['open', 'resolved'] as const)
+      if ('error' in status) return bad(status.error)
+      if (status.value !== undefined) gates = gates.filter((g) => g.status === status.value)
       return okBody(gates)
     }
     // **오케스트레이터가 거기 있는가, 그리고 무엇이 돌고 있는가**(공개 CLI 설계 §5). 이 명령에

@@ -449,7 +449,7 @@ astera host    status | start | stop
 
 astera projects list
 astera projects get   --id <projectId>
-astera projects find  --path <absolute path>
+astera projects find  --path <path>
 
 astera jobs    list   [--status <pending|paused|scheduled|waiting|running|completed|failed>] [--project <path>]
 astera jobs    get    --id <jobId | runId>
@@ -544,16 +544,24 @@ list. Filters on one command combine.
   script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
   `outcome`, in that order. `paused` is the Job's own pause, which is what the table shows; a run
   stopped with `runs stop` is paused on the run, and `runs get` shows it.
-- **`jobs list --project <path>`** keeps the Jobs of the project a folder is registered as, found the
-  way `projects find` finds it: the path must be the project's folder, and win32 ignores case. A
-  folder no project is registered for is a 4 with `astera projects list` as its step. A Job belongs to
-  the project it was created in; one made before projects were registered belongs by its folder.
+- **`jobs list --project <path>`** keeps the Jobs of the project a folder belongs to, found the way
+  `projects find` finds it (below). A folder no project holds is a 4 with `astera projects list` as its
+  step. A Job belongs to the project it was created in; one made before projects were registered
+  belongs by its folder.
 - **`questions list --run <runId>`** keeps one run's questions. An unknown run is a 4, as it is for
   `tasks list --run`, with `astera runs list` as its step.
+- **`questions list --status`** is `open` or `resolved`. Any other value is a 2, as for the other
+  filters, never an empty list.
 - **`sessions list --status`** is `alive` or `ended`, which read `alive`, or `working`, `waiting` or
   `unknown`, which read `state`. **`--provider claude|codex`** keeps the sessions whose account is on
   that vendor, as `accounts list` shows it. A session whose account has since been removed matches
   neither.
+
+**`projects find --path <path>` names the project a folder belongs to**: the registered project whose
+folder is that path or holds it. When registered projects nest, as a package registered inside a
+registered monorepo, the one with the longest folder wins. A folder that only shares a prefix with a
+project (`proj2` beside `proj`) is not inside it. win32 and macOS ignore case. A folder no project
+holds is a 4 with `astera projects list` as its step.
 
 **`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
 run it started, which is the id to pass to `runs wait`.
