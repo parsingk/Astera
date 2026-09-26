@@ -130,6 +130,9 @@ export const hasColumn = (db: DatabaseSync, table: string, column: string): bool
 interface OpenResult {
   db: DatabaseSync
   version: number
+  /** Set when an older file was read but could not be brought to this version. The file is left as
+   *  it was (the step is one transaction) and opened read-only in effect: not a corrupt file. */
+  upgradeFailed?: unknown
 }
 
 /** Opens (or creates) the file and brings it to the schema. Throws when the file is not a database. */
@@ -153,24 +156,13 @@ function open(filePath: string): OpenResult {
       ? (db.prepare('SELECT version FROM schema_meta LIMIT 1').get() as { version: number } | undefined)
       : undefined
     if (meta && meta.version > SCHEMA_VERSION) return { db, version: meta.version }
-    // A fresh file is born at v3. On a v1 file the CREATE TABLE IF NOT EXISTS adds what version 2
-    // added (recovery_actions); it does not touch an existing journal_events, hence the step below.
-    db.exec(SCHEMA)
-    // v3 (Host journal J4): who acted. A v2 table gains the column empty, so its rows read as actor
-    // null; nothing is inferred for them. In one transaction with the stamp, so a crash between the two
-    // cannot leave a v2 stamp on a v3 table or the reverse.
-    db.exec('BEGIN')
     try {
-      if (!hasColumn(db, 'journal_events', 'actor_json')) db.exec('ALTER TABLE journal_events ADD COLUMN actor_json TEXT')
-      if (!meta) db.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(SCHEMA_VERSION)
-      else if (meta.version < SCHEMA_VERSION) db.prepare('UPDATE schema_meta SET version = ?').run(SCHEMA_VERSION)
-      db.exec('COMMIT')
+      migrate(db, meta)
     } catch (err) {
-      try {
-        db.exec('ROLLBACK')
-      } catch {
-        /* the original error is the one worth reporting */
-      }
+      // An older file whose upgrade failed was readable a moment ago: keep it where it is, with its
+      // rows, rather than moving it aside as if it were corrupt. A fresh file that fails here is not
+      // an upgrade and takes the corrupt path.
+      if (meta && meta.version < SCHEMA_VERSION) return { db, version: meta.version, upgradeFailed: err }
       throw err
     }
     return { db, version: SCHEMA_VERSION }
@@ -179,6 +171,30 @@ function open(filePath: string): OpenResult {
       db.close()
     } catch {
       /* the open itself may have failed half-way */
+    }
+    throw err
+  }
+}
+
+/** Brings the file to SCHEMA_VERSION. Throws, leaving the file as it was, when the v3 step fails. */
+function migrate(db: DatabaseSync, meta: { version: number } | undefined): void {
+  // A fresh file is born at v3. On a v1 file the CREATE TABLE IF NOT EXISTS adds what version 2
+  // added (recovery_actions); it does not touch an existing journal_events, hence the step below.
+  db.exec(SCHEMA)
+  // v3 (Host journal J4): who acted. A v2 table gains the column empty, so its rows read as actor
+  // null; nothing is inferred for them. In one transaction with the stamp, so a crash between the two
+  // cannot leave a v2 stamp on a v3 table or the reverse.
+  db.exec('BEGIN')
+  try {
+    if (!hasColumn(db, 'journal_events', 'actor_json')) db.exec('ALTER TABLE journal_events ADD COLUMN actor_json TEXT')
+    if (!meta) db.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(SCHEMA_VERSION)
+    else if (meta.version < SCHEMA_VERSION) db.prepare('UPDATE schema_meta SET version = ?').run(SCHEMA_VERSION)
+    db.exec('COMMIT')
+  } catch (err) {
+    try {
+      db.exec('ROLLBACK')
+    } catch {
+      /* the original error is the one worth reporting */
     }
     throw err
   }
@@ -195,10 +211,13 @@ export class ContinuityJournal {
   private readonly db: DatabaseSync
   /** True when the file could not be opened as a database and was moved aside (design §4). */
   readonly recovered: boolean
-  /** False when the file is intact but was written by a newer build (a higher schema version):
-   *  it is left untouched and every write becomes a no-op (a journal problem must never stop a Job). */
+  /** False when the file is intact but was written by a newer build (a higher schema version), or is
+   *  an older one whose upgrade failed: it is left untouched, reads still work and every write becomes
+   *  a no-op (a journal problem must never stop a Job). */
   readonly usable: boolean
   private readonly version: number
+  /** Whether journal_events has actor_json: false only on an older file whose upgrade failed. */
+  private readonly withActor: boolean
 
   constructor(
     private readonly filePath: string,
@@ -218,8 +237,13 @@ export class ContinuityJournal {
     this.db = opened.db
     this.version = opened.version
     this.recovered = recovered
-    this.usable = opened.version <= SCHEMA_VERSION
-    if (!this.usable)
+    this.usable = opened.version <= SCHEMA_VERSION && opened.upgradeFailed === undefined
+    this.withActor = hasColumn(this.db, 'journal_events', 'actor_json')
+    if (opened.upgradeFailed !== undefined)
+      deps.log?.(
+        `journal at version ${opened.version} could not be upgraded to ${SCHEMA_VERSION} (${String(opened.upgradeFailed)}); it is kept as it was and journaling is off for this session`
+      )
+    else if (!this.usable)
       deps.log?.(`journal written by a newer build (version ${opened.version}); journaling is off for this session`)
   }
 
@@ -358,7 +382,7 @@ export class ContinuityJournal {
   eventsFor(runId: string): JournalEventRow[] {
     return (
       this.db
-        .prepare(`${selectEvents(true)} WHERE run_id = ? ORDER BY rowid`)
+        .prepare(`${selectEvents(this.withActor)} WHERE run_id = ? ORDER BY rowid`)
         // .all()'s typed return (Record<string, SQLOutputValue>[]) doesn't structurally overlap
         // RawEvent[] enough for a direct assertion (TS2352) the way the single-row .get() casts
         // below do; route through `unknown`, same as tsc's own suggestion.
@@ -367,7 +391,7 @@ export class ContinuityJournal {
   }
 
   lastEvent(): JournalEventRow | null {
-    const raw = this.db.prepare(`${selectEvents(true)} ORDER BY rowid DESC LIMIT 1`).get() as RawEvent | undefined
+    const raw = this.db.prepare(`${selectEvents(this.withActor)} ORDER BY rowid DESC LIMIT 1`).get() as RawEvent | undefined
     return raw ? rowToEvent(raw) : null
   }
 
@@ -451,7 +475,8 @@ const SELECT_EVENT_COLUMNS =
   'SELECT rowid AS sequence, event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json'
 
 /** The events SELECT prefix. `withActor` is false only for a v2 file the read-only reader must not
- *  migrate (it has no actor_json column); the writer always passes true, its file is v3 once opened. */
+ *  migrate (it has no actor_json column), and for the writer's own reads of an older file whose upgrade
+ *  failed; otherwise the writer's file is v3 once opened. */
 export function selectEvents(withActor: boolean): string {
   return `${SELECT_EVENT_COLUMNS}${withActor ? ', actor_json' : ''} FROM journal_events`
 }

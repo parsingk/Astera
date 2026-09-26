@@ -290,8 +290,9 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
   })
 
   // The column and the stamp move together or not at all: a failure between them (here a trigger that
-  // refuses the stamp, standing in for a crash) leaves the file exactly as v2 left it.
-  it('rolls the whole v3 step back when it fails midway: no column without the stamp', async () => {
+  // refuses the stamp, standing in for a crash) leaves the file exactly as v2 left it. A failed upgrade
+  // is not a corrupt file: it stays where it is, readable, and this session writes nothing to it.
+  it('a v3 step that fails midway leaves the v2 file in place, readable and unwritten, moving nothing aside', async () => {
     await writeV2File()
     const { DatabaseSync } = await import('node:sqlite')
     const raw = new DatabaseSync(file())
@@ -299,13 +300,16 @@ describe('ContinuityJournal v3 (Host journal J4)', () => {
     raw.close()
     const logs: string[] = []
     const j = new ContinuityJournal(file(), { log: (m) => logs.push(m), now: () => '2026-09-26T10:00:00.000Z' })
-    // The failed open is handled as today's unopenable file: moved aside, a fresh file in its place.
-    expect(j.recovered).toBe(true)
+    expect(j.recovered).toBe(false)
+    expect(j.usable).toBe(false)
+    expect(j.schemaVersion()).toBe(2)
     expect(logs.some((l) => l.includes('crash midway'))).toBe(true)
+    expect(j.eventsFor('run_1')).toEqual([expect.objectContaining({ eventId: 'e1', actor: null })])
+    expect(j.lastEvent()).toEqual(expect.objectContaining({ eventId: 'e1' }))
+    expect(j.append([{ ...ev('TASK_COMPLETED', 'k2'), actor: { surface: 'host' } }])).toBe(0)
     j.close()
-    const aside = (await fs.readdir(dir)).find((n) => /^continuity\.sqlite\.corrupt-[^.]*$/.test(n))
-    expect(aside).toBeDefined()
-    const old = new DatabaseSync(path.join(dir, aside as string))
+    expect((await fs.readdir(dir)).filter((n) => n.includes('.corrupt-'))).toEqual([])
+    const old = new DatabaseSync(file())
     const cols = (old.prepare('PRAGMA table_info(journal_events)').all() as { name: string }[]).map((c) => c.name)
     const version = (old.prepare('SELECT version FROM schema_meta').get() as { version: number }).version
     const rows = old.prepare('SELECT event_id FROM journal_events').all() as { event_id: string }[]
