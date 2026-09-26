@@ -73,6 +73,42 @@ const appImageShuttle = (a: AppImageLaunch): ShuttleFile => ({
     ` astera --no-sandbox "$@"\n`
 })
 
+/** The folders a Windows user's own paths live under, by the variable that names each. */
+const USER_FOLDER_VARS = ['LOCALAPPDATA', 'APPDATA', 'USERPROFILE'] as const
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/
+
+/**
+ * A path as the `.cmd` shuttle writes it: **with a user folder that is not ASCII written as its
+ * variable** (`%LOCALAPPDATA%\Programs\Astera\Astera.exe`).
+ *
+ * cmd.exe reads a batch file in the console's OEM code page (949 on Korean Windows, 437 on English),
+ * never as UTF-8, so a `C:\Users\홍길동\…` written into the file comes back as other characters and
+ * the program is not found (measured 2026-09-26). The executable and the CLI entry both sit under the
+ * user's own folder, so for a person whose user name is not ASCII every `astera` from cmd or
+ * PowerShell failed. A variable is expanded inside cmd from the environment, which is UTF-16, so the
+ * path arrives whole and the file stays ASCII.
+ *
+ * **Only a path that needs it is touched.** An ASCII path is written exactly as before, so nobody who
+ * works today depends on a variable being set. Of the folders that hold the path, the longest whose
+ * remainder is ASCII wins; a path with no such folder (a non-ASCII install folder outside the user's
+ * own) is written as it is, which is what it was before. Windows compares paths without case, and a
+ * folder counts only up to a separator, so `C:\Users\홍` does not claim `C:\Users\홍길동`.
+ */
+const forCmd = (p: string, env: NodeJS.ProcessEnv): string => {
+  if (PRINTABLE_ASCII.test(p)) return p
+  let best: { name: string; length: number } | null = null
+  for (const name of USER_FOLDER_VARS) {
+    const value = env[name]?.replace(/[\\/]+$/, '')
+    if (!value) continue
+    const rest = p.slice(value.length)
+    if (p.slice(0, value.length).toLowerCase() !== value.toLowerCase()) continue
+    if (rest !== '' && rest[0] !== '\\' && rest[0] !== '/') continue
+    if (!PRINTABLE_ASCII.test(rest)) continue
+    if (best === null || value.length > best.length) best = { name, length: value.length }
+  }
+  return best === null ? p : `%${best.name}%${p.slice(best.length)}`
+}
+
 /**
  * The shuttle files for this platform. **The first element is the canonical one that `ASTERA_CLI`
  * points at** — on win32 that is the `.cmd`, because it resolves reliably from PowerShell and cmd,
@@ -87,12 +123,15 @@ export function shuttleFiles(a: {
   entryPath: string
   appImage?: AppImageLaunch
   platform?: NodeJS.Platform
+  /** Where the user folders `forCmd` writes as variables are read from. This process's by default. */
+  env?: NodeJS.ProcessEnv
 }): ShuttleFile[] {
   if ((a.platform ?? process.platform) === 'win32') {
+    const env = a.env ?? process.env
     return [
       {
         name: 'astera.cmd',
-        content: `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${a.execPath}" "${a.entryPath}" %*\r\n`
+        content: `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${forCmd(a.execPath, env)}" "${forCmd(a.entryPath, env)}" %*\r\n`
       },
       shShuttle(a)
     ]
@@ -162,6 +201,7 @@ export async function syncShuttle(a: {
   entryPath: string
   appImage?: AppImageLaunch
   platform?: NodeJS.Platform
+  env?: NodeJS.ProcessEnv
 }): Promise<ShuttleSyncPlan> {
   const desired = shuttleFiles(a)
   const current: Record<string, string | null> = {}
@@ -194,6 +234,7 @@ export async function writeShuttle(a: {
   entryPath: string
   appImage?: AppImageLaunch
   platform?: NodeJS.Platform
+  env?: NodeJS.ProcessEnv
 }): Promise<string> {
   const files = shuttleFiles(a)
   await fs.mkdir(a.dir, { recursive: true })

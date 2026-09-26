@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import {
   appImageBootstrap,
   ensureShuttle,
@@ -263,5 +263,85 @@ describe('AppImage 셔틀', () => {
       { env: { ...process.env, APPDIR: dir }, encoding: 'utf8' }
     )
     expect(JSON.parse(out)).toEqual([`${dir}/cli.js`, 'jobs', '--json', "it's"])
+  })
+})
+
+// 명세 §49 — 공백과 ASCII 밖 글자가 든 사용자 폴더. **cmd.exe 는 배치 파일을 UTF-8 로 읽지 않는다.**
+// 콘솔의 OEM 코드 페이지(한국어 Windows 는 949, 영어는 437)로 읽으므로, `C:\Users\홍길동\…` 을 UTF-8
+// 로 적은 .cmd 는 그 경로를 깨진 글자로 읽고 "Cannot find module" 로 죽는다(2026-09-26 에 재 봤다).
+// 설치본의 실행 파일도, 세션 셔틀이 가리키는 것도 사용자 폴더 아래에 있으므로, 사용자 이름이 한글인
+// 사람에게는 모든 `astera` 가 이렇게 죽는다. 환경변수는 cmd 안에서 UTF-16 으로 풀리므로, 그 부분을
+// `%LOCALAPPDATA%` 로 적으면 파일은 ASCII 로 남고 경로는 온전히 돌아온다.
+describe('.cmd 셔틀과 ASCII 밖의 경로', () => {
+  const home = 'C:\\Users\\홍길동'
+  const env = {
+    USERPROFILE: home,
+    APPDATA: `${home}\\AppData\\Roaming`,
+    LOCALAPPDATA: `${home}\\AppData\\Local`
+  } as NodeJS.ProcessEnv
+  const cmdOf = (execPath: string, entryPath: string, e: NodeJS.ProcessEnv = env): string =>
+    shuttleFiles({ execPath, entryPath, platform: 'win32', env: e })[0].content
+  const ascii = /^[\x20-\x7e\r\n]*$/
+
+  it('사용자 폴더의 ASCII 밖 글자를 환경변수로 적어 .cmd 를 ASCII 로 둔다', () => {
+    const app = `${home}\\AppData\\Local\\Programs\\Astera`
+    const content = cmdOf(`${app}\\Astera.exe`, `${app}\\resources\\app.asar\\out\\main\\cli.js`)
+    expect(content).toMatch(ascii)
+    expect(content).toContain('"%LOCALAPPDATA%\\Programs\\Astera\\Astera.exe"')
+    expect(content).toContain('"%LOCALAPPDATA%\\Programs\\Astera\\resources\\app.asar\\out\\main\\cli.js"')
+    // 모양은 그대로다 — 제거·동기화(isShuttleContent)와 NSIS 제거기가 같은 모양으로 알아본다
+    expect(isShuttleContent('astera.cmd', content)).toBe(true)
+  })
+
+  it('가장 긴 것을 고르고, 대소문자는 가리지 않는다', () => {
+    const content = cmdOf('c:\\users\\홍길동\\AppData\\Roaming\\x\\app.exe', `${home}\\tools\\cli.js`)
+    expect(content).toContain('"%APPDATA%\\x\\app.exe"')
+    expect(content).toContain('"%USERPROFILE%\\tools\\cli.js"')
+  })
+
+  it('이름의 앞부분만 같은 폴더는 그 변수의 것이 아니다', () => {
+    const content = cmdOf(`${home}2\\app.exe`, `${home}\\cli.js`)
+    expect(content).toContain(`"${home}2\\app.exe"`)
+    expect(content).toContain('"%USERPROFILE%\\cli.js"')
+  })
+
+  // 바꿀 필요가 없는 경로는 한 글자도 바꾸지 않는다: 환경변수를 비운 채 부르는 자리(샌드박스 등)가
+  // 있어도 ASCII 경로의 사람은 지금과 똑같이 돈다.
+  it('ASCII 경로는 그대로 적는다', () => {
+    const content = cmdOf('C:\\Users\\me\\AppData\\Local\\Programs\\Astera\\Astera.exe', 'C:\\Users\\me\\cli.js', {
+      LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local',
+      USERPROFILE: 'C:\\Users\\me'
+    } as NodeJS.ProcessEnv)
+    expect(content).toBe(
+      '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"C:\\Users\\me\\AppData\\Local\\Programs\\Astera\\Astera.exe" "C:\\Users\\me\\cli.js" %*\r\n'
+    )
+  })
+
+  it('sh 셔틀은 그대로다 — bash 는 바이트를 UTF-8 로 읽는다', () => {
+    const sh = shuttleFiles({ execPath: `${home}\\a.exe`, entryPath: `${home}\\cli.js`, platform: 'win32', env })[1]
+    expect(sh.content).toContain('"C:/Users/홍길동/a.exe"')
+  })
+
+  // 진짜 cmd.exe 로. 공백과 한글이 든 폴더에 셔틀과 엔트리를 두고, 셔틀이 인자와 종료 코드를 그대로
+  // 넘기는지 본다. 실행 파일은 이 node 이고, 엔트리가 그 폴더 아래에 있다.
+  it.runIf(process.platform === 'win32')('cmd.exe 가 공백·한글 폴더의 셔틀을 돌린다', async () => {
+    const root = path.join(dir, '사용자 폴더')
+    const entryPath = path.join(root, 'Programs', 'Astera', 'cli.js')
+    await fs.mkdir(path.dirname(entryPath), { recursive: true })
+    await fs.writeFile(
+      entryPath,
+      'process.stdout.write(JSON.stringify({ argv: process.argv.slice(2), node: process.env.ELECTRON_RUN_AS_NODE })); process.exit(4)\n',
+      'utf8'
+    )
+    const childEnv = { ...process.env, LOCALAPPDATA: root }
+    const shim = await writeShuttle({ dir: path.join(root, 'astera', 'bin'), execPath: process.execPath, entryPath, env: childEnv })
+    const r = spawnSync('cmd.exe', ['/d', '/s', '/c', `""${shim}" "a b" 한글"`], {
+      windowsVerbatimArguments: true,
+      encoding: 'utf8',
+      env: childEnv
+    })
+    expect(r.stderr).toBe('')
+    expect(r.status).toBe(4)
+    expect(JSON.parse(r.stdout)).toEqual({ argv: ['a b', '한글'], node: '1' })
   })
 })
