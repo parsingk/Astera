@@ -19,7 +19,7 @@ import { trustSystemCa } from './systemCa'
 import { openHostLog, logUnhandledRejections } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
-import { createConhostReaper, listWindowsChildren } from './conhostReaper'
+import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
@@ -116,8 +116,7 @@ async function main(): Promise<void> {
     platform: process.platform,
     hostPid: process.pid,
     livePtys: () => registry.liveCount(),
-    listChildren: (pid) => listWindowsChildren(pid),
-    kill: (pid) => process.kill(pid),
+    reapChildren: (q) => reapWindowsConsoleHosts(q),
     log: (m) => log.write(m)
   })
   registry.onExit(() => conhostReaper.exited())
