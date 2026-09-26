@@ -218,6 +218,31 @@ describe('createCodexAdapter — a turn with a question', () => {
     await tick()
     expect(a.state()).toMatchObject({ status: 'working', request: null })
   })
+  it('an answered request is noted, as the claude adapter notes it, so a Host reader stops counting it before its echo (CT-8)', async () => {
+    const { p, a } = await started()
+    void a.send('do two things')
+    await tick()
+    p.feed(F.TURN_STARTED)
+    p.feed(F.COMMAND_APPROVAL) // id 0
+    p.feed(JSON.stringify({ method: 'item/commandExecution/requestApproval', id: 1, params: { command: 'ls -la', availableDecisions: ['accept', 'cancel'] } }))
+    await tick()
+    await a.answer('0', { kind: 'approval', decision: 'accept' })
+    expect(p.notes.at(-1)).toEqual({ answered: ['0'] })
+    await a.answer('1', { kind: 'approval', decision: 'decline' })
+    expect(p.notes.at(-1)).toEqual({ answered: ['0', '1'] })
+  })
+  it('a write that throws notes nothing, since nothing was answered (CT-8)', async () => {
+    const { p, a } = await started()
+    void a.send('do it')
+    await tick()
+    p.feed(F.TURN_STARTED)
+    p.feed(F.COMMAND_APPROVAL)
+    await tick()
+    const notesBefore = p.notes.length
+    p.write = () => { throw new Error('pipe gone') }
+    await expect(a.answer('0', { kind: 'approval', decision: 'accept' })).rejects.toThrow()
+    expect(p.notes.length).toBe(notesBefore)
+  })
   it('interrupt swallows “no active turn” and still rejects anything else', async () => {
     const { p, a } = await started()
     void a.send('count')
@@ -295,6 +320,15 @@ describe('createCodexAdapter — replay after adoption', () => {
     expect(a.state()).toMatchObject({ status: 'waiting', request: { kind: 'approval', id: '0' } })
     await a.answer('0', { kind: 'approval', decision: 'decline' })
     expect(JSON.parse(p.written.at(-1) as string)).toEqual({ id: 0, result: { decision: 'decline' } })
+  })
+  it('an adopted session keeps the ids the note already lists answered and adds to them (CT-8)', async () => {
+    const p = fakeProc()
+    const a = createCodexAdapter({ proc: p, mode: { mode: 'adopt', threadId: '01a0a6cb-43a2-7d71-994f-72e53764fbc1', rolloutPath: null, truncated: false, answered: ['7'] }, version: '1', log: () => {}, requestTimeoutMs: 30_000 })
+    await a.start({ cwd: 'D:/x', bypass: false })
+    p.feed(F.TURN_STARTED); p.feed(F.COMMAND_APPROVAL)
+    await tick()
+    await a.answer('0', { kind: 'approval', decision: 'accept' })
+    expect(p.notes.at(-1)).toEqual({ answered: ['7', '0'] })
   })
   it('a reply to an earlier app instance’s request is dropped, and truncated is carried into the state', async () => {
     const { p, a } = adopted(true)

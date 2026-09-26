@@ -81,7 +81,7 @@ export interface HostChats {
    *  an answer that landed first wins. */
   answerCard(sessionId: string, requestId: string, answer: ChatAnswer): Promise<void>
   unattendedOf(sessionId: string): UnattendedPermission
-  /** The note's `answered` ids (the app writes them, claudeAdapter's rememberAnswered). */
+  /** The note's `answered` ids (the app writes them, both adapters on every answer). */
   answeredOf(sessionId: string): string[]
   chosenModelOf(sessionId: string): string | null
   bypassedOf(sessionId: string): boolean

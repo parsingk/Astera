@@ -30,6 +30,9 @@ export interface CodexAdapterDeps {
 
 const MAX_FILE_CHANGES = 32
 
+/** How many answered request ids are kept in the note, the same bound as the Claude adapter's. */
+const ANSWERED_KEPT = 32
+
 function turnIdOf(result: unknown): string | null {
   if (typeof result !== 'object' || result === null) return null
   const turn = (result as Record<string, unknown>).turn
@@ -61,6 +64,13 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
   let picked: { model: string | null; effort: string | null } = { model: null, effort: null }
 
   const fileChanges = new Map<string, FileChange[]>()
+  /** The server requests this session has answered, newest last, written to the Host note on every
+   *  answer, as the Claude adapter writes its own (CT-8). The adapter itself needs none of it: the
+   *  replay carries `serverRequest/resolved` after every answer. A Host that is only a reader does: its
+   *  own adapter keeps the request open until that echo reaches it, and every Host view of the queue
+   *  (`prompts`, `requests`, the deny policy) filters the note's ids. Seeded from the note on adopt so
+   *  the list is rewritten whole, not restarted. */
+  const answered: string[] = mode.mode === 'adopt' ? [...(mode.answered ?? [])] : []
 
   function rememberFileChange(itemId: string, changes: FileChange[]): void {
     fileChanges.set(itemId, changes)
@@ -226,9 +236,13 @@ export function createCodexAdapter(deps: CodexAdapterDeps): ChatAdapter {
 
   async function doAnswer(requestId: string, answer: ChatAnswer): Promise<void> {
     // The write goes through the core so that a write which throws leaves the card open — see
-    // takeRequest's own doc. Nothing is left to do here once it has returned.
+    // takeRequest's own doc.
     const entry = core.takeRequest(requestId, (e) => proc.write(encodeAnswer(e.wireId, e.decoded, answer)))
     if (!entry) throw new Error(`no open request: ${requestId}`)
+    // Only once the answer is on the wire: a write that threw answered nothing.
+    answered.push(requestId)
+    if (answered.length > ANSWERED_KEPT) answered.splice(0, answered.length - ANSWERED_KEPT)
+    proc.remember?.({ answered: [...answered] })
   }
 
   /** The modes, asked for on first use when the startup list never ran. A session the Host already had

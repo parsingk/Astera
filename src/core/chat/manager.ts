@@ -374,7 +374,7 @@ export class ChatSessionManager {
     // would need a new dependency for a case a plain default already answers correctly.
     const noteProvider = r.provider
     const provider: Provider = noteProvider === 'claude' || noteProvider === 'codex' ? noteProvider : 'codex'
-    // The server requests the previous app answered (the Claude adapter writes them — see its `answered`
+    // The server requests the previous app answered (both adapters write them — see the Claude adapter's `answered`
     // doc and ruling S3-7). Read defensively for the same reason every other field here is: the note is
     // whatever a Host wrote, possibly an older build's, and a shape this one cannot use is no ids at all
     // rather than a reason to lose the session.

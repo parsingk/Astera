@@ -75,8 +75,9 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
    *  answer by however long the tool runs — so the replay an adopted session reads can carry a request
    *  that is already answered, with no echo behind it to clear it. Shown, it would be answered twice:
    *  once by the app that is gone and once by the person looking at it now. This list is what tells the
-   *  two apart. Codex needs none of it, because its `serverRequest/resolved` follows every answer at
-   *  once and the replay carries that too. */
+   *  two apart. Codex's own replay needs none of it, because its `serverRequest/resolved` follows every
+   *  answer at once and the replay carries that too; the codex adapter writes the list anyway, for a
+   *  Host reader's views (CT-8). */
   const answered: string[] = mode.mode === 'adopt' ? [...(mode.answered ?? [])] : []
 
   // ---- the wire: one place to send, one place to read a line ----
