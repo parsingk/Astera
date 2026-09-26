@@ -127,6 +127,10 @@ CREATE INDEX IF NOT EXISTS recovery_actions_run ON recovery_actions(run_id);
 export const hasColumn = (db: DatabaseSync, table: string, column: string): boolean =>
   (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column)
 
+/** Whether `table` exists. sqlite_master answers on any file, a failed-upgrade v1 one included. */
+export const hasTable = (db: DatabaseSync, table: string): boolean =>
+  db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) !== undefined
+
 interface OpenResult {
   db: DatabaseSync
   version: number
@@ -380,7 +384,13 @@ export class ContinuityJournal {
       .run(status, at, details ? JSON.stringify(details) : null, id)
   }
 
+  /** No rows, logged, on a file with no recovery_actions table: a version 1 file whose upgrade failed
+   *  before the table was made is kept as it was (usable false), and a read must not throw on it. */
   recoveryActionsFor(runId: string): RecoveryActionRow[] {
+    if (!hasTable(this.db, 'recovery_actions')) {
+      this.deps.log?.('journal has no recovery_actions table (an older file whose upgrade failed); no recovery actions to read')
+      return []
+    }
     return (
       this.db
         .prepare(`${SELECT_RECOVERY_ACTION} WHERE run_id = ? ORDER BY rowid`)

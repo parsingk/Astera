@@ -7,6 +7,7 @@ import {
   SELECT_CHECKPOINT,
   SELECT_RECOVERY_ACTION,
   hasColumn,
+  hasTable,
   rowToCheckpoint,
   rowToEvent,
   rowToRecoveryAction,
@@ -21,7 +22,10 @@ import {
 
 export class JournalReader {
   private db: DatabaseSync | null = null
-  constructor(private readonly filePath: string) {}
+  constructor(
+    private readonly filePath: string,
+    private readonly deps: { log?(message: string): void } = {}
+  ) {}
 
   /** Opened at the first read that finds the file; a missing file is no rows, and is asked again next time. */
   private handle(): DatabaseSync | null {
@@ -69,9 +73,14 @@ export class JournalReader {
     return raw ? rowToCheckpoint(raw) : null
   }
 
+  /** No rows, logged, on a file with no recovery_actions table (a version 1 file whose upgrade failed). */
   recoveryActionsFor(runId: string): RecoveryActionRow[] {
     const db = this.handle()
     if (!db) return []
+    if (!hasTable(db, 'recovery_actions')) {
+      this.deps.log?.('journal has no recovery_actions table (an older file whose upgrade failed); no recovery actions to read')
+      return []
+    }
     return (
       db.prepare(`${SELECT_RECOVERY_ACTION} WHERE run_id = ? ORDER BY rowid`).all(runId) as unknown as RawRecoveryAction[]
     ).map(rowToRecoveryAction)

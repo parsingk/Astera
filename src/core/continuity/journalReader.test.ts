@@ -81,3 +81,31 @@ describe('JournalReader (P13)', () => {
     expect(() => r.execForTest('DELETE FROM journal_events')).toThrow(/readonly/i)
   })
 })
+
+/** A version 1 file whose upgrade failed before recovery_actions was made: an index squats on the
+ *  table's name, so the schema step throws there and the file is kept as v1 left it (Task 7 carry). */
+const writeFailedV1File = async (at: string): Promise<void> => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const raw = new DatabaseSync(at)
+  raw.exec(`
+CREATE TABLE schema_meta (version INTEGER NOT NULL);
+CREATE TABLE journal_events (event_id TEXT PRIMARY KEY, schema_version INTEGER NOT NULL, run_id TEXT NOT NULL,
+  task_id TEXT, dispatch_id TEXT, event_type TEXT NOT NULL, created_at TEXT NOT NULL, idempotency_key TEXT UNIQUE,
+  payload_json TEXT NOT NULL);
+CREATE INDEX recovery_actions ON journal_events(run_id);
+INSERT INTO schema_meta (version) VALUES (1);
+`)
+  raw.close()
+}
+
+describe('JournalReader on a v1 file whose upgrade failed (Task 7 carry)', () => {
+  it('answers recoveryActionsFor with no rows and a log line instead of throwing', async () => {
+    await writeFailedV1File(file())
+    const logs: string[] = []
+    const r = new JournalReader(file(), { log: (m) => logs.push(m) })
+    open.push(r)
+    expect(r.recoveryActionsFor('run_1')).toEqual([])
+    expect(logs.some((l) => /recovery_actions/.test(l))).toBe(true)
+    expect(r.eventsFor('run_1')).toEqual([])
+  })
+})
