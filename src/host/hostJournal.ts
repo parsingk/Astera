@@ -137,7 +137,9 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
         // The Host renders nothing a person reads in a language (P10): English.
         lang: () => 'en',
         smartResume: () => settings.smartResume,
-        handoffLookup: (sessionId) => lookupHandoffFile(handoffPath, sessionId)
+        handoffLookup: (sessionId) => lookupHandoffFile(handoffPath, sessionId),
+        // The gate again, after a checkpoint's wait on git (final review M3), and this very handle still open.
+        stillWriting: () => !shut && settings.enabled && isWriter() && open?.journal === journal
       })
       open = { journal, recorder }
       if (openBusy) d.log('continuity: the journal is no longer locked, the Host journals again')

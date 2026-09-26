@@ -39,6 +39,9 @@ export interface ContinuityRecorderDeps {
   smartResume(): boolean
   /** The handoff memo store's lookup, by app session id. Consulted only when smartResume() is true. */
   handoffLookup?(sessionId: string): HandoffLookup
+  /** Whether this recorder may still write, asked again after a checkpoint's wait on git (final review
+   *  M3): the Host may have stopped being the one writer meanwhile. Always true when left out. */
+  stillWriting?(): boolean
 }
 
 const isPlaceholder = (sessionId: string): boolean => sessionId.startsWith('pending:')
@@ -193,6 +196,10 @@ export class ContinuityRecorder {
     try {
       // null when the folder is gone or not a repository — the checkpoint is still worth its other columns
       const git = await readGitSummary(dispatch.cwd, this.deps.git ? { git: this.deps.git } : {})
+      if (this.deps.stillWriting && !this.deps.stillWriting()) {
+        this.deps.log(`continuity: checkpoint ${kind} for ${dispatchId} dropped, this process no longer writes the journal`)
+        return
+      }
       const now = this.now()
       const checkpoint = buildCheckpoint(state, { dispatchId, git, now })
       if (!checkpoint) return

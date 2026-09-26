@@ -412,6 +412,43 @@ describe('createHostJournal', () => {
     }
   })
 
+  // Final review M3: a checkpoint waits on git after the commit. If this Host stopped being the writer
+  // meanwhile (an older app attached), the checkpoint must not land: at most one process appends.
+  it('a checkpoint that finishes after this Host stopped being the writer writes nothing', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const gates: Array<() => void> = []
+    const { j, box } = make({
+      git: () => new Promise((resolve) => gates.push(() => resolve({ ok: false, stdout: '', stderr: 'no git in this test' })))
+    })
+    await j.start()
+    const task = { id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'dispatched' as const, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    const dsp = (id: string): Dispatch => ({ id, taskId: 'tsk_1', provider: 'claude', accountId: 'acc', sessionId: `ses_${id}`, cwd: dir, specPath: 's', startedAt: NOW, workerState: 'ready', retained: false })
+    const s0 = stateFromLegacy({ runs: [run], tasks: [task], dispatches: [] })
+    const s1 = stateFromLegacy({ runs: [run], tasks: [task], dispatches: [dsp('dsp_1')] })
+    const s2 = stateFromLegacy({ runs: [run], tasks: [task], dispatches: [dsp('dsp_1'), dsp('dsp_2')] })
+    const checkpointOf = (dispatchId: string) => {
+      const r = new JournalReader(journalFile())
+      try {
+        return r.latestCheckpointFor(dispatchId)
+      } finally {
+        r.close()
+      }
+    }
+    j.committed({ prev: s0, next: s1, version: 1, actor: cli })
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThan(0))
+    box.writer = false // an older app attached while git ran
+    gates.splice(0).forEach((go) => go())
+    await new Promise((r) => setTimeout(r, 30))
+    expect(checkpointOf('dsp_1')).toBeNull()
+    expect(rows().map((e) => e.type)).not.toContain('CHECKPOINT_CREATED')
+    // The control: while it stays the writer, the checkpoint lands.
+    box.writer = true
+    j.committed({ prev: s1, next: s2, version: 2, actor: cli })
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThan(0))
+    gates.splice(0).forEach((go) => go())
+    await vi.waitFor(() => expect(checkpointOf('dsp_2')).not.toBeNull())
+  })
+
   // Final review I2: a busy file is not a corrupt one, and a busy open is not a failure for the Host's life.
   describe('a journal another process holds locked', () => {
     const corrupt = async (): Promise<string[]> => (await fs.readdir(path.dirname(journalFile()))).filter((n) => n.includes('.corrupt-'))
