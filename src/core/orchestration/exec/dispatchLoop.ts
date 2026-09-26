@@ -35,6 +35,7 @@ import {
   worktreeDepsOf
 } from '../integrate'
 import { reapableChildRuns } from '../reap'
+import { lostAttemptOf } from '../../recovery/candidates'
 import { slotsToFill, tasksMissingAccounts, type Slot } from '../schedule'
 import { coordinatorStarting, jobOf, type OrchState } from '../state'
 import { DEFAULT_CONCURRENCY, FAILURE_LIMIT } from '../types'
@@ -565,11 +566,18 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
             worktree: 'new',
             name: nameForTask(task)
           }
+    // **잃은 워커를 되살리는 시작이면 retryOf 로 잇는다**(P1 이월 5). 복구 Gate(재조정기의 review,
+    // Host 의 잃은 워커 Gate)에 사람이 답하면 Task 가 ready 로 돌아와 이 자리로 온다 — 그 새 시도는
+    // 재조정기의 re-dispatch(execute.ts)와 같은 재시도이므로 Timeline 이 재시도 칩을 보이게 같은 칸을
+    // 채운다. 판정은 candidates 와 같은 규칙(가장 최근 Dispatch 가 잃은 것인가)이고, 사람이 멈춘
+    // 시도(closedBy)나 결과를 보고한 시도는 잃은 것이 아니므로 잇지 않는다.
+    const lost = lostAttemptOf(c.getState(), slot.taskId)
     const reply = await c.handle('worker-start', {
       task: slot.taskId,
       agent: slotProvider,
       account: accountId,
-      ...placement
+      ...placement,
+      ...(lost ? { retryOf: lost.id } : {})
     })
     // **떠나는 Host 의 거절은 Gate 가 아니다**(R15). 물러나는 Host 는 retire 가 온 순간부터 모든
     // 시작을 거절하고, worker-start 는 그것을 `retry` 를 실은 409 로 답한다 — "이 Task 를 못

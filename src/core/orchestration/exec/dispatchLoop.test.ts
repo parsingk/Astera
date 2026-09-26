@@ -1114,3 +1114,32 @@ describe('dispatchOne — alone, after the pass', () => {
     for (const h of [paused, coordinated, pending]) expect(h.handled()).toEqual([])
   })
 })
+
+// P1 carry-over 5: a lost worker handed to a person (the reconciler's review Gate, or the Host's
+// lost-worker Gate, R16) comes back through this loop once the Gate is answered. That new attempt is a
+// retry of the lost one, exactly as the reconciler's own re-dispatch is (execute.ts's `retryOf`), so the
+// Timeline shows it with the retry chip.
+describe('a worker revived through a recovery Gate', () => {
+  const lostThenGated = () => {
+    const h = rig()
+    const s = h.state()
+    h.setState({
+      ...s,
+      tasks: s.tasks.map((x) => (x.id === 'tsk_1' ? { ...x, status: 'blocked' as const } : { ...x, status: 'completed' as const })),
+      dispatches: [
+        { id: 'dsp_lost', taskId: 'tsk_1', provider: 'claude', accountId: 'accA', sessionId: 'sess_gone', cwd: '/wt1', specPath: '/specs/1.md', startedAt: NOW, endedAt: NOW, workerState: 'outcome_unknown', retained: false }
+      ],
+      gates: [{ id: 'gate_lost', runId: 'run_1', taskId: 'tsk_1', question: 'the worker was lost', options: ['Restart with a new worker'], status: 'open', createdAt: NOW }]
+    })
+    return h
+  }
+
+  it('links the new Dispatch back to the lost one through retryOf once the Gate is answered', async () => {
+    const h = lostThenGated()
+    expect((await h.real('gate-resolve', { id: 'gate_lost', resolution: 'Restart with a new worker' })).status).toBe(200)
+    await h.settle()
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    const fresh = h.state().dispatches.filter((d) => d.id !== 'dsp_lost')
+    expect(fresh).toEqual([expect.objectContaining({ taskId: 'tsk_1', retryOf: 'dsp_lost' })])
+  })
+})

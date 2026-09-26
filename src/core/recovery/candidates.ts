@@ -39,15 +39,24 @@ export function candidates(state: OrchState): LostAttemptSeed[] {
     // orchestration.json outlives the process and is hand-edited, and recovery is a second door into
     // starting workers: it holds to the same standard.
     if (runGatedForTask(state, task)) continue
-    const own = state.dispatches.filter((d) => d.taskId === task.id)
-    // A `dispatched` Task always has one — openDispatch writes the Dispatch and the status together.
-    // The guard is here because orchestration.json outlives the process and is hand-edited, the same
-    // reason schedule.ts refuses to infer a Task's account from the command that made it.
-    if (own.length === 0) continue
-    if (own.some((d) => d.endedAt === undefined)) continue
-    const latest = own.reduce((a, b) => (b.startedAt > a.startedAt ? b : a))
-    if (!isLost(latest)) continue
-    out.push({ runId: runIdOf(task), taskId: task.id, dispatch: latest })
+    const lost = lostAttemptOf(state, task.id)
+    if (!lost) continue
+    out.push({ runId: runIdOf(task), taskId: task.id, dispatch: lost })
   }
   return out
+}
+
+/** The Task's most recent Dispatch when that one was lost, else undefined — and undefined while any of
+ *  its Dispatches is still open (a fresh attempt is already running). The rule `candidates` applies, and
+ *  the one the dispatch loop asks when it starts a Task again after a person answered the Gate a lost
+ *  worker left (P1 carry-over 5): that new attempt is a retry of this one, as a reconciler re-dispatch is. */
+export function lostAttemptOf(state: OrchState, taskId: string): Dispatch | undefined {
+  const own = state.dispatches.filter((d) => d.taskId === taskId)
+  // A `dispatched` Task always has one — openDispatch writes the Dispatch and the status together.
+  // The guard is here because orchestration.json outlives the process and is hand-edited, the same
+  // reason schedule.ts refuses to infer a Task's account from the command that made it.
+  if (own.length === 0) return undefined
+  if (own.some((d) => d.endedAt === undefined)) return undefined
+  const latest = own.reduce((a, b) => (b.startedAt > a.startedAt ? b : a))
+  return isLost(latest) ? latest : undefined
 }
