@@ -1851,7 +1851,10 @@ A1's form; the limits it closes point back here.
   from a new instance" below, "A missing `app.pid` makes a live app look gone" under "Known limits after
   S6", and "A registry write during a Host replacement window fails rather than falling back to local"
   under "Known limits after S3". An Astera from before S3, which writes no `app.pid` and sends no `pid`
-  in its `hello` either, is unchanged and stays a separate, open limit.
+  in its `hello` either, is unchanged and stays a separate, open limit. After the final review, the Host
+  forgets the pid from the app's last hello once a probe finds it dead, and the driving tick probes it
+  while no app is attached, so a pid Windows reuses after a quit cannot keep a gone app alive. A socket
+  close alone forgets nothing, so an app that closed its socket but never wrote `app.pid` stays alive.
 - **A112. Task 2, S45-11: a Job `cwd` that is the filesystem root or the home folder opens nothing
   (task-2-report.md).** `hostPathGuard` (`src/core/run/hostPathGuard.ts`, not the brief's
   `src/host/hostPathGuard.ts`, which does not exist) adds `tooBroadJobCwd`, with `home` injectable and
@@ -1964,7 +1967,8 @@ A1's form; the limits it closes point back here.
   usage-endpoint `fetch` still completed after the swap. Pinned by `systemCa.test.ts` (6). Narrows "The
   Host's usage lookup goes without the system proxy and the OS certificate store" under "`runs wait` and
   the usage lookup": the OS store is now trusted at start; the system proxy itself is unchanged and stays
-  open (see "Known limits after the left-over pass").
+  open (see "Known limits after the left-over pass"). System certificates are checked one by one, and a
+  malformed one is skipped rather than blocking the rest. The APIs need Node 22.19 or 24.5.
 - **A123. Task 5, part A: a role-less `hello` is a `legacy-app`, Astera 1.3.25 or older
   (task-5-report.md).** Checked first: `git show v1.3.25:src/main/host/client.ts` sends
   `{ t: 'hello', protocol, app }` with no role and no `yields`; role arrived in `c8e86a00`, after v1.3.25,
@@ -2015,7 +2019,10 @@ A1's form; the limits it closes point back here.
   clause of A63's own carry list. What is left: a `conhost.exe` that exits between the listing and the
   kill could, in theory, have its pid reused within that sub-second window before the kill checks it
   again, and a Host that always holds at least one live pty keeps its leaks until every such tab closes
-  (see "Known limits after the left-over pass").
+  (see "Known limits after the left-over pass"). After the final review the listing and the kill run in
+  one PowerShell pipeline that filters by parent, name and creation window, which closes most of that
+  window. Ending a leaked console host also ends any process a worker left attached to it, as
+  `ClosePseudoConsole` would.
 
 ## Known limits after S3
 
