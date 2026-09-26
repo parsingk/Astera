@@ -1296,7 +1296,8 @@ describe('hostOrchDeps — chatTurn and sessionTurn', () => {
 
   it("the Host's own adapter answers first, with its open prompt, and the app is not asked", async () => {
     const act = vi.fn()
-    const deps = hostOrchDeps(base({ act, chats: chatsWith({ alive: true, status: 'waiting', error: null }) }))
+    const writer = { ...chatsWith({ alive: true, status: 'waiting', error: null }), isWriter: () => true }
+    const deps = hostOrchDeps(base({ act, chats: writer }))
     expect(await deps.chatTurn!('c1')).toEqual({ alive: true, status: 'waiting', error: null, prompt })
     expect(act).not.toHaveBeenCalled()
   })
@@ -1308,6 +1309,16 @@ describe('hostOrchDeps — chatTurn and sessionTurn', () => {
     expect(act).toHaveBeenCalledWith('chatTurn', ['c1'])
     const alone = hostOrchDeps(base({ hasApp: () => false, chats: chatsWith(null) }))
     expect(await alone.chatTurn!('c1')).toBeUndefined()
+  })
+
+  // Review 3, I1. Only the writing adapter moves to `working` when a turn is sent; a reader stays `idle`
+  // until output arrives, so reading it would end a wait before the turn started.
+  it('a Host adapter that is only a reader is not asked: the app, which writes, is', async () => {
+    const act = vi.fn().mockResolvedValue({ alive: true, status: 'working', error: null, prompt: null })
+    const reader = { ...chatsWith({ alive: true, status: 'idle', error: null }), isWriter: () => false }
+    const deps = hostOrchDeps(base({ act, chats: reader }))
+    expect(await deps.chatTurn!('c1')).toEqual({ alive: true, status: 'working', error: null, prompt: null })
+    expect(act).toHaveBeenCalledWith('chatTurn', ['c1'])
   })
 
   it('an older app that cannot answer chatTurn reads as nobody able to say, not as a failure', async () => {

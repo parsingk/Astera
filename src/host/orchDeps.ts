@@ -869,11 +869,12 @@ export function hostOrchDeps(a: {
   }
 
   /** HOST_SESSIONS: the Host's own answer, marked as an effect before it runs when it is one. */
-  /** `chatTurn`: the Host's own adapter when it holds one for the session (writer or reader, it decodes
-   *  every line), else the app's by DEGRADES' route. */
+  /** `chatTurn`: the Host's own adapter **only while it is the session's writer**, else the app's by
+   *  DEGRADES' route (review 3, I1). Only the writing adapter moves to `working` when a turn is sent; a
+   *  reader stays `idle` until the turn's output arrives, and read then it would end a wait at once. */
   const askTurn = degrading('chatTurn', DEGRADES.chatTurn)
   const hostTurn = (id: string): Promise<unknown> => {
-    const mine = a.chats?.turnOf?.(id) ?? null
+    const mine = a.chats?.isWriter(id) ? (a.chats.turnOf?.(id) ?? null) : null
     if (mine !== null) return Promise.resolve({ ...mine, prompt: a.chats?.prompts(id)[0] ?? null })
     // An app that answered and failed (one too old to know the name) is nobody able to say too, as
     // `chatPrompts` treats it: the wait keeps asking, or is refused before a send, and never fails whole.
