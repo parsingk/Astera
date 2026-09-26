@@ -290,6 +290,25 @@ describe('createHostJournal', () => {
     expect(rows().filter((e) => e.type === 'CONTINUITY_ENABLED')).toHaveLength(1)
   })
 
+  // Review 4-5: measured p99 is a few ms; a write that takes more than 50 ms is worth a line in the log.
+  it('logs a warning for a journal write that takes more than 50 ms, and none for a fast one', async () => {
+    await settings({ jobContinuityEnabled: true })
+    let t = 0
+    let step = 10
+    const { j, logs } = make({ clockMs: () => (t += step) })
+    await j.start()
+    j.committed({ prev: on(), next: paused(), version: 1, actor: cli })
+    expect(logs.filter((l) => /took \d+ ms/.test(l))).toEqual([])
+    step = 60
+    j.committed({ prev: paused(), next: on(), version: 2, actor: cli })
+    j.append([{ op: 'events', events: [{ runId: 'run_1', type: 'RECOVERY_DETECTED', at: NOW, idempotencyKey: 'r1', payload: {} }] }])
+    expect(logs.filter((l) => /took \d+ ms/.test(l))).toEqual([
+      expect.stringMatching(/recording a commit took 60 ms/),
+      expect.stringMatching(/journal-append took 60 ms/)
+    ])
+    expect(rows().map((e) => e.type)).toEqual(['JOB_RUN_PAUSED', 'JOB_RUN_RESUMED', 'RECOVERY_DETECTED'])
+  })
+
   it('a journal it cannot open is logged once and journals nothing, and nothing throws', async () => {
     await settings({ jobContinuityEnabled: true })
     // A file where the orch folder should be: the mkdir fails. (A folder at the journal's own path would

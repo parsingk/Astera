@@ -31,6 +31,8 @@ export interface HostJournalDeps {
   /** Test seams. */
   readSettings?(settingsPath: string): Promise<ContinuitySettingsRead>
   git?: GitSummaryDeps['git']
+  /** A monotonic clock in milliseconds, for the slow-write warning; defaults to `performance.now()`. */
+  clockMs?(): number
 }
 export interface HostJournal {
   /** Reads app-settings.json; opens the file only when Job Continuity is on and this Host writes. Never rejects. */
@@ -51,6 +53,9 @@ export interface HostJournal {
 }
 
 const OFF: ContinuitySettingsRead = { enabled: false, smartResume: false }
+/** A journal write slower than this is logged (review 4-5: p99 measured at a few ms on a local SSD, FULL
+ *  sync). Every write runs on the Host's one thread, inside a commit, so a slow disk is worth a line. */
+export const SLOW_WRITE_MS = 50
 
 export function createHostJournal(d: HostJournalDeps): HostJournal {
   const file = path.join(d.profileDir, 'orch', 'continuity.sqlite')
@@ -132,9 +137,30 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     // checkpoint() swallows its own failures; the catch is R3's, for a throw that escapes it anyway.
     void w.recorder.checkpoint(events, next, actor).catch((e) => d.log(`continuity: checkpoint failed: ${String(e)}`))
   }
+  const clockMs = d.clockMs ?? (() => performance.now())
+  /** `fn`, with a warning when it took longer than SLOW_WRITE_MS. The clock is only read, never trusted
+   *  to throw nothing: a broken clock costs the warning. */
+  const timed = <T>(what: string, fn: () => T): T => {
+    let started: number | null = null
+    try {
+      started = clockMs()
+    } catch {
+      /* no warning this time */
+    }
+    try {
+      return fn()
+    } finally {
+      try {
+        const ms = started === null ? 0 : Math.round(clockMs() - started)
+        if (ms > SLOW_WRITE_MS) d.log(`continuity: ${what} took ${ms} ms (over ${SLOW_WRITE_MS} ms)`)
+      } catch {
+        /* no warning this time */
+      }
+    }
+  }
   const guarded = (what: string, fn: () => void): void => {
     try {
-      fn()
+      timed(what, fn)
     } catch (err) {
       d.log(`continuity: ${what} failed: ${String(err)}`)
     }
@@ -155,6 +181,44 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     // Turned on while an attached app keeps the journal: nobody writes the baseline now, so it is owed.
     else if (!was && !w && !openFailed) owed = { since: d.now(), state }
     return { enabled: true, writer: w !== null }
+  }
+
+  /** journal-append (J3, P14), timed by its caller. */
+  const appendNow = (ops: JournalOp[]): { status: number; body: unknown } => {
+    const writer = isWriter()
+    if (!settings.enabled || !writer)
+      return { status: 409, body: { error: settings.enabled ? 'this Host is not the journal writer now' : 'Job Continuity is off on this Host', enabled: settings.enabled, writer } }
+    const w = writing()
+    if (!w) return { status: 409, body: { error: 'this Host could not open the journal', enabled: true, writer } }
+    let applied = 0
+    let failed = 0
+    try {
+      // One call, one transaction (one sync); each op a savepoint inside it, so one that fails costs
+      // only itself (P14).
+      w.journal.transaction(() => {
+        for (const op of ops) {
+          try {
+            w.journal.transaction(() => {
+              // The Host stamps who sent these (P5): the app, whatever the rows said; and puts the app's
+              // keys in their own namespace (review 4-5 M-2).
+              if (op.op === 'events')
+                w.journal.append(op.events.map((e) => ({ ...e, idempotencyKey: APP_KEY_PREFIX + e.idempotencyKey, actor: DESKTOP_ACTOR })))
+              else if (op.op === 'recovery-start') w.journal.startRecoveryAction(op.row)
+              else w.journal.finishRecoveryAction(op.id, op.status, op.at, op.details)
+            })
+            applied += 1
+          } catch (err) {
+            failed += 1
+            d.log(`continuity: journal-append ${op.op} failed: ${String(err)}`)
+          }
+        }
+      })
+    } catch (err) {
+      // The commit itself failed: nothing of this call landed.
+      d.log(`continuity: journal-append could not commit: ${String(err)}`)
+      return { status: 200, body: { applied: 0, failed: ops.length } }
+    }
+    return { status: 200, body: { applied, failed } }
   }
 
   return {
@@ -184,42 +248,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
         const row = w ? promptWriteEventOf(state, e, d.now(), HOST_ACTOR) : null
         if (w && row) w.recorder.note(row)
       }),
-    append: (ops) => {
-      const writer = isWriter()
-      if (!settings.enabled || !writer)
-        return { status: 409, body: { error: settings.enabled ? 'this Host is not the journal writer now' : 'Job Continuity is off on this Host', enabled: settings.enabled, writer } }
-      const w = writing()
-      if (!w) return { status: 409, body: { error: 'this Host could not open the journal', enabled: true, writer } }
-      let applied = 0
-      let failed = 0
-      try {
-        // One call, one transaction (one sync); each op a savepoint inside it, so one that fails costs
-        // only itself (P14).
-        w.journal.transaction(() => {
-          for (const op of ops) {
-            try {
-              w.journal.transaction(() => {
-                // The Host stamps who sent these (P5): the app, whatever the rows said; and puts the app's
-                // keys in their own namespace (review 4-5 M-2).
-                if (op.op === 'events')
-                  w.journal.append(op.events.map((e) => ({ ...e, idempotencyKey: APP_KEY_PREFIX + e.idempotencyKey, actor: DESKTOP_ACTOR })))
-                else if (op.op === 'recovery-start') w.journal.startRecoveryAction(op.row)
-                else w.journal.finishRecoveryAction(op.id, op.status, op.at, op.details)
-              })
-              applied += 1
-            } catch (err) {
-              failed += 1
-              d.log(`continuity: journal-append ${op.op} failed: ${String(err)}`)
-            }
-          }
-        })
-      } catch (err) {
-        // The commit itself failed: nothing of this call landed.
-        d.log(`continuity: journal-append could not commit: ${String(err)}`)
-        return { status: 200, body: { applied: 0, failed: ops.length } }
-      }
-      return { status: 200, body: { applied, failed } }
-    },
+    append: (ops) => timed('journal-append', () => appendNow(ops)),
     // Review 4-5 M-1: one reload at a time. Two that overlapped would both read `was` as off before
     // either finished, and both write the baseline under keys a moving clock keeps apart.
     reload: (state) => {
