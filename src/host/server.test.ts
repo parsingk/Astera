@@ -740,6 +740,37 @@ describe('startHostServer', () => {
       await vi.waitFor(() => expect(h.s.yieldsOf(seen[0])).toBeNull())
     })
 
+    // Leftovers Task 1 (S6-3): the app's pid from its hello, kept after its socket closes so the app-gone
+    // rule can still ask whether that process lives when app.pid could not be written.
+    it('keeps the last pid an app gave in its hello, past its close, and ignores a CLI or a junk pid', async () => {
+      const h = await server()
+      const hello = async (m: Record<string, unknown>) => {
+        const sock = net.connect(h.address)
+        await new Promise((r) => sock.once('connect', r))
+        const ch = messageChannel(sock)
+        ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...m } as ClientMessage)
+        await ch.next()
+        return sock
+      }
+      expect(h.s.lastAppPid()).toBeNull()
+      const old = await hello({ role: 'app' }) // an app from before this field: nothing to keep
+      expect(h.s.lastAppPid()).toBeNull()
+      const a = await hello({ role: 'app', pid: 4242 })
+      expect(h.s.lastAppPid()).toBe(4242)
+      const cli = await hello({ role: 'cli', pid: 777 })
+      const junk = await hello({ role: 'app', pid: -3 })
+      const junk2 = await hello({ role: 'app', pid: '5' })
+      expect(h.s.lastAppPid()).toBe(4242)
+      a.end()
+      await vi.waitFor(() => expect(h.s.hasApp()).toBe(true)) // the old app is still there
+      old.end()
+      junk.end()
+      junk2.end()
+      await vi.waitFor(() => expect(h.s.hasApp()).toBe(false))
+      expect(h.s.lastAppPid()).toBe(4242)
+      cli.end()
+    })
+
     it('tells onMessage whether the sender has said hello (review of Task 1)', async () => {
       const seen: boolean[] = []
       const h = await server({

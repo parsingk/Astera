@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createAppGoneWatch } from './appGone'
+import { createAppGoneWatch, createAppLeftGrace } from './appGone'
 
 const rig = (pid: { now: number | null }) => {
   let app = true
@@ -113,5 +113,62 @@ describe('createAppGoneWatch (S6 R25, design §3A.3)', () => {
     r.graceEnds()
     r.w.tick()
     expect(r.gone).toEqual([])
+  })
+})
+
+// Leftovers Task 1 (S6-5): one app-left rule for both watchers. driving.ts runs it with
+// `attachCancels: false` (an attach within the grace decides by pid), appGone's watch with `true` (A69: an
+// attach cancels whatever the pid). One table drives both, so a change to one is a change to the other.
+describe('createAppLeftGrace, the app-left rule both watchers run (S6-5)', () => {
+  type Step = 'leave' | 'attach' | 'graceEnds' | 'tick' | ['pid', number | null]
+  const run = (attachCancels: boolean, steps: Step[]) => {
+    let app = true
+    let pid: number | null = 100
+    let clock = 1000
+    const timers: Array<{ fn: () => void; cancelled: boolean }> = []
+    const gone: Array<{ why: string; leftAt: number; appAttached: boolean }> = []
+    const g = createAppLeftGrace({
+      hasApp: () => app,
+      appPid: () => pid,
+      attachCancels,
+      onGone: (e) => gone.push(e),
+      log: () => {},
+      nowMs: () => clock,
+      after: (_ms, fn) => {
+        const t = { fn, cancelled: false }
+        timers.push(t)
+        return () => { t.cancelled = true }
+      }
+    })
+    for (const s of steps) {
+      clock += 10
+      if (s === 'leave') { app = false; g.left() }
+      else if (s === 'attach') { app = true; g.attached() }
+      else if (s === 'graceEnds') { for (const t of timers.splice(0)) if (!t.cancelled) t.fn() }
+      else if (s === 'tick') g.tick()
+      else pid = s[1]
+    }
+    return gone
+  }
+  const table: Array<{ name: string; steps: Step[]; driver: number; watch: number }> = [
+    { name: 'a quit (no live pid) is gone when the grace ends', steps: ['leave', ['pid', null], 'graceEnds'], driver: 1, watch: 1 },
+    { name: 'the same live pid at the grace end keeps what it left', steps: ['leave', 'graceEnds', 'tick'], driver: 0, watch: 0 },
+    { name: 'a kept app that quits is gone at the next tick', steps: ['leave', 'graceEnds', ['pid', null], 'tick'], driver: 1, watch: 1 },
+    { name: 'a kept app back with the same pid keeps it', steps: ['leave', 'graceEnds', 'attach', ['pid', null], 'tick'], driver: 0, watch: 0 },
+    { name: 'the same pid back within the grace keeps it', steps: ['leave', 'attach', 'graceEnds'], driver: 0, watch: 0 },
+    { name: 'a new instance within the grace: the driver runs the steps, the takeover is cancelled (A69)', steps: ['leave', ['pid', 200], 'attach', 'graceEnds'], driver: 1, watch: 0 },
+    { name: 'a new instance after a kept grace: the driver runs the steps, the takeover is cancelled (A69)', steps: ['leave', 'graceEnds', ['pid', 200], 'attach', 'tick'], driver: 1, watch: 0 },
+    { name: 'no pid known at the leave cannot be the same app', steps: [['pid', null], 'leave', 'graceEnds'], driver: 1, watch: 1 },
+    { name: 'a tick inside the grace decides nothing', steps: ['leave', ['pid', null], 'tick'], driver: 0, watch: 0 }
+  ]
+  for (const row of table) {
+    it(row.name, () => {
+      expect(run(false, row.steps), 'driving.ts').toHaveLength(row.driver)
+      expect(run(true, row.steps), 'appGone.ts').toHaveLength(row.watch)
+    })
+  }
+  it('says when the app left and whether one is attached at the decision', () => {
+    expect(run(false, ['leave', ['pid', 200], 'attach'])).toEqual([{ why: expect.any(String), leftAt: 1010, appAttached: true }])
+    expect(run(false, ['leave', ['pid', null], 'graceEnds'])).toEqual([{ why: expect.any(String), leftAt: 1010, appAttached: false }])
   })
 })

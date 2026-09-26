@@ -375,6 +375,15 @@ describe('createHostWorktrees', () => {
       expect(err).toBeInstanceOf(AppUnreachable)
       expect(wasRefusedBeforeActing(err)).toBe(true)
     })
+    // Leftovers Task 1 (S6-3): an app that could not write app.pid is still seen, by the pid its hello gave.
+    it('refuses too when app.pid is missing but the pid the app gave in its hello lives', async () => {
+      const h = rig({ app: { ...noApp, lastAppPid: () => process.pid } })
+      const p = await h.wt.fork({ repoPath: repo, name: 'a' })
+      h.session('ses_w', p)
+      const err = await h.wt.removeWorktrees([p]).then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(AppUnreachable)
+      await fs.stat(p)
+    })
     it('proceeds when no app has said it is running', async () => {
       const h = rig()
       const p = await h.wt.fork({ repoPath: repo, name: 'a' })

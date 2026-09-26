@@ -142,6 +142,11 @@ export interface HostServer {
    *  names. Whatever role the socket gave: an app old enough to send no role greets as a CLI and still
    *  holds ptys, and it yielded nothing, so it keeps every duty. */
   yieldsOf(socketNo: number): ReadonlySet<string> | null
+  /** The pid the last app to say hello gave (`hello.pid`, leftovers Task 1), or null when none did. Kept
+   *  after that socket closes: it is what `liveAppPid` asks about when `app.pid` names no live app, and
+   *  the question matters most once the app's socket is down. Only from a hello that said `role: 'app'`
+   *  on this protocol, and only a positive integer. */
+  lastAppPid(): number | null
   /** How many sockets the number index behind `yieldsOf` holds: every connection, greeted or not,
    *  until it closes. For the tests: `yieldsOf` answers null for a closed socket either way, so only
    *  this count shows the index forgetting it, and an index that did not would grow by one for every
@@ -212,6 +217,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    *  set's element because the set is what `broadcast` walks and that must not change shape.
    *  A socket that is in `greetedSockets` is always in here too — both are written in one place. */
   const roles = new Map<net.Socket, 'app' | 'cli'>()
+  /** `lastAppPid`: the pid of the last app hello that carried one. */
+  let lastAppPid: number | null = null
   /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
    *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
   const yields = new Map<net.Socket, ReadonlySet<string>>()
@@ -317,6 +324,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
+          if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) lastAppPid = m.pid
           if (roles.get(socket) === 'app') tellAppsChanged()
           send({
             t: 'hello',
@@ -512,6 +520,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       return yields.get(s) ?? null
     },
     knownSockets: () => socketByNo.size,
+    lastAppPid: () => lastAppPid,
     act: (name, args) =>
       new Promise((resolve, reject) => {
         const sock = appSocket()

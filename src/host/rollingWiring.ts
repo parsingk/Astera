@@ -83,7 +83,8 @@ export function composeHostRolling(a: {
   version: string
   spawner: HostSpawner
   exits(): Pick<HostExits, 'holdersOf'>
-  server(): Pick<HostServer, 'hasApp' | 'yieldsOf' | 'broadcast' | 'act'>
+  /** `lastAppPid` (leftovers Task 1) is optional for the rigs: the app-gone rule's fallback pid. */
+  server(): Pick<HostServer, 'hasApp' | 'yieldsOf' | 'broadcast' | 'act'> & Partial<Pick<HostServer, 'lastAppPid'>>
   orch(): Pick<HostOrch, 'ready' | 'state' | 'internalDeps'>
   lang(): Lang
   log(m: string): void
@@ -314,7 +315,8 @@ export function composeHostRolling(a: {
 
   const watch = createAppGoneWatch({
     hasApp: () => a.server().hasApp(),
-    appPid: a.appPid ?? (() => liveAppPid(a.profileDir)),
+    // Leftovers Task 1 (S6-3): app.pid, or the pid the app's hello gave when app.pid names no live app.
+    appPid: a.appPid ?? (() => liveAppPid(a.profileDir, a.server().lastAppPid?.() ?? null)),
     // Synchronous once the first read is done, so the mark and the chain land in the pass that decided.
     onGone: () => {
       if (refreshed) return takeOver()

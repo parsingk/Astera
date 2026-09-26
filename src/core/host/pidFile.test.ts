@@ -112,6 +112,22 @@ describe('the app pid file', () => {
       kill.mockRestore()
     }
   })
+  // Leftovers Task 1 (S6-3, S45-4a): markAppRunning swallows a failed write, so a live app can leave
+  // no app.pid. The pid its hello gave the Host stands in, probed the same way.
+  it('falls back to the pid the app gave in its hello when app.pid names no live app', async () => {
+    const dir = await tempDir('astera-apppid-')
+    expect(liveAppPid(dir, process.pid)).toBe(process.pid)
+    const gone = await dead()
+    expect(liveAppPid(dir, gone)).toBeNull()
+    expect(liveAppPid(dir, null)).toBeNull()
+    writeFileSync(appPidFilePath(dir), 'abc')
+    expect(liveAppPid(dir, process.pid)).toBe(process.pid)
+    writeFileSync(appPidFilePath(dir), String(gone))
+    expect(liveAppPid(dir, process.pid)).toBe(process.pid)
+    // A live file wins: it is what the app wrote at start.
+    writeFileSync(appPidFilePath(dir), String(process.pid))
+    expect(liveAppPid(dir, gone)).toBe(process.pid)
+  })
   it('never throws, even with no profile folder', () => {
     const nowhere = path.join(tmpdir(), `astera-apppid-missing-${process.pid}`, 'deeper')
     expect(() => markAppRunning(nowhere, process.pid)).not.toThrow()

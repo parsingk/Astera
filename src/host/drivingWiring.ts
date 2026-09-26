@@ -59,7 +59,7 @@ export function composeHostDriving(a: {
   spawner: HostSpawner
   worktrees: HostWorktrees
   orch(): HostOrch
-  server(): { hasApp(): boolean; appsKeep(duty: string): boolean; broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean): void }
+  server(): { hasApp(): boolean; appsKeep(duty: string): boolean; broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean): void; lastAppPid?(): number | null }
   log(m: string): void
   now(): string
   nowMs(): number
@@ -112,7 +112,9 @@ export function composeHostDriving(a: {
     },
     server: {
       hasApp: () => a.server().hasApp(),
-      appsKeep: (duty) => a.server().appsKeep(duty)
+      appsKeep: (duty) => a.server().appsKeep(duty),
+      // Leftovers Task 1: the app-left rule's fallback when app.pid names no live app.
+      lastAppPid: () => a.server().lastAppPid?.() ?? null
     },
     // The driver's `mayStart` asks `isRetiring` on entry, before each slot and after a handover's
     // drain: answering true from dispose on stops a pass that is already running, in the same turn,

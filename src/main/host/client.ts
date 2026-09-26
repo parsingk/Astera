@@ -75,7 +75,7 @@ export const PING_MISSES = HOST_UNRESPONSIVE_MS / PING_MS
 
 /** How long `retire()` waits for the Host to be gone. Covers the Host's own EXIT_HAMMER_MS
  *  (host/index.ts), which is the point by which it has stopped being polite about leaving. */
-const RETIRE_SETTLE_MS = 2_000
+export const RETIRE_SETTLE_MS = 2_000
 
 /** Which Host answered, as the `hello` reports it. Two `hello`s with the same pair came from the same
  *  process, and one whose registry therefore still holds the ptys this app spawned before the drop. */
@@ -529,6 +529,8 @@ export class HostClient {
       protocol: this.deps.protocol ?? HOST_PROTOCOL,
       app: this.deps.appVersion,
       role: 'app',
+      // Leftovers Task 1 (S6-3): the Host asks whether this pid lives when app.pid could not be written.
+      pid: process.pid,
       yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])]
     })
   }

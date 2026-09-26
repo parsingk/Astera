@@ -52,8 +52,9 @@ export interface HostWorktreesDeps {
   broadcast(m: HostMessage): void
   log(m: string): void
   /** The attached app, asked before a folder is removed about what it runs itself (the ruling on
-   *  plan risk 3, HOST_ACT_PATH_IN_USE). */
-  app: Pick<HostServer, 'hasApp' | 'act'>
+   *  plan risk 3, HOST_ACT_PATH_IN_USE). `lastAppPid` (leftovers Task 1, optional for the rigs): the pid the
+   *  last app's hello gave, asked when app.pid names no live app. */
+  app: Pick<HostServer, 'hasApp' | 'act'> & Partial<Pick<HostServer, 'lastAppPid'>>
   /** Test seams; the wiring leaves them out. */
   closeTimeoutMs?: number
   pollMs?: number
@@ -213,7 +214,8 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
    *  (core/host/pidFile.ts, which says what its pid-reuse residual costs). */
   const DETACHED_APP =
     'Astera is running but not connected to this Host; remove the worktree from the app, or quit Astera and retry'
-  const detachedApp = (): boolean => !d.app.hasApp() && liveAppPid(d.profileDir) !== null
+  const liveApp = (): number | null => liveAppPid(d.profileDir, d.app.lastAppPid?.() ?? null)
+  const detachedApp = (): boolean => !d.app.hasApp() && liveApp() !== null
 
   /** Whether an app runs something in the folder the Host cannot see, as a reason, or null.
    *  - Attached (the ruling on plan risk 3): the app is asked, and one that does not answer, or
@@ -222,7 +224,7 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
    *  - No app alive: nothing the Host cannot see. */
   const askApp = async (p: string): Promise<string | null> => {
     // A throw here is caught by whoever asked: `reap` and reapWorktree's own try both keep the folder.
-    if (!d.app.hasApp()) return liveAppPid(d.profileDir) !== null ? DETACHED_APP : null
+    if (!d.app.hasApp()) return liveApp() !== null ? DETACHED_APP : null
     try {
       const answer = await d.app.act(HOST_ACT_PATH_IN_USE, [p])
       if (answer === null || typeof answer === 'string') return answer

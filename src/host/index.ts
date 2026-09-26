@@ -197,7 +197,7 @@ async function main(): Promise<void> {
     getState: () => orch.state(),
     broadcast: (m) => server.broadcast(m),
     log: (m) => log.write(m),
-    app: { hasApp: () => server.hasApp(), act: (name, args) => server.act(name, args) }
+    app: { hasApp: () => server.hasApp(), act: (name, args) => server.act(name, args), lastAppPid: () => server.lastAppPid() }
   })
 
   // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in

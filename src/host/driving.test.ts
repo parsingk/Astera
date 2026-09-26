@@ -95,6 +95,9 @@ interface RigOpts {
   sleepingCoordinator?: boolean
   /** Every restart Gate the tick asks for is refused (interruptStalledTask answers not interrupted). */
   refuseGates?: boolean
+  /** Leftovers Task 1: no appPid seam, so the real liveAppPid over the profile's app.pid and the server's
+   *  last hello pid answers. */
+  realAppPid?: boolean
 }
 
 /** Under the test's own folder (review m7): never a literal path, should the fake ever resolve one. */
@@ -180,7 +183,7 @@ async function rig(o: RigOpts = {}) {
     await fs.writeFile(path.join(specsDir, 'dsp_live.md'), 'the spec a live worker reads', 'utf8')
   }
 
-  const server = { app: false, keeps: false }
+  const server = { app: false, keeps: false, lastPid: null as number | null }
   const coordinator = { busy: false as boolean | null }
   const typed: Array<[string, string]> = []
   const typeInto = vi.fn((id: string, text: string) => {
@@ -268,7 +271,7 @@ async function rig(o: RigOpts = {}) {
   const driving = createHostDriving({
     profileDir: dir,
     orch: { handle, internalDeps: () => orch.internalDeps(), loaded: () => orch.loaded(), drainOnce, state: () => orch.state() },
-    server: { hasApp: () => server.app, appsKeep: () => server.keeps },
+    server: { hasApp: () => server.app, appsKeep: () => server.keeps, lastAppPid: () => server.lastPid },
     spawner: { sessionBusy: (id) => (id === 'coord-1' ? coordinator.busy : null), typeInto, isRetiring: () => spawner.retiring, inFlight: () => spawner.inFlightCount },
     worktrees: {
       fork: async () => wt,
@@ -290,7 +293,7 @@ async function rig(o: RigOpts = {}) {
     specsDir,
     log: (m) => logs.push(m),
     nowMs: () => clock.now,
-    appPid: () => appPid.value,
+    ...(o.realAppPid ? {} : { appPid: () => appPid.value }),
     onReport: (r) => reports.push(r),
     ...(o.refuseGates
       ? { interruptStalled: (st: OrchState) => ({ state: st, interrupted: null, resume: null, stuck: true }) }
@@ -1244,6 +1247,25 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
   it('leaves the steps to a same-pid app whose socket stays down past the grace', async () => {
     const h = await rig({ openRepairWithoutSpec: true })
     h.appPid.value = 4242
+    h.server.app = true
+    await h.load()
+    h.driving.appsChanged()
+    await h.settle()
+    h.grace.hold = true
+    h.server.app = false
+    h.driving.appsChanged()
+    await h.settle()
+    expect(h.fireGrace()).toBe(1)
+    await h.settle()
+    expect(h.startRepair).not.toHaveBeenCalled()
+    expect(h.stopForeignValidations).not.toHaveBeenCalled()
+  })
+
+  // Leftovers Task 1 (S6-3, S45-4a): an app that could not write app.pid is still told from a new instance,
+  // by the pid its hello gave (the rig's profile has no app.pid).
+  it('leaves the steps to a live app whose app.pid is unreadable, by the pid its hello gave', async () => {
+    const h = await rig({ openRepairWithoutSpec: true, realAppPid: true })
+    h.server.lastPid = process.pid
     h.server.app = true
     await h.load()
     h.driving.appsChanged()

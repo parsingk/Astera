@@ -94,21 +94,37 @@ export function clearAppRunning(profileDir: string, pid: number): void {
   }
 }
 
-/** The pid of a live app on this profile, or null: no file, not one pid, or a process that has ended. */
-export function liveAppPid(profileDir: string): number | null {
-  let text: string
+/** Whether `pid` names a process that exists. Signal 0 asks and does nothing to it; EPERM also means it
+ *  does (another user, or higher integrity). Never throws. */
+function pidLives(pid: number): boolean {
   try {
-    text = readFileSync(appPidFilePath(profileDir), 'utf8')
-  } catch {
-    return null
-  }
-  if (!/^[1-9][0-9]*$/.test(text)) return null
-  const pid = Number(text)
-  try {
-    // Signal 0 asks whether the pid exists and does nothing to it; EPERM also means it does.
     process.kill(pid, 0)
-    return pid
+    return true
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM' ? pid : null
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
   }
+}
+
+/** The pid of a live app on this profile, or null: no file, not one pid, or a process that has ended.
+ *
+ *  **`fallbackPid` stands in when the file names no live app** (leftovers Task 1, S6-3): the pid the app
+ *  gave in its last `hello` (`HostServer.lastAppPid`). `markAppRunning` swallows a failed write, so a live
+ *  app can leave no file, or a crash's stale one, behind; without this the Host would read that app as
+ *  gone. Probed the same way, so it answers null once that process has ended. An app older than the
+ *  field sends no pid, and then this reads the file alone, as before. */
+export function liveAppPid(profileDir: string, fallbackPid?: number | null): number | null {
+  const fromFile = ((): number | null => {
+    let text: string
+    try {
+      text = readFileSync(appPidFilePath(profileDir), 'utf8')
+    } catch {
+      return null
+    }
+    if (!/^[1-9][0-9]*$/.test(text)) return null
+    const pid = Number(text)
+    return pidLives(pid) ? pid : null
+  })()
+  if (fromFile !== null) return fromFile
+  if (typeof fallbackPid !== 'number' || !Number.isSafeInteger(fallbackPid) || fallbackPid <= 0) return null
+  return pidLives(fallbackPid) ? fallbackPid : null
 }

@@ -243,8 +243,13 @@ export type ClientMessage =
    *  app is attached. Absent means none, which is what an S2 app sends: the Host then keeps sending
    *  that work to it, because such an app writes worktrees.json whole and would erase an entry the
    *  Host made behind it. An older Host ignores the field, so a new app in front of one keeps S2's
-   *  behaviour. Additive, so HOST_PROTOCOL stays 3. */
-  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli'; yields?: string[] }
+   *  behaviour. Additive, so HOST_PROTOCOL stays 3.
+   *
+   *  **`pid` is the app's own process id** (leftovers Task 1, S6-3). The Host keeps the last one an app
+   *  gave and asks whether it lives when the profile's `app.pid` names no live app (a profile the app
+   *  could not write). Absent from an older app and from the CLI, and then `app.pid` alone answers, as
+   *  before. Additive, so HOST_PROTOCOL stays 3. */
+  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli'; yields?: string[]; pid?: number }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
    *

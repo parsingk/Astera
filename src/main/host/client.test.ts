@@ -153,6 +153,8 @@ describe('HostClient', () => {
     await waitFor(() => host.got.some((m) => m.t === 'hello'))
     expect(host.got.find((m) => m.t === 'hello')).toMatchObject({ role: 'app' })
     expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toContain('worktrees')
+    // Leftovers Task 1 (S6-3): its own pid too, so the Host can ask whether it lives without app.pid.
+    expect(host.got.find((m) => m.t === 'hello')).toMatchObject({ pid: process.pid })
     await c.stop()
     await host.close()
   })
