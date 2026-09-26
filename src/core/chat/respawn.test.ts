@@ -17,4 +17,12 @@ describe('chatSpawnOptsOf', () => {
     chatSpawnOptsOf({ account, cwd: 'D:/p' }, { unattendedOf: (id) => { seen.push(id); return 'hold' }, bypassSignal: null })
     expect(seen).toEqual([undefined])
   })
+  // `sessions create --kind chat --unattended` (CLI spec §14): a fresh session names its own policy.
+  it('a policy the request names wins over the one asked of the old session', () => {
+    const o = chatSpawnOptsOf(
+      { account, cwd: 'D:/p', unattendedPermission: 'deny-after-60s' },
+      { unattendedOf: () => 'hold', bypassSignal: null, hostStarting: true }
+    )
+    expect(o.unattendedPermission).toBe('deny-after-60s')
+  })
 })

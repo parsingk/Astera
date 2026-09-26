@@ -414,6 +414,9 @@ export function createHostOrch(a: {
   /** The Host's dispatch loop placing one ready Task (`tasks dispatch`), passed through to
    *  `hostOrchDeps`. Absent: the command answers 409. */
   dispatchTask?(taskId: string): Promise<{ status: number; body: unknown }>
+  /** `sessions create` (sessionCreate.ts), passed through to `hostOrchDeps`. Absent: the command
+   *  answers 409. */
+  createSession?: OrchServerDeps['createSession']
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
 
@@ -574,6 +577,7 @@ export function createHostOrch(a: {
       chats: a.chats ?? null,
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
+      ...(a.createSession ? { createSession: a.createSession } : {}),
       onEffect: () => {
         marks.effects += 1
       },

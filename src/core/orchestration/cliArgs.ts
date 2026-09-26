@@ -117,7 +117,7 @@ export const NOUNS = {
   skills: ['list', 'install'],
   // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
   // id 는 앱의 세션 id(`ASTERA_SESSION`)이다. 대화 세션도 읽고 친다(phase D) — 치기는 앱이 열려 있으면 앱이 한다.
-  sessions: ['list', 'read', 'send'],
+  sessions: ['list', 'read', 'send', 'create'],
   // **Host 가 답한다 — 앱이 닫혀 있어도**(chat takeover §3.5). 대화 세션이 기다리는 권한 질문을 보고
   // 답한다. 답은 그 세션의 쓰는 쪽(Host 또는 앱)이 한다(host/orchDeps.ts 의 HOST_CHATS).
   chats: ['pending', 'answer'],

@@ -360,6 +360,20 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'no-enter', about: 'terminal: type the text and do not press Enter' }
     ]
   },
+  'sessions-create': {
+    summary: 'start a terminal or chat session on an account, in a folder',
+    detail:
+      "The Host starts it, so Astera may be open or closed: a terminal session the way it starts a worker (the agent CLI in a terminal, with Astera's hooks, the folder trusted, and its permission prompts on or off as Astera's setting says), a chat session the way it restarts one after a roll. With Astera open, it takes the session back and shows it as a tab. Answers the session as `sessions list` shows it; its id is what `sessions read` and `sessions send` take. --prompt is the first thing it is asked. --roll-accounts is the chain it rolls onto at a usage limit, --account first unless you place it; every account must be one vendor's. --unattended is for chat sessions: hold (the default) leaves a permission prompt open for someone to answer, deny-after-60s denies it after a minute when nobody has. A folder that does not exist is 2, an unknown account 4, and a Host started without the agent CLI paths is 6. With --request-id a retry does not start a second session.",
+    flags: [
+      { name: 'account', value: '<accountId>', required: true, about: 'the account it runs on (from `accounts list`)' },
+      { name: 'cwd', value: '<path>', required: true, about: 'the folder it starts in (a relative path is from here)' },
+      { name: 'kind', value: '<terminal|chat>', about: 'terminal (default) or chat' },
+      { name: 'title', value: '<text>', about: "the tab's title (default: the folder's name)" },
+      { name: 'prompt', value: '<text|->', about: 'the first prompt (a value of `-` reads it from stdin)' },
+      { name: 'roll-accounts', value: '<id,…>', about: 'the accounts to roll onto at a usage limit, in order' },
+      { name: 'unattended', value: '<hold|deny-after-60s>', about: 'chat: a permission prompt nobody answers' }
+    ]
+  },
   'chats-pending': {
     summary: 'the permission prompts and questions chat sessions are waiting on',
     detail:

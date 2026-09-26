@@ -479,6 +479,7 @@ astera skills  install [--account <accountId>]
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
+astera sessions create --account <accountId> --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
 
 astera chats pending   [--session <sessionId>]
 astera chats answer    --id <promptId> [--allow | --deny] [--session <sessionId>]
@@ -843,6 +844,42 @@ rather than typed a second time.
   the session from the agent's output and transcript, and the turn is there. A Codex session that has not
   started its first thread yet cannot take a turn from the Host, and that is a 6 that says so; nothing was
   sent, so the same `--request-id` works once the thread exists.
+
+**`sessions create` starts an agent session**, with Astera open or closed, because the Host starts it.
+`--account` and `--cwd` are required; a relative `--cwd` is taken from the directory you ran the
+command from. It answers the new session as `sessions list` shows it, and its `id` is the one
+`sessions read` and `sessions send` take.
+
+```json
+{"ok":true,"data":{"id":"…","kind":"terminal","title":"fix the build","accountId":"acc_1","cwd":"D:\\repo","alive":true,"state":"unknown"}}
+```
+
+- **A terminal session (the default, `--kind terminal`)** is started the way the Host starts a worker:
+  the account's agent CLI in a terminal, the folder trusted for it, Astera's hooks and status line, the
+  environment the Host itself was started with less the Host's own variables, and permission prompts
+  on or off as **Run agents without permission checks** in Astera's settings says at that moment. A
+  damaged `app-settings.json` is refused with 6, because it may have said the prompts are on; open
+  Astera to repair it.
+- **A chat session (`--kind chat`)** is started the way the Host starts a chat session after a roll,
+  with the same reading of the permission setting. The command answers once the session has finished
+  starting, its first prompt included. `--unattended` says what happens to a permission prompt nobody
+  answers: `hold` (the default) leaves it open until someone answers it in Astera or with `chats
+  answer`, and `deny-after-60s` denies it after a minute. `--unattended` is a 2 on a terminal session.
+
+`--title` names the tab (the folder's name by default). `--prompt` is the first thing the session is
+asked, and `--prompt -` reads it from standard input. `--roll-accounts a,b` is the chain the session
+rolls onto when it reaches a usage limit, with `--account` first unless you place it in the list
+yourself; every account in it must be one vendor's, and a mix is a 2. The Host rolls the chain, Astera
+open or closed.
+
+**With Astera open, the session shows up as a tab**: Astera takes it back from the Host the moment it
+starts, as it does a session the Host started for a worker. An Astera too old to hear that picks it up
+the next time it starts.
+
+A folder that does not exist is a 2, an account that is not in `accounts list` a 4, and a Host started
+without the agent CLI paths (it answers no `spawn` feature) a 6. Nothing is started in any of those
+cases. With `--request-id`, a retried `sessions create` is answered from the receipt rather than
+starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is

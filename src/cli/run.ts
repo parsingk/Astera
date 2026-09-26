@@ -278,6 +278,10 @@ export function argsForCall(a: {
       : a.args
   }
   const given = typeof a.args.cwd === 'string' && a.args.cwd.length > 0 ? a.args.cwd : null
+  // `sessions create` takes --cwd as required and gets no default, but a relative one is resolved here
+  // for the same reason: the session would otherwise start in the Host's folder.
+  if (a.cmd === 'sessions-create')
+    return given !== null && !path.isAbsolute(given) ? { ...a.args, cwd: path.resolve(a.cwd, given) } : a.args
   // `jobs create` is run-create under its public name (command.ts), so it needs the same default.
   if (a.cmd !== 'run-create' && a.cmd !== 'jobs-create') return a.args
   if (given === null) return { ...a.args, cwd: a.cwd }

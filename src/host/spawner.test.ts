@@ -679,3 +679,42 @@ describe('the roll spawn (S6 R5, R6)', () => {
     await vi.waitFor(() => expect(seen).toEqual([[r.sessionId, 'cx-9', 'C:/cx/rollout-9.jsonl']]))
   })
 })
+
+// `sessions create` (CLI spec §14): a person's session, started by the same spawn a worker takes.
+describe('createHostSpawner — createSession', () => {
+  it('starts the agent CLI in the folder, with the note, the hooks and the D4 environment, and announces it', async () => {
+    const h = rig()
+    const spawnedCb: string[] = []
+    h.spawner!.onSpawned((info) => spawnedCb.push(info.id))
+    const info = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, title: 'fix it', initialPrompt: 'run the tests', rollAccountIds: [] })
+    expect(h.spawned).toHaveLength(1)
+    const entry = h.registry.list()[0]
+    expect(entry.meta).toMatchObject({ kind: 'session', id: info.id, restore: { accountId: 'acc1', cwd: repo, title: 'fix it', rolledBy: 'host' } })
+    expect(h.sent).toEqual([{ t: 'pty-opened', entry }])
+    const env = h.spawned[0].opts.env
+    expect(env.ASTERA_SESSION).toBe(info.id)
+    expect(env.CI_SECRET).toBe('kept')
+    expect(Object.keys(env).filter((k) => /^(ELECTRON_RUN_AS_NODE|ASTERA_HOST_)/i.test(k))).toEqual([])
+    expect(JSON.stringify(h.spawned[0].args)).toContain('run the tests')
+    // The rolling hears it the way it hears a worker (a chain when it has accounts to roll onto).
+    expect(spawnedCb).toEqual([info.id])
+  })
+
+  it('reads the permission setting as a worker start does: manual means prompts on', async () => {
+    await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+    const h = rig()
+    await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+    expect(JSON.stringify(h.spawned[0].args)).not.toMatch(/--dangerously-skip-permissions/)
+  })
+
+  it('a folder that does not exist, or an unknown account, starts nothing and is tagged as such', async () => {
+    const h = rig()
+    const missing = await h.spawner!.createSession({ accountId: 'acc1', cwd: path.join(dir, 'nope'), rollAccountIds: [] }).catch((e: unknown) => e)
+    expect(String(missing)).toContain('CWD_MISSING')
+    expect(wasRefusedBeforeActing(missing)).toBe(true)
+    const unknown = await h.spawner!.createSession({ accountId: 'acc_gone', cwd: repo, rollAccountIds: [] }).catch((e: unknown) => e)
+    expect(String(unknown)).toContain('unknown account')
+    expect(wasRefusedBeforeActing(unknown)).toBe(true)
+    expect(h.spawned).toHaveLength(0)
+  })
+})

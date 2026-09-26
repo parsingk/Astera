@@ -27,6 +27,9 @@ export interface ChatRollSpawn {
   model?: string | null
   startWithBypass?: boolean
   restoreExtra?: RollSpawnExtra
+  /** The session's own policy, when the request names one: a fresh session (`sessions create --kind
+   *  chat --unattended`) has no old session to ask. Absent, the policy is asked of the old session. */
+  unattendedPermission?: UnattendedPermission
 }
 
 /** The manager's spawn options for a roll respawn. The policy is asked of the session the roll came
@@ -51,7 +54,7 @@ export function chatSpawnOptsOf(
     ...(o.startWithBypass !== undefined ? { startWithBypass: o.startWithBypass } : {}),
     ...(o.restoreExtra !== undefined ? { restoreExtra: o.restoreExtra } : {}),
     bypassSignal: d.bypassSignal,
-    unattendedPermission: d.unattendedOf(o.restoreExtra?.rolledFrom),
+    unattendedPermission: o.unattendedPermission ?? d.unattendedOf(o.restoreExtra?.rolledFrom),
     ...(d.hostStarting ? { hostStarting: true } : {})
   }
 }

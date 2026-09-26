@@ -488,6 +488,23 @@ export interface OrchServerDeps {
    *  (exec/dispatchLoop.ts `dispatchOne`), through the slot the loop fills. **Only the Host injects it**,
    *  and answers 409 itself when it does not drive. Absent, the command answers 409. */
   dispatchTask?(taskId: string): Promise<Reply>
+  /** Starts an agent session for `sessions create` (CLI spec §14): a terminal one through the Host's
+   *  spawner (the path its workers take), a chat one through the Host's chat manager (the path its rolls
+   *  take). **Only the Host injects it.** Rejects with the reason when the start fails; answers the new
+   *  session's row as `sessions list` shows it. */
+  createSession?(o: SessionCreate): Promise<HostSession>
+}
+
+/** What `sessions create` hands the Host, checked. `rollAccountIds` is the whole chain, the account
+ *  included, or empty for none; `unattended` is only ever set for a chat session. */
+export interface SessionCreate {
+  kind: 'terminal' | 'chat'
+  accountId: string
+  cwd: string
+  title?: string
+  prompt?: string
+  rollAccountIds: string[]
+  unattended?: 'hold' | 'deny-after-60s'
 }
 
 type Reply = { status: number; body: unknown }
@@ -3612,6 +3629,61 @@ export async function handleCommand(
      * approval can be answered here (plan ruling P6); a prompt id is per process, so an id open in two
      * sessions needs `--session` (P7).
      */
+    /**
+     * 세션 하나를 띄운다 — 공개 이름(CLI spec §14). **띄우는 것은 Host 다**(`createSession`): 터미널은
+     * 워커가 뜨는 그 spawner 로(계정, 폴더 신뢰, statusLine, D4 의 환경, 설정의 권한 우회), 대화는
+     * 롤링이 되띄우는 그 대화 관리자로. 이 층은 띄우기 전에 거절할 것을 거절한다: 빠진 플래그,
+     * 모르는 값, 없는 계정, 섞인 체인. 앱이 열려 있으면 앱이 그 세션을 되찾아 탭으로 보인다.
+     *
+     * COORDINATOR_ONLY 가 아니다 — `sessions send` 와 같은 사용자 결정이다.
+     */
+    case 'sessions-create': {
+      if (!deps.createSession) return conflict('sessions are started by the Astera Host, and this caller is not one')
+      if (args.account === undefined) return bad('--account is required: the account the session runs on (from `accounts list`)')
+      const account = str(args.account)
+      if (account === null) return bad('--account needs a value: an account id (from `accounts list`)')
+      if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
+      const cwd = str(args.cwd)
+      if (cwd === null) return bad('--cwd needs a value: a folder')
+      const kind = enumFilter('kind', args.kind, ['terminal', 'chat'] as const)
+      if ('error' in kind) return bad(kind.error)
+      const sessionKind = kind.value ?? 'terminal'
+      const unattended = enumFilter('unattended', args.unattended, ['hold', 'deny-after-60s'] as const)
+      if ('error' in unattended) return bad(unattended.error)
+      if (unattended.value !== undefined && sessionKind !== 'chat')
+        return bad('--unattended is for chat sessions: what the Host does with a permission prompt nobody is there to answer')
+      if (args.title !== undefined && str(args.title) === null) return bad('--title needs a value')
+      if (args.prompt !== undefined && str(args.prompt) === null) return bad('--prompt needs a value: the first thing the session is asked')
+      const known = await deps.listAccounts()
+      const mine = known.find((a) => a.id === account)
+      if (!mine) return notFound(`unknown account: ${account}`)
+      let chain: string[] = []
+      if (args.rollAccounts !== undefined) {
+        const raw = str(args.rollAccounts)
+        if (raw === null) return bad('--roll-accounts needs a value: account ids, comma-separated')
+        const parsed = parseAccountList(raw, known, '--roll-accounts')
+        if (!parsed.ok) return parsed.missing ? notFound(parsed.reason) : bad(parsed.reason)
+        chain = parsed.ids.includes(account) ? parsed.ids : [account, ...parsed.ids]
+        const odd = chain.find((id) => known.find((k) => k.id === id)!.provider !== mine.provider)
+        if (odd !== undefined)
+          return bad(`--roll-accounts must not mix providers: ${account} is ${mine.provider}, ${odd} is not`)
+      }
+      try {
+        return okBody(
+          await deps.createSession({
+            kind: sessionKind,
+            accountId: account,
+            cwd,
+            ...(args.title !== undefined ? { title: str(args.title)! } : {}),
+            ...(args.prompt !== undefined ? { prompt: str(args.prompt)! } : {}),
+            rollAccountIds: chain,
+            ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {})
+          })
+        )
+      } catch (e) {
+        return bad(`could not start the session: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
     case 'chats-pending':
     case 'chats-answer': {
       // **An answer is for a person** (Task 8 fix round 1, the controller's ruling). Letting a tool run

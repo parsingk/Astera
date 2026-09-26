@@ -263,6 +263,14 @@ describe('argsForCall — a project path is resolved here, not by the Host', () 
     expect(argsForCall({ cmd: 'projects-find', args: { path: '.' }, cwd: here })).toEqual({ path: here })
   })
 
+  it('sessions create resolves a relative --cwd too, and adds none when it was not given', () => {
+    expect(argsForCall({ cmd: 'sessions-create', args: { account: 'a', cwd: 'x' }, cwd: here })).toEqual({
+      account: 'a',
+      cwd: path.resolve(here, 'x')
+    })
+    expect(argsForCall({ cmd: 'sessions-create', args: { account: 'a' }, cwd: here })).toEqual({ account: 'a' })
+  })
+
   it('an absolute one goes as given', () => {
     const abs = path.resolve('/else')
     expect(argsForCall({ cmd: 'runs-list', args: { project: abs }, cwd: here })).toEqual({ project: abs })

@@ -25,7 +25,7 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
@@ -39,6 +39,8 @@ import { createHostExits, ptyHeldBy, type HostExits } from './exits'
 import { registrySessions } from './sessions'
 import { hookEventsDirIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
+import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
+import { createHostSessionStarter } from './sessionCreate'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -339,6 +341,13 @@ async function main(): Promise<void> {
   //
   // `server` is assigned a few lines down; every one of these closures runs long after that, because
   // nothing can call them before a client has connected.
+  /** `astera sessions`' registries: answered here and read back by `sessions create` for its answer. */
+  const hostSessions = registrySessions({
+    ptys: registry,
+    procs,
+    hookEventsDir: hookEventsDirIn(profileDir),
+    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
+  })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -368,11 +377,25 @@ async function main(): Promise<void> {
     // `astera sessions` — answered from the same two registries, by the app's id for each session,
     // plus the hook event files the sessions' own hooks append under this profile (read only), and
     // the profile's accounts.json for where a Claude chat session's transcript lives (read only).
-    sessions: registrySessions({
-      ptys: registry,
-      procs,
-      hookEventsDir: hookEventsDirIn(profileDir),
-      accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
+    sessions: hostSessions,
+    // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
+    // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
+    createSession: createHostSessionStarter({
+      spawner,
+      chats: rollingWiring?.chats ?? null,
+      rolling: rollingWiring?.rolling ?? null,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
+      exists: existsSync,
+      announceProc: (procId) => {
+        try {
+          server.broadcast({ t: 'proc-opened', procId }, (yields) => yields.has(HOST_YIELD_CHAT_TAKEOVER))
+        } catch (err) {
+          log.write(`proc-opened broadcast failed proc=${procId}: ${String(err)}`)
+        }
+      },
+      list: () => hostSessions.listSessions(),
+      log: (m) => log.write(m)
     }),
     local: spawner,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces

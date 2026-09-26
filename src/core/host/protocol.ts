@@ -397,6 +397,11 @@ export type HostMessage =
    *  restart. Never sent in reply to a `pty-spawn`: the client that asked already has `pty-spawned`,
    *  and the session is its own. An older app ignores it, and adopts the session at its next boot. */
   | { t: 'pty-opened'; entry: PtyEntry }
+  /** A chat session's line process the Host started **itself** for `sessions create` (CLI spec §14),
+   *  sent once its start has settled (`hostStarting` cleared), to the apps that yield chat takeover, so
+   *  an attached app takes it back the way it takes a rolled chat proc. The pty twin is `pty-opened`.
+   *  An older app ignores it, and adopts the session at its next sweep. Additive. */
+  | { t: 'proc-opened'; procId: string }
   /** A merge the Host runs in a repository the app may be watching (host S3 ruling R7, §3.3):
    *  `begin` right before `git merge` into `cwd`, `end` in the `finally` after it. `op` is the Host's
    *  own id and pairs the two. The app registers it as its own git operation, so its Work Unit screen

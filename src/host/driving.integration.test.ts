@@ -261,7 +261,10 @@ async function rig(o: RigOpts) {
     statusLinePayload: async () => null,
     onSpawned: () => {},
     onRolloutLocated: () => {},
-    retarget: () => {}
+    retarget: () => {},
+    createSession: async () => {
+      throw new Error('not in this rig')
+    }
   } satisfies HostSpawner
 
   const wiring = composeHostDriving({

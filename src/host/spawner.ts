@@ -37,6 +37,7 @@ import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { SessionManager } from '../core/sessions/manager'
+import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { StatusLineManager, resolveNodePath } from '../core/sessions/statusline'
 import { BusyScanner } from '../core/terminal/busy'
@@ -126,6 +127,12 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
   onRolloutLocated(cb: (sessionId: string, codexSessionId: string, rolloutPath: string) => void): void
   /** R19: a Host roll moved a Dispatch to another session; the tail and `readWorker` follow it. */
   retarget(a: { dispatchId: string; sessionId: string; previousSessionId: string }): void
+  /** `sessions create` (CLI spec §14): a person's terminal session, through the spawn a worker takes
+   *  (`spawnSession`): the account, the folder trusted, the statusLine and hooks, the D4 environment,
+   *  and the bypass read from the settings at this spawn. Announced with `pty-opened`, so an attached app
+   *  takes it back as a tab, and heard by `onSpawned`, so the rolling registers its chain. A missing
+   *  folder or an unknown account starts nothing and is tagged `refusedBeforeActing`. */
+  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[] }): Promise<SessionInfo>
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -631,6 +638,29 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         if (trace.forked === null && !trace.opened && trace.settingsRefused && err instanceof Error)
           throw refusedBeforeActing(err)
         throw err
+      }
+    }),
+    createSession: spawning(async (o) => {
+      const trace: StartTrace = { opened: false, forked: null, settingsRefused: false }
+      try {
+        const accounts = await readAccounts(accountsPath)
+        accountIn(accounts, o.accountId)
+        if (!existsSync(o.cwd)) throw new Error(`CWD_MISSING: ${o.cwd} does not exist`)
+        const info = await spawnSession(
+          {
+            accountId: o.accountId,
+            cwd: o.cwd,
+            title: o.title ?? defaultSessionTitle(o.cwd),
+            ...(o.initialPrompt !== undefined ? { initialPrompt: o.initialPrompt } : {}),
+            rollAccountIds: o.rollAccountIds
+          },
+          accounts,
+          trace
+        )
+        return info as SessionInfo
+      } catch (err) {
+        // Nothing started (no pty opened): a keyed retry keeps no receipt over it, as for a coordinator.
+        throw !trace.opened && err instanceof Error ? refusedBeforeActing(err) : err
       }
     }),
     startCoordinator: spawning(async (a) => {

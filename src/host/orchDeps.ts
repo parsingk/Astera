@@ -400,7 +400,14 @@ const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ..
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
  *  added to the returned object), so that its own failure can never reach `onAppRequired`. Declared
  *  here only for the compiler check below. */
-const NOT_FORWARDED = ['discardRunWorktree', 'stopCoordinator', 'enterCheckWait', 'coordinatorIdle', 'dispatchTask'] as const
+const NOT_FORWARDED = [
+  'discardRunWorktree',
+  'stopCoordinator',
+  'enterCheckWait',
+  'coordinatorIdle',
+  'dispatchTask',
+  'createSession'
+] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
  *  synchronous getters became `T | Promise<T>` in `command.ts` and are awaited at their one call site
@@ -515,7 +522,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   coordinatorIdle: false,
   // NOT_FORWARDED as well (CLI spec §18, `tasks dispatch`): built by hand below over the Host's own
   // dispatch loop, never the app's. It starts a worker, so it acts; the wrapper marks it once it has.
-  dispatchTask: true
+  dispatchTask: true,
+  // NOT_FORWARDED as well (CLI spec §14, `sessions create`): the Host's own spawner or chat manager,
+  // never the app. It starts a session, so it acts; the wrapper marks it unless nothing started.
+  createSession: true
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -615,6 +625,9 @@ export function hostOrchDeps(a: {
   /** The Host's own dispatch loop placing one ready Task (`tasks dispatch`, drivingWiring's
    *  `dispatchTask`). Absent: the command answers 409, as a caller that is not the Host. */
   dispatchTask?(taskId: string): Promise<{ status: number; body: unknown }>
+  /** The Host's own session starter (`sessions create`, sessionCreate.ts). Absent: the command
+   *  answers 409, as a caller that is not the Host. */
+  createSession?: OrchServerDeps['createSession']
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -974,6 +987,26 @@ export function hostOrchDeps(a: {
     return reply
   }
 
+  /**
+   * **`sessions create`, by the Host's own spawner or chat manager** (CLI spec §14). Marked as an effect
+   * once a session started, and on any failure that is not tagged `refusedBeforeActing` (a pty may be
+   * running); a refusal before the spawn (an unknown account, a missing folder, a damaged settings
+   * file, a leaving Host) starts nothing and keeps no receipt. A refusal only the app can clear is
+   * flagged the way HOST_LOCAL flags it, so the command answers 6 carrying `repair` or `retry`.
+   */
+  const createSession = async (o: Parameters<NonNullable<OrchServerDeps['createSession']>>[0]) => {
+    try {
+      const row = await a.createSession!(o)
+      a.onEffect?.()
+      return row
+    } catch (err) {
+      if (!wasRefusedBeforeActing(err)) a.onEffect?.()
+      if (err instanceof RepairNeeded) a.onAppRequired('createSession', err.message, { repair: err.file })
+      if (err instanceof HostRetiring) a.onAppRequired('createSession', err.message, { retry: HostRetiring.RETRY })
+      throw err
+    }
+  }
+
   /** HOST_RESOLVES: the Host's own resolver when no app is attached or the Host drives, else the app,
    *  and the Host again when that app cannot be asked. A failure is thrown as it is, never flagged:
    *  the command layer swallows it (see HOST_RESOLVES). */
@@ -1060,6 +1093,7 @@ export function hostOrchDeps(a: {
     discardRunWorktree,
     stopCoordinator,
     ...(a.dispatchTask ? { dispatchTask } : {}),
+    ...(a.createSession ? { createSession } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),

@@ -1235,3 +1235,49 @@ describe('hostOrchDeps — dispatchTask, the Host loop placing one Task', () => 
     expect(acted).toBe(1)
   })
 })
+
+// `sessions create` (CLI spec §14): the Host's own starter, never the app.
+describe('hostOrchDeps — createSession, the Host starting a session', () => {
+  const req = { kind: 'terminal' as const, accountId: 'acc_c', cwd: '/repo', rollAccountIds: [] }
+  const row = { id: 's1', kind: 'terminal' as const, title: 't', accountId: 'acc_c', cwd: '/repo', alive: true, state: 'unknown' as const }
+
+  it('is absent without a starter, so the command answers 409', () => {
+    expect(hostOrchDeps(base()).createSession).toBeUndefined()
+  })
+
+  it('a started session is an effect, and nothing goes to the app', async () => {
+    const act = vi.fn()
+    let acted = 0
+    const deps = hostOrchDeps(base({ act, onEffect: () => acted++, createSession: async () => row }))
+    expect(await deps.createSession!(req)).toEqual(row)
+    expect(acted).toBe(1)
+    expect(act).not.toHaveBeenCalled()
+  })
+
+  it('a refusal before the spawn is no effect; a failure after it is one', async () => {
+    let acted = 0
+    const { refusedBeforeActing } = await import('../core/host/orchProtocol')
+    const refusing = hostOrchDeps(
+      base({ onEffect: () => acted++, createSession: async () => { throw refusedBeforeActing(new Error('CWD_MISSING: /nope')) } })
+    )
+    await expect(refusing.createSession!(req)).rejects.toThrow('CWD_MISSING')
+    expect(acted).toBe(0)
+    const failing = hostOrchDeps(base({ onEffect: () => acted++, createSession: async () => { throw new Error('did not finish starting') } }))
+    await expect(failing.createSession!(req)).rejects.toThrow('did not finish')
+    expect(acted).toBe(1)
+  })
+
+  it('a damaged settings file is the app being required, carrying the file', async () => {
+    const flagged: Array<{ name: string; repair?: string }> = []
+    const deps = hostOrchDeps(
+      base({
+        onAppRequired: (name, _why, detail) => flagged.push({ name, repair: detail?.repair }),
+        createSession: async () => {
+          throw new RepairNeeded('open Astera to repair it', 'app-settings.json')
+        }
+      })
+    )
+    await expect(deps.createSession!(req)).rejects.toThrow('repair')
+    expect(flagged).toEqual([{ name: 'createSession', repair: 'app-settings.json' }])
+  })
+})

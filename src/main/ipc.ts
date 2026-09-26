@@ -6098,6 +6098,12 @@ export function registerIpc(
         void takeSessionsBack('the Host opened a session', m.entry.id).catch((e) =>
           hostLog(`host: could not take back the session the Host opened: ${String(e)}`)
         )
+      // The chat twin (`sessions create --kind chat`, CLI spec §14): one line process, sent once its start
+      // settled, taken back through the same queue the way a Host chat roll's new proc is.
+      if (m.t === 'proc-opened')
+        void takeSessionsBack('the Host opened a chat session', undefined, m.procId).catch((e) =>
+          hostLog(`host: could not take back the chat session the Host opened: ${String(e)}`)
+        )
     })
     // Host S3 (R1, R7, §3.3): the file the Host just wrote, and a merge it ran. Neither throws, but
     // wrapped anyway — a listener that threw here would be an uncaught exception in the main process,

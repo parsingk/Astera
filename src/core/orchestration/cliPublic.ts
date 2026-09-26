@@ -296,6 +296,7 @@ const SHAPE: Record<string, readonly string[]> = {
   'sessions-list': SESSION,
   'sessions-read': SESSION_READ,
   'sessions-send': SESSION_SEND,
+  'sessions-create': SESSION,
   'chats-pending': CHATS_PENDING,
   'chats-answer': CHATS_ANSWER
 }
