@@ -233,6 +233,10 @@ const LISTING: Record<string, readonly string[]> = {
   // **The Job of `--job`, not a run** — the same shape the other way round. The noun rule would offer
   // `runs list` again, which gives run ids, and a run id given to `--job` is the same 404.
   'runs-list': ['astera jobs list'],
+  // **The project of `--project`, and the run of `--run`** (CLI spec §16, §19): the only ids these two
+  // lists fail on. The noun rule would offer the same list again, which gives the wrong kind of id.
+  'jobs-list': ['astera projects list'],
+  'questions-list': ['astera runs list'],
   // **The Task or Dispatch a worker_done named** — the same two lines as `worker-*`, the first
   // giving the second its `<taskId>`. `send` is a worker's command, so neither line may be
   // coordinator-only, and neither is.

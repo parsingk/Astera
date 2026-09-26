@@ -386,9 +386,7 @@ describe('unknownFlagError — 공개 명령은 모르는 플래그를 거절한
 
   it('감사가 실행으로 본 무시 사례가 전부 거절된다', () => {
     for (const line of [
-      'jobs list --project p_x --status running',
-      'sessions list --provider claude --status running',
-      'questions list --run run_nope',
+      'sessions list --project p_x',
       'runs get --id run_1 --follow',
       'status --no-color',
       'host stop --force'
@@ -396,8 +394,19 @@ describe('unknownFlagError — 공개 명령은 모르는 플래그를 거절한
       expect(check(line), line).not.toBeNull()
   })
 
+  // The list filters of this batch (CLI spec §14, §16, §19), added on purpose. The values are the
+  // command layer's to judge (commandListFilters.test.ts); here only that the flags are declared.
+  it('목록 필터는 이제 선언된 플래그다', () => {
+    for (const line of [
+      'jobs list --project /work/p --status running',
+      'sessions list --provider claude --status alive',
+      'questions list --run run_1 --status open'
+    ])
+      expect(check(line), line).toBeNull()
+  })
+
   it('플래그가 없는 명령은 그렇다고 말한다', () => {
-    expect(check('jobs list --project p_x')).toContain('takes no flags of its own')
+    expect(check('projects list --project p_x')).toContain('takes no flags of its own')
   })
 
   it('전역 플래그는 어느 공개 명령에서든 받는다', () => {

@@ -224,6 +224,13 @@ describe('nextStepsFor — 무엇을 치면 되는가', () => {
     expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'runs-list' })).toEqual(['astera jobs list'])
   })
 
+  // The list filters of CLI spec §16 and §19. `jobs list` fails only on `--project`'s folder, and
+  // `questions list` only on `--run`'s run; the noun rule would offer the same list again.
+  it('jobs list 의 404 는 프로젝트 목록으로, questions list 의 404 는 회차 목록으로 간다', () => {
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'jobs-list' })).toEqual(['astera projects list'])
+    expect(nextStepsFor({ code: 'NOT_FOUND', cmd: 'questions-list' })).toEqual(['astera runs list'])
+  })
+
   // 세션 전용 명령은 무엇을 못 찾았다고 말하는지가 갈래다 — run-create 가 못 찾는 것은
   // 회차가 아니라 계정이다.
   it('세션 전용 명령은 그것이 못 찾은 것의 목록으로 이어진다', () => {

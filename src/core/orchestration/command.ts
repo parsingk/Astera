@@ -46,7 +46,8 @@ import {
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
 import type { SwitchedCommand } from './cliAgentContext'
-import { findProject, findProjectByPath } from './projects'
+import { findProject, findProjectByPath, jobInProject } from './projects'
+import { stateWord } from './cliHuman'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
 import {
@@ -813,6 +814,39 @@ const TASK_STATUSES: TaskStatus[] = [
   'blocked'
 ]
 const isTaskStatus = (v: string): v is TaskStatus => (TASK_STATUSES as string[]).includes(v)
+
+/**
+ * The values `jobs list --status` takes: the state word the `--human` table prints in its first
+ * column (cliHuman.ts `stateWord`), lower case, with `COMPLETE` spelled `completed` as `outcome` spells
+ * it. **The filter reads the same word the table shows**, so a person who filtered on `paused` sees
+ * PAUSED on every row, and a script can compute the same word from the fields it already gets
+ * (`pendingStart`, `paused`, `schedule`, `questionsOpen`, `outcome`).
+ */
+const JOB_STATES = ['pending', 'paused', 'scheduled', 'waiting', 'running', 'completed', 'failed'] as const
+const jobStateOf = (view: Parameters<typeof stateWord>[0]): string => {
+  const word = stateWord(view).toLowerCase()
+  return word === 'complete' ? 'completed' : word
+}
+
+/** The values `sessions list --status` takes. Two read `alive` (the ALIVE/ENDED column of `--human`)
+ *  and three read `state`, so each value names one field a script can see. */
+const SESSION_STATUSES = ['alive', 'ended', 'working', 'waiting', 'unknown'] as const
+
+/** A filter's value, or why it is refused. `undefined` when the flag was not given. A bare flag
+ *  (`--status` with nothing after it arrives as `true`) and an empty value are refused rather than read
+ *  as "no filter": a script whose value came back empty would list everything (review M1 on
+ *  `runs list --job`). */
+function enumFilter<T extends string>(
+  flag: string,
+  given: unknown,
+  known: readonly T[]
+): { value: T | undefined } | { error: string } {
+  if (given === undefined) return { value: undefined }
+  if (typeof given !== 'string' || given === '') return { error: `--${flag} needs a value: one of ${known.join(', ')}` }
+  if (!(known as readonly string[]).includes(given))
+    return { error: `unknown --${flag}: ${given} (expected one of ${known.join(', ')})` }
+  return { value: given as T }
+}
 
 const POLL_MS = 50
 
@@ -1681,8 +1715,25 @@ export async function handleCommand(
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.
-    case 'jobs-list':
-      return okBody(s.jobs.map((j) => jobView(s, j, latestRunOf(s, j))))
+    //
+    // **Two filters (CLI spec §16), both judged here and never in the parser.** `--status` is the state
+    // word of the `--human` table (JOB_STATES). `--project` takes a folder and finds its project the way
+    // `projects find` does, exactly and with `isSamePath`, so a folder no project is registered for is
+    // that command's 404 rather than an empty list that reads as "that project has no Jobs".
+    case 'jobs-list': {
+      const status = enumFilter('status', args.status, JOB_STATES)
+      if ('error' in status) return bad(status.error)
+      let jobs = s.jobs
+      if (args.project !== undefined) {
+        const p = str(args.project)
+        if (p === null) return bad('--project needs a value: a project folder (from `projects list`)')
+        const project = findProjectByPath(s, p)
+        if (!project) return notFound(`no project registered for: ${p}`)
+        jobs = jobs.filter((j) => jobInProject(s, j, project))
+      }
+      const views = jobs.map((j) => jobView(s, j, latestRunOf(s, j)))
+      return okBody(status.value === undefined ? views : views.filter((v) => jobStateOf(v) === status.value))
+    }
     // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
     // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
     case 'run-configs': {
@@ -3250,6 +3301,13 @@ export async function handleCommand(
     }
     case 'questions-list': {
       let gates = s.gates
+      // `--run` (CLI spec §19): a named run that is not there is a 404, for the reason tasks-list gives.
+      if (args.run !== undefined) {
+        const run = str(args.run)
+        if (run === null) return bad('--run needs a value: the run id')
+        if (!s.runs.some((r) => r.id === run)) return notFound(`unknown run: ${run}`)
+        gates = gates.filter((g) => g.runId === run)
+      }
       if (str(args.task)) gates = gates.filter((g) => g.taskId === args.task)
       if (str(args.status)) gates = gates.filter((g) => g.status === args.status)
       return okBody(gates)
@@ -3305,7 +3363,25 @@ export async function handleCommand(
     case 'sessions-send': {
       if (!deps.listSessions || !deps.readSession || !deps.sendSession || !deps.readChat || !deps.chatSend)
         return conflict('sessions are answered by the Astera Host, and this caller is not one')
-      if (routed === 'sessions-list') return okBody(await deps.listSessions())
+      // **Two filters (CLI spec §14).** `--status` names one field a script can see: `alive` or `ended`
+      // read `alive`, and the rest read `state`. `--provider` is the provider of the session's account,
+      // from `listAccounts`, the same list `accounts list` prints: a session carries its account and not
+      // its provider. A session whose account is gone, or that names none, matches neither provider.
+      if (routed === 'sessions-list') {
+        const status = enumFilter('status', args.status, SESSION_STATUSES)
+        if ('error' in status) return bad(status.error)
+        const provider = enumFilter('provider', args.provider, ['claude', 'codex'] as const)
+        if ('error' in provider) return bad(provider.error)
+        let rows = await deps.listSessions()
+        if (status.value === 'alive' || status.value === 'ended')
+          rows = rows.filter((x) => x.alive === (status.value === 'alive'))
+        else if (status.value !== undefined) rows = rows.filter((x) => x.state === status.value)
+        if (provider.value !== undefined) {
+          const theirs = new Set((await deps.listAccounts(provider.value)).map((a) => a.id))
+          rows = rows.filter((x) => x.accountId !== null && theirs.has(x.accountId))
+        }
+        return okBody(rows)
+      }
       const id = str(args.id)
       if (id === null) return bad('--id is required: a session id from `sessions list`')
       const lines = routed === 'sessions-read' && args.lines !== undefined ? posInt(args.lines) : 200

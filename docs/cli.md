@@ -451,7 +451,7 @@ astera projects list
 astera projects get   --id <projectId>
 astera projects find  --path <absolute path>
 
-astera jobs    list
+astera jobs    list   [--status <pending|paused|scheduled|waiting|running|completed|failed>] [--project <path>]
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
@@ -473,14 +473,14 @@ astera run-configs list --job <jobId>
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
 
-astera sessions list
+astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter]
 
 astera chats pending   [--session <sessionId>]
 astera chats answer    --id <promptId> [--allow | --deny] [--session <sessionId>]
 
-astera questions list  [--task <taskId>] [--status <open|resolved>]
+astera questions list  [--run <runId>] [--task <taskId>] [--status <open|resolved>]
 astera questions get    --id <questionId>
 astera questions answer --id <questionId> --answer <text>
 
@@ -531,6 +531,27 @@ an unknown Job, and `tasks list --run` with an unknown run. An empty list would 
 has no runs". `nextSteps` is the list that gives the missing kind of id, `astera jobs list` and
 `astera runs list` respectively. `runs list --job` given no value (`--job ""`, as a script whose id
 came back empty would send) is a 2, not the list of every run.
+
+**The list filters are judged by the Host, never by the parser**, and a value a filter does not know
+is a 2 whose message lists the values it does. A filter given no value is a 2 as well, never the whole
+list. Filters on one command combine.
+
+- **`jobs list --status`** keeps the Jobs in one state: `pending` (made by `jobs create` and not run
+  yet), `paused`, `scheduled`, `waiting` (a question is open), `running`, `completed` or `failed`. It
+  is the word the first column of `--human` shows, in lower case (`COMPLETE` is `completed`), so a
+  script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
+  `outcome`, in that order. `paused` is the Job's own pause, which is what the table shows; a run
+  stopped with `runs stop` is paused on the run, and `runs get` shows it.
+- **`jobs list --project <path>`** keeps the Jobs of the project a folder is registered as, found the
+  way `projects find` finds it: the path must be the project's folder, and win32 ignores case. A
+  folder no project is registered for is a 4 with `astera projects list` as its step. A Job belongs to
+  the project it was created in; one made before projects were registered belongs by its folder.
+- **`questions list --run <runId>`** keeps one run's questions. An unknown run is a 4, as it is for
+  `tasks list --run`, with `astera runs list` as its step.
+- **`sessions list --status`** is `alive` or `ended`, which read `alive`, or `working`, `waiting` or
+  `unknown`, which read `state`. **`--provider claude|codex`** keeps the sessions whose account is on
+  that vendor, as `accounts list` shows it. A session whose account has since been removed matches
+  neither.
 
 **`jobs run` refuses a Job that is already running** and names the run that is going. It returns the
 run it started, which is the id to pass to `runs wait`.

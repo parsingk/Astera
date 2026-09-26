@@ -6,7 +6,7 @@
 // The state operations that need a path live here instead; `OrchState.projects` is still just an
 // array on the state those functions return.
 import { isSamePath } from '../files/tree'
-import { newId, type Project } from './types'
+import { newId, type Job, type Project } from './types'
 import type { OrchState, Res } from './state'
 
 /** The last segment of a path, whatever separator it arrived with. Not `path.basename`: that reads
@@ -25,6 +25,20 @@ export function findProjectByPath(s: OrchState, path: string): Project | undefin
 
 export function findProject(s: OrchState, id: string): Project | undefined {
   return s.projects.find((p) => p.id === id)
+}
+
+/**
+ * Whether this Job belongs to this project, for `jobs list --project` (CLI spec §16).
+ *
+ * **The rule `jobsForProject` uses (view.ts), minus its worktree mapping.** `projectId` wins when it
+ * resolves; a Job made before projects were registered, or one whose project record is gone, belongs
+ * by its folder, compared with `isSamePath`. The worktree registry that lets the sidebar map a
+ * worktree folder back to its repository is the app's (`core.worktrees`) and this layer has none, so
+ * an old Job created inside a worktree is not matched here. Every Job made since has a `projectId`.
+ */
+export function jobInProject(s: OrchState, job: Pick<Job, 'projectId' | 'cwd'>, project: Project): boolean {
+  if (job.projectId !== undefined && findProject(s, job.projectId)) return job.projectId === project.id
+  return isSamePath(project.path, job.cwd)
 }
 
 /**

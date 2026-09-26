@@ -122,7 +122,19 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [{ name: 'path', value: '<path>', required: true, about: 'an absolute path inside the project' }]
   },
 
-  'jobs-list': { summary: 'every Job, with the state of its latest run' },
+  'jobs-list': {
+    summary: 'every Job, with the state of its latest run',
+    detail:
+      'Two filters, and they combine. --status keeps the Jobs whose state is that word: the word the first column of --human shows, in lower case, where completed is COMPLETE. Any other value is refused with 2. --project keeps the Jobs of the project a folder is registered as, found the way `projects find` finds it; a folder no project is registered for is 4.',
+    flags: [
+      {
+        name: 'status',
+        value: '<pending|paused|scheduled|waiting|running|completed|failed>',
+        about: 'only Jobs in this state'
+      },
+      { name: 'project', value: '<path>', about: 'only the Jobs of the project at this folder (from `projects list`)' }
+    ]
+  },
   'jobs-get': {
     summary: 'one Job, with a run folded in',
     detail:
@@ -237,6 +249,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'questions-list': {
     summary: 'questions workers have asked',
     flags: [
+      { name: 'run', value: '<runId>', about: 'only the questions of this run (an unknown run is 4)' },
       { name: 'task', value: '<taskId>', about: 'only the questions of this task' },
       { name: 'status', value: '<open|resolved>', about: 'only questions in this state' }
     ]
@@ -290,7 +303,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-list': {
     summary: 'the agent sessions the Host holds, running and ended',
     detail:
-      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed.'
+      'Each with its id, which is the id `sessions read` and `sessions send` take and the one `ASTERA_SESSION` holds inside that session. `kind` is terminal (an agent CLI in a terminal) or chat. `state` is working, waiting or unknown, from the hook events a Claude terminal session writes; Codex and chat sessions are always unknown, and so is a session typed into since its last event. Plain shell tabs and run configurations are not sessions and are not listed. Answered by the Host, so it works with Astera closed. --status alive or ended reads `alive`, and working, waiting or unknown reads `state`. --provider is the provider of the account the session runs on, as `accounts list` prints it; a session whose account is gone matches neither. Any other value is refused with 2.',
+    flags: [
+      { name: 'status', value: '<alive|ended|working|waiting|unknown>', about: 'only sessions in this state' },
+      { name: 'provider', value: '<claude|codex>', about: "only sessions on this vendor's accounts" }
+    ]
   },
   'sessions-read': {
     summary: "what a terminal session's tab shows, or a chat session's recent turns",
