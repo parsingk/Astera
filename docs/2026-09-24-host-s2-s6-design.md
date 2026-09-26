@@ -1624,6 +1624,58 @@ Landed on `develop` from `ce533d36` through `633be4b5`. This list is the record,
 - **A104. After the final review and the end to end run.** Not run as of this document: Task 9 (this document)
   lands before Task 10, the end to end pass with a fake Slack and CI on three OS. Recorded here, in A94's
   form, once Task 10 completes.
+- **A105. The final review's fixes (report `final-fix-report.md`, same folder).** The whole-branch review
+  found one critical, one important and four minor faults, and Task 10's run found a fifth notice fault. What
+  shipped:
+  - **The SDK's own reconnect is off, and the inbox reconnects itself.** Socket mode's auto-reconnect called
+    its own `start()` from a timer and dropped the promise, so a reconnect that failed for good
+    (`invalid_auth` after the app token was regenerated, `account_inactive`, or the SDK's network retries used
+    up) was an unhandled rejection, and on the Host's node.exe that ends the process and every session in it.
+    Both SDK constructors (`src/host/slackSdk.ts`, `src/main/slackSdk.ts`) now pass
+    `autoReconnectEnabled: false`. `SlackInbox` (`src/core/slack/inbox.ts`) builds a fresh client after a
+    drop or a failed start, waiting `reconnectDelayMs`: 1 s doubling to a cap of 5 minutes, reset by a
+    connection. A start error Slack will never accept (`not_authed`, `invalid_auth`, `account_inactive`,
+    `user_removed_from_team`, `team_disabled`) is logged and stops the retries until the config is applied
+    again, a settings save in the app or the Host's `slack-reload`, which `SlackInboxController.apply` now
+    rebuilds even with an unchanged key. Every start ends in a catch. A stop cancels a pending retry, and a
+    start that resolves after a stop closes what it opened, so no socket outlives a deactivation. The
+    controller no longer waits for the first start before it takes the next apply or stop, because that
+    start can sit in the SDK's network retries for as long as an outage lasts.
+  - **The Host logs a rejection nobody handled and keeps running** (`logUnhandledRejections` in
+    `src/host/log.ts`, installed as soon as the Host log exists). This replaces the plan's constraint 5
+    wording that the Host has no such handler. It is a belt only: every path still ends in its own catch.
+  - **A fresh Host takes Slack only after the first app hello, or after `HOST_SLACK_START_GRACE_MS` (10 s)
+    with no app** (`src/host/slackWiring.ts`). A Host that took Slack at start opened a second socket beside
+    an app that held Slack (the upgrade path, or a respawn after an outage longer than the hand-back grace),
+    and a reply Slack routed to it was answered "this session has ended". The app that spawned the Host says
+    hello within milliseconds; a headless `astera host start` takes Slack when the grace ends.
+  - **While the Host stays active, a hello, a close or a reload applies the config again only when it
+    changed.** Applying it again built a new transport and reset every record's thread, so a root still in
+    flight was lost. The inbox is still handed every reload, which is what retries a refused token.
+  - **Nothing forwarded is lost while the Host is away.** In the app (`src/main/slackOwnership.ts`) a forward
+    made while the Slack-owning Host is not connected is held (at most 200) and sent when it answers again,
+    or told to the app's own notifier (`hearForwarded`, `src/core/slack/forwarded.ts`) when the hand-back
+    grace ends and the app takes Slack. In the Host, a forward that arrives while a settle is still in the
+    queue waits behind it, so a card forwarded while the Host is taking Slack reaches a registered record.
+  - **A settings save made before a Slack-owning Host can hear it is owed to it.** A save while ownership is
+    undecided, or while the Host is away, is sent as `slack-reload` the next time a Slack-owning Host answers,
+    and every save is sent to a Slack-owning Host that is there, even one that is not active.
+  - **The API URL seam takes only the literals `127.0.0.1` and `[::1]`.** `localhost` (still named in A97)
+    resolves through the hosts file, so it is not a guaranteed loopback, and the seam is honoured in
+    production builds.
+  - **A chat limit that the rolling chain handles posts nothing from the chat path.** Task 10's run saw the
+    switch notice followed by "turn failed" and "Response complete", both over the limit text. In a chain
+    (`rollAccountIds`), the notifier's `onChatEvent` now stays quiet on an error that reads as a limit by the
+    provider's own scanner, or a rejected `rateLimit`, and skips that turn's summary; the next turn is
+    announced as usual. The terminal path's StopFailure already stayed quiet on the same rule, and a session
+    outside a chain still posts both.
+  Pinned by `src/core/slack/inbox.test.ts` (a reconnect whose start rejects leaves no unhandled rejection,
+  the backoff grows and is capped, a stop during a retry builds nothing, a start that resolves after a stop
+  is closed, `invalid_auth` halts until the next apply), `src/host/slackSdk.test.ts`,
+  `src/main/slackSdk.test.ts`, `src/host/log.test.ts`, the index.ts guard in
+  `src/host/driving.integration.test.ts`, `src/host/slackWiring.test.ts` (the start grace both ways, no
+  re-apply, a forward during activation), `src/main/slackOwnership.test.ts`, `src/core/slack/forwarded.test.ts`,
+  `src/core/slack/apiUrl.test.ts` and `src/core/slack/notifier.test.ts`.
 
 ## Known limits after S3
 
@@ -2010,7 +2062,7 @@ at `3db032df`.
 ## Known limits after Slack in the Host
 
 Each was found while building or reviewing Slack in the Host and left as it is, with its reason. Checked at
-`633be4b5`.
+`633be4b5`, and again after the final review's fixes (Amendments A105).
 
 - **An installed build and a dev build that share one Slack app token still split replies** (spec §4). Slack
   delivers each socket-mode event to one of the connections sharing an app token, and the other only hears
@@ -2030,6 +2082,17 @@ Each was found while building or reviewing Slack in the Host and left as it is, 
 - **The app takes up to 15 seconds with no Slack intake after a Slack-owning Host goes away**
   (`SLACK_HANDBACK_MS`, plan P5). Its own sessions went with the Host anyway, so nothing that mattered was
   listening in that window.
+- **A Host started with no Astera open takes Slack about 10 seconds after it starts**
+  (`HOST_SLACK_START_GRACE_MS`, Amendments A105). Until then no notice is posted and no reply is read. The
+  wait is what keeps a fresh Host from opening a second socket beside an Astera that holds Slack.
+- **After Slack refuses the app token, intake stays off until the Slack settings are saved again**
+  (Amendments A105). A regenerated token, an uninstalled app or a disabled workspace ends the socket for
+  good, and retrying would only hammer Slack; the refusal is written to `slack.log`. Notices still post
+  through the bot token while it is valid.
+- **After a network outage, intake can take up to 5 minutes to come back** (Amendments A105). The reconnect
+  wait doubles with each failure up to that cap, and resets once a connection holds.
+- **At most 200 forwarded events are held while a Slack-owning Host is away** (Amendments A105). A grace is
+  15 seconds, so this is far more than one holds; past it the oldest go first, and the log says so once.
 - **A role-less app from before this feature (v1.3.17 to v1.3.25) is not seen by `appsKeep`, and counts as a
   CLI** (the S6 pre-flight finding this document already carries, preflight C17). Such an app opens its own
   Slack socket beside a Host that, seeing no attached app keep Slack, believes itself active too.
