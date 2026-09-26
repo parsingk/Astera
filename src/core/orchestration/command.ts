@@ -33,7 +33,6 @@ import {
   jobOfRunId,
   runIdOf,
   attachCoordinator,
-  detachCoordinator,
   pauseSchedule,
   resumeSchedule,
   resumeRun,
@@ -762,6 +761,7 @@ const COORDINATOR_ONLY = new Set([
   'run-delete',
   'run-spawn',
   'run-coordinator-stop',
+  'run-start-marks-clear',
   'run-start',
   'run-worktree-set',
   'run-pause',
@@ -1018,26 +1018,42 @@ export async function handleCommand(
     await deps.setState({ ...current, runs: current.runs.map((r) => (r.id === runId ? rest : r)) })
   }
 
+  /** Drops a Run's `coordinatorStopPending`, on the state as it is now (L1): its Run moves again, so the
+   *  stop it held is no longer one to retry. Nothing is written when there is no mark. */
+  const dropStopPending = async (runId: string): Promise<void> => {
+    const current = deps.getState()
+    const run = current.runs.find((r) => r.id === runId)
+    if (!run || run.coordinatorStopPending === undefined) return
+    const { coordinatorStopPending: _mark, ...rest } = run
+    await deps.setState({ ...current, runs: current.runs.map((r) => (r.id === runId ? rest : r)) })
+    deps.log?.(`run ${runId} moves again; the stop pending for its coordinator ${run.coordinatorSessionId ?? '(none)'} was dropped`)
+  }
+
   /**
-   * **Stops a Run's coordinator that has nothing left to do, and empties its slot** (the user's U4 of
-   * 2026-09-25). Two callers: `run-coordinator-stop`, which the driving process's loop sends once a
-   * scheduled Job's Run has finished, and a fire that replaces an idle-only Run (`run-spawn
-   * --unless-running`), which also passes `pause` to end that unfinished Run the way `runs stop` does.
+   * **Stops a Run's coordinator that has nothing left to do** (the user's U4 of 2026-09-25). Two
+   * callers: `run-coordinator-stop`, which the driving process's loop sends once a scheduled Job's Run
+   * has finished (and again for a stop still pending), and a fire that replaces an idle-only Run
+   * (`run-spawn --unless-running`), which also passes `pause` to end that unfinished Run the way
+   * `runs stop` does.
    *
-   * **It never throws out of the command, and a stop that fails does not keep the slot** (R3). The
-   * stop is best effort, as it is for the hand-over's I2 discard: a slot kept after a failed stop would
-   * be asked again on every pass, and a replaced Run would keep its old coordinator in the slot beside
-   * nothing. The failure is logged; the session, if it still lives, is the one thing left behind.
+   * **The slot is kept, marked `coordinatorStopPending`, until the session is gone** (limits pass L1).
+   * A stop is confirmed only by the exit release (`coordinatorReleaseOf`), which empties the slot and
+   * drops the mark (`detachCoordinator`). Emptying it here, after a stop that failed or went nowhere,
+   * left a live coordinator looping on `check --wait` with nothing pointing at it, and nothing asked
+   * again. The mark is what the driving loop finds to send the stop again after a backoff
+   * (dispatchLoop.ts). **It never throws out of the command** (R3): a stop that throws is logged and
+   * still marked, since it is exactly the stop that needs the retry.
    *
-   * The Run is written on the state as it is after the stop (a long await). The slot is emptied only
-   * when it still names the session this call stopped: a ▶ may have started another coordinator on the
-   * Run meanwhile, and then nothing is written. **`pause` holds even when the slot is already empty**
-   * (final round 2, Minor 3): the exit release may have emptied it during the stop, and the replaced Run
-   * must still end paused.
+   * The Run is written on the state as it is after the stop (a long await). The mark is written only
+   * when the slot still names the session this call stopped: a ▶ may have started another coordinator on
+   * the Run meanwhile, and then nothing is written. When the exit release already emptied the slot
+   * during the stop, there is nothing to mark. **`pause` holds either way** (final round 2, Minor 3): the
+   * replaced Run must still end paused.
    *
    * `still` is asked on that fresh state before anything is written (Minor 4, `run-coordinator-stop`):
-   * when it answers false, nothing is written and the answer is `'moved'`. The session is already
-   * stopped by then, and its exit release empties the slot the ordinary way.
+   * when it answers false, nothing is written and the answer is `'moved'`. A stop that did land ends the
+   * session, and its exit release empties the slot the ordinary way; one that did not leaves a
+   * coordinator whose Run has work again, which is not a stop to retry.
    */
   const retireCoordinator = async (
     runId: string,
@@ -1057,17 +1073,25 @@ export async function handleCommand(
     if (!run) return 'gone'
     if (run.coordinatorSessionId !== undefined && run.coordinatorSessionId !== sessionId) return 'gone'
     if (!still(current)) {
-      deps.log?.(`coordinator ${sessionId} of run ${runId} was stopped, but the run gained work meanwhile; its slot is left to the exit release`)
+      deps.log?.(`coordinator ${sessionId} of run ${runId} was asked to stop, but the run gained work meanwhile; its slot is left as it is`)
       return 'moved'
     }
-    let next = current
-    if (run.coordinatorSessionId === sessionId) {
-      const detached = detachCoordinator(current, { runId })
-      if (detached.ok) next = detached.state
+    const pending = run.coordinatorSessionId === sessionId && run.coordinatorStopPending === undefined
+    if (pending || (pause && run.paused !== true)) {
+      await deps.setState({
+        ...current,
+        runs: current.runs.map((r) =>
+          r.id === runId
+            ? { ...r, ...(pending ? { coordinatorStopPending: now } : {}), ...(pause ? { paused: true } : {}) }
+            : r
+        )
+      })
     }
-    if (pause) next = { ...next, runs: next.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }
-    if (next !== current) await deps.setState(next)
-    deps.log?.(`coordinator ${sessionId} of run ${runId} stopped: ${why}`)
+    deps.log?.(
+      run.coordinatorSessionId === sessionId
+        ? `coordinator ${sessionId} of run ${runId} asked to stop: ${why}; its slot is kept until the session is gone`
+        : `coordinator ${sessionId} of run ${runId} stopped: ${why}`
+    )
     return 'retired'
   }
 
@@ -2034,6 +2058,13 @@ export async function handleCommand(
      * Refused, 409, while the Run still moves (runMoves, the rule `jobs run` and a fire use), so this
      * never stops a coordinator that has work. With no coordinator attached it answers 200 with
      * `stopped: null`, so a repeat does nothing.
+     *
+     * **A stop still pending is sent again as it was decided** (limits pass L1): the loop sends this
+     * for a slot marked `coordinatorStopPending` after a backoff. The idle check is not asked again,
+     * since the decision was made on it already (a fire's replacement leaves the Run paused and
+     * unfinished, and its coordinator is no longer in `check --wait` once asked to stop). The Run moving
+     * again still refuses it, and then the mark is dropped: a person took that Run back (`runs resume`),
+     * so its coordinator is no longer one to stop.
      */
     case 'run-coordinator-stop': {
       const id = str(args.run)
@@ -2041,14 +2072,21 @@ export async function handleCommand(
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
       const job = jobOf(s, run)
-      if (job && runMoves(s, job, run, now))
+      if (job && runMoves(s, job, run, now)) {
+        await dropStopPending(id)
         return conflict(`run ${id} still has work its coordinator can start; its coordinator was left running`)
+      }
       const sessionId = run.coordinatorSessionId
       if (sessionId === undefined) return okBody({ runId: id, stopped: null })
       // **An unfinished Run's coordinator is stopped only while parked in `check --wait`** (final round 2,
       // I-A): a Run with no Tasks, whose coordinator may be doing the work itself. A finished Run (every
-      // Task terminal) needs no such check: there is nothing left for it to do.
-      if (outcomeOf(s, id) === 'running' && (await deps.coordinatorIdle?.(id, sessionId)) !== true)
+      // Task terminal) needs no such check: there is nothing left for it to do. Nor does a stop already
+      // decided and pending (L1).
+      if (
+        run.coordinatorStopPending === undefined &&
+        outcomeOf(s, id) === 'running' &&
+        (await deps.coordinatorIdle?.(id, sessionId)) !== true
+      )
         return conflict(`run ${id}'s coordinator is busy or its state is unknown; it was left running`)
       // **Asked again on the state after the stop** (Minor 4): the Run may have gained work meanwhile.
       const moved = (current: OrchState): boolean => {
@@ -2057,8 +2095,34 @@ export async function handleCommand(
         return r !== undefined && j !== undefined && runMoves(current, j, r, now)
       }
       const retired = await retireCoordinator(id, sessionId, 'the run has nothing left for it to do', false, (c) => !moved(c))
-      if (retired === 'moved') return conflict(`run ${id} gained work while its coordinator was being stopped; its slot is left to the exit release`)
+      if (retired === 'moved') {
+        await dropStopPending(id)
+        return conflict(`run ${id} gained work while its coordinator was being stopped; its slot is left to the exit release`)
+      }
       return okBody({ runId: id, stopped: sessionId })
+    }
+    /**
+     * **Drops every `coordinatorStartingAt` past its window** (limits pass L2). Internal: the driving
+     * loop sends it (dispatchLoop.ts) when it sees a stale mark, so the view gets a commit and the ▶
+     * comes back. A stale mark already counts for nothing (`coordinatorStarting` ignores it), but a view
+     * computed while it was fresh keeps showing no ▶ until some unrelated commit. A mark inside its
+     * window is left alone: that start may still be under way. Answers the Runs it cleared.
+     */
+    case 'run-start-marks-clear': {
+      const nowMs = Date.parse(now)
+      const stale = new Set(
+        s.runs.filter((r) => r.coordinatorStartingAt !== undefined && !coordinatorStarting(r, nowMs)).map((r) => r.id)
+      )
+      if (stale.size === 0) return okBody({ cleared: [] })
+      await deps.setState({
+        ...s,
+        runs: s.runs.map((r) => {
+          if (!stale.has(r.id)) return r
+          const { coordinatorStartingAt: _mark, ...rest } = r
+          return rest
+        })
+      })
+      return okBody({ cleared: [...stale] })
     }
     case 'task-create': {
       // `--run` 이 없으면 "가장 최근 Run" 이다. **그 뜻을 latestOrdinaryRun 이 정한다** — 예약

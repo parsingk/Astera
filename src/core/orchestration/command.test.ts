@@ -26,6 +26,7 @@ import { runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
+import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
 
 const NOW = '2026-08-04T00:00:00.000Z'
@@ -6773,6 +6774,11 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     await deps.setState({ ...s, runs: s.runs.map((r) => (r.id === runId ? f(r) : r)) })
   }
   const detach = ({ coordinatorSessionId: _gone, ...r }: JobRun): JobRun => r
+  /** The coordinator session ends: the exit release empties its slot (L1: that is the stop confirmed). */
+  const exited = async (deps: OrchServerDeps, sessionId: string): Promise<void> => {
+    const released = coordinatorReleaseOf(deps.getState(), sessionId, 0)
+    if (released) await deps.setState(released.state)
+  }
   /** The Run's coordinator parks in `check --wait` (I-A). Resolves once the wait is in flight; the
    *  returned promise is the wait itself, which ends on its short deadline. */
   const park = async (deps: OrchServerDeps, runId: string): Promise<{ done: Promise<unknown> }> => {
@@ -6838,9 +6844,13 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(second).not.toBe(first.id)
     expect(deps.stopped).toEqual([`coord-${first.id}`])
     const old = deps.getState().runs.find((x) => x.id === first.id)!
-    expect(old).not.toHaveProperty('coordinatorSessionId')
+    // L1: the slot is kept, marked pending, until the session is gone.
+    expect(old.coordinatorSessionId).toBe(`coord-${first.id}`)
+    expect(old.coordinatorStopPending).toBe(NOW)
     // Ended the way `runs stop` ends a Run: paused, so `runs resume` can take it back.
     expect(old.paused).toBe(true)
+    await exited(deps, `coord-${first.id}`)
+    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
     expect(deps.getState().runs.find((x) => x.id === second)?.coordinatorSessionId).toBe(`coord-${second}`)
     expect(deps.logs.join('\n')).toContain(`coord-${first.id}`)
   })
@@ -6866,8 +6876,10 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect((await fire(deps, jobId)).status).toBe(200)
     expect(deps.stopped).toEqual([`coord-${first.id}`])
     const old = deps.getState().runs.find((x) => x.id === first.id)!
-    expect(old).not.toHaveProperty('coordinatorSessionId')
+    expect(old.coordinatorStopPending).toBe(NOW)
     expect(old.paused).toBeUndefined()
+    await exited(deps, `coord-${first.id}`)
+    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
   })
 
   it('U4: jobs run agrees: an idle-only Run does not count as running, and a manual Run keeps its coordinator', async () => {
@@ -6882,7 +6894,7 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
   })
 
-  it('U4: a stop that throws is logged, and the Run is still replaced', async () => {
+  it('U4: a stop that throws is logged, and the Run is still replaced, its slot kept pending (L1)', async () => {
     const deps = coordDeps()
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
@@ -6892,9 +6904,13 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
       }
     })
     const waiting = await park(deps, first.id)
-    expect((await fire(deps, jobId)).status).toBe(200)
+    const r = await fire(deps, jobId)
+    expect(r.status).toBe(200)
     await waiting.done
-    expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
+    expect((r.body as { id: string }).id).not.toBe(first.id)
+    const old = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(old.coordinatorSessionId).toBe(`coord-${first.id}`)
+    expect(old.coordinatorStopPending).toBe(NOW)
     expect(deps.logs.join('\n')).toContain('pty gone')
   })
 
@@ -6911,6 +6927,8 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ runId: first.id, stopped: `coord-${first.id}` })
     expect(deps.stopped).toEqual([`coord-${first.id}`])
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorStopPending).toBe(NOW)
+    await exited(deps, `coord-${first.id}`)
     expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
     // Nothing left to stop: 200, and nothing is stopped twice.
     expect((await call(deps, 'run-coordinator-stop', { run: first.id })).body).toMatchObject({ stopped: null })
@@ -7005,6 +7023,56 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
   })
 
+  // Limits pass L1: the slot is kept, marked pending, until the exit release confirms the session gone.
+  it('L1: run-coordinator-stop keeps the slot marked pending, even when the stop throws', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const t = await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    Object.assign(deps, {
+      stopCoordinator: async () => {
+        throw new Error('pty gone')
+      }
+    })
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(r.status).toBe(200)
+    const run = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(run.coordinatorSessionId).toBe(`coord-${first.id}`)
+    expect(run.coordinatorStopPending).toBe(NOW)
+    expect(deps.logs.join('\n')).toContain('pty gone')
+  })
+
+  it('L1: a pending stop of a replaced (paused) Run is sent again without the idle check', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const waiting = await park(deps, first.id)
+    expect((await fire(deps, jobId)).status).toBe(200)
+    await waiting.done
+    const old = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(old.paused).toBe(true)
+    expect(old.coordinatorStopPending).toBeDefined()
+    // Not parked any more: the decision was made already, so the retry does not ask again.
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(r.status).toBe(200)
+    expect(deps.stopped).toEqual([`coord-${first.id}`, `coord-${first.id}`])
+  })
+
+  it('L1: a pending stop on a Run that moves again is refused, and its mark dropped', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    await patchRun(deps, first.id, (r) => ({ ...r, coordinatorStopPending: NOW }))
+    await call(deps, 'task-create', { run: first.id, title: 't', spec: 's', account: 'accA' })
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id })
+    expect(r.status).toBe(409)
+    expect(deps.stopped).toEqual([])
+    const run = deps.getState().runs.find((x) => x.id === first.id)!
+    expect(run.coordinatorSessionId).toBe(`coord-${first.id}`)
+    expect(run).not.toHaveProperty('coordinatorStopPending')
+  })
+
   it('I1: the Run is committed marked as starting its coordinator, and the attach clears the mark', async () => {
     const deps = coordDeps()
     const jobId = await scheduledJob(deps)
@@ -7096,6 +7164,7 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect((await fire(deps, jobId)).status).toBe(200)
     await waiting.done
     expect(deps.getState().runs.find((r) => r.id === first.id)?.paused).toBe(true)
+    await exited(deps, `coord-${first.id}`)
     deps.startCoordinator.mockClear()
     const r = await call(deps, 'run-start', { run: first.id })
     expect(r.status).toBe(200)

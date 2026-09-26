@@ -216,6 +216,15 @@ export interface JobRun {
    *  counts as running. **Read through `coordinatorStarting`**, which ignores a mark older than
    *  `COORDINATOR_START_WINDOW_MS`: a process that died mid-start must not pin it. */
   coordinatorStartingAt?: string
+  /** A stop of the coordinator this slot names was decided at this time and is not confirmed yet
+   *  (limits pass L1). `retireCoordinator` (command.ts) writes it after it asks the session to stop,
+   *  whether the stop went through, failed or threw, and **keeps the slot**: only the exit release
+   *  (`coordinatorReleaseOf`, and the boot sweep) empties it, once the session is really gone, and
+   *  `detachCoordinator` drops this mark with it. While it holds, the driving loop sends
+   *  `run-coordinator-stop` again after a backoff (dispatchLoop.ts), so a stop that did not land is
+   *  retried rather than remembered as done. A new coordinator (`attachCoordinator`) starts without it;
+   *  a roll's rekey carries it, since the stop is meant for whatever session the slot follows. */
+  coordinatorStopPending?: string
   /** 이 회차의 워커들이 일하는 워크트리. **없으면 아직 만들어지지 않았다** — 첫 워커를 띄우기
    *  직전에 만들고 기록한다: 예약의 게으른 포크는 배선이 `run-worktree-set` 으로(src/main/ipc.ts),
    *  코디네이터가 있는 Job 의 첫 실행은 command.ts 가 직접(Host 도 만든다, Host S3).

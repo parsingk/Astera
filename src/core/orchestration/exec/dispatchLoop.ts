@@ -36,7 +36,7 @@ import {
 } from '../integrate'
 import { reapableChildRuns } from '../reap'
 import { slotsToFill, tasksMissingAccounts } from '../schedule'
-import { jobOf, type OrchState } from '../state'
+import { coordinatorStarting, jobOf, type OrchState } from '../state'
 import { DEFAULT_CONCURRENCY } from '../types'
 import { outcomeOf } from '../view'
 import type { Integration } from './integrateGit'
@@ -54,6 +54,11 @@ export const ORCH_FIRE_TICK_MS = 15_000
  *  즉 이 문턱을 넘는 것은 "루프를 놓았다" 의 신호에 가깝다. 틱이 15초이므로 실제 깨우기는
  *  90~105초 사이에 일어난다. */
 export const COORDINATOR_NUDGE_MS = 90_000
+/** The first wait before a coordinator stop is sent again (limits pass L1). Longer than the exit
+ *  release's window (EXIT_DEFER_MS) by far, so a stop that landed has emptied the slot before it; each
+ *  further try waits twice as long, up to `COORDINATOR_STOP_RETRY_MAX_MS`. */
+export const COORDINATOR_STOP_RETRY_MS = 30_000
+export const COORDINATOR_STOP_RETRY_MAX_MS = 10 * 60_000
 
 export interface DispatchLoopContext {
   /** handleCommand under this process's own caller id (the app's UI_CALLER, the Host's HOST_CALLER). */
@@ -141,42 +146,98 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     }
   }
 
-  /** Coordinator sessions this process has asked to stop (U4), each asked once: a refusal, or a stop
-   *  that failed, is not sent again on every pass. A fire of the Job is the second chance, since it
-   *  stops the coordinator of a finished latest Run it finds still attached (run-spawn). */
-  const askedToStop = new Set<string>()
+  /** When each coordinator session may be asked to stop again (limits pass L1), by session id. A stop
+   *  is not remembered as done: until the exit release empties the slot, the Run keeps it (marked
+   *  `coordinatorStopPending` once the command ran) and the stop is sent again, first after
+   *  `COORDINATOR_STOP_RETRY_MS`, then twice as long each time up to `COORDINATOR_STOP_RETRY_MAX_MS`.
+   *  A refusal and a throw are retried the same way. **In memory on purpose**: the pending mark is what
+   *  survives a restart or a change of driver, and a new driver's first pass sends the stop at once. */
+  const stopRetry = new Map<string, { tries: number; nextAt: number }>()
 
   /**
    * **A scheduled Job's Run that has finished gets its coordinator stopped** (the user's U4 of
    * 2026-09-25). Otherwise every fire leaves one more coordinator looping on `check --wait` for good.
    * A finished Run is one whose outcome is no longer `running` (every Task done, view.ts). Only a Job
    * with a schedule: a manual `jobs run` Run keeps its coordinator, since a person may be reading its
-   * tab (the controller's ruling on U4's scope).
+   * tab (the controller's ruling on U4's scope). **A slot marked `coordinatorStopPending` is sent
+   * again too** (L1), whatever its Run's outcome: a fire's replacement leaves that Run paused and
+   * unfinished.
    *
-   * **Only the process that drives does it.** The pass that calls this has asked `mayStart` just
-   * before, and it asks again before each stop, so the app and the Host never both stop one
-   * coordinator. The stop and the emptied slot are `run-coordinator-stop`'s, through the command
-   * layer like every other thing this loop does. A failure is logged and never thrown (R14).
+   * **Only the process that drives does it.** The caller has asked `mayStart` just before, and this
+   * asks again before each stop, so the app and the Host never both stop one coordinator. The stop and
+   * the pending mark are `run-coordinator-stop`'s, through the command layer like every other thing
+   * this loop does. A failure is logged and never thrown (R14).
    */
   const stopFinishedCoordinators = async (): Promise<void> => {
     const s = c.getState()
+    const slots = new Set<string>()
+    for (const run of s.runs) if (run.coordinatorSessionId !== undefined) slots.add(run.coordinatorSessionId)
+    // A session no slot names any more is gone (the exit release emptied it): its backoff goes with it.
+    for (const id of [...stopRetry.keys()]) if (!slots.has(id)) stopRetry.delete(id)
     for (const run of s.runs) {
       const sessionId = run.coordinatorSessionId
-      if (sessionId === undefined || askedToStop.has(sessionId)) continue
-      if (jobOf(s, run)?.schedule === undefined) continue
-      if (outcomeOf(s, run.id) === 'running') continue
+      if (sessionId === undefined) continue
+      const pending = run.coordinatorStopPending !== undefined
+      if (!pending) {
+        if (jobOf(s, run)?.schedule === undefined) continue
+        if (outcomeOf(s, run.id) === 'running') continue
+      }
+      const nowMs = c.nowMs()
+      const retry = stopRetry.get(sessionId)
+      if (retry && nowMs < retry.nextAt) continue
       if (!c.mayStart()) return
-      askedToStop.add(sessionId)
+      const tries = (retry?.tries ?? 0) + 1
+      const wait = Math.min(COORDINATOR_STOP_RETRY_MS * 2 ** (tries - 1), COORDINATOR_STOP_RETRY_MAX_MS)
+      stopRetry.set(sessionId, { tries, nextAt: nowMs + wait })
+      const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
+      const what = tries === 1 ? `scheduled run=${run.id} finished` : `run=${run.id} (stop attempt ${tries})`
       try {
         const r = await c.handle('run-coordinator-stop', { run: run.id })
         log(
           r.status >= 400
-            ? `scheduled run=${run.id} finished, and stopping its coordinator ${sessionId} was refused: ${JSON.stringify(r.body)}`
-            : `scheduled run=${run.id} finished — its coordinator ${sessionId} was stopped`
+            ? `${what}, and stopping its coordinator ${sessionId} was refused: ${JSON.stringify(r.body)}${again}`
+            : `${what}: its coordinator ${sessionId} was asked to stop${again}`
         )
       } catch (e) {
-        log(`scheduled run=${run.id} finished, and stopping its coordinator ${sessionId} failed: ${String(e)}`)
+        log(`${what}, and stopping its coordinator ${sessionId} failed: ${String(e)}${again}`)
       }
+    }
+  }
+
+  /** **Drops the stale coordinator start marks** (limits pass L2): a `coordinatorStartingAt` past its
+   *  window is a start that died with its process. It already counts for nothing, but the view the app
+   *  last got was computed while it held, and keeps hiding the ▶ until a commit. The command
+   *  (`run-start-marks-clear`) does the dropping on the state as it is then. Driving process only. */
+  const clearStaleStartMarks = async (): Promise<void> => {
+    const nowMs = c.nowMs()
+    if (!c.getState().runs.some((r) => r.coordinatorStartingAt !== undefined && !coordinatorStarting(r, nowMs))) return
+    if (!c.mayStart()) return
+    try {
+      const r = await c.handle('run-start-marks-clear', {})
+      const cleared = (r.body as { cleared?: unknown } | null)?.cleared
+      if (r.status >= 400) log(`stale coordinator start marks were not cleared: ${JSON.stringify(r.body)}`)
+      else if (Array.isArray(cleared) && cleared.length > 0)
+        log(`stale coordinator start marks cleared on ${cleared.join(', ')}`)
+    } catch (e) {
+      log(`stale coordinator start marks were not cleared: ${String(e)}`)
+    }
+  }
+
+  /** The coordinator housekeeping: the stale start marks (L2), then the stops due (U4, L1). Run from the
+   *  pass and from the timer's `nudge`, since the app runs the pass only on commits and a stop to retry
+   *  or a mark to drop comes due with nothing committed. One at a time: a second call while one is under
+   *  way does nothing, and the backoff keeps the next one from repeating a stop just sent. */
+  let tidying = false
+  const tidyCoordinators = async (): Promise<void> => {
+    if (tidying) return
+    tidying = true
+    try {
+      if (!c.mayStart()) return
+      await clearStaleStartMarks()
+      if (!c.mayStart()) return
+      await stopFinishedCoordinators()
+    } finally {
+      tidying = false
     }
   }
 
@@ -564,8 +625,9 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       // 세션을 닫고 `git worktree remove` 를 함께 돌리게 된다. 운전하지 않는 프로세스는 일을 하지 않는다.
       // 앱에서는 mayStart 가 언제나 참이므로(orch 는 한 번 서면 내려가지 않는다) 앱의 동작은 그대로다.
       if (!c.mayStart()) return
-      // U4: 끝난 예약 회차의 코디네이터를 세운다(stopFinishedCoordinators). 회수보다 앞이다.
-      await stopFinishedCoordinators()
+      // U4: 끝난 예약 회차의 코디네이터를 세우고(L1: 확인될 때까지 다시), 낡은 기동 표시를 걷는다(L2).
+      // 회수보다 앞이다.
+      await tidyCoordinators()
       if (!c.mayStart()) return
       // 앱이 등록한 워크트리인가 — 앱에서는 core.worktrees, Host 에서는 자기 레지스트리다(c.isRegisteredWorktree).
       for (const r of reapableChildRuns(c.getState(), (p) => c.isRegisteredWorktree(p)))
@@ -641,6 +703,10 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  훅이 아니라 바쁨으로 막는 것은 더 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
    *  있으면 이 가드는 새어 나간다. 그 경우를 실측한 적은 없다. */
   const nudgeSleepingCoordinators = async (): Promise<void> => {
+    if (!c.mayStart()) return
+    // 타이머 쪽의 정리(L1, L2) — 앱은 커밋 때만 pass 를 돌리므로, 커밋 없이 때가 온 재시도와 낡은
+    // 표시는 이 틱이 맡는다. tidyCoordinators 는 던지지 않는다.
+    await tidyCoordinators()
     if (!c.mayStart()) return
     for (const m of unreadUpwardMail(c.getState(), {
       nowMs: c.nowMs(),

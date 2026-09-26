@@ -5,9 +5,10 @@
 // 워크트리·세션)뿐이다. **setState 는 상태를 갈아 끼운 뒤 `loop.run()` 을 다시 부른다** — 앱의 커밋
 // 훅이 하는 일 그대로라(B4), 루프의 scheduleAgain 갈래가 운영에서처럼 돈다.
 import { describe, it, expect, vi } from 'vitest'
-import { createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
+import { COORDINATOR_STOP_RETRY_MS, createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
+import { coordinatorReleaseOf } from './releaseDefer'
 import { handleCommand, type OrchServerDeps } from '../command'
-import { emptyState, type OrchState } from '../state'
+import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../state'
 import type { Job, Message, Task } from '../types'
 import type { Account } from '../../types'
 
@@ -641,14 +642,14 @@ describe('a finished scheduled Run’s coordinator is stopped (U4)', () => {
     h.setState({ ...s, tasks: s.tasks.map((t) => (t.runId === runId ? { ...t, status: 'completed' as const } : t)) })
   }
 
-  it('stops it once, through run-coordinator-stop, and empties the slot', async () => {
+  it('stops it through run-coordinator-stop, keeps the slot pending (L1), and does not ask again at once', async () => {
     const h = rig({ reapableChild: true })
     withCoordinator(h, 'run_rc', 'coord-rc')
     await h.loop.run()
     await h.settle()
     expect(h.stopCoordinator.mock.calls).toEqual([['coord-rc']])
     expect(h.handled()).toContain('run-coordinator-stop')
-    expect(h.state().runs.find((r) => r.id === 'run_rc')).not.toHaveProperty('coordinatorSessionId')
+    expect(h.state().runs.find((r) => r.id === 'run_rc')?.coordinatorStopPending).toBeDefined()
     await h.loop.run()
     await h.settle()
     expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
@@ -686,7 +687,7 @@ describe('a finished scheduled Run’s coordinator is stopped (U4)', () => {
     expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
   })
 
-  it('a refused or failed stop is logged, never thrown, and not sent again on every pass', async () => {
+  it('a refused or failed stop is logged, never thrown, and not sent again before its backoff', async () => {
     const h = rig({ reapableChild: true })
     withCoordinator(h, 'run_rc', 'coord-rc')
     h.ctx.handle = async (cmd, args) => {
@@ -724,5 +725,158 @@ describe('stopFinishedCoordinators asks mayStart before each stop', () => {
     await h.loop.run()
     expect(h.handled().filter((c) => c === 'run-coordinator-stop')).toHaveLength(1)
     expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Limits pass L1: a coordinator stop is confirmed only when the session is gone (the exit release empties
+// the slot). Until then the Run keeps its slot, marked `coordinatorStopPending`, and the driving loop
+// sends the stop again after a backoff, so a stop that failed or was refused is not remembered as done.
+describe('a coordinator stop is retried until the session is gone (L1)', () => {
+  const withCoordinator = (h: ReturnType<typeof rig>, runId: string, sessionId: string): void => {
+    const s = h.state()
+    h.setState({ ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: sessionId } : r)) })
+  }
+  const rc = (h: ReturnType<typeof rig>) => h.state().runs.find((r) => r.id === 'run_rc')!
+  const stops = (h: ReturnType<typeof rig>): number => h.handled().filter((c) => c === 'run-coordinator-stop').length
+
+  it('a failed stop is sent again after its backoff, and then succeeds', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    let fail = true
+    h.ctx.handle = async (cmd, args) => {
+      if (cmd === 'run-coordinator-stop' && fail) throw new Error('socket closed')
+      return h.real(cmd, args)
+    }
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(1)
+    // Not on every pass: the backoff holds it.
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(1)
+    fail = false
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(2)
+    expect(h.stopCoordinator.mock.calls).toEqual([['coord-rc']])
+    expect(rc(h).coordinatorStopPending).toBeDefined()
+  })
+
+  it('a refused stop is sent again after its backoff too', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    let refuse = true
+    h.ctx.handle = async (cmd, args) => {
+      if (cmd === 'run-coordinator-stop' && refuse) return { status: 409, body: { error: 'busy' } }
+      return h.real(cmd, args)
+    }
+    await h.loop.run()
+    await h.settle()
+    refuse = false
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(2)
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the slot, marked pending, while the session lives, and asks again after the backoff', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+    expect(rc(h).coordinatorSessionId).toBe('coord-rc')
+    expect(rc(h).coordinatorStopPending).toBeDefined()
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await h.loop.run()
+    await h.settle()
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(2)
+  })
+
+  it('the exit release empties the slot and drops the pending mark, and nothing is sent after it', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    await h.loop.run()
+    await h.settle()
+    const released = coordinatorReleaseOf(h.state(), 'coord-rc', 0)
+    expect(released).not.toBeNull()
+    h.setState(released!.state)
+    expect(rc(h)).not.toHaveProperty('coordinatorSessionId')
+    expect(rc(h)).not.toHaveProperty('coordinatorStopPending')
+    h.clock += COORDINATOR_STOP_RETRY_MS * 4
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(1)
+  })
+
+  it('a pending mark is retried on the timer as well (nudge), for the app that runs the pass only on commits', async () => {
+    const h = rig({ reapableChild: true })
+    withCoordinator(h, 'run_rc', 'coord-rc')
+    await h.loop.run()
+    await h.settle()
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await h.loop.nudge()
+    await h.settle()
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(2)
+  })
+
+  it('a process that does not drive sends nothing, pending mark or not', async () => {
+    const h = rig({ reapableChild: true })
+    const s = h.state()
+    h.setState({
+      ...s,
+      runs: s.runs.map((r) =>
+        r.id === 'run_rc'
+          ? { ...r, coordinatorSessionId: 'coord-rc', coordinatorStopPending: NOW }
+          : { ...r, coordinatorStartingAt: new Date(NOW_MS - COORDINATOR_START_WINDOW_MS - 1).toISOString() }
+      )
+    })
+    const before = h.state()
+    const other = createDispatchLoop({ ...h.ctx, mayStart: () => false })
+    await other.run()
+    await other.nudge()
+    expect(h.handled()).toEqual([])
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
+    expect(h.state()).toBe(before)
+  })
+})
+
+// Limits pass L2: a `coordinatorStartingAt` past its window (a start that died with its process) is
+// dropped by the driving loop's own pass, so the ▶ comes back without waiting for an unrelated commit.
+describe('a stale coordinator start mark is cleared by the pass (L2)', () => {
+  const mark = (h: ReturnType<typeof rig>, at: number): void => {
+    const s = h.state()
+    h.setState({ ...s, runs: s.runs.map((r) => (r.id === 'run_1' ? { ...r, coordinatorStartingAt: new Date(at).toISOString() } : r)) })
+  }
+  const run1 = (h: ReturnType<typeof rig>) => h.state().runs.find((r) => r.id === 'run_1')!
+
+  it('drops a mark past its window on the pass', async () => {
+    const h = rig()
+    mark(h, NOW_MS)
+    h.clock += COORDINATOR_START_WINDOW_MS + 1
+    await h.loop.run()
+    await h.settle()
+    expect(run1(h)).not.toHaveProperty('coordinatorStartingAt')
+  })
+
+  it('drops it on the timer (nudge) as well', async () => {
+    const h = rig()
+    mark(h, NOW_MS)
+    h.clock += COORDINATOR_START_WINDOW_MS + 1
+    await h.loop.nudge()
+    await h.settle()
+    expect(run1(h)).not.toHaveProperty('coordinatorStartingAt')
+  })
+
+  it('leaves a mark inside its window alone', async () => {
+    const h = rig()
+    mark(h, NOW_MS)
+    h.clock += COORDINATOR_START_WINDOW_MS - 1
+    await h.loop.run()
+    await h.loop.nudge()
+    await h.settle()
+    expect(run1(h).coordinatorStartingAt).toBe(NOW)
   })
 })

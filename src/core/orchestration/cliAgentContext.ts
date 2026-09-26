@@ -128,6 +128,12 @@ const SESSION = {
       "Refused (409) while the run still has work its coordinator can start. The app sends it when a scheduled Job's run finishes.",
     flags: [RUN_ARG('<runId>', 'the run whose coordinator to stop')]
   },
+  'run-start-marks-clear': {
+    summary: 'drop the coordinator start marks that are past their window',
+    detail:
+      'A mark inside its window is left alone. The app or the Host sends it when it sees a stale mark, so the restart button comes back.',
+    flags: []
+  },
   'run-merge': {
     summary: "merge this run's worktrees back into the project",
     detail: 'It does not remove the worktrees afterwards.',

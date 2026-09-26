@@ -1983,7 +1983,13 @@ export function attachCoordinator(
   // A new coordinator starts with no stop on record: a stop belonged to the session that had it. Its
   // start is over, so the mark goes (I1), and so does the Run's own `autoDispatch` (fix round 1 M4): one
   // driver per Run, as the hand-over drops the Job's.
-  const { coordinatorStop: _stop, coordinatorStartingAt: _starting, autoDispatch: _placed, ...rest } = run
+  const {
+    coordinatorStop: _stop,
+    coordinatorStartingAt: _starting,
+    coordinatorStopPending: _pending,
+    autoDispatch: _placed,
+    ...rest
+  } = run
   const next: JobRun = { ...rest, coordinatorSessionId: a.sessionId }
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
@@ -2012,6 +2018,8 @@ export function detachCoordinator(s: OrchState, a: { runId: string }): Res<JobRu
   // With no coordinator there is nobody stopped: a stop left behind would make `runs wait` end
   // `limited` on a Run whose coordinator is gone (S6 limits D2).
   delete next.coordinatorStop
+  // The session is gone, so a stop still pending for it is confirmed (limits pass L1).
+  delete next.coordinatorStopPending
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
 
