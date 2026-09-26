@@ -2014,6 +2014,47 @@ describe('SlackNotifier chat events', () => {
     expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — rate limited'])
   })
 
+  // Task 10 e2e: a chat limit in a rolling chain posted the switch, then "turn failed" and "Response
+  // complete", both carrying the limit text. The chain announces the limit (the switch or the wait), so the
+  // chat path stays quiet on it, as the terminal path's StopFailure already does.
+  it('a limit in a rolling chain posts nothing from the chat path, and the next turn is announced as usual', async () => {
+    const LIMIT = "You've hit your session " + 'limit · resets 10:38am'
+    // The quiet turn reads nothing; the file holds the next turn's answer by the time that turn ends.
+    const h = setup({ wait: instantWait, readFileTail: async () => assistantLine('NEXT') })
+    h.notifier.register(chatInfo({ rollAccountIds: ['acc-1', 'acc-2'] }))
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'error', message: LIMIT }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual([])
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> NEXT'])
+  })
+
+  it('a rejected rate limit in a rolling chain quiets its turn too, and any other error still posts', async () => {
+    const h = setup({ wait: instantWait, readFileTail: async () => assistantLine('LIMIT TEXT') })
+    h.notifier.register(chatInfo({ rollAccountIds: ['acc-1', 'acc-2'] }))
+    const at = claudeAt('D:/t.jsonl')
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'working' }, at)
+    h.notifier.onChatEvent('s-1', { type: 'rateLimit', info: { status: 'rejected', resetsAt: null, utilization: null, window: null, source: 'result', windows: null } }, at)
+    h.notifier.onChatEvent('s-1', { type: 'status', status: 'idle' }, at)
+    await flush(); await flush(); await flush()
+    expect(h.sent).toEqual([])
+    h.notifier.onChatEvent('s-1', { type: 'error', message: 'API Error: 500' }, at)
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ⚠️ 턴 실패 — API Error: 500'])
+    // Outside a rolling chain a chat limit still says so: nobody else will.
+    const LIMIT = "You've hit your session " + 'limit · resets 10:38am'
+    const g = setup()
+    g.notifier.register(chatInfo())
+    g.notifier.onChatEvent('s-1', { type: 'error', message: LIMIT }, claudeAt(null))
+    await flush()
+    expect(g.sent).toEqual([`[myproj · work1] ⚠️ 턴 실패 — ${LIMIT}`])
+  })
+
   it('a codex chat session’s summary reads the rollout with the codex extractor', async () => {
     const agentLine = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'CODEX DONE' }] } })
     const h = setup({ wait: instantWait, readFileTail: async () => agentLine })

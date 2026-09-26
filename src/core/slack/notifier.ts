@@ -147,7 +147,7 @@ interface SlackRecord {
   /** A chat session's protocol state as this notifier last heard it (null for a terminal session): the
    *  status for the working→idle edge that means "turn over", the open card, and the previous turn's
    *  excerpt so a re-read can tell "the file has not caught up" from "the model said the same thing". */
-  chat: { status: ChatStatus; request: ChatRequest | null; lastExcerpt: string | null } | null
+  chat: { status: ChatStatus; request: ChatRequest | null; lastExcerpt: string | null; limitTurn?: boolean } | null
 }
 
 /** Reads only the last maxBytes of a file — safe for a large transcript (the same rule as the tail read in history/parser.ts) */
@@ -589,19 +589,41 @@ export class SlackNotifier {
     if (!record) return
     if (record.chat === null) record.chat = { status: 'idle', request: null, lastExcerpt: null }
     const chat = record.chat
+    // **A limit the rolling chain handles is its to announce** (Task 10 e2e). In a chain, rolling sees the
+    // same rejection and posts a switch or a wait through onRolled and onRollState; this path also posting
+    // "turn failed" and "Response complete" over the limit text said it three times. The terminal path's
+    // StopFailure stays quiet on the same rule (rollAccountIds). A session with no chain still posts both:
+    // nobody else will.
+    const rolling = (record.info.rollAccountIds?.length ?? 0) >= 1
     switch (event.type) {
       case 'status': {
         const wasWorking = chat.status === 'working'
+        // A new turn starts clean: the limit belonged to the one before.
+        if (!wasWorking && event.status === 'working') chat.limitTurn = false
         chat.status = event.status
         // 'waiting' is a card: the card's own event posts for it; the turn is still running.
-        if (wasWorking && event.status === 'idle') void this.sendChatTurnSummary(record, at)
+        if (wasWorking && event.status === 'idle') {
+          if (chat.limitTurn) {
+            chat.limitTurn = false
+            this.deps.log(`slack: a limit turn of ${sessionId} ended, the rolling chain announces it`)
+          } else void this.sendChatTurnSummary(record, at)
+        }
         break
       }
+      case 'rateLimit':
+        if (rolling && event.info.status === 'rejected') chat.limitTurn = true
+        break
       case 'request':
         chat.request = event.request
         if (event.request) void this.send(record, `${t(this.deps.lang(), 'slack.inputNeeded')}\n${describeChatRequest(event.request, this.deps.lang())}`)
         break
       case 'error':
+        // The same phrase test the protocol uses to raise the rejection (claudeProtocol.ts), which arrives
+        // just after this event; the provider's own scanner, so codex is read by codex's phrasing.
+        if (rolling && makeLimitScanner(record.provider).push(event.message)) {
+          chat.limitTurn = true
+          break
+        }
         void this.send(record, t(this.deps.lang(), 'slack.chat.turnFailed', { message: event.message }))
         break
       default:
