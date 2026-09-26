@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { ProcRegistry } from './procRegistry'
-import { composeHostSlack, hostSlackLog } from './slackWiring'
+import { composeHostSlack, hostSlackLog, HOST_SLACK_START_GRACE_MS } from './slackWiring'
 import type { HostSlackSdk } from './slackSdk'
 import type { SlackConfig } from '../core/slack/config'
 import type { Account } from '../core/types'
@@ -23,8 +23,9 @@ function fakeSlack(o: { delay?: number } = {}) {
   let peak = 0
   let ts = 0
   const wait = (): Promise<void> => (o.delay ? new Promise((r) => setTimeout(r, o.delay)) : Promise.resolve())
+  let posters = 0
   const sdk: HostSlackSdk = {
-    createPoster: () => ({ chat: { postMessage: async (m) => { posts.push(m); return { ok: true, ts: `t${++ts}` } } } }),
+    createPoster: () => { posters++; return { chat: { postMessage: async (m) => { posts.push(m); return { ok: true, ts: `t${++ts}` } } } } },
     createClient: () => {
       const handlers = new Map<string, (arg: never) => void>()
       const n = clients.length + 1
@@ -40,7 +41,7 @@ function fakeSlack(o: { delay?: number } = {}) {
       return c
     }
   }
-  return { sdk, live, clients, posts, trail, peak: () => peak }
+  return { sdk, live, clients, posts, trail, peak: () => peak, posters: () => posters }
 }
 
 function fakePty(): RegistryPty & { emit(d: string): void; sent: string[] } {
@@ -49,13 +50,24 @@ function fakePty(): RegistryPty & { emit(d: string): void; sent: string[] } {
   return { pid: 1, sent, onData: (cb) => { onData = cb }, onExit: () => {}, write: (d) => { sent.push(d) }, resize: () => {}, kill: () => {}, pause: () => {}, resume: () => {}, emit: (d) => onData(d) }
 }
 
-async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDir?: string; readConfig?: (() => Promise<SlackConfig>) | null; statusLinePayload?: () => Promise<unknown>; hostChains?: string[] } = {}) {
+async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDir?: string; readConfig?: (() => Promise<SlackConfig>) | null; statusLinePayload?: () => Promise<unknown>; hostChains?: string[]; manualGrace?: boolean } = {}) {
   const slack = fakeSlack({ delay: o.delay })
   const ptys = new Map<string, ReturnType<typeof fakePty>>()
   let next = ''
   const registry = new PtyRegistry({ spawn: () => { const p = fakePty(); ptys.set(next, p); return p }, log: () => {} })
   const procs = new ProcRegistry({ spawn: () => { throw new Error('no procs here') }, log: () => {} })
-  const state = { keep: o.keep ?? false }
+  // `app`: a greeted app is attached (it may yield Slack); `keep`: one that keeps Slack is.
+  const state = { keep: o.keep ?? false, app: false }
+  // The start grace (final review I1). By default it ends at once, so a rig with no app activates on
+  // start as before; `manualGrace` holds it until the test calls `grace.fire()`.
+  const grace = { ms: -1, fn: null as (() => void) | null, cancelled: false, fire: () => grace.fn?.() }
+  const after = o.manualGrace
+    ? (ms: number, fn: () => void) => {
+        grace.ms = ms
+        grace.fn = () => { if (!grace.cancelled) fn() }
+        return () => { grace.cancelled = true }
+      }
+    : (_ms: number, fn: () => void) => { queueMicrotask(fn); return () => {} }
   const logs: string[] = []
   const wiring = composeHostSlack({
     profileDir: o.profileDir ?? mkdtempSync(path.join(os.tmpdir(), 'astera-host-slack-')),
@@ -65,17 +77,18 @@ async function rig(o: { keep?: boolean; sdk?: boolean; delay?: number; profileDi
     statusLinePayload: o.statusLinePayload ?? (async () => null),
     chats: null,
     rolling: { has: (id: string) => (o.hostChains ?? []).includes(id), account: (id: string) => (id === account.id ? account : null) },
-    server: () => ({ appsKeep: () => state.keep, hasApp: () => state.keep, act: vi.fn(async () => null) }),
+    server: () => ({ appsKeep: () => state.keep, hasApp: () => state.keep || state.app, act: vi.fn(async () => null) }),
     lang: () => 'en',
     log: (m) => logs.push(m),
     ...(o.readConfig === null ? {} : { readConfig: o.readConfig ?? (async () => ({ ...CFG })) }),
-    every: () => () => {}
+    every: () => () => {},
+    after
   })
   const openSession = (id: string, restore: Record<string, unknown> = {}) => {
     next = `p-${id}`
     registry.open({ id: next, file: 'x', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: { kind: 'session', id, restore: { accountId: 'a1', cwd: 'D:/p', title: id, slackNotify: true, ...restore } } })
   }
-  return { wiring, slack, registry, ptys, state, logs, openSession, active: () => vi.waitFor(() => expect(wiring.active()).toBe(true)) }
+  return { wiring, slack, registry, ptys, state, logs, openSession, grace, active: () => vi.waitFor(() => expect(wiring.active()).toBe(true)) }
 }
 
 describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
@@ -326,6 +339,80 @@ describe('composeHostSlack (Slack in the Host Task 5, S1, S2, S4)', () => {
     } finally {
       process.off('unhandledRejection', on)
     }
+  })
+
+  // Final review I1: a fresh Host that took Slack at start opened a second socket beside an app that holds
+  // Slack, until that app's keeping hello arrived; a reply Slack routed to the new Host was answered
+  // "this session has ended".
+  it('a fresh Host waits for the first hello: an app that already holds Slack greets within the grace, and no socket ever opens', async () => {
+    const h = await rig({ manualGrace: true })
+    h.wiring.start()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(h.slack.clients).toHaveLength(0)
+    expect(h.grace.ms).toBe(HOST_SLACK_START_GRACE_MS)
+    expect(HOST_SLACK_START_GRACE_MS).toBe(10_000)
+    h.state.keep = true
+    h.wiring.onAppsChanged()
+    await new Promise((r) => setTimeout(r, 5))
+    h.grace.fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(h.slack.clients).toHaveLength(0)
+    expect(h.wiring.active()).toBe(false)
+    expect(h.grace.cancelled).toBe(true)
+  })
+
+  it('a headless Host takes Slack when the start grace ends with no app, and a yielding hello inside it takes Slack at once', async () => {
+    const h = await rig({ manualGrace: true })
+    h.wiring.start()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(h.slack.clients).toHaveLength(0)
+    h.grace.fire()
+    await h.active()
+    expect(h.slack.live.size).toBe(1)
+    const g = await rig({ manualGrace: true })
+    g.wiring.start()
+    g.state.app = true
+    g.wiring.onAppsChanged()
+    await g.active()
+    expect(g.slack.live.size).toBe(1)
+    expect(g.grace.cancelled).toBe(true)
+    await h.wiring.dispose()
+    await g.wiring.dispose()
+  })
+
+  // Final review M1: every hello or close re-applied the config while the Host stayed active, which built
+  // a new transport and dropped a root still in flight, so the next notice opened a second root.
+  it('a hello, a close or a reload that changes nothing leaves the active config alone', async () => {
+    let cfg = { ...CFG }
+    const h = await rig({ readConfig: async () => ({ ...cfg }) })
+    h.wiring.start()
+    await h.active()
+    const built = h.slack.posters()
+    h.state.app = true
+    h.wiring.onAppsChanged()
+    h.state.app = false
+    h.wiring.onAppsChanged()
+    await h.wiring.reload()
+    expect(h.slack.posters()).toBe(built)
+    cfg = { ...CFG, channelId: 'C2' }
+    await h.wiring.reload()
+    expect(h.slack.posters()).toBe(built + 1)
+    await h.wiring.dispose()
+  })
+
+  it('a forward that arrives while the Host is taking Slack is told once it has, not dropped', async () => {
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => { release = r })
+    const h = await rig({ keep: true, readConfig: async () => { await gate; return { ...CFG } } })
+    h.wiring.start()
+    h.openSession('s1')
+    h.state.keep = false
+    h.wiring.onAppsChanged()
+    h.wiring.forwarded({ kind: 'roll-state', event: { sessionId: 's1', state: 'stalled' } })
+    release()
+    await h.active()
+    await vi.waitFor(() => expect(h.slack.posts.filter((p) => p.thread_ts === 't1')).toHaveLength(1))
+    await h.wiring.dispose()
   })
 
   it('hostSlackLog appends [host] lines to <profile>/slack.log and never throws', () => {

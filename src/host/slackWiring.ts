@@ -14,6 +14,11 @@
 // **Read only.** slack.json is read through SlackConfigReader, which has no way to change the file; the
 // app's settings screen stays its only writer (spec S4).
 //
+// **A fresh Host waits for the first hello** (final review I1). An app that spawned this Host says hello
+// within milliseconds, and when that app already holds Slack, a Host that took Slack at start would open a
+// second socket beside it until the hello arrived. So the first activation waits for the first app hello,
+// or for HOST_SLACK_START_GRACE_MS when no app connects (a headless `astera host start`).
+//
 // **Late-bound on purpose**, as rollingWiring.ts is: `server` does not exist when index.ts builds this,
 // so it is a function, read at the call, and nothing is opened until `start()`.
 //
@@ -37,6 +42,11 @@ import { ROLLING_TICK_MS } from './rollingWiring'
 import { createHostSlackSessions } from './slackSessions'
 import { createHostSlackSources } from './slackSources'
 import { hostInboxRoutes } from './slackRoutes'
+
+/** How long a fresh Host with no app attached waits before it takes Slack (final review I1). An app that
+ *  spawned the Host connects and says hello within milliseconds of the spawn; ten seconds is far beyond
+ *  that, and short for a headless Host nobody is waiting on. */
+export const HOST_SLACK_START_GRACE_MS = 10_000
 
 export interface HostSlackWiring {
   notifier: SlackNotifier
@@ -70,6 +80,12 @@ export function hostSlackLog(profileDir: string): (m: string) => void {
   }
 }
 
+function defaultAfter(ms: number, fn: () => void): () => void {
+  const h = setTimeout(fn, ms)
+  h.unref?.()
+  return () => clearTimeout(h)
+}
+
 function defaultEvery(ms: number, fn: () => void): () => void {
   const h = setInterval(fn, ms)
   h.unref?.()
@@ -93,6 +109,8 @@ export function composeHostSlack(a: {
   log?(m: string): void
   readConfig?(): Promise<SlackConfig>
   every?(ms: number, fn: () => void): () => void
+  /** The start grace's timer (HOST_SLACK_START_GRACE_MS); returns its cancel. */
+  after?(ms: number, fn: () => void): () => void
   findTranscript?(configDir: string, threadId: string): Promise<string | null>
 }): HostSlackWiring {
   const raw = a.log ?? hostSlackLog(a.profileDir)
@@ -116,6 +134,13 @@ export function composeHostSlack(a: {
   let disposed = false
   let started = false
   let isActive = false
+  /** The first app hello arrived, or the start grace ended with none (final review I1). */
+  let decided = false
+  let cancelGrace: (() => void) | null = null
+  /** The config the notifier holds while active, as JSON; null while inactive. */
+  let applied: string | null = null
+  /** Settles and held-back forwards still in the queue: a forward waits behind them (see `forwarded`). */
+  let pending = 0
 
   // P9: the thread keys go into whichever entry carries the session, straight through the registry.
   const noteThread = (sid: string, patch: Record<string, unknown>): void => {
@@ -209,7 +234,7 @@ export function composeHostSlack(a: {
 
   let queue: Promise<void> = Promise.resolve()
   const want = (): boolean => {
-    if (!started || disposed || a.sdk === null) return false
+    if (!started || !decided || disposed || a.sdk === null) return false
     try {
       return !a.server().appsKeep(HOST_YIELD_SLACK)
     } catch {
@@ -221,6 +246,7 @@ export function composeHostSlack(a: {
    *  apply an older read over a newer one, and a close must be done before the next open. Each settle
    *  reads who keeps Slack when it runs, not when it was asked, so the last change wins. Never rejects. */
   const settle = (why: string): Promise<void> => {
+    pending++
     queue = queue
       .then(async () => {
         if (want()) {
@@ -232,22 +258,40 @@ export function composeHostSlack(a: {
             return
           }
           if (!want()) return
-          notifier.applyConfig(cfg)
+          // Final review M1: while the Host stays active, the notifier keeps its transport unless the config
+          // changed. Applying it again built a new transport and reset every record's thread, so a root
+          // still in flight was lost and the next notice opened a second one.
+          const json = JSON.stringify(cfg)
+          const fresh = !isActive || json !== applied
+          if (fresh) notifier.applyConfig(cfg)
+          applied = json
+          // Always handed on: the same key reconnects nothing, and a reload is what retries an inbox Slack
+          // refused for good (invalid_auth, final review C1).
           await inbox.apply(cfg)
           if (!isActive) log(`this Host owns Slack now (${why})`)
           isActive = true
           // Every activation reads the notes again: a record from an earlier activation takes the thread
           // the app noted while it kept Slack (Task 6, the Task 5 carry).
-          sessions.reconcile({ fromNotes: true })
+          if (fresh) sessions.reconcile({ fromNotes: true })
         } else {
           if (isActive) log(`this Host leaves Slack alone (${why})`)
           isActive = false
+          applied = null
           notifier.setTransport(null, null)
           await inbox.stop()
         }
       })
       .catch((err) => log(`slack settle failed (${why}): ${String(err)}`))
+      .finally(() => {
+        pending--
+      })
     return queue
+  }
+  /** The first hello, or the end of the start grace: from here on, who keeps Slack decides. */
+  const decide = (): void => {
+    decided = true
+    cancelGrace?.()
+    cancelGrace = null
   }
   const stopTick = (a.every ?? defaultEvery)(ROLLING_TICK_MS, () => {
     if (!disposed) sessions.reconcile()
@@ -258,14 +302,48 @@ export function composeHostSlack(a: {
     start: () => {
       if (started || disposed) return
       started = true
-      void settle('start')
+      let appThere = false
+      try {
+        appThere = a.server().hasApp()
+      } catch {
+        /* unsure: wait the grace */
+      }
+      if (appThere) {
+        decide()
+        void settle('start')
+        return
+      }
+      // Final review I1: an app that spawned this Host is about to say hello, and it may hold Slack.
+      const after = a.after ?? defaultAfter
+      cancelGrace = after(HOST_SLACK_START_GRACE_MS, () => {
+        cancelGrace = null
+        if (decided || disposed) return
+        decide()
+        void settle('start, no app said hello')
+      })
     },
     reload: () => settle('slack-reload'),
     onAppsChanged: () => {
-      if (started) void settle('an app attached or left')
+      if (!started) return
+      decide()
+      void settle('an app attached or left')
     },
+    // Final review M2, the Host half: a forward that arrives while a settle is in the queue waits behind it.
+    // While the Host is taking Slack, the sessions are registered only once its config is read; a forward
+    // told before then finds no record and is dropped (a card lost this way leaves a Slack reply to it read
+    // as a turn).
     forwarded: (m) => {
-      if (!disposed) sources.forwarded(m)
+      if (disposed) return
+      if (pending === 0) return sources.forwarded(m)
+      pending++
+      queue = queue
+        .then(() => {
+          if (!disposed) sources.forwarded(m)
+        })
+        .catch((err) => log(`slack: a held forward failed: ${String(err)}`))
+        .finally(() => {
+          pending--
+        })
     },
     onRollEvent: (e) => {
       if (!disposed) sources.onRollEvent(e)
@@ -276,6 +354,8 @@ export function composeHostSlack(a: {
     dispose: async () => {
       if (disposed) return
       disposed = true
+      cancelGrace?.()
+      cancelGrace = null
       stopTick()
       sessions.dispose()
       sources.dispose()
