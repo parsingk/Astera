@@ -19,6 +19,7 @@ import { trustSystemCa } from './systemCa'
 import { openHostLog, logUnhandledRejections } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
+import { createConhostReaper, listWindowsChildren } from './conhostReaper'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
@@ -101,10 +102,25 @@ async function main(): Promise<void> {
       // answers `pty-failed` with the message, which is the path this wants — the app shows the
       // sentence on the terminal (ptyFactory.ts) instead of a session that never appears.
       if (missing) throw new Error(`node-pty is incomplete: ${missing} is missing — the app repairs this at the next Host start`)
-      return pty.spawn(file, args, { name: 'xterm-256color', ...opts })
+      const spawned = pty.spawn(file, args, { name: 'xterm-256color', ...opts })
+      // After it returns: the console host of this pty exists by now, and is made before this mark.
+      conhostReaper.spawned()
+      return spawned
     },
     log: (m) => log.write(m)
   })
+  // Leftovers Task 5 (S3-2): the console hosts node-pty leaves behind on win32, one per pty that ended
+  // by itself, reaped once no pty is live (conhostReaper.ts). A no-op elsewhere. Its closures only run
+  // on a spawn or an exit, long after both consts exist.
+  const conhostReaper = createConhostReaper({
+    platform: process.platform,
+    hostPid: process.pid,
+    livePtys: () => registry.liveCount(),
+    listChildren: (pid) => listWindowsChildren(pid),
+    kill: (pid) => process.kill(pid),
+    log: (m) => log.write(m)
+  })
+  registry.onExit(() => conhostReaper.exited())
   let handlePty: ReturnType<typeof attachPtyHost> | null = null
 
   // The Host's second registry: line processes — a chat session's protocol child (chat-sessions design
@@ -141,6 +157,8 @@ async function main(): Promise<void> {
     // check: the Task stays validating or reviewing, and the next Host restarts it (a convergence Job)
     // or gates it (otherwise). Never throws.
     wiring?.dispose()
+    // No reap from here on: a leaked console host ends with the Host (measured 2026-09-26).
+    conhostReaper.dispose()
     // **The rolling stops with it** (S6 R16): its tick and the app-gone watch stop, so no takeover starts
     // from here on, and every chain is quieted. No roll waits: `killAll` below ends every session, a roll
     // in flight included, and the spawner refuses new respawns from `closeAndSettle` on. Never throws.
