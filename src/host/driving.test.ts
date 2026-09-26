@@ -183,7 +183,7 @@ async function rig(o: RigOpts = {}) {
     await fs.writeFile(path.join(specsDir, 'dsp_live.md'), 'the spec a live worker reads', 'utf8')
   }
 
-  const server = { app: false, keeps: false, lastPid: null as number | null }
+  const server = { app: false, keeps: false, lastPid: null as number | null, pidAsks: 0 }
   const coordinator = { busy: false as boolean | null }
   const typed: Array<[string, string]> = []
   const typeInto = vi.fn((id: string, text: string) => {
@@ -271,7 +271,10 @@ async function rig(o: RigOpts = {}) {
   const driving = createHostDriving({
     profileDir: dir,
     orch: { handle, internalDeps: () => orch.internalDeps(), loaded: () => orch.loaded(), drainOnce, state: () => orch.state() },
-    server: { hasApp: () => server.app, appsKeep: () => server.keeps, lastAppPid: () => server.lastPid },
+    server: { hasApp: () => server.app, appsKeep: () => server.keeps, lastAppPid: () => {
+      server.pidAsks++
+      return server.lastPid
+    } },
     spawner: { sessionBusy: (id) => (id === 'coord-1' ? coordinator.busy : null), typeInto, isRetiring: () => spawner.retiring, inFlight: () => spawner.inFlightCount },
     worktrees: {
       fork: async () => wt,
@@ -1278,6 +1281,21 @@ describe('createHostDriving — the app-left grace (S4+S5 tidy)', () => {
     await h.settle()
     expect(h.startRepair).not.toHaveBeenCalled()
     expect(h.stopForeignValidations).not.toHaveBeenCalled()
+  })
+
+  // Final review I1: the server forgets a dead last-app pid when asked, so the tick asks while no app is
+  // attached, before Windows can hand that number to another process.
+  it('asks the server for the last app pid on a tick with no app attached, and not with one', async () => {
+    const h = await rig({})
+    await h.load()
+    await h.settle()
+    h.server.app = true
+    h.server.pidAsks = 0
+    await h.tickNow()
+    expect(h.server.pidAsks).toBe(0)
+    h.server.app = false
+    await h.tickNow()
+    expect(h.server.pidAsks).toBeGreaterThan(0)
   })
 
   // Last round (a): a same-pid app that stays detached past the grace and then quits without

@@ -410,6 +410,11 @@ export function createHostDriving(d: {
 
   const tick = async (): Promise<void> => {
     try {
+      // **Forget a gone app's pid promptly** (final review I1): the server's `lastAppPid` probes the pid
+      // and forgets it once dead. Asked here while no app is attached, so the forgetting happens within a
+      // tick of the app ending, not at the next worktree removal, which may come after Windows has
+      // handed that number to another process. The answer itself is not needed.
+      if (!d.server.hasApp()) d.server.lastAppPid?.()
       await compute()
       if (mayStart()) {
         await pass()

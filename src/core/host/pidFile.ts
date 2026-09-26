@@ -96,7 +96,7 @@ export function clearAppRunning(profileDir: string, pid: number): void {
 
 /** Whether `pid` names a process that exists. Signal 0 asks and does nothing to it; EPERM also means it
  *  does (another user, or higher integrity). Never throws. */
-function pidLives(pid: number): boolean {
+export function pidLives(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
