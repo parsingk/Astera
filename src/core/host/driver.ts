@@ -7,6 +7,9 @@ export type Driver = 'host' | 'app' | 'parked'
 export type DispatchGate = 'no-settings' | 'migrated' | 'not-migrated' | 'unreadable'
 /** The caller id every command the Host issues for itself runs under (R9). */
 export const HOST_CALLER = 'astera:host'
+/** The caller id the app's own commands run under (ipc.ts's UI_CALLER): its buttons and, when it
+ *  drives, its dispatch loop. */
+export const APP_CALLER = 'astera:app'
 
 /** An app that keeps dispatch drives (it will, whatever we say: its scheduler runs on every push).
  *  Otherwise the F62 marker decides: work an old toggle parked must not be spent before an app has

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { handleCommand, handleExit, PENDING_START_WINDOW_MS, type HostSession, type OrchServerDeps, type SessionScreen } from './command'
 import { SPAWN_DEADLINE_MS } from '../host/unresponsive'
+import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { ensureProject } from './projects'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -7112,16 +7113,34 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(deps.stopped).toEqual([`coord-${first.id}`])
   })
 
+  // Final review M3. `--gone` and the start-mark sweep are the driving loop's own calls. A coordinator
+  // could otherwise empty its own slot while alive (`--gone <own id>`) and orphan itself.
+  it('M3: --gone and run-start-marks-clear are refused from inside an agent session, and taken from the app, the Host and a shell', async () => {
+    const deps = coordDeps()
+    const jobId = await scheduledJob(deps)
+    const first = (await fire(deps, jobId)).body as { id: string }
+    const own = `coord-${first.id}`
+    const gone = await call(deps, 'run-coordinator-stop', { run: first.id, gone: own }, own)
+    expect(gone.status).toBe(403)
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(own)
+    expect((await call(deps, 'run-start-marks-clear', {}, own)).status).toBe(403)
+    expect((await call(deps, 'run-start-marks-clear', {}, 'some-tab')).status).toBe(403)
+    for (const caller of [APP_CALLER, HOST_CALLER, '']) {
+      expect((await call(deps, 'run-start-marks-clear', {}, caller)).status).toBe(200)
+      expect((await call(deps, 'run-coordinator-stop', { run: first.id, gone: 'coord-someone-else' }, caller)).status).toBe(200)
+    }
+  })
+
   it('L1: run-coordinator-stop --gone empties the slot the way the exit release does, and only for that session', async () => {
     const deps = coordDeps()
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
     await patchRun(deps, first.id, (r) => ({ ...r, coordinatorStopPending: NOW, paused: true }))
-    const other = await call(deps, 'run-coordinator-stop', { run: first.id, gone: 'coord-someone-else' })
+    const other = await call(deps, 'run-coordinator-stop', { run: first.id, gone: 'coord-someone-else' }, HOST_CALLER)
     expect(other.status).toBe(200)
     expect(other.body).toMatchObject({ released: null })
     expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorSessionId).toBe(`coord-${first.id}`)
-    const r = await call(deps, 'run-coordinator-stop', { run: first.id, gone: `coord-${first.id}` })
+    const r = await call(deps, 'run-coordinator-stop', { run: first.id, gone: `coord-${first.id}` }, HOST_CALLER)
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ runId: first.id, released: `coord-${first.id}` })
     expect(deps.stopped).toEqual([])

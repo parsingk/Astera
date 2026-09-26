@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { COORDINATOR_STOP_RETRY_MS, createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
 import { coordinatorReleaseOf } from './releaseDefer'
 import { handleCommand, type OrchServerDeps } from '../command'
+import { APP_CALLER } from '../../host/driver'
 import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../state'
 import type { Job, Message, Task } from '../types'
 import type { Account } from '../../types'
@@ -200,7 +201,7 @@ function rig(o: RigOpts = {}) {
   const real = (cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
     if (o.gateRefused && cmd === 'gate-create')
       return Promise.resolve({ status: 409, body: { error: 'task has an open dispatch' } })
-    return handleCommand(deps, { sessionId: 'astera:test' }, cmd, args)
+    return handleCommand(deps, { sessionId: APP_CALLER }, cmd, args)
   }
 
   const ctx: DispatchLoopContext = {

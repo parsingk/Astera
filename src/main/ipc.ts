@@ -43,6 +43,7 @@ import { hostPidFilePath, parseHostPidFile } from '../core/host/pidFile'
 import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
+import { APP_CALLER } from '../core/host/driver'
 import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover } from './host/outdated'
 import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
@@ -330,7 +331,8 @@ export interface HostWiring {
  *  document, not a disk image, and the cap is what keeps a stray drop from filling a disk. */
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
-const UI_CALLER = 'astera:app'
+// The same string core's handleCommand lets send the driving loop's own calls (APP_CALLER).
+const UI_CALLER = APP_CALLER
 
 /** http:/https:/mailto: 만 허용하는 스킴 화이트리스트. 통과하면 파싱된 URL 을 돌려준다 —
  *  new URL 은 탭·개행을 스스로 걷어내므로, 호출자는 원래 문자열이 아니라 이 반환값의

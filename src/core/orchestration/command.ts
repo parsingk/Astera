@@ -92,6 +92,7 @@ import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
 import { leftNothingBehind } from '../host/orchProtocol'
+import { APP_CALLER, HOST_CALLER } from '../host/driver'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -923,6 +924,17 @@ export async function handleCommand(
   )
   const isWorker = myDispatchIds.size > 0
   if (isWorker && COORDINATOR_ONLY.has(cmd)) return denied(`worker sessions cannot call ${cmd}`)
+  // **The driving loop's own calls are not an agent's** (final review M3). `run-coordinator-stop --gone`
+  // empties a slot with nothing stopped, and a coordinator sending it with its own id would orphan
+  // itself; `run-start-marks-clear` is the loop's sweep. Refused from inside any agent session, as
+  // `chats answer` is: taken from the app (APP_CALLER), the Host (HOST_CALLER) and a shell (no session).
+  if (
+    (cmd === 'run-start-marks-clear' || (cmd === 'run-coordinator-stop' && args.gone !== undefined)) &&
+    caller.sessionId !== '' &&
+    caller.sessionId !== APP_CALLER &&
+    caller.sessionId !== HOST_CALLER
+  )
+    return denied(`${cmd === 'run-start-marks-clear' ? cmd : 'run-coordinator-stop --gone'} is sent by the app or the Host, not from inside an agent session`)
   // isRunCoordinator: this session is coordinating a Run that is **still running**. Kept separate
   // from isWorker rather than folded into one flag — they answer different questions (dispatch
   // ownership vs. Run coordination) for different reasons elsewhere in this file (isWorker also
