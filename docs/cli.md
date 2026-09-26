@@ -1413,6 +1413,9 @@ shell.
 The install folder is not on your `PATH`, or this shell was opened before you added it. Re-check
 **Settings → Agents → Command line tool (astera)**, run the line it shows, and open a new shell.
 
+**"Cannot find module" from `astera` in cmd or PowerShell on Windows**
+Astera is installed in a folder whose name has characters outside ASCII and that is not inside `%LOCALAPPDATA%`, `%APPDATA%` or your user folder, which `astera.cmd` cannot name; reinstall Astera into a folder with an ASCII name or into its default folder.
+
 **Exit 3, "cannot reach the Host"**
 No Host is running and the command needs one. Run `astera host start`. If it does not come up,
 `astera host status` names the profile it looked in, and the Host's log is at
