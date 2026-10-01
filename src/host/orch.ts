@@ -13,6 +13,8 @@ import { isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
+import { mcpRefusal } from '../core/host/mcpGate'
+import { readMcpAccess } from '../core/settings/mcpAccess'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
@@ -1240,6 +1242,14 @@ export function createHostOrch(a: {
        *  observed replay resumes the question the receipt names rather than asking a new one. */
       let runArgs = args
       try {
+        // **MCP callers pass the allowlist first** (MCP design §2), before receipts and before the
+        // app-only commands, so a refused call leaves no receipt and reaches nothing. Read per call, as
+        // `app js` reads its toggle: the app may change it while the Host runs. A settings file that
+        // cannot be read refuses (readMcpAccess throws; the catch below answers 500 with its message).
+        if (from?.role === 'mcp') {
+          const refused = mcpRefusal(cmd, await readMcpAccess(path.join(a.profileDir, 'app-settings.json')))
+          if (refused) return refused
+        }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
         // line below, so a `request` sent with one would be accepted and silently ignored — which is
         // precisely the fault §3 is built on: Orca's `check --peek` takes `--retry-request` and drops

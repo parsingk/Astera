@@ -890,6 +890,9 @@ export type ResumeStrategy = 'smart' | 'original'
  *  두고 그 기본값이 곧 우회 플래그다(`DEFAULT_TUI_AGENT_ARGS = YOLO_TUI_AGENT_ARGS`). */
 export type AgentPermissionMode = 'yolo' | 'manual'
 
+/** What an MCP client may do through the Host (MCP design M5). Default 'control' (M6). */
+export type McpAccess = 'off' | 'read' | 'control'
+
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
 export interface HostStatus {
