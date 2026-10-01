@@ -19,7 +19,9 @@ export function stateWord(o: {
   schedule?: unknown
 }): string {
   if (o.pendingStart === true) return 'PENDING'
-  if (o.paused === true) return 'PAUSED'
+  // A Job whose latest Run is paused says so in its outcome (command.ts jobView); the Job's own
+  // `paused` is a schedule's hold.
+  if (o.paused === true || o.outcome === 'paused') return 'PAUSED'
   if (o.schedule !== undefined && o.schedule !== null) return 'SCHEDULED'
   if ((o.questionsOpen ?? 0) > 0) return 'WAITING'
   if (o.outcome === 'completed') return 'COMPLETE'

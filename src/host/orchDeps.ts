@@ -27,7 +27,9 @@ import { chatPendingOf, type ChatPrompt, type ChatPromptList } from '../core/ses
  *  with the CLI writing straight to the Host, a copy taken in the app can be a state one commit old,
  *  which is the one thing a safety net must not be. Here it goes through the store's own write queue,
  *  so the copy is of the state the command that asked for it just saw. */
-const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVersion', 'backup'] as const
+// `resumeStopWaitMs` is a number, not a call: the Host leaves it unset (RESUME_STOP_WAIT_MS) and only
+// tests set it, so it is never forwarded.
+const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVersion', 'backup', 'resumeStopWaitMs'] as const
 
 /**
  * **Forwarded, and a refusal reaches the caller.** `handleCommand` either awaits these and lets the
@@ -460,6 +462,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   runningSessions: false,
   appVersion: false,
   backup: true,
+  resumeStopWaitMs: false,
   // HOST_LOCAL — the same values these names had in PROPAGATES and SWALLOWED before S2 (the six), and
   // in PROPAGATES before S3 (the three worktree names).
   startWorker: true,

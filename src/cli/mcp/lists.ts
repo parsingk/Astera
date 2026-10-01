@@ -15,7 +15,7 @@ const num = (r: unknown, k: string): number => {
 }
 
 /** How each list tool orders its rows. A tool not here keeps the Host's order: list_tasks (DAG and
- *  creation order), list_projects and list_accounts. Every sort is stable, so ties keep it too. */
+ *  creation order), list_projects, list_accounts and list_run_configs. Every sort is stable, so ties keep it too. */
 const ORDER: Record<string, (a: unknown, b: unknown) => number> = {
   list_jobs: (a, b) => text(b, 'createdAt').localeCompare(text(a, 'createdAt')),
   // createdAt, not ordinal: ordinal counts per Job, so across Jobs it would put a young Job's newest
@@ -60,6 +60,6 @@ export function cursorOffset(tool: string, cursor: string): number | { error: st
   if (o === null || typeof o.k !== 'string' || typeof o.o !== 'number' || !Number.isSafeInteger(o.o) || o.o < 0) return malformed
   // Named back only when it is a tool name: the rest of a cursor is the caller's own text.
   if (o.k !== tool)
-    return /^list_[a-z]+$/.test(o.k) ? { error: `cursor is from ${o.k}, not ${tool}; pass the nextCursor of a ${tool} result` } : malformed
+    return /^list_[a-z_]+$/.test(o.k) ? { error: `cursor is from ${o.k}, not ${tool}; pass the nextCursor of a ${tool} result` } : malformed
   return o.o
 }

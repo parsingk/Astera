@@ -17,7 +17,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
-import { TOOLS, convergenceRefusal, type ToolDef } from './tools'
+import { TOOLS, convergenceRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
@@ -102,8 +102,20 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   // or one that is no cursor at all, is the caller's mistake.
   const offset = typeof input.cursor === 'string' ? cursorOffset(t.name, input.cursor) : 0
   if (typeof offset !== 'number') return errorResult('INVALID_ARGUMENTS', offset.error)
-  const refused = t.name === 'create_job' ? convergenceRefusal(input) : null
+  const refused = t.name === 'create_job' ? convergenceRefusal(input) : t.name === 'create_task' ? taskTargetRefusal(input) : null
   if (refused !== null) return errorResult('INVALID_ARGUMENTS', refused)
+  // create_task without an accountId runs on the Job's coordinator account, the default the
+  // coordinator's own planning brief uses. jobs-get takes a Job id or a Run id.
+  if (t.name === 'create_task' && input.accountId === undefined) {
+    const job = await link.call('jobs-get', { id: input.jobId ?? input.runId })
+    if ('code' in job) return errorResult(job.code, job.message, 'jobs-get')
+    if (job.status !== 200)
+      return errorResult(codeForStatus(job.status), refusalMessage(job.status, job.body), 'jobs-get', job.body)
+    const account = (job.body as { coordinatorAccountId?: unknown }).coordinatorAccountId
+    if (typeof account !== 'string')
+      return errorResult('INVALID_ARGUMENTS', 'accountId is required: this Job has no coordinator account to default to')
+    args = { ...input, accountId: account }
+  }
   // create_job and list_jobs take a project id; the Host's jobs-create (`--cwd`) and jobs-list
   // (`--project`) take the project's folder. An unknown id is projects-get's own NOT_FOUND.
   if (t.name === 'create_job' || (t.name === 'list_jobs' && input.projectId !== undefined)) {

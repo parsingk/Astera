@@ -18,8 +18,13 @@ describe('mcpRefusal', () => {
     expect(mcpRefusal('runs-resume', 'control')).toBeNull()
     expect(mcpRefusal('runs-resume', 'read')?.status).toBe(403)
   })
+  it('tasks-add is a control command and run-configs-list a read: create_task and list_run_configs', () => {
+    expect(mcpRefusal('tasks-add', 'control')).toBeNull()
+    expect(mcpRefusal('tasks-add', 'read')?.status).toBe(403)
+    expect(mcpRefusal('run-configs-list', 'read')).toBeNull()
+  })
   it('refuses everything else whatever the setting', () => {
-    for (const cmd of ['worker-start', 'sessions-send', 'chats-answer', 'state-put', 'run-delete', 'tasks-add', 'run-resume'])
+    for (const cmd of ['worker-start', 'sessions-send', 'chats-answer', 'state-put', 'run-delete', 'task-create', 'run-configs', 'run-resume'])
       expect(mcpRefusal(cmd, 'control')?.status).toBe(403)
   })
 })

@@ -15,7 +15,7 @@ import type { HostLink } from './hostLink'
 const TOOLS = [
   'list_projects', 'get_project', 'list_accounts', 'list_jobs', 'get_job', 'create_job', 'run_job',
   'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
-  'get_completion'
+  'get_completion', 'create_task', 'list_run_configs'
 ]
 
 async function connected(link: HostLink) {
@@ -76,7 +76,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the sixteen tools', async () => {
+  it('lists exactly the eighteen tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -553,6 +553,95 @@ describe('the MCP server', () => {
     const withProject = await client.callTool({ name: 'list_jobs', arguments: { projectId: 'p1', cursor: 'not-a-cursor' } })
     expect(errorOf(withProject)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
     expect(calls.length).toBe(before)
+  })
+
+  // Flow B (brief P2): an external agent lays the Tasks out itself. The Host's tasks-add reads the
+  // CLI parser's shapes: `--deps` arrives as a JSON array (cliArgs.ts JSON_ARRAY), `--validate` and
+  // `--account` as comma lists, `--review` as true.
+  it('create_task sends tasks-add with the keys the handler reads', async () => {
+    const { link, calls } = answering({ 'tasks-add': { status: 200, body: { id: 'tsk_2', spec: 's', status: 'pending' } } })
+    const client = await connected(link)
+    const r = await client.callTool({
+      name: 'create_task',
+      arguments: {
+        runId: 'run_1',
+        spec: 's',
+        title: 't',
+        deps: ['tsk_1'],
+        accountId: 'acc_1',
+        validate: ['test', 'lint'],
+        review: true,
+        requestId: 'rq-t'
+      }
+    })
+    expect(r.isError, JSON.stringify(r.content)).toBeFalsy()
+    expect(calls).toEqual([
+      {
+        cmd: 'tasks-add',
+        args: { run: 'run_1', spec: 's', title: 't', deps: ['tsk_1'], account: 'acc_1', validate: 'test,lint', review: true },
+        request: 'rq-t'
+      }
+    ])
+    expect(r.structuredContent).toMatchObject({ id: 'tsk_2' })
+    await client.callTool({ name: 'create_task', arguments: { jobId: 'job_1', spec: 's', accountId: 'acc_1' } })
+    expect(calls.at(-1)?.args).toEqual({ job: 'job_1', spec: 's', account: 'acc_1' })
+  })
+
+  it("create_task without an accountId uses the Job's coordinator account", async () => {
+    const { link, calls } = answering({ 'jobs-get': { status: 200, body: { id: 'job_1', coordinatorAccountId: 'coord_1' } } })
+    const client = await connected(link)
+    const r = await client.callTool({ name: 'create_task', arguments: { runId: 'run_1', spec: 's' } })
+    expect(r.isError, JSON.stringify(r.content)).toBeFalsy()
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['jobs-get', { id: 'run_1' }],
+      ['tasks-add', { run: 'run_1', spec: 's', account: 'coord_1' }]
+    ])
+  })
+
+  it('create_task without an accountId on a Job with no coordinator account is INVALID_ARGUMENTS', async () => {
+    const { link, calls } = answering({ 'jobs-get': { status: 200, body: { id: 'job_1' } } })
+    const r = await (await connected(link)).callTool({ name: 'create_task', arguments: { jobId: 'job_1', spec: 's' } })
+    expect(r.isError).toBe(true)
+    expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('accountId') })
+    expect(calls.map((c) => c.cmd)).toEqual(['jobs-get'])
+  })
+
+  it('create_task takes exactly one of jobId or runId, and a spec within 50 000 characters, before calling the Host', async () => {
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    for (const input of [
+      { spec: 's', accountId: 'a' },
+      { jobId: 'job_1', runId: 'run_1', spec: 's', accountId: 'a' },
+      { runId: 'run_1', spec: 'x'.repeat(50_001), accountId: 'a' },
+      { runId: 'run_1', spec: 's', title: 't'.repeat(201), accountId: 'a' },
+      { runId: 'run_1', spec: '', accountId: 'a' }
+    ]) {
+      const r = await client.callTool({ name: 'create_task', arguments: input })
+      expect(r.isError, JSON.stringify(input).slice(0, 80)).toBe(true)
+    }
+    expect(calls).toEqual([])
+    const r = await client.callTool({ name: 'create_task', arguments: { runId: 'run_1', spec: 'x'.repeat(50_000), accountId: 'a' } })
+    expect(r.isError).toBeFalsy()
+  })
+
+  it('list_run_configs sends run-configs-list for the Job and passes only id, name and type', async () => {
+    const configs = [{ id: 'test', name: 'test', type: 'npm', command: 'node test.js', env: { SECRET: 'x' } }]
+    const { link, calls } = answering({ 'run-configs-list': { status: 200, body: configs } })
+    const r = await (await connected(link)).callTool({ name: 'list_run_configs', arguments: { jobId: 'job_1' } })
+    expect(calls.at(-1)).toEqual({ cmd: 'run-configs-list', args: { job: 'job_1' }, request: undefined })
+    expect(r.structuredContent).toEqual({ runConfigs: [{ id: 'test', name: 'test', type: 'npm' }] })
+  })
+
+  it('marks create_task as a change and list_run_configs as a read', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    expect(tools.find((t) => t.name === 'create_task')?.annotations?.readOnlyHint).toBe(false)
+    expect(tools.find((t) => t.name === 'list_run_configs')?.annotations?.readOnlyHint).toBe(true)
+  })
+
+  it('stop_run and resume_run say the coordinator is stopped and brought back', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    expect(tools.find((t) => t.name === 'stop_run')?.description).toMatch(/coordinator is asked to stop/)
+    expect(tools.find((t) => t.name === 'resume_run')?.description).toMatch(/new coordinator/)
   })
 
   it('stop_run sends runs-stop', async () => {

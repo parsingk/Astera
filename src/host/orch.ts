@@ -295,6 +295,16 @@ export const OBSERVED: Record<string, ObservedReplay> = {
       return typeof turn === 'object' && turn !== null && (turn as { state?: unknown }).state === 'timeout'
     },
     afresh: (args) => ({ ...args, resumeWait: true })
+  },
+  /**
+   * `runs resume` waits for a stopped coordinator's slot to empty **before** it commits anything
+   * (review fix round 1, I2 of the MCP planning work). A wait that runs out is a 409 that committed
+   * nothing, which leaves no receipt, so a retry runs afresh. A reply that did commit is a fact (the
+   * Run resumed, with or without a new coordinator), never a stopwatch reading: replayed verbatim.
+   */
+  'runs-resume': {
+    stale: () => false,
+    afresh: (args) => args
   }
 }
 

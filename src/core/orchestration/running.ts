@@ -1,5 +1,48 @@
-import type { JobTask } from '../types'
+import type { JobTask, RunOutcome } from '../types'
 import type { OrchState } from './state'
+import { FAILURE_LIMIT, type Task } from './types'
+
+// tasksOwnedBy, isTerminal and outcomeOf moved here from view.ts so runningRunCount can ask outcomeOf:
+// the renderer's build includes this file and not view.ts, which re-exports them.
+
+/** ownerId 는 회차의 id 이거나, 아직 회차가 없는 Job 의 id 다 — 뒤쪽이면 정의 Task 를 센다.
+ *  두 id 는 접두사가 달라(`job_`·`run_`) 섞일 수 없다. */
+export const tasksOwnedBy = (state: OrchState, ownerId: string): Task[] =>
+  state.tasks.filter((t) => t.runId === ownerId || t.jobId === ownerId)
+
+/** Task 가 더 움직이지 않는가.
+ *
+ *  failed 는 그것만으로 terminal 이 아니다 — 전이표(types.ts)의 `failed: ['dispatched', 'blocked']`
+ *  가 말하듯 실패한 Task 는 재시도되고, 그것이 FAILURE_LIMIT 까지의 정상 흐름이다. view.ts 의
+ *  progressOf 가 같은 이유로 failed 를 완료로 세지 않는다. 재시도가 소진되어야(연속 실패가
+ *  FAILURE_LIMIT) 더 움직이지 않는다. */
+export const isTerminal = (t: Task): boolean =>
+  t.status === 'completed' || (t.status === 'failed' && t.consecutiveFailures >= FAILURE_LIMIT)
+
+/** Run 이 끝났는지, 끝났다면 성공인지 실패인지.
+ *
+ *  **저장된 값이 아니라 파생이다.** 명시적인 close 명령을 두면 코디네이터가 그것을 부른다는
+ *  규율에 기대게 되고, 잊으면 화면은 지금과 똑같아진다.
+ *
+ *  terminal 의 정의는 store.ts 의 TTL 정리와 **일부러 다르다.** 그쪽은 30일간 아무 일도 없었던
+ *  Run 을 버릴지 정하는 자리라 재시도 중인 Task 가 있을 수 없고, 재시도가 남았는지 여부가 결과를
+ *  바꾸지 않는다. 여기는 지금 도는 Run 에 라벨을 붙이는 자리다 — 두 번째 시도를 기다리는 Task 를
+ *  '실패'로 적으면 다음 시도에서 라벨이 사라진다. 같은 상수로 묶지 말 것.
+ *
+ *  Task 가 없으면 running: Run 만 만들고 Task 를 아직 만들지 않은 상태가 정상적인 시작 지점이다.
+ *  every 는 빈 배열에 참이므로, 이 가드가 없으면 방금 만든 Run 이 completed 로 보인다.
+ *  (store.ts 가 같은 이유로 own.length > 0 을 두고 있다.)
+ *
+ *  failed 가 completed 를 이긴다 — 사람이 손봐야 하는 Run 을 목록에서 바로 찾을 수 있어야 한다.
+ *
+ *  대가: 모두 끝난 뒤 Task 가 추가되면 completed 가 running 으로 되돌아간다. 진행률 숫자도 같은
+ *  방식으로 움직이므로 정직한 표시라고 본다. */
+export function outcomeOf(state: OrchState, runId: string): RunOutcome {
+  const tasks = tasksOwnedBy(state, runId)
+  if (tasks.length === 0) return 'running'
+  if (!tasks.every(isTerminal)) return 'running'
+  return tasks.some((t) => t.status === 'failed') ? 'failed' : 'completed'
+}
 
 /** 지금 일이 도는 Task 의 개수. 사이드바의 `+N` 과 두 화면(JobsView·RunDetail)의 머리 숫자가
  *  이것을 센다. 렌더러가 아니라 여기 있는 이유는 elapsed.ts 와 같다 — 렌더러에 테스트가 없어서,
@@ -66,6 +109,11 @@ export function isStoppedWorker(t: JobTask): boolean {
 export function runningRunCount(s: OrchState): number {
   const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
   return s.runs.filter((run) =>
+    // **A Run with its coordinator attached counts while it has work left** (e2e 2026-10-01:
+    // `runsRunning: 0` beside a coordinator planning a Task-less Run). That coordinator is the work in
+    // flight: it plans and places. Not once the Run is paused (`runs stop` stopped it) or finished
+    // (a manual Run keeps its coordinator after its Tasks end, and that is not work).
+    (run.coordinatorSessionId !== undefined && run.paused !== true && outcomeOf(s, run.id) === 'running') ||
     s.tasks.some(
       (t) =>
         t.runId === run.id &&

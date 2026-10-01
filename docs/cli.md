@@ -117,8 +117,10 @@ otherwise. A script that read `.data.stopped` or `.data.sessions` off a refused 
 nothing is.
 
 A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
-A run is running while it has work in flight: a worker session open on one of its tasks, or a task
-being validated or reviewed. A run whose tasks have not started yet is not. Neither is one whose
+A run is running while it has work in flight: a worker session open on one of its tasks, a task
+being validated or reviewed, or its coordinator attached while the run is neither paused nor finished
+(a coordinator planning a run that has no tasks yet counts). A run whose tasks have not started yet,
+and that has no coordinator, is not. Neither is one whose
 workers were all stopped, unless one of its tasks is still being validated or reviewed. `runs stop`
 closes the run's worker sessions and pauses it, but it does not end a validation or a review, and a
 paused run with such a task still counts. The Host finishes that task itself (with a Host that does
@@ -421,7 +423,8 @@ Jobs do not move. You can restart it from Settings, Info". If it stays that way,
 from **Settings → Info**.
 
 **Stopping a worker.** `worker-stop --dispatch <id>` ends the worker's session and marks its Dispatch
-stopped. `runs stop --id <runId>` does the same for every open worker of a run, and pauses the run.
+stopped. `runs stop --id <runId>` does the same for every open worker of a run, stops its
+coordinator, and pauses the run.
 Both refuse with 6, and end nothing, while a worker is still starting: the message is `the worker is
 still starting; try again in a moment`, and the answer is to run the same command a few seconds later.
 That refusal lasts only two minutes from the start. A start older than that is taken as one that died,
@@ -593,10 +596,11 @@ list. Filters on one command combine.
 - **`jobs list --status`** keeps the Jobs in one state: `pending` (made by `jobs create` and not run
   yet), `paused`, `scheduled`, `waiting` (a question is open), `running`, `completed` or `failed`. It
   is the word the first column of `--human` shows, in lower case (`COMPLETE` is `completed`), so a
-  script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
-  `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
-  failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, which is what the table shows; a run
-  stopped with `runs stop` is paused on the run, and `runs get` shows it.
+  script can work out the same word from `pendingStart`, then `paused` or `outcome: "paused"`, then
+  `schedule`, `questionsOpen` and the rest of `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
+  failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, or a
+  latest run stopped with `runs stop`: that run has `paused: true`, and both it (`runs get`, `runs
+  list`) and its Job have `outcome: "paused"` until `runs resume`.
 - **`jobs list --project <path>`** keeps the Jobs of the project a folder belongs to, found the way
   `projects find` finds it (below). A folder no project holds is a 4 with `astera projects list` as its
   step. A Job belongs to the project it was created in. A Job with no project of its own, such as one
@@ -658,6 +662,9 @@ is parked in `check --wait`, and skips otherwise, as above.
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
 to have a coordinator session drive the Job once it runs; without it the workers are placed for you.
+A coordinator handed a run with tasks runs them as they stand. Handed one with no tasks, it plans the
+Job first: it breaks the objective into a few tasks (`task-create --run`, with `--deps`, an account,
+and `--validate` with the Job's run configurations when it has any), then runs them the same way.
 `--coordinator-provider claude` (or `codex`) picks that provider's default account for you: the
 earliest registered one that is logged in, the one `accounts list` marks `default: true`. With no
 account of that provider logged in it is a 2 that names the provider. When both flags are given,
@@ -774,10 +781,10 @@ second run is all `unchanged`.
 skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
-protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen
-tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access
-in Settings (CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`,
-`resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
+protocol. It connects to the Host of this profile, starting one when none answers, and serves eighteen
+tools that create, plan, run, observe, answer, stop and resume Jobs. What it may do is set by MCP
+access in Settings (CLI tab). The six tools that change something (`create_job`, `create_task`,
+`run_job`, `stop_run`, `resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
 
 **`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
 `cliVersion`, `transport` (`stdio`), `host` (`running`, and for a running Host its `version`,
@@ -1031,8 +1038,17 @@ cases. With `--request-id`, a retried `sessions create` is answered from the rec
 starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
-dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
-held open on purpose.
+dispatches, stops the run's coordinator session when it has one, and pauses the run. The answer says
+`stopped` (how many workers) and `coordinatorStopped`: `true` means the run's coordinator was asked to
+stop, not that it has already exited. A coordinator that is still starting when the run is stopped is
+not stopped: it attaches to the paused run once its start finishes and keeps running until the run is
+stopped again. The run keeps naming that coordinator until its
+session has really ended, and the stop is sent again until it has, as for a scheduled run's
+coordinator. `runs resume` clears the pause, and for a Job with a coordinator account it starts a new
+coordinator for the run once the old one is gone, which looks at what is done and carries on. A
+resume sent while the old session is still ending waits up to 10 seconds for it to go; if it is still
+there, the resume is a 6 (`the coordinator is still stopping; try again in a moment`) and changes
+nothing, so run it again a moment later. It refuses while a dispatch is held open on purpose.
 
 **`runs follow` prints a run's events as they happen**, and stops where `runs wait` stops. The events
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
