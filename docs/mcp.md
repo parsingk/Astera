@@ -177,6 +177,12 @@ given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart
 and `list_jobs` until `run_job` starts it, and a Job with no Run has `outcome: "pending"`, also after
 a `run_job` that failed.
 
+**Who plans the Tasks.** A Job from `create_job` carries only its objective. Run it as it is and its
+coordinator plans it first: it breaks the objective into a few Tasks, with dependencies, an account
+(its own unless the objective names another) and the project's run configurations as checks when
+there are any, and then runs them. A question it must ask before any Task exists goes on its first
+Task, so `list_questions` shows it.
+
 **Completion convergence.** `create_job` takes the same policy `astera jobs create --convergence`
 does. `convergence: true` turns it on with the default bounds; `maxFixAttempts`,
 `maxReviewRounds` and `maxTotalMinutes` (each an integer of 1 or more, the values the CLI takes) and

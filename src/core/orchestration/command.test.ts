@@ -3481,6 +3481,20 @@ describe('run-start — 코디네이터 인계', () => {
     expect(brief).toContain('tasks already defined: 1')
   })
 
+  // e2e 2026-10-01 second run: a Job from MCP create_job reaches run-start with no Tasks, and the
+  // brief told its coordinator not to create any, so it stalled at a question in its own terminal.
+  it('a Run with no Tasks hands the coordinator the planning brief, with its account and Job', async () => {
+    const deps = coordDeps()
+    const jobId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    expect((await call(deps, 'run-start', { run: jobId })).status).toBe(200)
+    const brief = deps.spawned[0].brief
+    expect(brief).toContain('PLAN THIS JOB FIRST')
+    expect(brief).not.toContain('Do not create Tasks')
+    expect(brief).toContain(`task-create --run ${runOf(deps, jobId).id}`)
+    expect(brief).toContain('--account cl1')
+    expect(brief).toContain(`run-configs list --job ${jobId}`)
+  })
+
   // 전체 브랜치 리뷰, Finding 2 — target.convergence !== undefined 는 손으로 고친 "convergence": null
   // 을 "정책이 있다" 로 잘못 읽는다. 이 자리는 이 브랜치가 reconciler.ts·ipc.ts 에서 이미 고친 것과
   // 똑같은 실수였다 — policyOf 로 판정해야 손으로 고친 orchestration.json 에도 다른 모든 관문과 같은

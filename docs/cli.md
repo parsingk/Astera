@@ -658,6 +658,9 @@ is parked in `check --wait`, and skips otherwise, as above.
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
 to have a coordinator session drive the Job once it runs; without it the workers are placed for you.
+A coordinator handed a run with tasks runs them as they stand. Handed one with no tasks, it plans the
+Job first: it breaks the objective into a few tasks (`task-create --run`, with `--deps`, an account,
+and `--validate` with the Job's run configurations when it has any), then runs them the same way.
 `--coordinator-provider claude` (or `codex`) picks that provider's default account for you: the
 earliest registered one that is logged in, the one `accounts list` marks `default: true`. With no
 account of that provider logged in it is a 2 that names the provider. When both flags are given,

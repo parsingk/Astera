@@ -1365,7 +1365,9 @@ export async function handleCommand(
           // **`s` 가 아니라 방금 만든 회차가 들어 있는 상태로 묻는다.** `s` 는 명령 진입 시점의
           // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
           // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
-          convergence: policyOf(base, { runId: target.id }) !== null
+          convergence: policyOf(base, { runId: target.id }) !== null,
+          jobId: job.id,
+          accountId
         })
       })
       sessionId = spawned.sessionId

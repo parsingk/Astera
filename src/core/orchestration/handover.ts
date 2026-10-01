@@ -7,7 +7,8 @@
  *
  *  **일곱 가지가 다 들어가야 한다.** 하나라도 빠지면 코디네이터가 *지킬 수 없는* 규칙이 생긴다:
  *
- *  1. 이 Run 은 사람이 짰다 — 그대로 돌려라
+ *  1. The plan: with Tasks, it was laid out before the Run — run it as it stands; with none (a Job
+ *     from MCP `create_job` or `jobs create`), planning it is the coordinator's first job
  *  2. **아무것도 시작하기 전에 현황을 파악하라** — 중간에 들어왔을 수 있다
  *  3. 계정은 Task 에 있다(첫 계정이 provider 다)
  *  4. 동시 실행 한도 — 숫자를 문구에 박아 넣는다
@@ -61,10 +62,50 @@ export function buildHandoverPrompt(a: {
    *  거절하기 시작한다 — 그 규칙을 모르는 코디네이터는 거절을 받고서야, 혹은 최악의 경우
    *  `task-update` 로 앱의 repair 를 밟고서야 알아챈다. */
   convergence?: boolean
+  /** The Job this Run belongs to: `run-configs list --job` takes a Job id, not a Run id. Only the
+   *  planning section (no Tasks) names it. */
+  jobId?: string
+  /** The account this coordinator runs on, the default account of the Tasks it plans. Only the
+   *  planning section (no Tasks) names it. */
+  accountId?: string
 }): string {
   const sequential = a.concurrency <= 1
+  // A Job from MCP `create_job` or `jobs create` carries only its objective (e2e 2026-10-01, second
+  // run): telling that coordinator "do not create Tasks" left it with nothing it may do, since a Gate
+  // needs a Task too. So the plan section splits on whether any Task exists.
+  const planning = a.taskCount === 0
+  const planSection = planning
+    ? [
+        'PLAN THIS JOB FIRST',
+        'This Job came with an objective and no plan: no Task exists yet. Planning it is your first job.',
+        'Break the objective into Tasks, then run them under the same rules as any other plan:',
+        `- Create each one with \`astera task-create --run ${a.runId} --spec - --account <id>\` (the spec on`,
+        '  stdin, in full: the worker reads only that). Pass `--title <text>` for a short name.',
+        '- Order them with `--deps \'["<tsk>", ...]\'` (a JSON array of the Task ids it waits for).',
+        a.accountId !== undefined
+          ? `- Account: \`--account ${a.accountId}\`, the one you run on, unless the objective names another;`
+          : '- Account: the one you run on, unless the objective names another;',
+        '  `astera accounts list --json` lists the rest. One provider per Task: never mix providers inside one Task.',
+        `- Checks: \`astera run-configs list --job ${a.jobId ?? '<jobId>'} --json\` lists the project's run`,
+        '  configurations. When there are any that test the work, pass their ids as `--validate <id,...>`',
+        '  so the result is checked. Pass `--review` only when the objective asks for a review.',
+        'Keep the plan small and concrete: a few Tasks, each one a piece of work a worker can finish',
+        'and report. Do not plan what the objective does not ask for.',
+        'A Gate needs a Task. If you must ask the person something before any Task exists, create the',
+        'first Task (for example the investigation) and open the Gate on it;',
+        'never ask only in your own terminal, where nobody outside the app can see it.'
+      ]
+    : [
+        'THE PLAN IS ALREADY MADE',
+        'The Tasks, their dependencies, their accounts and their validation settings were set before',
+        'this Run started. Run them as they stand. Do not create Tasks, do not rewrite their specs, and do not',
+        'reassign their accounts. If the plan looks wrong to you, say so to the person through a Gate',
+        'instead of editing around it.'
+      ]
   return [
-    'You are the coordinator for one Job in Astera. A person laid it out in the app and pressed Run.',
+    planning
+      ? 'You are the coordinator for one Job in Astera. It was started with an objective and no Tasks.'
+      : 'You are the coordinator for one Job in Astera. Its Tasks were laid out before this Run started.',
     'Nothing else is driving it: the app starts no workers for this Run, and no other agent is',
     'reading its mail. Getting these Tasks done, and answering the workers you start, is your job.',
     '',
@@ -91,11 +132,7 @@ export function buildHandoverPrompt(a: {
     '  and will not move until the answer arrives; do not try to start them.',
     'On a Run that has only just been created all four come back nearly empty, and that is the answer.',
     '',
-    'THE PLAN IS ALREADY MADE',
-    'The Tasks, their dependencies, their accounts and their validation settings were set by a',
-    'person. Run them as they stand. Do not create Tasks, do not rewrite their specs, and do not',
-    'reassign their accounts. If the plan looks wrong to you, say so to the person through a Gate',
-    'instead of editing around it.',
+    ...planSection,
     '',
     'ACCOUNTS COME FROM THE TASK',
     'Each Task carries `accountIds`, in order. Start its worker on the first one.',
