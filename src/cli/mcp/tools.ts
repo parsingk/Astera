@@ -131,7 +131,8 @@ export const TOOLS: ToolDef[] = [
     title: 'List Tasks',
     readOnly: true,
     cmd: 'tasks-list',
-    description: 'The Tasks of a Run, with their status and dependencies (deps).',
+    description:
+      'The Tasks of a Run, with their status and dependencies (deps). Each spec is cut to 160 characters, and spec_truncated says when it was; get_task has the whole spec.',
     inputSchema: { runId: id },
     // `brief`: the Host bounds each spec to 160 characters and marks a cut one `spec_truncated`.
     args: (i) => ({ run: i.runId, brief: true })
