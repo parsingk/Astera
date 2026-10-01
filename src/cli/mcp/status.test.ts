@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { mcpStatus } from './status'
@@ -92,6 +93,30 @@ describe('mcpStatus', () => {
     expect(exitCodeFor(e.code)).toBe(9)
     expect(e.message).toContain('MCP')
     expect(e.details).toMatchObject({ host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: false } })
+  })
+
+  it('a Host of another protocol on the profile: VERSION_MISMATCH (9), with its protocol and the same report', async () => {
+    const dir = await profile()
+    const addr = hostAddress({ profileDir: dir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL + 1 })
+    if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+    const other = net.createServer((s) => s.end())
+    await new Promise<void>((resolve) => other.listen(addr.address, resolve))
+    cleanups.push(async () => {
+      await new Promise<void>((resolve) => other.close(() => resolve()))
+      if (addr.dirToPrepare) await fs.rm(addr.dirToPrepare, { recursive: true, force: true })
+    })
+    const e = failed(await run(dir))
+    expect(e.code).toBe('VERSION_MISMATCH')
+    expect(e.details).toEqual({
+      hostProtocol: HOST_PROTOCOL + 1,
+      hostAddress: addr.address,
+      cliProtocol: HOST_PROTOCOL,
+      cliVersion: '1.4.1',
+      transport: 'stdio',
+      host: { running: false, mcp: false },
+      access: 'control',
+      tools: TOOLS.length
+    })
   })
 
   it('a settings file it cannot read: access null with a warning, and the exit still follows the Host', async () => {

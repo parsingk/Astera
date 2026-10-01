@@ -782,8 +782,9 @@ in Settings (CLI tab). The five tools that change something (`create_job`, `run_
 `cliVersion`, `transport` (`stdio`), `host` (`running`, and for a running Host its `version`,
 `protocol` and `mcp`: whether it serves MCP clients), `access` (MCP access from Settings: `off`,
 `read` or `control`) and `tools` (how many tools `mcp serve` offers). It exits 0 when a Host runs and
-serves MCP clients, 3 when no Host runs, and 9 when the Host is too old for MCP clients; on 3 and 9
-the same report is in `error.details`. When `app-settings.json` cannot be read, `access` is `null`
+serves MCP clients, 3 when no Host runs, and 9 when the Host is too old for MCP clients or a Host of
+another protocol serves the profile; on 3 and 9 the same report is in `error.details`, and for a Host
+of another protocol `hostProtocol`, `hostAddress` and `cliProtocol` beside it, as in `host status`. When `app-settings.json` cannot be read, `access` is `null`
 and `warning` says why: the Host then fails every MCP call until the file is repaired.
 
 ```json

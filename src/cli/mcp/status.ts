@@ -54,9 +54,13 @@ export async function mcpStatus(a: {
   }
 
   if (!host.running) {
-    // A Host of another protocol on this profile is 9, as `host status` says (cli/host.ts).
+    // A Host of another protocol on this profile is 9, as `host status` says (cli/host.ts), with that
+    // Host's protocol and address beside the same report the other endings carry.
     const found = await otherProtocolHost({ profileDir, platform: a.platform, tmpDir: os.tmpdir() })
-    if (found) return { ok: false, error: siblingHostError({ found, cliProtocol: HOST_PROTOCOL }) }
+    if (found) {
+      const sibling = siblingHostError({ found, cliProtocol: HOST_PROTOCOL })
+      return { ok: false, error: { ...sibling, details: { ...sibling.details, ...body } } }
+    }
     return {
       ok: false,
       error: {
