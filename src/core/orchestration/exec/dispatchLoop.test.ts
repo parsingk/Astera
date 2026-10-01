@@ -15,7 +15,7 @@ import { coordinatorReleaseOf } from './releaseDefer'
 import { handleCommand, type OrchServerDeps } from '../command'
 import { APP_CALLER } from '../../host/driver'
 import { COORDINATOR_START_WINDOW_MS, emptyState, type OrchState } from '../state'
-import type { Job, Message, Task } from '../types'
+import type { Dispatch, Job, Message, Task } from '../types'
 import type { Account } from '../../types'
 
 const NOW = '2026-09-24T00:00:00.000Z'
@@ -846,14 +846,14 @@ describe('a finished manual Run’s coordinator stops after the grace', () => {
 // sends it for an idle worker (its Dispatch closed, not retained) of a finished Run, under the same grace.
 describe('a finished Run’s idle workers are released after the grace', () => {
   const MIN = 60_000
-  const dispatch = (over: Partial<OrchState['dispatches'][number]> & { id: string; taskId: string; sessionId: string }) => ({
+  const dispatch = (over: Partial<Dispatch> & { id: string; taskId: string; sessionId: string }): Dispatch => ({
     provider: 'claude' as const,
     accountId: 'accA',
     cwd: '/wt1',
     specPath: '/specs/x.md',
     startedAt: NOW,
     endedAt: NOW,
-    outcome: 'success' as const,
+    outcome: 'succeeded' as const,
     workerState: 'stopped' as const,
     retained: false,
     ...over
