@@ -932,6 +932,42 @@ describe('a coordinator stop is retried until the session is gone (L1)', () => {
     expect(rc(h).coordinatorSessionId).toBe('coord-rc')
   })
 
+  // 2026-10-01: `runs stop` / `run-coordinator-stop` from a caller write the mark and stop the session
+  // themselves, leaving this loop no backoff entry, so its next pass (the commit's own) resent the stop
+  // 12 ms later. The mark's own time is the backoff then.
+  const pendingAt = (h: ReturnType<typeof rig>, at: number): void => {
+    const s = h.state()
+    h.setState({
+      ...s,
+      runs: s.runs.map((r) =>
+        r.id === 'run_rc' ? { ...r, coordinatorSessionId: 'coord-rc', coordinatorStopPending: new Date(at).toISOString(), paused: true } : r
+      )
+    })
+  }
+  it('a fresh pending mark a command wrote is not resent on the next pass, only once its interval is over', async () => {
+    const h = rig({ reapableChild: true })
+    pendingAt(h, h.clock)
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(0)
+    h.clock += COORDINATOR_STOP_RETRY_MS - 1
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(0)
+    h.clock += 1
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(1)
+  })
+
+  it('a pending mark older than the interval (a Host restart) goes out at once', async () => {
+    const h = rig({ reapableChild: true })
+    pendingAt(h, h.clock - COORDINATOR_STOP_RETRY_MS)
+    await h.loop.run()
+    await h.settle()
+    expect(stops(h)).toBe(1)
+  })
+
   it('a process that does not drive sends nothing, pending mark or not', async () => {
     const h = rig({ reapableChild: true })
     const s = h.state()
