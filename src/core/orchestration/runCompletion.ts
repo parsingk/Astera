@@ -30,6 +30,10 @@ export interface TaskCompletion {
   /** What failed, the line `runs checks` gives: each failed check's name, exit code and last output
    *  line (cut to 200 characters), then a rejected review. Null when nothing did. */
   failureSummary: string | null
+  /** What failed in the last round that failed, worded like `failureSummary`. Unlike it, it stays
+   *  through the recheck and after the Task converged, so it says why a repair ran. Null for a Task
+   *  whose checks never failed. */
+  lastFailure: string | null
 }
 
 export interface RunCompletion {
@@ -89,7 +93,8 @@ export function completionForRun(s: OrchState, runId: string): RunCompletion | n
         attempt: repairCountOf(s, task.id),
         maxAttempts: policyOf(s, task)?.maxFixAttempts ?? null,
         detail: withoutOutput(completionDetailOf(task)),
-        failureSummary: failureSummaryOf(s, task)
+        failureSummary: failureSummaryOf(s, task),
+        lastFailure: task.lastFailure ?? null
       })
     )
   const states = tasks.map((t) => t.state)

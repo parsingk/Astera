@@ -1158,6 +1158,31 @@ describe('applyValidationResult — convergence', () => {
     expect(msg.body).not.toContain('--retry-of')
   })
 
+  it('a failed round is remembered as lastFailure, and a later pass does not forget it', () => {
+    const { s, taskId } = armed()
+    const failed = unwrap<Task>(applyValidationResult(s, { taskId, results: two(1, null), repair: SAME }, NOW) as never)
+    expect(failed.value.lastFailure).toBe('Typecheck failed (exit 1): TS2322')
+    const back: OrchState = {
+      ...failed.state,
+      tasks: failed.state.tasks.map((t) => (t.id === taskId ? { ...t, status: 'validating' as const } : t))
+    }
+    const passed = unwrap<Task>(applyValidationResult(back, { taskId, results: two(0, 0), repair: SAME }, NOW) as never)
+    expect(passed.value.status).toBe('completed')
+    expect(passed.value.lastFailure).toBe('Typecheck failed (exit 1): TS2322')
+  })
+
+  it('a Task copied into a new Run starts without lastFailure', () => {
+    const { s, taskId } = seed()
+    const marked: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, lastFailure: 'Typecheck failed (exit 1): TS2322' } : t))
+    }
+    const next = unwrap<{ id: string }>(startJobRun(marked, marked.jobs[0].id, NOW) as never)
+    const copies = next.state.tasks.filter((t) => t.runId === next.value.id)
+    expect(copies.length).toBeGreaterThan(0)
+    for (const c of copies) expect(c).not.toHaveProperty('lastFailure')
+  })
+
   it('fresh 대상이면 placeholder 세션으로 연다', () => {
     const { s, taskId } = armed()
     const r = unwrap<Task>(

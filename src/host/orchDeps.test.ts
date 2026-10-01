@@ -1091,8 +1091,17 @@ describe('stopCoordinator', () => {
     const stopSession = vi.fn(() => true)
     const deps = hostOrchDeps(base({ act, local: fakeLocal({ stopSession }) }))
     await deps.stopCoordinator!('ses_c')
-    expect(stopSession).toHaveBeenCalledWith('ses_c')
+    expect(stopSession).toHaveBeenCalledWith('ses_c', undefined)
     expect(act).not.toHaveBeenCalled()
+  })
+  it('hands the reason to the Host’s own stop, and only the session to the app', async () => {
+    const act = vi.fn()
+    const stopSession = vi.fn((_id: string, _reason?: string) => true)
+    await hostOrchDeps(base({ act, local: fakeLocal({ stopSession }) })).stopCoordinator!('ses_c', 'the run was stopped')
+    expect(stopSession).toHaveBeenCalledWith('ses_c', 'the run was stopped')
+    const act2 = vi.fn()
+    await hostOrchDeps(base({ act: act2, local: fakeLocal({ stopSession: () => false }) })).stopCoordinator!('ses_a', 'the run was stopped')
+    expect(act2).toHaveBeenCalledWith('stopCoordinator', ['ses_a'])
   })
   it('asks the attached app for a session the Host does not hold, and only logs a failure', async () => {
     const act = vi.fn().mockRejectedValue(new Error('gone'))

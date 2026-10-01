@@ -105,7 +105,7 @@ export const TASK_PUBLIC_FIELDS = [
  * 일부러 안 내보내는 Task 의 칸 — 전부 **앱이 수렴을 굴리려고 적어 두는 장부**다.
  *
  * 가이드가 코디네이터에게 읽으라고 말하는 칸은 `checks`·`consecutiveFailures`·`parentId` 이고
- * (resources/skills/orchestration-guide.md), 아래 일곱은 한 번도 나오지 않는다. 내보내면 앱이
+ * (resources/skills/orchestration-guide.md), 아래 여덟은 한 번도 나오지 않는다. 내보내면 앱이
  * 수렴을 어떻게 굴리는지가 그대로 공개 API 가 되어, 정책을 바꿀 때마다 남의 스크립트를 깨뜨린다.
  *
  * `completionOverride` 는 여기 없다 — 그것은 장부가 아니라 **사람이 내린 결정**이고, 지켜보는
@@ -113,6 +113,7 @@ export const TASK_PUBLIC_FIELDS = [
  */
 const TASK_HIDDEN = [
   'checkHistory',
+  'lastFailure',
   'policySnapshot',
   'policyChanged',
   'convergenceStartedAt',

@@ -317,8 +317,8 @@ export interface OrchServerDeps {
   }): Promise<{ sessionId: string }>
   /** Stops a coordinator session `startCoordinator` opened, when the hand-over finds another one
    *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
-   *  running and the command says so in the log. */
-  stopCoordinator?(sessionId: string): Promise<void>
+   *  running and the command says so in the log. `reason` is why, for the log line of whoever stops it. */
+  stopCoordinator?(sessionId: string, reason?: string): Promise<void>
   /** How long `runs resume` waits for a stopped coordinator's slot to empty before it refuses (review
    *  fix round 1, I2). Absent means RESUME_STOP_WAIT_MS; tests shorten it. */
   resumeStopWaitMs?: number
@@ -1296,7 +1296,7 @@ export async function handleCommand(
     still: (current: OrchState) => boolean = () => true
   ): Promise<'retired' | 'moved' | 'gone'> => {
     try {
-      if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
+      if (deps.stopCoordinator) await deps.stopCoordinator(sessionId, why)
       else deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: nothing here can stop a session`)
     } catch (e) {
       deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: ${String(e)}`)
@@ -1445,7 +1445,7 @@ export async function handleCommand(
             `stopping the one this start opened (${sessionId})`
         )
         try {
-          if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
+          if (deps.stopCoordinator) await deps.stopCoordinator(sessionId, 'another coordinator already manages its Run')
           else deps.log?.(`coordinator ${sessionId} could not be stopped: nothing here can stop a session`)
         } catch (e) {
           deps.log?.(`coordinator ${sessionId} could not be stopped: ${String(e)}`)

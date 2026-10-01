@@ -33,6 +33,7 @@ const FREE_TEXT = new Set([
   'summary',
   'answer',
   'failureSummary',
+  'lastFailure',
   'title',
   'description',
   'suggestedFix',
