@@ -330,12 +330,14 @@ below).
 is done, the process that drives stops that run's coordinator and releases its idle workers (a worker
 whose dispatch has closed; one held with `worker-retain` is kept). A run of a scheduled Job is cleaned
 up at once, so a schedule does not pile up coordinators. Any other run gets 10 minutes, counted from
-the later of the run finishing and the last time a person typed into that session (in an Astera tab,
-or a reply from Slack), so you can read the coordinator's closing summary or ask it a follow-up; each
-input starts the 10 minutes again. The Host's and Astera's own writes into a session (a nudge, a
-prompt) are not a person's input. The time of the last input is kept in memory, so after a restart the
-10 minutes count from the run finishing. `run-coordinator-stop --run <runId>` ends the coordinator
-now. For the coordinator, the process keeps asking
+the later of the run finishing and the last time a person typed into that session, so you can read the
+coordinator's closing summary or ask it a follow-up; each input starts the 10 minutes again. A
+person's input is typing in an Astera tab, and a reply from Slack only while the Host drives. Nothing
+else counts: not `sessions send` (agents use it too), and not the Host's or Astera's own writes into a
+session (a nudge, a prompt). A session that is busy, in the middle of a turn, is never ended then: it
+is ended once it is idle again with the 10 minutes over. When whether it is busy cannot be told, the
+10 minutes alone decide. The time of the last input is kept in memory, so after a restart the 10
+minutes count from the run finishing. `run-coordinator-stop --run <runId>` ends the coordinator now. For the coordinator, the process keeps asking
 until the session is confirmed gone, backing off from 30 seconds up to 10 minutes rather than asking
 once, so a run whose coordinator resists stopping can still show that coordinator, paused, for a while
 after the run itself finished. A stop that keeps failing or keeps being refused at the 10 minute cap is
