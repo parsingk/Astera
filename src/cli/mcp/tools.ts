@@ -171,7 +171,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: true,
     cmd: 'runs-completion',
     description:
-      'Where each Task of a Run stands in completion: checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results. Astera runs the checks and repairs; this only reads them.',
+      'Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results. Astera runs the checks and repairs; this only reads them.',
     inputSchema: { runId: id },
     args: (i) => ({ id: i.runId })
   }

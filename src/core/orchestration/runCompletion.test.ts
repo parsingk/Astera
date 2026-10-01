@@ -56,7 +56,10 @@ describe('taskCompletionState', () => {
   it.each<[Task['status'], Partial<Dispatch>[], Partial<Gate>[], string]>([
     ['pending', [], [], 'not-started'],
     ['ready', [], [], 'not-started'],
-    ['dispatched', [{ repair: undefined }], [], 'not-started'],
+    // A first attempt in progress: an open Dispatch that is neither a review nor a repair.
+    ['dispatched', [{ repair: undefined }], [], 'working'],
+    ['dispatched', [{ repair: undefined, outcome: 'failed', endedAt: 'x' }], [], 'not-started'],
+    ['dispatched', [], [], 'not-started'],
     ['validating', [], [], 'checking'],
     ['validating', [{ repair: 'check-failure', outcome: 'succeeded', endedAt: 'x' }], [], 'rechecking'],
     ['reviewing', [], [], 'reviewing'],
@@ -111,6 +114,12 @@ describe('completionForRun', () => {
     const noGate = stateWith([task('t1', 'dispatched'), task('t3', 'validating')], [dispatch('d1', 't1', { repair: 'check-failure' })])
     expect(completionForRun(noGate, 'r1')?.state).toBe('fixing')
     expect(completionForRun(stateWith([task('t3', 'validating'), task('t4', 'reviewing')]), 'r1')?.state).toBe('checking')
+  })
+
+  it('reviewing beats working, and working beats not-started', () => {
+    const working = (others: Task[]): OrchState => stateWith([task('t1', 'dispatched'), ...others], [dispatch('d1', 't1')])
+    expect(completionForRun(working([task('t2', 'pending')]), 'r1')?.state).toBe('working')
+    expect(completionForRun(working([task('t2', 'reviewing')]), 'r1')?.state).toBe('reviewing')
   })
 
   it('the run is converged only when every task converged', () => {

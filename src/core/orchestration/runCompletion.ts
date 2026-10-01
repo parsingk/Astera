@@ -11,6 +11,7 @@ export type CompletionState =
   | 'checking'
   | 'rechecking'
   | 'reviewing'
+  | 'working'
   | 'fixing'
   | 'fixing-review'
   | 'waiting-for-user'
@@ -43,6 +44,7 @@ const URGENCY: readonly CompletionState[] = [
   'rechecking',
   'checking',
   'reviewing',
+  'working',
   'not-started'
 ]
 
@@ -61,6 +63,8 @@ export function taskCompletionState(s: OrchState, task: Task): CompletionState {
     const open = s.dispatches.find((d) => d.taskId === task.id && d.endedAt === undefined && !d.review)
     if (open?.repair === 'check-failure') return 'fixing'
     if (open?.repair === 'review-failure') return 'fixing-review'
+    // A first attempt under way: without this it read `not-started` while the worker ran.
+    if (open) return 'working'
   }
   return 'not-started'
 }
