@@ -1366,6 +1366,20 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       }
   })
 
+  // Spec §40, through the CLI's real entry: 0 while a Host that speaks mcp runs, 3 once it has gone,
+  // and no Host is started by asking.
+  it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
+    const h = await hostRig({ repo: false })
+    const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 16 })
+    await h.stop()
+    const down = await astera(['mcp', 'status'], h.env)
+    expect(down.code).toBe(3)
+    expect(down.envelope.error).toMatchObject({ code: 'HOST_NOT_RUNNING', details: { host: { running: false, mcp: false } } })
+    expect(down.envelope.error?.nextSteps).toEqual(['astera host start'])
+    expect((await astera(['mcp', 'status'], h.env)).code).toBe(3)
+  })
+
   // Spec §81 Case C. The link targets the profile's address, which a restart does not change, so the
   // same MCP server reconnects by itself; while no Host answers, the call says so and starts nothing
   // (this client's startHost answers false).

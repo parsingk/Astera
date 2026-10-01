@@ -247,6 +247,13 @@ a field with nothing left.
 
 ## Troubleshooting
 
+**Start with `astera mcp status`.** Run it in a shell on the same machine. It starts no Host and says
+whether `astera mcp serve` would work: whether a Host runs and serves MCP clients (`host.running`,
+`host.mcp`), the MCP access setting (`access`) and how many tools the server offers (`tools`). It
+exits 0 when all is well, 3 when no Host runs (the server starts one when a client launches it, or
+run `astera host start`), and 9 when the Host is too old for MCP clients. `access: null` with a
+`warning` means `app-settings.json` cannot be read, and every MCP call fails until Astera repairs it.
+
 Tool errors carry the same codes as the CLI (`HOST_NOT_RUNNING`, `VERSION_MISMATCH`,
 `PERMISSION_DENIED`, `NOT_FOUND`, `CONFLICT`, `INVALID_ARGUMENTS`, `TIMEOUT`, `FAILED`) and a
 `nextSteps` list saying what to do.

@@ -524,6 +524,7 @@ astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
 
 astera mcp     serve                     serve Astera to an MCP client over stdio
+astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
@@ -776,6 +777,19 @@ protocol. It connects to the Host of this profile, starting one when none answer
 tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access
 in Settings (CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`,
 `resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
+
+**`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
+`cliVersion`, `transport` (`stdio`), `host` (`running`, and for a running Host its `version`,
+`protocol` and `mcp`: whether it serves MCP clients), `access` (MCP access from Settings: `off`,
+`read` or `control`) and `tools` (how many tools `mcp serve` offers). It exits 0 when a Host runs and
+serves MCP clients, 3 when no Host runs, and 9 when the Host is too old for MCP clients; on 3 and 9
+the same report is in `error.details`. When `app-settings.json` cannot be read, `access` is `null`
+and `warning` says why: the Host then fails every MCP call until the file is repaired.
+
+```json
+{"ok":true,"data":{"cliVersion":"1.4.1","transport":"stdio","host":{"running":true,"version":"1.4.1",
+  "protocol":4,"mcp":true},"access":"control","tools":16}}
+```
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
@@ -1158,7 +1172,7 @@ command runs exactly as it always did.
 **That refusal is about a Host that answered and cannot help. Some answers never reach a Host at
 all**, and they split in two.
 
-`host start`, `host status`, `host stop`, `skills list`, `skills install` and `mcp serve` do not go
+`host start`, `host status`, `host stop`, `skills list`, `skills install`, `mcp serve` and `mcp status` do not go
 through the Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
 dropped. `host stop` and `skills install` are the ones that act, and a caller that keys them is owed
 either the protection or the refusal. (`skills install` is safe to repeat anyway: a second run writes

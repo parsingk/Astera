@@ -20,6 +20,7 @@ import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTO
 import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
+import { mcpStatus } from './mcp/status'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -1210,6 +1211,20 @@ export async function main(): Promise<void> {
     await serveMcp({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
     // A pipe on POSIX is asynchronous: let the last answer leave before the process does.
     await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(0)
+  }
+
+  // **mcp status answers like `host status`** (spec §40): it starts nothing and goes through no command
+  // layer, so a request id is refused the same way.
+  if (parsed.cmd === 'mcp-status') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await mcpStatus({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
     process.exit(0)
   }
 
