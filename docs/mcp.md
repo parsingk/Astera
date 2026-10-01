@@ -117,7 +117,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `list_projects` | The projects registered in Astera. Use a project id with `create_job`. |
 | `get_project` | One registered project. |
 | `list_accounts` | The agent accounts Astera holds (id, label, provider). `create_job` needs one as the coordinator account. |
-| `list_jobs` | Astera Jobs, newest first, each with the state of its latest Run. Filter by state. |
+| `list_jobs` | Astera Jobs, newest first, each with the state of its latest Run. Filter by state, and by project with a `projectId` from `list_projects` (an unknown id is `NOT_FOUND`). |
 | `get_job` | One Job and its latest Run. |
 | `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work. |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |

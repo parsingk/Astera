@@ -141,10 +141,25 @@ describe('the MCP server', () => {
     expect(calls).toEqual([])
   })
 
-  it('list_jobs takes no projectId in P0', async () => {
-    const { tools } = await (await connected(answering({}).link)).listTools()
-    const props = Object.keys(tools.find((t) => t.name === 'list_jobs')?.inputSchema.properties ?? {})
-    expect(props).toEqual(['status', 'limit'])
+  it('list_jobs with a projectId reads the project and filters by its folder', async () => {
+    const { link, calls } = answering({
+      'projects-get': { status: 200, body: { id: 'p1', name: 'Astera', path: 'D:/repo', addedAt: 'x' } },
+      'jobs-list': { status: 200, body: [] }
+    })
+    const r = await (await connected(link)).callTool({ name: 'list_jobs', arguments: { projectId: 'p1', status: 'running' } })
+    expect(r.isError).toBeFalsy()
+    expect(calls).toEqual([
+      { cmd: 'projects-get', args: { id: 'p1' }, request: undefined },
+      { cmd: 'jobs-list', args: { status: 'running', project: 'D:/repo' }, request: undefined }
+    ])
+  })
+
+  it('list_jobs with an unknown projectId answers the projects-get NOT_FOUND and lists nothing', async () => {
+    const { link, calls } = answering({ 'projects-get': { status: 404, body: { error: 'unknown project: p9' } } })
+    const r = await (await connected(link)).callTool({ name: 'list_jobs', arguments: { projectId: 'p9' } })
+    expect(r.isError).toBe(true)
+    expect(errorOf(r)).toMatchObject({ code: 'NOT_FOUND', message: 'unknown project: p9' })
+    expect(calls.map((c) => c.cmd)).toEqual(['projects-get'])
   })
 
   it('sends each tool as its Host command with the flags its handler reads', async () => {

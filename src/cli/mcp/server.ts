@@ -98,8 +98,9 @@ const refusalMessage = (status: number, body: unknown): string => {
 
 async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
   let args = input
-  // create_job takes a project id; the Host's jobs-create takes the project's folder (`--cwd`).
-  if (t.name === 'create_job') {
+  // create_job and list_jobs take a project id; the Host's jobs-create (`--cwd`) and jobs-list
+  // (`--project`) take the project's folder. An unknown id is projects-get's own NOT_FOUND.
+  if (t.name === 'create_job' || (t.name === 'list_jobs' && input.projectId !== undefined)) {
     const project = await link.call('projects-get', { id: input.projectId })
     if ('code' in project) return errorResult(project.code, project.message, 'projects-get')
     if (project.status !== 200)
@@ -109,7 +110,7 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
         'projects-get',
         project.body
       )
-    args = { ...input, cwd: (project.body as { path: string }).path }
+    args = { ...input, projectPath: (project.body as { path: string }).path }
   }
   const r = await link.call(t.cmd, t.args(args), typeof input.requestId === 'string' ? input.requestId : undefined)
   if ('code' in r) return errorResult(r.code, r.message, t.cmd)
