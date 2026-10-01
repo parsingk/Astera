@@ -206,7 +206,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'runs-resume',
     description:
-      'Resume a Run that stop_run paused. A Job with a coordinator account gets a new coordinator, which looks at what is done and carries on. A Run that is not paused is returned as it is.',
+      'Resume a Run that stop_run paused. A Job with a coordinator account gets a new coordinator, which looks at what is done and carries on; while the stopped one is still exiting this waits up to 10 seconds, then answers CONFLICT and changes nothing, so call it again. A Run that is not paused is returned as it is.',
     inputSchema: { runId: id, requestId },
     args: (i) => ({ id: i.runId })
   },

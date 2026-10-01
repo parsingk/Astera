@@ -7341,19 +7341,29 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
 
   // Final review I2. A replaced Run with no Tasks does not move after `runs resume` (nothing to start),
   // so "moves again" never dropped the mark and the retry stopped the coordinator the person took back.
-  it('L1: runs resume on a replaced Run drops its pending stop, so the retry no longer stops that coordinator', async () => {
-    const deps = coordDeps()
+  // Changed in review fix round 1 (I2): taking the stopped coordinator back was the race that left a
+  // resumed Run with no coordinator once that session exited. A resume now waits for the stop to land
+  // (409 while it has not, nothing changed), and then the Run gets a new coordinator, which no pending
+  // stop is left to stop.
+  it('L1: runs resume on a replaced Run waits for its stopped coordinator, then starts a new one that no retry stops', async () => {
+    const deps = Object.assign(coordDeps(), { resumeStopWaitMs: 100 })
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
     const waiting = await park(deps, first.id)
     expect((await fire(deps, jobId)).status).toBe(200)
     await waiting.done
     expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorStopPending).toBeDefined()
+    expect((await call(deps, 'runs-resume', { id: first.id })).status).toBe(409)
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.paused).toBe(true)
+    await exited(deps, `coord-${first.id}`)
+    const starts = deps.startCoordinator.mock.calls.length
     expect((await call(deps, 'runs-resume', { id: first.id })).status).toBe(200)
+    expect(deps.startCoordinator.mock.calls.length).toBe(starts + 1)
     const resumed = deps.getState().runs.find((x) => x.id === first.id)!
     expect(resumed).not.toHaveProperty('paused')
     expect(resumed).not.toHaveProperty('coordinatorStopPending')
-    // The coordinator is at work again (not parked): a stop now is a fresh one and asks the idle check.
+    expect(resumed.coordinatorSessionId).toBe(`coord-${first.id}`)
+    // The new coordinator is at work (not parked): a stop now is a fresh one and asks the idle check.
     const r = await call(deps, 'run-coordinator-stop', { run: first.id })
     expect(r.status).toBe(409)
     expect(deps.stopped).toEqual([`coord-${first.id}`])
@@ -8066,6 +8076,34 @@ describe('runs stop and runs resume with a coordinator', () => {
     expect(run.paused).toBeUndefined()
     expect(run.coordinatorSessionId).toBe(`coord-${runId}`)
     expect(r.body).toMatchObject({ id: runId, coordinatorSessionId: `coord-${runId}` })
+  })
+
+  // Review fix round 1, I2: for EXIT_DEFER_MS and the process exit after `runs stop`, the slot still
+  // names the stopped session. A resume then dropped the mark, started nothing, and left the Run
+  // running with no coordinator once that session went.
+  it('runs resume while the stopped coordinator has not exited is a 409 and changes nothing', async () => {
+    const deps = Object.assign(coordDeps(), { resumeStopWaitMs: 120 })
+    const runId = await coordinatedRun(deps)
+    await call(deps, 'runs-stop', { id: runId })
+    const before = deps.getState().runs.find((x) => x.id === runId)!
+    const r = await call(deps, 'runs-resume', { id: runId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('the coordinator is still stopping; try again in a moment')
+    expect(deps.getState().runs.find((x) => x.id === runId)).toEqual(before)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs resume waits for the stopped coordinator to exit, then starts a new one', async () => {
+    const deps = Object.assign(coordDeps(), { resumeStopWaitMs: 5_000 })
+    const runId = await coordinatedRun(deps)
+    await call(deps, 'runs-stop', { id: runId })
+    setTimeout(() => void exited(deps, `coord-${runId}`), 100)
+    const r = await call(deps, 'runs-resume', { id: runId })
+    expect(r.status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(2)
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.paused).toBeUndefined()
+    expect(run.coordinatorSessionId).toBe(`coord-${runId}`)
   })
 
   it('runs resume of a Job without a coordinator account starts no coordinator', async () => {

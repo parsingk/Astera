@@ -318,6 +318,9 @@ export interface OrchServerDeps {
    *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
    *  running and the command says so in the log. */
   stopCoordinator?(sessionId: string): Promise<void>
+  /** How long `runs resume` waits for a stopped coordinator's slot to empty before it refuses (review
+   *  fix round 1, I2). Absent means RESUME_STOP_WAIT_MS; tests shorten it. */
+  resumeStopWaitMs?: number
   /** Records a `check --wait` long-poll entering, for this Run and caller session; the returned
    *  function records its exit (final round 2, I-A; checkWaits.ts). Optional: the Host's command server,
    *  where every CLI call is served, wires it; the app serves no session's `check` and does not. */
@@ -1000,6 +1003,10 @@ const POLL_MS = 50
  *  asks again at once, so this bounds only how long a poll outlives a client that went away, and how
  *  often an idle follow costs a round trip. `FOLLOW_WINDOW_MAX_MS` caps what a caller may ask for. */
 export const FOLLOW_WINDOW_MS = 20_000
+/** How long `runs resume` waits for the coordinator `runs stop` stopped to be gone: the exit release
+ *  waits EXIT_DEFER_MS (3 s) after the process exits, so a stop that landed has emptied the slot well
+ *  within this. */
+export const RESUME_STOP_WAIT_MS = 10_000
 const FOLLOW_WINDOW_MAX_MS = 60_000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -1920,21 +1927,44 @@ export async function handleCommand(
     case 'runs-resume': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
+      // **A stopped coordinator still in its slot is waited for** (review fix round 1, I2). For the exit
+      // release's window after `runs stop`, the slot still names the stopped session; resuming then
+      // dropped its pending mark and started nothing, and once that session went the Run ran with no
+      // coordinator. So a paused Run of a coordinator Job whose stop is still pending waits, bounded, for
+      // the slot to empty, and a slot still named after that is a 409 that changes nothing.
+      let base = s
+      const entry = base.runs.find((r) => r.id === id)
+      if (
+        entry?.paused === true &&
+        entry.coordinatorStopPending !== undefined &&
+        entry.coordinatorSessionId !== undefined &&
+        jobOf(base, entry)?.coordinatorAccountId !== undefined &&
+        deps.startCoordinator
+      ) {
+        const stopping = entry.coordinatorSessionId
+        const waited = await pollUntil(
+          () => (deps.getState().runs.find((r) => r.id === id)?.coordinatorSessionId === stopping ? null : true),
+          deps.resumeStopWaitMs ?? RESUME_STOP_WAIT_MS
+        )
+        if (!('value' in waited))
+          return conflict(`run ${id}: the coordinator is still stopping; try again in a moment`)
+        base = deps.getState()
+      }
       // Answered with the view `runs get` gives (derived fields included); refusals are commit's.
-      const resumed = resumeRun(s, id)
+      const resumed = resumeRun(base, id)
       const reply = await commit(resumed)
       if (!resumed.ok || reply.status !== 200) return reply
       // **A Run `runs stop` paused gets its coordinator back** (the user's decision, 2026-10-01): the
       // stop ended it, and without one nothing drives a coordinator Job's Run. The same guard and the
       // same hand-over as the ▶ on a Run row (`run-start` given a run id); the new coordinator's TAKE
-      // STOCK section covers joining part-way. A slot that still names a coordinator (a stop not yet
-      // confirmed by its exit) is taken back as it is, as before. A Job with no coordinator account,
+      // STOCK section covers joining part-way. A slot that still names a coordinator whose stop is not
+      // pending (a hand-edited file) is left as it is. A Job with no coordinator account,
       // or a Run that was not paused, resumes as it always did.
       const after = deps.getState()
       const run = after.runs.find((r) => r.id === id)
       const job = run && jobOf(after, run)
       if (
-        s.runs.find((r) => r.id === id)?.paused === true &&
+        base.runs.find((r) => r.id === id)?.paused === true &&
         run &&
         job?.coordinatorAccountId &&
         deps.startCoordinator &&

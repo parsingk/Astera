@@ -1042,9 +1042,10 @@ dispatches, stops the run's coordinator session when it has one, and pauses the 
 `stopped` (how many workers) and `coordinatorStopped`. The run keeps naming that coordinator until its
 session has really ended, and the stop is sent again until it has, as for a scheduled run's
 coordinator. `runs resume` clears the pause, and for a Job with a coordinator account it starts a new
-coordinator for the run once the old one is gone, which looks at what is done and carries on; a resume
-sent while the old session is still ending keeps that one. It refuses while a dispatch is held open on
-purpose.
+coordinator for the run once the old one is gone, which looks at what is done and carries on. A
+resume sent while the old session is still ending waits up to 10 seconds for it to go; if it is still
+there, the resume is a 6 (`the coordinator is still stopping; try again in a moment`) and changes
+nothing, so run it again a moment later. It refuses while a dispatch is held open on purpose.
 
 **`runs follow` prints a run's events as they happen**, and stops where `runs wait` stops. The events
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
