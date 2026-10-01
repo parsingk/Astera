@@ -196,7 +196,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'runs-stop',
     description:
-      'Stop a Run: its open workers are closed, its coordinator is asked to stop (coordinatorStopped: true means it had one and was asked, not that it has exited yet), and the Run is paused. Use resume_run to continue it. A Run that has already finished is refused with CONFLICT and left as it is.',
+      'Stop a Run: its open workers are closed, its coordinator is asked to stop (coordinatorStopped: true means it had one and was asked, not that it has exited yet), and the Run is paused. Use resume_run to continue it. A Run that has already finished is refused with CONFLICT and left as it is: its coordinator and idle workers end on their own 10 minutes after it finished or after a person last typed into them (at once for a scheduled Run), so there is nothing to stop.',
     inputSchema: { runId: id, requestId },
     args: (i) => ({ id: i.runId })
   },

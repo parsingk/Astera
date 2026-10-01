@@ -598,6 +598,20 @@ describe('a CONFLICT a retiring Host answered', () => {
   })
 })
 
+// 2026-10-02: `runs stop` on a finished Run. Its coordinator ends on its own after the grace, so the first
+// step is to read the Run; ending the coordinator now is the CLI's `run-coordinator-stop`.
+describe('a CONFLICT for runs stop on a finished Run', () => {
+  it('offers runs get, then run-coordinator-stop for that run', () => {
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'runs-stop', details: { runId: 'run_1' } })).toEqual([
+      'astera runs get --id run_1',
+      'astera run-coordinator-stop --run run_1'
+    ])
+  })
+  it('any other runs stop refusal keeps astera status', () => {
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'runs-stop' })).toEqual(['astera status'])
+  })
+})
+
 // `sessions send --wait` (CLI spec §15): the Host says how the turn ended; the exit code is decided here.
 describe('sessionTurnEnd — how a waited turn exits', () => {
   it('a turn that ended is success, a failed one included (its error is in the body)', () => {

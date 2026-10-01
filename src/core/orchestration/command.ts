@@ -91,6 +91,7 @@ import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
+import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
 import type { JobEvent, RunOutcome } from '../types'
 import type { SessionCheck } from '../workUnit/types'
@@ -1894,10 +1895,22 @@ export async function handleCommand(
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
       // **A finished Run is left as it is** (e2e 2026-10-01): pausing it turned a converged Run's outcome
-      // into `paused`. Its coordinator, kept on purpose for a manual Run, is `run-coordinator-stop`'s.
+      // into `paused`. Its coordinator and idle workers end on their own after the grace (the driving
+      // loop, FINISHED_RUN_GRACE_MS), which the refusal says first, since an MCP client has no
+      // `run-coordinator-stop`; that command is named for the CLI, to end the coordinator now. `runId`
+      // in the body gives the CLI's nextSteps that Run (cliOutput.ts).
       const outcome = outcomeOf(s, id)
       if (outcome !== 'running')
-        return conflict(`run ${id} is not running: it has ${outcome}; \`run-coordinator-stop --run ${id}\` stops its coordinator`)
+        return {
+          status: 409,
+          body: {
+            error:
+              `run ${id} is not running: it has ${outcome}. Its coordinator and idle workers end on their own ` +
+              `${FINISHED_RUN_GRACE_MS / 60_000} minutes after the run finished or after a person last typed into them ` +
+              `(a scheduled run's at once); to end the coordinator now: astera run-coordinator-stop --run ${id}`,
+            runId: id
+          }
+        }
       const mine = new Set(s.tasks.filter((t) => t.runId === id).map((t) => t.id))
       const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt && mine.has(d.taskId))
       const retained = open.filter((d) => d.retained)
