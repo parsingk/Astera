@@ -9,6 +9,7 @@ import {
   COORDINATOR_STOP_RETRY_CAP_TRIES,
   COORDINATOR_STOP_RETRY_MAX_MS,
   COORDINATOR_STOP_RETRY_MS,
+  FINISHED_RUN_BUSY_CAP_MS,
   FINISHED_RUN_GRACE_MS,
   createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
 import { coordinatorReleaseOf } from './releaseDefer'
@@ -844,6 +845,20 @@ describe('a finished manual Run’s coordinator stops after the grace', () => {
     expect(stops(h)).toBe(1)
   })
 
+  // Controller ruling: the busy veto is bounded. The busy state is a title spinner that never ages out,
+  // so a session hung with it up was never cleaned.
+  it('a coordinator busy at grace + 59 min is left alone; at grace + 60 min it is stopped', async () => {
+    const h = finishedWithCoordinator()
+    h.ctx.sessionBusy = () => true
+    expect(FINISHED_RUN_BUSY_CAP_MS).toBe(60 * MIN)
+    h.clock = NOW_MS + FINISHED_RUN_GRACE_MS + 59 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(0)
+    h.clock = NOW_MS + FINISHED_RUN_GRACE_MS + 60 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
   it('a coordinator whose busy state is unknown falls back to the time rule', async () => {
     const h = finishedWithCoordinator()
     h.ctx.sessionBusy = () => null
@@ -1027,6 +1042,17 @@ describe('a finished Run’s idle workers are released after the grace', () => {
     await pass(h)
     expect(releases(h)).toEqual([])
     busy = null // unknown: the time rule decides
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
+  })
+
+  it('a worker busy at grace + 59 min is left alone; at grace + 60 min it is released', async () => {
+    const h = finishedWithWorker()
+    h.ctx.sessionBusy = () => true
+    h.clock = NOW_MS + FINISHED_RUN_GRACE_MS + 59 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual([])
+    h.clock = NOW_MS + FINISHED_RUN_GRACE_MS + 60 * MIN
     await pass(h)
     expect(releases(h)).toEqual(['dsp_1'])
   })

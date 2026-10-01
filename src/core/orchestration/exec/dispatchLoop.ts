@@ -73,6 +73,10 @@ export const COORDINATOR_STOP_RETRY_CAP_TRIES = 6
  *  count again; short enough that a finished Run does not keep its sessions, and with them the Host,
  *  alive for good. A scheduled Run gets none, since nothing watches it. */
 export const FINISHED_RUN_GRACE_MS = 10 * 60_000
+/** How long past FINISHED_RUN_GRACE_MS a busy session still holds off its end. A person's follow-up
+ *  rarely takes an hour; the busy state is a terminal title spinner that never ages out, so a spinner
+ *  still up after that is read as hung, and the session is ended anyway. */
+export const FINISHED_RUN_BUSY_CAP_MS = 60 * 60_000
 
 /** One session's resend backoff: how many sends, when the next may go, how many waited the cap, and
  *  whether it was given up on (LP-1/2). */
@@ -226,16 +230,19 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  commit that made the last one terminal stamps it, and nothing on the Run records the moment. A later
    *  edit of a finished Task moves it on, which only waits longer.
    *
-   *  **Never mid-turn** (fix round 1): the grace counts from the last input, so a session still
-   *  answering a person's follow-up past it is busy, and is left until it is idle. A busy state this
+   *  **Not mid-turn, for up to an hour** (fix round 1, then the controller's ruling): the grace counts
+   *  from the last input, so a session still answering a person's follow-up past it is busy, and is
+   *  left until it is idle, or until FINISHED_RUN_BUSY_CAP_MS past the grace. A busy state this
    *  process cannot tell (null) falls back to the time rule. `run-coordinator-stop` asks no idle state
    *  for a finished Run, so this is the one place that asks. */
   const graceOver = (s: OrchState, run: JobRun, sessionId: string, nowMs: number): boolean => {
     if (jobOf(s, run)?.schedule !== undefined) return true
-    if (c.sessionBusy(sessionId) === true) return false
     const finishedAt = Math.max(...tasksOwnedBy(s, run.id).map((t) => Date.parse(t.updatedAt)))
     const typedAt = c.lastPersonInputAt?.(sessionId) ?? null
-    return nowMs - Math.max(finishedAt, typedAt ?? finishedAt) >= FINISHED_RUN_GRACE_MS
+    const since = nowMs - Math.max(finishedAt, typedAt ?? finishedAt)
+    if (since < FINISHED_RUN_GRACE_MS) return false
+    // The busy veto, bounded: past FINISHED_RUN_BUSY_CAP_MS a spinner still up is read as hung.
+    return c.sessionBusy(sessionId) !== true || since >= FINISHED_RUN_GRACE_MS + FINISHED_RUN_BUSY_CAP_MS
   }
 
   /**
