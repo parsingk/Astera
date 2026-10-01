@@ -248,6 +248,9 @@ astera questions answer --id <questionId> --answer "use the existing migration"
 있습니다. 모든 명령, JSON 형식, 종료 코드, 안전하게 다시 시도하는 법, CI 예시와 보안은
 [`astera` 명령](docs/cli.md)(영어)을 보세요.
 
+**MCP**
+MCP를 지원하는 에이전트가 데스크톱 앱과 CLI가 쓰는 같은 로컬 Host를 통해 Astera Job을 만들고, 실행하고, 지켜볼 수 있습니다. [docs/mcp.md](docs/mcp.md)(영어)를 보세요.
+
 ## 앱을 끈 채로 터미널에서 쓰기
 
 `astera` 명령은 세션과 Job 을 돌리는 백그라운드 프로세스인 **Astera Host** 와 이야기합니다. Host 는
@@ -360,6 +363,7 @@ npm run dist:linux # Linux AppImage + deb
 ## 문서
 
 - [`astera` 명령](docs/cli.md) — 셸이나 CI에서 Job 다루기: 설치, 명령, JSON, 종료 코드 (영어)
+- [MCP](docs/mcp.md) — MCP 클라이언트로 Job 만들고 실행하고 지켜보기: 연결, 도구, MCP 접근 (영어)
 - [Slack 봇 설정](docs/slack-bot-setup.md) — 앱 생성, 토큰, 권한
 - [릴리스](docs/releasing.md) — 버전을 자르고 배포하는 방법
 - [코드 서명 정책](docs/code-signing.md) — 누가 릴리스에 서명하는지, 무엇에 서명하는지, 개인정보
