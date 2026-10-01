@@ -100,6 +100,14 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await fs.rm(d, { recursive: true, force: true })
 })
 
+// A script runs in a child process of its own (scriptWorker.ts), which has to start before the script
+// reaches any helper. In a full run the slowest files start together, and that start alone took past
+// vi.waitFor's 1 s default, so the test saw a helper "never called". A wait for the script to reach a
+// helper gets the same 15 s the launch-wait tests below give it, and its test gets that plus its own 10 s.
+const SCRIPT_START_MS = 15_000
+const reachesHelper = { timeout: SCRIPT_START_MS, interval: 20 }
+const STARTS_A_SCRIPT = { timeout: SCRIPT_START_MS + 10_000 }
+
 const rig = async (over: Partial<WorkspaceManagerDeps> = {}) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-ws-'))
   dirs.push(dir)
@@ -272,11 +280,11 @@ describe('launch and the record file', () => {
     expect(m.list()).toMatchObject([{ sessionId: 's1', running: false }])
   })
 
-  it('a second script while one runs is refused', async () => {
+  it('a second script while one runs is refused', STARTS_A_SCRIPT, async () => {
     let release!: () => void
     const { m } = await rig({ connectCdp: vi.fn(() => new Promise<Cdp | null>((r) => { release = () => r(fakeCdp()) })) })
     const first = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), reachesHelper)
     expect(await m.run('s1', 'log(1)')).toEqual({ status: 409, body: { error: 'a script is already running' } })
     release()
     expect((await first).status).toBe(200)
@@ -309,10 +317,10 @@ describe('launch and the record file', () => {
 })
 
 describe('Stop, Close, the session, the helper, idleness', () => {
-  it('Stop ends the running script at "stopped" and leaves the app running', async () => {
+  it('Stop ends the running script at "stopped" and leaves the app running', STARTS_A_SCRIPT, async () => {
     const { m } = await rig({ connectCdp: vi.fn(() => new Promise<Cdp | null>(() => {})) })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(FakeDesk.made[0]?.launches).toHaveLength(1))
+    await vi.waitFor(() => expect(FakeDesk.made[0]?.launches).toHaveLength(1), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     expect(body(await run).error).toEqual({ message: 'stopped', at: 'stopped' })
     expect(FakeDesk.made[0].kills).toEqual([])
@@ -320,13 +328,13 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     expect(m.stop('s1')).toBe(false)
   })
 
-  it('the session ending mid launch stops the script and leaves nothing (Review Focus 4)', async () => {
+  it('the session ending mid launch stops the script and leaves nothing (Review Focus 4)', STARTS_A_SCRIPT, async () => {
     const unhandled = vi.fn()
     process.on('unhandledRejection', unhandled)
     try {
       const { m, deps, events, settle } = await rig({ connectCdp: vi.fn(() => new Promise<Cdp | null>(() => {})) })
       const run = m.run('s1', "await launch({ command: 'app.exe' })")
-      await vi.waitFor(() => expect(FakeDesk.made[0]?.launches).toHaveLength(1))
+      await vi.waitFor(() => expect(FakeDesk.made[0]?.launches).toHaveLength(1), reachesHelper)
       m.sessionEnded('s1')
       expect(body(await run).error?.at).toBe('stopped')
       await vi.waitFor(() => expect(FakeDesk.made[0].closed).toBe(true))
@@ -377,7 +385,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     expect(deps.killTree).toHaveBeenCalledWith(511)
   })
 
-  it('a Stop that lands before the desktop exists opens none (ruling F1)', async () => {
+  it('a Stop that lands before the desktop exists opens none (ruling F1)', STARTS_A_SCRIPT, async () => {
     let resolved!: () => void
     const { m, deps, settle } = await rig({
       resolveLaunch: ({ cwd }) =>
@@ -386,7 +394,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
         })
     })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     expect(body(await run).error?.at).toBe('stopped')
     resolved()
@@ -395,7 +403,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     expect(m.list()).toEqual([])
   })
 
-  it('a Stop that lands while the desktop is being created closes it and launches nothing (ruling F1)', async () => {
+  it('a Stop that lands while the desktop is being created closes it and launches nothing (ruling F1)', STARTS_A_SCRIPT, async () => {
     let started!: () => void
     const { m, deps, events, settle } = await rig({
       startDesk: vi.fn(
@@ -406,7 +414,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
       )
     })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(started).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(started).toBeTypeOf('function'), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     expect(body(await run).error?.at).toBe('stopped')
     started()
@@ -418,7 +426,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     await vi.waitFor(async () => expect(await fs.stat(deps.recordFile).then(() => true, () => false)).toBe(false))
   })
 
-  it('the session ending while the desktop is being created closes it once and launches nothing (ruling F1)', async () => {
+  it('the session ending while the desktop is being created closes it once and launches nothing (ruling F1)', STARTS_A_SCRIPT, async () => {
     let started!: () => void
     const { m, events, settle } = await rig({
       startDesk: vi.fn(
@@ -429,7 +437,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
       )
     })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(started).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(started).toBeTypeOf('function'), reachesHelper)
     m.sessionEnded('s1')
     expect(body(await run).error?.at).toBe('stopped')
     started()
@@ -461,11 +469,11 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     return states.slice(lastOpen + 1).filter((e) => e.kind === 'state' && !e.open)
   }
 
-  it('Close after a Stop while the desktop starts, then the start fails, tells the app it closed once', async () => {
+  it('Close after a Stop while the desktop starts, then the start fails, tells the app it closed once', STARTS_A_SCRIPT, async () => {
     const { startDesk, fail } = failingDesk()
     const { m, events, settle } = await rig({ startDesk })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(startDesk).toHaveBeenCalled())
+    await vi.waitFor(() => expect(startDesk).toHaveBeenCalled(), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     expect(body(await run).error?.at).toBe('stopped')
     expect(events.at(-1)).toMatchObject({ kind: 'state', sessionId: 's1', open: true })
@@ -478,11 +486,11 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     expect(m.list()).toEqual([])
   })
 
-  it('Close and the session ending at once, over a desktop that fails to start, tell the app it closed once', async () => {
+  it('Close and the session ending at once, over a desktop that fails to start, tell the app it closed once', STARTS_A_SCRIPT, async () => {
     const { startDesk, fail } = failingDesk()
     const { m, events, settle } = await rig({ startDesk })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(startDesk).toHaveBeenCalled())
+    await vi.waitFor(() => expect(startDesk).toHaveBeenCalled(), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     await run
     const closing = m.close('s1')
@@ -494,11 +502,11 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     expect(m.list()).toEqual([])
   })
 
-  it('a desktop that fails to start after its script was stopped tells the app it closed, with no Close', async () => {
+  it('a desktop that fails to start after its script was stopped tells the app it closed, with no Close', STARTS_A_SCRIPT, async () => {
     const { startDesk, fail } = failingDesk()
     const { m, events, settle } = await rig({ startDesk })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(startDesk).toHaveBeenCalled())
+    await vi.waitFor(() => expect(startDesk).toHaveBeenCalled(), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     await run
     fail()
@@ -521,7 +529,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
 
   // Final review Important 1: script 1's launch is stopped while it waits for the port; script 2
   // relaunches; script 1's wait then gives up. The connection script 2 made must survive for script 3.
-  it('a stopped launch whose port wait ends after a newer relaunch leaves the newer connection in place', async () => {
+  it('a stopped launch whose port wait ends after a newer relaunch leaves the newer connection in place', STARTS_A_SCRIPT, async () => {
     let giveUp!: (c: Cdp | null) => void
     const page = (): ReturnType<typeof fakeCdp> => {
       const c = fakeCdp()
@@ -538,7 +546,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     })
     const { m, settle } = await rig({ connectCdp })
     const first = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(giveUp).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(giveUp).toBeTypeOf('function'), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     expect(body(await first).error?.at).toBe('stopped')
     const second = await m.run('s1', 'await relaunch()')
@@ -564,7 +572,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
     expect(m.list()).toMatchObject([{ sessionId: 's1', running: false }])
   })
 
-  it('a stale Stop does not close the desktop a newer script is starting on (review minor 3)', async () => {
+  it('a stale Stop does not close the desktop a newer script is starting on (review minor 3)', STARTS_A_SCRIPT, async () => {
     let started!: () => void
     const { m } = await rig({
       startDesk: vi.fn(
@@ -575,7 +583,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
       )
     })
     const first = m.run('s1', "await launch({ command: 'a.exe' })")
-    await vi.waitFor(() => expect(started).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(started).toBeTypeOf('function'), reachesHelper)
     expect(m.stop('s1')).toBe(true)
     expect(body(await first).error?.at).toBe('stopped')
     const second = m.run('s1', "log(await launch({ command: 'b.exe' }))")
@@ -681,14 +689,14 @@ describe('Stop, Close, the session, the helper, idleness', () => {
   })
 
   for (const way of ['close', 'sessionEnded', 'dispose'] as const)
-    it(`${way} while the app is starting ends the app once it has started (review important 2)`, async () => {
+    it(`${way} while the app is starting ends the app once it has started (review important 2)`, STARTS_A_SCRIPT, async () => {
       let release!: () => void
       FakeDesk.hold = new Promise((r) => {
         release = r
       })
       const { m, deps, settle } = await rig({ startTimes: vi.fn(async () => new Map([[501, 3_000]])) })
       const run = m.run('s1', "await launch({ command: 'app.exe' })")
-      await vi.waitFor(() => expect(FakeDesk.made[0]?.launches).toHaveLength(1))
+      await vi.waitFor(() => expect(FakeDesk.made[0]?.launches).toHaveLength(1), reachesHelper)
       if (way === 'close') expect(await m.close('s1')).toBe(true)
       else if (way === 'sessionEnded') m.sessionEnded('s1')
       else await m.dispose()
@@ -702,7 +710,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
       expect(await fs.stat(deps.recordFile).then(() => true, () => false)).toBe(false)
     })
 
-  it('the session ending before the desktop exists opens none (ruling F1)', async () => {
+  it('the session ending before the desktop exists opens none (ruling F1)', STARTS_A_SCRIPT, async () => {
     let resolved!: () => void
     const { m, deps, settle } = await rig({
       resolveLaunch: ({ cwd }) =>
@@ -711,7 +719,7 @@ describe('Stop, Close, the session, the helper, idleness', () => {
         })
     })
     const run = m.run('s1', "await launch({ command: 'app.exe' })")
-    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(resolved).toBeTypeOf('function'), reachesHelper)
     m.sessionEnded('s1')
     expect(body(await run).error?.at).toBe('stopped')
     resolved()
@@ -826,7 +834,7 @@ describe('frames', () => {
     expect(m.list()[0].frame?.jpeg).toBe('/9j/frame')
   })
 
-  it('the frame timer keeps running after close() inside the script, for the next launch (ruling F6)', async () => {
+  it('the frame timer keeps running after close() inside the script, for the next launch (ruling F6)', STARTS_A_SCRIPT, async () => {
     let second!: () => void
     let calls = 0
     const { m, events, tick } = await rig({
@@ -839,7 +847,7 @@ describe('frames', () => {
       })
     })
     const run = m.run('s1', "await launch({ command: 'a.exe' }); await close(); await launch({ command: 'a.exe' })")
-    await vi.waitFor(() => expect(second).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(second).toBeTypeOf('function'), reachesHelper)
     await new Promise((r) => setTimeout(r, 20))
     events.length = 0
     tick(1_000)
