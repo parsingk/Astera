@@ -54,6 +54,11 @@ import {
 import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState, type Res } from '../core/orchestration/state'
 import { ensureProject } from '../core/orchestration/projects'
 import { CLI_PROTOCOL, codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { connectHost } from '../core/host/connect'
+import { createMcpServer } from './mcp/server'
+import { openHostLink } from './mcp/hostLink'
 
 /** Every wait is bounded: long enough for real git on a loaded Windows runner, short enough to fail. */
 const WAIT = { timeout: 25_000, interval: 25 }
@@ -1023,5 +1028,209 @@ describe('the Job Journal with Astera closed (Host journal)', { timeout: 60_000 
     await until(() => expect(h.server.hasApp()).toBe(false))
     okData(await astera(['runs', 'resume', '--id', runId], h.env), 'runs resume')
     await until(() => expect(h.journalRows(runId).map((e) => e.type)).toContain('JOB_RUN_RESUMED'))
+  })
+})
+
+// MCP design §4: an MCP client, over the SDK's in-memory transport, to `createMcpServer`, which reaches
+// this real Host through `openHostLink` and a `role: 'mcp'` connection, exactly as `astera mcp serve`
+// does minus stdio. The Host gates every call by `mcpAccess` and journals what MCP did as surface mcp.
+describe('MCP against the Host', { timeout: 60_000 }, () => {
+  type ToolResult = { isError?: boolean; content: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown> }
+
+  /** A connected client and its own close, which a test may call early; the cleanup closes it otherwise. */
+  async function mcpClient(rig: Rig): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
+    const addr = hostAddress({ profileDir: rig.profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+    const link = openHostLink({
+      connect: () => connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', log: () => {} }),
+      // The rig's Host is always up: a link that had to start one would be a fault here.
+      startHost: async () => false,
+      log: () => {}
+    })
+    const server = createMcpServer({ link, version: 'test', log: () => {} })
+    const [a, b] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'it', version: '0' })
+    await Promise.all([server.connect(a), client.connect(b)])
+    let closed = false
+    const close = async (): Promise<void> => {
+      if (closed) return
+      closed = true
+      await client.close()
+      link.close()
+    }
+    cleanups.push(close)
+    return { call: async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult, close }
+  }
+
+  /** A rig whose state already holds one registered project, a git repo of its own: what an app that
+   *  opened that folder once leaves behind (projects are only registered by the app). */
+  async function projectRig(o: { continuity?: boolean } = {}): Promise<{ h: Rig; projectId: string; projectPath: string }> {
+    const projectPath = await makeRepo('astera-mcp-int-project-')
+    cleanups.push(() => rmrf(projectPath))
+    const seed = ensureProject(emptyState(), { path: projectPath, now: '2026-10-01T00:00:00.000Z' })
+    const h = await hostRig({ repo: false, seed: seed.state, continuity: o.continuity })
+    return { h, projectId: seed.project.id, projectPath }
+  }
+
+  /** Rewrites the profile's settings with an MCP access level, keeping the keys the rig wrote. */
+  const setMcpAccess = (h: Rig, mcpAccess: 'off' | 'read' | 'control', continuity = false): Promise<void> =>
+    fs.writeFile(
+      path.join(h.profileDir, 'app-settings.json'),
+      JSON.stringify({ orchAlwaysOnMigrated: true, ...(continuity ? { jobContinuityEnabled: true } : {}), mcpAccess })
+    )
+
+  it('creates a Job the CLI then sees, and records who did it', async () => {
+    const { h, projectId, projectPath } = await projectRig({ continuity: true })
+    const mcp = await mcpClient(h)
+
+    const projects = await mcp.call('list_projects', {})
+    expect(projects.isError).toBeFalsy()
+    expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })
+
+    const created = await mcp.call('create_job', {
+      projectId,
+      objective: 'refactor auth',
+      coordinatorAccountId: h.accountId,
+      requestId: 'r-1'
+    })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    expect(created.structuredContent).toMatchObject({ objective: 'refactor auth', cwd: projectPath, projectId })
+    const jobId = (created.structuredContent as { id: string }).id
+    expect(jobId).toMatch(/^job_/)
+    // The content carries the same data after its sentence, for a client that reads only text.
+    const [sentence, json] = created.content[0].text!.split('\n')
+    expect(sentence).not.toContain('replayed')
+    expect(JSON.parse(json)).toEqual(created.structuredContent)
+    // The Host kept the coordinator account the tool was given.
+    expect(h.state().jobs.find((j) => j.id === jobId)?.coordinatorAccountId).toBe(h.accountId)
+
+    // The CLI, a different surface on the same Host, reads the Job the MCP client made.
+    const seen = okData(await astera(['jobs', 'get', '--id', jobId], h.env), 'jobs get')
+    expect(seen).toMatchObject({ id: jobId, objective: 'refactor auth', cwd: projectPath, projectId })
+
+    // Who did it: the run started over MCP is journalled as surface mcp, not cli or host.
+    const ran = await mcp.call('run_job', { jobId, requestId: 'r-2' })
+    expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+    const runId = (ran.structuredContent as { id: string }).id
+    expect(runId).toMatch(/^run_/)
+    await until(() => expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'mcp' }))
+  })
+
+  it('a repeated create_job with the same requestId makes one Job', async () => {
+    const { h, projectId } = await projectRig()
+    const mcp = await mcpClient(h)
+    const args = { projectId, objective: 'one job only', coordinatorAccountId: h.accountId, requestId: 'same' }
+
+    const first = await mcp.call('create_job', args)
+    expect(first.isError, first.content[0]?.text).toBeFalsy()
+    const second = await mcp.call('create_job', args)
+    expect(second.isError, second.content[0]?.text).toBeFalsy()
+    // The second answer is the first one, said to be a replay.
+    expect(second.structuredContent).toEqual(first.structuredContent)
+    expect(second.content[0].text!.split('\n')[0]).toContain('replayed')
+    expect(first.content[0].text!.split('\n')[0]).not.toContain('replayed')
+
+    const listed = await mcp.call('list_jobs', {})
+    expect(listed.isError).toBeFalsy()
+    const jobs = (listed.structuredContent as { jobs: Array<{ id: string; objective: string }> }).jobs
+    expect(jobs.filter((j) => j.objective === 'one job only').map((j) => j.id)).toEqual([(first.structuredContent as { id: string }).id])
+    expect(h.state().jobs).toHaveLength(1)
+  })
+
+  it('answers a question and the journal row says mcp', async () => {
+    const h = await hostRig({ continuity: true })
+    // The question a Host opens when a worker ends without reporting (the CLI tests above).
+    const { runId, taskId, worker } = await runningJob(h)
+    h.exitWorker(worker, 1)
+    await until(() => expect(h.state().gates.filter((g) => g.status === 'open')).toHaveLength(1))
+    const mcp = await mcpClient(h)
+
+    const open = await mcp.call('list_questions', { runId, status: 'open' })
+    expect(open.isError).toBeFalsy()
+    const questions = (open.structuredContent as { questions: Array<{ id: string; taskId: string; status: string }> }).questions
+    expect(questions).toEqual([expect.objectContaining({ runId, taskId, status: 'open' })])
+    const questionId = questions[0].id
+
+    const answered = await mcp.call('answer_question', { questionId, answer: 'Use the existing DB.', requestId: 'a-1' })
+    expect(answered.isError, answered.content[0]?.text).toBeFalsy()
+    expect(answered.structuredContent).toMatchObject({ id: questionId, status: 'resolved', resolution: 'Use the existing DB.' })
+    expect(h.state().gates.find((g) => g.id === questionId)).toMatchObject({ status: 'resolved', resolution: 'Use the existing DB.' })
+
+    await until(() =>
+      expect(h.journalRows(runId).filter((e) => e.type === 'GATE_RESOLVED')).toEqual([
+        expect.objectContaining({ taskId, actor: { surface: 'mcp' }, payload: expect.objectContaining({ gateId: questionId, resolution: 'Use the existing DB.' }) })
+      ])
+    )
+    // And the answer did what an answer does: the Host places the worker again.
+    await until(() => expect(h.spawns()).toHaveLength(2))
+  })
+
+  it('read only refuses create_job and still lists', async () => {
+    const { h, projectId } = await projectRig()
+    await setMcpAccess(h, 'read')
+    const mcp = await mcpClient(h)
+
+    const listed = await mcp.call('list_jobs', {})
+    expect(listed.isError, listed.content[0]?.text).toBeFalsy()
+    expect(listed.structuredContent).toEqual({ jobs: [] })
+    const projects = await mcp.call('list_projects', {})
+    expect(projects.isError).toBeFalsy()
+
+    const created = await mcp.call('create_job', { projectId, objective: 'not allowed', coordinatorAccountId: h.accountId, requestId: 'ro-1' })
+    expect(created.isError).toBe(true)
+    expect(created.structuredContent).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('Read only') })
+    expect(created.content[0].text).toContain('PERMISSION_DENIED')
+    expect(h.state().jobs).toEqual([])
+
+    // The setting is read on every call: turned back to control, the same client may create.
+    await setMcpAccess(h, 'control')
+    const again = await mcp.call('create_job', { projectId, objective: 'allowed now', coordinatorAccountId: h.accountId, requestId: 'ro-2' })
+    expect(again.isError, again.content[0]?.text).toBeFalsy()
+    expect(h.state().jobs).toHaveLength(1)
+  })
+
+  it('off refuses reads', async () => {
+    const { h, projectId } = await projectRig()
+    await setMcpAccess(h, 'off')
+    const mcp = await mcpClient(h)
+
+    for (const [name, args] of [
+      ['list_jobs', {}],
+      ['list_projects', {}],
+      ['get_project', { projectId }]
+    ] as const) {
+      const r = await mcp.call(name, args)
+      expect(r.isError, name).toBe(true)
+      expect(r.structuredContent, name).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('MCP access is off') })
+    }
+    // create_job is refused at its first step (reading the project), and nothing is made.
+    const created = await mcp.call('create_job', { projectId, objective: 'not allowed', coordinatorAccountId: h.accountId })
+    expect(created.isError).toBe(true)
+    expect(created.structuredContent).toMatchObject({ code: 'PERMISSION_DENIED' })
+    expect(h.state().jobs).toEqual([])
+    // The CLI is not MCP: it still reads the same Host.
+    okData(await astera(['jobs', 'list'], h.env), 'jobs list')
+  })
+
+  it('a client that disconnects leaves the Run running, and a new client sees it', async () => {
+    const { h, projectId } = await projectRig()
+    const first = await mcpClient(h)
+    const created = await first.call('create_job', { projectId, objective: 'outlives its client', coordinatorAccountId: h.accountId, requestId: 'd-1' })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    const jobId = (created.structuredContent as { id: string }).id
+    const ran = await first.call('run_job', { jobId, requestId: 'd-2' })
+    expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+    const runId = (ran.structuredContent as { id: string }).id
+
+    await first.close()
+
+    const second = await mcpClient(h)
+    const run = await second.call('get_run', { runId })
+    expect(run.isError, run.content[0]?.text).toBeFalsy()
+    expect(run.structuredContent).toMatchObject({ id: runId, jobId, outcome: 'running' })
+    expect((run.structuredContent as { paused?: boolean }).paused).toBeFalsy()
+    const runs = await second.call('list_runs', { jobId })
+    expect((runs.structuredContent as { runs: Array<{ id: string }> }).runs.map((r) => r.id)).toEqual([runId])
+    // The Host's own record agrees: the Run is neither stopped nor paused by the client leaving.
+    expect(h.state().runs.find((r) => r.id === runId)?.paused).toBeFalsy()
   })
 })
