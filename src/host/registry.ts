@@ -92,6 +92,8 @@ interface Entry {
    *  The app's ptys follow the same rule in `withExitedPtyGuard` (core/sessions/pty.ts), which this file
    *  does not import (see its header). */
   killSent: boolean
+  /** Whether a repeat kill has already ended this pty's process tree (`kill`): once per pty. */
+  treeKillSent: boolean
 }
 
 export interface PtyRegistryDeps {
@@ -101,6 +103,10 @@ export interface PtyRegistryDeps {
   scrollback?: number
   /** Test injection; the wiring leaves it out and gets Date.now. */
   now?: () => number
+  /** Ends a process and everything it started without touching its pty (`workspace/native`'s
+   *  `killTree`: taskkill /T /F on win32, the process group elsewhere). What a repeat kill escalates
+   *  to. Left out, a repeat is only logged. */
+  killTree?: (pid: number) => Promise<void>
 }
 
 export class PtyRegistry {
@@ -188,7 +194,8 @@ export class PtyRegistry {
       rows: a.opts.rows,
       lastWriteAt: null,
       exitCode: null,
-      killSent: false
+      killSent: false,
+      treeKillSent: false
     }
     this.entries.set(a.id, entry)
     pty.onData((d) => {
@@ -296,14 +303,22 @@ export class PtyRegistry {
     return e ? { cols: e.cols, rows: e.rows } : null
   }
 
-  /** Sends a live pty its one kill (`Entry.killSent`); a repeat is logged and sent nowhere. Marked
-   *  before the call, so a kill that threw is not sent again either: whether it freed the handle is
-   *  not known. */
+  /** Sends a live pty its one kill (`Entry.killSent`). Marked before the call, so a kill that threw is
+   *  not sent again either: whether it freed the handle is not known. **A repeat escalates, once**: the
+   *  pty is still alive after its kill, so its process tree is ended (`deps.killTree`), which never
+   *  touches the ConPTY handle. Any repeat after that is only logged. */
   kill(id: string): void {
     const e = this.live(id)
     if (!e) return
     if (e.killSent) {
-      this.deps.log(`pty ${id} was already sent its kill and has not exited yet; not sending another`)
+      const killTree = this.deps.killTree
+      if (e.treeKillSent || !killTree) {
+        this.deps.log(`pty ${id} was already sent its kill and has not exited yet; not sending another`)
+        return
+      }
+      e.treeKillSent = true
+      this.deps.log(`pty ${id} was already sent its kill and has not exited yet; ending its process tree (pid ${e.pid}) instead`)
+      killTree(e.pid).catch((err) => this.deps.log(`pty ${id}: its process tree (pid ${e.pid}) could not be ended: ${String(err)}`))
       return
     }
     e.killSent = true

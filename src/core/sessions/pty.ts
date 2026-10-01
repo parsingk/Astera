@@ -84,17 +84,31 @@ export interface PtySpawnOptions {
  * nodePtyFactory 가 node-pty 를 감쌀 때 쓴다. 검사는 pty.test.ts 가 한다 — nodePtyFactory 자체는
  * node-pty 네이티브 바인딩을 불러오므로 vitest 의 node 환경에서 import 할 수 없다.
  */
-export function withExitedPtyGuard(p: PtyLike, log: (m: string) => void = (m) => console.warn(m)): PtyLike {
+export function withExitedPtyGuard(
+  p: PtyLike,
+  log: (m: string) => void = (m) => console.warn(m),
+  /** Ends `pid` and its children without touching the pty (taskkill /T /F on win32), what a repeat kill
+   *  escalates to; never throws. nodePtyFactory gives it; left out, a repeat is only logged. */
+  killTree?: (pid: number) => void
+): PtyLike {
   /** **One kill per pty, ever** (2026-10-01): node-pty 1.1.0's ConPTY kill calls ClosePseudoConsole on
    *  the same handle every time, so a second kill of a pty that has not exited frees it twice. In the
    *  Host that ended the process with STATUS_HEAP_CORRUPTION (0xC0000374) and every session with it;
    *  the Host's own copy of this rule is `Entry.killSent` in src/host/registry.ts, which cannot import
    *  this module (the Host bundle). Set before the call, so a kill that threw is not resent either. */
   let killSent = false
+  let treeKillSent = false
+  /** Read through the callers' own `onExit`: every manager this factory feeds registers one, and the
+   *  test fakes keep a single listener, so the wrapper adds none of its own. */
+  let exited = false
   return {
     pid: p.pid,
     onData: (cb) => p.onData(cb),
-    onExit: (cb) => p.onExit(cb),
+    onExit: (cb) =>
+      p.onExit((e) => {
+        exited = true
+        cb(e)
+      }),
     write: (d) => {
       try {
         p.write(d)
@@ -111,7 +125,16 @@ export function withExitedPtyGuard(p: PtyLike, log: (m: string) => void = (m) =>
     },
     kill: () => {
       if (killSent) {
-        log(`astera: pty ${p.pid} was already sent its kill and has not exited yet; not sending another`)
+        if (exited) return
+        // **A repeat escalates, once**, as the Host registry's does: the pty is still alive after its
+        // kill, so its process tree is ended, which never touches the ConPTY handle.
+        if (treeKillSent || !killTree) {
+          log(`astera: pty ${p.pid} was already sent its kill and has not exited yet; not sending another`)
+          return
+        }
+        treeKillSent = true
+        log(`astera: pty ${p.pid} was already sent its kill and has not exited yet; ending its process tree instead`)
+        killTree(p.pid)
         return
       }
       killSent = true

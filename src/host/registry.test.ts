@@ -344,6 +344,66 @@ describe('PtyRegistry', () => {
     expect(h.logs.some((m) => m.includes('p1') && m.includes('already'))).toBe(true)
   })
 
+  // A repeat means the one kill has not ended it. The process tree is ended instead (taskkill /T /F on
+  // win32), which never touches the ConPTY handle; once, and never another pty kill.
+  it('a repeat kill on a live pty ends its process tree once, and never sends the pty kill again', async () => {
+    const p = fakePty(4321)
+    let kills = 0
+    p.kill = () => { kills += 1 }
+    const trees: number[] = []
+    const logs: string[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: (m) => logs.push(m), killTree: async (pid) => { trees.push(pid) } })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.kill('p1')
+    expect(trees).toEqual([])
+    r.kill('p1')
+    r.kill('p1')
+    await Promise.resolve()
+    expect(kills).toBe(1)
+    expect(trees).toEqual([4321])
+    expect(logs.some((m) => m.includes('p1') && m.includes('4321') && m.includes('process tree'))).toBe(true)
+  })
+
+  it('a tree kill that fails is logged, not thrown', async () => {
+    const p = fakePty(4321)
+    const logs: string[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: (m) => logs.push(m), killTree: async () => { throw new Error('access denied') } })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.kill('p1')
+    expect(() => r.kill('p1')).not.toThrow()
+    await new Promise((res) => setTimeout(res, 0))
+    expect(logs.some((m) => m.includes('p1') && m.includes('access denied'))).toBe(true)
+  })
+
+  it('a repeat kill on a pty that has exited does nothing', () => {
+    const p = fakePty(4321)
+    const trees: number[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: () => {}, killTree: async (pid) => { trees.push(pid) } })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.kill('p1')
+    p.exit(1)
+    r.kill('p1')
+    expect(trees).toEqual([])
+  })
+
+  it('killAll kills a fresh pty exactly once and leaves one already sent its kill alone', () => {
+    const a = fakePty(1)
+    const b = fakePty(2)
+    const kills = { a: 0, b: 0 }
+    a.kill = () => { kills.a += 1 }
+    b.kill = () => { kills.b += 1 }
+    const trees: number[] = []
+    const made = [a, b]
+    let i = 0
+    const r = new PtyRegistry({ spawn: () => made[i++], log: () => {}, killTree: async (pid) => { trees.push(pid) } })
+    r.open({ id: 'p1', file: 'x', args: [], opts, meta: meta() })
+    r.open({ id: 'p2', file: 'x', args: [], opts, meta: meta() })
+    r.kill('p1')
+    r.killAll()
+    expect(kills).toEqual({ a: 1, b: 1 })
+    expect(trees).toEqual([])
+  })
+
   it('a kill that threw is not sent again either', () => {
     const p = fakePty()
     let kills = 0

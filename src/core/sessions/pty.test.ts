@@ -97,6 +97,35 @@ describe('withExitedPtyGuard', () => {
     expect(logs.some((m) => m.includes('4242') && m.includes('already'))).toBe(true)
   })
 
+  // The same escalation as the Host registry's: a repeat means the one kill did not end it, so its
+  // process tree is ended (taskkill /T /F), once, and the pty kill is never sent again.
+  it('a repeat kill ends the process tree once, and never sends the pty kill again', () => {
+    let kills = 0
+    const raw = new TwoPhasePty()
+    raw.kill = () => { kills += 1 }
+    const trees: number[] = []
+    const logs: string[] = []
+    const p = withExitedPtyGuard(raw, (m) => logs.push(m), (pid) => { trees.push(pid) })
+    p.kill()
+    expect(trees).toEqual([])
+    p.kill()
+    p.kill()
+    expect(kills).toBe(1)
+    expect(trees).toEqual([4242])
+    expect(logs.some((m) => m.includes('4242') && m.includes('process tree'))).toBe(true)
+  })
+
+  it('a repeat kill after the pty has exited does nothing', () => {
+    const raw = new TwoPhasePty()
+    const trees: number[] = []
+    const p = withExitedPtyGuard(raw, () => {}, (pid) => { trees.push(pid) })
+    p.onExit(() => {})
+    p.kill()
+    raw.emitExit(1)
+    p.kill()
+    expect(trees).toEqual([])
+  })
+
   it('a kill that threw is not sent again either', () => {
     let kills = 0
     const raw = new TwoPhasePty()
