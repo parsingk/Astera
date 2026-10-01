@@ -75,7 +75,9 @@ const RUN_FIELDS = [
  *  and until when, is the `limited` ending of `runs wait`. */
 const RUN_HIDDEN = ['coordinatorStop', 'coordinatorStartingAt', 'coordinatorStopPending'] as const
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
-const RUN = [...RUN_FIELDS, ...DERIVED]
+/** Derived like DERIVED, by `runs get` alone and only when above zero: how many of the Run's Tasks have
+ *  a worker showing a permission prompt (command.ts `waitingForApprovalIn`). */
+const RUN = [...RUN_FIELDS, ...DERIVED, 'waitingForApproval']
 
 export const TASK_PUBLIC_FIELDS = [
   'id',

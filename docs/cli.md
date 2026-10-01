@@ -615,6 +615,11 @@ list. Filters on one command combine.
   the workers and coordinators of the project's runs wherever their worktree is. A session with no
   folder in its record, and not started by one of those runs, is left out.
 
+**`runs get` carries `waitingForApproval`** when some of the run's Tasks have a worker stopped at a
+permission prompt: the number of those Tasks, read from the same hook events as `sessions list`'s
+`waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
+([mcp.md](mcp.md) says more).
+
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
 list`. A `--project` after the command belongs to that command and wins over the global one. Every

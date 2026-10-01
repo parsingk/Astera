@@ -15,11 +15,15 @@ export interface TaskAttempt {
   outcome?: Outcome
   startedAt: string
   endedAt?: string
+  /** This attempt's worker shows a permission prompt a person has to answer in Astera. Only on an
+   *  open attempt, and only where the caller can read its session (command.ts `waitingForApprovalIn`). */
+  waitingForApproval?: true
 }
 
 export type TaskDetail = Record<string, unknown> & { attempts: TaskAttempt[]; openQuestionId?: string }
 
-export function taskDetailOf(s: OrchState, taskId: string): TaskDetail | null {
+/** `waiting`: the ids of the Dispatches whose worker shows a permission prompt now. */
+export function taskDetailOf(s: OrchState, taskId: string, waiting: ReadonlySet<string> = new Set()): TaskDetail | null {
   const task = s.tasks.find((t) => t.id === taskId)
   if (!task) return null
   const out: Record<string, unknown> = {}
@@ -36,7 +40,8 @@ export function taskDetailOf(s: OrchState, taskId: string): TaskDetail | null {
         ...(d.review === true ? { review: true as const } : {}),
         ...(d.outcome !== undefined ? { outcome: d.outcome } : {}),
         startedAt: d.startedAt,
-        ...(d.endedAt !== undefined ? { endedAt: d.endedAt } : {})
+        ...(d.endedAt !== undefined ? { endedAt: d.endedAt } : {}),
+        ...(waiting.has(d.id) ? { waitingForApproval: true as const } : {})
       })
     )
   const open = s.gates.find((g) => g.taskId === taskId && g.status === 'open')

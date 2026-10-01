@@ -266,6 +266,20 @@ describe('the MCP server', () => {
     for (const hidden of ['coordinatorStop', 'coordinatorStartingAt', 'coordinatorStopPending']) expect(hidden in data).toBe(false)
   })
 
+  // Read only: the count and the mark say a person must answer a prompt in Astera; no tool answers it.
+  it('get_run carries waitingForApproval and get_task carries it on the attempt', async () => {
+    const client = await connected(
+      answering({
+        'runs-get': { status: 200, body: { id: 'run_1', jobId: 'job_1', waitingForApproval: 2 } },
+        'tasks-get': { status: 200, body: { id: 't1', attempts: [{ id: 'd1' }, { id: 'd2', waitingForApproval: true }] } }
+      }).link
+    )
+    const run = await client.callTool({ name: 'get_run', arguments: { runId: 'run_1' } })
+    expect(run.structuredContent).toMatchObject({ id: 'run_1', waitingForApproval: 2 })
+    const task = await client.callTool({ name: 'get_task', arguments: { taskId: 't1' } })
+    expect((task.structuredContent as { attempts: unknown[] }).attempts).toEqual([{ id: 'd1' }, { id: 'd2', waitingForApproval: true }])
+  })
+
   it('carries the data in content too: the sentence, a newline, then the structured data as JSON', async () => {
     const client = await connected(answering({ 'runs-get': { status: 200, body: { id: 'run_1', jobId: 'job_1' } } }).link)
     const ok = await client.callTool({ name: 'get_run', arguments: { runId: 'run_1' } })
