@@ -197,7 +197,8 @@ neither.
 
 **Paging.** Every list tool also takes an optional `cursor`. A cut list that has more rows after it
 carries `nextCursor`; pass it as `cursor`, with the same filters, for the next page, which follows
-the same order. The last page still carries `truncated: true` and `total`, and no `nextCursor`. A
+the same order. No `nextCursor` means this is the last page. `truncated: true` and `total` mean the
+list is not whole, so the last page of a paged list still carries them, without `nextCursor`. A
 cursor is opaque and belongs to the tool that gave it: one from another tool, or one that is not a
 cursor at all, is refused with `INVALID_ARGUMENTS`. A cursor holds a position in the list, not a
 snapshot of it, so a list that changes between calls shifts: when rows are added ahead of the

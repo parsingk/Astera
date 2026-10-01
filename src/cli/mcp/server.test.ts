@@ -435,8 +435,14 @@ describe('the MCP server', () => {
     const { link, calls } = answering({ 'jobs-list': { status: 200, body: jobs } })
     const client = await connected(link)
     const { tools } = await client.listTools()
-    for (const t of tools.filter((t) => t.name.startsWith('list_')))
+    for (const t of tools.filter((t) => t.name.startsWith('list_'))) {
       expect(t.inputSchema.properties?.cursor, t.name).toMatchObject({ type: 'string' })
+      // What an agent reads to know when to stop paging, and what truncated and total mean.
+      const limitText = String((t.inputSchema.properties?.limit as { description?: string }).description)
+      const cursorText = String((t.inputSchema.properties?.cursor as { description?: string }).description)
+      expect(limitText, t.name).toContain('truncated: true and total mean the list is not whole')
+      for (const text of [limitText, cursorText]) expect(text, t.name).toContain('No nextCursor means this is the last page')
+    }
     const seen: string[] = []
     let cursor: string | undefined
     for (let page = 0; page < 3; page++) {

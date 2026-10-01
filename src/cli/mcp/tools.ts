@@ -18,13 +18,17 @@ const limit = z
   .min(LIST_LIMIT.min)
   .max(LIST_LIMIT.max)
   .optional()
-  .describe(`At most this many rows (default ${LIST_LIMIT.default}). A cut list says truncated: true and the total.`)
+  .describe(
+    `At most this many rows (default ${LIST_LIMIT.default}). truncated: true and total mean the list is not whole: total is how many rows there are. When more rows follow, the result carries nextCursor; pass it as cursor for the next page. No nextCursor means this is the last page.`
+  )
 const cursor = z
   .string()
   .min(1)
   .max(MCP_LIMITS.cursor)
   .optional()
-  .describe('The nextCursor of a previous result of this tool, for the page after it. Leave it out for the first page.')
+  .describe(
+    'The nextCursor of a previous result of this tool, for the page after it, with the same filters. Leave it out for the first page. No nextCursor means this is the last page.'
+  )
 
 export interface ToolDef {
   name: string
