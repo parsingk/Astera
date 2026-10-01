@@ -503,6 +503,33 @@ describe('startHostServer', () => {
       mcp.send({ t: 'ping', seq: 7 })
       expect(await mcp.next()).toEqual({ t: 'pong', seq: 7 })
     })
+    // An MCP link lives for hours; it reads nothing pushed, so it is sent no terminal output and no state.
+    it('is sent no broadcast, while a cli socket is', async () => {
+      const h = await start()
+      const mcp = await h.connect('mcp')
+      const cli = await h.connect('cli')
+      h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
+      expect(await cli.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
+      expect(await mcp.next(150)).toBeUndefined()
+    })
+    it("is sent no other caller's state push, and still gets its own orch-result", async () => {
+      const h = await start({
+        orch: {
+          call: async ({ from }) => {
+            from?.toOthers({ t: 'pty-data', id: 'p1', data: 'pushed to the others' })
+            return { status: 200, body: { ok: true } }
+          }
+        }
+      })
+      const mcp = await h.connect('mcp')
+      const cli = await h.connect('cli')
+      cli.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+      expect(await cli.next()).toMatchObject({ t: 'orch-result', call: 'c1', status: 200 })
+      expect(await mcp.next(150)).toBeUndefined()
+      mcp.send({ t: 'orch-call', call: 'c2', cmd: 'version', args: {} })
+      expect(await mcp.next()).toMatchObject({ t: 'orch-result', call: 'c2', status: 200 })
+      expect(await cli.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'pushed to the others' })
+    })
   })
 
   // A Host holding a terminal must not leave when the app closes: that terminal is the whole reason

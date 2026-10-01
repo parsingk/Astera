@@ -416,6 +416,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     const r = roles.get(s)
     return (r === 'app' || r === 'legacy-app') && !s.destroyed
   }
+  /** An MCP client reads only the answers to its own calls (MCP design §2), so no fan-out writes to
+   *  it: an MCP link lives for hours, and every terminal's output and every state push would reach it. */
+  const isMcp = (s: net.Socket): boolean => roles.get(s) === 'mcp'
   /** Wraps `deps.onAppsChanged` so a caller's throw costs the handshake or close it rode in on
    *  nothing — logged instead, the same as `onClientGone`'s own guard below. */
   const tellAppsChanged = (): void => {
@@ -591,7 +594,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
               const line = lazyLine(msg)
               // The sender holds this state already; anything older held for it would put it back.
               if (msg.t === 'orch-state') dropState(socket)
-              for (const s of greetedSockets) if (s !== socket && !s.destroyed) writeTo(s, msg, line)
+              for (const s of greetedSockets) if (s !== socket && !s.destroyed && !isMcp(s)) writeTo(s, msg, line)
             }
           }
           void deps.orch
@@ -775,7 +778,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     broadcast: (m, to) => {
       const line = lazyLine(m)
       for (const s of greetedSockets) {
-        if (s.destroyed) continue
+        if (s.destroyed || isMcp(s)) continue
         if (to && !to(yields.get(s) ?? new Set<string>())) continue
         writeTo(s, m, line)
       }
