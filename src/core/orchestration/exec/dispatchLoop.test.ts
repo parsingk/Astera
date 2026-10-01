@@ -840,6 +840,141 @@ describe('a finished manual Run’s coordinator stops after the grace', () => {
   })
 })
 
+// The same decision, for the workers (e2e "Fourth run": the converged Run's worker stayed alive too).
+// A worker reports and then waits, by the guide's rule, and only `worker-release` ends its session;
+// that is the coordinator's to send, and once the Run has finished nothing sent it. Now the driving loop
+// sends it for an idle worker (its Dispatch closed, not retained) of a finished Run, under the same grace.
+describe('a finished Run’s idle workers are released after the grace', () => {
+  const MIN = 60_000
+  const dispatch = (over: Partial<OrchState['dispatches'][number]> & { id: string; taskId: string; sessionId: string }) => ({
+    provider: 'claude' as const,
+    accountId: 'accA',
+    cwd: '/wt1',
+    specPath: '/specs/x.md',
+    startedAt: NOW,
+    endedAt: NOW,
+    outcome: 'success' as const,
+    workerState: 'stopped' as const,
+    retained: false,
+    ...over
+  })
+  const finishedWithWorker = (over: Partial<OrchState['dispatches'][number]> = {}, o: RigOpts = {}) => {
+    const h = rig(o)
+    const s = h.state()
+    h.setState({
+      ...s,
+      tasks: s.tasks.map((t) => (t.runId === 'run_1' ? { ...t, status: 'completed' as const } : t)),
+      dispatches: [dispatch({ id: 'dsp_1', taskId: 'tsk_1', sessionId: 'sess_w1', ...over })]
+    })
+    return h
+  }
+  const pass = async (h: ReturnType<typeof rig>): Promise<void> => {
+    await h.loop.run()
+    await h.settle()
+  }
+  const releases = (h: ReturnType<typeof rig>): string[] => h.releaseWorker.mock.calls.map(([a]) => a.dispatchId)
+
+  it('leaves it alone 9 minutes after the finish, and releases it once at 10', async () => {
+    const h = finishedWithWorker()
+    h.clock = NOW_MS + 9 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual([])
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
+    expect(h.handled()).toContain('worker-release')
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
+  })
+
+  it('does not change the Dispatch: the release only ends the session', async () => {
+    const h = finishedWithWorker()
+    const before = h.state().dispatches
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(h.state().dispatches).toEqual(before)
+  })
+
+  it('a release whose session lives on is sent again after the backoff', async () => {
+    const h = finishedWithWorker()
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    h.clock += COORDINATOR_STOP_RETRY_MS - 1
+    await pass(h)
+    expect(releases(h)).toHaveLength(1)
+    h.clock += 1
+    await pass(h)
+    expect(releases(h)).toHaveLength(2)
+  })
+
+  it('a person typing into it at minute 8 moves the release to minute 18', async () => {
+    const h = finishedWithWorker()
+    h.ctx.lastPersonInputAt = (id) => (id === 'sess_w1' ? NOW_MS + 8 * MIN : null)
+    h.clock = NOW_MS + 18 * MIN - 1
+    await pass(h)
+    expect(releases(h)).toEqual([])
+    h.clock = NOW_MS + 18 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
+  })
+
+  it('never ends a retained worker', async () => {
+    const h = finishedWithWorker({ retained: true })
+    h.clock = NOW_MS + 60 * MIN
+    await pass(h)
+    expect(h.handled()).not.toContain('worker-release')
+  })
+
+  it('leaves a worker whose session has already ended', async () => {
+    const h = finishedWithWorker()
+    h.ctx.sessionAlive = () => false
+    h.clock = NOW_MS + 60 * MIN
+    await pass(h)
+    expect(h.handled()).not.toContain('worker-release')
+  })
+
+  it('leaves a session a later Dispatch reuses: the release is the latest owner’s', async () => {
+    const h = finishedWithWorker()
+    const s = h.state()
+    h.setState({
+      ...s,
+      jobs: [...s.jobs, { id: 'job_2', objective: 'o', cwd: '/p', createdAt: NOW }],
+      runs: [...s.runs, { id: 'run_2', jobId: 'job_2', ordinal: 1, createdAt: NOW }],
+      tasks: [...s.tasks, task({ id: 'tsk_9', runId: 'run_2', jobId: 'job_2', status: 'completed' })],
+      dispatches: [...s.dispatches, dispatch({ id: 'dsp_9', taskId: 'tsk_9', sessionId: 'sess_w1', retained: true })]
+    })
+    h.clock = NOW_MS + 60 * MIN
+    await pass(h)
+    expect(h.handled()).not.toContain('worker-release')
+  })
+
+  it('leaves the workers of a Run that has not finished alone, however long', async () => {
+    const h = finishedWithWorker()
+    const s = h.state()
+    h.setState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_2' ? { ...t, status: 'pending' as const } : t)) })
+    h.clock = NOW_MS + 60 * MIN
+    await pass(h)
+    expect(h.handled()).not.toContain('worker-release')
+  })
+
+  it('releases a finished scheduled Run’s worker at once', async () => {
+    const h = rig({ reapableChild: true })
+    const s = h.state()
+    h.setState({ ...s, dispatches: [dispatch({ id: 'dsp_rc', taskId: 'tsk_rc', sessionId: 'sess_rc', cwd: '/wt-child' })] })
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_rc'])
+  })
+
+  it('only the driving process releases it', async () => {
+    const h = finishedWithWorker()
+    h.clock = NOW_MS + 10 * MIN
+    const other = createDispatchLoop({ ...h.ctx, mayStart: () => false })
+    await other.run()
+    await other.nudge()
+    expect(h.releaseWorker).not.toHaveBeenCalled()
+  })
+})
+
 // Limits pass L1: a coordinator stop is confirmed only when the session is gone (the exit release empties
 // the slot). Until then the Run keeps its slot, marked `coordinatorStopPending`, and the driving loop
 // sends the stop again after a backoff, so a stop that failed or was refused is not remembered as done.

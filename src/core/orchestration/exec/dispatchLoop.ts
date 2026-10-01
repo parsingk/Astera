@@ -74,6 +74,19 @@ export const COORDINATOR_STOP_RETRY_CAP_TRIES = 6
  *  alive for good. A scheduled Run gets none, since nothing watches it. */
 export const FINISHED_RUN_GRACE_MS = 10 * 60_000
 
+/** One session's resend backoff: how many sends, when the next may go, how many waited the cap, and
+ *  whether it was given up on (LP-1/2). */
+type Retry = { tries: number; nextAt: number; capped: number; gaveUp: boolean }
+
+/** The entry after one more send: the wait doubles from `COORDINATOR_STOP_RETRY_MS` up to
+ *  `COORDINATOR_STOP_RETRY_MAX_MS`, and each send that waits the cap is counted toward giving up. */
+const nextTry = (prev: Retry | undefined, nowMs: number): { entry: Retry; wait: number } => {
+  const tries = (prev?.tries ?? 0) + 1
+  const wait = Math.min(COORDINATOR_STOP_RETRY_MS * 2 ** (tries - 1), COORDINATOR_STOP_RETRY_MAX_MS)
+  const capped = (prev?.capped ?? 0) + (wait === COORDINATOR_STOP_RETRY_MAX_MS ? 1 : 0)
+  return { entry: { tries, nextAt: nowMs + wait, capped, gaveUp: false }, wait }
+}
+
 export interface DispatchLoopContext {
   /** handleCommand under this process's own caller id (the app's UI_CALLER, the Host's HOST_CALLER). */
   handle(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
@@ -200,7 +213,12 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  survives a restart or a change of driver, and a new driver's first pass sends the stop once the
    *  mark is `COORDINATOR_STOP_RETRY_MS` old (at once for an older one). A mark with no entry here is
    *  timed from the mark itself, so a stop a command has just sent is not sent again by the next pass. */
-  const stopRetry = new Map<string, { tries: number; nextAt: number; capped: number; gaveUp: boolean }>()
+  const stopRetry = new Map<string, Retry>()
+  /** The same backoff for `worker-release` of a finished Run's idle worker, by session id: a release
+   *  whose session lives on is sent again, first after `COORDINATOR_STOP_RETRY_MS`, then twice as long
+   *  each time, and given up on after `COORDINATOR_STOP_RETRY_CAP_TRIES` at the cap. An entry goes once
+   *  its session is no longer alive. In memory: a restart or a new driver asks again. */
+  const releaseRetry = new Map<string, Retry>()
 
   /** Whether a finished Run's session may be ended now (FINISHED_RUN_GRACE_MS): at once for a scheduled
    *  Job's Run, otherwise once the grace has passed since the later of the Run's finish and the last time
@@ -278,10 +296,9 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         )
         continue
       }
-      const tries = (retry?.tries ?? 0) + 1
-      const wait = Math.min(COORDINATOR_STOP_RETRY_MS * 2 ** (tries - 1), COORDINATOR_STOP_RETRY_MAX_MS)
-      const capped = (retry?.capped ?? 0) + (wait === COORDINATOR_STOP_RETRY_MAX_MS ? 1 : 0)
-      stopRetry.set(sessionId, { tries, nextAt: nowMs + wait, capped, gaveUp: false })
+      const { entry, wait } = nextTry(retry, nowMs)
+      const tries = entry.tries
+      stopRetry.set(sessionId, entry)
       const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
       const what =
         tries === 1
@@ -296,6 +313,57 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         )
       } catch (e) {
         log(`${what}, and stopping its coordinator ${sessionId} failed: ${String(e)}${again}`)
+      }
+    }
+  }
+
+  /**
+   * **A finished Run's idle workers are released** (the user's decision of 2026-10-02). A worker reports
+   * and then waits (the guide's rule, so a follow-up can reach it), and only `worker-release` ends its
+   * session; that is the coordinator's to send, and once the Run has finished nothing sent it (e2e
+   * "Fourth run": the converged Run's worker stayed alive beside its coordinator). So the driving loop
+   * sends it, under the coordinator's grace (`graceOver`), for each Dispatch of a finished Run that is
+   * closed, not retained (`worker-retain` is a person's "keep it", never overridden here), the latest
+   * owner of its session (`releaseArgsFor`'s rule: a reused session is the later Dispatch's), and whose
+   * session is still alive. `worker-release` and not `worker-stop`: it only ends the session, where
+   * `worker-stop` would rewrite a closed Dispatch's ending. Driving process only, asked before each one;
+   * a failure is logged and never thrown (R14).
+   */
+  const releaseIdleWorkers = async (): Promise<void> => {
+    const s = c.getState()
+    for (const id of [...releaseRetry.keys()]) if (!c.sessionAlive(id)) releaseRetry.delete(id)
+    for (const run of s.runs) {
+      if (outcomeOf(s, run.id) === 'running') continue
+      const mine = new Set(tasksOwnedBy(s, run.id).map((t) => t.id))
+      for (const d of s.dispatches) {
+        if (!mine.has(d.taskId) || d.retained || (!d.outcome && !d.endedAt)) continue
+        const owners = s.dispatches.filter((x) => x.sessionId === d.sessionId)
+        if (owners[owners.length - 1]?.id !== d.id) continue
+        if (!c.sessionAlive(d.sessionId)) continue
+        const nowMs = c.nowMs()
+        if (!graceOver(s, run, d.sessionId, nowMs)) continue
+        const retry = releaseRetry.get(d.sessionId)
+        if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
+        if (!c.mayStart()) return
+        if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+          retry.gaveUp = true
+          log(`run=${run.id}: gave up releasing its worker ${d.sessionId} (dispatch ${d.id}) after ${retry.tries} attempts`)
+          continue
+        }
+        const { entry, wait } = nextTry(retry, nowMs)
+        releaseRetry.set(d.sessionId, entry)
+        const what = `run=${run.id} finished: its idle worker ${d.sessionId} (dispatch ${d.id})`
+        const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
+        try {
+          const r = await c.handle('worker-release', { dispatch: d.id })
+          log(
+            r.status >= 400
+              ? `${what} was not released: ${JSON.stringify(r.body)}${again}`
+              : `${what} was released${again}`
+          )
+        } catch (e) {
+          log(`${what} could not be released: ${String(e)}${again}`)
+        }
       }
     }
   }
@@ -319,10 +387,11 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     }
   }
 
-  /** The coordinator housekeeping: the stale start marks (L2), then the stops due (U4, L1). Run from the
-   *  pass and from the timer's `nudge`, since the app runs the pass only on commits and a stop to retry
-   *  or a mark to drop comes due with nothing committed. One at a time: a second call while one is under
-   *  way does nothing, and the backoff keeps the next one from repeating a stop just sent. */
+  /** The coordinator housekeeping: the stale start marks (L2), then the stops due (U4, L1), then the
+   *  finished Runs' idle workers. Run from the pass and from the timer's `nudge`, since the app runs the
+   *  pass only on commits and a stop to retry, a mark to drop or a grace that ran out comes due with
+   *  nothing committed. One at a time: a second call while one is under way does nothing, and the backoff
+   *  keeps the next one from repeating a stop just sent. */
   let tidying = false
   const tidyCoordinators = async (): Promise<void> => {
     if (tidying) return
@@ -332,6 +401,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       await clearStaleStartMarks()
       if (!c.mayStart()) return
       await stopFinishedCoordinators()
+      if (!c.mayStart()) return
+      await releaseIdleWorkers()
     } finally {
       tidying = false
     }
