@@ -132,7 +132,10 @@ export const NOUNS = {
   // `docs/cli.md` 에 함께 적히게 만들기 때문이다. `--request-id` 는 반대로 여기 없다: 그것은
   // 한 명령의 동사가 아니라 모든 명령이 받는 전역 플래그이고, 그 자리는 cliAgentContext 의
   // `globalFlags` 다(설계 §3 — 명령 목록을 손으로 들고 있으면 빠뜨린 명령이 조용히 무시한다).
-  requests: ['show']
+  requests: ['show'],
+  // **Answered by the CLI itself, for an MCP client to launch** (MCP design §4, cli/mcp/server.ts):
+  // stdout carries the MCP protocol, and each tool is one Host command over one long-lived link.
+  mcp: ['serve']
 } as const
 
 /** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고

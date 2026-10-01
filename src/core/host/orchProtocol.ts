@@ -88,7 +88,7 @@ export function leftNothingBehind(err: unknown): boolean {
 export interface OrchCaller {
   /** What this client called itself in its `hello`. Absent there means `'cli'` (protocol.ts's
    *  `hello` says why the careful default is that one and not the other). */
-  role: 'app' | 'cli'
+  role: 'app' | 'cli' | 'mcp'
   /** Pushes a message to every greeted socket **except this one**. What `state-put` answers with: the
    *  state came from this client, so sending it back would be an echo — and the app that pushed it
    *  would then write its own state back over itself. */

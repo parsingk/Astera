@@ -13,10 +13,15 @@ import { isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
+import { mcpRefusal } from '../core/host/mcpGate'
+import { readMcpAccess } from '../core/settings/mcpAccess'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
 import { readAccountsFile } from '../core/accounts/accountsFile'
+import { isLoggedIn } from '../core/accounts/loginCheck'
+import { makeDescriptors } from '../core/providers/descriptor'
+import type { Account } from '../core/types'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
@@ -341,6 +346,9 @@ export interface HostOrch extends OrchCall {
 
 export function createHostOrch(a: {
   profileDir: string
+  /** The login rule `accounts-list` and `--coordinator-provider` mark each provider's default by, with
+   *  no app attached. Defaults to the one rule (loginCheck.ts, C8) the Host's checks and spawner use. */
+  isLoggedIn?(account: Account): Promise<boolean>
   /** The Host's own version (`ASTERA_HOST_VERSION`) — what `status` and `version` answer with. */
   version: string
   now(): string
@@ -444,6 +452,9 @@ export function createHostOrch(a: {
   workspaces?: Pick<WorkspaceManager, 'run' | 'stop' | 'close' | 'list'>
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
+  // Built at the first ask: only a call that marks the default needs the descriptors.
+  let descriptors: ReturnType<typeof makeDescriptors> | undefined
+  const loggedIn = a.isLoggedIn ?? ((x: Account) => isLoggedIn(x, (descriptors ??= makeDescriptors(process.platform))))
 
   /** The journal, isolated (R3): hostJournal.ts never throws, and a journal that does anyway must not
    *  turn a landed commit into a failed command. */
@@ -609,7 +620,8 @@ export function createHostOrch(a: {
       hasApp: a.hasApp,
       log: a.log,
       // 앱이 없을 때 계정 목록은 앱이 쓴 파일이 답한다(orchDeps 의 LOCAL_WHEN_ABSENT). 읽기만 한다.
-      readAccounts: (provider) => readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider),
+      readAccounts: (provider, opts) =>
+        readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider, opts?.withDefault ? loggedIn : undefined),
       // 실행 구성도 같다 — 앱이 쓴 run-configs.json 과 계획의 폴더를 읽기만 한다(CLI phase D).
       readRunConfigs: (projectPath) => readRunConfigsFile(path.join(a.profileDir, 'run-configs.json'), projectPath),
       sessions: a.sessions,
@@ -1240,6 +1252,14 @@ export function createHostOrch(a: {
        *  observed replay resumes the question the receipt names rather than asking a new one. */
       let runArgs = args
       try {
+        // **MCP callers pass the allowlist first** (MCP design §2), before receipts and before the
+        // app-only commands, so a refused call leaves no receipt and reaches nothing. Read per call, as
+        // `app js` reads its toggle: the app may change it while the Host runs. A settings file that
+        // cannot be read refuses (readMcpAccess throws; the catch below answers 500 with its message).
+        if (from?.role === 'mcp') {
+          const refused = mcpRefusal(cmd, await readMcpAccess(path.join(a.profileDir, 'app-settings.json')))
+          if (refused) return refused
+        }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
         // line below, so a `request` sent with one would be accepted and silently ignored — which is
         // precisely the fault §3 is built on: Orca's `check --peek` takes `--retry-request` and drops

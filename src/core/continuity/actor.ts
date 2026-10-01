@@ -3,7 +3,7 @@
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import type { OrchState } from '../orchestration/state'
 
-export type JournalSurface = 'desktop' | 'cli' | 'agent' | 'host'
+export type JournalSurface = 'desktop' | 'cli' | 'agent' | 'host' | 'mcp'
 
 /** Who acted, on every journal row written since v3 (Host journal J4). */
 export interface JournalActor {
@@ -11,7 +11,7 @@ export interface JournalActor {
   sessionId?: string
 }
 
-const SURFACES: ReadonlySet<string> = new Set<JournalSurface>(['desktop', 'cli', 'agent', 'host'])
+const SURFACES: ReadonlySet<string> = new Set<JournalSurface>(['desktop', 'cli', 'agent', 'host', 'mcp'])
 
 export function isJournalActor(v: unknown): v is JournalActor {
   if (typeof v !== 'object' || v === null) return false
@@ -47,8 +47,11 @@ export const DESKTOP_ACTOR: JournalActor = { surface: 'desktop' }
  *  HOST_CALLER or APP_CALLER, so they count only when the Host itself or the app's own connection sets
  *  them: the Host's own commands carry HOST_ACTOR without being judged here, and the app is known by its
  *  role. Anyone else claiming one is the CLI. */
-export function actorOf(a: { sessionId: string; role?: 'app' | 'cli'; state: OrchState | null }): JournalActor {
+export function actorOf(a: { sessionId: string; role?: 'app' | 'cli' | 'mcp'; state: OrchState | null }): JournalActor {
   if (a.role === 'app') return DESKTOP_ACTOR
+  // An MCP client is never a worker or a coordinator: it has no Dispatch and no Run slot, and the
+  // session it sends is not one Astera started (MCP design M1).
+  if (a.role === 'mcp') return { surface: 'mcp' }
   if (a.sessionId === '') return { surface: 'cli' }
   if (a.sessionId === HOST_CALLER || a.sessionId === APP_CALLER) return { surface: 'cli', sessionId: a.sessionId }
   const st = a.state

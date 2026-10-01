@@ -116,6 +116,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'ask the running Host to retire',
     detail: 'Refused while the Host still holds sessions or running runs. It says how many.'
   },
+  'mcp-serve': {
+    summary: 'serve Astera to an MCP client over stdio',
+    detail:
+      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
+  },
 
   'projects-list': { summary: 'every project registered in the app' },
   'projects-get': {
@@ -166,6 +171,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
         name: 'coordinator-account',
         value: '<accountId>',
         about: 'the account a coordinator session runs on (one, from `accounts list`)'
+      },
+      {
+        name: 'coordinator-provider',
+        value: '<claude|codex>',
+        about: "without --coordinator-account, that provider's default account coordinates"
       },
       {
         name: 'convergence',

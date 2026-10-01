@@ -502,7 +502,7 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
 astera runs    get    --id <runId>
@@ -522,6 +522,8 @@ astera run-configs list --job <jobId>
 
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
+
+astera mcp     serve                     serve Astera to an MCP client over stdio
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
@@ -649,6 +651,10 @@ is parked in `check --wait`, and skips otherwise, as above.
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
 to have a coordinator session drive the Job once it runs; without it the workers are placed for you.
+`--coordinator-provider claude` (or `codex`) picks that provider's default account for you: the
+earliest registered one that is logged in, the one `accounts list` marks `default: true`. With no
+account of that provider logged in it is a 2 that names the provider. When both flags are given,
+`--coordinator-account` wins.
 A Host that announces `dispatch` places them whether Astera is open or closed, and otherwise Astera
 does (see "Jobs run with Astera closed").
 
@@ -713,7 +719,9 @@ a subfolder of a project the app knows up to that project's root; with Astera cl
 folder as given, and a Job made from a subfolder then lists only what that subfolder's build files give.
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
-else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
+else about them, except `default: true` on each provider's default account: the earliest registered
+one that is logged in, the one `jobs create --coordinator-provider` picks. `--agent claude` or
+`--agent codex` narrows it to one vendor.
 
 **`skills` manages the agent skills Astera installs into each account**: the files that tell an agent
 session about `astera`, and about the features switched on in the app. There are five.
@@ -757,6 +765,12 @@ second run is all `unchanged`.
 
 **Agent sessions read their skills when they start**, so a session already open does not see a
 skill installed after it, and `data.note` says so. Open a new session.
+
+**`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
+protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen
+tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access
+in Settings (CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`,
+`resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
@@ -1139,8 +1153,8 @@ command runs exactly as it always did.
 **That refusal is about a Host that answered and cannot help. Some answers never reach a Host at
 all**, and they split in two.
 
-`host start`, `host status`, `host stop`, `skills list` and `skills install` do not go through the
-Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
+`host start`, `host status`, `host stop`, `skills list`, `skills install` and `mcp serve` do not go
+through the Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
 dropped. `host stop` and `skills install` are the ones that act, and a caller that keys them is owed
 either the protection or the refusal. (`skills install` is safe to repeat anyway: a second run writes
 nothing.)

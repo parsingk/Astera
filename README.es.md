@@ -268,6 +268,9 @@ Cada código de salida tiene un solo significado, así que un pipeline distingue
 ver todos los comandos, el formato JSON, los códigos de salida, cómo reintentar una llamada sin riesgo,
 recetas de CI y notas de seguridad.
 
+**MCP**
+Permite que los agentes compatibles con MCP creen, ejecuten y supervisen Jobs de Astera a través del mismo Host local que usan la aplicación de escritorio y la CLI. Consulta [docs/mcp.md](docs/mcp.md) (en inglés).
+
 ## Usar Astera desde una terminal, con la aplicación cerrada
 
 El comando `astera` habla con el **Astera Host**, el proceso en segundo plano que ejecuta tus sesiones y
@@ -391,6 +394,7 @@ ejecuta la comprobación de tipos, la suite y una compilación completa del bund
 ## Documentación
 
 - [El comando `astera`](docs/cli.md) — manejar Jobs desde una shell o CI: instalación, comandos, JSON y códigos de salida (en inglés)
+- [MCP](docs/mcp.md) — dejar que un cliente MCP cree, ejecute y supervise Jobs: conexión, herramientas y acceso MCP (en inglés)
 - [Configuración del bot de Slack](docs/slack-bot-setup.md) — crear la aplicación, tokens y permisos
 - [Publicación de versiones](docs/releasing.md) — cómo se corta y publica una versión
 - [Política de firma de código](docs/code-signing.md) — quién firma las versiones, qué se firma y

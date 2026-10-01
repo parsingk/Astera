@@ -53,6 +53,15 @@ export const ko = {
   'settings.cli.pathTooLong.toast': 'astera 명령은 설치했지만 사용자 PATH 가 너무 길어 새로 여는 창에서는 쓸 수 없습니다. 설정 화면의 안내를 봐 주세요.',
   'settings.cli.copy': '복사',
   'settings.cli.cmdRawPath': 'Astera 가 ASCII 가 아닌 이름의 폴더에 설치되어 있어 cmd 나 PowerShell 의 astera 가 돌지 않을 수 있습니다: {detail}. Git Bash 에서는 돕니다. ASCII 이름의 폴더에 다시 설치하면 고쳐집니다.',
+  'settings.mcp.label': 'MCP 접근',
+  'settings.mcp.off': '꺼짐',
+  'settings.mcp.read': '읽기 전용',
+  'settings.mcp.control': '읽기와 제어',
+  'settings.mcp.hint': 'astera mcp serve 로 연결한 MCP 클라이언트가 할 수 있는 일입니다. 읽기 전용이면 Job 과 Run 을 보기만 하고, 읽기와 제어면 Job 을 만들고 실행하고 멈추고 다시 이어 가고 질문에 답할 수 있습니다.',
+  'settings.mcp.copyFailed': '줄을 복사하지 못했습니다: {detail}',
+  'settings.mcp.register': 'MCP 클라이언트에 Astera 를 추가하려면 그 클라이언트의 줄을 실행하거나 붙여 넣으세요. 이 운영체제에 맞춘 형태입니다.',
+  'settings.mcp.saveFailed': 'MCP 접근 설정을 저장하지 못했습니다: {detail}',
+  'settings.mcp.loadFailed': 'MCP 접근 설정을 읽지 못했습니다: {detail}',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
   'settings.agentPermission.hint':

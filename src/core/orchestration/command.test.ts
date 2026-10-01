@@ -5575,6 +5575,18 @@ describe('runs stop', () => {
     expect((await call(deps, 'runs-resume')).status).toBe(400)
   })
 
+  // The same view `runs get` answers with, derived fields included, so a caller needs no second read.
+  it('runs resume answers with the Run as runs get shows it', async () => {
+    const { deps, runId } = await withWorker()
+    await call(deps, 'runs-stop', { id: runId })
+    const resumed = await call(deps, 'runs-resume', { id: runId })
+    expect(resumed.status).toBe(200)
+    const got = await call(deps, 'runs-get', { id: runId })
+    expect(resumed.body).toEqual(got.body)
+    expect(resumed.body).toHaveProperty('outcome')
+    expect((resumed.body as { paused?: boolean }).paused).toBeUndefined()
+  })
+
   it('열린 워커가 없어도 세운다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
@@ -6074,6 +6086,87 @@ describe('jobs create / tasks add / accounts list', () => {
     expect(r.body).toEqual([{ id: 'acc1', label: '계정1', provider: 'codex' }])
     await shell(deps, 'accounts-list', { agent: 'claude' })
     expect(seen).toEqual([undefined, 'claude'])
+  })
+
+  /** Accounts whose `default` marks are given only when the caller asks for them (`withDefault`). */
+  const withDefaults = (rows: Array<{ id: string; provider: 'claude' | 'codex'; default?: true }>) => {
+    const asked: Array<{ provider?: string; withDefault?: boolean }> = []
+    return {
+      asked,
+      listAccounts: (provider?: 'claude' | 'codex', opts?: { withDefault?: boolean }) => {
+        asked.push({ provider, withDefault: opts?.withDefault })
+        return rows
+          .filter((a) => provider === undefined || a.provider === provider)
+          .map(({ default: d, ...a }) => ({ ...a, label: a.id, ...(opts?.withDefault && d ? { default: d } : {}) }))
+      }
+    }
+  }
+
+  it('accounts list marks each provider\'s default account', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude', default: true },
+      { id: 'cl2', provider: 'claude' },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const r = await shell({ ...makeDeps(), listAccounts: accounts.listAccounts }, 'accounts-list', {})
+    expect(r.body).toEqual([
+      { id: 'cl1', label: 'cl1', provider: 'claude', default: true },
+      { id: 'cl2', label: 'cl2', provider: 'claude' },
+      { id: 'cx1', label: 'cx1', provider: 'codex', default: true }
+    ])
+  })
+
+  it('jobs create --coordinator-provider takes that provider\'s default account', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude' },
+      { id: 'cl2', provider: 'claude', default: true },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'claude' })
+    expect(r.status).toBe(200)
+    expect((r.body as { coordinatorAccountId?: string }).coordinatorAccountId).toBe('cl2')
+    expect(accounts.asked).toContainEqual({ provider: 'claude', withDefault: true })
+  })
+
+  it('an explicit --coordinator-account wins over --coordinator-provider', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude', default: true },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'cx1',
+      coordinatorProvider: 'claude'
+    })
+    expect(r.status).toBe(200)
+    expect((r.body as { coordinatorAccountId?: string }).coordinatorAccountId).toBe('cx1')
+  })
+
+  it('--coordinator-provider with no logged-in account of it is 400, naming the provider and accounts list', async () => {
+    const accounts = withDefaults([{ id: 'cl1', provider: 'claude', default: true }, { id: 'cx1', provider: 'codex' }])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'codex' })
+    expect(r.status).toBe(400)
+    const error = String((r.body as { error?: string }).error)
+    expect(error).toContain('codex')
+    expect(error).toContain('accounts list')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('--coordinator-provider outside claude and codex is 400', async () => {
+    const r = await shell(makeDeps(), 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'gemini' })
+    expect(r.status).toBe(400)
+  })
+
+  it('without either flag jobs create makes a Job with no coordinator, as before', async () => {
+    const accounts = withDefaults([{ id: 'cl1', provider: 'claude', default: true }])
+    const r = await shell({ ...makeDeps(), listAccounts: accounts.listAccounts }, 'jobs-create', { objective: 'o', cwd: 'D:/p' })
+    expect(r.status).toBe(200)
+    expect('coordinatorAccountId' in (r.body as object)).toBe(false)
+    expect(accounts.asked).toEqual([])
   })
 
   // 워커는 계획도 Task 도 만들 수 없다 — 안에서 부르는 run-create·task-create 의 경계가 그대로 선다.
@@ -7732,5 +7825,47 @@ describe('handleCommand — chats pending and chats answer (chat takeover §3.5)
     const detail = 'c1 is written by an Astera too old to be asked; answer it in Astera'
     const r = await call(withChats([p('c1', 'r1')], { answered: false, reason: 'not-held', detail }).deps, 'chats-answer', { id: 'r1', allow: true }, '')
     expect(r).toEqual({ status: 409, body: { error: detail } })
+  })
+})
+
+describe('handleCommand — runs-completion', () => {
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ]
+  })
+  it('answers where each Task of the run stands', async () => {
+    const r = await call(makeDeps(seeded()), 'runs-completion', { id: 'r1' }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId: 'r1', jobId: 'job_1', state: 'checking', tasks: [{ taskId: 't1', state: 'checking' }] })
+  })
+  it('is 404 for an unknown run and 400 for no id', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'runs-completion', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'runs-completion', {}, '')).status).toBe(400)
+  })
+})
+
+describe('handleCommand — tasks-get', () => {
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ]
+  })
+  it('answers one Task with its attempts', async () => {
+    const r = await call(makeDeps(seeded()), 'tasks-get', { id: 't1' }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ id: 't1', title: 'T', attempts: [] })
+  })
+  it('is 404 for an unknown id and 400 for no id', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'tasks-get', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'tasks-get', {}, '')).status).toBe(400)
   })
 })

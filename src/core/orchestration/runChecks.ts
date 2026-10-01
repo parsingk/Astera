@@ -145,6 +145,10 @@ function summaryOf(task: Task, validation: TaskValidation, review: TaskReview): 
   return parts.length === 0 ? null : parts.join('; ')
 }
 
+/** One Task's `failureSummary`, the same line `runs checks` gives it. For `runs-completion`. */
+export const failureSummaryOf = (s: OrchState, task: Task): string | null =>
+  summaryOf(task, validationOf(task), reviewOf(s, task))
+
 /** Every Task of the run, in the order they were made, with its checks. Null for a run not there. */
 export function checksForRun(s: OrchState, runId: string): RunChecks | null {
   const run = s.runs.find((r) => r.id === runId)

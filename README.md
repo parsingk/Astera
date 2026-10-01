@@ -278,6 +278,9 @@ Each exit code has one meaning, so a pipeline can tell a run that finished badly
 for a person (8). See [the `astera` command](docs/cli.md) for every command, the JSON format, exit
 codes, retrying a call safely, CI recipes and security notes.
 
+**MCP**
+Let MCP-capable agents create, run, and monitor Astera Jobs through the same local Host used by the desktop app and CLI. See [docs/mcp.md](docs/mcp.md).
+
 ## Using Astera from a terminal, with the app closed
 
 The `astera` command talks to the **Astera Host**, the background process that runs your sessions and
@@ -397,6 +400,7 @@ and a full bundle build.
 - [How It Works](docs/how-it-works.md) — record a task, read its explanation, and follow the implementation
 - [Job lifecycle](docs/jobs.md) — tasks, worktrees, completion, merging, and scheduled runs
 - [The `astera` command](docs/cli.md) — driving Jobs from a shell or CI: install, commands, JSON, exit codes
+- [MCP](docs/mcp.md) — letting an MCP client create, run, and monitor Jobs: connecting, the tools, and MCP access
 - [Slack bot setup](docs/slack-bot-setup.md) — creating the app, tokens, and permissions
 - [Releasing](docs/releasing.md) — how a version gets cut and published
 - [Code signing policy](docs/code-signing.md) — who signs the releases, what is signed, and privacy

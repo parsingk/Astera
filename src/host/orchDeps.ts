@@ -607,7 +607,7 @@ export function hostOrchDeps(a: {
   withdrawEffect?(): void
   /** `listAccounts` answered from the profile's accounts.json (LOCAL_WHEN_ABSENT). Rejects when the
    *  file cannot be read, with a message that says how to repair it. */
-  readAccounts(provider?: Provider): Promise<OrchAccount[]>
+  readAccounts(provider?: Provider, opts?: { withDefault?: boolean }): Promise<OrchAccount[]>
   /** `listRunConfigs` answered from the profile's run-configs.json and the project folder
    *  (LOCAL_WHEN_ABSENT). Rejects when the file cannot be read, with a message that says how to repair it. */
   readRunConfigs(projectPath: string): Promise<OrchRunConfig[]>

@@ -36,6 +36,25 @@ describe('publicFor', () => {
     ])
   })
 
+  // `jobs run` answers with the Run it started (runView), so it hides what `runs get` hides.
+  it('jobs run hides the Run fields runs get hides', () => {
+    const out = publicFor('jobs-run', {
+      id: 'run_1',
+      jobId: 'job_1',
+      ordinal: 1,
+      coordinatorStop: { at: 'T' },
+      coordinatorStartingAt: 'T',
+      coordinatorStopPending: true
+    })
+    expect(out).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })
+  })
+
+  // `runs resume` answers with the Run it took back (runView), so it hides what `runs get` hides.
+  it('runs resume hides the Run fields runs get hides', () => {
+    const out = publicFor('runs-resume', { id: 'run_1', jobId: 'job_1', ordinal: 1, coordinatorStop: { at: 'T' } })
+    expect(out).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })
+  })
+
   // **한 겹 안이라고 새면 가림막이 아니다.** jobs get 은 회차를 `run` 에 접어 싣는다(설계 §5)
   it('jobs get 이 접어 실은 회차도 가린다', () => {
     const out = publicFor('jobs-get', {
@@ -140,6 +159,19 @@ describe('publicFor', () => {
     expect(
       publicFor('accounts-list', [{ id: 'a1', label: '일', provider: 'claude', configDir: 'C:/secret' }])
     ).toEqual([{ id: 'a1', label: '일', provider: 'claude' }])
+  })
+
+  // An added field: a row that is its provider's default says so, the others carry no `default`.
+  it('accounts list keeps the default mark', () => {
+    expect(
+      publicFor('accounts-list', [
+        { id: 'a1', label: 'one', provider: 'claude', default: true },
+        { id: 'a2', label: 'two', provider: 'claude' }
+      ])
+    ).toEqual([
+      { id: 'a1', label: 'one', provider: 'claude', default: true },
+      { id: 'a2', label: 'two', provider: 'claude' }
+    ])
   })
 
   // skills 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다. 두 겹 모두 같은 규칙으로 가린다 —

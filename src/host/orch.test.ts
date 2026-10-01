@@ -103,6 +103,42 @@ describe('createHostOrch', () => {
     expect((r.body as { id: string }[]).map((j) => j.id)).toEqual([jobId])
   })
 
+  describe('MCP access gate', () => {
+    const settings = (text: string): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), text)
+    const caller = (role: 'mcp' | 'cli'): { role: 'mcp' | 'cli'; toOthers: () => void } => ({ role, toOthers: () => {} })
+    it('an MCP caller is refused when app-settings.json says off, and admitted when it says control', async () => {
+      const orch = orchOver()
+      await settings(JSON.stringify({ mcpAccess: 'off' }))
+      const off = await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })
+      expect(off.status).toBe(403)
+      await settings(JSON.stringify({ mcpAccess: 'control' }))
+      const on = await orch.call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })
+      expect(on.status).toBe(200)
+    })
+    it('a CLI caller is not gated by mcpAccess', async () => {
+      await settings(JSON.stringify({ mcpAccess: 'off' }))
+      const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('cli') })
+      expect(r.status).toBe(200)
+    })
+    it('a refused MCP call with a request id leaves no receipt', async () => {
+      const orch = orchOver()
+      const call = (): ReturnType<typeof orch.call> =>
+        orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: caller('mcp'), request: 'r-1' })
+      await settings(JSON.stringify({ mcpAccess: 'read' }))
+      expect((await call()).status).toBe(403)
+      await settings(JSON.stringify({ mcpAccess: 'control' }))
+      const again = await call()
+      expect(again.replayed).not.toBe(true)
+      expect(again.status).toBe(200)
+    })
+    it('an unreadable settings file refuses', async () => {
+      await settings('{not json')
+      const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })
+      expect(r.status).toBe(500)
+      expect(JSON.stringify(r.body)).toMatch(/app-settings\.json/)
+    })
+  })
+
   // 설계 §8: 상태가 실리기 전에 온 호출은 실패하는 대신 기다린다. ready() 를 부르지 않는 것이
   // 여기서 요점이다 — 실제 Host 도 부르지 않는다.
   it('ready() 전에 온 호출도 상태를 보고 답한다', async () => {

@@ -881,3 +881,42 @@ describe('readSkillSettings on a corrupt file', () => {
     }
   })
 })
+
+describe('mcpAccess', () => {
+  it('defaults to control and is not written while it is', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpAccess()).toBe('control')
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpAccess')
+    await store.setMcpAccess('read')
+    await store.setMcpAccess('control')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpAccess')
+  })
+
+  it('keeps read and off across a reload', async () => {
+    for (const value of ['read', 'off'] as const) {
+      const a = new AppSettingsStore(file())
+      await a.load()
+      await a.setMcpAccess(value)
+      expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpAccess).toBe(value)
+      const b = new AppSettingsStore(file())
+      await b.load()
+      expect(b.getMcpAccess()).toBe(value)
+    }
+  })
+
+  it('an unknown value in the file reads as control', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpAccess: 'nope' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpAccess()).toBe('control')
+  })
+
+  it('a recovered profile reads off, the narrower side', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpAccess()).toBe('off')
+  })
+})

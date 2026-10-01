@@ -77,7 +77,7 @@ const RUN_HIDDEN = ['coordinatorStop', 'coordinatorStartingAt', 'coordinatorStop
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 const RUN = [...RUN_FIELDS, ...DERIVED]
 
-const TASK_FIELDS = [
+export const TASK_PUBLIC_FIELDS = [
   'id',
   'runId',
   'jobId',
@@ -118,11 +118,11 @@ const TASK_HIDDEN = [
   'suspiciousFiles',
   'reviewRequested'
 ] as const
-type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
+type _task = NothingLeft<Unlisted<Task, typeof TASK_PUBLIC_FIELDS, typeof TASK_HIDDEN>>
 
 /** `tasks list --brief` 가 덧붙이는 칸. Task 에는 없다 — 어디서 잘렸는지 알리려고 그 명령이
  *  만든다(server.ts). 목록에 넣지 않으면 --brief 가 그 표시를 조용히 잃는다. */
-const TASK = [...TASK_FIELDS, 'spec_truncated']
+const TASK = [...TASK_PUBLIC_FIELDS, 'spec_truncated']
 
 const QUESTION = [
   'id',
@@ -139,8 +139,9 @@ const QUESTION = [
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 
 /** 계정은 앱이 이미 이 셋으로만 내보낸다(ipc.ts 의 listAccounts). 그래도 적는 이유는 이 파일의
- *  머리말 그대로다 — 앱 쪽이 칸을 하나 더하는 순간 그것이 공개 API 가 되지 않게 한다. */
-const ACCOUNT = ['id', 'label', 'provider'] as const
+ *  머리말 그대로다 — 앱 쪽이 칸을 하나 더하는 순간 그것이 공개 API 가 되지 않게 한다.
+ *  `default` is the fourth: it is there only on its provider's default account (OrchAccount.default). */
+const ACCOUNT = ['id', 'label', 'provider', 'default'] as const
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
 /** 구성의 명령·env·cwd 는 앱에 남는다 — env 값은 비밀일 수 있다. 앱도 Host 도 이미 셋으로 추려
@@ -286,6 +287,10 @@ const SHAPE: Record<string, readonly string[]> = {
   'jobs-create': JOB,
   'runs-list': RUN,
   'runs-get': RUN,
+  // `jobs run` answers with the Run it started (runView), so it hides what `runs get` hides.
+  'jobs-run': RUN,
+  // `runs resume` answers with the Run it took back (runView), so it hides the same.
+  'runs-resume': RUN,
   'tasks-list': TASK,
   'tasks-add': TASK,
   'tasks-dispatch': TASK_DISPATCH,

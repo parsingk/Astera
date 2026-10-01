@@ -49,6 +49,15 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.cli.pathTooLong.toast': 'The astera command is installed, but your user PATH is too long for new windows to have it. See Settings for what to do.',
   'settings.cli.copy': 'Copy',
   'settings.cli.cmdRawPath': 'Astera is installed in a folder whose name is not ASCII, and astera from cmd or PowerShell may not run: {detail}. It still runs from Git Bash. Reinstalling Astera into a folder with an ASCII name fixes it.',
+  'settings.mcp.label': 'MCP access',
+  'settings.mcp.off': 'Off',
+  'settings.mcp.read': 'Read only',
+  'settings.mcp.control': 'Read and control',
+  'settings.mcp.hint': 'What an MCP client connected through astera mcp serve may do. Read only lets it look at Jobs and Runs; read and control also lets it create, run, stop and resume Jobs and answer questions.',
+  'settings.mcp.copyFailed': 'Could not copy the line: {detail}',
+  'settings.mcp.register': "To add Astera to an MCP client, run or paste that client's line. The lines are written for this operating system.",
+  'settings.mcp.saveFailed': 'Could not save MCP access: {detail}',
+  'settings.mcp.loadFailed': 'Could not read MCP access: {detail}',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':

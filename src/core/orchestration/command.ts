@@ -49,6 +49,8 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
+import { completionForRun } from './runCompletion'
+import { taskDetailOf } from './taskDetail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -107,6 +109,9 @@ export interface OrchAccount {
   id: string
   label: string
   provider: Provider
+  /** Its provider's default account (defaultAccountIdOf). Only when the list was asked for
+   *  `withDefault`: deciding it probes every account's login, so the other callers do not pay for it. */
+  default?: true
 }
 
 /** One run configuration as this layer sees it: what `--validate` takes and what `run-configs`
@@ -340,7 +345,7 @@ export interface OrchServerDeps {
    *  not care which — that is the whole point of the split (host control plane design §5). The union
    *  rather than `Promise<…>` outright: `await` on a plain array is already correct, so the app's
    *  wiring and every test double that returns one stay exactly as they are. */
-  listAccounts(provider?: Provider): OrchAccount[] | Promise<OrchAccount[]>
+  listAccounts(provider?: Provider, opts?: { withDefault?: boolean }): OrchAccount[] | Promise<OrchAccount[]>
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to.
    *  **Orchestration itself has no such toggle**: it is a thing Astera has, like sessions, so the
@@ -1501,6 +1506,21 @@ export async function handleCommand(
           return notFound(`unknown account: ${coordArg}`)
         coordinatorAccountId = coordArg
       }
+      // `--coordinator-provider`: with no `--coordinator-account`, that provider's default account
+      // (defaultAccountIdOf, which listAccounts marks when asked) coordinates. An explicit account wins.
+      // An older app attached to a newer Host returns no default mark, so this fails with the no-account
+      // 400 until the app is updated.
+      const coordProvider = args.coordinatorProvider
+      if (coordProvider !== undefined && coordProvider !== 'claude' && coordProvider !== 'codex')
+        return bad('--coordinator-provider must be claude|codex')
+      if (coordArg === null && coordProvider !== undefined) {
+        const chosen = (await deps.listAccounts(coordProvider, { withDefault: true })).find((k) => k.default === true)
+        if (!chosen)
+          return bad(
+            `no ${coordProvider} account is logged in to coordinate this Job; log one in, or name one from \`accounts list\` with --coordinator-account`
+          )
+        coordinatorAccountId = chosen.id
+      }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
       let schedule: ScheduleRule | undefined
@@ -1862,7 +1882,11 @@ export async function handleCommand(
     case 'runs-resume': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
-      return commit(resumeRun(s, id))
+      // Answered with the view `runs get` gives (derived fields included); refusals are commit's.
+      const resumed = resumeRun(s, id)
+      const reply = await commit(resumed)
+      if (!resumed.ok || reply.status !== 200) return reply
+      return okBody(runView(resumed.state, resumed.value))
     }
     case 'runs-get': {
       const id = str(args.id)
@@ -1930,6 +1954,14 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const checks = checksForRun(s, id)
       return checks ? okBody(checks) : notFound(`unknown run: ${id}`)
+    }
+    // **Where each Task stands in completion, read and never run** (MCP design §3). Not public: the
+    // MCP get_completion tool reads it; the CLI's `runs checks` stays the public view of the same run.
+    case 'runs-completion': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const completion = completionForRun(s, id)
+      return completion ? okBody(completion) : notFound(`unknown run: ${id}`)
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.
@@ -2606,6 +2638,13 @@ export async function handleCommand(
         return conflict(`run ${run.id} is at its concurrency limit: ${openHere} of ${limit} workers are open`)
       if (!deps.dispatchTask) return conflict('placing a task on request is done by the Astera Host, and this caller is not one')
       return deps.dispatchTask(id)
+    }
+    // **One Task and its attempts** (MCP design §3b). Not public: the MCP get_task tool reads it.
+    case 'tasks-get': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const detail = taskDetailOf(s, id)
+      return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
     }
     case 'tasks-list': {
       let tasks = s.tasks
@@ -3674,7 +3713,7 @@ export async function handleCommand(
     case 'accounts':
     case 'accounts-list': {
       const agent = str(args.agent)
-      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
+      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined, { withDefault: true }))
     }
     /**
      * 세션을 보고, 읽고, 친다 — 공개 이름(phase C). 답은 Host 의 레지스트리다(`listSessions` 셋).

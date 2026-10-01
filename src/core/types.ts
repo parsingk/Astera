@@ -890,6 +890,9 @@ export type ResumeStrategy = 'smart' | 'original'
  *  두고 그 기본값이 곧 우회 플래그다(`DEFAULT_TUI_AGENT_ARGS = YOLO_TUI_AGENT_ARGS`). */
 export type AgentPermissionMode = 'yolo' | 'manual'
 
+/** What an MCP client may do through the Host (MCP design M5). Default 'control' (M6). */
+export type McpAccess = 'off' | 'read' | 'control'
+
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
 export interface HostStatus {
@@ -1245,6 +1248,9 @@ export interface CoreApi {
     // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
     getAgentPermissionMode(): Promise<AgentPermissionMode>
     setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    // What an MCP client may do through `astera mcp serve`. See McpAccess.
+    getMcpAccess(): Promise<McpAccess>
+    setMcpAccess(v: McpAccess): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
