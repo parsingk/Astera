@@ -46,8 +46,10 @@ export function isJournalActor(v: unknown): v is JournalActor {
   if (o.sessionId !== undefined && typeof o.sessionId !== 'string') return false
   // A client only on mcp, and only one already in its kept form.
   if (o.client === undefined) return true
+  // Field by field: the order the keys were written in says nothing.
   const kept = mcpClientOf(o.client)
-  return o.surface === 'mcp' && kept !== undefined && JSON.stringify(kept) === JSON.stringify(o.client)
+  const given = o.client as Record<string, unknown>
+  return o.surface === 'mcp' && kept !== undefined && kept.name === given.name && kept.version === given.version
 }
 
 /** `actor_json` as read: null for a v2 row, or for a value this build cannot read (P4). A `client`

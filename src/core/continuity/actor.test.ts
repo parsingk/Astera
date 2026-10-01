@@ -106,6 +106,11 @@ describe('the MCP client on the actor', () => {
     // Only mcp carries one: on another surface it is dropped.
     expect(actorFromJson('{"surface":"cli","client":{"name":"x"}}')).toEqual({ surface: 'cli' })
     expect(isJournalActor({ surface: 'mcp', client: { name: 7 } })).toBe(false)
+    // Field by field, not by the order the keys were written in.
+    expect(isJournalActor({ surface: 'mcp', client: { version: '1.2.3', name: 'claude-code' } })).toBe(true)
+    expect(isJournalActor({ surface: 'mcp', client: { name: 'claude-code' } })).toBe(true)
+    expect(isJournalActor({ surface: 'mcp', client: { name: 'a\nb' } })).toBe(false)
+    expect(isJournalActor({ surface: 'mcp', client: { name: 'x', version: '' } })).toBe(false)
     expect(isJournalActor({ surface: 'cli', client: { name: 'x' } })).toBe(false)
   })
 })
