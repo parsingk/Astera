@@ -6076,6 +6076,87 @@ describe('jobs create / tasks add / accounts list', () => {
     expect(seen).toEqual([undefined, 'claude'])
   })
 
+  /** Accounts whose `default` marks are given only when the caller asks for them (`withDefault`). */
+  const withDefaults = (rows: Array<{ id: string; provider: 'claude' | 'codex'; default?: true }>) => {
+    const asked: Array<{ provider?: string; withDefault?: boolean }> = []
+    return {
+      asked,
+      listAccounts: (provider?: 'claude' | 'codex', opts?: { withDefault?: boolean }) => {
+        asked.push({ provider, withDefault: opts?.withDefault })
+        return rows
+          .filter((a) => provider === undefined || a.provider === provider)
+          .map(({ default: d, ...a }) => ({ ...a, label: a.id, ...(opts?.withDefault && d ? { default: d } : {}) }))
+      }
+    }
+  }
+
+  it('accounts list marks each provider\'s default account', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude', default: true },
+      { id: 'cl2', provider: 'claude' },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const r = await shell({ ...makeDeps(), listAccounts: accounts.listAccounts }, 'accounts-list', {})
+    expect(r.body).toEqual([
+      { id: 'cl1', label: 'cl1', provider: 'claude', default: true },
+      { id: 'cl2', label: 'cl2', provider: 'claude' },
+      { id: 'cx1', label: 'cx1', provider: 'codex', default: true }
+    ])
+  })
+
+  it('jobs create --coordinator-provider takes that provider\'s default account', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude' },
+      { id: 'cl2', provider: 'claude', default: true },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'claude' })
+    expect(r.status).toBe(200)
+    expect((r.body as { coordinatorAccountId?: string }).coordinatorAccountId).toBe('cl2')
+    expect(accounts.asked).toContainEqual({ provider: 'claude', withDefault: true })
+  })
+
+  it('an explicit --coordinator-account wins over --coordinator-provider', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude', default: true },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'cx1',
+      coordinatorProvider: 'claude'
+    })
+    expect(r.status).toBe(200)
+    expect((r.body as { coordinatorAccountId?: string }).coordinatorAccountId).toBe('cx1')
+  })
+
+  it('--coordinator-provider with no logged-in account of it is 400, naming the provider and accounts list', async () => {
+    const accounts = withDefaults([{ id: 'cl1', provider: 'claude', default: true }, { id: 'cx1', provider: 'codex' }])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'codex' })
+    expect(r.status).toBe(400)
+    const error = String((r.body as { error?: string }).error)
+    expect(error).toContain('codex')
+    expect(error).toContain('accounts list')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('--coordinator-provider outside claude and codex is 400', async () => {
+    const r = await shell(makeDeps(), 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'gemini' })
+    expect(r.status).toBe(400)
+  })
+
+  it('without either flag jobs create makes a Job with no coordinator, as before', async () => {
+    const accounts = withDefaults([{ id: 'cl1', provider: 'claude', default: true }])
+    const r = await shell({ ...makeDeps(), listAccounts: accounts.listAccounts }, 'jobs-create', { objective: 'o', cwd: 'D:/p' })
+    expect(r.status).toBe(200)
+    expect('coordinatorAccountId' in (r.body as object)).toBe(false)
+    expect(accounts.asked).toEqual([])
+  })
+
   // 워커는 계획도 Task 도 만들 수 없다 — 안에서 부르는 run-create·task-create 의 경계가 그대로 선다.
   it('워커 세션은 jobs create 와 tasks add 를 부를 수 없다', async () => {
     const deps = makeDeps()

@@ -180,6 +180,15 @@ describe('hostOrchDeps', () => {
       expect(refused).toEqual([])
     })
 
+    it('passes withDefault on, to the file read and to the app alike', async () => {
+      const readAccounts = vi.fn().mockResolvedValue(acc)
+      await hostOrchDeps(base({ hasApp: () => false, act: vi.fn(), readAccounts })).listAccounts('claude', { withDefault: true })
+      expect(readAccounts).toHaveBeenCalledWith('claude', { withDefault: true })
+      const act = vi.fn().mockResolvedValue(acc)
+      await hostOrchDeps(base({ act, readAccounts: vi.fn() })).listAccounts(undefined, { withDefault: true })
+      expect(act).toHaveBeenCalledWith('listAccounts', [undefined, { withDefault: true }])
+    })
+
     it('앱이 있으면 앱에 묻고 파일은 읽지 않는다', async () => {
       const act = vi.fn().mockResolvedValue(acc)
       const readAccounts = vi.fn()

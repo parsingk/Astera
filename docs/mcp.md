@@ -116,10 +116,10 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | --- | --- |
 | `list_projects` | The projects registered in Astera. Use a project id with `create_job`. |
 | `get_project` | One registered project. |
-| `list_accounts` | The agent accounts Astera holds (id, label, provider). `create_job` needs one as the coordinator account. |
+| `list_accounts` | The agent accounts Astera holds (id, label, provider). Each provider's default account says `default: true`; `create_job` uses it when no coordinator account is given. |
 | `list_jobs` | Astera Jobs, newest first, each with the state of its latest Run. Filter by state, and by project with a `projectId` from `list_projects` (an unknown id is `NOT_FOUND`). |
 | `get_job` | One Job and its latest Run. |
-| `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work. |
+| `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
 | `list_runs` | Runs, newest first by ordinal, optionally of one Job. |
 | `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. |
@@ -131,8 +131,12 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
 | `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and a `failureSummary` naming each failed check, its exit code and its last output line. Astera runs the checks and repairs; this only reads them. |
 
-`create_job` takes a `projectId` from `list_projects`, an `objective`, and a `coordinatorAccountId`
-from `list_accounts`. A Job that has never run shows `pendingStart: true` in `get_job` and
+`create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
+`coordinatorAccountId` from `list_accounts`, or, without one, the default account of
+`coordinatorProvider` (`claude` or `codex`, `claude` when neither is given): the earliest registered
+account of that provider that is logged in, the one `list_accounts` marks `default: true`. With no
+account of that provider logged in, `create_job` is refused with `INVALID_ARGUMENTS`. When both are
+given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart: true` in `get_job` and
 `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion` and `list_questions`.
 `run_job` makes the Run's worktree and starts its coordinator before it answers, so on a large repository it can take up
 to a minute.
@@ -215,8 +219,8 @@ Use the `cmd /c astera mcp serve` form from [Connect a client](#connect-a-client
 ## An example flow
 
 1. `list_projects` to find the project id.
-2. `list_accounts` to pick a coordinator account.
-3. `create_job` with the `projectId`, an `objective` and the `coordinatorAccountId`. It returns the Job
+2. `list_accounts` to pick a coordinator account, or skip it to use the default `claude` account.
+3. `create_job` with the `projectId`, an `objective` and, if you picked one, the `coordinatorAccountId`. It returns the Job
    without starting it.
 4. `run_job` with the Job id. It returns a Run id at once.
 5. Poll `get_run` for the Run's state and `get_completion` for where each Task stands in its checks.

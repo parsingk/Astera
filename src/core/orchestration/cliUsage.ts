@@ -173,6 +173,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
         about: 'the account a coordinator session runs on (one, from `accounts list`)'
       },
       {
+        name: 'coordinator-provider',
+        value: '<claude|codex>',
+        about: "without --coordinator-account, that provider's default account coordinates"
+      },
+      {
         name: 'convergence',
         about: 'repair failing tasks instead of failing them'
       },

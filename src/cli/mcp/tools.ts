@@ -57,7 +57,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: true,
     cmd: 'accounts-list',
     description:
-      'The agent accounts Astera holds (id, label, provider). create_job needs one as the coordinator account.',
+      "The agent accounts Astera holds (id, label, provider). Each provider's default account says default: true; create_job uses it when no coordinator account is given.",
     inputSchema: { provider: z.enum(['claude', 'codex']).optional(), limit },
     args: (i) => (i.provider ? { agent: i.provider } : {})
   },
@@ -90,14 +90,25 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'jobs-create',
     description:
-      'Create a durable Astera Job for a project. This does not start execution. Use run_job after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work.',
+      "Create a durable Astera Job for a project. This does not start execution. Use run_job after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without coordinatorAccountId it is coordinatorProvider's default account (claude unless given).",
     inputSchema: {
       projectId: id,
       objective: z.string().min(1).max(MCP_LIMITS.objective),
-      coordinatorAccountId: id,
+      coordinatorAccountId: id.optional(),
+      coordinatorProvider: z
+        .enum(['claude', 'codex'])
+        .optional()
+        .describe("Without coordinatorAccountId, that provider's default account coordinates (default claude)."),
       requestId
     },
-    args: (i) => ({ objective: i.objective, cwd: i.projectPath, coordinatorAccount: i.coordinatorAccountId })
+    // Exactly one coordinator reaches the Host: the account when given, otherwise the provider.
+    args: (i) => ({
+      objective: i.objective,
+      cwd: i.projectPath,
+      ...(i.coordinatorAccountId !== undefined
+        ? { coordinatorAccount: i.coordinatorAccountId }
+        : { coordinatorProvider: i.coordinatorProvider ?? 'claude' })
+    })
   },
   {
     name: 'run_job',

@@ -502,7 +502,7 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
 astera runs    get    --id <runId>
@@ -651,6 +651,10 @@ is parked in `check --wait`, and skips otherwise, as above.
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
 to have a coordinator session drive the Job once it runs; without it the workers are placed for you.
+`--coordinator-provider claude` (or `codex`) picks that provider's default account for you: the
+earliest registered one that is logged in, the one `accounts list` marks `default: true`. With no
+account of that provider logged in it is a 2 that names the provider. When both flags are given,
+`--coordinator-account` wins.
 A Host that announces `dispatch` places them whether Astera is open or closed, and otherwise Astera
 does (see "Jobs run with Astera closed").
 
@@ -715,7 +719,8 @@ a subfolder of a project the app knows up to that project's root; with Astera cl
 folder as given, and a Job made from a subfolder then lists only what that subfolder's build files give.
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
-else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
+else about them, except `default: true` on each provider's default account: the earliest registered
+one that is logged in, the one `jobs create --coordinator-provider` picks. `--agent claude` or `--agent codex` narrows it to one vendor.
 
 **`skills` manages the agent skills Astera installs into each account**: the files that tell an agent
 session about `astera`, and about the features switched on in the app. There are five.

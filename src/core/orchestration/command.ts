@@ -109,6 +109,9 @@ export interface OrchAccount {
   id: string
   label: string
   provider: Provider
+  /** Its provider's default account (defaultAccountIdOf). Only when the list was asked for
+   *  `withDefault`: deciding it probes every account's login, so the other callers do not pay for it. */
+  default?: true
 }
 
 /** One run configuration as this layer sees it: what `--validate` takes and what `run-configs`
@@ -342,7 +345,7 @@ export interface OrchServerDeps {
    *  not care which — that is the whole point of the split (host control plane design §5). The union
    *  rather than `Promise<…>` outright: `await` on a plain array is already correct, so the app's
    *  wiring and every test double that returns one stay exactly as they are. */
-  listAccounts(provider?: Provider): OrchAccount[] | Promise<OrchAccount[]>
+  listAccounts(provider?: Provider, opts?: { withDefault?: boolean }): OrchAccount[] | Promise<OrchAccount[]>
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to.
    *  **Orchestration itself has no such toggle**: it is a thing Astera has, like sessions, so the
@@ -1502,6 +1505,19 @@ export async function handleCommand(
         if (!(await deps.listAccounts()).some((k) => k.id === coordArg))
           return notFound(`unknown account: ${coordArg}`)
         coordinatorAccountId = coordArg
+      }
+      // `--coordinator-provider`: with no `--coordinator-account`, that provider's default account
+      // (defaultAccountIdOf, which listAccounts marks when asked) coordinates. An explicit account wins.
+      const coordProvider = args.coordinatorProvider
+      if (coordProvider !== undefined && coordProvider !== 'claude' && coordProvider !== 'codex')
+        return bad('--coordinator-provider must be claude|codex')
+      if (coordArg === null && coordProvider !== undefined) {
+        const chosen = (await deps.listAccounts(coordProvider, { withDefault: true })).find((k) => k.default === true)
+        if (!chosen)
+          return bad(
+            `no ${coordProvider} account is logged in to coordinate this Job; log one in, or name one from \`accounts list\` with --coordinator-account`
+          )
+        coordinatorAccountId = chosen.id
       }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
@@ -3691,7 +3707,7 @@ export async function handleCommand(
     case 'accounts':
     case 'accounts-list': {
       const agent = str(args.agent)
-      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
+      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined, { withDefault: true }))
     }
     /**
      * 세션을 보고, 읽고, 친다 — 공개 이름(phase C). 답은 Host 의 레지스트리다(`listSessions` 셋).

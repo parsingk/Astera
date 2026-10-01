@@ -60,7 +60,7 @@ import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
-import { orchAccountOf } from '../core/accounts/accountsFile'
+import { orchAccountsFor } from '../core/accounts/accountsFile'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
@@ -3166,12 +3166,14 @@ export function registerIpc(
         rolling?.unregister(sessionId)
         codexRolling?.unregister(sessionId)
       },
-      listAccounts: (provider) =>
-        core.accounts
-          .list()
-          .filter((a) => provider === undefined || providerOf(a) === provider)
-          // 같은 투영을 Host 가 accounts.json 을 읽을 때도 쓴다(accountsFile.ts) — 두 답이 갈라지지 않게.
-          .map(orchAccountOf),
+      // The Host answers from accounts.json through the same function (accountsFile.ts), so the two
+      // answers cannot drift apart. `withDefault` marks each provider's default by the registry's login check.
+      listAccounts: (provider, opts) =>
+        orchAccountsFor(
+          core.accounts.list(),
+          provider,
+          opts?.withDefault ? (a) => core.accounts.loginStatus(a.id) : undefined
+        ),
       // limit is a line count (200 by default). The tail is returned as-is even after the session has
       // died — worker-release does not clear output. Why untracked, empty, and non-empty tails get three
       // different messages is explained in tail.ts (an empty string reads as "the worker did nothing").

@@ -161,6 +161,19 @@ describe('publicFor', () => {
     ).toEqual([{ id: 'a1', label: '일', provider: 'claude' }])
   })
 
+  // An added field: a row that is its provider's default says so, the others carry no `default`.
+  it('accounts list keeps the default mark', () => {
+    expect(
+      publicFor('accounts-list', [
+        { id: 'a1', label: 'one', provider: 'claude', default: true },
+        { id: 'a2', label: 'two', provider: 'claude' }
+      ])
+    ).toEqual([
+      { id: 'a1', label: 'one', provider: 'claude', default: true },
+      { id: 'a2', label: 'two', provider: 'claude' }
+    ])
+  })
+
   // skills 의 답은 계정 목록 안에 스킬 목록이 접힌 모양이다. 두 겹 모두 같은 규칙으로 가린다 —
   // 계정의 configDir 도, 스킬 파일의 경로도 나가지 않는다.
   it('skills list 와 install 은 계정과 그 안의 스킬을 둘 다 가린다', () => {

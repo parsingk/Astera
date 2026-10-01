@@ -114,12 +114,38 @@ describe('the MCP server', () => {
     expect(calls.map((c) => c.cmd)).toEqual(['projects-get'])
   })
 
-  it('create_job requires the coordinator account', async () => {
-    const { link, calls } = answering({})
+  it('create_job without an account sends coordinatorProvider, claude unless another is given', async () => {
+    const { link, calls } = answering({
+      'projects-get': { status: 200, body: { id: 'p1', name: 'Astera', path: 'D:/repo', addedAt: 'x' } }
+    })
     const client = await connected(link)
-    const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o' } })
-    expect(r.isError).toBe(true)
-    expect(calls).toEqual([])
+    await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o' } })
+    expect(calls.at(-1)).toMatchObject({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/repo', coordinatorProvider: 'claude' } })
+    await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', coordinatorProvider: 'codex' } })
+    expect(calls.at(-1)?.args).toEqual({ objective: 'o', cwd: 'D:/repo', coordinatorProvider: 'codex' })
+    // An explicit account wins, and is the only coordinator that reaches the Host.
+    await client.callTool({
+      name: 'create_job',
+      arguments: { projectId: 'p1', objective: 'o', coordinatorAccountId: 'acc_1', coordinatorProvider: 'codex' }
+    })
+    expect(calls.at(-1)?.args).toEqual({ objective: 'o', cwd: 'D:/repo', coordinatorAccount: 'acc_1' })
+  })
+
+  it('list_accounts marks each provider\'s default and passes no other field', async () => {
+    const accounts = [
+      { id: 'a1', label: 'one', provider: 'claude', default: true, configDir: 'C:/secret' },
+      { id: 'a2', label: 'two', provider: 'claude' }
+    ]
+    const r = await (await connected(answering({ 'accounts-list': { status: 200, body: accounts } }).link)).callTool({
+      name: 'list_accounts',
+      arguments: {}
+    })
+    expect(r.structuredContent).toEqual({
+      accounts: [
+        { id: 'a1', label: 'one', provider: 'claude', default: true },
+        { id: 'a2', label: 'two', provider: 'claude' }
+      ]
+    })
   })
 
   it('rejects an objective over the limit before calling the Host', async () => {

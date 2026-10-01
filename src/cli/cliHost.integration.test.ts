@@ -1036,6 +1036,11 @@ describe('the Job Journal with Astera closed (Host journal)', { timeout: 60_000 
 // does minus stdio. The Host gates every call by `mcpAccess` and journals what MCP did as surface mcp.
 describe('MCP against the Host', { timeout: 60_000 }, () => {
   type ToolResult = { isError?: boolean; content: Array<{ type: string; text?: string }>; structuredContent?: Record<string, unknown> }
+  /** An error's data: the JSON after its `CODE: message` line. An error carries no structuredContent. */
+  const errorOf = (r: ToolResult): Record<string, unknown> => {
+    expect(r.structuredContent).toBeUndefined()
+    return JSON.parse(String(r.content[0]?.text).split('\n')[1])
+  }
 
   /** A connected client and its own close, which a test may call early; the cleanup closes it otherwise. */
   async function mcpClient(rig: Rig): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
@@ -1177,7 +1182,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
 
     const created = await mcp.call('create_job', { projectId, objective: 'not allowed', coordinatorAccountId: h.accountId, requestId: 'ro-1' })
     expect(created.isError).toBe(true)
-    expect(created.structuredContent).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('Read only') })
+    expect(errorOf(created)).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('Read only') })
     expect(created.content[0].text).toContain('PERMISSION_DENIED')
     expect(h.state().jobs).toEqual([])
 
@@ -1200,16 +1205,35 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     ] as const) {
       const r = await mcp.call(name, args)
       expect(r.isError, name).toBe(true)
-      expect(r.structuredContent, name).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('MCP access is off') })
+      expect(errorOf(r), name).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('MCP access is off') })
     }
     // create_job is refused at its first step (reading the project), and nothing is made.
     const created = await mcp.call('create_job', { projectId, objective: 'not allowed', coordinatorAccountId: h.accountId })
     expect(created.isError).toBe(true)
-    expect(created.structuredContent).toMatchObject({ code: 'PERMISSION_DENIED' })
+    expect(errorOf(created)).toMatchObject({ code: 'PERMISSION_DENIED' })
     expect(h.state().jobs).toEqual([])
     // The CLI is not MCP: it still reads the same Host.
     okData(await astera(['jobs', 'list'], h.env), 'jobs list')
   })
+
+  // The rig's claude account is logged in by its .credentials.json; on macOS claude's login is the
+  // Keychain, which the rig does not fake.
+  it.skipIf(process.platform === 'darwin')(
+    'create_job with no account takes the default claude account, which list_accounts marks',
+    async () => {
+      const { h, projectId } = await projectRig()
+      const mcp = await mcpClient(h)
+      const accounts = await mcp.call('list_accounts', {})
+      expect(accounts.structuredContent).toEqual({ accounts: [{ id: h.accountId, label: 'a', provider: 'claude', default: true }] })
+      const created = await mcp.call('create_job', { projectId, objective: 'default coordinator' })
+      expect(created.isError, created.content[0]?.text).toBeFalsy()
+      expect(h.state().jobs.find((j) => j.objective === 'default coordinator')?.coordinatorAccountId).toBe(h.accountId)
+      // No codex account at all: refused, naming the provider, and nothing is made.
+      const codex = await mcp.call('create_job', { projectId, objective: 'no codex', coordinatorProvider: 'codex' })
+      expect(errorOf(codex)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('codex') })
+      expect(h.state().jobs.filter((j) => j.objective === 'no codex')).toEqual([])
+    }
+  )
 
   it('a client that disconnects leaves the Run running, and a new client sees it', async () => {
     const { h, projectId } = await projectRig()

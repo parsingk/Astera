@@ -15,6 +15,7 @@ import type { Account, Provider } from '../types'
 import { providerOf } from '../providers/meta'
 import type { OrchAccount } from '../orchestration/command'
 import { isValidAccount } from './registry'
+import { defaultAccountIdOf } from './defaultAccount'
 import { RepairNeeded } from '../settings/repairNeeded'
 
 /** One account as the orchestration layer sees it. **The one projection**: the app's `listAccounts`
@@ -37,10 +38,46 @@ export const orchAccountOf = (a: Account): OrchAccount => ({
  *   is a write this reader must not make. The rule for what counts as misshaped is the registry's own
  *   (`isValidAccount`), so the two cannot disagree about which file is corrupt.
  */
-export async function readAccountsFile(filePath: string, provider?: Provider): Promise<OrchAccount[]> {
-  return (await readAccountEntries(filePath))
-    .filter((a) => provider === undefined || providerOf(a) === provider)
-    .map(orchAccountOf)
+export async function readAccountsFile(
+  filePath: string,
+  provider?: Provider,
+  /** Given, each provider's default account is marked (`orchAccountsFor`). */
+  loggedIn?: (a: Account) => Promise<boolean>
+): Promise<OrchAccount[]> {
+  return orchAccountsFor(await readAccountEntries(filePath), provider, loggedIn)
+}
+
+/**
+ * `listAccounts`' answer from the whole list: narrowed to `provider`, projected, and, when `loggedIn`
+ * is given, each provider's default (defaultAccountIdOf, the rule behind the app's default badge)
+ * marked `default: true`. The app's `listAccounts` and the Host's file read both answer through this,
+ * so the two cannot drift apart. A probe that fails counts as logged out.
+ *
+ * `provider` may be null: a call the Host forwards to the app crosses a socket as JSON, where an
+ * omitted provider before the options (`listAccounts(undefined, { withDefault })`) becomes null.
+ */
+export function orchAccountsFor(
+  all: readonly Account[],
+  provider: Provider | null | undefined,
+  loggedIn?: (a: Account) => Promise<boolean>
+): OrchAccount[] | Promise<OrchAccount[]> {
+  const accounts = all.filter((a) => provider == null || providerOf(a) === provider)
+  return loggedIn ? withDefaultMarks(accounts, loggedIn) : accounts.map(orchAccountOf)
+}
+
+async function withDefaultMarks(
+  accounts: readonly Account[],
+  loggedIn: (a: Account) => Promise<boolean>
+): Promise<OrchAccount[]> {
+  const ids = new Set<string>()
+  await Promise.all(
+    accounts.map(async (a) => {
+      if (await loggedIn(a).catch(() => false)) ids.add(a.id)
+    })
+  )
+  return accounts.map((a) =>
+    defaultAccountIdOf(providerOf(a), accounts, ids) === a.id ? { ...orchAccountOf(a), default: true as const } : orchAccountOf(a)
+  )
 }
 
 /** The same read, with every account whole — `configDir` included. For `astera skills`, which runs
