@@ -327,6 +327,37 @@ describe('PtyRegistry', () => {
     expect([a.killed, b.killed]).toEqual([true, true])
   })
 
+  // Measured on win32 (2026-10-01): node-pty 1.1.0's ConPTY kill calls ClosePseudoConsole on the same
+  // handle every time it is called, and a second call on a pty still alive ended the Host with
+  // STATUS_HEAP_CORRUPTION (0xC0000374), no log line, and every session it held with it. `runs stop`
+  // reached it: its stop marks the slot pending, and the driving loop resent the stop 12 ms later.
+  it('sends a live pty one kill, however often it is asked, and logs the repeats', () => {
+    const p = fakePty()
+    let kills = 0
+    p.kill = () => { kills += 1 }
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    h.r.kill('p1')
+    h.r.kill('p1')
+    h.r.killAll()
+    expect(kills).toBe(1)
+    expect(h.logs.some((m) => m.includes('p1') && m.includes('already'))).toBe(true)
+  })
+
+  it('a kill that threw is not sent again either', () => {
+    const p = fakePty()
+    let kills = 0
+    p.kill = () => {
+      kills += 1
+      throw new Error('AttachConsole failed')
+    }
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(() => h.r.kill('p1')).toThrow('AttachConsole failed')
+    h.r.kill('p1')
+    expect(kills).toBe(1)
+  })
+
   it('the default scrollback is the one the design fixed', () => {
     expect(SCROLLBACK_CHARS).toBe(256_000)
   })
