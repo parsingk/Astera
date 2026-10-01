@@ -195,6 +195,15 @@ oldest first by `createdAt`; `list_tasks` keeps the Run's order (dependencies, t
 list carries `truncated: true` and `total` (how many there were) beside it; a whole list carries
 neither.
 
+**Paging.** Every list tool also takes an optional `cursor`. A cut list that has more rows after it
+carries `nextCursor`; pass it as `cursor`, with the same filters, for the next page, which follows
+the same order. The last page still carries `truncated: true` and `total`, and no `nextCursor`. A
+cursor is opaque and belongs to the tool that gave it: one from another tool, or one that is not a
+cursor at all, is refused with `INVALID_ARGUMENTS`. A cursor holds a position in the list, not a
+snapshot of it, so a list that changes between calls shifts: when rows are added ahead of the
+position (a new Job in `list_jobs`, newest first), the next page starts that many rows earlier and
+repeats them.
+
 Every result carries the data twice, as `structuredContent` and as the same JSON in the text
 content. An error is the exception: its text content is a `CODE: message` line followed by the JSON
 (`code`, `message`, `nextSteps` and, when there are any, `details`), and it carries no

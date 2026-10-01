@@ -16,7 +16,7 @@ import { publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
-import { LIST_LIMIT, orderAndCut } from './lists'
+import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
 import { TOOLS, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
@@ -98,6 +98,10 @@ const refusalMessage = (status: number, body: unknown): string => {
 
 async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
   let args = input
+  // A list tool's cursor (lists.ts) is read before anything reaches the Host: one from another tool,
+  // or one that is no cursor at all, is the caller's mistake.
+  const offset = typeof input.cursor === 'string' ? cursorOffset(t.name, input.cursor) : 0
+  if (typeof offset !== 'number') return errorResult('INVALID_ARGUMENTS', offset.error)
   // create_job and list_jobs take a project id; the Host's jobs-create (`--cwd`) and jobs-list
   // (`--project`) take the project's folder. An unknown id is projects-get's own NOT_FOUND.
   if (t.name === 'create_job' || (t.name === 'list_jobs' && input.projectId !== undefined)) {
@@ -117,16 +121,21 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   if (r.status < 200 || r.status >= 300)
     return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd, r.body)
   const shaped = redact(dropCheckOutput(publicFor(t.cmd, r.body)))
-  // A list tool orders and cuts its rows (lists.ts); `truncated` and `total` sit beside the list.
+  // A list tool orders its rows and cuts the page the cursor names (lists.ts); `truncated`, `total`
+  // and `nextCursor` sit beside the list.
   const cut = Array.isArray(shaped)
-    ? orderAndCut(t.name, shaped, typeof input.limit === 'number' ? input.limit : LIST_LIMIT.default)
+    ? orderAndCut(t.name, shaped, typeof input.limit === 'number' ? input.limit : LIST_LIMIT.default, offset)
     : null
   const count = cut === null ? '' : cut.total === undefined ? ` (${cut.list.length})` : ` (${cut.list.length} of ${cut.total})`
   // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
   const data =
     cut === null
       ? dataFor(t.cmd, shaped)
-      : { ...dataFor(t.cmd, cut.list), ...(cut.truncated ? { truncated: true, total: cut.total } : {}) }
+      : {
+          ...dataFor(t.cmd, cut.list),
+          ...(cut.truncated ? { truncated: true, total: cut.total } : {}),
+          ...(cut.nextCursor !== undefined ? { nextCursor: cut.nextCursor } : {})
+        }
   return {
     content: textResult(`${t.title}${count}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
     structuredContent: data

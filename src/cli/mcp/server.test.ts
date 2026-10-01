@@ -423,10 +423,51 @@ describe('the MCP server', () => {
     const client = await connected(link)
     const cut = await client.callTool({ name: 'list_jobs', arguments: { limit: 2 } })
     expect(calls.at(-1)).toEqual({ cmd: 'jobs-list', args: {}, request: undefined })
-    expect(cut.structuredContent).toEqual({ jobs: [jobs[2], jobs[1]], truncated: true, total: 3 })
+    expect(cut.structuredContent).toEqual({ jobs: [jobs[2], jobs[1]], truncated: true, total: 3, nextCursor: expect.any(String) })
     expect(textOf(cut).split('\n')[0]).toBe('List Jobs (2 of 3).')
     const whole = await client.callTool({ name: 'list_jobs', arguments: {} })
     expect(whole.structuredContent).toEqual({ jobs: [jobs[2], jobs[1], jobs[0]] })
+  })
+
+  // Spec §48: every list tool pages with an opaque cursor; the cursor never reaches the Host.
+  it('every list tool takes a cursor, and a cut list pages through it in the same order', async () => {
+    const jobs = [1, 2, 3, 4, 5].map((i) => ({ id: `job_${i}`, objective: 'o', createdAt: `2026-10-0${i}T00:00:00.000Z` }))
+    const { link, calls } = answering({ 'jobs-list': { status: 200, body: jobs } })
+    const client = await connected(link)
+    const { tools } = await client.listTools()
+    for (const t of tools.filter((t) => t.name.startsWith('list_')))
+      expect(t.inputSchema.properties?.cursor, t.name).toMatchObject({ type: 'string' })
+    const seen: string[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 3; page++) {
+      const r = await client.callTool({ name: 'list_jobs', arguments: { limit: 2, ...(cursor ? { cursor } : {}) } })
+      const data = r.structuredContent as { jobs: Array<{ id: string }>; truncated?: boolean; total?: number; nextCursor?: string }
+      seen.push(...data.jobs.map((j) => j.id))
+      expect(data).toMatchObject({ truncated: true, total: 5 })
+      cursor = data.nextCursor
+      expect(JSON.parse(textOf(r).split('\n')[1])).toEqual(data)
+    }
+    expect(seen).toEqual(['job_5', 'job_4', 'job_3', 'job_2', 'job_1'])
+    expect(cursor).toBeUndefined()
+    for (const c of calls) expect(c.args).toEqual({})
+  })
+
+  it("refuses another tool's cursor and a malformed one as INVALID_ARGUMENTS, before calling the Host", async () => {
+    const runs = [1, 2, 3].map((i) => ({ id: `run_${i}`, jobId: 'job_1', ordinal: i, createdAt: `2026-10-0${i}T00:00:00.000Z` }))
+    const { link, calls } = answering({ 'runs-list': { status: 200, body: runs } })
+    const client = await connected(link)
+    const first = await client.callTool({ name: 'list_runs', arguments: { limit: 1 } })
+    const runsCursor = (first.structuredContent as { nextCursor: string }).nextCursor
+    const before = calls.length
+    const foreign = await client.callTool({ name: 'list_jobs', arguments: { cursor: runsCursor } })
+    expect(foreign.isError).toBe(true)
+    expect(errorOf(foreign)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('list_runs') })
+    const junk = await client.callTool({ name: 'list_jobs', arguments: { cursor: 'not-a-cursor' } })
+    expect(errorOf(junk)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('cursor') })
+    // list_jobs with a projectId reads the project first; a bad cursor stops it before that too.
+    const withProject = await client.callTool({ name: 'list_jobs', arguments: { projectId: 'p1', cursor: 'not-a-cursor' } })
+    expect(errorOf(withProject)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+    expect(calls.length).toBe(before)
   })
 
   it('stop_run sends runs-stop', async () => {
