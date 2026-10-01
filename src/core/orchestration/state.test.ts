@@ -1171,6 +1171,18 @@ describe('applyValidationResult — convergence', () => {
     expect(passed.value.lastFailure).toBe('Typecheck failed (exit 1): TS2322')
   })
 
+  it('a Task copied into a new Run starts without lastFailure', () => {
+    const { s, taskId } = seed()
+    const marked: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, lastFailure: 'Typecheck failed (exit 1): TS2322' } : t))
+    }
+    const next = unwrap<{ id: string }>(startJobRun(marked, marked.jobs[0].id, NOW) as never)
+    const copies = next.state.tasks.filter((t) => t.runId === next.value.id)
+    expect(copies.length).toBeGreaterThan(0)
+    for (const c of copies) expect(c).not.toHaveProperty('lastFailure')
+  })
+
   it('fresh 대상이면 placeholder 세션으로 연다', () => {
     const { s, taskId } = armed()
     const r = unwrap<Task>(
