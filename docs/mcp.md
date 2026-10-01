@@ -117,17 +117,17 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `list_projects` | The projects registered in Astera. Use a project id with `create_job`. |
 | `get_project` | One registered project. |
 | `list_accounts` | The agent accounts Astera holds (id, label, provider). `create_job` needs one as the coordinator account. |
-| `list_jobs` | Astera Jobs, each with the state of its latest Run. Filter by state. |
+| `list_jobs` | Astera Jobs, newest first, each with the state of its latest Run. Filter by state. |
 | `get_job` | One Job and its latest Run. |
 | `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work. |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
-| `list_runs` | Runs, oldest first, optionally of one Job. |
+| `list_runs` | Runs, newest first by ordinal, optionally of one Job. |
 | `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. |
 | `stop_run` | Stop a Run: its open workers are closed and the Run is paused. Use `resume_run` to continue it. |
 | `resume_run` | Resume a Run that `stop_run` paused. A Run that is not paused is returned as it is. |
 | `list_tasks` | The Tasks of a Run, with their status and dependencies (deps). Each spec is cut to 160 characters, and `spec_truncated` says when it was; `get_task` has the whole spec. |
 | `get_task` | One Task with its attempts and the open question on it, if any. |
-| `list_questions` | Questions that block a Run until someone answers. Use `answer_question` with an id from here. |
+| `list_questions` | Questions that block a Run until someone answers, oldest first. Use `answer_question` with an id from here. |
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
 | `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and a `failureSummary` naming each failed check, its exit code and its last output line. Astera runs the checks and repairs; this only reads them. |
 
@@ -136,6 +136,12 @@ from `list_accounts`. A Job that has never run shows `pendingStart: true` in `ge
 `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion` and `list_questions`.
 `run_job` makes the Run's worktree and starts its coordinator before it answers, so on a large repository it can take up
 to a minute.
+
+Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
+first by `createdAt`, `list_runs` newest first by `ordinal`, and `list_questions` oldest first by
+`createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and `list_projects` and
+`list_accounts` keep Astera's. The list is ordered first and cut second. A cut list carries
+`truncated: true` and `total` (how many there were) beside it; a whole list carries neither.
 
 Every result carries the data twice, as `structuredContent` and as the same JSON in the text content.
 An error is the exception: its text content is a `CODE: message` line followed by the JSON (`code`,

@@ -16,6 +16,7 @@ import { publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
+import { LIST_LIMIT, orderAndCut } from './lists'
 import { TOOLS, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
@@ -115,9 +116,16 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   if (r.status < 200 || r.status >= 300)
     return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd, r.body)
   const shaped = redact(dropCheckOutput(publicFor(t.cmd, r.body)))
-  const count = Array.isArray(shaped) ? ` (${shaped.length})` : ''
+  // A list tool orders and cuts its rows (lists.ts); `truncated` and `total` sit beside the list.
+  const cut = Array.isArray(shaped)
+    ? orderAndCut(t.name, shaped, typeof input.limit === 'number' ? input.limit : LIST_LIMIT.default)
+    : null
+  const count = cut === null ? '' : cut.total === undefined ? ` (${cut.list.length})` : ` (${cut.list.length} of ${cut.total})`
   // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
-  const data = dataFor(t.cmd, shaped)
+  const data =
+    cut === null
+      ? dataFor(t.cmd, shaped)
+      : { ...dataFor(t.cmd, cut.list), ...(cut.truncated ? { truncated: true, total: cut.total } : {}) }
   return {
     content: textResult(`${t.title}${count}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
     structuredContent: data

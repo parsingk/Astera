@@ -144,7 +144,7 @@ describe('the MCP server', () => {
   it('list_jobs takes no projectId in P0', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
     const props = Object.keys(tools.find((t) => t.name === 'list_jobs')?.inputSchema.properties ?? {})
-    expect(props).toEqual(['status'])
+    expect(props).toEqual(['status', 'limit'])
   })
 
   it('sends each tool as its Host command with the flags its handler reads', async () => {
@@ -344,6 +344,27 @@ describe('the MCP server', () => {
     expect(summary).not.toContain(token)
     expect(summary).toContain('build failed (exit 2): key ')
     expect(textOf(r)).not.toContain(token)
+  })
+
+  it('every list tool takes a limit of 1 to 200', async () => {
+    const client = await connected(answering({}).link)
+    const { tools } = await client.listTools()
+    for (const t of tools.filter((t) => t.name.startsWith('list_')))
+      expect(t.inputSchema.properties?.limit, t.name).toMatchObject({ minimum: 1, maximum: 200 })
+    expect((await client.callTool({ name: 'list_jobs', arguments: { limit: 201 } })).isError).toBe(true)
+    expect((await client.callTool({ name: 'list_jobs', arguments: { limit: 0 } })).isError).toBe(true)
+  })
+
+  it('list_jobs comes newest first, cut to the limit, and says it was cut', async () => {
+    const jobs = [1, 2, 3].map((i) => ({ id: `job_${i}`, objective: 'o', createdAt: `2026-10-0${i}T00:00:00.000Z` }))
+    const { link, calls } = answering({ 'jobs-list': { status: 200, body: jobs } })
+    const client = await connected(link)
+    const cut = await client.callTool({ name: 'list_jobs', arguments: { limit: 2 } })
+    expect(calls.at(-1)).toEqual({ cmd: 'jobs-list', args: {}, request: undefined })
+    expect(cut.structuredContent).toEqual({ jobs: [jobs[2], jobs[1]], truncated: true, total: 3 })
+    expect(textOf(cut).split('\n')[0]).toBe('List Jobs (2 of 3).')
+    const whole = await client.callTool({ name: 'list_jobs', arguments: {} })
+    expect(whole.structuredContent).toEqual({ jobs: [jobs[2], jobs[1], jobs[0]] })
   })
 
   it('stop_run sends runs-stop', async () => {
