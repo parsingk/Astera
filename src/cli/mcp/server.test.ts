@@ -138,6 +138,81 @@ describe('the MCP server', () => {
     expect(calls.at(-1)?.args).toEqual({ objective: 'o', cwd: 'D:/repo', coordinatorAccount: 'acc_1' })
   })
 
+  it('create_job with convergence sends it and its knobs to jobs-create as the CLI parser would', async () => {
+    const { link, calls } = answering({
+      'projects-get': { status: 200, body: { id: 'p1', name: 'Astera', path: 'D:/repo', addedAt: 'x' } }
+    })
+    const client = await connected(link)
+    const r = await client.callTool({
+      name: 'create_job',
+      arguments: {
+        projectId: 'p1',
+        objective: 'o',
+        coordinatorAccountId: 'acc_1',
+        convergence: true,
+        maxFixAttempts: 3,
+        maxReviewRounds: 2,
+        blockingSeverity: 'medium',
+        maxTotalMinutes: 90
+      }
+    })
+    expect(r.isError, JSON.stringify(r.content)).toBeFalsy()
+    // `--max-fix-attempts` arrives as `maxFixAttempts` (cliArgs.ts `camel`), `--convergence` as true.
+    expect(calls.at(-1)?.args).toEqual({
+      objective: 'o',
+      cwd: 'D:/repo',
+      coordinatorAccount: 'acc_1',
+      convergence: true,
+      maxFixAttempts: 3,
+      maxReviewRounds: 2,
+      blockingSeverity: 'medium',
+      maxTotalMinutes: 90
+    })
+    // convergence alone turns it on with the default policy; convergence: false sends nothing.
+    await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', convergence: true } })
+    expect(calls.at(-1)?.args).toEqual({ objective: 'o', cwd: 'D:/repo', coordinatorProvider: 'claude', convergence: true })
+    await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', convergence: false } })
+    expect(calls.at(-1)?.args).toEqual({ objective: 'o', cwd: 'D:/repo', coordinatorProvider: 'claude' })
+  })
+
+  it('create_job refuses a convergence knob without convergence: true as INVALID_ARGUMENTS, before calling the Host', async () => {
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    for (const extra of [{ maxFixAttempts: 3 }, { blockingSeverity: 'high' }, { convergence: false, maxTotalMinutes: 30 }]) {
+      const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', ...extra } })
+      expect(r.isError).toBe(true)
+      expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('convergence: true') })
+    }
+    expect(calls).toEqual([])
+  })
+
+  it('create_job holds the convergence knobs to their bounds', async () => {
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    for (const knob of [
+      { maxFixAttempts: 0 },
+      { maxFixAttempts: 21 },
+      { maxFixAttempts: 1.5 },
+      { maxReviewRounds: 21 },
+      { maxTotalMinutes: 0 },
+      { maxTotalMinutes: 1441 },
+      { blockingSeverity: 'low' }
+    ]) {
+      const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', convergence: true, ...knob } })
+      expect(r.isError, JSON.stringify(knob)).toBe(true)
+    }
+    expect(calls).toEqual([])
+  })
+
+  it('create_job says what convergence does', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const createJob = tools.find((t) => t.name === 'create_job')!
+    expect(createJob.description).toMatch(/convergence/)
+    expect(Object.keys(createJob.inputSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(['convergence', 'maxFixAttempts', 'maxReviewRounds', 'blockingSeverity', 'maxTotalMinutes'])
+    )
+  })
+
   it('list_accounts marks each provider\'s default and passes no other field', async () => {
     const accounts = [
       { id: 'a1', label: 'one', provider: 'claude', default: true, configDir: 'C:/secret' },

@@ -17,7 +17,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
-import { TOOLS, type ToolDef } from './tools'
+import { TOOLS, convergenceRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
@@ -102,6 +102,8 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   // or one that is no cursor at all, is the caller's mistake.
   const offset = typeof input.cursor === 'string' ? cursorOffset(t.name, input.cursor) : 0
   if (typeof offset !== 'number') return errorResult('INVALID_ARGUMENTS', offset.error)
+  const refused = t.name === 'create_job' ? convergenceRefusal(input) : null
+  if (refused !== null) return errorResult('INVALID_ARGUMENTS', refused)
   // create_job and list_jobs take a project id; the Host's jobs-create (`--cwd`) and jobs-list
   // (`--project`) take the project's folder. An unknown id is projects-get's own NOT_FOUND.
   if (t.name === 'create_job' || (t.name === 'list_jobs' && input.projectId !== undefined)) {

@@ -156,7 +156,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `list_accounts` | The agent accounts Astera holds (id, label, provider). Each provider's default account says `default: true`; `create_job` uses it when no coordinator account is given. |
 | `list_jobs` | Astera Jobs, newest first, each with the state of its latest Run. Filter by state, and by project with a `projectId` from `list_projects` (an unknown id is `NOT_FOUND`). |
 | `get_job` | One Job and its latest Run. |
-| `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). |
+| `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). With `convergence: true`, a Task whose checks or review fail gets bounded repair and recheck loops instead of failing at once. |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
 | `list_runs` | Runs, newest first, optionally of one Job. |
 | `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). |
@@ -175,7 +175,17 @@ account of that provider that is logged in, the one `list_accounts` marks `defau
 account of that provider logged in, `create_job` is refused with `INVALID_ARGUMENTS`. When both are
 given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart: true` in `get_job`
 and `list_jobs` until `run_job` starts it, and a Job with no Run has `outcome: "pending"`, also after
-a `run_job` that failed. No tool waits: an agent polls `get_run`, `get_completion`
+a `run_job` that failed.
+
+**Completion convergence.** `create_job` takes the same policy `astera jobs create --convergence`
+does. `convergence: true` turns it on with the default bounds; `maxFixAttempts` and
+`maxReviewRounds` (integers from 1 to 20), `blockingSeverity` (`high`, or `medium` for medium and
+high findings) and `maxTotalMinutes` (1 to 1440) change them. A knob given without
+`convergence: true` is refused with `INVALID_ARGUMENTS`, as the CLI refuses it, since it would set a
+policy that is off. The Job carries the policy as `convergence`, and `get_completion` shows the
+loops as they run.
+
+No tool waits: an agent polls `get_run`, `get_completion`
 and `list_questions`. `run_job` makes the Run's worktree and starts its coordinator before it
 answers, so on a large repository it can take up to a minute.
 

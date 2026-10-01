@@ -1139,6 +1139,26 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     )
   })
 
+  it('create_job with convergence makes a Job that carries the policy', async () => {
+    const { h, projectId } = await projectRig()
+    const mcp = await mcpClient(h)
+    const created = await mcp.call('create_job', {
+      projectId,
+      objective: 'converge on the tests',
+      coordinatorAccountId: h.accountId,
+      convergence: true,
+      maxFixAttempts: 4,
+      maxReviewRounds: 2,
+      blockingSeverity: 'medium',
+      maxTotalMinutes: 120
+    })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    const policy = { maxFixAttempts: 4, maxReviewRounds: 2, blockingSeverity: 'medium', maxTotalMinutes: 120 }
+    expect(created.structuredContent).toMatchObject({ convergence: policy })
+    const jobId = (created.structuredContent as { id: string }).id
+    expect(h.state().jobs.find((j) => j.id === jobId)?.convergence).toEqual(policy)
+  })
+
   it('a repeated create_job with the same requestId makes one Job', async () => {
     const { h, projectId } = await projectRig()
     const mcp = await mcpClient(h)
