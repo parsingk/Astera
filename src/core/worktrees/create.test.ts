@@ -129,6 +129,12 @@ describe('createWorktree', () => {
     expect(info.baseRef).toBe('main') // origin이 없는 픽스처 → 로컬 main
   })
 
+  it('a name ending in .lock gets a worktree real git accepts', async () => {
+    const { info } = await createWorktree({ repoPath: repo, name: 'Regenerate yarn.lock', registry: reg })
+    expect(info.name).toBe('Regenerate-yarn-lock')
+    expect(await localBranchExists(repo, info.branch)).toBe(true)
+  })
+
   it('two 2,000-character objectives sharing their first 40 characters both get a worktree real git accepts', async () => {
     const head = 'Add an add a b function to math.js and export it '
     const a = nameForRun({ id: 'job_a', objective: head + 'x '.repeat(1000) })

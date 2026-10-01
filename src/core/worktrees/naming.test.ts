@@ -18,6 +18,13 @@ describe('slugify', () => {
     expect(slugify('..a..b..')).toBe('a.b')
     expect(slugify('-x-')).toBe('x')
   })
+  it('a trailing .lock, which git refuses in a ref, becomes -lock, and stays so when slugified again', () => {
+    expect(slugify('Regenerate yarn.lock')).toBe('Regenerate-yarn-lock')
+    expect(slugify('pin deps.LOCK')).toBe('pin-deps-LOCK')
+    expect(slugify(slugify('Regenerate yarn.lock'))).toBe('Regenerate-yarn-lock')
+    // only at the end: git refuses a component that ends with .lock
+    expect(slugify('yarn.lock fix')).toBe('yarn.lock-fix')
+  })
   it('유효 문자가 없으면 INVALID_NAME', () => {
     expect(() => slugify('!!!')).toThrow(/INVALID_NAME/)
     expect(() => slugify('   ')).toThrow(/INVALID_NAME/)
@@ -113,6 +120,19 @@ describe('nameForRun / nameForTask, bounded length', () => {
 
   it('cuts a single long word at the cap when it has no -', () => {
     expect(nameForTask({ id: 'tsk_1', title: 'x'.repeat(300) })).toBe('x'.repeat(40))
+  })
+
+  it('hard-cuts at the cap when the last - is in the first half', () => {
+    const name = nameForRun({ id: 'run_1', objective: `a-${'z'.repeat(300)}` })
+    expect(name).toBe(`a-${'z'.repeat(38)}`)
+    expect(name.length).toBe(MAX_NAME_LENGTH)
+  })
+
+  it('a cut that lands on .lock does not leave a name git refuses', () => {
+    // cut at the - after '.lock'
+    expect(nameForRun({ id: 'run_1', objective: `${'b'.repeat(25)}.lock-${'c'.repeat(30)}` })).toBe(`${'b'.repeat(25)}-lock`)
+    // hard cut that ends exactly on '.lock'
+    expect(nameForTask({ id: 'tsk_1', title: `${'b'.repeat(35)}.lockccc` })).toBe(`${'b'.repeat(35)}-lock`)
   })
 
   it('leaves a short name as it was', () => {
