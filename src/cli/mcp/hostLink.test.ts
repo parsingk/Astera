@@ -121,4 +121,43 @@ describe('openHostLink', () => {
     expect(connects).toBe(2)
     expect(f.sent).toHaveLength(1)
   })
+
+  it('a call the Host never answers times out and a late reply is ignored', async () => {
+    const f = fakeConn()
+    const link = openHostLink({ connect: async () => f.conn, startHost: async () => false, log: () => {}, timeoutMs: 20 })
+    const r = await link.call('jobs-list', {})
+    expect(r).toMatchObject({ code: 'TIMEOUT' })
+    expect((r as { message: string }).message).toContain('jobs-list')
+    expect(() => f.push({ t: 'orch-result', call: (f.sent[0] as { call: string }).call, status: 200, body: [] } as HostMessage)).not.toThrow()
+  })
+
+  it('after close, calls answer HOST_NOT_RUNNING without connecting', async () => {
+    let connects = 0
+    let started = 0
+    const f = fakeConn()
+    const link = openHostLink({ connect: async () => (connects++, f.conn), startHost: async () => (started++, true), log: () => {} })
+    link.close()
+    expect(await link.call('jobs-list', {})).toMatchObject({ code: 'HOST_NOT_RUNNING', message: 'the MCP server is shutting down' })
+    expect(connects + started).toBe(0)
+  })
+
+  it('a stale connection closing does not fail calls pending on the current one', async () => {
+    const first = fakeConn()
+    const second = fakeConn()
+    const conns = [first.conn, second.conn]
+    const link = openHostLink({ connect: async () => conns.shift()!, startHost: async () => false, log: () => {} })
+    const p = link.call('jobs-list', {})
+    await new Promise((r) => setImmediate(r))
+    first.drop()
+    await p
+    const q = link.call('jobs-list', {})
+    await new Promise((r) => setImmediate(r))
+    first.drop()
+    const third = link.call('jobs-list', {})
+    await new Promise((r) => setImmediate(r))
+    expect(second.sent).toHaveLength(2)
+    for (const m of second.sent as Array<{ call: string }>) second.push({ t: 'orch-result', call: m.call, status: 200, body: [] } as HostMessage)
+    expect(await q).toMatchObject({ status: 200 })
+    expect(await third).toMatchObject({ status: 200 })
+  })
 })

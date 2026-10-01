@@ -6,7 +6,7 @@ import type { ConnectFailure, HostConnection } from '../../core/host/connect'
 import { HOST_FEATURE_MCP, HOST_FEATURE_ORCH } from '../../core/host/protocol'
 import type { HostAnswer } from '../run'
 
-export type LinkFailure = { code: 'HOST_NOT_RUNNING' | 'VERSION_MISMATCH' | 'PERMISSION_DENIED'; message: string }
+export type LinkFailure = { code: 'HOST_NOT_RUNNING' | 'VERSION_MISMATCH' | 'PERMISSION_DENIED' | 'TIMEOUT'; message: string }
 
 export interface HostLink {
   call(cmd: string, args: Record<string, unknown>, request?: string): Promise<HostAnswer | LinkFailure>
@@ -20,10 +20,16 @@ export function openHostLink(a: {
   /** Starts a Host when none answers (MCP design M4). Resolves true when one now answers. */
   startHost(): Promise<boolean>
   log(m: string): void
+  /** Per-call deadline. The default matches the CLI's default `clientTimeoutMs`; no MCP tool long-polls. */
+  timeoutMs?: number
 }): HostLink {
-  let conn: Promise<HostConnection | LinkFailure> | null = null
+  const timeoutMs = a.timeoutMs ?? 300_000
+  // A connection and the calls sent on it: its close flushes only these.
+  type Live = { c: HostConnection; pending: Map<string, (r: HostAnswer | LinkFailure) => void> }
+  let conn: Promise<Live | LinkFailure> | null = null
+  let current: Live | null = null
+  let closed = false
   let next = 1
-  const pending = new Map<string, (r: HostAnswer | LinkFailure) => void>()
 
   const failureOf = (f: ConnectFailure): LinkFailure =>
     f.error === 'impostor'
@@ -32,7 +38,7 @@ export function openHostLink(a: {
         ? { code: 'VERSION_MISMATCH', message: 'the Host speaks another protocol; update Astera so the app and the CLI match' }
         : { code: 'HOST_NOT_RUNNING', message: 'Astera Host is not running and could not be started. Start it with `astera host start`.' }
 
-  const open = async (): Promise<HostConnection | LinkFailure> => {
+  const open = async (): Promise<Live | LinkFailure> => {
     let c = await a.connect()
     if (isFailure(c) && c.error === 'unreachable' && (await a.startHost())) c = await a.connect()
     if (isFailure(c)) return failureOf(c)
@@ -40,6 +46,8 @@ export function openHostLink(a: {
       c.close()
       return { code: 'VERSION_MISMATCH', message: `the Host (${c.hello.host}) is too old for MCP clients; update Astera` }
     }
+    const live: Live = { c, pending: new Map() }
+    const { pending } = live
     c.onMessage((m) => {
       if (m.t !== 'orch-result') return
       const done = pending.get(m.call)
@@ -53,32 +61,49 @@ export function openHostLink(a: {
       })
     })
     c.onClose(() => {
-      conn = null
+      if (current === live) {
+        current = null
+        conn = null
+      }
       a.log('the Host connection closed')
       for (const [id, done] of pending) {
         pending.delete(id)
         done({ code: 'HOST_NOT_RUNNING', message: 'the Host went away during the call; retry with the same requestId' })
       }
     })
-    return c
+    current = live
+    return live
   }
 
   return {
     async call(cmd, args, request) {
+      if (closed) return { code: 'HOST_NOT_RUNNING', message: 'the MCP server is shutting down' }
       if (conn === null) conn = open()
-      const c = await conn
-      if ('code' in c) {
-        conn = null
-        return c
+      const mine = conn
+      const l = await mine
+      if ('code' in l) {
+        if (conn === mine) conn = null
+        return l
       }
       const call = `mcp_${next++}`
       return new Promise((resolve) => {
-        pending.set(call, resolve)
-        c.call({ t: 'orch-call', call, cmd, args, session: '', ...(request !== undefined ? { request } : {}) })
+        const timer = setTimeout(() => {
+          l.pending.delete(call)
+          resolve({
+            code: 'TIMEOUT',
+            message: `the Host did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; the command may still finish, re-read with a get_ tool`
+          })
+        }, timeoutMs)
+        l.pending.set(call, (r) => {
+          clearTimeout(timer)
+          resolve(r)
+        })
+        l.c.call({ t: 'orch-call', call, cmd, args, session: '', ...(request !== undefined ? { request } : {}) })
       })
     },
     close() {
-      void conn?.then((c) => ('code' in c ? undefined : c.close()))
+      closed = true
+      void conn?.then((l) => ('code' in l ? undefined : l.c.close()))
       conn = null
     }
   }
