@@ -25,6 +25,8 @@ export const es: Catalog = {
   'settings.mcp.copyFailed': 'No se pudo copiar la línea: {detail}',
   'settings.mcp.register':
     'Para añadir Astera a un cliente MCP, ejecuta o pega la línea de ese cliente. Las líneas están escritas para este sistema operativo.',
+  'settings.mcp.installFirst':
+    'Instala primero la herramienta de línea de comandos de arriba y después añade Astera a tu cliente MCP.',
   'settings.mcp.saveFailed': 'No se pudo guardar el acceso MCP: {detail}',
   'settings.mcp.loadFailed': 'No se pudo leer el acceso MCP: {detail}',
   // Modo de permisos del agente

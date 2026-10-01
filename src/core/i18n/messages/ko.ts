@@ -60,6 +60,7 @@ export const ko = {
   'settings.mcp.hint': 'astera mcp serve 로 연결한 MCP 클라이언트가 할 수 있는 일입니다. 읽기 전용이면 Job 과 Run 을 보기만 하고, 읽기와 제어면 Job 을 만들고 실행하고 멈추고 다시 이어 가고 질문에 답할 수 있습니다.',
   'settings.mcp.copyFailed': '줄을 복사하지 못했습니다: {detail}',
   'settings.mcp.register': 'MCP 클라이언트에 Astera 를 추가하려면 그 클라이언트의 줄을 실행하거나 붙여 넣으세요. 이 운영체제에 맞춘 형태입니다.',
+  'settings.mcp.installFirst': '위의 명령줄 도구를 먼저 설치한 다음 MCP 클라이언트에 Astera 를 추가하세요.',
   'settings.mcp.saveFailed': 'MCP 접근 설정을 저장하지 못했습니다: {detail}',
   'settings.mcp.loadFailed': 'MCP 접근 설정을 읽지 못했습니다: {detail}',
   // 에이전트 권한 모드

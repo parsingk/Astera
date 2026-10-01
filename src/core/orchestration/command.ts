@@ -849,6 +849,20 @@ const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
   ...derivedFor(s, run.id, [run.id])
 })
 
+/**
+ * The open Dispatches among `ds` whose worker shows a permission prompt now, by id: the hook-event
+ * state `sessions list` reads, with its prompt (host/sessions.ts `sessionTurn`). Only the Host can read
+ * it, so elsewhere this is empty, and so is a session it cannot read. A Codex worker writes no hook
+ * events and never shows here. Read only: a person answers the prompt in Astera.
+ */
+const waitingForApprovalIn = async (deps: OrchServerDeps, ds: readonly Dispatch[]): Promise<Set<string>> => {
+  const turnOf = deps.sessionTurn
+  if (!turnOf) return new Set()
+  const open = ds.filter((d) => !d.outcome && !d.endedAt)
+  const turns = await Promise.all(open.map((d) => turnOf(d.sessionId).catch(() => null)))
+  return new Set(open.filter((_, i) => turns[i]?.prompt === 'permission').map((d) => d.id))
+}
+
 /** Commands only the orchestrator may call. Workers do not need check (the worker preamble uses only
  *  send and ask) — and on top of that the single unacknowledged Delivery is shared per Run with the
  *  coordinator, so a worker calling check --ack would acknowledge, on the coordinator's behalf, a
@@ -1892,7 +1906,13 @@ export async function handleCommand(
       const id = str(args.id)
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
-      return run ? okBody(runView(s, run)) : notFound(`unknown run: ${id}`)
+      if (!run) return notFound(`unknown run: ${id}`)
+      // How many of its Tasks wait on a person's approval (waitingForApprovalIn); left out at none.
+      const tasks = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
+      const mine = s.dispatches.filter((d) => tasks.has(d.taskId))
+      const waiting = await waitingForApprovalIn(deps, mine)
+      const waitingTasks = new Set(mine.filter((d) => waiting.has(d.id)).map((d) => d.taskId)).size
+      return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}) })
     }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
@@ -2643,7 +2663,7 @@ export async function handleCommand(
     case 'tasks-get': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
-      const detail = taskDetailOf(s, id)
+      const detail = taskDetailOf(s, id, await waitingForApprovalIn(deps, s.dispatches.filter((d) => d.taskId === id)))
       return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
     }
     case 'tasks-list': {

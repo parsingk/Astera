@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { MessageKey, MessageParams } from '../../../core/i18n'
-import type { McpAccess } from '../../../core/types'
-import { mcpRegistrationLines } from '../../../core/install/mcpRegistration'
+import type { CliInstallStatus, McpAccess } from '../../../core/types'
+import { mcpRegistrationLines, shimPathFor, type McpRegistrationLine } from '../../../core/install/mcpRegistration'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { Select } from './Select'
@@ -23,10 +23,26 @@ export function copyLine(line: string, t: (key: MessageKey, params?: MessagePara
   })
 }
 
+/** What goes under the registration hint: nothing while the CLI status is unread, a hint to install
+ *  the command first while it is not installed (a line naming a file that is not there cannot run),
+ *  and once it is, the lines with the installed command by its full path (mcpRegistration.ts). */
+export function registrationFor(
+  status: CliInstallStatus | null,
+  platform: string
+): McpRegistrationLine[] | 'install-first' | null {
+  if (status === null) return null
+  if (!status.installed) return 'install-first'
+  return mcpRegistrationLines({ platform, shimPath: shimPathFor({ platform, dir: status.dir }) })
+}
+
 /** MCP access (MCP design M5): what an MCP client may do through `astera mcp serve`. The Host reads
- *  the saved value on every call, so the change applies to clients already connected. */
-export function McpSettings(): React.JSX.Element {
+ *  the saved value on every call, so the change applies to clients already connected.
+ *
+ *  `cliStatus` is the value CliSettings read and keeps after Install and Uninstall (App.tsx passes it
+ *  on), so the lines follow those buttons without a second read. */
+export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null }): React.JSX.Element {
   const { t } = useI18n()
+  const registration = registrationFor(cliStatus, window.api.platform)
   const [access, setAccess] = useState<McpAccess>('control')
 
   useEffect(() => {
@@ -59,14 +75,19 @@ export function McpSettings(): React.JSX.Element {
       </div>
       <span className="settings-hint">{t('settings.mcp.hint')}</span>
       {/* The registration line for each client, in this platform's form (mcpRegistration.ts). */}
-      <span className="settings-hint">{t('settings.mcp.register')}</span>
-      {mcpRegistrationLines(window.api.platform).map(({ client, line }) => (
-        <div key={client} className="cli-path-hint">
-          <span className="mcp-register-client">{client}</span>
-          <code>{line}</code>
-          <button onClick={() => void copyLine(line, t)}>{t('settings.cli.copy')}</button>
-        </div>
-      ))}
+      {registration === 'install-first' && <span className="settings-hint">{t('settings.mcp.installFirst')}</span>}
+      {Array.isArray(registration) && (
+        <>
+          <span className="settings-hint">{t('settings.mcp.register')}</span>
+          {registration.map(({ client, line }) => (
+            <div key={client} className="cli-path-hint">
+              <span className="mcp-register-client">{client}</span>
+              <code>{line}</code>
+              <button onClick={() => void copyLine(line, t)}>{t('settings.cli.copy')}</button>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   )
 }

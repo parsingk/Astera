@@ -7869,3 +7869,95 @@ describe('handleCommand — tasks-get', () => {
     expect((await call(deps, 'tasks-get', {}, '')).status).toBe(400)
   })
 })
+
+// A worker showing a permission prompt, read off the hook events the Host already reads for `sessions
+// list` (sessionTurn). Read only: nothing here answers it.
+describe('handleCommand — waitingForApproval', () => {
+  const task = (id: string) => ({
+    id,
+    runId: 'r1',
+    title: id,
+    spec: 's',
+    deps: [],
+    status: 'dispatched' as const,
+    consecutiveFailures: 0,
+    createdAt: NOW,
+    updatedAt: NOW
+  })
+  const dispatch = (id: string, taskId: string, sessionId: string, ended = false) => ({
+    id,
+    taskId,
+    provider: 'claude' as const,
+    accountId: 'a1',
+    sessionId,
+    cwd: 'D:/p',
+    specPath: 'D:/p/spec.md',
+    startedAt: `2026-10-01T00:00:0${id.slice(-1)}.000Z`,
+    workerState: 'ready' as const,
+    retained: false,
+    ...(ended ? { outcome: 'failed' as const, endedAt: NOW } : {})
+  })
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [task('t1'), task('t2'), task('t3')],
+    dispatches: [
+      dispatch('d1', 't1', 's-closed', true),
+      dispatch('d2', 't1', 's-perm'),
+      dispatch('d3', 't2', 's-question'),
+      dispatch('d4', 't3', 's-perm2')
+    ]
+  })
+  type Turn = { alive: boolean; state: 'working' | 'waiting' | 'unknown'; prompt: 'permission' | 'question' | null }
+  const withTurns = (turns: Record<string, Turn | null>, state = seeded()) => {
+    const deps = makeDeps(state)
+    const sessionTurn = vi.fn(async (id: string) => turns[id] ?? null)
+    return { deps: { ...deps, sessionTurn } as typeof deps, sessionTurn }
+  }
+  const perm: Turn = { alive: true, state: 'waiting', prompt: 'permission' }
+
+  it('marks the open attempt whose session shows a permission prompt, and only that one', async () => {
+    const { deps, sessionTurn } = withTurns({ 's-closed': perm, 's-perm': perm })
+    const r = await call(deps, 'tasks-get', { id: 't1' }, '')
+    const attempts = (r.body as { attempts: Array<Record<string, unknown>> }).attempts
+    expect(attempts.map((a) => [a.id, a.waitingForApproval])).toEqual([
+      ['d1', undefined],
+      ['d2', true]
+    ])
+    // The closed attempt's session is not asked: it is not this Task's worker any more.
+    expect(sessionTurn).not.toHaveBeenCalledWith('s-closed')
+  })
+
+  it('does not mark a question or a turn that ended', async () => {
+    const { deps } = withTurns({
+      's-question': { alive: true, state: 'waiting', prompt: 'question' },
+      's-perm': { alive: true, state: 'waiting', prompt: null }
+    })
+    for (const id of ['t1', 't2']) {
+      const attempts = ((await call(deps, 'tasks-get', { id }, '')).body as { attempts: Array<Record<string, unknown>> }).attempts
+      expect(attempts.some((a) => 'waitingForApproval' in a), id).toBe(false)
+    }
+  })
+
+  it('runs get counts the Tasks waiting on an approval, and leaves the field out at none', async () => {
+    const both = withTurns({ 's-perm': perm, 's-perm2': perm, 's-question': { alive: true, state: 'waiting', prompt: 'question' } })
+    expect((await call(both.deps, 'runs-get', { id: 'r1' }, '')).body).toMatchObject({ id: 'r1', waitingForApproval: 2 })
+    const none = withTurns({})
+    expect((await call(none.deps, 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('waitingForApproval')
+  })
+
+  it('says nothing where the caller cannot read sessions (not the Host)', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('waitingForApproval')
+    const attempts = ((await call(deps, 'tasks-get', { id: 't1' }, '')).body as { attempts: Array<Record<string, unknown>> }).attempts
+    expect(attempts.some((a) => 'waitingForApproval' in a)).toBe(false)
+  })
+
+  it('a session that cannot be read is not waiting, and the read still answers', async () => {
+    const deps = makeDeps(seeded())
+    const failing = { ...deps, sessionTurn: vi.fn(async () => Promise.reject(new Error('gone'))) } as typeof deps
+    expect((await call(failing, 'runs-get', { id: 'r1' }, '')).status).toBe(200)
+    expect((await call(failing, 'tasks-get', { id: 't1' }, '')).status).toBe(200)
+  })
+})

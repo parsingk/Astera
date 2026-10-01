@@ -18,7 +18,41 @@ The server speaks MCP over stdio, so you do not run it yourself. The client laun
 Each client launches the same command: `astera mcp serve`.
 
 **Settings, CLI tab** shows the line for Claude Code, Codex and Cursor under MCP access, already in
-the form for your operating system, each with a copy button.
+the form for your operating system, each with a copy button. The lines appear once the command line
+tool is installed; before that the tab says to install it first.
+
+**The Settings lines name the installed command by its full path**, so they work whatever the
+client's `PATH` holds. On Windows, a folder just put on the user Path reaches only programs started
+after that, so a client that was already running cannot find `astera`. On macOS and Linux,
+`~/.local/bin` is often missing from the `PATH` a desktop app starts with. On Windows a Settings line
+looks like this:
+
+```bash
+claude mcp add astera -- cmd /c call "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
+```
+
+and on macOS or Linux like this:
+
+```bash
+claude mcp add astera -- '/Users/you/.local/bin/astera' mcp serve
+```
+
+The Cursor line carries the same as `"command": "cmd"` with
+`"args": ["/c", "call", "<path>", "mcp", "serve"]`. The `call` is there for a folder name with `&`,
+`(` or `)`: without it cmd drops the quotes around such a path and the path breaks. The quoting was
+checked on Windows 11 with folders named with a space, with Hangul and `a&b (c)`: the line gave the
+client the same arguments when pasted into cmd, PowerShell 7 and Windows PowerShell 5.1, and `cmd`
+started with those arguments from Node and from Rust's standard library (Codex is written in Rust)
+listed every tool.
+
+One case these lines do not handle: a folder name with `$`, a backtick, `^` or `%`. PowerShell
+expands `$` and the backtick inside double quotes, and cmd reads `^` and `%` in the path. For `$` or
+a backtick, register the server by hand: write the JSON or TOML entry yourself, with the path as one
+of the `args`, so no PowerShell reads it. For `^` or `%`, cmd reads them in any form that goes
+through it, so move the CLI folder to a path without them.
+
+The forms below use the short `astera mcp serve`, for a client that has the install folder on its
+`PATH`.
 
 **On Windows, launch it through `cmd /c`.** There `astera` is `astera.cmd`, and a client that starts
 its server without a shell cannot run it. Checked on Windows 11 with Node 24: spawning `astera` by name failed with
@@ -125,11 +159,11 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
 | `list_runs` | Runs, newest first, optionally of one Job. |
-| `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. |
+| `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). |
 | `stop_run` | Stop a Run: its open workers are closed and the Run is paused. Use `resume_run` to continue it. |
 | `resume_run` | Resume a Run that `stop_run` paused. A Run that is not paused is returned as it is. |
 | `list_tasks` | The Tasks of a Run, with their status and dependencies (deps). Each spec is cut to 160 characters, and `spec_truncated` says when it was; `get_task` has the whole spec. |
-| `get_task` | One Task with its attempts and the open question on it, if any. |
+| `get_task` | One Task with its attempts and the open question on it, if any. An open attempt whose worker waits for a person's approval carries `waitingForApproval: true`. |
 | `list_questions` | Questions that block a Run until someone answers, oldest first. Use `answer_question` with an id from here. |
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
 | `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and a `failureSummary` naming each failed check, its exit code and its last output line. Astera runs the checks and repairs; this only reads them. |
@@ -143,6 +177,16 @@ given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart
 and `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion`
 and `list_questions`. `run_job` makes the Run's worktree and starts its coordinator before it
 answers, so on a large repository it can take up to a minute.
+
+**A worker waiting for approval.** When a worker runs without skipping permission checks (Settings,
+Agent tab), its agent can stop at a permission prompt and wait for a person. `get_task` then marks
+that attempt `waitingForApproval: true`, and `get_run` carries `waitingForApproval` with the number
+of its Tasks in that state; with none, the field is left out. Nothing over MCP answers the prompt: a
+person answers it in Astera, in the worker's terminal. The Task's state in `get_completion` does not
+change. It is read from the hook events Claude Code writes, the same ones `astera sessions list`
+reads: Claude Code reports the prompt a few seconds after it goes up, and once anyone types into
+that terminal the mark goes until the next event. A Codex worker writes no such events, so it never
+shows as waiting.
 
 Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
 first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions`
@@ -216,7 +260,7 @@ so check with `get_job` before you call `run_job` again, or retry with the same 
 
 **`astera: command not found` in the client's log**
 The client was started from a shell that does not have the install folder on its `PATH`. Open a new
-shell, or use the full path in the client's configuration. On Windows, a client that launches
+shell, or use the full path in the client's configuration: the lines in Settings, CLI tab already do. On Windows, a client that launches
 `astera` itself fails even with the folder on `PATH`, because `astera` is `astera.cmd` and a program
 started without a shell neither finds nor runs a `.cmd` (`ENOENT` by name, `EINVAL` by full path).
 Use the `cmd /c astera mcp serve` form from [Connect a client](#connect-a-client).

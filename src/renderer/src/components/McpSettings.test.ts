@@ -4,7 +4,7 @@ import { CATALOGS, LANGS } from '../../../core/i18n'
 const errors: string[] = []
 vi.mock('../lib/toast', () => ({ toast: { error: (m: string) => void errors.push(m) } }))
 
-const { copyLine, loadMcpAccess } = await import('./McpSettings')
+const { copyLine, loadMcpAccess, registrationFor } = await import('./McpSettings')
 
 const t = (key: string, params?: Record<string, unknown>): string => (params ? `${key} ${JSON.stringify(params)}` : key)
 const withApi = (getMcpAccess: () => Promise<unknown>): void => {
@@ -61,5 +61,31 @@ describe('McpSettings copy', () => {
 
   it('has its copy-failed string in all four languages', () => {
     for (const lang of LANGS) expect(CATALOGS[lang].messages['settings.mcp.copyFailed'], lang).toBeTruthy()
+  })
+})
+
+describe('McpSettings registration lines', () => {
+  const status = (installed: boolean) => ({ dir: 'C:\\Users\\me\\AppData\\Local\\astera\\bin', installed, onPath: false, hint: '' })
+
+  it('shows nothing until the CLI status is read', () => {
+    expect(registrationFor(null, 'win32')).toBeNull()
+  })
+
+  it('asks for the CLI first while it is not installed, instead of lines that cannot run', () => {
+    expect(registrationFor(status(false), 'win32')).toBe('install-first')
+    expect(registrationFor(status(false), 'linux')).toBe('install-first')
+  })
+
+  it('once installed, gives the lines with the installed command by its full path', () => {
+    const lines = registrationFor(status(true), 'win32')
+    expect(Array.isArray(lines) && lines[0].line).toBe(
+      'claude mcp add astera -- cmd /c call "C:\\Users\\me\\AppData\\Local\\astera\\bin\\astera.cmd" mcp serve'
+    )
+    const posix = registrationFor({ ...status(true), dir: '/home/me/.local/bin' }, 'linux')
+    expect(Array.isArray(posix) && posix[0].line).toBe("claude mcp add astera -- '/home/me/.local/bin/astera' mcp serve")
+  })
+
+  it('has its install-first string in all four languages', () => {
+    for (const lang of LANGS) expect(CATALOGS[lang].messages['settings.mcp.installFirst'], lang).toBeTruthy()
   })
 })
