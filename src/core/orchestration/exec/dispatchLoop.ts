@@ -224,9 +224,15 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  Job's Run, otherwise once the grace has passed since the later of the Run's finish and the last time
    *  a person typed into that session. The finish is the latest `updatedAt` of the Run's Tasks: the
    *  commit that made the last one terminal stamps it, and nothing on the Run records the moment. A later
-   *  edit of a finished Task moves it on, which only waits longer. */
+   *  edit of a finished Task moves it on, which only waits longer.
+   *
+   *  **Never mid-turn** (fix round 1): the grace counts from the last input, so a session still
+   *  answering a person's follow-up past it is busy, and is left until it is idle. A busy state this
+   *  process cannot tell (null) falls back to the time rule. `run-coordinator-stop` asks no idle state
+   *  for a finished Run, so this is the one place that asks. */
   const graceOver = (s: OrchState, run: JobRun, sessionId: string, nowMs: number): boolean => {
     if (jobOf(s, run)?.schedule !== undefined) return true
+    if (c.sessionBusy(sessionId) === true) return false
     const finishedAt = Math.max(...tasksOwnedBy(s, run.id).map((t) => Date.parse(t.updatedAt)))
     const typedAt = c.lastPersonInputAt?.(sessionId) ?? null
     return nowMs - Math.max(finishedAt, typedAt ?? finishedAt) >= FINISHED_RUN_GRACE_MS
@@ -330,18 +336,30 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    * a failure is logged and never thrown (R14).
    */
   const releaseIdleWorkers = async (): Promise<void> => {
+    /** Whether `dispatchId` is, in `s`, an idle worker of the finished Run `runId`. */
+    const idleIn = (s: OrchState, runId: string, dispatchId: string): boolean => {
+      if (outcomeOf(s, runId) === 'running') return false
+      const d = s.dispatches.find((x) => x.id === dispatchId)
+      if (!d || d.retained || (!d.outcome && !d.endedAt)) return false
+      if (!tasksOwnedBy(s, runId).some((t) => t.id === d.taskId)) return false
+      const owners = s.dispatches.filter((x) => x.sessionId === d.sessionId)
+      return owners[owners.length - 1]?.id === d.id
+    }
     const s = c.getState()
     for (const id of [...releaseRetry.keys()]) if (!c.sessionAlive(id)) releaseRetry.delete(id)
     for (const run of s.runs) {
       if (outcomeOf(s, run.id) === 'running') continue
-      const mine = new Set(tasksOwnedBy(s, run.id).map((t) => t.id))
       for (const d of s.dispatches) {
-        if (!mine.has(d.taskId) || d.retained || (!d.outcome && !d.endedAt)) continue
-        const owners = s.dispatches.filter((x) => x.sessionId === d.sessionId)
-        if (owners[owners.length - 1]?.id !== d.id) continue
+        if (!idleIn(s, run.id, d.id)) continue
+        // **Asked again on the state as it is now** (fix round 1): each release below awaits, and a Run
+        // reopened, a Dispatch reused or a worker retained meanwhile must not lose its session to the
+        // snapshot this pass started from.
+        const current = c.getState()
+        const now = current.runs.find((r) => r.id === run.id)
+        if (!now || !idleIn(current, run.id, d.id)) continue
         if (!c.sessionAlive(d.sessionId)) continue
         const nowMs = c.nowMs()
-        if (!graceOver(s, run, d.sessionId, nowMs)) continue
+        if (!graceOver(current, now, d.sessionId, nowMs)) continue
         const retry = releaseRetry.get(d.sessionId)
         if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
         if (!c.mayStart()) return

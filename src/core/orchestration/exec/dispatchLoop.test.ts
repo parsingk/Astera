@@ -830,6 +830,60 @@ describe('a finished manual Run’s coordinator stops after the grace', () => {
     expect(stops(h)).toBe(0)
   })
 
+  // Fix round 1: the grace counts from the last input, so a coordinator still answering a follow-up
+  // past it was stopped mid-turn (run-coordinator-stop does not ask a finished Run's idle state).
+  it('a coordinator busy at minute 11 is not stopped; once idle it is', async () => {
+    const h = finishedWithCoordinator()
+    let busy: boolean | null = true
+    h.ctx.sessionBusy = (id) => (id === 'coord-1' ? busy : false)
+    h.clock = NOW_MS + 11 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(0)
+    busy = false
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
+  it('a coordinator whose busy state is unknown falls back to the time rule', async () => {
+    const h = finishedWithCoordinator()
+    h.ctx.sessionBusy = () => null
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
+  it('a scheduled finished Run’s coordinator is stopped at once, busy or not', async () => {
+    const h = rig({ reapableChild: true })
+    const s = h.state()
+    h.setState({ ...s, runs: s.runs.map((r) => (r.id === 'run_rc' ? { ...r, coordinatorSessionId: 'coord-rc' } : r)) })
+    h.ctx.sessionBusy = () => true
+    await pass(h)
+    expect(h.stopCoordinator.mock.calls).toEqual([['coord-rc']])
+  })
+
+  // The re-check in run-coordinator-stop (runMoves): a stop still pending for a Run that has work again
+  // is refused, its mark dropped, and the coordinator kept.
+  it('a Run reopened while its coordinator stop is pending keeps its coordinator', async () => {
+    const h = finishedWithCoordinator()
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+    const run1 = () => h.state().runs.find((r) => r.id === 'run_1')!
+    expect(run1().coordinatorStopPending).toBeDefined()
+    // A new Task the coordinator can start: the Run is running again.
+    const s = h.state()
+    h.setState({ ...s, tasks: [...s.tasks, task({ id: 'tsk_3', status: 'pending' })] })
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await pass(h)
+    expect(stops(h)).toBe(2)
+    expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+    expect(run1().coordinatorSessionId).toBe('coord-1')
+    expect(run1().coordinatorStopPending).toBeUndefined()
+    h.clock += COORDINATOR_STOP_RETRY_MAX_MS
+    await pass(h)
+    expect(stops(h)).toBe(2)
+  })
+
   it('only the driving process stops it', async () => {
     const h = finishedWithCoordinator()
     h.clock = NOW_MS + 10 * MIN
@@ -963,6 +1017,63 @@ describe('a finished Run’s idle workers are released after the grace', () => {
     h.setState({ ...s, dispatches: [dispatch({ id: 'dsp_rc', taskId: 'tsk_rc', sessionId: 'sess_rc', cwd: '/wt-child' })] })
     await pass(h)
     expect(releases(h)).toEqual(['dsp_rc'])
+  })
+
+  it('a worker busy at minute 11 is not released; once idle it is', async () => {
+    const h = finishedWithWorker()
+    let busy: boolean | null = true
+    h.ctx.sessionBusy = (id) => (id === 'sess_w1' ? busy : false)
+    h.clock = NOW_MS + 11 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual([])
+    busy = null // unknown: the time rule decides
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
+  })
+
+  it('a scheduled finished Run’s worker is released at once, busy or not', async () => {
+    const h = rig({ reapableChild: true })
+    const s = h.state()
+    h.setState({ ...s, dispatches: [dispatch({ id: 'dsp_rc', taskId: 'tsk_rc', sessionId: 'sess_rc', cwd: '/wt-child' })] })
+    h.ctx.sessionBusy = () => true
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_rc'])
+  })
+
+  // Fix round 1: the pass reads the state once, and each release awaits; a Run reopened meanwhile (or a
+  // worker retained) must not lose its worker to the snapshot.
+  it('re-reads the state before each release: a Run reopened after the first is left alone', async () => {
+    const h = finishedWithWorker()
+    const s = h.state()
+    h.setState({ ...s, dispatches: [...s.dispatches, dispatch({ id: 'dsp_2', taskId: 'tsk_2', sessionId: 'sess_w2' })] })
+    h.ctx.handle = async (cmd, args) => {
+      const r = await h.real(cmd, args)
+      if (cmd === 'worker-release') {
+        const now = h.state()
+        h.setState({ ...now, tasks: now.tasks.map((t) => (t.id === 'tsk_2' ? { ...t, status: 'pending' as const } : t)) })
+      }
+      return r
+    }
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
+  })
+
+  it('re-reads the state before each release: a worker retained after the snapshot is kept', async () => {
+    const h = finishedWithWorker()
+    const s = h.state()
+    h.setState({ ...s, dispatches: [...s.dispatches, dispatch({ id: 'dsp_2', taskId: 'tsk_2', sessionId: 'sess_w2' })] })
+    h.ctx.handle = async (cmd, args) => {
+      const r = await h.real(cmd, args)
+      if (cmd === 'worker-release') {
+        const now = h.state()
+        h.setState({ ...now, dispatches: now.dispatches.map((d) => (d.id === 'dsp_2' ? { ...d, retained: true } : d)) })
+      }
+      return r
+    }
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(releases(h)).toEqual(['dsp_1'])
   })
 
   it('only the driving process releases it', async () => {
