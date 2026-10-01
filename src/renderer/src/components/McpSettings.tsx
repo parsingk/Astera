@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react'
+import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { McpAccess } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { Select } from './Select'
+
+/** The saved value into `set`, or a toast when it cannot be read; the control then keeps its default. */
+export function loadMcpAccess(
+  set: (a: McpAccess) => void,
+  t: (key: MessageKey, params?: MessageParams) => string
+): Promise<void> {
+  return window.api.settings.getMcpAccess().then(set, (err) => {
+    toast.error(t('settings.mcp.loadFailed', { detail: err instanceof Error ? err.message : String(err) }))
+  })
+}
 
 /** MCP access (MCP design M5): what an MCP client may do through `astera mcp serve`. The Host reads
  *  the saved value on every call, so the change applies to clients already connected. */
@@ -11,7 +22,8 @@ export function McpSettings(): React.JSX.Element {
   const [access, setAccess] = useState<McpAccess>('control')
 
   useEffect(() => {
-    void window.api.settings.getMcpAccess().then(setAccess)
+    void loadMcpAccess(setAccess, t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, as before; a language change must not re-read over a choice in flight
   }, [])
 
   return (

@@ -55,6 +55,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcp.control': 'Read and control',
   'settings.mcp.hint': 'What an MCP client connected through astera mcp serve may do. Read only lets it look at Jobs and Runs; read and control also lets it create, run and stop Jobs and answer questions.',
   'settings.mcp.saveFailed': 'Could not save MCP access: {detail}',
+  'settings.mcp.loadFailed': 'Could not read MCP access: {detail}',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':
