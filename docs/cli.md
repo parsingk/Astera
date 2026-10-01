@@ -334,10 +334,13 @@ the later of the run finishing and the last time a person typed into that sessio
 coordinator's closing summary or ask it a follow-up; each input starts the 10 minutes again. A
 person's input is typing in an Astera tab, and a reply from Slack only while the Host drives. Nothing
 else counts: not `sessions send` (agents use it too), and not the Host's or Astera's own writes into a
-session (a nudge, a prompt). A session that is busy, in the middle of a turn, is never ended then: it
-is ended once it is idle again with the 10 minutes over. When whether it is busy cannot be told, the
-10 minutes alone decide. The time of the last input is kept in memory, so after a restart the 10
-minutes count from the run finishing. `run-coordinator-stop --run <runId>` ends the coordinator now. For the coordinator, the process keeps asking
+session (a nudge, a prompt). A session that is busy, in the middle of a turn, is not ended mid-turn,
+for up to an hour: it is ended once it is idle again with the 10 minutes over, or an hour after the
+10 minutes ran out if it still shows busy then, since a busy sign still up after that is read as
+hung. When whether it is busy cannot be told, the 10 minutes alone decide. The time of the last
+input is kept in memory, so after a restart the 10 minutes count from the run finishing.
+`run-coordinator-stop --run <runId>` ends the coordinator now.
+For the coordinator, the process keeps asking
 until the session is confirmed gone, backing off from 30 seconds up to 10 minutes rather than asking
 once, so a run whose coordinator resists stopping can still show that coordinator, paused, for a while
 after the run itself finished. A stop that keeps failing or keeps being refused at the 10 minute cap is
@@ -1049,9 +1052,9 @@ starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches, stops the run's coordinator session when it has one, and pauses the run. A run that has
-already finished (every task completed, or failed with no retries left) is refused with 6 and left as it is:
-its coordinator and idle workers end on their own (see "A finished run does not keep its sessions"),
-and `run-coordinator-stop --run <runId>` ends the coordinator now. The answer says
+already finished (every task completed, or failed with no retries left) is refused with 6 and left
+as it is: its coordinator and idle workers end on their own (see "A finished run does not keep its
+sessions"), and `run-coordinator-stop --run <runId>` ends the coordinator now. The answer says
 `stopped` (how many workers) and `coordinatorStopped`: `true` means the run's coordinator was asked to
 stop, not that it has already exited. A coordinator that is still starting when the run is stopped is
 not stopped: it attaches to the paused run once its start finishes and keeps running until the run is
