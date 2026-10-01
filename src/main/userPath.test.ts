@@ -1,5 +1,12 @@
 import { describe, it, expect, afterAll } from 'vitest'
-import { addToUserPath, removeFromUserPath, runWindowsPowerShell, userPathStatus, type RunPowerShell } from './userPath'
+import {
+  addToUserPath,
+  removeFromUserPath,
+  runWindowsPowerShell,
+  takeOffUserPathIfItBreaks,
+  userPathStatus,
+  type RunPowerShell
+} from './userPath'
 
 // The real registry and the real PowerShell, on a scratch key under HKCU\Software so the person's own
 // Path is never touched: what the fake below stands in for, checked where it runs.
@@ -112,6 +119,31 @@ describe('the win32 user Path the astera command is put on', () => {
     expect(full.writes).toBe(0)
     // The refused Path itself still fits; the panel has to keep saying why, not offer the line to add it
     expect(await userPathStatus({ dir, env, run: full.run })).toEqual({ has: false, fits: false })
+  })
+
+  // 1.4.1 added the entry without the length check, so a Path just under the limit went over it and
+  // every tool on it left new shells. At start the entry comes off again, but only when it is the cause.
+  describe('takeOffUserPathIfItBreaks', () => {
+    const machine = `C:\\WINDOWS\\system32;${'m'.repeat(1608)};`
+
+    it('takes the folder off when it is what pushed the Path past the limit', async () => {
+      const before = 'u'.repeat(2465 - dir.length)
+      const reg = fakeRegistry({ kind: 'ExpandString', value: `${before};${dir}` }, machine)
+      expect(await takeOffUserPathIfItBreaks({ dir, env, run: reg.run })).toBe('removed')
+      expect(reg.now).toEqual({ kind: 'ExpandString', value: before })
+    })
+
+    it('leaves a Path alone that fits, that is too long without the folder too, or that lacks it', async () => {
+      for (const value of [
+        `${'u'.repeat(2465 - dir.length - 1)};${dir}`,
+        `${'u'.repeat(2500)};${dir}`,
+        'u'.repeat(2600)
+      ]) {
+        const reg = fakeRegistry({ kind: 'String', value }, machine)
+        expect(await takeOffUserPathIfItBreaks({ dir, env, run: reg.run }), value.slice(-40)).toBe('kept')
+        expect(reg.writes).toBe(0)
+      }
+    })
   })
 
   it('says when the folder is on the user Path but new shells are not given that Path', async () => {

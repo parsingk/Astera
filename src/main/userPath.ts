@@ -109,6 +109,26 @@ export async function addToUserPath(a: {
   return 'added'
 }
 
+/** Takes `dir` off the user Path when it is what keeps that Path from new shells: the Path is too long
+ *  with it and fits without it. 1.4.1 added it without the length check, so a Path just under the limit
+ *  went over and every tool on it was gone from new shells. Anything else is left as it is. */
+export async function takeOffUserPathIfItBreaks(a: {
+  dir: string
+  env: NodeJS.ProcessEnv
+  run?: RunPowerShell
+  key?: string
+}): Promise<'removed' | 'kept'> {
+  const run = a.run ?? runWindowsPowerShell
+  const key = a.key ?? USER_ENV_KEY
+  const now = await readUserPath(run, key)
+  const without = userPathWithout(now.value, a.dir, a.env)
+  if (without === null) return 'kept'
+  if (userPathFits({ machine: now.machine, user: now.value, env: a.env })) return 'kept'
+  if (!userPathFits({ machine: now.machine, user: without, env: a.env })) return 'kept'
+  await run(writeUserPathScript(without, now.kind === 'String' ? 'String' : 'ExpandString', key))
+  return 'removed'
+}
+
 /** Takes every entry that is `dir` out of the user Path, keeping the value's kind and every other
  *  entry. 'absent' when there was none. */
 export async function removeFromUserPath(a: {

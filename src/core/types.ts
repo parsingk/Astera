@@ -1197,6 +1197,10 @@ export interface CoreApi {
     install(opts?: { addToPath?: boolean }): Promise<CliInstallStatus>
     /** 그 자리에서 앱이 쓴 셔틀 파일만 지우고 바뀐 상태를 돌려준다. 폴더와 이웃 파일은 남긴다. */
     uninstall(): Promise<CliInstallStatus>
+    /** win32, installed app: whether this start took the folder off the user Path because it was what
+     *  made that Path too long for new shells (main/userPath.ts takeOffUserPathIfItBreaks). Waits for
+     *  that check, so the answer holds however early it is asked. */
+    pathRepairedAtStart(): Promise<boolean>
   }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.

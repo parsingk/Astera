@@ -47,6 +47,9 @@ export const ko = {
   'settings.cli.pathTooLong':
     '사용자 PATH 가 너무 깁니다. 시스템 PATH 와 합쳐 4094자를 넘으면 Windows 는 새로 여는 창에 사용자 PATH 를 통째로 넣지 않아서, ' +
     '이 폴더뿐 아니라 사용자 PATH 의 다른 도구도 새 창에서 찾지 못합니다. 환경 변수 설정에서 사용자 Path 의 중복 항목(시스템 Path 에 이미 있는 것 등)을 지운 뒤 다시 설치해 주세요.',
+  'settings.cli.pathRepaired.toast':
+    '사용자 PATH 에서 astera 폴더를 뺐습니다. 이 항목 때문에 PATH 가 너무 길어져 Windows 가 새로 여는 창에 사용자 PATH 를 통째로 넣지 않고 있었습니다. ' +
+    '다른 도구는 새 창에서 다시 찾아집니다. astera 를 다시 쓰려면 사용자 Path 의 중복 항목을 지운 뒤 설정에서 다시 설치해 주세요.',
   'settings.cli.pathTooLong.toast': 'astera 명령은 설치했지만 사용자 PATH 가 너무 길어 새로 여는 창에서는 쓸 수 없습니다. 설정 화면의 안내를 봐 주세요.',
   'settings.cli.copy': '복사',
   'settings.cli.cmdRawPath': 'Astera 가 ASCII 가 아닌 이름의 폴더에 설치되어 있어 cmd 나 PowerShell 의 astera 가 돌지 않을 수 있습니다: {detail}. Git Bash 에서는 돕니다. ASCII 이름의 폴더에 다시 설치하면 고쳐집니다.',

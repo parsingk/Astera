@@ -162,7 +162,7 @@ import {
   type AppImageLaunch
 } from '../core/orchestration/exec/shuttle'
 import { appImageLaunchFor, binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
-import { addToUserPath, removeFromUserPath, userPathStatus } from './userPath'
+import { addToUserPath, removeFromUserPath, takeOffUserPathIfItBreaks, userPathStatus } from './userPath'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import {
@@ -5468,6 +5468,23 @@ export function registerIpc(
           orchLog(`public astera shuttle sync failed: ${err instanceof Error ? err.message : String(err)}`)
       )
   }
+  // win32: 1.4.1 put the folder on the user Path without checking its length, and a Path pushed past
+  // the limit is given to no new shell, every other tool on it gone too. With the command installed, the
+  // entry comes off again when it is what does that (takeOffUserPathIfItBreaks); the renderer says so once.
+  const pathRepair: Promise<boolean> =
+    app.isPackaged && process.platform === 'win32' && shuttleNames().every((n) => existsSync(path.join(cliBinDir(), n)))
+      ? takeOffUserPathIfItBreaks({ dir: cliBinDir(), env: process.env }).then(
+          (r) => {
+            if (r === 'removed') orchLog(`${cliBinDir()} was taken off the user Path: with it the Path was too long for new shells`)
+            return r === 'removed'
+          },
+          (err: unknown) => {
+            orchLog(`the user Path could not be checked at start: ${err instanceof Error ? err.message : String(err)}`)
+            return false
+          }
+        )
+      : Promise.resolve(false)
+  ipcMain.handle('cli.pathRepairedAtStart', () => pathRepair)
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
   // sent is validated before being written to disk. Registered unconditionally here (not inside
