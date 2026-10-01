@@ -21,7 +21,8 @@ export const ja: Catalog = {
   'settings.mcp.control': '読み取りと操作',
   'settings.mcp.hint':
     'astera mcp serve で接続した MCP クライアントにできることです。読み取り専用では Job と Run を見るだけで、' +
-    '読み取りと操作では Job の作成、実行、停止と、質問への回答もできます。',
+    '読み取りと操作では Job の作成、実行、停止、再開と、質問への回答もできます。',
+  'settings.mcp.copyFailed': '行をコピーできませんでした: {detail}',
   'settings.mcp.register':
     'MCP クライアントに Astera を追加するには、そのクライアントの行を実行するか貼り付けてください。この OS に合わせた形です。',
   'settings.mcp.saveFailed': 'MCP アクセスの設定を保存できませんでした: {detail}',

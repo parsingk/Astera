@@ -16,6 +16,13 @@ export function loadMcpAccess(
   })
 }
 
+/** A registration line onto the clipboard, or a toast when the clipboard refuses it. */
+export function copyLine(line: string, t: (key: MessageKey, params?: MessageParams) => string): Promise<void> {
+  return navigator.clipboard.writeText(line).catch((err) => {
+    toast.error(t('settings.mcp.copyFailed', { detail: err instanceof Error ? err.message : String(err) }))
+  })
+}
+
 /** MCP access (MCP design M5): what an MCP client may do through `astera mcp serve`. The Host reads
  *  the saved value on every call, so the change applies to clients already connected. */
 export function McpSettings(): React.JSX.Element {
@@ -57,7 +64,7 @@ export function McpSettings(): React.JSX.Element {
         <div key={client} className="cli-path-hint">
           <span className="mcp-register-client">{client}</span>
           <code>{line}</code>
-          <button onClick={() => void navigator.clipboard.writeText(line)}>{t('settings.cli.copy')}</button>
+          <button onClick={() => void copyLine(line, t)}>{t('settings.cli.copy')}</button>
         </div>
       ))}
     </div>
