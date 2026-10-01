@@ -56,14 +56,34 @@ export function isOnPath(a: {
 /** One raw user-Path entry as a folder to compare: quotes and trailing separators off, `%NAME%`
  *  expanded from `env` (a REG_EXPAND_SZ Path keeps them unexpanded). */
 const userPathFolder = (entry: string, env: NodeJS.ProcessEnv): string =>
-  entry
-    .trim()
-    .replace(/^"|"$/g, '')
-    .replace(/%([^%]+)%/g, (whole, name: string) => {
-      const key = Object.keys(env).find((k) => k.toUpperCase() === name.toUpperCase())
-      return key !== undefined ? (env[key] ?? whole) : whole
-    })
-    .replace(/[\\/]+$/, '')
+  expandVariables(entry.trim().replace(/^"|"$/g, ''), env).replace(/[\\/]+$/, '')
+
+/** `%NAME%` replaced from `env`, ignoring case, the way Windows expands a REG_EXPAND_SZ value. An unknown
+ *  name stays as it was. */
+const expandVariables = (value: string, env: NodeJS.ProcessEnv): string =>
+  value.replace(/%([^%]+)%/g, (whole, name: string) => {
+    const key = Object.keys(env).find((k) => k.toUpperCase() === name.toUpperCase())
+    return key !== undefined ? (env[key] ?? whole) : whole
+  })
+
+/**
+ * The longest Path, system and user values joined and expanded, that Explorer gives a new shell.
+ * Measured on Windows 11 (2026-10-01) through a cmd Explorer itself started: 4094 characters reached it;
+ * at 4095 the user value was left out whole, so every tool on it was gone, the system value alone kept.
+ */
+const WIN32_JOINED_PATH_LIMIT = 4094
+
+/**
+ * Whether new shells get the user Path `user` alongside the system Path `machine` (both raw, as the
+ * registry holds them). The separator between them is counted only when the system value does not end
+ * in one already; the measurement had one ending in ';', so the other case is the assumption that
+ * Windows inserts a ';' there.
+ */
+export function userPathFits(a: { machine: string; user: string; env: NodeJS.ProcessEnv }): boolean {
+  const machine = expandVariables(a.machine, a.env)
+  const joined = machine.length + (machine === '' || machine.endsWith(';') ? 0 : 1) + expandVariables(a.user, a.env).length
+  return joined <= WIN32_JOINED_PATH_LIMIT
+}
 
 const hasUserPathEntry = (value: string, dir: string, env: NodeJS.ProcessEnv): boolean =>
   value.split(';').some((e) => e.trim() !== '' && isSamePath(userPathFolder(e, env), userPathFolder(dir, env), 'win32'))

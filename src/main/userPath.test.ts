@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest'
-import { addToUserPath, removeFromUserPath, runWindowsPowerShell, userPathHas, type RunPowerShell } from './userPath'
+import { addToUserPath, removeFromUserPath, runWindowsPowerShell, userPathStatus, type RunPowerShell } from './userPath'
 
 // The real registry and the real PowerShell, on a scratch key under HKCU\Software so the person's own
 // Path is never touched: what the fake below stands in for, checked where it runs.
@@ -25,10 +25,10 @@ describe.skipIf(process.platform !== 'win32')('the scripts against the real regi
         )
       ) as { kind: string; value: string }
     expect(await addToUserPath({ dir: dirHere, env: envHere, key })).toBe('added')
-    expect(await userPathHas({ dir: dirHere, env: envHere, key })).toBe(true)
+    expect(await userPathStatus({ dir: dirHere, env: envHere, key })).toEqual({ has: true, fits: true })
     expect(await read()).toEqual({ kind: 'ExpandString', value: `${original}${dirHere};` })
     expect(await removeFromUserPath({ dir: dirHere, env: envHere, key })).toBe('removed')
-    expect(await userPathHas({ dir: dirHere, env: envHere, key })).toBe(false)
+    expect(await userPathStatus({ dir: dirHere, env: envHere, key })).toEqual({ has: false, fits: true })
     expect(await read()).toEqual({ kind: 'ExpandString', value: original })
   }, 60_000)
 })
@@ -38,7 +38,10 @@ const env = { LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' } as NodeJS.ProcessE
 
 /** A registry the scripts read and write: the read script answers with it, a write script is decoded
  *  back from its base64 and its kind, the way PowerShell would run it. */
-function fakeRegistry(start: { kind: 'String' | 'ExpandString' | 'None'; value: string }): {
+function fakeRegistry(
+  start: { kind: 'String' | 'ExpandString' | 'None'; value: string },
+  machine = 'C:\\WINDOWS\\system32;'
+): {
   run: RunPowerShell
   now: { kind: string; value: string }
   writes: number
@@ -46,7 +49,7 @@ function fakeRegistry(start: { kind: 'String' | 'ExpandString' | 'None'; value: 
   const state = { now: { ...start } as { kind: string; value: string }, writes: 0 }
   const run: RunPowerShell = async (script) => {
     const b64 = /FromBase64String\('([^']*)'\)/.exec(script)
-    if (!b64) return JSON.stringify({ kind: state.now.kind, value: state.now.kind === 'None' ? null : state.now.value })
+    if (!b64) return JSON.stringify({ kind: state.now.kind, value: state.now.kind === 'None' ? null : state.now.value, machine })
     const kind = /RegistryValueKind\]::(\w+)/.exec(script)![1]
     state.now = { kind, value: Buffer.from(b64[1], 'base64').toString('utf8') }
     state.writes++
@@ -68,7 +71,7 @@ describe('the win32 user Path the astera command is put on', () => {
     const reg = fakeRegistry({ kind: 'ExpandString', value: '%USERPROFILE%\\bin;C:\\tools' })
     expect(await addToUserPath({ dir, env, run: reg.run })).toBe('added')
     expect(reg.now).toEqual({ kind: 'ExpandString', value: `%USERPROFILE%\\bin;C:\\tools;${dir}` })
-    expect(await userPathHas({ dir, env, run: reg.run })).toBe(true)
+    expect(await userPathStatus({ dir, env, run: reg.run })).toEqual({ has: true, fits: true })
   })
 
   it('writes nothing when the folder is there already', async () => {
@@ -96,5 +99,24 @@ describe('the win32 user Path the astera command is put on', () => {
     const reg = fakeRegistry({ kind: 'ExpandString', value: odd })
     await addToUserPath({ dir, env, run: reg.run })
     expect(reg.now.value).toBe(`${odd};${dir}`)
+  })
+
+  // Over the length Explorer passes on, Windows drops the whole user Path from new shells
+  // (core/orchestration/cliInstall.ts userPathFits): adding the folder would take every other tool on it away.
+  it('refuses to add the folder when the Path would grow past what new shells are given', async () => {
+    const machine = `C:\\WINDOWS\\system32;${'m'.repeat(1608)};`
+    const reg = fakeRegistry({ kind: 'String', value: 'u'.repeat(2465 - dir.length - 1) }, machine)
+    expect(await addToUserPath({ dir, env, run: reg.run })).toBe('added')
+    const full = fakeRegistry({ kind: 'String', value: 'u'.repeat(2465 - dir.length) }, machine)
+    expect(await addToUserPath({ dir, env, run: full.run })).toBe('tooLong')
+    expect(full.writes).toBe(0)
+    // The refused Path itself still fits; the panel has to keep saying why, not offer the line to add it
+    expect(await userPathStatus({ dir, env, run: full.run })).toEqual({ has: false, fits: false })
+  })
+
+  it('says when the folder is on the user Path but new shells are not given that Path', async () => {
+    const machine = `C:\\WINDOWS\\system32;${'m'.repeat(1608)};`
+    const reg = fakeRegistry({ kind: 'String', value: `${'u'.repeat(2500)};${dir}` }, machine)
+    expect(await userPathStatus({ dir, env, run: reg.run })).toEqual({ has: true, fits: false })
   })
 })

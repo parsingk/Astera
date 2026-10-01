@@ -40,6 +40,10 @@ export const en: Record<keyof typeof ko, string> = {
   // The one line a person runs themselves is shown below
   'settings.cli.pathMissing': 'This folder is not on PATH. Running the line below once adds it.',
   'settings.cli.onPath': 'This folder is on PATH.',
+  'settings.cli.pathTooLong':
+    'Your user PATH is too long. When it and the system PATH together pass 4094 characters, Windows leaves the whole user PATH out of new windows, ' +
+    'so they find neither this folder nor any other tool on it. Remove duplicate entries from your user Path (ones the system Path already has, for instance) in the environment variable settings, then install again.',
+  'settings.cli.pathTooLong.toast': 'The astera command is installed, but your user PATH is too long for new windows to have it. See Settings for what to do.',
   'settings.cli.copy': 'Copy',
   'settings.cli.cmdRawPath': 'Astera is installed in a folder whose name is not ASCII, and astera from cmd or PowerShell may not run: {detail}. It still runs from Git Bash. Reinstalling Astera into a folder with an ASCII name fixes it.',
   // Agent permission mode

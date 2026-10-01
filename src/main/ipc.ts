@@ -162,7 +162,7 @@ import {
   type AppImageLaunch
 } from '../core/orchestration/exec/shuttle'
 import { appImageLaunchFor, binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
-import { addToUserPath, removeFromUserPath, userPathHas } from './userPath'
+import { addToUserPath, removeFromUserPath, userPathStatus } from './userPath'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import {
@@ -5352,20 +5352,27 @@ export function registerIpc(
   const cliStatus = async (): Promise<CliInstallStatus> => {
     const dir = cliBinDir()
     let onPath = isOnPath({ dir, pathVar: process.env.PATH ?? '', platform: process.platform })
+    let userPathTooLong = false
     // win32: this app's own PATH was read once when it started, so a folder put on the user Path since
-    // (by Install, or by the person) is asked of the registry, which is what the next shell reads.
-    if (!onPath && process.platform === 'win32') {
-      onPath = await userPathHas({ dir, env: process.env }).catch((err: unknown) => {
+    // (by Install, or by the person) is asked of the registry, which is what the next shell reads. It is
+    // asked even when this app's PATH has the folder: a user Path too long for Windows reaches no new shell.
+    if (process.platform === 'win32') {
+      const user = await userPathStatus({ dir, env: process.env }).catch((err: unknown) => {
         orchLog(`the user Path could not be read: ${String(err)}`)
-        return false
+        return null
       })
+      if (user) {
+        userPathTooLong = !user.fits
+        onPath = (onPath || user.has) && user.fits
+      }
     }
     return {
       dir,
       installed: shuttleNames().every((n) => existsSync(path.join(dir, n))),
       onPath,
       hint: pathHintFor({ dir, platform: process.platform }),
-      ...(process.platform === 'win32' ? { canEditUserPath: true as const } : {})
+      ...(process.platform === 'win32' ? { canEditUserPath: true as const } : {}),
+      ...(userPathTooLong ? { userPathTooLong: true as const } : {})
     }
   }
 

@@ -1716,9 +1716,13 @@ export interface CliInstallStatus {
   /** win32: the Install and Uninstall buttons can put the folder on the user Path themselves, with the
    *  person's consent (the checkbox beside Install; main/userPath.ts). Absent elsewhere. */
   canEditUserPath?: true
+  /** win32: the user Path is too long for Windows to give it to new shells, so none of its entries,
+   *  this folder's included, reach them (core/orchestration/cliInstall.ts userPathFits). onPath is then
+   *  false whatever the registry holds. */
+  userPathTooLong?: true
   /** Install or Uninstall only: what they did to the user Path, and why not when they could not. A
-   *  change reaches shells opened after it, not one already open. */
-  userPath?: 'added' | 'present' | 'removed'
+   *  change reaches shells opened after it, not one already open. 'tooLong': nothing was written. */
+  userPath?: 'added' | 'present' | 'removed' | 'tooLong'
   userPathError?: string
   /** 설치 응답에만. `.cmd` 가 정션을 거쳐야 했는데 못 해서 진짜 경로를 적은 까닭들
    *  (core/orchestration/exec/shuttle.ts 의 ShuttleWarning). 있으면 cmd·PowerShell 의 astera 가
