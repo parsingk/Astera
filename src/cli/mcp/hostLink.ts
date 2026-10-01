@@ -20,10 +20,12 @@ export function openHostLink(a: {
   /** Starts a Host when none answers (MCP design M4). Resolves true when one now answers. */
   startHost(): Promise<boolean>
   log(m: string): void
-  /** Per-call deadline. The default matches the CLI's default `clientTimeoutMs`; no MCP tool long-polls. */
+  /** Per-call deadline. No MCP tool long-polls. */
   timeoutMs?: number
 }): HostLink {
-  const timeoutMs = a.timeoutMs ?? 300_000
+  // 50 s: Cursor cuts a tool call at 60 s and Codex documents 60 s as its default, so answering
+  // TIMEOUT first lets the agent see why the call ended instead of a bare client-side cut.
+  const timeoutMs = a.timeoutMs ?? 50_000
   // A connection and the calls sent on it: its close flushes only these.
   type Live = { c: HostConnection; pending: Map<string, (r: HostAnswer | LinkFailure) => void> }
   let conn: Promise<Live | LinkFailure> | null = null
@@ -94,7 +96,11 @@ export function openHostLink(a: {
           l.pending.delete(call)
           resolve({
             code: 'TIMEOUT',
-            message: `the Host did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; the command may still finish, re-read with a get_ tool`
+            message: `the Host did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; ${
+              cmd === 'jobs-run'
+                ? 'the Run may still be starting, check with get_job'
+                : 'the command may still finish, re-read with a get_ tool'
+            }`
           })
         }, timeoutMs)
         l.pending.set(call, (r) => {

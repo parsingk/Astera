@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { HostConnection } from '../../core/host/connect'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 import { openHostLink } from './hostLink'
@@ -129,6 +129,33 @@ describe('openHostLink', () => {
     expect(r).toMatchObject({ code: 'TIMEOUT' })
     expect((r as { message: string }).message).toContain('jobs-list')
     expect(() => f.push({ t: 'orch-result', call: (f.sent[0] as { call: string }).call, status: 200, body: [] } as HostMessage)).not.toThrow()
+  })
+
+  it('answers TIMEOUT at 50 s by default, before a client cuts the call at 60 s', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fakeConn()
+      const link = openHostLink({ connect: async () => f.conn, startHost: async () => false, log: () => {} })
+      let r: unknown
+      void link.call('runs-get', { id: 'run_1' }).then((x) => (r = x))
+      await vi.advanceTimersByTimeAsync(49_999)
+      expect(r).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(r).toMatchObject({ code: 'TIMEOUT' })
+      expect((r as { message: string }).message).toContain('within 50 s')
+      expect((r as { message: string }).message).toContain('re-read with a get_ tool')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a jobs-run that times out says the Run may still be starting and to check with get_job', async () => {
+    const f = fakeConn()
+    const link = openHostLink({ connect: async () => f.conn, startHost: async () => false, log: () => {}, timeoutMs: 20 })
+    const r = (await link.call('jobs-run', { id: 'job_1' })) as { code: string; message: string }
+    expect(r.code).toBe('TIMEOUT')
+    expect(r.message).toContain('the Run may still be starting')
+    expect(r.message).toContain('get_job')
   })
 
   it('after close, calls answer HOST_NOT_RUNNING without connecting', async () => {

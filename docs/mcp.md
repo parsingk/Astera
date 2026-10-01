@@ -133,6 +133,8 @@ If the client cannot find `astera`, give `command` the full path of the installe
 `create_job` takes a `projectId` from `list_projects`, an `objective`, and a `coordinatorAccountId`
 from `list_accounts`. A Job that has never run shows `pendingStart: true` in `get_job` and
 `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion` and `list_questions`.
+`run_job` makes the Run's worktree and starts its coordinator before it answers, so on a large repository it can take up
+to a minute.
 
 Every result carries the data twice, as `structuredContent` and as the same JSON in the text content.
 An error is the exception: its text content is a `CODE: message` line followed by the JSON (`code`,
@@ -187,6 +189,12 @@ the change at its next call. The same code with the message "something answered 
 but could not prove it is this account's Host" means a process at the Host's address failed the Host
 key proof. The server sent it nothing and does not start a Host beside it. Find what holds that
 address before you retry.
+
+**`TIMEOUT`**
+The Host did not answer within 50 seconds. The server answers first because Cursor cuts a tool call
+at 60 seconds and Codex documents 60 seconds as its limit, and an answer says why the call ended. The
+command may still finish: re-read with a `get_` tool. For `run_job` the Run may still be starting,
+so check with `get_job` before you call `run_job` again, or retry with the same `requestId`.
 
 **`astera: command not found` in the client's log**
 The client was started from a shell that does not have the install folder on its `PATH`. Open a new
