@@ -25,6 +25,7 @@ export const ja: Catalog = {
   'settings.mcp.copyFailed': '行をコピーできませんでした: {detail}',
   'settings.mcp.register':
     'MCP クライアントに Astera を追加するには、そのクライアントの行を実行するか貼り付けてください。この OS に合わせた形です。',
+  'settings.mcp.installFirst': '先に上のコマンドラインツールをインストールしてから、MCP クライアントに Astera を追加してください。',
   'settings.mcp.saveFailed': 'MCP アクセスの設定を保存できませんでした: {detail}',
   'settings.mcp.loadFailed': 'MCP アクセスの設定を読み込めませんでした: {detail}',
   // エージェント権限モード

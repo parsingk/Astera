@@ -18,7 +18,35 @@ The server speaks MCP over stdio, so you do not run it yourself. The client laun
 Each client launches the same command: `astera mcp serve`.
 
 **Settings, CLI tab** shows the line for Claude Code, Codex and Cursor under MCP access, already in
-the form for your operating system, each with a copy button.
+the form for your operating system, each with a copy button. The lines appear once the command line
+tool is installed; before that the tab says to install it first.
+
+**The Settings lines name the installed command by its full path**, so they work whatever the
+client's `PATH` holds. On Windows, a folder just put on the user Path reaches only programs started
+after that, so a client that was already running cannot find `astera`. On macOS and Linux,
+`~/.local/bin` is often missing from the `PATH` a desktop app starts with. On Windows a Settings line
+looks like this:
+
+```bash
+claude mcp add astera -- cmd /c "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
+```
+
+and on macOS or Linux like this:
+
+```bash
+claude mcp add astera -- '/Users/you/.local/bin/astera' mcp serve
+```
+
+The quoting was checked on Windows 11 with the folder named with a space and with Hangul: the line
+gave the client the same arguments when pasted into cmd, PowerShell 7 and Windows PowerShell 5.1, and
+`cmd` started with those arguments from Node and from Rust's standard library (Codex is written in
+Rust) listed every tool. One case it does not cover: when the name of your user
+folder has `&`, `(` or `)`, cmd drops the quotes and the path breaks. Put `call` before the path
+there: `cmd /c call "<path>" mcp serve`, or `"args": ["/c", "call", "<path>", "mcp", "serve"]`, which
+started the server in the same checks.
+
+The forms below use the short `astera mcp serve`, for a client that has the install folder on its
+`PATH`.
 
 **On Windows, launch it through `cmd /c`.** There `astera` is `astera.cmd`, and a client that starts
 its server without a shell cannot run it. Checked on Windows 11 with Node 24: spawning `astera` by name failed with
@@ -216,7 +244,7 @@ so check with `get_job` before you call `run_job` again, or retry with the same 
 
 **`astera: command not found` in the client's log**
 The client was started from a shell that does not have the install folder on its `PATH`. Open a new
-shell, or use the full path in the client's configuration. On Windows, a client that launches
+shell, or use the full path in the client's configuration: the lines in Settings, CLI tab already do. On Windows, a client that launches
 `astera` itself fails even with the folder on `PATH`, because `astera` is `astera.cmd` and a program
 started without a shell neither finds nor runs a `.cmd` (`ENOENT` by name, `EINVAL` by full path).
 Use the `cmd /c astera mcp serve` form from [Connect a client](#connect-a-client).

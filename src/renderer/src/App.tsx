@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, HostDriverReport, HostHoldings, HostStatus, HostRuntimeInstallState, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
+import type { Account, CliInstallStatus, CliStatus, HistoryEntry, HostDriverReport, HostHoldings, HostStatus, HostRuntimeInstallState, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
 import type { UnattendedPermission } from '../../core/chat/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
@@ -632,6 +632,8 @@ export default function App(): React.JSX.Element {
   const sidebarOpenRef = useRef(sidebarOpen)
   sidebarOpenRef.current = sidebarOpen
   const [showSettings, setShowSettings] = useState(false)
+  // The CLI tab's install status, as CliSettings last read it, for McpSettings beside it.
+  const [cliInstallStatus, setCliInstallStatus] = useState<CliInstallStatus | null>(null)
   const [settingsTab, setSettingsTab] = useState<
     | 'general'
     | 'appearance'
@@ -4633,9 +4635,10 @@ export default function App(): React.JSX.Element {
                 )}
                 {settingsTab === 'cli' && (
                   <div className="settings-stack">
-                    {/* The astera command: installing it, and on Windows the user PATH (CliSettings). */}
-                    <CliSettings />
-                    <McpSettings />
+                    {/* The astera command: installing it, and on Windows the user PATH (CliSettings).
+                        Its status also decides the MCP registration lines (McpSettings). */}
+                    <CliSettings onStatus={setCliInstallStatus} />
+                    <McpSettings cliStatus={cliInstallStatus} />
                   </div>
                 )}
                 {settingsTab === 'agent' && (

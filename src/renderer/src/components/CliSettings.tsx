@@ -12,8 +12,11 @@ import { toast } from '../lib/toast'
  *  옆의 체크박스가 그 동의이고 기본으로 켜져 있으며, 끄면 예전처럼 한 줄을 보여 준다. 제거는 그 항목만 뺀다.
  *
  *  같은 settings-row + settings-hint 모양을 쓴다(App.tsx 의 토글들). 상태를 스스로 읽고 쓴다 —
- *  이 값을 읽는 곳이 여기뿐이다. */
-export function CliSettings(): React.JSX.Element {
+ *  이 값을 읽는 곳이 여기뿐이다.
+ *
+ *  `onStatus` hands each value it holds (the first read, then each Install and Uninstall reply) to
+ *  the MCP lines below it (McpSettings), which need to know whether the command is installed and where. */
+export function CliSettings({ onStatus }: { onStatus?: (s: CliInstallStatus) => void } = {}): React.JSX.Element {
   const { t } = useI18n()
   const [status, setStatus] = useState<CliInstallStatus | null>(null)
   const [busy, setBusy] = useState(false)
@@ -22,6 +25,11 @@ export function CliSettings(): React.JSX.Element {
   useEffect(() => {
     void window.api.cli.status().then(setStatus)
   }, [])
+
+  useEffect(() => {
+    if (status) onStatus?.(status)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the value, not the callback's identity
+  }, [status])
 
   const install = async (): Promise<void> => {
     setBusy(true)
