@@ -456,6 +456,12 @@ describe('OrchCoordinator.startWorker', () => {
     })
     expect(r.cwd).toContain('wt-auth')
   })
+  it('worktree new with a paragraph-long --name asks for a name of at most 40 characters', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs(), runCwd: dir, worktree: 'new', name: 'implement the parser '.repeat(100) })
+    expect(deps.worktrees).toEqual(['implement-the-parser-implement-the'])
+  })
   it('경로로 주어진 worktree가 실제로 존재하면 그 경로를 cwd로 쓴다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)

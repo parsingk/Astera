@@ -14,6 +14,24 @@ export function slugify(input: string): string {
   return s
 }
 
+/** The longest name derived from free text (a Job's objective, a Task's title, a worker name an agent
+ *  writes). The name becomes both the worktree folder and the branch `<git user>/<name>`; unbounded,
+ *  a paragraph-long objective broke the ref file's path on Windows (MAX_PATH) and, past about 250
+ *  characters, a single path component on every OS. */
+export const MAX_NAME_LENGTH = 40
+
+/** slugify, then cut to MAX_NAME_LENGTH: at the last - before the cap when there is one, with a
+ *  trailing . or - trimmed. Throws as slugify does when the input has no usable characters. */
+export function boundedSlug(input: string): string {
+  const s = slugify(input)
+  if (s.length <= MAX_NAME_LENGTH) return s
+  // One character past the cap, so a word that ends exactly at the cap is kept whole
+  const head = s.slice(0, MAX_NAME_LENGTH + 1)
+  const cut = head.lastIndexOf('-')
+  // Never empty: slugify left no leading . or -, so the first character survives the trim
+  return (cut > 0 ? head.slice(0, cut) : s.slice(0, MAX_NAME_LENGTH)).replace(/[.-]+$/, '')
+}
+
 // Automatic naming — short, neutral words. Collisions are resolved by the candidateName suffix.
 const AUTO_WORDS = [
   'coral', 'delta', 'ember', 'fjord', 'grove', 'harbor', 'indigo', 'juniper', 'lagoon', 'maple',
@@ -35,7 +53,7 @@ export function autoName(random: () => number = Math.random): string {
  *  orchestration in the dependency order and must not point back up at it. */
 export function nameForTask(task: { id: string; title: string }): string {
   try {
-    return slugify(task.title)
+    return boundedSlug(task.title)
   } catch {
     return task.id
   }
@@ -51,7 +69,7 @@ export function nameForTask(task: { id: string; title: string }): string {
  *  orchestration 아래에 있고 위를 가리켜서는 안 된다(nameForTask 와 같은 이유). */
 export function nameForRun(run: { id: string; objective: string }): string {
   try {
-    return slugify(run.objective)
+    return boundedSlug(run.objective)
   } catch {
     return run.id
   }

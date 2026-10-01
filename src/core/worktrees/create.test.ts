@@ -7,6 +7,7 @@ import type { WorktreeCreateProgress } from '../types'
 import { WorktreeRegistry } from './registry'
 import { git, localBranchExists } from './git'
 import { makeRepo, addOrigin, tempDir } from './testRepo'
+import { nameForRun } from './naming'
 import { createProbePool, createProber, rootOf, ProbeBudget, PROBE_CONCURRENCY, PROBE_STUCK_CEILING_MS, PROBE_TIMEOUT_MS, processProbeBudget } from '../sessions/pathProbe'
 
 let repo: string
@@ -126,6 +127,20 @@ describe('createWorktree', () => {
   it('baseRef가 없으면 기존 자동 감지를 그대로 쓴다', async () => {
     const { info } = await createWorktree({ repoPath: repo, name: 'auto', registry: reg })
     expect(info.baseRef).toBe('main') // origin이 없는 픽스처 → 로컬 main
+  })
+
+  it('two 2,000-character objectives sharing their first 40 characters both get a worktree real git accepts', async () => {
+    const head = 'Add an add a b function to math.js and export it '
+    const a = nameForRun({ id: 'job_a', objective: head + 'x '.repeat(1000) })
+    const b = nameForRun({ id: 'job_b', objective: head + 'y '.repeat(1000) })
+    expect(a).toBe(b)
+    const first = await createWorktree({ repoPath: repo, name: a, registry: reg })
+    const second = await createWorktree({ repoPath: repo, name: b, registry: reg })
+    expect(first.info.name).toBe(a)
+    expect(second.info.name).toBe(`${a}-2`)
+    expect(await localBranchExists(repo, first.info.branch)).toBe(true)
+    expect(await localBranchExists(repo, second.info.branch)).toBe(true)
+    expect(gitIn(second.info.path, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(second.info.branch)
   })
 })
 

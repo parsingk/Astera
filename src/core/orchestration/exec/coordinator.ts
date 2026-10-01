@@ -21,6 +21,7 @@ import { isSamePath } from '../../files/tree'
 import type { Provider } from '../../providers/meta'
 import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../knowledge/detect'
 import type { CheckResult, RepairReason, ReviewIssue } from '../types'
+import { boundedSlug } from '../../worktrees/naming'
 
 /** Job Continuity's two prompt events (P0 design §5): 'requested' right before the prompt leaves
  *  the app, 'confirmed' once it has — the spawned process holds it as argv, or the typed prompt's
@@ -801,7 +802,9 @@ export class OrchCoordinator {
         throw new Error(`terminal session is not alive: ${a.terminal}`)
     } else if (a.worktree === 'new') {
       if (!a.name) throw new Error('--name is required for --worktree new')
-      cwd = (await this.deps.createWorktree({ repoPath: a.runCwd, name: a.name })).path
+      // The name is free text the coordinator agent wrote; it becomes a folder and a branch, so it is
+      // bounded like a Run's or a Task's (naming.ts MAX_NAME_LENGTH)
+      cwd = (await this.deps.createWorktree({ repoPath: a.runCwd, name: boundedSlug(a.name) })).path
     } else if (a.worktree === 'current') {
       cwd = a.runCwd
     } else {

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { absPath } from '../testPaths'
 import {
   slugify, autoName, branchNameFor, candidateName, repoDirName, worktreePathFor, nameForTask,
-  nameForRun, MAX_SUFFIX_ATTEMPTS
+  nameForRun, MAX_SUFFIX_ATTEMPTS, MAX_NAME_LENGTH
 } from './naming'
 
 describe('slugify', () => {
@@ -80,5 +80,42 @@ describe('nameForRun', () => {
 
   it('쓸 글자가 없으면 id 로 물러난다', () => {
     expect(nameForRun({ id: 'run_abcd1234', objective: '///' })).toBe('run_abcd1234')
+  })
+})
+
+describe('nameForRun / nameForTask, bounded length', () => {
+  const long = Array.from({ length: 400 }, (_, i) => `word${i}`).join(' ').slice(0, 2000)
+
+  it('a 2,000-character objective or title yields a name of at most 40 characters', () => {
+    expect(long.length).toBe(2000)
+    for (const name of [nameForRun({ id: 'run_1', objective: long }), nameForTask({ id: 'tsk_1', title: long })]) {
+      expect(name.length).toBeLessThanOrEqual(MAX_NAME_LENGTH)
+      expect(name.length).toBeGreaterThan(0)
+      expect(slugify(name)).toBe(name)
+    }
+    expect(MAX_NAME_LENGTH).toBe(40)
+  })
+
+  it('cuts at the last - before the cap', () => {
+    // 'word0-word1-...': the cap falls inside 'word6', so the cut goes back to the - before it
+    expect(nameForRun({ id: 'run_1', objective: long })).toBe('word0-word1-word2-word3-word4-word5')
+  })
+
+  it('keeps a whole word that ends exactly at the cap', () => {
+    const objective = `${'c'.repeat(34)} dddde ${'f'.repeat(20)}`
+    expect(nameForRun({ id: 'run_1', objective })).toBe(`${'c'.repeat(34)}-dddde`)
+  })
+
+  it('trims a trailing . or - left by the cut', () => {
+    const objective = `${'a'.repeat(38)}. ${'b'.repeat(50)}`
+    expect(nameForRun({ id: 'run_1', objective })).toBe('a'.repeat(38))
+  })
+
+  it('cuts a single long word at the cap when it has no -', () => {
+    expect(nameForTask({ id: 'tsk_1', title: 'x'.repeat(300) })).toBe('x'.repeat(40))
+  })
+
+  it('leaves a short name as it was', () => {
+    expect(nameForRun({ id: 'run_1', objective: 'Fix the login bug' })).toBe('Fix-the-login-bug')
   })
 })

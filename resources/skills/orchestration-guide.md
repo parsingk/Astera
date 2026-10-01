@@ -364,6 +364,7 @@ accounts [--agent <claude|codex>] [--json]
   yourself has none, so for those the default is still `current`.
 - **`--name <s>` is required with `--worktree new`** — it becomes the branch and directory name of the
   new worktree. Without it the request is rejected with `400 --name is required for --worktree new`.
+  A name longer than 40 characters is cut to 40 (at the last `-` before that), so keep it short.
   It is unused (ignored) with `--worktree current` or an explicit path.
 - **The placement rule.** Referred to elsewhere in this guide and defined here. A Run's concurrency
   (`jobs get --id <run>`, defaulting to 3) decides where its workers belong:
