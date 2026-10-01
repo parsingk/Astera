@@ -141,6 +141,22 @@ describe('createHostOrch', () => {
       await settings(JSON.stringify({ mcpAccess: 'control', mcpSessions: false }))
       expect((await list()).status).toBe(403)
     })
+    // MCP P1 design §2: the connection's role reaches handleCommand, which refuses an MCP client a
+    // session outside a registered project. The CLI's call is not refused for that.
+    it('the caller role reaches the command layer: MCP sessions-create outside a project is 403', async () => {
+      const createSession = vi.fn(async () => {
+        throw new Error('not reached in this test')
+      })
+      const orch = orchOver({ createSession })
+      await settings(JSON.stringify({ mcpAccess: 'control', mcpSessions: true }))
+      const create = (role: 'mcp' | 'cli'): ReturnType<typeof orch.call> =>
+        orch.call({ cmd: 'sessions-create', args: { account: 'acc1', cwd: 'D:/elsewhere' }, sessionId: '', from: caller(role) })
+      const mcp = await create('mcp')
+      expect(mcp.status).toBe(403)
+      expect(JSON.stringify(mcp.body)).toContain('MCP clients start sessions only in a registered project')
+      expect(JSON.stringify((await create('cli')).body)).not.toContain('registered project')
+      expect(createSession).not.toHaveBeenCalled()
+    })
     it('an unreadable settings file refuses', async () => {
       await settings('{not json')
       const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })

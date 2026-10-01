@@ -405,3 +405,101 @@ describe('sessions send — an agent does not answer another session\'s prompt',
     }
   })
 })
+
+// MCP P1 design §2 (Q4): an MCP client calls with an empty session id, which reads as a shell, so it
+// passed the agent guard above. Its text would answer the prompt as surely as an agent's, so role mcp
+// is refused the same way. The CLI from a shell (role cli, empty session id) still answers.
+describe('sessions send — an MCP client does not answer a session\'s prompt', () => {
+  const terminal: HostSession = { id: 't1', kind: 'terminal', title: 't', accountId: 'acc_c', cwd: 'D:/p', alive: true, state: 'waiting' }
+  const rig = (prompt: 'permission' | 'question') => {
+    const sendSession = vi.fn(async () => {})
+    const deps = makeDeps({
+      listSessions: async () => [terminal],
+      readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }),
+      sendSession,
+      readChat: async () => [],
+      chatSend: vi.fn(async () => ({ sent: true as const })),
+      sessionTurn: vi.fn(async () => ({ alive: true, state: 'waiting' as const, prompt }))
+    } as Partial<OrchServerDeps>)
+    return { deps, sendSession }
+  }
+
+  it('refuses role mcp at a permission prompt or a question, naming it and typing nothing (6)', async () => {
+    for (const [prompt, words] of [
+      ['permission', 'a permission prompt'],
+      ['question', 'a question']
+    ] as const) {
+      const h = rig(prompt)
+      const r = await handleCommand(h.deps, { sessionId: '', role: 'mcp' }, 'sessions-send', { id: 't1', text: '1' })
+      expect(r.status, prompt).toBe(409)
+      expect(error(r), prompt).toContain(`waiting on ${words}`)
+      expect(error(r), prompt).toContain('an MCP client')
+      expect(h.sendSession, prompt).not.toHaveBeenCalled()
+    }
+  })
+
+  it('still lets the CLI from a shell answer it', async () => {
+    const h = rig('permission')
+    const r = await handleCommand(h.deps, { sessionId: '', role: 'cli' }, 'sessions-send', { id: 't1', text: '1' })
+    expect(r.status).toBe(200)
+    expect(h.sendSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+// MCP P1 design §2 (Q5): an MCP client starts a session only in a registered project's root, never an
+// arbitrary folder (MCP spec §68). The CLI keeps any --cwd.
+describe('sessions create — an MCP client starts sessions only in a project', () => {
+  const withProjects = async (createSession: OrchServerDeps['createSession']): Promise<OrchServerDeps> => {
+    const deps = makeDeps({ createSession })
+    await deps.setState({
+      ...deps.getState(),
+      projects: [
+        { id: 'prj_a', path: 'D:/work/repo', name: 'repo', addedAt: NOW },
+        { id: 'prj_gone', path: 'D:/work/gone', name: 'gone', addedAt: NOW }
+      ]
+    })
+    return deps
+  }
+  const mcp = (deps: OrchServerDeps, cwd: string) =>
+    handleCommand(deps, { sessionId: '', role: 'mcp' }, 'sessions-create', { account: 'acc_c', cwd })
+
+  it('refuses a folder that is no project root, or only inside one (5), starting nothing', async () => {
+    const createSession = vi.fn(async () => row())
+    const deps = await withProjects(createSession)
+    for (const cwd of ['D:/elsewhere', 'D:/work/repo/sub', 'D:/work']) {
+      const r = await mcp(deps, cwd)
+      expect(r.status, cwd).toBe(403)
+      expect(error(r), cwd).toContain('MCP clients start sessions only in a registered project')
+    }
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('takes a project root, compared with isSamePath (a trailing separator is the same root)', async () => {
+    const createSession = vi.fn(async () => row())
+    const deps = await withProjects(createSession)
+    expect((await mcp(deps, 'D:/work/repo')).status).toBe(200)
+    expect((await mcp(deps, 'D:/work/repo/')).status).toBe(200)
+    expect(createSession).toHaveBeenCalledTimes(2)
+  })
+
+  // Review Focus 2: a project whose folder was moved or deleted after it was registered. The starter
+  // probes the folder before any spawn (host/sessionCreate.ts, spawner.ts: CWD_MISSING), and that
+  // refusal comes back as a 2, not a session in a missing folder.
+  it('a project root whose folder is gone is the starter\'s CWD_MISSING refusal (2)', async () => {
+    const createSession = vi.fn(async (o: { cwd: string }) => {
+      throw new Error(`CWD_MISSING: ${o.cwd} does not exist`)
+    })
+    const deps = await withProjects(createSession as unknown as OrchServerDeps['createSession'])
+    const r = await mcp(deps, 'D:/work/gone')
+    expect(r.status).toBe(400)
+    expect(error(r)).toContain('CWD_MISSING: D:/work/gone does not exist')
+  })
+
+  it('the CLI keeps any --cwd', async () => {
+    const createSession = vi.fn(async () => row())
+    const deps = await withProjects(createSession)
+    const r = await handleCommand(deps, { sessionId: '', role: 'cli' }, 'sessions-create', { account: 'acc_c', cwd: 'D:/elsewhere' })
+    expect(r.status).toBe(200)
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+})

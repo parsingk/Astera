@@ -1086,7 +1086,9 @@ function parseAccountList(
 
 export async function handleCommand(
   deps: OrchServerDeps,
-  caller: { sessionId: string },
+  /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
+   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. */
+  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' },
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
@@ -3965,13 +3967,17 @@ export async function handleCommand(
        * The person in a shell, the app and the Host still answer. A session whose state is not known
        * (a Codex terminal, one typed into since its last event) is not refused: nothing says it is
        * at a prompt. An observed replay types nothing and is not checked.
+       * **An MCP client is refused the same way** (MCP P1 design §2, Q4): it calls with an empty
+       * session id, which reads as a shell, but its text comes from an agent all the same.
        */
-      const fromAgent = caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER
+      const fromMcp = caller.role === 'mcp'
+      const fromAgent =
+        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
         const now = await deps.sessionTurn(id)
         if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
           return conflict(
-            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from an agent session would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
+            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${fromMcp ? 'an MCP client' : 'an agent session'} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
           )
       }
       let waitFor: (() => Promise<TurnEnding | null>) | null = null
@@ -4080,6 +4086,11 @@ export async function handleCommand(
       if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
       const cwd = str(args.cwd)
       if (cwd === null) return bad('--cwd needs a value: a folder')
+      // MCP P1 design §2 (Q5): an MCP client starts a session only in a registered project's root,
+      // never an arbitrary folder (MCP spec §68). A root whose folder is gone is the starter's
+      // CWD_MISSING refusal below, probed before anything spawns.
+      if (caller.role === 'mcp' && !findProjectByPath(s, cwd))
+        return denied('MCP clients start sessions only in a registered project')
       const kind = enumFilter('kind', args.kind, ['terminal', 'chat'] as const)
       if ('error' in kind) return bad(kind.error)
       const sessionKind = kind.value ?? 'terminal'
