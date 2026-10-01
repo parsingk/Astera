@@ -12,8 +12,15 @@ import {
 // Path is never touched: what the fake below stands in for, checked where it runs.
 describe.skipIf(process.platform !== 'win32')('the scripts against the real registry (win32)', () => {
   const key = `Software\\AsteraUserPathTest-${process.pid}-${Date.now()}`
+  // Each call starts a Windows PowerShell, and the write script also compiles its Add-Type and tells every
+  // window. In the first seconds of a full run one such call was measured at 10 s, and one ran past the
+  // 15 s default and was killed: the failure read "Command failed: ... #< CLIXML", which is what a killed
+  // PowerShell leaves. That deadline is not what this checks, so each call here gets 45 s. With another
+  // full run beside this one a write took up to 40 s and the test's nine calls 57 s together, hence 120 s
+  // for the test.
+  const run: RunPowerShell = (script) => runWindowsPowerShell(script, 45_000)
   afterAll(async () => {
-    await runWindowsPowerShell(`Remove-Item -LiteralPath 'HKCU:\\${key}' -Recurse -Force -ErrorAction SilentlyContinue`)
+    await run(`Remove-Item -LiteralPath 'HKCU:\\${key}' -Recurse -Force -ErrorAction SilentlyContinue`)
   })
 
   it('adds, keeps the kind and the variables unexpanded, and removes only its entry', async () => {
@@ -22,22 +29,22 @@ describe.skipIf(process.platform !== 'win32')('the scripts against the real regi
     // Ends in ';' on purpose: the real Path of the machine this was first run on did, and Uninstall has
     // to give that back to the character
     const original = '%USERPROFILE%\\bin;D:\\한글;'
-    await runWindowsPowerShell(
+    await run(
       `$k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('${key}'); $k.SetValue('Path', '${original}', [Microsoft.Win32.RegistryValueKind]::ExpandString); $k.Close()`
     )
     const read = async (): Promise<{ kind: string; value: string }> =>
       JSON.parse(
-        await runWindowsPowerShell(
+        await run(
           `[Console]::OutputEncoding = [Text.Encoding]::UTF8; $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${key}'); [Console]::Out.Write((@{ kind = $k.GetValueKind('Path').ToString(); value = $k.GetValue('Path', $null, 'DoNotExpandEnvironmentNames') } | ConvertTo-Json -Compress))`
         )
       ) as { kind: string; value: string }
-    expect(await addToUserPath({ dir: dirHere, env: envHere, key })).toBe('added')
-    expect(await userPathStatus({ dir: dirHere, env: envHere, key })).toEqual({ has: true, fits: true })
+    expect(await addToUserPath({ dir: dirHere, env: envHere, key, run })).toBe('added')
+    expect(await userPathStatus({ dir: dirHere, env: envHere, key, run })).toEqual({ has: true, fits: true })
     expect(await read()).toEqual({ kind: 'ExpandString', value: `${original}${dirHere};` })
-    expect(await removeFromUserPath({ dir: dirHere, env: envHere, key })).toBe('removed')
-    expect(await userPathStatus({ dir: dirHere, env: envHere, key })).toEqual({ has: false, fits: true })
+    expect(await removeFromUserPath({ dir: dirHere, env: envHere, key, run })).toBe('removed')
+    expect(await userPathStatus({ dir: dirHere, env: envHere, key, run })).toEqual({ has: false, fits: true })
     expect(await read()).toEqual({ kind: 'ExpandString', value: original })
-  }, 60_000)
+  }, 120_000)
 })
 
 const dir = 'C:\\Users\\me\\AppData\\Local\\astera\\bin'

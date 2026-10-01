@@ -4,7 +4,7 @@
 import { z } from 'zod'
 import { LIST_LIMIT } from './lists'
 
-export const MCP_LIMITS = { objective: 20_000, answer: 20_000, id: 200 } as const
+export const MCP_LIMITS = { objective: 20_000, answer: 20_000, id: 200, cursor: 512 } as const
 const id = z.string().min(1).max(MCP_LIMITS.id)
 const requestId = z
   .string()
@@ -18,7 +18,17 @@ const limit = z
   .min(LIST_LIMIT.min)
   .max(LIST_LIMIT.max)
   .optional()
-  .describe(`At most this many rows (default ${LIST_LIMIT.default}). A cut list says truncated: true and the total.`)
+  .describe(
+    `At most this many rows (default ${LIST_LIMIT.default}). truncated: true and total mean the list is not whole: total is how many rows there are. When more rows follow, the result carries nextCursor; pass it as cursor for the next page. No nextCursor means this is the last page.`
+  )
+const cursor = z
+  .string()
+  .min(1)
+  .max(MCP_LIMITS.cursor)
+  .optional()
+  .describe(
+    'The nextCursor of a previous result of this tool, for the page after it, with the same filters. Leave it out for the first page. No nextCursor means this is the last page.'
+  )
 
 export interface ToolDef {
   name: string
@@ -39,7 +49,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: true,
     cmd: 'projects-list',
     description: 'The projects registered in Astera. Use a project id with create_job.',
-    inputSchema: { limit },
+    inputSchema: { limit, cursor },
     args: () => ({})
   },
   {
@@ -58,7 +68,7 @@ export const TOOLS: ToolDef[] = [
     cmd: 'accounts-list',
     description:
       "The agent accounts Astera holds (id, label, provider). Each provider's default account says default: true; create_job uses it when no coordinator account is given.",
-    inputSchema: { provider: z.enum(['claude', 'codex']).optional(), limit },
+    inputSchema: { provider: z.enum(['claude', 'codex']).optional(), limit, cursor },
     args: (i) => (i.provider ? { agent: i.provider } : {})
   },
   // The Host's `--project` takes a folder, so a projectId is read with projects-get first (server.ts).
@@ -71,7 +81,8 @@ export const TOOLS: ToolDef[] = [
     inputSchema: {
       status: z.enum(['pending', 'paused', 'scheduled', 'waiting', 'running', 'completed', 'failed']).optional(),
       projectId: id.optional(),
-      limit
+      limit,
+      cursor
     },
     args: (i) => ({ ...(i.status ? { status: i.status } : {}), ...(i.projectPath ? { project: i.projectPath } : {}) })
   },
@@ -126,7 +137,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: true,
     cmd: 'runs-list',
     description: 'Runs, newest first, optionally of one Job.',
-    inputSchema: { jobId: id.optional(), limit },
+    inputSchema: { jobId: id.optional(), limit, cursor },
     args: (i) => (i.jobId ? { job: i.jobId } : {})
   },
   {
@@ -164,7 +175,7 @@ export const TOOLS: ToolDef[] = [
     cmd: 'tasks-list',
     description:
       'The Tasks of a Run, with their status and dependencies (deps). Each spec is cut to 160 characters, and spec_truncated says when it was; get_task has the whole spec.',
-    inputSchema: { runId: id, limit },
+    inputSchema: { runId: id, limit, cursor },
     // `brief`: the Host bounds each spec to 160 characters and marks a cut one `spec_truncated`.
     args: (i) => ({ run: i.runId, brief: true })
   },
@@ -185,7 +196,7 @@ export const TOOLS: ToolDef[] = [
     description:
       'Questions that block a Run until someone answers, oldest first. Use answer_question with an id from here.',
     // The values questions-list accepts (command.ts `enumFilter`); any other is a 400 there.
-    inputSchema: { runId: id.optional(), status: z.enum(['open', 'resolved']).optional(), limit },
+    inputSchema: { runId: id.optional(), status: z.enum(['open', 'resolved']).optional(), limit, cursor },
     args: (i) => ({ ...(i.runId ? { run: i.runId } : {}), ...(i.status ? { status: i.status } : {}) })
   },
   {

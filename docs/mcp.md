@@ -195,6 +195,16 @@ oldest first by `createdAt`; `list_tasks` keeps the Run's order (dependencies, t
 list carries `truncated: true` and `total` (how many there were) beside it; a whole list carries
 neither.
 
+**Paging.** Every list tool also takes an optional `cursor`. A cut list that has more rows after it
+carries `nextCursor`; pass it as `cursor`, with the same filters, for the next page, which follows
+the same order. No `nextCursor` means this is the last page. `truncated: true` and `total` mean the
+list is not whole, so the last page of a paged list still carries them, without `nextCursor`. A
+cursor is opaque and belongs to the tool that gave it: one from another tool, or one that is not a
+cursor at all, is refused with `INVALID_ARGUMENTS`. A cursor holds a position in the list, not a
+snapshot of it, so a list that changes between calls shifts: when rows are added ahead of the
+position (a new Job in `list_jobs`, newest first), the next page starts that many rows earlier and
+repeats them.
+
 Every result carries the data twice, as `structuredContent` and as the same JSON in the text
 content. An error is the exception: its text content is a `CODE: message` line followed by the JSON
 (`code`, `message`, `nextSteps` and, when there are any, `details`), and it carries no
@@ -217,6 +227,12 @@ restart forgets them.
 The setting is read on every call, so a change applies to a connected client at its next call without
 reconnecting. Every other Host command is refused to MCP clients whatever the setting says.
 
+**The Job Journal records which client acted.** What an MCP client does is journalled as surface
+`mcp`, with the client's name and version as its MCP `initialize` request gave them (for example
+`claude-code` `1.2.3`). The client names itself, so Astera keeps only ASCII letters, digits, `.`,
+`_`, `-`, `/`, `@` and spaces, cuts the name to 64 characters and the version to 32, and leaves out
+a field with nothing left.
+
 ## How it stays local
 
 - The server talks to the client over stdio. It opens no network port.
@@ -231,6 +247,13 @@ reconnecting. Every other Host command is refused to MCP clients whatever the se
   redacted like the rest of the free text. It is the same line `astera runs checks` prints.
 
 ## Troubleshooting
+
+**Start with `astera mcp status`.** Run it in a shell on the same machine. It starts no Host and says
+whether `astera mcp serve` would work: whether a Host runs and serves MCP clients (`host.running`,
+`host.mcp`), the MCP access setting (`access`) and how many tools the server offers (`tools`). It
+exits 0 when all is well, 3 when no Host runs (the server starts one when a client launches it, or
+run `astera host start`), and 9 when the Host is too old for MCP clients. `access: null` with a
+`warning` means `app-settings.json` cannot be read, and every MCP call fails until Astera repairs it.
 
 Tool errors carry the same codes as the CLI (`HOST_NOT_RUNNING`, `VERSION_MISMATCH`,
 `PERMISSION_DENIED`, `NOT_FOUND`, `CONFLICT`, `INVALID_ARGUMENTS`, `TIMEOUT`, `FAILED`) and a

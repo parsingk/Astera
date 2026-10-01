@@ -20,14 +20,16 @@ import { userPathFits, userPathWith, userPathWithout } from '../core/orchestrati
 /** Runs one PowerShell script and resolves with what it printed. Injectable for tests. */
 export type RunPowerShell = (script: string) => Promise<string>
 
-export const runWindowsPowerShell: RunPowerShell = (script) =>
+/** `timeoutMs` is for the test that runs these scripts for real in a full test run, where starting
+ *  PowerShell alone can take most of the default. */
+export const runWindowsPowerShell = (script: string, timeoutMs = 15_000): Promise<string> =>
   new Promise((resolve, reject) => {
     const exe = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
     const encoded = Buffer.from(script, 'utf16le').toString('base64')
     execFile(
       exe,
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      { timeout: 15_000, windowsHide: true, encoding: 'utf8' },
+      { timeout: timeoutMs, windowsHide: true, encoding: 'utf8' },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     )
   })

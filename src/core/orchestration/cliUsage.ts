@@ -121,6 +121,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     detail:
       'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
   },
+  'mcp-status': {
+    summary: 'would mcp serve work here: the Host, MCP access and the tool count',
+    detail:
+      'Starts no Host. 0 when a Host runs and serves MCP clients, 3 when none runs, 9 when the Host is too old for MCP clients. access is null, with a warning, when app-settings.json cannot be read. See docs/mcp.md.'
+  },
 
   'projects-list': { summary: 'every project registered in the app' },
   'projects-get': {

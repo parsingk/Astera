@@ -99,6 +99,20 @@ describe('connectHost', () => {
     expect(seen).toEqual(['cli', 'mcp'])
   })
 
+  it('carries the MCP client it was given in the hello, cleaned, and none when it was given none', async () => {
+    const seen: unknown[] = []
+    const address = await listen((sock, nonce, h) => {
+      seen.push((h as { client?: unknown }).client)
+      sock.write(hello(nonce))
+    })
+    for (const client of [undefined, { name: 'claude-code', version: '1.2.3' }, { name: 'a\u0007b' }, { name: '\u0007' }]) {
+      const conn = await connectHost({ address, profileDir: PROFILE, app: 'test', role: 'mcp', timeoutMs: 2000, log: () => {}, ...(client ? { client } : {}) })
+      if ('error' in conn) throw new Error(conn.error)
+      conn.close()
+    }
+    expect(seen).toEqual([undefined, { name: 'claude-code', version: '1.2.3' }, { name: 'ab' }, undefined])
+  })
+
   it('hello 에 nonce 를 싣는다', async () => {
     let seen = ''
     const address = await listen((sock, nonce) => {

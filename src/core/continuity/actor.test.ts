@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { emptyState, type OrchState } from '../orchestration/state'
-import { actorFromJson, actorOf, commitStamp, isJournalActor } from './actor'
+import { actorFromJson, actorOf, commitStamp, isJournalActor, mcpClientOf } from './actor'
 
 describe('the journal actor (J4)', () => {
   it('reads the four surfaces, with or without a session', () => {
@@ -62,5 +62,55 @@ describe('the mcp surface', () => {
   it('a row written with the mcp surface reads back', () => {
     expect(isJournalActor({ surface: 'mcp' })).toBe(true)
     expect(actorFromJson('{"surface":"mcp"}')).toEqual({ surface: 'mcp' })
+  })
+})
+
+// MCP spec §29: which client acted. The client names itself, so its name is untrusted input.
+describe('the MCP client on the actor', () => {
+  it('keeps a plain name and version', () => {
+    expect(mcpClientOf({ name: 'claude-code', version: '1.2.3' })).toEqual({ name: 'claude-code', version: '1.2.3' })
+    expect(mcpClientOf({ name: '@scope/agent_x 2', version: 'v1.0-beta' })).toEqual({ name: '@scope/agent_x 2', version: 'v1.0-beta' })
+  })
+  it('drops every character outside the kept set, control characters and non-ASCII included', () => {
+    expect(mcpClientOf({ name: 'cur\u001b[31msor\n<b>"x"</b>', version: '1.0;rm -rf' })).toEqual({ name: 'cur31msorbx/b', version: '1.0rm -rf' })
+    expect(mcpClientOf({ name: '클로드 code' })).toEqual({ name: 'code' })
+  })
+  it('cuts the name to 64 and the version to 32 characters', () => {
+    const c = mcpClientOf({ name: 'n'.repeat(100), version: 'v'.repeat(100) })
+    expect(c).toEqual({ name: 'n'.repeat(64), version: 'v'.repeat(32) })
+  })
+  it('drops a field with nothing left, and the whole client without a name', () => {
+    expect(mcpClientOf({ name: 'x', version: '\u0000\u0001' })).toEqual({ name: 'x' })
+    expect(mcpClientOf({ name: 'x', version: 7 })).toEqual({ name: 'x' })
+    expect(mcpClientOf({ name: '\u0000한글', version: '1' })).toBeUndefined()
+    expect(mcpClientOf({ name: '   ' })).toBeUndefined()
+    for (const junk of [undefined, null, 'claude', 7, [], { version: '1' }, { name: 7 }]) expect(mcpClientOf(junk)).toBeUndefined()
+  })
+  it('actorOf puts the cleaned client on an mcp actor only', () => {
+    const client = { name: 'claude-code', version: '1.2.3' }
+    expect(actorOf({ sessionId: '', role: 'mcp', client, state: null })).toEqual({ surface: 'mcp', client })
+    expect(actorOf({ sessionId: '', role: 'mcp', client: { name: 'a\nb' }, state: null })).toEqual({ surface: 'mcp', client: { name: 'ab' } })
+    expect(actorOf({ sessionId: '', role: 'mcp', client: { name: '\n' }, state: null })).toEqual({ surface: 'mcp' })
+    expect(actorOf({ sessionId: '', role: 'cli', client, state: null })).toEqual({ surface: 'cli' })
+    expect(actorOf({ sessionId: '', role: 'app', client, state: null })).toEqual({ surface: 'desktop' })
+  })
+  it('round-trips through actor JSON', () => {
+    const actor = actorOf({ sessionId: '', role: 'mcp', client: { name: 'claude-code', version: '1.2.3' }, state: null })
+    expect(actorFromJson(JSON.stringify(actor))).toEqual({ surface: 'mcp', client: { name: 'claude-code', version: '1.2.3' } })
+    expect(isJournalActor(actor)).toBe(true)
+  })
+  it('a client this build cannot read is dropped and the row still reads', () => {
+    expect(actorFromJson('{"surface":"mcp","client":{"name":7}}')).toEqual({ surface: 'mcp' })
+    expect(actorFromJson('{"surface":"mcp","client":"claude"}')).toEqual({ surface: 'mcp' })
+    expect(actorFromJson('{"surface":"mcp","client":{"name":"a\\u001bb","version":"1"}}')).toEqual({ surface: 'mcp', client: { name: 'ab', version: '1' } })
+    // Only mcp carries one: on another surface it is dropped.
+    expect(actorFromJson('{"surface":"cli","client":{"name":"x"}}')).toEqual({ surface: 'cli' })
+    expect(isJournalActor({ surface: 'mcp', client: { name: 7 } })).toBe(false)
+    // Field by field, not by the order the keys were written in.
+    expect(isJournalActor({ surface: 'mcp', client: { version: '1.2.3', name: 'claude-code' } })).toBe(true)
+    expect(isJournalActor({ surface: 'mcp', client: { name: 'claude-code' } })).toBe(true)
+    expect(isJournalActor({ surface: 'mcp', client: { name: 'a\nb' } })).toBe(false)
+    expect(isJournalActor({ surface: 'mcp', client: { name: 'x', version: '' } })).toBe(false)
+    expect(isJournalActor({ surface: 'cli', client: { name: 'x' } })).toBe(false)
   })
 })

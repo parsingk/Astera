@@ -135,7 +135,8 @@ export const NOUNS = {
   requests: ['show'],
   // **Answered by the CLI itself, for an MCP client to launch** (MCP design §4, cli/mcp/server.ts):
   // stdout carries the MCP protocol, and each tool is one Host command over one long-lived link.
-  mcp: ['serve']
+  // `status` says whether that would work here, and starts nothing (cli/mcp/status.ts).
+  mcp: ['serve', 'status']
 } as const
 
 /** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고

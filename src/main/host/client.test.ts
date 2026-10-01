@@ -624,7 +624,9 @@ describe('HostClient', () => {
       await settled(c, (s) => s.unresponsive)
       expect(c.status()).toMatchObject({ connected: false, unresponsive: true, pid: 4242 })
       expect(c.status().problem).toContain('stopped answering')
-      expect(h.got.filter((m) => m.t === 'ping').length).toBeGreaterThanOrEqual(3)
+      // Waited for, not read at once: the client reaches its verdict as it sends the third ping, and
+      // that ping still has to cross the socket to this peer.
+      await waitFor(() => h.got.filter((m) => m.t === 'ping').length >= 3)
       // A late answer is the one thing that takes the state back — which is why the pings do not stop.
       //
       // **Caught as the status change, not polled.** This peer never answers the pings after it, so the

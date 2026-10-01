@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { LIST_LIMIT, orderAndCut } from './lists'
+import { LIST_LIMIT, cursorOffset, orderAndCut, pageCursor } from './lists'
 
 const rows = (n: number, at = (i: number) => `2026-10-01T00:00:${String(i).padStart(2, '0')}.000Z`) =>
   Array.from({ length: n }, (_, i) => ({ id: `x${i}`, createdAt: at(i), ordinal: i + 1 }))
@@ -60,5 +60,51 @@ describe('orderAndCut', () => {
 
   it('limits run 1 to 200 and default to 50', () => {
     expect(LIST_LIMIT).toEqual({ min: 1, max: 200, default: 50 })
+  })
+})
+
+// Spec §48: a cut list says where the next page starts, with an opaque cursor for that tool alone.
+describe('cursor paging', () => {
+  const ids = (cut: { list: unknown[] }): string[] => cut.list.map((r) => (r as { id: string }).id)
+
+  it('a cut list carries nextCursor, and the cursor gives the next page in the same order', () => {
+    const all = rows(5)
+    const first = orderAndCut('list_jobs', all, 2)
+    expect(ids(first)).toEqual(['x4', 'x3'])
+    expect(first).toMatchObject({ truncated: true, total: 5 })
+    expect(typeof first.nextCursor).toBe('string')
+    const second = orderAndCut('list_jobs', all, 2, cursorOffset('list_jobs', first.nextCursor!) as number)
+    expect(ids(second)).toEqual(['x2', 'x1'])
+    expect(second).toMatchObject({ truncated: true, total: 5 })
+    const third = orderAndCut('list_jobs', all, 2, cursorOffset('list_jobs', second.nextCursor!) as number)
+    expect(ids(third)).toEqual(['x0'])
+    // The last page: still not the whole list, so truncated and total stay; nothing more remains.
+    expect(third).toMatchObject({ truncated: true, total: 5 })
+    expect('nextCursor' in third).toBe(false)
+  })
+
+  it('a whole list carries no nextCursor', () => {
+    expect('nextCursor' in orderAndCut('list_jobs', rows(2), 2)).toBe(false)
+  })
+
+  it('an offset past the end is an empty page that still says the total', () => {
+    const cut = orderAndCut('list_jobs', rows(2), 2, 5)
+    expect(cut.list).toEqual([])
+    expect(cut).toMatchObject({ truncated: true, total: 2 })
+    expect('nextCursor' in cut).toBe(false)
+  })
+
+  it('the cursor is base64url JSON of the offset and the tool', () => {
+    const c = pageCursor('list_runs', 50)
+    expect(c).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(JSON.parse(Buffer.from(c, 'base64url').toString('utf8'))).toEqual({ o: 50, k: 'list_runs' })
+    expect(cursorOffset('list_runs', c)).toBe(50)
+  })
+
+  it("refuses another tool's cursor and a malformed one with a message that says so", () => {
+    const enc = (v: unknown): string => Buffer.from(JSON.stringify(v), 'utf8').toString('base64url')
+    expect(cursorOffset('list_jobs', pageCursor('list_runs', 2))).toEqual({ error: expect.stringContaining('list_runs') })
+    for (const bad of ['%%%', 'bm90IGpzb24', enc([1]), enc({ o: -1, k: 'list_jobs' }), enc({ o: 1.5, k: 'list_jobs' }), enc({ o: '2', k: 'list_jobs' }), enc({ k: 'list_jobs' })])
+      expect(cursorOffset('list_jobs', bad), bad).toEqual({ error: expect.stringContaining('cursor') })
   })
 })

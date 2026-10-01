@@ -312,8 +312,22 @@ export type ClientMessage =
    *  before. Additive, so HOST_PROTOCOL stays 3.
    *
    *  **`nonce`** (protocol 4): the Host answers it with `proof` (core/host/hostKey.ts), and the client
-   *  sends nothing more until that proof checks out. */
-  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli' | 'mcp'; yields?: string[]; pid?: number; nonce?: string }
+   *  sends nothing more until that proof checks out.
+   *
+   *  **`client`** is the MCP client an `mcp` socket serves, as its MCP `initialize` named itself (MCP
+   *  spec §29). The Host keeps it per socket and journals it on that socket's rows, cleaned again on
+   *  arrival (core/continuity/actor.ts `mcpClientOf`), and ignores it from any other role. Additive, so
+   *  HOST_PROTOCOL stays 4. */
+  | {
+      t: 'hello'
+      protocol: number
+      app: string
+      role?: 'app' | 'cli' | 'mcp'
+      yields?: string[]
+      pid?: number
+      nonce?: string
+      client?: { name: string; version?: string }
+    }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
    *

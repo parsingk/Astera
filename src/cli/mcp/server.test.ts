@@ -2,6 +2,13 @@ import { describe, it, expect, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { PassThrough } from 'node:stream'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { hostAddress } from '../../host/address'
+import { startHostServer } from '../../host/server'
+import { ensureHostKey } from '../../core/host/hostKey'
+import { HOST_PROTOCOL } from '../../core/host/protocol'
 import { createMcpServer, serveMcp } from './server'
 import type { HostLink } from './hostLink'
 
@@ -416,10 +423,57 @@ describe('the MCP server', () => {
     const client = await connected(link)
     const cut = await client.callTool({ name: 'list_jobs', arguments: { limit: 2 } })
     expect(calls.at(-1)).toEqual({ cmd: 'jobs-list', args: {}, request: undefined })
-    expect(cut.structuredContent).toEqual({ jobs: [jobs[2], jobs[1]], truncated: true, total: 3 })
+    expect(cut.structuredContent).toEqual({ jobs: [jobs[2], jobs[1]], truncated: true, total: 3, nextCursor: expect.any(String) })
     expect(textOf(cut).split('\n')[0]).toBe('List Jobs (2 of 3).')
     const whole = await client.callTool({ name: 'list_jobs', arguments: {} })
     expect(whole.structuredContent).toEqual({ jobs: [jobs[2], jobs[1], jobs[0]] })
+  })
+
+  // Spec §48: every list tool pages with an opaque cursor; the cursor never reaches the Host.
+  it('every list tool takes a cursor, and a cut list pages through it in the same order', async () => {
+    const jobs = [1, 2, 3, 4, 5].map((i) => ({ id: `job_${i}`, objective: 'o', createdAt: `2026-10-0${i}T00:00:00.000Z` }))
+    const { link, calls } = answering({ 'jobs-list': { status: 200, body: jobs } })
+    const client = await connected(link)
+    const { tools } = await client.listTools()
+    for (const t of tools.filter((t) => t.name.startsWith('list_'))) {
+      expect(t.inputSchema.properties?.cursor, t.name).toMatchObject({ type: 'string' })
+      // What an agent reads to know when to stop paging, and what truncated and total mean.
+      const limitText = String((t.inputSchema.properties?.limit as { description?: string }).description)
+      const cursorText = String((t.inputSchema.properties?.cursor as { description?: string }).description)
+      expect(limitText, t.name).toContain('truncated: true and total mean the list is not whole')
+      for (const text of [limitText, cursorText]) expect(text, t.name).toContain('No nextCursor means this is the last page')
+    }
+    const seen: string[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 3; page++) {
+      const r = await client.callTool({ name: 'list_jobs', arguments: { limit: 2, ...(cursor ? { cursor } : {}) } })
+      const data = r.structuredContent as { jobs: Array<{ id: string }>; truncated?: boolean; total?: number; nextCursor?: string }
+      seen.push(...data.jobs.map((j) => j.id))
+      expect(data).toMatchObject({ truncated: true, total: 5 })
+      cursor = data.nextCursor
+      expect(JSON.parse(textOf(r).split('\n')[1])).toEqual(data)
+    }
+    expect(seen).toEqual(['job_5', 'job_4', 'job_3', 'job_2', 'job_1'])
+    expect(cursor).toBeUndefined()
+    for (const c of calls) expect(c.args).toEqual({})
+  })
+
+  it("refuses another tool's cursor and a malformed one as INVALID_ARGUMENTS, before calling the Host", async () => {
+    const runs = [1, 2, 3].map((i) => ({ id: `run_${i}`, jobId: 'job_1', ordinal: i, createdAt: `2026-10-0${i}T00:00:00.000Z` }))
+    const { link, calls } = answering({ 'runs-list': { status: 200, body: runs } })
+    const client = await connected(link)
+    const first = await client.callTool({ name: 'list_runs', arguments: { limit: 1 } })
+    const runsCursor = (first.structuredContent as { nextCursor: string }).nextCursor
+    const before = calls.length
+    const foreign = await client.callTool({ name: 'list_jobs', arguments: { cursor: runsCursor } })
+    expect(foreign.isError).toBe(true)
+    expect(errorOf(foreign)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('list_runs') })
+    const junk = await client.callTool({ name: 'list_jobs', arguments: { cursor: 'not-a-cursor' } })
+    expect(errorOf(junk)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('cursor') })
+    // list_jobs with a projectId reads the project first; a bad cursor stops it before that too.
+    const withProject = await client.callTool({ name: 'list_jobs', arguments: { projectId: 'p1', cursor: 'not-a-cursor' } })
+    expect(errorOf(withProject)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+    expect(calls.length).toBe(before)
   })
 
   it('stop_run sends runs-stop', async () => {
@@ -443,6 +497,48 @@ describe('the MCP server', () => {
     expect(messages.map((m) => m.id)).toEqual([1, 2])
     expect(messages[1].result.structuredContent).toEqual({ jobs: [{ id: 'job_1', objective: 'o' }] })
     write.mockRestore()
+  })
+
+  // MCP spec §29: the link opens at the first tool call, after initialize, so its hello can name the
+  // client the initialize request named. Its own link to a real Host server whose command layer records
+  // who called.
+  it("names the client from initialize in the Host hello, so the Host's command layer hears it", async () => {
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-client-'))
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+    const heard: unknown[] = []
+    const host = await startHostServer({
+      address: addr.address,
+      dirToPrepare: addr.dirToPrepare,
+      version: '9.9.9',
+      idleMs: 60_000,
+      onIdle: () => {},
+      hostKey: await ensureHostKey(profileDir),
+      log: { write: () => {}, close: () => {} },
+      orch: {
+        call: async (c) => {
+          heard.push({ role: c.from?.role, client: c.from?.client })
+          return { status: 200, body: { id: 'run_1' } }
+        }
+      }
+    })
+    try {
+      const stdin = new PassThrough()
+      const stdout = new PassThrough()
+      const lines: string[] = []
+      stdout.on('data', (c: Buffer) => lines.push(...c.toString('utf8').split('\n').filter(Boolean)))
+      const done = serveMcp({ env: { ASTERA_PROFILE_DIR: profileDir }, platform: process.platform, home: os.tmpdir(), version: '1.4.1', stdin, stdout })
+      const send = (m: unknown): void => void stdin.write(JSON.stringify(m) + '\n')
+      send({ ...INITIALIZE, params: { ...INITIALIZE.params, clientInfo: { name: 'claude-code', version: '1.2.3' } } })
+      send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_run', arguments: { runId: 'run_1' } } })
+      await vi.waitFor(() => expect(lines.map((l) => JSON.parse(l)).some((m) => m.id === 2)).toBe(true), { timeout: 5000 })
+      stdin.end()
+      await done
+      expect(heard).toEqual([{ role: 'mcp', client: { name: 'claude-code', version: '1.2.3' } }])
+    } finally {
+      await host.close()
+      await fs.rm(profileDir, { recursive: true, force: true })
+    }
   })
 
   it('stops waiting for a call that never answers once the drain cap passes', async () => {

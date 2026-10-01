@@ -6,6 +6,7 @@ import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from './protocol'
 import { createLineReader, encodeLine } from '../../host/framing'
 import { unsafeSocketDir } from './socketDir'
 import { newHostNonce, proofMatches, readHostKey } from './hostKey'
+import { mcpClientOf, type McpClient } from '../continuity/actor'
 
 export interface HostConnection {
   /** `legacyApp`: the Host has an app 1.3.25 or older attached (HostMessage `hello`). Absent otherwise. */
@@ -30,6 +31,9 @@ export async function connectHost(a: {
   app: string
   /** What the hello announces; the CLI's is `cli`. */
   role?: 'cli' | 'mcp'
+  /** The MCP client an `mcp` connection serves (MCP spec §29). Cleaned before it is sent, and left out
+   *  when nothing is left of it. */
+  client?: McpClient
   timeoutMs?: number
   /** Where a malformed line or a handler that threw gets reported. Every other real caller of
    *  `createLineReader` in this repo — `main/host/client.ts`'s `attach()`, `host/server.ts`'s
@@ -108,8 +112,11 @@ export async function connectHost(a: {
         a.log(`a message from the Host failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
     })
     socket.on('data', (c: string) => read(c))
+    const client = mcpClientOf(a.client)
     socket.on('connect', () =>
-      socket.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: a.role ?? 'cli', nonce }))
+      socket.write(
+        encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: a.role ?? 'cli', nonce, ...(client ? { client } : {}) })
+      )
     )
   })
 }

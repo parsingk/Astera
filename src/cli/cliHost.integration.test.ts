@@ -25,7 +25,7 @@ import { main } from './run'
 import { hostAddress } from '../host/address'
 import { encodeLine, createLineReader } from '../host/framing'
 import { startHostServer, ADDRESS_TAKEN, type HostServer } from '../host/server'
-import { ensureHostKey } from '../core/host/hostKey'
+import { ensureHostKey, hostProof } from '../core/host/hostKey'
 import { createHostOrch, type HostOrch } from '../host/orch'
 import { createHostJournal } from '../host/hostJournal'
 import { JournalReader } from '../core/continuity/journalReader'
@@ -51,7 +51,7 @@ import {
   type ClientMessage,
   type HostMessage
 } from '../core/host/protocol'
-import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState, type Res } from '../core/orchestration/state'
+import { createGate, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState, type Res } from '../core/orchestration/state'
 import { ensureProject } from '../core/orchestration/projects'
 import { CLI_PROTOCOL, codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -262,6 +262,9 @@ interface Rig {
   state(): OrchState
   /** Ends a worker's session the way a crashed agent ends: its pty exits with no report. */
   exitWorker(s: Spawn, code: number): void
+  /** The Host leaving, as its process would: the rig's teardown, run now and once. The profile stays
+   *  for a next `hostRig({ profileDir })`. */
+  stop(): Promise<void>
   logs: string[]
   /** The rows of the Host's Job Journal for this run, read through a read-only `JournalReader` opened
    *  and closed per call on `<profile>/orch/continuity.sqlite`, as the app reads them. */
@@ -514,8 +517,12 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
   box.server = server
 
   // Teardown in `leave()`'s order: the driver stops, the spawner retires, the server closes, the ptys
-  // end, and the exits those ends start run out before the folders are removed.
-  cleanups.push(async () => {
+  // end, and the exits those ends start run out before the folders are removed. Run once: a test may
+  // call it early as the Host leaving (`stop`), and the cleanup then has nothing left to do.
+  let stopping: Promise<void> | null = null
+  const stop = (): Promise<void> => (stopping ??= teardown())
+  cleanups.push(stop)
+  const teardown = async (): Promise<void> => {
     wiring.dispose()
     await spawner.closeAndSettle()
     await server.close().catch(() => {})
@@ -530,7 +537,7 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     journalDown = true
     journal?.close()
     if (addr.dirToPrepare) await rmrf(addr.dirToPrepare)
-  })
+  }
 
   return {
     profileDir,
@@ -547,6 +554,7 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
       if (!entry) throw new Error(`rig: no pty for ${s.sessionId}`)
       ptys.get(entry.pid)!.exit(code)
     },
+    stop,
     logs,
     journalRows: (runId) => {
       const reader = new JournalReader(path.join(profileDir, 'orch', 'continuity.sqlite'))
@@ -1043,17 +1051,25 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   }
 
   /** A connected client and its own close, which a test may call early; the cleanup closes it otherwise. */
-  async function mcpClient(rig: Rig): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
+  async function mcpClient(
+    rig: Rig,
+    /** `log` hears every line serveMcp would write to stderr: the link's, the connection's and, with
+     *  `debug` (ASTERA_MCP_LOG_LEVEL=debug), the server's line per tool call. */
+    o: { clientInfo?: { name: string; version: string }; log?: (m: string) => void; debug?: boolean } = {}
+  ): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
     const addr = hostAddress({ profileDir: rig.profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+    const log = o.log ?? ((): void => {})
     const link = openHostLink({
-      connect: () => connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', log: () => {} }),
+      // As serveMcp connects: the hello names the client initialize named (MCP spec §29).
+      connect: () =>
+        connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', client: server.server.getClientVersion(), log }),
       // The rig's Host is always up: a link that had to start one would be a fault here.
       startHost: async () => false,
-      log: () => {}
+      log
     })
-    const server = createMcpServer({ link, version: 'test', log: () => {} })
+    const server = createMcpServer({ link, version: 'test', log, debug: o.debug })
     const [a, b] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: 'it', version: '0' })
+    const client = new Client(o.clientInfo ?? { name: 'it', version: '0' })
     await Promise.all([server.connect(a), client.connect(b)])
     let closed = false
     const close = async (): Promise<void> => {
@@ -1117,7 +1133,10 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(ran.isError, ran.content[0]?.text).toBeFalsy()
     const runId = (ran.structuredContent as { id: string }).id
     expect(runId).toMatch(/^run_/)
-    await until(() => expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'mcp' }))
+    // And which client: the one this test's initialize named (MCP spec §29).
+    await until(() =>
+      expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'mcp', client: { name: 'it', version: '0' } })
+    )
   })
 
   it('a repeated create_job with the same requestId makes one Job', async () => {
@@ -1141,13 +1160,13 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(h.state().jobs).toHaveLength(1)
   })
 
-  it('answers a question and the journal row says mcp', async () => {
+  it('answers a question and the journal row says mcp, and which client', async () => {
     const h = await hostRig({ continuity: true })
     // The question a Host opens when a worker ends without reporting (the CLI tests above).
     const { runId, taskId, worker } = await runningJob(h)
     h.exitWorker(worker, 1)
     await until(() => expect(h.state().gates.filter((g) => g.status === 'open')).toHaveLength(1))
-    const mcp = await mcpClient(h)
+    const mcp = await mcpClient(h, { clientInfo: { name: 'claude-code', version: '1.2.3' } })
 
     const open = await mcp.call('list_questions', { runId, status: 'open' })
     expect(open.isError).toBeFalsy()
@@ -1162,7 +1181,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
 
     await until(() =>
       expect(h.journalRows(runId).filter((e) => e.type === 'GATE_RESOLVED')).toEqual([
-        expect.objectContaining({ taskId, actor: { surface: 'mcp' }, payload: expect.objectContaining({ gateId: questionId, resolution: 'Use the existing DB.' }) })
+        expect.objectContaining({
+          taskId,
+          actor: { surface: 'mcp', client: { name: 'claude-code', version: '1.2.3' } },
+          payload: expect.objectContaining({ gateId: questionId, resolution: 'Use the existing DB.' })
+        })
       ])
     )
     // And the answer did what an answer does: the Host places the worker again.
@@ -1256,5 +1279,130 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect((runs.structuredContent as { runs: Array<{ id: string }> }).runs.map((r) => r.id)).toEqual([runId])
     // The Host's own record agrees: the Run is neither stopped nor paused by the client leaving.
     expect(h.state().runs.find((r) => r.id === runId)?.paused).toBeFalsy()
+  })
+
+  // Spec §98 scenario E: a whole flow, with every log line the MCP server and the Host write kept, and
+  // none of them carries the Host key, a handshake proof, an account's credentials file (its path or
+  // what it holds) or the tokens a question's text and an answer carry.
+  it('no secret reaches the MCP server log or the Host log over a full flow', async () => {
+    const token = 'sk-ant-' + 'q'.repeat(12) + '0123456789abcdefghij'
+    const answerToken = 'sk-' + 'a'.repeat(40)
+    const projectPath = await makeRepo('astera-mcp-int-project-')
+    cleanups.push(() => rmrf(projectPath))
+    const now = '2026-10-01T00:00:00.000Z'
+    const need = <T>(r: Res<T>): { state: OrchState; value: T } => {
+      if (!r.ok) throw new Error(r.error)
+      return r
+    }
+    // A Run waiting on a question whose text carries a token, built with the pure layer.
+    const project = ensureProject(emptyState(), { path: projectPath, now })
+    const job = need(createJob(project.state, { objective: 'the asking job', cwd: projectPath, concurrency: 1 }, now))
+    const run = need(startJobRun(job.state, job.value.id, now))
+    const task = need(createTask(run.state, { runId: run.value.id, title: 'one', spec: 'do it', deps: [], accountIds: ['acc_claude_0'] }, now))
+    const gate = need(createGate(task.state, { taskId: task.value.id, question: `which key? I found ${token} in .env` }, now))
+    const h = await hostRig({ repo: false, seed: gate.state, continuity: true })
+    // The account's credentials file, with something in it worth stealing. Only its presence is read.
+    const accounts = JSON.parse(await fs.readFile(path.join(h.profileDir, 'accounts.json'), 'utf8')) as { accounts: Array<{ configDir: string }> }
+    const credentialsPath = path.join(accounts.accounts[0].configDir, '.credentials.json')
+    const credentials = `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-${'c'.repeat(32)}"}}`
+    await fs.writeFile(credentialsPath, credentials)
+    const hostKey = (await fs.readFile(path.join(h.profileDir, 'host', 'host.key'), 'utf8')).trim()
+    expect(hostKey).toMatch(/^[0-9a-f]{64}$/)
+
+    // Every nonce a client sends, so each proof the Host answers with can be computed and looked for.
+    const nonces: string[] = []
+    const realConnect = net.connect.bind(net) as (...a: unknown[]) => net.Socket
+    const spy = vi.spyOn(net, 'connect').mockImplementation(((...a: unknown[]) => {
+      const sock = realConnect(...a)
+      const write = sock.write.bind(sock) as (chunk: unknown, ...rest: unknown[]) => boolean
+      sock.write = ((chunk: unknown, ...rest: unknown[]) => {
+        for (const m of String(chunk).matchAll(/"nonce":"([0-9a-f]+)"/g)) nonces.push(m[1])
+        return write(chunk, ...rest)
+      }) as typeof sock.write
+      return sock
+    }) as typeof net.connect)
+    cleanups.push(() => spy.mockRestore())
+
+    const mcpLog: string[] = []
+    const mcp = await mcpClient(h, { log: (m) => mcpLog.push(m), debug: true })
+    const listed = await mcp.call('list_projects', {})
+    const projectId = (listed.structuredContent as { projects: Array<{ id: string }> }).projects[0].id
+    const created = await mcp.call('create_job', { projectId, objective: 'a second job', coordinatorAccountId: h.accountId, requestId: 's-1' })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    const ran = await mcp.call('run_job', { jobId: (created.structuredContent as { id: string }).id, requestId: 's-2' })
+    expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+    const open = await mcp.call('list_questions', { status: 'open' })
+    const questions = (open.structuredContent as { questions: Array<{ id: string }> }).questions
+    expect(questions.map((q) => q.id)).toContain(gate.value.id)
+    // The tool result is redacted too (server.test.ts has the shapes); this test is about the logs.
+    expect(JSON.stringify(open)).not.toContain(token)
+    const answered = await mcp.call('answer_question', { questionId: gate.value.id, answer: `use ${answerToken}`, requestId: 's-3' })
+    expect(answered.isError, answered.content[0]?.text).toBeFalsy()
+    // A refusal and a link failure are logged too.
+    expect((await mcp.call('get_run', { runId: 'run_missing' })).isError).toBe(true)
+    await h.stop()
+    expect((await mcp.call('get_run', { runId: 'run_missing' })).isError).toBe(true)
+
+    // The debug line per call and the link's close line were written, so the logs were really heard.
+    expect(mcpLog.some((l) => l.startsWith('answer_question: ok'))).toBe(true)
+    expect(mcpLog).toContain('the Host connection closed')
+    expect(h.logs.length).toBeGreaterThan(0)
+    expect(nonces.length).toBeGreaterThan(0)
+    const secrets = [
+      hostKey,
+      ...nonces.map((n) => hostProof(hostKey, n)),
+      credentialsPath,
+      credentialsPath.split(path.sep).join('/'),
+      credentials,
+      'sk-ant-oat01-',
+      token,
+      answerToken
+    ]
+    for (const [where, lines] of [['MCP server', mcpLog], ['Host', h.logs]] as const)
+      for (const line of lines) {
+        for (const secret of secrets) expect(line, `${where} log: ${line}`).not.toContain(secret)
+        // Nothing the shape of a key or a proof at all.
+        expect(line, `${where} log: ${line}`).not.toMatch(/[0-9a-f]{64}/)
+      }
+  })
+
+  // Spec §40, through the CLI's real entry: 0 while a Host that speaks mcp runs, 3 once it has gone,
+  // and no Host is started by asking.
+  it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
+    const h = await hostRig({ repo: false })
+    const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 16 })
+    await h.stop()
+    const down = await astera(['mcp', 'status'], h.env)
+    expect(down.code).toBe(3)
+    expect(down.envelope.error).toMatchObject({ code: 'HOST_NOT_RUNNING', details: { host: { running: false, mcp: false } } })
+    expect(down.envelope.error?.nextSteps).toEqual(['astera host start'])
+    expect((await astera(['mcp', 'status'], h.env)).code).toBe(3)
+  })
+
+  // Spec §81 Case C. The link targets the profile's address, which a restart does not change, so the
+  // same MCP server reconnects by itself; while no Host answers, the call says so and starts nothing
+  // (this client's startHost answers false).
+  it('the Host restarts: the same server answers HOST_NOT_RUNNING while it is down, then reconnects to the next one', async () => {
+    const { h, projectId } = await projectRig({ continuity: true })
+    const mcp = await mcpClient(h)
+    const created = await mcp.call('create_job', { projectId, objective: 'outlives its Host', coordinatorAccountId: h.accountId, requestId: 'hr-1' })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    const jobId = (created.structuredContent as { id: string }).id
+    const ran = await mcp.call('run_job', { jobId, requestId: 'hr-2' })
+    expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+    const runId = (ran.structuredContent as { id: string }).id
+
+    await h.stop()
+    const down = await mcp.call('get_run', { runId })
+    expect(down.isError).toBe(true)
+    expect(errorOf(down)).toMatchObject({ code: 'HOST_NOT_RUNNING' })
+
+    const second = await hostRig({ repo: false, profileDir: h.profileDir, continuity: true })
+    expect(second.address).toBe(h.address)
+    const run = await mcp.call('get_run', { runId })
+    expect(run.isError, run.content[0]?.text).toBeFalsy()
+    expect(run.structuredContent).toMatchObject({ id: runId, jobId })
+    expect(second.state().runs.map((r) => r.id)).toContain(runId)
   })
 })
