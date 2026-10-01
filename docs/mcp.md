@@ -135,6 +135,9 @@ from `list_accounts`. A Job that has never run shows `pendingStart: true` in `ge
 `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion` and `list_questions`.
 
 Every result carries the data twice, as `structuredContent` and as the same JSON in the text content.
+An error is the exception: its text content is a `CODE: message` line followed by the JSON (`code`,
+`message`, `nextSteps` and, when there are any, `details`), and it carries no `structuredContent`,
+because some clients (Cursor) validate `structuredContent` even on an error.
 The four tools that change something (`create_job`, `run_job`, `stop_run`, `answer_question`) accept an
 optional `requestId`. Retrying with the same id returns the first result instead of acting twice. The
 Host keeps these receipts in memory for one hour, and a Host restart forgets them.

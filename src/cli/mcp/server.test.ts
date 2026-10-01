@@ -58,6 +58,9 @@ const textOf = (r: unknown): string => {
   return content[0].text
 }
 
+/** An error result's data: the JSON after its code/message line. Errors carry no structuredContent. */
+const errorOf = (r: unknown): Record<string, unknown> => JSON.parse(textOf(r).split('\n')[1])
+
 const INITIALIZE = {
   jsonrpc: '2.0',
   id: 1,
@@ -107,7 +110,7 @@ describe('the MCP server', () => {
       arguments: { projectId: 'p9', objective: 'o', coordinatorAccountId: 'a' }
     })
     expect(r.isError).toBe(true)
-    expect(r.structuredContent).toMatchObject({ code: 'NOT_FOUND', message: 'unknown project: p9' })
+    expect(errorOf(r)).toMatchObject({ code: 'NOT_FOUND', message: 'unknown project: p9' })
     expect(calls.map((c) => c.cmd)).toEqual(['projects-get'])
   })
 
@@ -186,8 +189,8 @@ describe('the MCP server', () => {
     )
     const r = await client.callTool({ name: 'run_job', arguments: { jobId: 'job_1' } })
     expect(r.isError).toBe(true)
-    expect(r.structuredContent).toMatchObject({ code: 'CONFLICT', message: 'job job_1 is already running (run run_2)' })
-    expect(Array.isArray((r.structuredContent as { nextSteps?: unknown }).nextSteps)).toBe(true)
+    expect(errorOf(r)).toMatchObject({ code: 'CONFLICT', message: 'job job_1 is already running (run run_2)' })
+    expect(Array.isArray(errorOf(r).nextSteps)).toBe(true)
   })
 
   it('a refusal naming a request in flight points at requests show and carries the id as details', async () => {
@@ -195,7 +198,7 @@ describe('the MCP server', () => {
       answering({ 'jobs-run': { status: 409, body: { error: 'request rq-1 is already running', requestId: 'rq-1' } } }).link
     )
     const r = await client.callTool({ name: 'run_job', arguments: { jobId: 'job_1', requestId: 'rq-1' } })
-    const data = r.structuredContent as { nextSteps: string[]; details?: Record<string, unknown> }
+    const data = errorOf(r) as { nextSteps: string[]; details?: Record<string, unknown> }
     expect(data.details).toEqual({ requestId: 'rq-1' })
     expect(data.nextSteps.some((s) => s.includes('requests show') && s.includes('rq-1'))).toBe(true)
   })
@@ -203,7 +206,7 @@ describe('the MCP server', () => {
   it('a refusal naming no ids carries no details', async () => {
     const client = await connected(answering({ 'runs-get': { status: 404, body: { error: 'unknown run: run_9' } } }).link)
     const r = await client.callTool({ name: 'get_run', arguments: { runId: 'run_9' } })
-    expect('details' in (r.structuredContent as object)).toBe(false)
+    expect('details' in errorOf(r)).toBe(false)
   })
 
   it('run_job hides the Run fields get_run hides', async () => {
@@ -232,7 +235,10 @@ describe('the MCP server', () => {
     const err = await failing.callTool({ name: 'get_run', arguments: { runId: 'run_1' } })
     const [line, errJson] = textOf(err).split('\n')
     expect(line).toBe('NOT_FOUND: unknown run: run_1')
-    expect(JSON.parse(errJson)).toEqual(err.structuredContent)
+    expect(JSON.parse(errJson)).toMatchObject({ code: 'NOT_FOUND', message: 'unknown run: run_1' })
+    expect(Array.isArray(JSON.parse(errJson).nextSteps)).toBe(true)
+    // Cursor validates structuredContent even on an error, so an error carries none (Task 12 U6).
+    expect(err.structuredContent).toBeUndefined()
   })
 
   it('redacts free text but leaves ids and paths alone', async () => {
@@ -254,7 +260,7 @@ describe('the MCP server', () => {
     const link: HostLink = { call: async () => ({ code: 'HOST_NOT_RUNNING', message: 'm' }), close: () => {} }
     const r = await (await connected(link)).callTool({ name: 'list_jobs', arguments: {} })
     expect(r.isError).toBe(true)
-    expect(r.structuredContent).toMatchObject({ code: 'HOST_NOT_RUNNING' })
+    expect(errorOf(r)).toMatchObject({ code: 'HOST_NOT_RUNNING' })
   })
 
   it('shapes results through the public allowlist and redacts free text', async () => {

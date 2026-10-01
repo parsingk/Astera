@@ -79,7 +79,15 @@ const errorResult = (code: CliErrorCode, message: string, cmd?: string, body?: u
   // request in flight points at `requests show`, a repair only the app can make gets none.
   const details = refusalDetailsOf(body)
   const data = { code, message, nextSteps: nextStepsFor({ code, cmd, details }), ...(details ? { details } : {}) }
-  return { isError: true, content: textResult(`${code}: ${message}`, data), structuredContent: data }
+  // **No structuredContent on an error.** Cursor validates it even when isError is set, so an error
+  // carries its data only in `content`: the code/message line, then the same JSON.
+  return { isError: true, content: textResult(`${code}: ${message}`, data) }
+}
+
+/** The code an error result opens its text with (`CODE: message`). */
+const errorCodeOf = (r: CallToolResult): string => {
+  const first = r.content[0]
+  return first?.type === 'text' ? first.text.slice(0, first.text.indexOf(':')) : 'error'
 }
 
 const refusalMessage = (status: number, body: unknown): string => {
@@ -135,7 +143,7 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
       },
       async (input: Record<string, unknown>) => {
         const result = await runTool(a.link, t, input)
-        if (a.debug) a.log(`${t.name}: ${result.isError ? String((result.structuredContent as { code?: unknown }).code) : 'ok'}`)
+        if (a.debug) a.log(`${t.name}: ${result.isError ? errorCodeOf(result) : 'ok'}`)
         return result
       }
     )
