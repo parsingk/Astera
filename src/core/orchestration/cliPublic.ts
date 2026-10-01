@@ -77,7 +77,7 @@ const RUN_HIDDEN = ['coordinatorStop', 'coordinatorStartingAt', 'coordinatorStop
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 const RUN = [...RUN_FIELDS, ...DERIVED]
 
-const TASK_FIELDS = [
+export const TASK_PUBLIC_FIELDS = [
   'id',
   'runId',
   'jobId',
@@ -118,11 +118,11 @@ const TASK_HIDDEN = [
   'suspiciousFiles',
   'reviewRequested'
 ] as const
-type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
+type _task = NothingLeft<Unlisted<Task, typeof TASK_PUBLIC_FIELDS, typeof TASK_HIDDEN>>
 
 /** `tasks list --brief` 가 덧붙이는 칸. Task 에는 없다 — 어디서 잘렸는지 알리려고 그 명령이
  *  만든다(server.ts). 목록에 넣지 않으면 --brief 가 그 표시를 조용히 잃는다. */
-const TASK = [...TASK_FIELDS, 'spec_truncated']
+const TASK = [...TASK_PUBLIC_FIELDS, 'spec_truncated']
 
 const QUESTION = [
   'id',

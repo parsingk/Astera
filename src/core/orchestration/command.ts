@@ -50,6 +50,7 @@ import { findProject, findProjectByPath, findProjectContaining, jobInProject } f
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
+import { taskDetailOf } from './taskDetail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -2615,6 +2616,13 @@ export async function handleCommand(
         return conflict(`run ${run.id} is at its concurrency limit: ${openHere} of ${limit} workers are open`)
       if (!deps.dispatchTask) return conflict('placing a task on request is done by the Astera Host, and this caller is not one')
       return deps.dispatchTask(id)
+    }
+    // **One Task and its attempts** (MCP design §3b). Not public: the MCP get_task tool reads it.
+    case 'tasks-get': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const detail = taskDetailOf(s, id)
+      return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
     }
     case 'tasks-list': {
       let tasks = s.tasks

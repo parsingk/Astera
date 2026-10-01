@@ -274,6 +274,10 @@ const SESSION = {
     summary: "where each Task of a run stands in completion (the MCP server's get_completion)",
     flags: [req('id', '<runId>', 'the run to read')]
   },
+  'tasks-get': {
+    summary: "one Task with its attempts (the MCP server's get_task)",
+    flags: [req('id', '<taskId>', 'the Task to read')]
+  },
   'worker-start': {
     summary: 'start a worker session for a Task',
     flags: [
