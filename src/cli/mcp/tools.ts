@@ -196,7 +196,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'runs-stop',
     description:
-      'Stop a Run: its open workers are closed and the Run is paused. Use resume_run to continue it.',
+      'Stop a Run: its open workers are closed, its coordinator is stopped (coordinatorStopped says whether it had one), and the Run is paused. Use resume_run to continue it.',
     inputSchema: { runId: id, requestId },
     args: (i) => ({ id: i.runId })
   },
@@ -205,7 +205,8 @@ export const TOOLS: ToolDef[] = [
     title: 'Resume a Run',
     readOnly: false,
     cmd: 'runs-resume',
-    description: 'Resume a Run that stop_run paused. A Run that is not paused is returned as it is.',
+    description:
+      'Resume a Run that stop_run paused. A Job with a coordinator account gets a new coordinator, which looks at what is done and carries on. A Run that is not paused is returned as it is.',
     inputSchema: { runId: id, requestId },
     args: (i) => ({ id: i.runId })
   },

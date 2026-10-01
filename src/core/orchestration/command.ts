@@ -1900,7 +1900,13 @@ export async function handleCommand(
         ),
         runs: latest.runs.map((r) => (r.id === id ? { ...r, paused: true } : r))
       })
-      return okBody({ runId: id, stopped: open.length, paused: true })
+      // **The coordinator is stopped too** (the user's decision after the e2e of 2026-10-01): left
+      // running, it kept a stopped Run's session, and with it the Host, alive with no way for an MCP
+      // client to end it. The stop is `run-coordinator-stop`'s own (retireCoordinator): the slot is
+      // kept, marked pending, until the exit release confirms it, and the driving loop resends it.
+      const coordinator = deps.getState().runs.find((r) => r.id === id)?.coordinatorSessionId
+      if (coordinator !== undefined) await retireCoordinator(id, coordinator, 'the run was stopped', true)
+      return okBody({ runId: id, stopped: open.length, paused: true, coordinatorStopped: coordinator !== undefined })
     }
     /** 세워 둔 회차를 다시 돌게 한다. **`runs stop` 이 만든 상태를 푸는 유일한 길이다** —
      *  기존 `run-resume` 은 예약(계획)의 것만 걷고 예약이 아닌 Job 을 거절한다. 되돌릴 수 있다는
@@ -1912,6 +1918,31 @@ export async function handleCommand(
       const resumed = resumeRun(s, id)
       const reply = await commit(resumed)
       if (!resumed.ok || reply.status !== 200) return reply
+      // **A Run `runs stop` paused gets its coordinator back** (the user's decision, 2026-10-01): the
+      // stop ended it, and without one nothing drives a coordinator Job's Run. The same guard and the
+      // same hand-over as the ▶ on a Run row (`run-start` given a run id); the new coordinator's TAKE
+      // STOCK section covers joining part-way. A slot that still names a coordinator (a stop not yet
+      // confirmed by its exit) is taken back as it is, as before. A Job with no coordinator account,
+      // or a Run that was not paused, resumes as it always did.
+      const after = deps.getState()
+      const run = after.runs.find((r) => r.id === id)
+      const job = run && jobOf(after, run)
+      if (
+        s.runs.find((r) => r.id === id)?.paused === true &&
+        run &&
+        job?.coordinatorAccountId &&
+        deps.startCoordinator &&
+        run.coordinatorSessionId === undefined &&
+        run.paused !== true &&
+        outcomeOf(after, id) === 'running'
+      ) {
+        const handed = await handToCoordinator(after, job, run, job.coordinatorAccountId, true)
+        if (handed.status < 200 || handed.status >= 300)
+          return { status: handed.status, body: { ...(handed.body as object), runId: id } }
+        const handedState = deps.getState()
+        const withCoordinator = handedState.runs.find((r) => r.id === id)
+        if (withCoordinator) return okBody(runView(handedState, withCoordinator))
+      }
       return okBody(runView(resumed.state, resumed.value))
     }
     case 'runs-get': {

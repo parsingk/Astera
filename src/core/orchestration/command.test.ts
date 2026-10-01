@@ -7998,3 +7998,90 @@ describe('handleCommand — waitingForApproval', () => {
     expect((await call(failing, 'tasks-get', { id: 't1' }, '')).status).toBe(200)
   })
 })
+
+// e2e 2026-10-01 second run: `runs stop` answered `stopped: 0` and left the coordinator session
+// running, so `host stop` refused and an MCP client had no way to end it. The user's decision: a stop
+// stops the coordinator too, and a resume brings one back for a Job that has a coordinator account.
+describe('runs stop and runs resume with a coordinator', () => {
+  const coordDeps = () => {
+    const stopped: string[] = []
+    const deps = makeDeps()
+    const startCoordinator = vi.fn(async (a: { runId: string; brief: string }) => ({ sessionId: `coord-${a.runId}` }))
+    Object.assign(deps, {
+      listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
+      startCoordinator,
+      stopCoordinator: async (sessionId: string) => {
+        stopped.push(sessionId)
+      }
+    })
+    return Object.assign(deps, { startCoordinator, stopped })
+  }
+  /** A Job with a coordinator account, run once: its Run has coordinator `coord-<runId>`. */
+  const coordinatedRun = async (deps: OrchServerDeps): Promise<string> => {
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = (r.body as { id: string }).id
+    expect((await call(deps, 'run-start', { run: jobId })).status).toBe(200)
+    return deps.getState().runs.find((x) => x.jobId === jobId)!.id
+  }
+  const exited = async (deps: OrchServerDeps, sessionId: string): Promise<void> => {
+    const released = coordinatorReleaseOf(deps.getState(), sessionId, 0)
+    if (released) await deps.setState(released.state)
+  }
+
+  it('runs stop stops the Run coordinator and says so', async () => {
+    const deps = coordDeps()
+    const runId = await coordinatedRun(deps)
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId, stopped: 0, paused: true, coordinatorStopped: true })
+    expect(deps.stopped).toEqual([`coord-${runId}`])
+    // The slot is kept, marked, until the exit release confirms the stop (retireCoordinator, L1).
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.paused).toBe(true)
+    expect(run.coordinatorStopPending).toBeDefined()
+  })
+
+  it('runs stop of a Run with no coordinator says coordinatorStopped: false', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.body).toMatchObject({ runId, paused: true, coordinatorStopped: false })
+    expect(deps.stopped).toEqual([])
+  })
+
+  it('runs resume brings the coordinator back once the stopped one is gone', async () => {
+    const deps = coordDeps()
+    const runId = await coordinatedRun(deps)
+    await call(deps, 'runs-stop', { id: runId })
+    await exited(deps, `coord-${runId}`)
+    expect(deps.getState().runs.find((x) => x.id === runId)?.coordinatorSessionId).toBeUndefined()
+    const r = await call(deps, 'runs-resume', { id: runId })
+    expect(r.status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(2)
+    expect(deps.startCoordinator.mock.calls[1][0]).toMatchObject({ runId, accountId: 'accA' })
+    // The new coordinator joins part-way, which its TAKE STOCK section covers.
+    expect(deps.startCoordinator.mock.calls[1][0].brief).toContain('TAKE STOCK BEFORE YOU START ANYTHING')
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.paused).toBeUndefined()
+    expect(run.coordinatorSessionId).toBe(`coord-${runId}`)
+    expect(r.body).toMatchObject({ id: runId, coordinatorSessionId: `coord-${runId}` })
+  })
+
+  it('runs resume of a Job without a coordinator account starts no coordinator', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    await call(deps, 'runs-stop', { id: runId })
+    expect((await call(deps, 'runs-resume', { id: runId })).status).toBe(200)
+    expect(deps.startCoordinator).not.toHaveBeenCalled()
+  })
+
+  it('runs resume of a Run that is not paused starts nothing', async () => {
+    const deps = coordDeps()
+    const runId = await coordinatedRun(deps)
+    await exited(deps, `coord-${runId}`)
+    expect((await call(deps, 'runs-resume', { id: runId })).status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+})

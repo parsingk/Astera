@@ -421,7 +421,8 @@ Jobs do not move. You can restart it from Settings, Info". If it stays that way,
 from **Settings → Info**.
 
 **Stopping a worker.** `worker-stop --dispatch <id>` ends the worker's session and marks its Dispatch
-stopped. `runs stop --id <runId>` does the same for every open worker of a run, and pauses the run.
+stopped. `runs stop --id <runId>` does the same for every open worker of a run, stops its
+coordinator, and pauses the run.
 Both refuse with 6, and end nothing, while a worker is still starting: the message is `the worker is
 still starting; try again in a moment`, and the answer is to run the same command a few seconds later.
 That refusal lasts only two minutes from the start. A start older than that is taken as one that died,
@@ -1034,8 +1035,13 @@ cases. With `--request-id`, a retried `sessions create` is answered from the rec
 starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
-dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
-held open on purpose.
+dispatches, stops the run's coordinator session when it has one, and pauses the run. The answer says
+`stopped` (how many workers) and `coordinatorStopped`. The run keeps naming that coordinator until its
+session has really ended, and the stop is sent again until it has, as for a scheduled run's
+coordinator. `runs resume` clears the pause, and for a Job with a coordinator account it starts a new
+coordinator for the run once the old one is gone, which looks at what is done and carries on; a resume
+sent while the old session is still ending keeps that one. It refuses while a dispatch is held open on
+purpose.
 
 **`runs follow` prints a run's events as they happen**, and stops where `runs wait` stops. The events
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,

@@ -638,6 +638,12 @@ describe('the MCP server', () => {
     expect(tools.find((t) => t.name === 'list_run_configs')?.annotations?.readOnlyHint).toBe(true)
   })
 
+  it('stop_run and resume_run say the coordinator is stopped and brought back', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    expect(tools.find((t) => t.name === 'stop_run')?.description).toMatch(/coordinator is stopped/)
+    expect(tools.find((t) => t.name === 'resume_run')?.description).toMatch(/new coordinator/)
+  })
+
   it('stop_run sends runs-stop', async () => {
     const { link, calls } = answering({})
     await (await connected(link)).callTool({ name: 'stop_run', arguments: { runId: 'run_1' } })
