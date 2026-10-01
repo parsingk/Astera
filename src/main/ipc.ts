@@ -1537,6 +1537,12 @@ export function registerIpc(
   // forwarded and the mirror moved (S6 §3.4, withHostRollHold), so the renderer replaces the old tab
   // rather than closing it, and the app's orchestration tap finds the Dispatch already rekeyed.
   // installHostRollExit sets this one held handler as both core.sessions.onExit and core.chat.onExit (S6-20).
+  /** When a person last typed into each session in this app's tabs (the renderer's `sessions.write`,
+   *  terminal reports left out), by session id. A finished Run's sessions end once nobody has typed into
+   *  them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS); the app's own writes (a nudge, a prompt)
+   *  go through core.sessions.write directly and are not here. An entry goes with its session's exit
+   *  (below), except a lost-sight one: that session is still running in the Host. */
+  const personInputAt = new Map<string, number>()
   installHostRollExit(hostRollView, [core.sessions, core.chat], (e: { sessionId: string; exitCode: number }): void => {
     adoptedNative.delete(e.sessionId)
     hostOwned.delete(e.sessionId)
@@ -1553,6 +1559,7 @@ export function registerIpc(
     scheduler?.handleExit(e) // clean up the schedule entry
     forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
     forgetAttentionOnExit(pendingPrompt, e.sessionId, e.exitCode) // same guard: a lost-sight exit keeps the capture
+    forgetAttentionOnExit({ forget: (id) => personInputAt.delete(id) }, e.sessionId, e.exitCode) // same guard
     closeConversationOnExit(conversationSessions, e.sessionId, e.exitCode) // stop the follow (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
@@ -2274,12 +2281,6 @@ export function registerIpc(
   })
 
   // ── Starting orchestration ─────────────────────────────────────────
-  /** When a person last typed into each session in this app's tabs (the renderer's `sessions.write`,
-   *  terminal reports left out), by session id. A finished Run's sessions end once nobody has typed into
-   *  them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS); the app's own writes (a nudge, a prompt)
-   *  go through core.sessions.write directly and are not here. */
-  const personInputAt = new Map<string, number>()
-
   // It sits directly after spawnSession above because that function is the session creation the
   // coordinator needs, and the busy verdict reads this file's busyState too. Once the server is
   // listening, sessions start receiving ASTERA_*.
