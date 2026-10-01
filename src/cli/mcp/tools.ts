@@ -30,6 +30,29 @@ const cursor = z
     'The nextCursor of a previous result of this tool, for the page after it, with the same filters. Leave it out for the first page. No nextCursor means this is the last page.'
   )
 
+/** create_job's completion-convergence policy knobs: the CLI's `jobs create` flags, camel-cased as its
+ *  parser hands them to run-create (`--max-fix-attempts` is `maxFixAttempts`). The numbers take what
+ *  run-create takes (command.ts `posInt`, an integer >= 1), no narrower, so MCP and the CLI agree. */
+const positive = z.number().int().min(1)
+export const CONVERGENCE_KNOBS = {
+  maxFixAttempts: positive.optional().describe('Repair attempts per Task (an integer >= 1). Needs convergence: true.'),
+  maxReviewRounds: positive.optional().describe('Review rounds per Task (an integer >= 1). Needs convergence: true.'),
+  blockingSeverity: z
+    .enum(['high', 'medium'])
+    .optional()
+    .describe('Which review findings block a Task: high only, or medium and high. Needs convergence: true.'),
+  maxTotalMinutes: positive
+    .optional()
+    .describe('Time budget per Task in minutes (an integer >= 1). Needs convergence: true.')
+}
+
+/** Why create_job's input is refused before the Host is asked, or null. A knob without
+ *  `convergence: true` would set a policy that is off, so it is refused, as `jobs create` refuses it. */
+export function convergenceRefusal(input: Record<string, unknown>): string | null {
+  const knobs = Object.keys(CONVERGENCE_KNOBS).filter((k) => input[k] !== undefined)
+  return knobs.length > 0 && input.convergence !== true ? `${knobs.join(', ')} need convergence: true` : null
+}
+
 export interface ToolDef {
   name: string
   title: string
@@ -101,7 +124,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'jobs-create',
     description:
-      "Create a durable Astera Job for a project. This does not start execution. Use run_job after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without coordinatorAccountId it is coordinatorProvider's default account (claude unless given).",
+      "Create a durable Astera Job for a project. This does not start execution. Use run_job after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without coordinatorAccountId it is coordinatorProvider's default account (claude unless given). With convergence: true, a Task whose checks or review fail gets bounded repair and recheck loops instead of failing at once; maxFixAttempts, maxReviewRounds, blockingSeverity and maxTotalMinutes set those bounds.",
     inputSchema: {
       projectId: id,
       objective: z.string().min(1).max(MCP_LIMITS.objective),
@@ -110,15 +133,27 @@ export const TOOLS: ToolDef[] = [
         .enum(['claude', 'codex'])
         .optional()
         .describe("Without coordinatorAccountId, that provider's default account coordinates (default claude)."),
+      convergence: z
+        .boolean()
+        .optional()
+        .describe('Repair and recheck a Task whose checks or review fail, within the bounds below, instead of failing it.'),
+      ...CONVERGENCE_KNOBS,
       requestId
     },
-    // Exactly one coordinator reaches the Host: the account when given, otherwise the provider.
+    // Exactly one coordinator reaches the Host: the account when given, otherwise the provider. The
+    // knobs go only with convergence: true; without it server.ts refuses them (convergenceRefusal).
     args: (i) => ({
       objective: i.objective,
       cwd: i.projectPath,
       ...(i.coordinatorAccountId !== undefined
         ? { coordinatorAccount: i.coordinatorAccountId }
-        : { coordinatorProvider: i.coordinatorProvider ?? 'claude' })
+        : { coordinatorProvider: i.coordinatorProvider ?? 'claude' }),
+      ...(i.convergence === true
+        ? {
+            convergence: true,
+            ...Object.fromEntries(Object.keys(CONVERGENCE_KNOBS).filter((k) => i[k] !== undefined).map((k) => [k, i[k]]))
+          }
+        : {})
     })
   },
   {
