@@ -85,6 +85,9 @@ export function openHostLink(a: {
         if (conn === mine) conn = null
         return l
       }
+      // The connection can close between its open resolving and this call resuming; its close has
+      // flushed `pending` already, so a call registered on it now would wait out the whole deadline.
+      if (current !== l) return { code: 'HOST_NOT_RUNNING', message: 'the Host went away during the call; retry with the same requestId' }
       const call = `mcp_${next++}`
       return new Promise((resolve) => {
         const timer = setTimeout(() => {

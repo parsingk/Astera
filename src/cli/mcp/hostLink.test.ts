@@ -141,6 +141,20 @@ describe('openHostLink', () => {
     expect(connects + started).toBe(0)
   })
 
+  it('a call whose connection closed while it waited for it is not sent there', async () => {
+    const f = fakeConn()
+    const link = openHostLink({ connect: async () => f.conn, startHost: async () => false, log: () => {}, timeoutMs: 50 })
+    const p = link.call('jobs-list', {})
+    await new Promise((r) => setImmediate(r))
+    f.push({ t: 'orch-result', call: (f.sent[0] as { call: string }).call, status: 200, body: [] } as HostMessage)
+    await p
+    // `call` runs up to `await mine` at once; the close lands before it resumes.
+    const q = link.call('jobs-list', {}, 'req-2')
+    f.drop()
+    expect(await q).toMatchObject({ code: 'HOST_NOT_RUNNING', message: expect.stringContaining('retry with the same requestId') })
+    expect(f.sent).toHaveLength(1)
+  })
+
   it('a stale connection closing does not fail calls pending on the current one', async () => {
     const first = fakeConn()
     const second = fakeConn()
