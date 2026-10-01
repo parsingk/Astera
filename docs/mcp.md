@@ -139,24 +139,26 @@ If the client cannot find `astera`, give `command` the full path of the installe
 `coordinatorProvider` (`claude` or `codex`, `claude` when neither is given): the earliest registered
 account of that provider that is logged in, the one `list_accounts` marks `default: true`. With no
 account of that provider logged in, `create_job` is refused with `INVALID_ARGUMENTS`. When both are
-given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart: true` in `get_job` and
-`list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion` and `list_questions`.
-`run_job` makes the Run's worktree and starts its coordinator before it answers, so on a large repository it can take up
-to a minute.
+given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart: true` in `get_job`
+and `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion`
+and `list_questions`. `run_job` makes the Run's worktree and starts its coordinator before it
+answers, so on a large repository it can take up to a minute.
 
 Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
-first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions` oldest first by
-`createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and `list_projects` and
-`list_accounts` keep Astera's. The list is ordered first and cut second. A cut list carries
-`truncated: true` and `total` (how many there were) beside it; a whole list carries neither.
+first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions`
+oldest first by `createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and
+`list_projects` and `list_accounts` keep Astera's. The list is ordered first and cut second. A cut
+list carries `truncated: true` and `total` (how many there were) beside it; a whole list carries
+neither.
 
-Every result carries the data twice, as `structuredContent` and as the same JSON in the text content.
-An error is the exception: its text content is a `CODE: message` line followed by the JSON (`code`,
-`message`, `nextSteps` and, when there are any, `details`), and it carries no `structuredContent`,
-because some clients (Cursor) validate `structuredContent` even on an error.
-The five tools that change something (`create_job`, `run_job`, `stop_run`, `resume_run`, `answer_question`) accept an
-optional `requestId`. Retrying with the same id returns the first result instead of acting twice. The
-Host keeps these receipts in memory for one hour, and a Host restart forgets them.
+Every result carries the data twice, as `structuredContent` and as the same JSON in the text
+content. An error is the exception: its text content is a `CODE: message` line followed by the JSON
+(`code`, `message`, `nextSteps` and, when there are any, `details`), and it carries no
+`structuredContent`, because some clients (Cursor) validate `structuredContent` even on an error.
+The five tools that change something (`create_job`, `run_job`, `stop_run`, `resume_run`,
+`answer_question`) accept an optional `requestId`. Retrying with the same id returns the first
+result instead of acting twice. The Host keeps these receipts in memory for one hour, and a Host
+restart forgets them.
 
 ## MCP access
 
@@ -177,8 +179,8 @@ reconnecting. Every other Host command is refused to MCP clients whatever the se
 - It reaches the Host only from the same OS account, and the Host proves itself with its key before
   the server sends anything.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
-  results, questions, answers, review issues and suggested fixes, failure summaries, error messages) is redacted of
-  anything that looks like a secret; ids, paths and timestamps are left as they are.
+  results, questions, answers, review issues and suggested fixes, failure summaries, error messages)
+  is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
 - Raw check output is not returned. `list_tasks` and `get_task` carry each check's status and exit
   code without its log, and so does `get_completion`. The one exception is `get_completion`'s
   `failureSummary`: it carries each failed check's last output line, cut to 200 characters and
@@ -223,8 +225,8 @@ Use the `cmd /c astera mcp serve` form from [Connect a client](#connect-a-client
 
 1. `list_projects` to find the project id.
 2. `list_accounts` to pick a coordinator account, or skip it to use the default `claude` account.
-3. `create_job` with the `projectId`, an `objective` and, if you picked one, the `coordinatorAccountId`. It returns the Job
-   without starting it.
+3. `create_job` with the `projectId`, an `objective` and, if you picked one, the
+   `coordinatorAccountId`. It returns the Job without starting it.
 4. `run_job` with the Job id. It returns a Run id at once.
 5. Poll `get_run` for the Run's state and `get_completion` for where each Task stands in its checks.
 6. If a Run is blocked, `list_questions` shows the open questions, and `answer_question` answers one.

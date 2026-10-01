@@ -720,7 +720,8 @@ folder as given, and a Job made from a subfolder then lists only what that subfo
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
 else about them, except `default: true` on each provider's default account: the earliest registered
-one that is logged in, the one `jobs create --coordinator-provider` picks. `--agent claude` or `--agent codex` narrows it to one vendor.
+one that is logged in, the one `jobs create --coordinator-provider` picks. `--agent claude` or
+`--agent codex` narrows it to one vendor.
 
 **`skills` manages the agent skills Astera installs into each account**: the files that tell an agent
 session about `astera`, and about the features switched on in the app. There are five.
@@ -767,9 +768,9 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen
-tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access in Settings
-(CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`, `resume_run`,
-`answer_question`) take an optional `requestId`. See [MCP](mcp.md).
+tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access
+in Settings (CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`,
+`resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
