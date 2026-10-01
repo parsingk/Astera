@@ -1892,6 +1892,11 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
+      // **A finished Run is left as it is** (e2e 2026-10-01): pausing it turned a converged Run's outcome
+      // into `paused`. Its coordinator, kept on purpose for a manual Run, is `run-coordinator-stop`'s.
+      const outcome = outcomeOf(s, id)
+      if (outcome !== 'running')
+        return conflict(`run ${id} is not running: it has ${outcome}; \`run-coordinator-stop --run ${id}\` stops its coordinator`)
       const mine = new Set(s.tasks.filter((t) => t.runId === id).map((t) => t.id))
       const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt && mine.has(d.taskId))
       const retained = open.filter((d) => d.retained)
