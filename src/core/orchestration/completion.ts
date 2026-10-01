@@ -8,7 +8,7 @@
 // `task-list` 를 렌더러가 부르는 대신 전용 투영을 두는 이유(W2): 그 명령은 Run 의 모든 Task 를
 // spec 본문째 넘긴다. 한 Task 의 꼬리를 보려고 그것을 전부 건너보내는 것은 U4 가 막으려던 무게
 // 그대로이고, 남의 Task 내용까지 화면에 들어온다.
-import type { ReviewIssue, Task } from './types'
+import type { CheckResult, ReviewIssue, Task } from './types'
 
 /** 검사 하나 — 칩이 말하지 않는 것(왜 실패했는지)까지. */
 export interface CompletionCheckDetail {
@@ -79,4 +79,27 @@ export function completionDetailOf(task: Task): CompletionDetail | null {
 export function completionForTaskOf(tasks: readonly Task[], runId: string, taskId: string): CompletionDetail | null {
   const task = tasks.find((t) => t.id === taskId && t.runId === runId)
   return task ? completionDetailOf(task) : null
+}
+
+/** The last line of a check's output with anything on it, cut to a length a summary can carry. */
+const lastLine = (tail: string | undefined): string | null => {
+  const line = (tail ?? '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l !== '')
+    .at(-1)
+  return line === undefined ? null : line.slice(0, 200)
+}
+
+export const checkFailed = (c: CheckResult): boolean => c.status === 'failed' || c.status === 'timed-out'
+
+/** Each failed check of one round as `name failed (exit N): last line`, joined; null when none failed.
+ *  The shape of `failureSummary`, and what `Task.lastFailure` keeps when the round is overwritten. */
+export function failedChecksSummary(checks: CheckResult[]): string | null {
+  const parts = checks.filter(checkFailed).map((c) => {
+    const exit = c.exitCode === undefined ? '' : ` (exit ${c.exitCode})`
+    const line = lastLine(c.outputTail)
+    return `${c.name} ${c.status === 'timed-out' ? 'timed out' : 'failed'}${exit}${line === null ? '' : `: ${line}`}`
+  })
+  return parts.length === 0 ? null : parts.join('; ')
 }

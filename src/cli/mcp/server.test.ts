@@ -487,6 +487,24 @@ describe('the MCP server', () => {
     expect(textOf(r)).not.toContain(token)
   })
 
+  it('get_completion redacts a secret in lastFailure', async () => {
+    const token = 'sk-abcdefghijklmnopqrstuvwxyz0123456789'
+    const body = {
+      runId: 'run_1',
+      jobId: 'job_1',
+      state: 'converged',
+      tasks: [{ taskId: 't1', title: 'x', state: 'converged', attempt: 1, maxAttempts: 3, detail: null, failureSummary: null, lastFailure: `build failed (exit 2): key ${token}` }]
+    }
+    const r = await (await connected(answering({ 'runs-completion': { status: 200, body } }).link)).callTool({
+      name: 'get_completion',
+      arguments: { runId: 'run_1' }
+    })
+    const last = String((r.structuredContent as { tasks: Array<{ lastFailure: string }> }).tasks[0].lastFailure)
+    expect(last).not.toContain(token)
+    expect(last).toContain('build failed (exit 2): key ')
+    expect(textOf(r)).not.toContain(token)
+  })
+
   it('every list tool takes a limit of 1 to 200', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()

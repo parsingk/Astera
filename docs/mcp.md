@@ -168,7 +168,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
 | `create_task` | Add a Task to a Job's plan (`jobId`: every Run started from then on copies it) or to one Run (`runId`); give exactly one. `spec` is the work in full (up to 50 000 characters), `title` a short name (up to 200), `deps` the Task ids it waits for, `validate` run configuration ids from `list_run_configs` that must pass, `review: true` asks for a review. Without `accountId` the Task runs on the Job's coordinator account. |
 | `list_run_configs` | The run configurations of a Job's project folder (`id`, `name`, `type`): the checks a Task can name in `create_task`'s `validate`. |
-| `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and a `failureSummary` naming each failed check, its exit code and its last output line. Astera runs the checks and repairs; this only reads them. |
+| `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and, per Task, a `failureSummary` (what fails in the current round: each failed check, its exit code and its last output line) and a `lastFailure` (the same for the last round that failed, kept while it is rechecked and after it converged, so it says why a repair ran). Astera runs the checks and repairs; this only reads them. |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
 `coordinatorAccountId` from `list_accounts`, or, without one, the default account of
@@ -264,8 +264,10 @@ a field with nothing left.
   is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
 - Raw check output is not returned. `list_tasks` and `get_task` carry each check's status and exit
   code without its log, and so does `get_completion`. The one exception is `get_completion`'s
-  `failureSummary`: it carries each failed check's last output line, cut to 200 characters and
-  redacted like the rest of the free text. It is the same line `astera runs checks` prints.
+  `failureSummary` and `lastFailure`: they carry each failed check's last output line, cut to 200
+  characters and redacted like the rest of the free text. `failureSummary` is the same line
+  `astera runs checks` prints, for the current round only; `lastFailure` is that line for the last round
+  that failed, and stays after the recheck passes.
 
 ## Troubleshooting
 

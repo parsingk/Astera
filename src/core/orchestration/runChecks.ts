@@ -9,6 +9,7 @@
 // test reaches them here without a Host or a socket.
 import { checkConfigIdsOf, policyOf } from './convergence'
 import type { OrchState } from './state'
+import { checkFailed, failedChecksSummary } from './completion'
 import type { CheckResult, ReviewIssue, Task, TaskStatus } from './types'
 
 /**
@@ -57,22 +58,11 @@ export interface RunChecks {
   tasks: TaskChecks[]
 }
 
-/** The last line of a check's output with anything on it, cut to a length a summary can carry. */
-const lastLine = (tail: string | undefined): string | null => {
-  const line = (tail ?? '')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l !== '')
-    .at(-1)
-  return line === undefined ? null : line.slice(0, 200)
-}
-
 const firstLine = (text: string | undefined): string | null => {
   const line = (text ?? '').split(/\r?\n/)[0].trim()
   return line === '' ? null : line.slice(0, 200)
 }
 
-const checkFailed = (c: CheckResult): boolean => c.status === 'failed' || c.status === 'timed-out'
 
 function validationOf(task: Task): TaskValidation {
   const checks = task.checks ?? []
@@ -122,12 +112,10 @@ function reviewOf(s: OrchState, task: Task): TaskReview {
 
 function summaryOf(task: Task, validation: TaskValidation, review: TaskReview): string | null {
   const parts: string[] = []
-  if (validation.status === 'failed')
-    for (const c of validation.checks.filter(checkFailed)) {
-      const exit = c.exitCode === undefined ? '' : ` (exit ${c.exitCode})`
-      const line = lastLine(c.outputTail)
-      parts.push(`${c.name} ${c.status === 'timed-out' ? 'timed out' : 'failed'}${exit}${line === null ? '' : `: ${line}`}`)
-    }
+  if (validation.status === 'failed') {
+    const checks = failedChecksSummary(validation.checks)
+    if (checks !== null) parts.push(checks)
+  }
   if (review.status === 'failed') {
     const blocking = review.issues.filter((i) => i.blocking)
     if (blocking.length > 0)

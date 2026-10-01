@@ -37,6 +37,7 @@ import {
   type ResolvedPolicy
 } from './convergence'
 import { normalizeIssues, type ReviewIssueInput } from './review'
+import { failedChecksSummary } from './completion'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -784,7 +785,13 @@ export function applyValidationResult(
       r.status === 'passed' ? rest : { ...rest, ...(outputTail !== undefined ? { outputTail } : {}) }
     return unstable.has(r.configId) ? { ...kept, unstable: true } : kept
   })
-  const recorded: Task = { ...task, checks, checkHistory: history }
+  const failedRound = failedChecksSummary(a.results)
+  const recorded: Task = {
+    ...task,
+    checks,
+    checkHistory: history,
+    ...(failedRound !== null ? { lastFailure: failedRound } : {})
+  }
 
   if (policy === null) {
     // ---- 지금까지의 경로. 문구까지 그대로다 ---- 달라진 것은 task 가 아니라 recorded 를 옮긴다는 것 하나다.

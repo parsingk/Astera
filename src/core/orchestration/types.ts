@@ -308,6 +308,9 @@ export interface Task {
   checks?: CheckResult[]
   /** configId → 라운드별 판정. unstable 판정의 근거(convergence.ts 의 unstableChecks) */
   checkHistory?: Record<string, ('passed' | 'failed')[]>
+  /** The failed checks of the last round that failed, as `failureSummary` words them. `checks` is
+   *  overwritten each round, so this is what still says why a repair ran after the recheck passed. */
+  lastFailure?: string
   /** 마지막 검토의 이슈 전부, blocking 여부 포함 */
   reviewIssues?: ReviewIssue[]
   /** 이 Task 가 처음 validating 이 될 때 찍은 완료 정책의 지문(설계 G3, 명세 §37).

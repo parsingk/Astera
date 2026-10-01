@@ -167,4 +167,16 @@ describe('completionForRun', () => {
     expect(failed.failureSummary).toBe('build failed (exit 2): error TS2322: nope')
     expect(fresh.failureSummary).toBeNull()
   })
+
+  it('lastFailure is the last failed round, kept after the checks pass; failureSummary is the current round only', () => {
+    const passed: CheckResult[] = [{ configId: 'cfg_build', name: 'build', status: 'passed', exitCode: 0 }]
+    const s = stateWith([
+      task('t1', 'completed', { validateConfigIds: ['cfg_build'], checks: passed, lastFailure: 'build failed (exit 2): error TS2322: nope' }),
+      task('t2', 'completed', { validateConfigIds: ['cfg_build'], checks: passed })
+    ])
+    const [fixed, clean] = completionForRun(s, 'r1')!.tasks
+    expect(fixed.failureSummary).toBeNull()
+    expect(fixed.lastFailure).toBe('build failed (exit 2): error TS2322: nope')
+    expect(clean.lastFailure).toBeNull()
+  })
 })
