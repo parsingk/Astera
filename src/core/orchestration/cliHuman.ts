@@ -25,6 +25,8 @@ export function stateWord(o: {
   if (o.outcome === 'completed') return 'COMPLETE'
   if (o.outcome === 'failed') return 'FAILED'
   if (o.outcome === 'running') return 'RUNNING'
+  // A Job with no Run (command.ts jobView)
+  if (o.outcome === 'pending') return 'PENDING'
   return '-'
 }
 

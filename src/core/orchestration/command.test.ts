@@ -23,6 +23,7 @@ import {
 import { TaskValidator } from './exec/validator'
 import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
 import { parseArgs } from './cliArgs'
+import { stateWord } from './cliHuman'
 import { runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
@@ -3542,6 +3543,28 @@ describe('run-start — 코디네이터 인계', () => {
     expect(job.pendingStart).toBe(true)
     // 회차도 만들어지지 않았다 — 실패는 아무것도 바꾸지 않는다
     expect(deps.getState().runs).toEqual([])
+  })
+
+  // The e2e check of 2026-10-01: after a refused run_job the Job read `outcome: "running"` with no Run
+  it('a Job whose jobs run failed reads pending, not running, in jobs get and jobs list', async () => {
+    const deps = coordDeps({
+      makeRunWorktree: async () => {
+        throw new Error('GIT_ADD_FAILED: Filename too long')
+      }
+    })
+    const created = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorAccount: 'cl1' })
+    const jobId = (created.body as { id: string }).id
+    expect(created.body).toMatchObject({ pendingStart: true, outcome: 'pending' })
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(400)
+    expect(deps.getState().runs).toEqual([])
+
+    const got = (await call(deps, 'jobs-get', { id: jobId })).body as Record<string, unknown>
+    expect(got).toMatchObject({ pendingStart: true, outcome: 'pending' })
+    expect(stateWord(got)).toBe('PENDING')
+    const listed = (await call(deps, 'jobs-list')).body as Record<string, unknown>[]
+    expect(listed.map((j) => j.outcome)).toEqual(['pending'])
+    expect(((await call(deps, 'jobs-list', { status: 'pending' })).body as unknown[]).length).toBe(1)
+    expect(((await call(deps, 'jobs-list', { status: 'running' })).body as unknown[]).length).toBe(0)
   })
 
   // Host S3 risk 6 — 워크트리는 만들었는데 코디네이터가 못 뜨면, 상태는 위 테스트처럼 하나도 안

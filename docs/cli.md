@@ -594,7 +594,8 @@ list. Filters on one command combine.
   yet), `paused`, `scheduled`, `waiting` (a question is open), `running`, `completed` or `failed`. It
   is the word the first column of `--human` shows, in lower case (`COMPLETE` is `completed`), so a
   script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
-  `outcome`, in that order. `paused` is the Job's own pause, which is what the table shows; a run
+  `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
+  failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, which is what the table shows; a run
   stopped with `runs stop` is paused on the run, and `runs get` shows it.
 - **`jobs list --project <path>`** keeps the Jobs of the project a folder belongs to, found the way
   `projects find` finds it (below). A folder no project holds is a 4 with `astera projects list` as its

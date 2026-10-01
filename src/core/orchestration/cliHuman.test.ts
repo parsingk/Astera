@@ -20,6 +20,8 @@ describe('stateWord', () => {
 
   it('나머지는 Task 에서 나온 결과다', () => {
     expect(stateWord({ outcome: 'running' })).toBe('RUNNING')
+    // A Job with no Run (jobs get, jobs list): not started, whether or not pendingStart is still set
+    expect(stateWord({ outcome: 'pending' })).toBe('PENDING')
     expect(stateWord({ outcome: 'completed' })).toBe('COMPLETE')
     expect(stateWord({ outcome: 'failed' })).toBe('FAILED')
     expect(stateWord({})).toBe('-')

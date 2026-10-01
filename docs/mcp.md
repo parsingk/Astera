@@ -174,7 +174,8 @@ If the client cannot find `astera`, give `command` the full path of the installe
 account of that provider that is logged in, the one `list_accounts` marks `default: true`. With no
 account of that provider logged in, `create_job` is refused with `INVALID_ARGUMENTS`. When both are
 given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart: true` in `get_job`
-and `list_jobs` until `run_job` starts it. No tool waits: an agent polls `get_run`, `get_completion`
+and `list_jobs` until `run_job` starts it, and a Job with no Run has `outcome: "pending"`, also after
+a `run_job` that failed. No tool waits: an agent polls `get_run`, `get_completion`
 and `list_questions`. `run_job` makes the Run's worktree and starts its coordinator before it
 answers, so on a large repository it can take up to a minute.
 

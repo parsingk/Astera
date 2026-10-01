@@ -753,7 +753,13 @@ const startable = (tasks: readonly Task[], coordinated: boolean): Set<string> =>
 /** 회차가 없으면 계획의 정의 Task 를 센다 — tasksOwnedBy 가 두 id 를 다 받는다(view.ts). */
 const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string, unknown> => ({
   ...job,
-  ...derivedFor(s, run?.id ?? job.id, run ? [run.id] : [])
+  ...derivedFor(s, run?.id ?? job.id, run ? [run.id] : []),
+  // A Job with no Run has started nothing. outcomeOf reads a Task-less owner as running (right for a
+  // Run just made), so without this a Job whose `jobs run` failed read `running` beside
+  // `pendingStart: true` (the e2e check of 2026-10-01). `pending` is JOB_STATES' word for it, and
+  // stateWord reads it as PENDING. The app's sidebar keeps its own row (view.ts) with its
+  // not-started chip, and a scheduled Job still reads SCHEDULED, since stateWord asks that first.
+  ...(run === undefined ? { outcome: 'pending' } : {})
 })
 
 /**
