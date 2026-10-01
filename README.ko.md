@@ -372,9 +372,9 @@ npm run dist:linux # Linux AppImage + deb
 - 동작을 바꾸는 변경에는 테스트도 함께 포함해야 합니다. 롤링 테스트를 수정할 때 알아 둘 규칙이
   하나 있습니다. 사용량 한도 문구는 Astera가 세션 출력에서 감시하므로 의도적으로 `+`로 나눠 두었습니다
   — [CONTRIBUTING](.github/CONTRIBUTING.md)을 보세요.
-- 버그 신고에는 앱 버전, OS 버전, 그리고 계정 롤링과 관련된 문제라면 `rolling.log`의 해당 부분을
-  함께 적어 주시면 훨씬 다루기 쉽습니다 — Windows는 `%APPDATA%\astera\rolling.log`, macOS는
-  `~/Library/Application Support/astera/rolling.log` 입니다.
+- 처음이신가요? [CONTRIBUTING](.github/CONTRIBUTING.md)은 개발 환경 준비, 무엇이 어디에 있는지,
+  무엇부터 맡으면 좋은지로 시작합니다. 버그는 [Issues](https://github.com/parsingk/Astera/issues/new/choose)의
+  양식으로 신고해 주시고, 보안 문제는 [SECURITY.md](.github/SECURITY.md)의 안내대로 비공개로 알려 주세요.
 
 ## 감사
 
