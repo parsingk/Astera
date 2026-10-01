@@ -32,8 +32,24 @@ const FREE_TEXT = new Set([
   'summary',
   'answer',
   'failureSummary',
-  'title'
+  'title',
+  'description',
+  'suggestedFix',
+  'retryOnceFailed'
 ])
+
+/** Every object in a `checks` array, at any depth, without its `outputTail`: raw validator output
+ *  (up to 4000 characters of a log) does not leave through MCP. Status and exit code stay. */
+const dropCheckOutput = (v: unknown, inChecks = false): unknown =>
+  Array.isArray(v)
+    ? v.map((x) => dropCheckOutput(x, inChecks))
+    : v !== null && typeof v === 'object'
+      ? Object.fromEntries(
+          Object.entries(v)
+            .filter(([k]) => !(inChecks && k === 'outputTail'))
+            .map(([k, x]) => [k, dropCheckOutput(x, k === 'checks')])
+        )
+      : v
 
 /** Every string under a free-text key, however deep (an array or an object under such a key included). */
 const redactAll = (v: unknown): unknown =>
@@ -90,7 +106,7 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   if ('code' in r) return errorResult(r.code, r.message, t.cmd)
   if (r.status < 200 || r.status >= 300)
     return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd, r.body)
-  const shaped = redact(publicFor(t.cmd, r.body))
+  const shaped = redact(dropCheckOutput(publicFor(t.cmd, r.body)))
   const count = Array.isArray(shaped) ? ` (${shaped.length})` : ''
   // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
   const data = dataFor(t.cmd, shaped)

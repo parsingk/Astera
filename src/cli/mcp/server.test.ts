@@ -158,7 +158,8 @@ describe('the MCP server', () => {
       ['list_runs', { jobId: 'job_1' }, 'runs-list', { job: 'job_1' }],
       ['get_run', { runId: 'run_1' }, 'runs-get', { id: 'run_1' }],
       ['stop_run', { runId: 'run_1' }, 'runs-stop', { id: 'run_1' }],
-      ['list_tasks', { runId: 'run_1' }, 'tasks-list', { run: 'run_1' }],
+      // `brief`: the Host bounds each spec to 160 characters (command.ts tasks-list).
+      ['list_tasks', { runId: 'run_1' }, 'tasks-list', { run: 'run_1', brief: true }],
       ['get_task', { taskId: 'task_1' }, 'tasks-get', { id: 'task_1' }],
       ['list_questions', {}, 'questions-list', {}],
       ['list_questions', { runId: 'run_1', status: 'open' }, 'questions-list', { run: 'run_1', status: 'open' }],
@@ -269,6 +270,43 @@ describe('the MCP server', () => {
     const q = (r.structuredContent as { questions: Array<Record<string, unknown>> }).questions[0]
     expect('internal' in q).toBe(false)
     expect(String(q.question)).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
+  })
+
+  it('returns no raw check output from list_tasks or get_task, at any depth', async () => {
+    const check = { configId: 'c1', name: 'test', status: 'failed', exitCode: 1, outputTail: 'raw validator log' }
+    const task = { id: 't1', runId: 'run_1', title: 'x', status: 'failed', checks: [check] }
+    const client = await connected(
+      answering({
+        'tasks-list': { status: 200, body: [task] },
+        'tasks-get': { status: 200, body: { ...task, attempts: [{ id: 'd1', nested: { checks: [check] } }] } }
+      }).link
+    )
+    const listed = await client.callTool({ name: 'list_tasks', arguments: { runId: 'run_1' } })
+    const got = await client.callTool({ name: 'get_task', arguments: { taskId: 't1' } })
+    for (const r of [listed, got]) {
+      expect(JSON.stringify(r.structuredContent)).not.toContain('outputTail')
+      expect(textOf(r)).not.toContain('raw validator log')
+    }
+    const t = (listed.structuredContent as { tasks: Array<{ checks: Array<Record<string, unknown>> }> }).tasks[0]
+    expect(t.checks[0]).toMatchObject({ configId: 'c1', status: 'failed', exitCode: 1 })
+  })
+
+  it('redacts review issue descriptions, suggested fixes and retryOnceFailed', async () => {
+    const token = 'sk-abcdefghijklmnopqrstuvwxyz0123456789'
+    const client = await connected(
+      answering({
+        'tasks-get': {
+          status: 200,
+          body: {
+            id: 't1',
+            reviewIssues: [{ id: 'i1', title: 't', description: `leaks ${token}`, suggestedFix: `drop ${token}` }],
+            retryOnceFailed: `failed with ${token}`
+          }
+        }
+      }).link
+    )
+    const r = await client.callTool({ name: 'get_task', arguments: { taskId: 't1' } })
+    expect(JSON.stringify(r.structuredContent)).not.toContain(token)
   })
 
   it('stop_run sends runs-stop', async () => {
