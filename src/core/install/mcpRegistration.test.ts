@@ -4,24 +4,26 @@ import { shuttleNames } from '../orchestration/exec/shuttle'
 
 const WIN_SPACE = 'C:\\Users\\Jane Doe\\AppData\\Local\\astera\\bin\\astera.cmd'
 const WIN_HANGUL = 'C:\\Users\\홍 길동\\AppData\\Local\\astera\\bin\\astera.cmd'
+const WIN_SPECIAL = 'C:\\Users\\a&b (c)\\AppData\\Local\\astera\\bin\\astera.cmd'
 
 describe('mcpRegistrationLines', () => {
   // On Windows the shim is astera.cmd, which a client that spawns without a shell cannot run, so each
-  // line launches it through `cmd /c` with the full path as its own argument (measured: docs/mcp.md).
-  it.each([WIN_SPACE, WIN_HANGUL])('win32 launches the full path through cmd /c: %s', (shimPath) => {
+  // line launches it through `cmd /c call` with the full path as its own argument (measured:
+  // mcpRegistration.ts). `call` keeps the quotes when the folder name has `&` or parentheses.
+  it.each([WIN_SPACE, WIN_HANGUL, WIN_SPECIAL])('win32 launches the full path through cmd /c call: %s', (shimPath) => {
     expect(mcpRegistrationLines({ platform: 'win32', shimPath })).toEqual([
-      { client: 'Claude Code', line: `claude mcp add astera -- cmd /c "${shimPath}" mcp serve` },
-      { client: 'Codex', line: `codex mcp add astera -- cmd /c "${shimPath}" mcp serve` },
+      { client: 'Claude Code', line: `claude mcp add astera -- cmd /c call "${shimPath}" mcp serve` },
+      { client: 'Codex', line: `codex mcp add astera -- cmd /c call "${shimPath}" mcp serve` },
       {
         client: 'Cursor',
-        line: JSON.stringify({ mcpServers: { astera: { command: 'cmd', args: ['/c', shimPath, 'mcp', 'serve'] } } })
+        line: JSON.stringify({ mcpServers: { astera: { command: 'cmd', args: ['/c', 'call', shimPath, 'mcp', 'serve'] } } })
       }
     ])
   })
 
   it('win32 Cursor JSON carries the path exactly once parsed', () => {
     const cursor = mcpRegistrationLines({ platform: 'win32', shimPath: WIN_HANGUL }).find((l) => l.client === 'Cursor')!
-    expect(JSON.parse(cursor.line).mcpServers.astera.args[1]).toBe(WIN_HANGUL)
+    expect(JSON.parse(cursor.line).mcpServers.astera.args[2]).toBe(WIN_HANGUL)
   })
 
   it.each(['darwin', 'linux'])('%s launches the full path, single-quoted for the shell', (platform) => {

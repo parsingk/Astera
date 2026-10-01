@@ -6,15 +6,22 @@
 // already running cannot find `astera`; on macOS and Linux `~/.local/bin` is often not on the PATH a
 // GUI app starts with.
 //
-// **On Windows each launches through `cmd /c`, with the path as its own argument.** There the command
-// is astera.cmd, and a client that starts its server without a shell cannot run a .cmd (docs/mcp.md:
-// EINVAL by full path from Node). Measured 2026-10-01 on Windows 11, spawning from Node 24 and from
-// Rust's std::process::Command (Codex is Rust) with a shim in a folder named with a space and with
-// Hangul: `cmd /c <path> mcp serve` listed all 16 tools from both. `cmd /s /c "\"<path>\" mcp serve"`
-// failed from both (each spawner escapes the inner quotes as \", which cmd does not read). The quoted
-// `claude`/`codex` lines below gave the client exactly that argv when typed into cmd, PowerShell 7 and
-// Windows PowerShell 5.1. What it does not cover: a user folder with `&`, `(` or `)` in its name,
-// where cmd strips the quotes (docs/mcp.md says what to use there).
+// **On Windows each launches through `cmd /c call`, with the path as its own argument.** There the
+// command is astera.cmd, and a client that starts its server without a shell cannot run a .cmd
+// (docs/mcp.md: EINVAL by full path from Node). Measured 2026-10-01 on Windows 11, spawning from
+// Node 24 and from Rust's std::process::Command (Codex is Rust) with a shim in folders named with a
+// space, with Hangul, and `a&b (c)`: `cmd /c call <path> mcp serve` listed all 16 tools from both in
+// all three, with the exit code and stdio passed through. Without `call`, `cmd /c <path> mcp serve`
+// worked for the first two but not for `a&b (c)`: with `&` or parentheses between the quotes cmd
+// strips them. `call` puts a word before the quote, so cmd keeps them. `cmd /s /c "\"<path>\" mcp
+// serve"` failed everywhere (each spawner escapes the inner quotes as \", which cmd does not read).
+// The quoted `claude`/`codex` lines below gave the client exactly that argv when typed into cmd,
+// PowerShell 7 and Windows PowerShell 5.1.
+//
+// **Not handled: a folder name with `$`, a backtick, `^` or `%`.** PowerShell expands `$` and the
+// backtick inside double quotes, and cmd (and `call`) reads `^` and `%` in the path. A person whose
+// install folder has one of these registers the server by hand (`$`, backtick: a JSON or TOML entry
+// no shell reads) or moves the CLI folder (`^`, `%`: any form through cmd), as docs/mcp.md says.
 
 export interface McpRegistrationLine {
   client: 'Claude Code' | 'Codex' | 'Cursor'
@@ -36,10 +43,11 @@ export function shimPathFor(a: { platform: string; dir: string }): string {
 
 export function mcpRegistrationLines(a: { platform: string; shimPath: string }): McpRegistrationLine[] {
   const win = a.platform === 'win32'
-  // Double quotes on Windows read the same in cmd and in PowerShell for a path with spaces or Hangul.
-  const launch = win ? `cmd /c "${a.shimPath}" mcp serve` : `${shQuote(a.shimPath)} mcp serve`
+  // Double quotes on Windows read the same in cmd and in PowerShell for a path with spaces, Hangul,
+  // `&` or parentheses.
+  const launch = win ? `cmd /c call "${a.shimPath}" mcp serve` : `${shQuote(a.shimPath)} mcp serve`
   const server = win
-    ? { command: 'cmd', args: ['/c', a.shimPath, 'mcp', 'serve'] }
+    ? { command: 'cmd', args: ['/c', 'call', a.shimPath, 'mcp', 'serve'] }
     : { command: a.shimPath, args: ['mcp', 'serve'] }
   return [
     { client: 'Claude Code', line: `claude mcp add astera -- ${launch}` },

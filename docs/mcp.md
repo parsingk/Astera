@@ -28,7 +28,7 @@ after that, so a client that was already running cannot find `astera`. On macOS 
 looks like this:
 
 ```bash
-claude mcp add astera -- cmd /c "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
+claude mcp add astera -- cmd /c call "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
 ```
 
 and on macOS or Linux like this:
@@ -37,13 +37,19 @@ and on macOS or Linux like this:
 claude mcp add astera -- '/Users/you/.local/bin/astera' mcp serve
 ```
 
-The quoting was checked on Windows 11 with the folder named with a space and with Hangul: the line
-gave the client the same arguments when pasted into cmd, PowerShell 7 and Windows PowerShell 5.1, and
-`cmd` started with those arguments from Node and from Rust's standard library (Codex is written in
-Rust) listed every tool. One case it does not cover: when the name of your user
-folder has `&`, `(` or `)`, cmd drops the quotes and the path breaks. Put `call` before the path
-there: `cmd /c call "<path>" mcp serve`, or `"args": ["/c", "call", "<path>", "mcp", "serve"]`, which
-started the server in the same checks.
+The Cursor line carries the same as `"command": "cmd"` with
+`"args": ["/c", "call", "<path>", "mcp", "serve"]`. The `call` is there for a folder name with `&`,
+`(` or `)`: without it cmd drops the quotes around such a path and the path breaks. The quoting was
+checked on Windows 11 with folders named with a space, with Hangul and `a&b (c)`: the line gave the
+client the same arguments when pasted into cmd, PowerShell 7 and Windows PowerShell 5.1, and `cmd`
+started with those arguments from Node and from Rust's standard library (Codex is written in Rust)
+listed every tool.
+
+One case these lines do not handle: a folder name with `$`, a backtick, `^` or `%`. PowerShell
+expands `$` and the backtick inside double quotes, and cmd reads `^` and `%` in the path. For `$` or
+a backtick, register the server by hand: write the JSON or TOML entry yourself, with the path as one
+of the `args`, so no PowerShell reads it. For `^` or `%`, cmd reads them in any form that goes
+through it, so move the CLI folder to a path without them.
 
 The forms below use the short `astera mcp serve`, for a client that has the install folder on its
 `PATH`.
@@ -174,8 +180,8 @@ answers, so on a large repository it can take up to a minute.
 
 **A worker waiting for approval.** When a worker runs without skipping permission checks (Settings,
 Agent tab), its agent can stop at a permission prompt and wait for a person. `get_task` then marks
-that attempt `waitingForApproval: true`, and `get_run` carries `waitingForApproval` with the number of
-its Tasks in that state; with none, the field is left out. Nothing over MCP answers the prompt: a
+that attempt `waitingForApproval: true`, and `get_run` carries `waitingForApproval` with the number
+of its Tasks in that state; with none, the field is left out. Nothing over MCP answers the prompt: a
 person answers it in Astera, in the worker's terminal. The Task's state in `get_completion` does not
 change. It is read from the hook events Claude Code writes, the same ones `astera sessions list`
 reads: Claude Code reports the prompt a few seconds after it goes up, and once anyone types into

@@ -79,7 +79,7 @@ describe('McpSettings registration lines', () => {
   it('once installed, gives the lines with the installed command by its full path', () => {
     const lines = registrationFor(status(true), 'win32')
     expect(Array.isArray(lines) && lines[0].line).toBe(
-      'claude mcp add astera -- cmd /c "C:\\Users\\me\\AppData\\Local\\astera\\bin\\astera.cmd" mcp serve'
+      'claude mcp add astera -- cmd /c call "C:\\Users\\me\\AppData\\Local\\astera\\bin\\astera.cmd" mcp serve'
     )
     const posix = registrationFor({ ...status(true), dir: '/home/me/.local/bin' }, 'linux')
     expect(Array.isArray(posix) && posix[0].line).toBe("claude mcp add astera -- '/home/me/.local/bin/astera' mcp serve")
