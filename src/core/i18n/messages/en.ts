@@ -42,6 +42,12 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.cli.onPath': 'This folder is on PATH.',
   'settings.cli.copy': 'Copy',
   'settings.cli.cmdRawPath': 'Astera is installed in a folder whose name is not ASCII, and astera from cmd or PowerShell may not run: {detail}. It still runs from Git Bash. Reinstalling Astera into a folder with an ASCII name fixes it.',
+  'settings.mcp.label': 'MCP access',
+  'settings.mcp.off': 'Off',
+  'settings.mcp.read': 'Read only',
+  'settings.mcp.control': 'Read and control',
+  'settings.mcp.hint': 'What an MCP client connected through astera mcp serve may do. Read only lets it look at Jobs and Runs; read and control also lets it create, run and stop Jobs and answer questions.',
+  'settings.mcp.saveFailed': 'Could not save MCP access: {detail}',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':

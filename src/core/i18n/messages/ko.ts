@@ -46,6 +46,12 @@ export const ko = {
   'settings.cli.onPath': '이 폴더가 PATH 에 있습니다.',
   'settings.cli.copy': '복사',
   'settings.cli.cmdRawPath': 'Astera 가 ASCII 가 아닌 이름의 폴더에 설치되어 있어 cmd 나 PowerShell 의 astera 가 돌지 않을 수 있습니다: {detail}. Git Bash 에서는 돕니다. ASCII 이름의 폴더에 다시 설치하면 고쳐집니다.',
+  'settings.mcp.label': 'MCP 접근',
+  'settings.mcp.off': '꺼짐',
+  'settings.mcp.read': '읽기 전용',
+  'settings.mcp.control': '읽기와 제어',
+  'settings.mcp.hint': 'astera mcp serve 로 연결한 MCP 클라이언트가 할 수 있는 일입니다. 읽기 전용이면 Job 과 Run 을 보기만 하고, 읽기와 제어면 Job 을 만들고 실행하고 멈추고 질문에 답할 수 있습니다.',
+  'settings.mcp.saveFailed': 'MCP 접근 설정을 저장하지 못했습니다: {detail}',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
   'settings.agentPermission.hint':

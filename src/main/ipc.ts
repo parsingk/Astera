@@ -5578,6 +5578,14 @@ export function registerIpc(
     await core.appSettings.setAgentPermissionMode(mode)
   })
 
+  // MCP access (MCP design M5). The Host reads the file on every MCP call (readMcpAccess), so saving it
+  // is the whole effect.
+  ipcMain.handle('settings.getMcpAccess', () => core.appSettings.getMcpAccess())
+  ipcMain.handle('settings.setMcpAccess', async (_e, v: unknown) => {
+    if (v !== 'off' && v !== 'read' && v !== 'control') throw new Error(`INVALID_MCP_ACCESS: ${String(v)}`)
+    await core.appSettings.setMcpAccess(v)
+  })
+
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
   // settings.ts); this handler validates the value and starts the orchestration wiring the journal
   // hooks live in, the way the other toggles do, and opens or closes the recorder with the toggle.

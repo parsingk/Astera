@@ -15,6 +15,14 @@ export const ja: Catalog = {
   // {lang} is the language the OS locale resolves to
   'settings.general.language.system': 'システム設定 ({lang})',
   'settings.general.language.saveFailed': '言語設定を保存できませんでした: {detail}',
+  'settings.mcp.label': 'MCP アクセス',
+  'settings.mcp.off': 'オフ',
+  'settings.mcp.read': '読み取り専用',
+  'settings.mcp.control': '読み取りと操作',
+  'settings.mcp.hint':
+    'astera mcp serve で接続した MCP クライアントにできることです。読み取り専用では Job と Run を見るだけで、' +
+    '読み取りと操作では Job の作成、実行、停止と、質問への回答もできます。',
+  'settings.mcp.saveFailed': 'MCP アクセスの設定を保存できませんでした: {detail}',
   // エージェント権限モード
   'settings.agentPermission.label': '権限確認なしでエージェントを実行',
   'settings.agentPermission.hint':

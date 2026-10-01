@@ -39,6 +39,7 @@ import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
 import { GeneratorSettings } from './components/GeneratorSettings'
 import { CliSettings } from './components/CliSettings'
+import { McpSettings } from './components/McpSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
@@ -4610,6 +4611,7 @@ export default function App(): React.JSX.Element {
                   <div className="settings-stack">
                     {/* The astera command: installing it, and on Windows the user PATH (CliSettings). */}
                     <CliSettings />
+                    <McpSettings />
                   </div>
                 )}
                 {settingsTab === 'agent' && (

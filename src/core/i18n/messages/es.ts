@@ -15,6 +15,14 @@ export const es: Catalog = {
   // visible before picking it
   'settings.general.language.system': 'Configuración del sistema ({lang})',
   'settings.general.language.saveFailed': 'No se pudo guardar la configuración de idioma: {detail}',
+  'settings.mcp.label': 'Acceso MCP',
+  'settings.mcp.off': 'Desactivado',
+  'settings.mcp.read': 'Solo lectura',
+  'settings.mcp.control': 'Lectura y control',
+  'settings.mcp.hint':
+    'Lo que puede hacer un cliente MCP conectado mediante astera mcp serve. Con solo lectura puede ver Jobs y Runs; ' +
+    'con lectura y control también puede crear, ejecutar y detener Jobs y responder preguntas.',
+  'settings.mcp.saveFailed': 'No se pudo guardar el acceso MCP: {detail}',
   // Modo de permisos del agente
   'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
   'settings.agentPermission.hint':

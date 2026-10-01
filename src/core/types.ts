@@ -1244,6 +1244,9 @@ export interface CoreApi {
     // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
     getAgentPermissionMode(): Promise<AgentPermissionMode>
     setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    // What an MCP client may do through `astera mcp serve`. See McpAccess.
+    getMcpAccess(): Promise<McpAccess>
+    setMcpAccess(v: McpAccess): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
