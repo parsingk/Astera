@@ -49,7 +49,7 @@ describe('publicFor', () => {
     expect(out).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })
   })
 
-  // `runs resume` answers with the Run it took back (resumeRun), so it hides what `runs get` hides.
+  // `runs resume` answers with the Run it took back (runView), so it hides what `runs get` hides.
   it('runs resume hides the Run fields runs get hides', () => {
     const out = publicFor('runs-resume', { id: 'run_1', jobId: 'job_1', ordinal: 1, coordinatorStop: { at: 'T' } })
     expect(out).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })

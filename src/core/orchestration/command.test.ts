@@ -5575,6 +5575,18 @@ describe('runs stop', () => {
     expect((await call(deps, 'runs-resume')).status).toBe(400)
   })
 
+  // The same view `runs get` answers with, derived fields included, so a caller needs no second read.
+  it('runs resume answers with the Run as runs get shows it', async () => {
+    const { deps, runId } = await withWorker()
+    await call(deps, 'runs-stop', { id: runId })
+    const resumed = await call(deps, 'runs-resume', { id: runId })
+    expect(resumed.status).toBe(200)
+    const got = await call(deps, 'runs-get', { id: runId })
+    expect(resumed.body).toEqual(got.body)
+    expect(resumed.body).toHaveProperty('outcome')
+    expect((resumed.body as { paused?: boolean }).paused).toBeUndefined()
+  })
+
   it('열린 워커가 없어도 세운다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

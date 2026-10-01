@@ -1880,7 +1880,11 @@ export async function handleCommand(
     case 'runs-resume': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
-      return commit(resumeRun(s, id))
+      // Answered with the view `runs get` gives (derived fields included); refusals are commit's.
+      const resumed = resumeRun(s, id)
+      const reply = await commit(resumed)
+      if (!resumed.ok || reply.status !== 200) return reply
+      return okBody(runView(resumed.state, resumed.value))
     }
     case 'runs-get': {
       const id = str(args.id)
