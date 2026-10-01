@@ -1200,6 +1200,10 @@ export interface CoreApi {
     install(opts?: { addToPath?: boolean }): Promise<CliInstallStatus>
     /** 그 자리에서 앱이 쓴 셔틀 파일만 지우고 바뀐 상태를 돌려준다. 폴더와 이웃 파일은 남긴다. */
     uninstall(): Promise<CliInstallStatus>
+    /** win32, installed app: whether this start took the folder off the user Path because it was what
+     *  made that Path too long for new shells (main/userPath.ts takeOffUserPathIfItBreaks). Waits for
+     *  that check, so the answer holds however early it is asked. */
+    pathRepairedAtStart(): Promise<boolean>
   }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
@@ -1722,9 +1726,13 @@ export interface CliInstallStatus {
   /** win32: the Install and Uninstall buttons can put the folder on the user Path themselves, with the
    *  person's consent (the checkbox beside Install; main/userPath.ts). Absent elsewhere. */
   canEditUserPath?: true
+  /** win32: the user Path is too long for Windows to give it to new shells, so none of its entries,
+   *  this folder's included, reach them (core/orchestration/cliInstall.ts userPathFits). onPath is then
+   *  false whatever the registry holds. */
+  userPathTooLong?: true
   /** Install or Uninstall only: what they did to the user Path, and why not when they could not. A
-   *  change reaches shells opened after it, not one already open. */
-  userPath?: 'added' | 'present' | 'removed'
+   *  change reaches shells opened after it, not one already open. 'tooLong': nothing was written. */
+  userPath?: 'added' | 'present' | 'removed' | 'tooLong'
   userPathError?: string
   /** 설치 응답에만. `.cmd` 가 정션을 거쳐야 했는데 못 해서 진짜 경로를 적은 까닭들
    *  (core/orchestration/exec/shuttle.ts 의 ShuttleWarning). 있으면 cmd·PowerShell 의 astera 가

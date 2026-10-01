@@ -152,7 +152,8 @@ const api = {
   cli: {
     status: invoke('cli.status'),
     install: invoke('cli.install'),
-    uninstall: invoke('cli.uninstall')
+    uninstall: invoke('cli.uninstall'),
+    pathRepairedAtStart: invoke('cli.pathRepairedAtStart')
   },
   settings: {
     getLang: invoke('settings.getLang'),

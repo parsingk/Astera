@@ -406,10 +406,10 @@ Los issues y los pull requests son bienvenidos. Un par de cosas que conviene sab
   antes de tocar las pruebas de rotación: las frases de límite de uso están partidas con `+` a
   propósito, porque Astera vigila la salida de las sesiones buscándolas — consulta
   [CONTRIBUTING](.github/CONTRIBUTING.md).
-- Los informes de errores son mucho más fáciles de atender con la versión de la aplicación, la
-  versión de tu sistema operativo y las líneas relevantes de `rolling.log` cuando el problema
-  involucra la rotación de cuentas — `%APPDATA%\astera\rolling.log` en Windows,
-  `~/Library/Application Support/astera/rolling.log` en macOS.
+- ¿Nuevo aquí? [CONTRIBUTING](.github/CONTRIBUTING.md) empieza con la configuración inicial, dónde
+  se encuentra cada cosa y por dónde empezar. Informa de errores mediante el formulario en
+  [Issues](https://github.com/parsingk/Astera/issues/new/choose), y reporta problemas de seguridad de
+  forma privada según las indicaciones de [SECURITY.md](.github/SECURITY.md).
 
 ## Agradecimientos
 

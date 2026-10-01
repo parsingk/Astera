@@ -162,7 +162,7 @@ import {
   type AppImageLaunch
 } from '../core/orchestration/exec/shuttle'
 import { appImageLaunchFor, binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
-import { addToUserPath, removeFromUserPath, userPathHas } from './userPath'
+import { addToUserPath, removeFromUserPath, takeOffUserPathIfItBreaks, userPathStatus } from './userPath'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import {
@@ -5352,20 +5352,27 @@ export function registerIpc(
   const cliStatus = async (): Promise<CliInstallStatus> => {
     const dir = cliBinDir()
     let onPath = isOnPath({ dir, pathVar: process.env.PATH ?? '', platform: process.platform })
+    let userPathTooLong = false
     // win32: this app's own PATH was read once when it started, so a folder put on the user Path since
-    // (by Install, or by the person) is asked of the registry, which is what the next shell reads.
-    if (!onPath && process.platform === 'win32') {
-      onPath = await userPathHas({ dir, env: process.env }).catch((err: unknown) => {
+    // (by Install, or by the person) is asked of the registry, which is what the next shell reads. It is
+    // asked even when this app's PATH has the folder: a user Path too long for Windows reaches no new shell.
+    if (process.platform === 'win32') {
+      const user = await userPathStatus({ dir, env: process.env }).catch((err: unknown) => {
         orchLog(`the user Path could not be read: ${String(err)}`)
-        return false
+        return null
       })
+      if (user) {
+        userPathTooLong = !user.fits
+        onPath = (onPath || user.has) && user.fits
+      }
     }
     return {
       dir,
       installed: shuttleNames().every((n) => existsSync(path.join(dir, n))),
       onPath,
       hint: pathHintFor({ dir, platform: process.platform }),
-      ...(process.platform === 'win32' ? { canEditUserPath: true as const } : {})
+      ...(process.platform === 'win32' ? { canEditUserPath: true as const } : {}),
+      ...(userPathTooLong ? { userPathTooLong: true as const } : {})
     }
   }
 
@@ -5461,6 +5468,23 @@ export function registerIpc(
           orchLog(`public astera shuttle sync failed: ${err instanceof Error ? err.message : String(err)}`)
       )
   }
+  // win32: 1.4.1 put the folder on the user Path without checking its length, and a Path pushed past
+  // the limit is given to no new shell, every other tool on it gone too. With the command installed, the
+  // entry comes off again when it is what does that (takeOffUserPathIfItBreaks); the renderer says so once.
+  const pathRepair: Promise<boolean> =
+    app.isPackaged && process.platform === 'win32' && shuttleNames().every((n) => existsSync(path.join(cliBinDir(), n)))
+      ? takeOffUserPathIfItBreaks({ dir: cliBinDir(), env: process.env }).then(
+          (r) => {
+            if (r === 'removed') orchLog(`${cliBinDir()} was taken off the user Path: with it the Path was too long for new shells`)
+            return r === 'removed'
+          },
+          (err: unknown) => {
+            orchLog(`the user Path could not be checked at start: ${err instanceof Error ? err.message : String(err)}`)
+            return false
+          }
+        )
+      : Promise.resolve(false)
+  ipcMain.handle('cli.pathRepairedAtStart', () => pathRepair)
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
   // sent is validated before being written to disk. Registered unconditionally here (not inside
