@@ -25,7 +25,28 @@ describe('buildHandoverPrompt', () => {
   it('with Tasks, the opening line is true wherever the Tasks came from', () => {
     const p = prompt({ taskCount: 2 })
     expect(p).not.toContain('A person laid it out in the app')
-    expect(p).toContain('Its Tasks were laid out before this Run started')
+    expect(p).toContain('Its Tasks were laid out before you joined')
+  })
+
+  // Review fix round 1, Important 1: the coordinator's session runs in the project folder itself,
+  // with permissions bypassed, so nothing but the brief keeps it from doing the work itself.
+  it('in both branches, the coordinator plans and places and changes no files', () => {
+    for (const p of [prompt({ taskCount: 0 }), prompt({ taskCount: 3 })]) {
+      expect(p).toContain('You plan and place; you do not change files.')
+      expect(p).toContain("Your session runs in the project folder itself, not this Run's worktree.")
+      expect(p).toContain('every edit, build or commit is done by a worker, through a Task')
+      expect(p).not.toContain('Getting these Tasks done, and answering the workers you start, is your job.')
+      expect(p).toContain('Getting these Tasks done by workers')
+    }
+  })
+
+  // Review fix round 1, Minor 3: a predecessor stopped part-way through planning leaves Tasks that do
+  // not cover the objective; "Do not create Tasks" alone left the newcomer no way to say so.
+  it('with Tasks, the opening line holds for a coordinator joining late, and a plan that falls short goes to a Gate', () => {
+    const p = prompt({ taskCount: 2 })
+    expect(p).toContain('Its Tasks were laid out before you joined')
+    expect(p).toContain('do not cover the objective')
+    expect(p).toMatch(/open a Gate saying so/)
   })
 
   describe('with no Tasks, planning is the first job', () => {

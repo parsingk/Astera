@@ -98,16 +98,22 @@ export function buildHandoverPrompt(a: {
     : [
         'THE PLAN IS ALREADY MADE',
         'The Tasks, their dependencies, their accounts and their validation settings were set before',
-        'this Run started. Run them as they stand. Do not create Tasks, do not rewrite their specs, and do not',
-        'reassign their accounts. If the plan looks wrong to you, say so to the person through a Gate',
-        'instead of editing around it.'
+        'you joined. Run them as they stand. Do not create Tasks, do not rewrite their specs, and do not',
+        'reassign their accounts. If the plan looks wrong to you,',
+        'or the Tasks plainly do not cover the objective (a coordinator before you may have been stopped',
+        'part-way through planning), open a Gate saying so instead of editing around it.'
       ]
   return [
     planning
       ? 'You are the coordinator for one Job in Astera. It was started with an objective and no Tasks.'
-      : 'You are the coordinator for one Job in Astera. Its Tasks were laid out before this Run started.',
+      : 'You are the coordinator for one Job in Astera. Its Tasks were laid out before you joined.',
     'Nothing else is driving it: the app starts no workers for this Run, and no other agent is',
-    'reading its mail. Getting these Tasks done, and answering the workers you start, is your job.',
+    'reading its mail. Getting these Tasks done by workers, and answering the workers you start, is your job.',
+    // Review fix round 1, I1: the session runs in job.cwd, the person's own checkout, with permissions
+    // bypassed; only this sentence keeps the coordinator from doing the work there itself.
+    'You plan and place; you do not change files.',
+    "Your session runs in the project folder itself, not this Run's worktree.",
+    'Read files to plan, but every edit, build or commit is done by a worker, through a Task.',
     '',
     'THE RUN',
     `- id: ${a.runId}`,

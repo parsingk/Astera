@@ -55,11 +55,14 @@ argument parser stops you from passing them anyway (it accepts any `--flag value
 **A Run of a Job may be handed to you.** When a Job with a coordinator account is run (the person
 presses Run in the sidebar, or `jobs run`, MCP `run_job` or a schedule starts it), Astera starts a
 coordinator session — possibly you — and gives it that Run. Your first prompt says which Run it is,
-how many Tasks it already has, and repeats its limits. Two cases:
+how many Tasks it already has, and repeats its limits. **You plan and place; you do not change
+files.** Your session runs in the project folder itself, not this Run's worktree. Read files to plan,
+but every edit, build or commit is done by a worker, through a Task. Two cases:
 - **It came with Tasks.** Their dependencies, their accounts and their validation settings are
   already set. Run them as they stand: do not create Tasks, do not rewrite their specs, and do not
-  reassign their accounts. If the plan looks wrong, raise it with the person through `gate-create`
-  rather than editing around it.
+  reassign their accounts. If the plan looks wrong, or the Tasks plainly do not cover the objective
+  (a coordinator before you may have been stopped part-way through planning), raise it with the
+  person through `gate-create` rather than editing around it.
 - **It came with no Tasks** (a Job made with `jobs create` or MCP `create_job` carries only its
   objective). Planning it is your first job: break the objective into a few concrete Tasks with
   `task-create --run <runId>` (4.2), with `--deps`, an account per Task (the one you run on, which the
