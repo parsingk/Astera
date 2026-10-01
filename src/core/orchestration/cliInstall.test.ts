@@ -156,7 +156,8 @@ describe('userPathWith / userPathWithout (win32 user Path)', () => {
 // Measured on Windows 11 (2026-10-01) through a cmd that Explorer itself started: with a system Path
 // of 1629 characters expanded, ending in ';', a user Path of 2465 characters reached the new shell and
 // one of 2466 did not reach it at all, every entry of it gone. A REG_EXPAND_SZ user Path counted its
-// expanded length.
+// expanded length. With the same system Path's trailing ';' taken off (1628), the boundary stayed at
+// 2465 / 2466: Windows puts a ';' between them.
 describe('userPathFits (win32: whether Explorer hands the user Path to new shells)', () => {
   const machine = `C:\\WINDOWS\\system32;${'m'.repeat(1629 - 21)};`
   const env = { USERPROFILE: 'C:\\Users\\anipen' } as NodeJS.ProcessEnv

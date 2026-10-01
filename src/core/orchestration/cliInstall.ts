@@ -76,8 +76,8 @@ const WIN32_JOINED_PATH_LIMIT = 4094
 /**
  * Whether new shells get the user Path `user` alongside the system Path `machine` (both raw, as the
  * registry holds them). The separator between them is counted only when the system value does not end
- * in one already; the measurement had one ending in ';', so the other case is the assumption that
- * Windows inserts a ';' there.
+ * in one already: measured both ways, a system value of 1628 characters without the ';' let a user
+ * value of 2465 through and not 2466, so Windows inserts one there.
  */
 export function userPathFits(a: { machine: string; user: string; env: NodeJS.ProcessEnv }): boolean {
   const machine = expandVariables(a.machine, a.env)
