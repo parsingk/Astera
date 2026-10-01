@@ -636,6 +636,10 @@ const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId)
  *
  * `questionsOpen` 을 따로 세는 이유는 status 명령과 같다: 그것만이 **사람을 기다리는** 수이고,
  * 나머지 상태와 달리 사람이 답해야 움직인다.
+ *
+ * One deliberate difference: for a Job with no Run the app's Jobs view (view.ts snapshotFor) keeps
+ * `running`, which its glyph and sort rely on, and shows its "not started" chip from `pendingStart`,
+ * while the CLI/MCP view says `pending` (jobView below).
  */
 const derivedFor = (
   s: OrchState,
