@@ -28,6 +28,8 @@ export async function connectHost(a: {
   /** The profile whose Host key the answer is checked against. */
   profileDir: string
   app: string
+  /** What the hello announces; the CLI's is `cli`. */
+  role?: 'cli' | 'mcp'
   timeoutMs?: number
   /** Where a malformed line or a handler that threw gets reported. Every other real caller of
    *  `createLineReader` in this repo — `main/host/client.ts`'s `attach()`, `host/server.ts`'s
@@ -107,7 +109,7 @@ export async function connectHost(a: {
     })
     socket.on('data', (c: string) => read(c))
     socket.on('connect', () =>
-      socket.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: 'cli', nonce }))
+      socket.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: a.role ?? 'cli', nonce }))
     )
   })
 }

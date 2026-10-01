@@ -28,7 +28,7 @@ afterAll(async () => {
 /** A server that answers hello the way the Host does. Unix socket even on win32 tests is not
  *  possible, so this uses a temp path on posix and a pipe name on win32. `onHello` is handed the
  *  client's nonce, which a real Host answers with `proof`. */
-const listen = async (onHello: (sock: net.Socket, nonce: string) => void): Promise<string> => {
+const listen = async (onHello: (sock: net.Socket, nonce: string, hello: { role?: string }) => void): Promise<string> => {
   const address =
     process.platform === 'win32'
       ? `\\\\.\\pipe\\astera-test-${Math.random().toString(16).slice(2)}`
@@ -36,8 +36,8 @@ const listen = async (onHello: (sock: net.Socket, nonce: string) => void): Promi
   const server = net.createServer((sock) => {
     sock.setEncoding('utf8')
     sock.once('data', (d: string) => {
-      const nonce = (JSON.parse(d.split('\n')[0]) as { nonce?: string }).nonce ?? ''
-      onHello(sock, nonce)
+      const sent = JSON.parse(d.split('\n')[0]) as { nonce?: string; role?: string }
+      onHello(sock, sent.nonce ?? '', sent)
     })
   })
   servers.push(server)
@@ -83,6 +83,20 @@ describe('connectHost', () => {
     const r = await connectHost({ address, profileDir: empty, app: 'test', timeoutMs: 2000, log: () => {} })
     expect(r).toEqual({ error: 'impostor' })
     await fs.rm(empty, { recursive: true, force: true })
+  })
+
+  it('announces the role it was given, and cli when it was given none', async () => {
+    const seen: (string | undefined)[] = []
+    const address = await listen((sock, nonce, h) => {
+      seen.push(h.role)
+      sock.write(hello(nonce))
+    })
+    for (const role of [undefined, 'mcp'] as const) {
+      const conn = await connectHost({ address, profileDir: PROFILE, app: 'test', timeoutMs: 2000, log: () => {}, ...(role ? { role } : {}) })
+      if ('error' in conn) throw new Error(conn.error)
+      conn.close()
+    }
+    expect(seen).toEqual(['cli', 'mcp'])
   })
 
   it('hello 에 nonce 를 싣는다', async () => {

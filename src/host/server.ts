@@ -11,6 +11,7 @@ import {
   HOST_FEATURE_PING,
   HOST_FEATURE_ORCH,
   HOST_FEATURE_REQUESTS,
+  HOST_FEATURE_MCP,
   HOST_YIELD_ORCH_STATE_LATEST,
   ORCH_STATE_PUSH_MS,
   type ClientMessage,
@@ -36,7 +37,7 @@ export const UNSAFE_ADDRESS_DIR = 'astera-host: the address directory is not pri
  *  connection in turn, never reused while it runs, so two clients of the same role can be told apart
  *  without handing the socket itself out. */
 export interface ClientRef {
-  role: 'app' | 'cli'
+  role: 'app' | 'cli' | 'mcp'
   socket: number
   /** Whether this socket has said hello on this protocol (review of Task 1). A mark made for one that
    *  has not is never released: close runs `onClientGone` only for a greeted socket. */
@@ -279,9 +280,12 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    *  `'legacy-app'` is a hello with no role: an app 1.3.25 or older (LEGACY_APP_NOTICE). It counts
    *  for `hasApp`, `appKeeps` and `appsKeep`, is never sent `orch-act`, and reaches `onMessage`,
    *  `onClientGone` and `orch-call` as `'cli'`, so no door that only an app may use opens for it. */
-  const roles = new Map<net.Socket, 'app' | 'legacy-app' | 'cli'>()
+  const roles = new Map<net.Socket, 'app' | 'legacy-app' | 'cli' | 'mcp'>()
   /** The role the hooks and the command layer hear: a legacy app is a `'cli'` to them (see `roles`). */
-  const outwardRole = (s: net.Socket): 'app' | 'cli' => (roles.get(s) === 'app' ? 'app' : 'cli')
+  const outwardRole = (s: net.Socket): 'app' | 'cli' | 'mcp' => {
+    const r = roles.get(s)
+    return r === 'app' ? 'app' : r === 'mcp' ? 'mcp' : 'cli'
+  }
   /** `lastAppPid`: the pid of the last app hello that carried one, until a probe finds it dead (see
    *  `HostServer.lastAppPid`). */
   let lastAppPid: number | null = null
@@ -495,7 +499,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // forever (protocol.ts's `hello` has the whole reason). A role that is neither is a CLI.
           const wasApp = isApp(socket)
           const wasLegacy = roles.get(socket) === 'legacy-app'
-          roles.set(socket, m.role === 'app' ? 'app' : m.role === undefined ? 'legacy-app' : 'cli')
+          roles.set(socket, m.role === 'app' ? 'app' : m.role === 'mcp' ? 'mcp' : m.role === undefined ? 'legacy-app' : 'cli')
           if (roles.get(socket) === 'legacy-app' && !wasLegacy) deps.log.write(LEGACY_APP_NOTICE)
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
@@ -519,10 +523,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             // with no `orch` can neither run a command nor remember having run it. Announcing it
             // unconditionally would tell a caller that its presented `--request-id` protects a call
             // that is never answered at all.
+            // HOST_FEATURE_MCP too: the MCP gate lives in `createHostOrch`, so it rides the same condition.
             features: [
               HOST_FEATURE_PROC,
               HOST_FEATURE_PING,
-              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS] : []),
+              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_FEATURE_MCP] : []),
               ...(deps.features ?? [])
             ],
             // Only while one is attached, so `astera host status` can say so (LEGACY_APP_NOTICE).

@@ -61,6 +61,11 @@ export const HOST_FEATURE_ORCH = 'orch'
  *  refuse over one we did not. */
 export const HOST_FEATURE_REQUESTS = 'requests'
 
+/** The Host tells an MCP caller apart (MCP design M1): it records its rows as surface `mcp` and admits
+ *  its commands only through the `mcpAccess` allowlist (core/host/mcpGate.ts). A Host without it reads
+ *  `role: 'mcp'` as a CLI and gates nothing, so `astera mcp serve` refuses to serve against one. */
+export const HOST_FEATURE_MCP = 'mcp'
+
 /** The Host spawns orchestration sessions itself: `worker-start`, `worker-stop`, `worker-release`,
  *  `worker-read` and a coordinator's start are carried out in its own pty registry when no app can
  *  (host S2 design §2). Announced only by a Host that was started with all three CLI paths
@@ -308,7 +313,7 @@ export type ClientMessage =
    *
    *  **`nonce`** (protocol 4): the Host answers it with `proof` (core/host/hostKey.ts), and the client
    *  sends nothing more until that proof checks out. */
-  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli'; yields?: string[]; pid?: number; nonce?: string }
+  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli' | 'mcp'; yields?: string[]; pid?: number; nonce?: string }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
    *

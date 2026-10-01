@@ -162,7 +162,7 @@ const start = async (
   /** Connects, completes the handshake, and hands back something to send with and read replies from.
    *  `role` is what the handshake announces — the Host sends `orch-act` only to `'app'`, and a hello
    *  with no role at all is read as a CLI (design F12), which the default here leaves testable. */
-  connect(role?: 'app' | 'cli'): Promise<{
+  connect(role?: 'app' | 'cli' | 'mcp'): Promise<{
     send(m: ClientMessage): void
     next(waitMs?: number): Promise<unknown>
     socket: net.Socket
@@ -200,7 +200,7 @@ describe('startHostServer', () => {
   it('answers a hello on the same protocol with its own version and pid', async () => {
     const h = await server()
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch', 'requests'] })
+    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch', 'requests', 'mcp'] })
     expect((reply as { startedAt: string }).startedAt).toMatch(/^\d{4}-/)
   })
 
@@ -540,10 +540,34 @@ describe('startHostServer', () => {
     expect((reply as { features: string[] }).features).not.toContain('requests')
   })
 
+  it('announces the mcp feature when it answers orch-call', async () => {
+    const h = await server()
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
+    expect((reply as { features: string[] }).features).toContain('mcp')
+  })
+
+  it('hands an mcp hello to the command layer as role mcp', async () => {
+    const roles: (string | undefined)[] = []
+    const base = versionOnlyOrchCall({ version: '9.9.9' })
+    const h = await start({
+      orch: {
+        ...base,
+        call: async (c) => {
+          roles.push(c.from?.role)
+          return base.call(c)
+        }
+      }
+    })
+    const client = await h.connect('mcp')
+    client.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+    await client.next()
+    expect(roles).toEqual(['mcp'])
+  })
+
   it('announces the extra features it was given, after the built-in ones', async () => {
     const h = await server({ features: ['spawn'] })
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'spawn'])
+    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'mcp', 'spawn'])
   })
   it('tells onMessage which client sent it, by role and a per-connection number', async () => {
     const seen: Array<{ t: string; role: string; socket: number }> = []

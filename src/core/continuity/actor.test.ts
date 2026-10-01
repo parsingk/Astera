@@ -53,3 +53,14 @@ describe('actorOf (J4, P5)', () => {
     expect(commitStamp('a', 5)).not.toBe(commitStamp('b', 5))
   })
 })
+
+describe('the mcp surface', () => {
+  it('an MCP caller is recorded as mcp, whatever session it names', () => {
+    expect(actorOf({ sessionId: '', role: 'mcp', state: null })).toEqual({ surface: 'mcp' })
+    expect(actorOf({ sessionId: 'sess_1', role: 'mcp', state: null })).toEqual({ surface: 'mcp' })
+  })
+  it('a row written with the mcp surface reads back', () => {
+    expect(isJournalActor({ surface: 'mcp' })).toBe(true)
+    expect(actorFromJson('{"surface":"mcp"}')).toEqual({ surface: 'mcp' })
+  })
+})
