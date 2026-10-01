@@ -19,6 +19,7 @@ import { connectHost, type ConnectFailure, type HostConnection } from '../core/h
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
 import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
+import { serveMcp } from './mcp/server'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -1210,6 +1211,19 @@ export async function main(): Promise<void> {
       })
     // 다른 모든 응답과 같은 봉투로 나간다 — 이것만 예외면 `jq .ok` 가 이 한 경우에만 null 이 된다.
     out(renderOk(parsed.cmd, undeliveredReportNotice({ path: written.path }), mode))
+    process.exit(0)
+  }
+
+  // **mcp serve answers before anything writes stdout** (MCP design §4): from here on stdout is the MCP
+  // protocol's, and `out()` / `fail()` would corrupt it. It never returns to the exits below.
+  if (parsed.cmd === 'mcp-serve') {
+    // Refused, not dropped, as the host commands below refuse it: each tool carries its own requestId.
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    await serveMcp({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
     process.exit(0)
   }
 

@@ -523,6 +523,8 @@ astera run-configs list --job <jobId>
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
 
+astera mcp     serve                     serve Astera to an MCP client over stdio
+
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter] [--wait [--timeout-ms <n>]]
@@ -757,6 +759,11 @@ second run is all `unchanged`.
 
 **Agent sessions read their skills when they start**, so a session already open does not see a
 skill installed after it, and `data.note` says so. Open a new session.
+
+**`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
+protocol. It connects to the Host of this profile, starting one when none answers, and serves fifteen
+tools that create, run, observe, answer and stop Jobs. What it may do is set by MCP access in Settings
+(CLI tab). Each tool takes its own `requestId`. See [MCP](mcp.md).
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
@@ -1139,8 +1146,8 @@ command runs exactly as it always did.
 **That refusal is about a Host that answered and cannot help. Some answers never reach a Host at
 all**, and they split in two.
 
-`host start`, `host status`, `host stop`, `skills list` and `skills install` do not go through the
-Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
+`host start`, `host status`, `host stop`, `skills list`, `skills install` and `mcp serve` do not go
+through the Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
 dropped. `host stop` and `skills install` are the ones that act, and a caller that keys them is owed
 either the protection or the refusal. (`skills install` is safe to repeat anyway: a second run writes
 nothing.)

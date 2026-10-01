@@ -386,7 +386,9 @@ export type AgentCommand = PublicCommand | SessionCommand
  * *Answered by the CLI itself, so they never reach the command layer:* `help`, `browser-help` and
  * `app-help` read a guide off disk, `agent-context` prints this file, the three `host-*` commands ask
  * about the Host rather than about orchestration (src/cli/host.ts), and the two `skills-*` commands
- * read and write the profile's files with no Host at all (src/cli/skills.ts).
+ * read and write the profile's files with no Host at all (src/cli/skills.ts). `mcp-serve` is answered
+ * by the CLI like the `host-*` commands: it serves the MCP protocol on stdout and turns each tool into
+ * a Host command of its own (src/cli/mcp/server.ts).
  *
  * *Answered before the switch:* `browser-js` and `handoff` each have their own toggle and need none
  * of the orchestration state the switch is built on, so `handleCommand` returns from an `if` above
@@ -400,8 +402,8 @@ export type AgentCommand = PublicCommand | SessionCommand
  * it is answered below the receipt line beside `requests-show` (agent workspace plan ruling P2).
  *
  * **This is a hand-kept list, and `satisfies` is not the check it looks like.** It proves only that
- * these thirteen names exist in the schema, which keeps a typo from quietly widening
- * `SwitchedCommand`. It proves nothing about anything answering them: a fourteenth name added here would
+ * these fourteen names exist in the schema, which keeps a typo from quietly widening
+ * `SwitchedCommand`. It proves nothing about anything answering them: a fifteenth name added here would
  * compile, would pass the exhaustiveness check, and would 501 at runtime with no `case` and no
  * branch. cliAgentContext.test.ts carries the witness for that half — it asserts each name is
  * mentioned in one of the four files that can answer it. A text witness is weak, but it is the
@@ -420,7 +422,8 @@ const NOT_SWITCHED = [
   'handoff',
   'requests-show',
   'skills-list',
-  'skills-install'
+  'skills-install',
+  'mcp-serve'
 ] as const satisfies readonly AgentCommand[]
 
 /**
