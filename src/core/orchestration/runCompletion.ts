@@ -3,6 +3,7 @@
 // through the Host command `runs-completion`.
 import { completionDetailOf, type CompletionDetail } from './completion'
 import { policyOf, repairCountOf } from './convergence'
+import { failureSummaryOf } from './runChecks'
 import type { OrchState } from './state'
 import type { Task } from './types'
 
@@ -26,6 +27,9 @@ export interface TaskCompletion {
   attempt: number
   maxAttempts: number | null
   detail: CompletionDetail | null
+  /** What failed, the line `runs checks` gives: each failed check's name, exit code and last output
+   *  line (cut to 200 characters), then a rejected review. Null when nothing did. */
+  failureSummary: string | null
 }
 
 export interface RunCompletion {
@@ -84,7 +88,8 @@ export function completionForRun(s: OrchState, runId: string): RunCompletion | n
         state: taskCompletionState(s, task),
         attempt: repairCountOf(s, task.id),
         maxAttempts: policyOf(s, task)?.maxFixAttempts ?? null,
-        detail: withoutOutput(completionDetailOf(task))
+        detail: withoutOutput(completionDetailOf(task)),
+        failureSummary: failureSummaryOf(s, task)
       })
     )
   const states = tasks.map((t) => t.state)

@@ -156,4 +156,15 @@ describe('completionForRun', () => {
     expect(t.attempt).toBe(0)
     expect(t.detail).toBeNull()
   })
+
+  it('carries the failure summary runs checks gives: each failed check, its exit code and last output line', () => {
+    const checks: CheckResult[] = [
+      { configId: 'cfg_build', name: 'build', status: 'failed', exitCode: 2, outputTail: 'compiling\nerror TS2322: nope\n' },
+      { configId: 'cfg_test', name: 'test', status: 'passed', exitCode: 0 }
+    ]
+    const s = stateWith([task('t1', 'failed', { validateConfigIds: ['cfg_build', 'cfg_test'], checks }), task('t2', 'pending')])
+    const [failed, fresh] = completionForRun(s, 'r1')!.tasks
+    expect(failed.failureSummary).toBe('build failed (exit 2): error TS2322: nope')
+    expect(fresh.failureSummary).toBeNull()
+  })
 })

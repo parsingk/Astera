@@ -129,7 +129,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `get_task` | One Task with its attempts and the open question on it, if any. |
 | `list_questions` | Questions that block a Run until someone answers. Use `answer_question` with an id from here. |
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
-| `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results. Astera runs the checks and repairs; this only reads them. |
+| `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and a `failureSummary` naming each failed check, its exit code and its last output line. Astera runs the checks and repairs; this only reads them. |
 
 `create_job` takes a `projectId` from `list_projects`, an `objective`, and a `coordinatorAccountId`
 from `list_accounts`. A Job that has never run shows `pendingStart: true` in `get_job` and
@@ -164,10 +164,12 @@ reconnecting. Every other Host command is refused to MCP clients whatever the se
 - It reaches the Host only from the same OS account, and the Host proves itself with its key before
   the server sends anything.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
-  results, questions, answers, review issues and suggested fixes, error messages) is redacted of
+  results, questions, answers, review issues and suggested fixes, failure summaries, error messages) is redacted of
   anything that looks like a secret; ids, paths and timestamps are left as they are.
 - Raw check output is not returned. `list_tasks` and `get_task` carry each check's status and exit
-  code without its log, and so does `get_completion`.
+  code without its log, and so does `get_completion`. The one exception is `get_completion`'s
+  `failureSummary`: it carries each failed check's last output line, cut to 200 characters and
+  redacted like the rest of the free text. It is the same line `astera runs checks` prints.
 
 ## Troubleshooting
 

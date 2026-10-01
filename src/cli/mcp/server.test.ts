@@ -328,6 +328,24 @@ describe('the MCP server', () => {
     expect(tools.find((t) => t.name === 'resume_run')?.annotations?.readOnlyHint).toBe(false)
   })
 
+  it('get_completion redacts a secret in a failure summary and keeps the rest of the line', async () => {
+    const token = 'sk-abcdefghijklmnopqrstuvwxyz0123456789'
+    const body = {
+      runId: 'run_1',
+      jobId: 'job_1',
+      state: 'failed',
+      tasks: [{ taskId: 't1', title: 'x', state: 'failed', attempt: 0, maxAttempts: null, detail: null, failureSummary: `build failed (exit 2): key ${token}` }]
+    }
+    const r = await (await connected(answering({ 'runs-completion': { status: 200, body } }).link)).callTool({
+      name: 'get_completion',
+      arguments: { runId: 'run_1' }
+    })
+    const summary = String((r.structuredContent as { tasks: Array<{ failureSummary: string }> }).tasks[0].failureSummary)
+    expect(summary).not.toContain(token)
+    expect(summary).toContain('build failed (exit 2): key ')
+    expect(textOf(r)).not.toContain(token)
+  })
+
   it('stop_run sends runs-stop', async () => {
     const { link, calls } = answering({})
     await (await connected(link)).callTool({ name: 'stop_run', arguments: { runId: 'run_1' } })
