@@ -1508,6 +1508,8 @@ export async function handleCommand(
       }
       // `--coordinator-provider`: with no `--coordinator-account`, that provider's default account
       // (defaultAccountIdOf, which listAccounts marks when asked) coordinates. An explicit account wins.
+      // An older app attached to a newer Host returns no default mark, so this fails with the no-account
+      // 400 until the app is updated.
       const coordProvider = args.coordinatorProvider
       if (coordProvider !== undefined && coordProvider !== 'claude' && coordProvider !== 'codex')
         return bad('--coordinator-provider must be claude|codex')
