@@ -262,6 +262,9 @@ interface Rig {
   state(): OrchState
   /** Ends a worker's session the way a crashed agent ends: its pty exits with no report. */
   exitWorker(s: Spawn, code: number): void
+  /** The Host leaving, as its process would: the rig's teardown, run now and once. The profile stays
+   *  for a next `hostRig({ profileDir })`. */
+  stop(): Promise<void>
   logs: string[]
   /** The rows of the Host's Job Journal for this run, read through a read-only `JournalReader` opened
    *  and closed per call on `<profile>/orch/continuity.sqlite`, as the app reads them. */
@@ -514,8 +517,12 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
   box.server = server
 
   // Teardown in `leave()`'s order: the driver stops, the spawner retires, the server closes, the ptys
-  // end, and the exits those ends start run out before the folders are removed.
-  cleanups.push(async () => {
+  // end, and the exits those ends start run out before the folders are removed. Run once: a test may
+  // call it early as the Host leaving (`stop`), and the cleanup then has nothing left to do.
+  let stopping: Promise<void> | null = null
+  const stop = (): Promise<void> => (stopping ??= teardown())
+  cleanups.push(stop)
+  const teardown = async (): Promise<void> => {
     wiring.dispose()
     await spawner.closeAndSettle()
     await server.close().catch(() => {})
@@ -530,7 +537,7 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     journalDown = true
     journal?.close()
     if (addr.dirToPrepare) await rmrf(addr.dirToPrepare)
-  })
+  }
 
   return {
     profileDir,
@@ -547,6 +554,7 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
       if (!entry) throw new Error(`rig: no pty for ${s.sessionId}`)
       ptys.get(entry.pid)!.exit(code)
     },
+    stop,
     logs,
     journalRows: (runId) => {
       const reader = new JournalReader(path.join(profileDir, 'orch', 'continuity.sqlite'))
@@ -1256,5 +1264,31 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect((runs.structuredContent as { runs: Array<{ id: string }> }).runs.map((r) => r.id)).toEqual([runId])
     // The Host's own record agrees: the Run is neither stopped nor paused by the client leaving.
     expect(h.state().runs.find((r) => r.id === runId)?.paused).toBeFalsy()
+  })
+
+  // Spec §81 Case C. The link targets the profile's address, which a restart does not change, so the
+  // same MCP server reconnects by itself; while no Host answers, the call says so and starts nothing
+  // (this client's startHost answers false).
+  it('the Host restarts: the same server answers HOST_NOT_RUNNING while it is down, then reconnects to the next one', async () => {
+    const { h, projectId } = await projectRig({ continuity: true })
+    const mcp = await mcpClient(h)
+    const created = await mcp.call('create_job', { projectId, objective: 'outlives its Host', coordinatorAccountId: h.accountId, requestId: 'hr-1' })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    const jobId = (created.structuredContent as { id: string }).id
+    const ran = await mcp.call('run_job', { jobId, requestId: 'hr-2' })
+    expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+    const runId = (ran.structuredContent as { id: string }).id
+
+    await h.stop()
+    const down = await mcp.call('get_run', { runId })
+    expect(down.isError).toBe(true)
+    expect(errorOf(down)).toMatchObject({ code: 'HOST_NOT_RUNNING' })
+
+    const second = await hostRig({ repo: false, profileDir: h.profileDir, continuity: true })
+    expect(second.address).toBe(h.address)
+    const run = await mcp.call('get_run', { runId })
+    expect(run.isError, run.content[0]?.text).toBeFalsy()
+    expect(run.structuredContent).toMatchObject({ id: runId, jobId })
+    expect(second.state().runs.map((r) => r.id)).toContain(runId)
   })
 })
