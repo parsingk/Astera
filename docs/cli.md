@@ -596,8 +596,8 @@ list. Filters on one command combine.
 - **`jobs list --status`** keeps the Jobs in one state: `pending` (made by `jobs create` and not run
   yet), `paused`, `scheduled`, `waiting` (a question is open), `running`, `completed` or `failed`. It
   is the word the first column of `--human` shows, in lower case (`COMPLETE` is `completed`), so a
-  script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
-  `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
+  script can work out the same word from `pendingStart`, then `paused` or `outcome: "paused"`, then
+  `schedule`, `questionsOpen` and the rest of `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
   failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, or a
   latest run stopped with `runs stop`: that run has `paused: true`, and both it (`runs get`, `runs
   list`) and its Job have `outcome: "paused"` until `runs resume`.
@@ -1039,7 +1039,10 @@ starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
 dispatches, stops the run's coordinator session when it has one, and pauses the run. The answer says
-`stopped` (how many workers) and `coordinatorStopped`. The run keeps naming that coordinator until its
+`stopped` (how many workers) and `coordinatorStopped`: `true` means the run's coordinator was asked to
+stop, not that it has already exited. A coordinator that is still starting when the run is stopped is
+not stopped: it attaches to the paused run once its start finishes and keeps running until the run is
+stopped again. The run keeps naming that coordinator until its
 session has really ended, and the stop is sent again until it has, as for a scheduled run's
 coordinator. `runs resume` clears the pause, and for a Job with a coordinator account it starts a new
 coordinator for the run once the old one is gone, which looks at what is done and carries on. A

@@ -640,7 +640,7 @@ describe('the MCP server', () => {
 
   it('stop_run and resume_run say the coordinator is stopped and brought back', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools.find((t) => t.name === 'stop_run')?.description).toMatch(/coordinator is stopped/)
+    expect(tools.find((t) => t.name === 'stop_run')?.description).toMatch(/coordinator is asked to stop/)
     expect(tools.find((t) => t.name === 'resume_run')?.description).toMatch(/new coordinator/)
   })
 

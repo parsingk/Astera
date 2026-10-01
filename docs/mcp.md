@@ -160,7 +160,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
 | `list_runs` | Runs, newest first, optionally of one Job. |
 | `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). |
-| `stop_run` | Stop a Run: its open workers are closed, its coordinator is stopped (`coordinatorStopped` says whether it had one), and the Run is paused. Use `resume_run` to continue it. |
+| `stop_run` | Stop a Run: its open workers are closed, its coordinator is asked to stop (`coordinatorStopped: true` means it had one and was asked, not that it has exited yet), and the Run is paused. Use `resume_run` to continue it. |
 | `resume_run` | Resume a Run that `stop_run` paused. A Job with a coordinator account gets a new coordinator, which looks at what is done and carries on; while the stopped one is still exiting it waits up to 10 seconds, then answers `CONFLICT` and changes nothing, so call it again. A Run that is not paused is returned as it is. |
 | `list_tasks` | The Tasks of a Run, with their status and dependencies (deps). Each spec is cut to 160 characters, and `spec_truncated` says when it was; `get_task` has the whole spec. |
 | `get_task` | One Task with its attempts and the open question on it, if any. An open attempt whose worker waits for a person's approval carries `waitingForApproval: true`. |

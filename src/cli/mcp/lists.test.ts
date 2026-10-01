@@ -107,4 +107,12 @@ describe('cursor paging', () => {
     for (const bad of ['%%%', 'bm90IGpzb24', enc([1]), enc({ o: -1, k: 'list_jobs' }), enc({ o: 1.5, k: 'list_jobs' }), enc({ o: '2', k: 'list_jobs' }), enc({ k: 'list_jobs' })])
       expect(cursorOffset('list_jobs', bad), bad).toEqual({ error: expect.stringContaining('cursor') })
   })
+
+  // Review fix round 1, Minor 5: a tool name with an underscore after list_ is still named back.
+  it("names list_run_configs when its cursor is given to another tool", () => {
+    expect(cursorOffset('list_jobs', pageCursor('list_run_configs', 2))).toEqual({
+      error: expect.stringContaining('cursor is from list_run_configs, not list_jobs')
+    })
+    expect(cursorOffset('list_run_configs', pageCursor('list_run_configs', 2))).toBe(2)
+  })
 })
