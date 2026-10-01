@@ -17,7 +17,7 @@ export const MCP_READ_COMMANDS = [
   'runs-completion'
 ] as const
 
-export const MCP_CONTROL_COMMANDS = ['jobs-create', 'jobs-run', 'runs-stop', 'questions-answer'] as const
+export const MCP_CONTROL_COMMANDS = ['jobs-create', 'jobs-run', 'runs-stop', 'runs-resume', 'questions-answer'] as const
 
 const READ: ReadonlySet<string> = new Set(MCP_READ_COMMANDS)
 const CONTROL: ReadonlySet<string> = new Set(MCP_CONTROL_COMMANDS)

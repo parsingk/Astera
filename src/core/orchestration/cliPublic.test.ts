@@ -49,6 +49,12 @@ describe('publicFor', () => {
     expect(out).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })
   })
 
+  // `runs resume` answers with the Run it took back (resumeRun), so it hides what `runs get` hides.
+  it('runs resume hides the Run fields runs get hides', () => {
+    const out = publicFor('runs-resume', { id: 'run_1', jobId: 'job_1', ordinal: 1, coordinatorStop: { at: 'T' } })
+    expect(out).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })
+  })
+
   // **한 겹 안이라고 새면 가림막이 아니다.** jobs get 은 회차를 `run` 에 접어 싣는다(설계 §5)
   it('jobs get 이 접어 실은 회차도 가린다', () => {
     const out = publicFor('jobs-get', {

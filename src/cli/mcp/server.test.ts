@@ -7,7 +7,7 @@ import type { HostLink } from './hostLink'
 
 const TOOLS = [
   'list_projects', 'get_project', 'list_accounts', 'list_jobs', 'get_job', 'create_job', 'run_job',
-  'list_runs', 'get_run', 'stop_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
+  'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
   'get_completion'
 ]
 
@@ -69,7 +69,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the fifteen tools', async () => {
+  it('lists exactly the sixteen tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -161,6 +161,7 @@ describe('the MCP server', () => {
       ['list_runs', { jobId: 'job_1' }, 'runs-list', { job: 'job_1' }],
       ['get_run', { runId: 'run_1' }, 'runs-get', { id: 'run_1' }],
       ['stop_run', { runId: 'run_1' }, 'runs-stop', { id: 'run_1' }],
+      ['resume_run', { runId: 'run_1' }, 'runs-resume', { id: 'run_1' }],
       // `brief`: the Host bounds each spec to 160 characters (command.ts tasks-list).
       ['list_tasks', { runId: 'run_1' }, 'tasks-list', { run: 'run_1', brief: true }],
       ['get_task', { taskId: 'task_1' }, 'tasks-get', { id: 'task_1' }],
@@ -313,6 +314,18 @@ describe('the MCP server', () => {
     )
     const r = await client.callTool({ name: 'get_task', arguments: { taskId: 't1' } })
     expect(JSON.stringify(r.structuredContent)).not.toContain(token)
+  })
+
+  it('resume_run takes a requestId, hides the Run fields get_run hides, and stop_run points at it', async () => {
+    const run = { id: 'run_1', jobId: 'job_1', ordinal: 1, coordinatorStop: { at: 'T' }, coordinatorStartingAt: 'T' }
+    const { link, calls } = answering({ 'runs-resume': { status: 200, body: run } })
+    const client = await connected(link)
+    const r = await client.callTool({ name: 'resume_run', arguments: { runId: 'run_1', requestId: 'rq-2' } })
+    expect(calls.at(-1)).toEqual({ cmd: 'runs-resume', args: { id: 'run_1' }, request: 'rq-2' })
+    expect(r.structuredContent).toEqual({ id: 'run_1', jobId: 'job_1', ordinal: 1 })
+    const { tools } = await client.listTools()
+    expect(tools.find((t) => t.name === 'stop_run')?.description).toContain('Use resume_run to continue it.')
+    expect(tools.find((t) => t.name === 'resume_run')?.annotations?.readOnlyHint).toBe(false)
   })
 
   it('stop_run sends runs-stop', async () => {

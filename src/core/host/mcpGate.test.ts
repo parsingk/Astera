@@ -14,8 +14,12 @@ describe('mcpRefusal', () => {
   it('control admits both lists', () => {
     for (const cmd of [...MCP_READ_COMMANDS, ...MCP_CONTROL_COMMANDS]) expect(mcpRefusal(cmd, 'control')).toBeNull()
   })
+  it('runs-resume is a control command: stop_run has its way back', () => {
+    expect(mcpRefusal('runs-resume', 'control')).toBeNull()
+    expect(mcpRefusal('runs-resume', 'read')?.status).toBe(403)
+  })
   it('refuses everything else whatever the setting', () => {
-    for (const cmd of ['worker-start', 'sessions-send', 'chats-answer', 'state-put', 'run-delete', 'tasks-add', 'runs-resume'])
+    for (const cmd of ['worker-start', 'sessions-send', 'chats-answer', 'state-put', 'run-delete', 'tasks-add', 'run-resume'])
       expect(mcpRefusal(cmd, 'control')?.status).toBe(403)
   })
 })

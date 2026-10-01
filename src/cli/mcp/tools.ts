@@ -1,4 +1,4 @@
-// The fifteen MCP tools (MCP design §4). Each is one Host command; `args` maps the tool's input to the
+// The sixteen MCP tools (MCP design §4). Each is one Host command; `args` maps the tool's input to the
 // command's arguments exactly as the CLI's parser would produce them: flag names camel-cased
 // (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
@@ -122,7 +122,16 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'runs-stop',
     description:
-      'Stop a Run: its open workers are closed and the Run is paused. It can be resumed later from Astera or with `astera runs resume`.',
+      'Stop a Run: its open workers are closed and the Run is paused. Use resume_run to continue it.',
+    inputSchema: { runId: id, requestId },
+    args: (i) => ({ id: i.runId })
+  },
+  {
+    name: 'resume_run',
+    title: 'Resume a Run',
+    readOnly: false,
+    cmd: 'runs-resume',
+    description: 'Resume a Run that stop_run paused. A Run that is not paused is returned as it is.',
     inputSchema: { runId: id, requestId },
     args: (i) => ({ id: i.runId })
   },

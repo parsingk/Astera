@@ -761,9 +761,9 @@ second run is all `unchanged`.
 skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
-protocol. It connects to the Host of this profile, starting one when none answers, and serves fifteen
-tools that create, run, observe, answer and stop Jobs. What it may do is set by MCP access in Settings
-(CLI tab). The four tools that change something (`create_job`, `run_job`, `stop_run`,
+protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen
+tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access in Settings
+(CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`, `resume_run`,
 `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
