@@ -136,7 +136,9 @@ async function main(): Promise<void> {
       conhostReaper.spawned()
       return spawned
     },
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    // A repeat kill's escalation (registry.ts `kill`): never a second ConPTY kill.
+    killTree: (pid) => killTree(pid)
   })
   // Leftovers Task 5 (S3-2): the console hosts node-pty leaves behind on win32, one per pty that ended
   // by itself, reaped once no pty is live (conhostReaper.ts). A no-op elsewhere. Its closures only run

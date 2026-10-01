@@ -5632,6 +5632,21 @@ describe('runs stop', () => {
     expect(r.body).toMatchObject({ runId, stopped: 0, paused: true })
   })
 
+  // e2e 2026-10-01: a stop on a Run that had converged turned its outcome into `paused`.
+  it('refuses a Run that has already finished, and changes nothing', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    const before = deps.getState()
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain(`run ${runId} is not running: it has completed`)
+    expect(deps.getState()).toEqual(before)
+    expect((await call(deps, 'runs-get', { id: runId })).body).toMatchObject({ outcome: 'completed' })
+  })
+
   it('없는 회차는 404, id 가 없으면 400 이다', async () => {
     const deps = makeDeps()
     expect((await call(deps, 'runs-stop', { id: 'nope' })).status).toBe(404)

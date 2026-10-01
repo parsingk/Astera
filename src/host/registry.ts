@@ -84,6 +84,16 @@ interface Entry {
   /** How the pty ended, or null while it is alive. Kept after the buffer is dropped, because the
    *  Host's exit handling asks for it after the fact (`sessionExitCode`). */
   exitCode: number | null
+  /** Whether this pty has been sent its kill. **One kill per pty, ever** (2026-10-01): node-pty 1.1.0's
+   *  ConPTY kill calls ClosePseudoConsole on the same handle every time, so a second kill of a pty that
+   *  has not exited yet frees it twice, and the Host ended with STATUS_HEAP_CORRUPTION (0xC0000374),
+   *  no log line, and every session it held with it. A stop resent while the first is still under way
+   *  (the driving loop's pending-stop resend, `run-coordinator-stop`) is ordinary, so this is not rare.
+   *  The app's ptys follow the same rule in `withExitedPtyGuard` (core/sessions/pty.ts), which this file
+   *  does not import (see its header). */
+  killSent: boolean
+  /** Whether a repeat kill has already ended this pty's process tree (`kill`): once per pty. */
+  treeKillSent: boolean
 }
 
 export interface PtyRegistryDeps {
@@ -93,6 +103,10 @@ export interface PtyRegistryDeps {
   scrollback?: number
   /** Test injection; the wiring leaves it out and gets Date.now. */
   now?: () => number
+  /** Ends a process and everything it started without touching its pty (`workspace/native`'s
+   *  `killTree`: taskkill /T /F on win32, the process group elsewhere). What a repeat kill escalates
+   *  to. Left out, a repeat is only logged. */
+  killTree?: (pid: number) => Promise<void>
 }
 
 export class PtyRegistry {
@@ -179,7 +193,9 @@ export class PtyRegistry {
       cols: a.opts.cols,
       rows: a.opts.rows,
       lastWriteAt: null,
-      exitCode: null
+      exitCode: null,
+      killSent: false,
+      treeKillSent: false
     }
     this.entries.set(a.id, entry)
     pty.onData((d) => {
@@ -287,8 +303,26 @@ export class PtyRegistry {
     return e ? { cols: e.cols, rows: e.rows } : null
   }
 
+  /** Sends a live pty its one kill (`Entry.killSent`). Marked before the call, so a kill that threw is
+   *  not sent again either: whether it freed the handle is not known. **A repeat escalates, once**: the
+   *  pty is still alive after its kill, so its process tree is ended (`deps.killTree`), which never
+   *  touches the ConPTY handle. Any repeat after that is only logged. */
   kill(id: string): void {
-    this.live(id)?.pty.kill()
+    const e = this.live(id)
+    if (!e) return
+    if (e.killSent) {
+      const killTree = this.deps.killTree
+      if (e.treeKillSent || !killTree) {
+        this.deps.log(`pty ${id} was already sent its kill and has not exited yet; not sending another`)
+        return
+      }
+      e.treeKillSent = true
+      this.deps.log(`pty ${id} was already sent its kill and has not exited yet; ending its process tree (pid ${e.pid}) instead`)
+      killTree(e.pid).catch((err) => this.deps.log(`pty ${id}: its process tree (pid ${e.pid}) could not be ended: ${String(err)}`))
+      return
+    }
+    e.killSent = true
+    e.pty.kill()
   }
 
   pause(id: string): void {
@@ -393,7 +427,8 @@ export class PtyRegistry {
    *  calls this on its way out, and an escaping throw left it running with its sessions still up. */
   killAll(): void {
     for (const e of this.entries.values()) {
-      if (!e.alive) continue
+      if (!e.alive || e.killSent) continue
+      e.killSent = true
       try {
         e.pty.kill()
       } catch (err) {

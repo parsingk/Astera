@@ -1038,7 +1038,9 @@ cases. With `--request-id`, a retried `sessions create` is answered from the rec
 starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
-dispatches, stops the run's coordinator session when it has one, and pauses the run. The answer says
+dispatches, stops the run's coordinator session when it has one, and pauses the run. A run that has
+already finished (every task completed, or failed with no retries left) is refused with 6 and left as it is; its coordinator,
+which a finished run keeps, is stopped with `run-coordinator-stop --run <runId>`. The answer says
 `stopped` (how many workers) and `coordinatorStopped`: `true` means the run's coordinator was asked to
 stop, not that it has already exited. A coordinator that is still starting when the run is stopped is
 not stopped: it attaches to the paused run once its start finishes and keeps running until the run is

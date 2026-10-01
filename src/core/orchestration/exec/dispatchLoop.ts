@@ -185,7 +185,9 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  `COORDINATOR_STOP_RETRY_MS`, then twice as long each time up to `COORDINATOR_STOP_RETRY_MAX_MS`.
    *  A refusal and a throw are retried the same way, until `COORDINATOR_STOP_RETRY_CAP_TRIES` stops at
    *  the cap have gone unanswered, then it gives up with one log line (LP-1/2). **In memory on purpose**: the pending mark is what
-   *  survives a restart or a change of driver, and a new driver's first pass sends the stop at once. */
+   *  survives a restart or a change of driver, and a new driver's first pass sends the stop once the
+   *  mark is `COORDINATOR_STOP_RETRY_MS` old (at once for an older one). A mark with no entry here is
+   *  timed from the mark itself, so a stop a command has just sent is not sent again by the next pass. */
   const stopRetry = new Map<string, { tries: number; nextAt: number; capped: number; gaveUp: boolean }>()
 
   /**
@@ -233,6 +235,14 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       const nowMs = c.nowMs()
       const retry = stopRetry.get(sessionId)
       if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
+      // **A mark this loop did not send waits out its interval from the mark itself** (2026-10-01):
+      // `runs stop` and `run-coordinator-stop` from a caller stop the session and write the mark, which
+      // leaves no backoff entry here, and the commit's own pass resent the stop 12 ms later. A mark
+      // older than the interval (one left by an earlier process) still goes out at once.
+      if (!retry && pending) {
+        const markedAt = Date.parse(run.coordinatorStopPending!)
+        if (Number.isFinite(markedAt) && nowMs < markedAt + COORDINATOR_STOP_RETRY_MS) continue
+      }
       if (!c.mayStart()) return
       // LP-1/2: after COORDINATOR_STOP_RETRY_CAP_TRIES stops at the cap, one log line and no more stops.
       if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
