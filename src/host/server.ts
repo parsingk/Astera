@@ -547,6 +547,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           }
           return
         }
+        // **An MCP socket may send `hello`, `ping` and `orch-call`, and nothing else** (MCP design §2).
+        // Placed after the hello branch and before every other one, so `retire`, `orch-acted` and the
+        // pty and proc messages `onMessage` serves are all out of its reach, not only the ones listed
+        // today. Dropped, not answered: it is not a client of those.
+        if (roles.get(socket) === 'mcp' && m?.t !== 'ping' && m?.t !== 'orch-call') {
+          deps.log.write(`an MCP socket sent ${String(m?.t)} — dropped`)
+          return
+        }
         if (m?.t === 'ping') {
           // Answered here rather than through `onMessage`, and deliberately carrying nothing: what the
           // app is asking is whether this event loop is still turning. A pty spawn stuck inside

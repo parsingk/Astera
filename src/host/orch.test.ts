@@ -120,10 +120,21 @@ describe('createHostOrch', () => {
       const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('cli') })
       expect(r.status).toBe(200)
     })
+    it('a refused MCP call with a request id leaves no receipt', async () => {
+      const orch = orchOver()
+      const call = (): ReturnType<typeof orch.call> =>
+        orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: caller('mcp'), request: 'r-1' })
+      await settings(JSON.stringify({ mcpAccess: 'read' }))
+      expect((await call()).status).toBe(403)
+      await settings(JSON.stringify({ mcpAccess: 'control' }))
+      const again = await call()
+      expect(again.replayed).not.toBe(true)
+      expect(again.status).toBe(200)
+    })
     it('an unreadable settings file refuses', async () => {
       await settings('{not json')
       const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })
-      expect(r.status).toBeGreaterThanOrEqual(400)
+      expect(r.status).toBe(500)
       expect(JSON.stringify(r.body)).toMatch(/app-settings\.json/)
     })
   })

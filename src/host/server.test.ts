@@ -476,6 +476,35 @@ describe('startHostServer', () => {
     expect(seen).toContain('pty-list')
   })
 
+  // MCP design §2: a socket that said role 'mcp' may send hello, ping and orch-call, and nothing else.
+  describe('an MCP socket reaches only hello, ping and orch-call', () => {
+    it("its retire does not stop the Host", async () => {
+      const h = await start({ liveCounts: () => ({ sessions: 0, runs: 0 }) })
+      const client = await h.connect('mcp')
+      client.send({ t: 'retire' })
+      await new Promise((r) => setTimeout(r, 150))
+      expect(h.stopped).toBe(false)
+    })
+    it('its pty message is not handed to onMessage, while a cli socket still reaches it', async () => {
+      const seen: string[] = []
+      const h = await start({ onMessage: (m) => { seen.push(m.t); return true } })
+      const mcp = await h.connect('mcp')
+      mcp.send({ t: 'pty-list' } as never)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual([])
+      const cli = await h.connect('cli')
+      cli.send({ t: 'pty-list' } as never)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual(['pty-list'])
+    })
+    it('still answers its ping', async () => {
+      const h = await start()
+      const mcp = await h.connect('mcp')
+      mcp.send({ t: 'ping', seq: 7 })
+      expect(await mcp.next()).toEqual({ t: 'pong', seq: 7 })
+    })
+  })
+
   // A Host holding a terminal must not leave when the app closes: that terminal is the whole reason
   // the Host exists (slice 2 design §2.2).
   it('does not leave on the idle timer while something is holding it', async () => {
