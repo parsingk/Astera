@@ -91,6 +91,7 @@ import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
+import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
 import type { JobEvent, RunOutcome } from '../types'
 import type { SessionCheck } from '../workUnit/types'
@@ -1262,8 +1263,9 @@ export async function handleCommand(
 
   /**
    * **Stops a Run's coordinator that has nothing left to do** (the user's U4 of 2026-09-25). Two
-   * callers: `run-coordinator-stop`, which the driving process's loop sends once a scheduled Job's Run
-   * has finished (and again for a stop still pending), and a fire that replaces an idle-only Run
+   * callers: `run-coordinator-stop`, which the driving process's loop sends once a Run has finished (a
+   * scheduled Job's at once, any other after its grace) and again for a stop still pending, and a fire
+   * that replaces an idle-only Run
    * (`run-spawn --unless-running`), which also passes `pause` to end that unfinished Run the way
    * `runs stop` does.
    *
@@ -1893,10 +1895,22 @@ export async function handleCommand(
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
       // **A finished Run is left as it is** (e2e 2026-10-01): pausing it turned a converged Run's outcome
-      // into `paused`. Its coordinator, kept on purpose for a manual Run, is `run-coordinator-stop`'s.
+      // into `paused`. Its coordinator and idle workers end on their own after the grace (the driving
+      // loop, FINISHED_RUN_GRACE_MS), which the refusal says first, since an MCP client has no
+      // `run-coordinator-stop`; that command is named for the CLI, to end the coordinator now. `runId`
+      // in the body gives the CLI's nextSteps that Run (cliOutput.ts).
       const outcome = outcomeOf(s, id)
       if (outcome !== 'running')
-        return conflict(`run ${id} is not running: it has ${outcome}; \`run-coordinator-stop --run ${id}\` stops its coordinator`)
+        return {
+          status: 409,
+          body: {
+            error:
+              `run ${id} is not running: it has ${outcome}. Its coordinator and idle workers end on their own ` +
+              `${FINISHED_RUN_GRACE_MS / 60_000} minutes after the run finished or after a person last typed into them ` +
+              `(a scheduled run's at once); to end the coordinator now: astera run-coordinator-stop --run ${id}`,
+            runId: id
+          }
+        }
       const mine = new Set(s.tasks.filter((t) => t.runId === id).map((t) => t.id))
       const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt && mine.has(d.taskId))
       const retained = open.filter((d) => d.retained)
@@ -2517,10 +2531,12 @@ export async function handleCommand(
     }
     /**
      * **Stops a Run's coordinator once nothing is left for it to do** (the user's U4 of 2026-09-25).
-     * The loop of the process that drives sends it for each finished Run of a scheduled Job whose
-     * coordinator is still attached (dispatchLoop.ts), so a schedule does not leave one coordinator
-     * looping on `check --wait` per fire. A Run of a Job with no schedule is never sent: a person may
-     * be reading that coordinator's tab (the controller's ruling on U4's scope).
+     * The loop of the process that drives sends it for each finished Run whose coordinator is still
+     * attached (dispatchLoop.ts), so a schedule does not leave one coordinator looping on `check --wait`
+     * per fire, and a finished manual Run does not keep its coordinator, and the Host, alive for good. A
+     * scheduled Job's Run is sent at once; any other once FINISHED_RUN_GRACE_MS has passed with nobody
+     * typing into that coordinator, since a person may be reading its tab (the user's decision of
+     * 2026-10-02, which replaced the controller's ruling that such a Run is never sent).
      *
      * Refused, 409, while the Run still moves (runMoves, the rule `jobs run` and a fire use), so this
      * never stops a coordinator that has work. With no coordinator attached it answers 200 with

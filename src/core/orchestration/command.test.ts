@@ -5643,6 +5643,11 @@ describe('runs stop', () => {
     const r = await call(deps, 'runs-stop', { id: runId })
     expect(r.status).toBe(409)
     expect(JSON.stringify(r.body)).toContain(`run ${runId} is not running: it has completed`)
+    // 2026-10-02: an MCP client has no `run-coordinator-stop`, so the refusal says what happens on its own.
+    const error = (r.body as { error: string }).error
+    expect(error).toContain('end on their own 10 minutes after')
+    expect(error).toContain(`to end the coordinator now: astera run-coordinator-stop --run ${runId}`)
+    expect(r.body).toMatchObject({ runId })
     expect(deps.getState()).toEqual(before)
     expect((await call(deps, 'runs-get', { id: runId })).body).toMatchObject({ outcome: 'completed' })
   })

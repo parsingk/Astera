@@ -72,6 +72,11 @@ but every edit, build or commit is done by a worker, through a Task. Two cases:
   something before any Task exists, create the first Task (the investigation, say) and open the Gate
   on it. Never ask only in your own terminal: nobody outside the app sees it.
 
+**Once every Task of the Run has finished, Astera ends your session.** It waits 10 minutes from the
+later of the Run finishing and the person's last input into your session (at once for a scheduled
+Job's Run), and releases the Run's idle workers the same way (a retained one is kept). So write your
+closing summary when the last Task lands.
+
 So "the most recently created Run" (which `task-create` with no `--run` attaches to) can already be
 one of these — whether the app made it that way or a coordinator did — and that is exactly the case
 4.2's note on `parentId` warns about.
@@ -911,7 +916,8 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
 - **If there is no follow-up**, clean up with `worker-release --dispatch <dsp>`. Call it after both
   success and failure reports — it is after-the-fact cleanup, not cancellation. Only the session that
   Dispatch owns is closed; a reused session, a session the user took over, and a session whose
-  ownership cannot be proven are all preserved.
+  ownership cannot be proven are all preserved. A worker left unreleased is released by Astera itself
+  after the same 10 minutes once the Run has finished (section 1).
 - **If the user asks to keep it alive for debugging**, `worker-retain --dispatch <dsp>` — it is
   recorded as an exception rather than silently skipped. After that, `worker-stop` is rejected with 409
   and `worker-release` returns `skipped: "retained"` (meaning no session was closed). **There is no

@@ -27,7 +27,9 @@ export function attachPtyHost(a: {
         return true
       }
       case 'pty-write':
-        a.registry.write(m.id, m.data)
+        // A person typing in a tab, as far as the Host can tell: the app's own few deliveries come this
+        // way too, which only makes a finished Run's grace wait longer (registry.ts, lastPersonWriteAt).
+        a.registry.write(m.id, m.data, { person: true })
         return true
       case 'pty-resize':
         a.registry.resize(m.id, m.cols, m.rows)

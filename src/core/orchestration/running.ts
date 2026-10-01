@@ -112,7 +112,7 @@ export function runningRunCount(s: OrchState): number {
     // **A Run with its coordinator attached counts while it has work left** (e2e 2026-10-01:
     // `runsRunning: 0` beside a coordinator planning a Task-less Run). That coordinator is the work in
     // flight: it plans and places. Not once the Run is paused (`runs stop` stopped it) or finished
-    // (a manual Run keeps its coordinator after its Tasks end, and that is not work).
+    // (a manual Run keeps its coordinator for a grace after its Tasks end, and that is not work).
     (run.coordinatorSessionId !== undefined && run.paused !== true && outcomeOf(s, run.id) === 'running') ||
     s.tasks.some(
       (t) =>
