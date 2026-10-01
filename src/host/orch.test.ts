@@ -131,6 +131,16 @@ describe('createHostOrch', () => {
       expect(again.replayed).not.toBe(true)
       expect(again.status).toBe(200)
     })
+    it('a session command from MCP needs mcpSessions, read per call', async () => {
+      const orch = orchOver()
+      const list = (): ReturnType<typeof orch.call> => orch.call({ cmd: 'sessions-list', args: {}, sessionId: '', from: caller('mcp') })
+      await settings(JSON.stringify({ mcpAccess: 'control' }))
+      expect((await list()).status).toBe(403)
+      await settings(JSON.stringify({ mcpAccess: 'control', mcpSessions: true }))
+      expect((await list()).status).not.toBe(403)
+      await settings(JSON.stringify({ mcpAccess: 'control', mcpSessions: false }))
+      expect((await list()).status).toBe(403)
+    })
     it('an unreadable settings file refuses', async () => {
       await settings('{not json')
       const r = await orchOver().call({ cmd: 'jobs-list', args: {}, sessionId: '', from: caller('mcp') })
