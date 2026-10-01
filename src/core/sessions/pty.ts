@@ -84,7 +84,13 @@ export interface PtySpawnOptions {
  * nodePtyFactory 가 node-pty 를 감쌀 때 쓴다. 검사는 pty.test.ts 가 한다 — nodePtyFactory 자체는
  * node-pty 네이티브 바인딩을 불러오므로 vitest 의 node 환경에서 import 할 수 없다.
  */
-export function withExitedPtyGuard(p: PtyLike): PtyLike {
+export function withExitedPtyGuard(p: PtyLike, log: (m: string) => void = (m) => console.warn(m)): PtyLike {
+  /** **One kill per pty, ever** (2026-10-01): node-pty 1.1.0's ConPTY kill calls ClosePseudoConsole on
+   *  the same handle every time, so a second kill of a pty that has not exited frees it twice. In the
+   *  Host that ended the process with STATUS_HEAP_CORRUPTION (0xC0000374) and every session with it;
+   *  the Host's own copy of this rule is `Entry.killSent` in src/host/registry.ts, which cannot import
+   *  this module (the Host bundle). Set before the call, so a kill that threw is not resent either. */
+  let killSent = false
   return {
     pid: p.pid,
     onData: (cb) => p.onData(cb),
@@ -103,7 +109,14 @@ export function withExitedPtyGuard(p: PtyLike): PtyLike {
         // 위 주석의 구간 — 죽은 PTY 로 간 크기 조정이다
       }
     },
-    kill: () => p.kill(),
+    kill: () => {
+      if (killSent) {
+        log(`astera: pty ${p.pid} was already sent its kill and has not exited yet; not sending another`)
+        return
+      }
+      killSent = true
+      p.kill()
+    },
     pause: () => p.pause(),
     resume: () => p.resume(),
     // Forwarded rather than dropped. This wrapper only ever sees a node-pty handle today, where both

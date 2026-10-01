@@ -88,7 +88,9 @@ interface Entry {
    *  ConPTY kill calls ClosePseudoConsole on the same handle every time, so a second kill of a pty that
    *  has not exited yet frees it twice, and the Host ended with STATUS_HEAP_CORRUPTION (0xC0000374),
    *  no log line, and every session it held with it. A stop resent while the first is still under way
-   *  (the driving loop's pending-stop resend, `run-coordinator-stop`) is ordinary, so this is not rare. */
+   *  (the driving loop's pending-stop resend, `run-coordinator-stop`) is ordinary, so this is not rare.
+   *  The app's ptys follow the same rule in `withExitedPtyGuard` (core/sessions/pty.ts), which this file
+   *  does not import (see its header). */
   killSent: boolean
 }
 
