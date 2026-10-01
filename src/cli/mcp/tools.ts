@@ -1,10 +1,10 @@
-// The sixteen MCP tools (MCP design §4). Each is one Host command; `args` maps the tool's input to the
+// The eighteen MCP tools (MCP design §4). Each is one Host command; `args` maps the tool's input to the
 // command's arguments exactly as the CLI's parser would produce them: flag names camel-cased
 // (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
 import { LIST_LIMIT } from './lists'
 
-export const MCP_LIMITS = { objective: 20_000, answer: 20_000, id: 200, cursor: 512 } as const
+export const MCP_LIMITS = { objective: 20_000, answer: 20_000, spec: 50_000, title: 200, id: 200, cursor: 512 } as const
 const id = z.string().min(1).max(MCP_LIMITS.id)
 const requestId = z
   .string()
@@ -44,6 +44,12 @@ export const CONVERGENCE_KNOBS = {
   maxTotalMinutes: positive
     .optional()
     .describe('Time budget per Task in minutes (an integer >= 1). Needs convergence: true.')
+}
+
+/** Why create_task's input is refused before the Host is asked, or null: the Host's tasks-add takes
+ *  exactly one of `--job` or `--run`, and the server reads the Job before it (its coordinator account). */
+export function taskTargetRefusal(input: Record<string, unknown>): string | null {
+  return (input.jobId === undefined) === (input.runId === undefined) ? 'exactly one of jobId or runId is required' : null
 }
 
 /** Why create_job's input is refused before the Host is asked, or null. A knob without
@@ -253,5 +259,46 @@ export const TOOLS: ToolDef[] = [
       'Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and a failureSummary naming each failed check, its exit code and its last output line. Astera runs the checks and repairs; this only reads them.',
     inputSchema: { runId: id },
     args: (i) => ({ id: i.runId })
+  },
+  {
+    name: 'create_task',
+    title: 'Create a Task',
+    readOnly: false,
+    cmd: 'tasks-add',
+    description:
+      "Add a Task to a Job's plan (jobId: every Run started from then on copies it) or to one Run (runId). Give exactly one. Use this to lay out the work yourself; a Job run with no Tasks is planned by its coordinator instead. deps are the Task ids it waits for; validate names run configurations from list_run_configs that must pass on the result; review asks for a review before it counts as done. Without accountId the Task runs on the Job's coordinator account.",
+    inputSchema: {
+      jobId: id.optional(),
+      runId: id.optional(),
+      spec: z.string().min(1).max(MCP_LIMITS.spec).describe('The work, in full: the worker reads only this.'),
+      title: z.string().min(1).max(MCP_LIMITS.title).optional().describe("A short name (default: the spec's first line)."),
+      deps: z.array(id).optional().describe('The ids of the Tasks this one waits for.'),
+      accountId: id.optional().describe("The account its worker runs on, from list_accounts (default: the Job's coordinator account)."),
+      validate: z.array(id).min(1).optional().describe('Run configuration ids from list_run_configs that must pass.'),
+      review: z.boolean().optional().describe('Have the result reviewed before the Task counts as done.'),
+      requestId
+    },
+    // The CLI parser's shapes, which tasks-add reads: `--deps` a JSON array (cliArgs.ts JSON_ARRAY),
+    // `--account` and `--validate` comma lists, `--review` a bare flag. server.ts fills accountId
+    // from the Job when it is not given.
+    args: (i) => ({
+      ...(i.jobId !== undefined ? { job: i.jobId } : { run: i.runId }),
+      spec: i.spec,
+      ...(i.title !== undefined ? { title: i.title } : {}),
+      ...(Array.isArray(i.deps) && i.deps.length > 0 ? { deps: i.deps } : {}),
+      account: i.accountId,
+      ...(Array.isArray(i.validate) ? { validate: i.validate.join(',') } : {}),
+      ...(i.review === true ? { review: true } : {})
+    })
+  },
+  {
+    name: 'list_run_configs',
+    title: 'List run configurations',
+    readOnly: true,
+    cmd: 'run-configs-list',
+    description:
+      "The run configurations of a Job's project folder (id, name, type): the checks a Task can name in create_task's validate.",
+    inputSchema: { jobId: id, limit, cursor },
+    args: (i) => ({ job: i.jobId })
   }
 ]

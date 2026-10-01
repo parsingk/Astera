@@ -777,10 +777,10 @@ second run is all `unchanged`.
 skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
-protocol. It connects to the Host of this profile, starting one when none answers, and serves sixteen
-tools that create, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access
-in Settings (CLI tab). The five tools that change something (`create_job`, `run_job`, `stop_run`,
-`resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
+protocol. It connects to the Host of this profile, starting one when none answers, and serves eighteen
+tools that create, plan, run, observe, answer, stop and resume Jobs. What it may do is set by MCP
+access in Settings (CLI tab). The six tools that change something (`create_job`, `create_task`,
+`run_job`, `stop_run`, `resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
 
 **`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
 `cliVersion`, `transport` (`stdio`), `host` (`running`, and for a running Host its `version`,
