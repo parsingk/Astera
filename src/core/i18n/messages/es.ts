@@ -22,6 +22,8 @@ export const es: Catalog = {
   'settings.mcp.hint':
     'Lo que puede hacer un cliente MCP conectado mediante astera mcp serve. Con solo lectura puede ver Jobs y Runs; ' +
     'con lectura y control también puede crear, ejecutar y detener Jobs y responder preguntas.',
+  'settings.mcp.register':
+    'Para añadir Astera a un cliente MCP, ejecuta o pega la línea de ese cliente. Las líneas están escritas para este sistema operativo.',
   'settings.mcp.saveFailed': 'No se pudo guardar el acceso MCP: {detail}',
   'settings.mcp.loadFailed': 'No se pudo leer el acceso MCP: {detail}',
   // Modo de permisos del agente

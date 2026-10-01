@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { McpAccess } from '../../../core/types'
+import { mcpRegistrationLines } from '../../../core/install/mcpRegistration'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { Select } from './Select'
@@ -50,6 +51,15 @@ export function McpSettings(): React.JSX.Element {
         />
       </div>
       <span className="settings-hint">{t('settings.mcp.hint')}</span>
+      {/* The registration line for each client, in this platform's form (mcpRegistration.ts). */}
+      <span className="settings-hint">{t('settings.mcp.register')}</span>
+      {mcpRegistrationLines(window.api.platform).map(({ client, line }) => (
+        <div key={client} className="cli-path-hint">
+          <span className="mcp-register-client">{client}</span>
+          <code>{line}</code>
+          <button onClick={() => void navigator.clipboard.writeText(line)}>{t('settings.cli.copy')}</button>
+        </div>
+      ))}
     </div>
   )
 }

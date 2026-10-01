@@ -17,6 +17,9 @@ The server speaks MCP over stdio, so you do not run it yourself. The client laun
 
 Each client launches the same command: `astera mcp serve`.
 
+**Settings, CLI tab** shows the line for Claude Code, Codex and Cursor under MCP access, already in
+the form for your operating system, each with a copy button.
+
 **On Windows, launch it through `cmd /c`.** There `astera` is `astera.cmd`, and a client that starts
 its server without a shell cannot run it. Checked on Windows 11 with Node 24: spawning `astera` by name failed with
 `ENOENT`, spawning the full path of `astera.cmd` failed with `EINVAL`, and spawning

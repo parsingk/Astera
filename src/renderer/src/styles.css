@@ -1102,6 +1102,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer;
   font-size: 12px; }
 .cli-path-hint button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* The client a registration line is for (McpSettings), beside the line in the same row. */
+.mcp-register-client { flex: none; min-width: 84px; padding-top: 6px; font-size: 12px; color: var(--text-dim); }
 
 /* ---------- 에이전트 탭: 재개 방식 카드 ---------- */
 /* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
