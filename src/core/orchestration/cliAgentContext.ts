@@ -270,6 +270,10 @@ const SESSION = {
     summary: 'the dispatches of one Task',
     flags: [req('task', '<taskId>', 'the Task to list them for')]
   },
+  'runs-completion': {
+    summary: "where each Task of a run stands in completion (the MCP server's get_completion)",
+    flags: [req('id', '<runId>', 'the run to read')]
+  },
   'worker-start': {
     summary: 'start a worker session for a Task',
     flags: [

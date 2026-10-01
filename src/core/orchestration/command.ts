@@ -49,6 +49,7 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
+import { completionForRun } from './runCompletion'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -1930,6 +1931,14 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const checks = checksForRun(s, id)
       return checks ? okBody(checks) : notFound(`unknown run: ${id}`)
+    }
+    // **Where each Task stands in completion, read and never run** (MCP design §3). Not public: the
+    // MCP get_completion tool reads it; the CLI's `runs checks` stays the public view of the same run.
+    case 'runs-completion': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const completion = completionForRun(s, id)
+      return completion ? okBody(completion) : notFound(`unknown run: ${id}`)
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.

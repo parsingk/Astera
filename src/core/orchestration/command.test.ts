@@ -7734,3 +7734,24 @@ describe('handleCommand — chats pending and chats answer (chat takeover §3.5)
     expect(r).toEqual({ status: 409, body: { error: detail } })
   })
 })
+
+describe('handleCommand — runs-completion', () => {
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ]
+  })
+  it('answers where each Task of the run stands', async () => {
+    const r = await call(makeDeps(seeded()), 'runs-completion', { id: 'r1' }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId: 'r1', jobId: 'job_1', state: 'checking', tasks: [{ taskId: 't1', state: 'checking' }] })
+  })
+  it('is 404 for an unknown run and 400 for no id', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'runs-completion', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'runs-completion', {}, '')).status).toBe(400)
+  })
+})
