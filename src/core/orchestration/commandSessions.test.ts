@@ -438,6 +438,29 @@ describe('sessions send — an MCP client does not answer a session\'s prompt', 
     }
   })
 
+  it('refuses role mcp with --no-enter too, typing nothing (6)', async () => {
+    const h = rig('permission')
+    const r = await handleCommand(h.deps, { sessionId: '', role: 'mcp' }, 'sessions-send', { id: 't1', text: '1', noEnter: true })
+    expect(r.status).toBe(409)
+    expect(error(r)).toContain('an MCP client')
+    expect(h.sendSession).not.toHaveBeenCalled()
+  })
+
+  // An observed replay (resumeWait) skips the prompt check because it types nothing: the first call
+  // typed. It must stay that way for role mcp.
+  it('a keyed replay with resumeWait from role mcp types nothing', async () => {
+    const h = rig('permission')
+    const r = await handleCommand(h.deps, { sessionId: '', role: 'mcp' }, 'sessions-send', {
+      id: 't1',
+      text: '1',
+      wait: true,
+      resumeWait: true,
+      timeoutMs: 0
+    })
+    expect(r.status).toBe(200)
+    expect(h.sendSession).not.toHaveBeenCalled()
+  })
+
   it('still lets the CLI from a shell answer it', async () => {
     const h = rig('permission')
     const r = await handleCommand(h.deps, { sessionId: '', role: 'cli' }, 'sessions-send', { id: 't1', text: '1' })
@@ -482,6 +505,18 @@ describe('sessions create — an MCP client starts sessions only in a project', 
     expect(createSession).toHaveBeenCalledTimes(2)
   })
 
+  // Review fix 1: the check compares resolved text, so `<root>/sub/..` matches. On POSIX the kernel
+  // follows a symlink `sub` before the `..`, and a relative spelling resolves against the Host's own
+  // folder; the caller's spelling must never reach the starter, only the registered root.
+  it('hands the starter the registered root, never the caller\'s spelling', async () => {
+    const createSession = vi.fn(async () => row())
+    const deps = await withProjects(createSession)
+    for (const cwd of ['D:/work/repo/sub/..', 'D:/work/repo/', 'D:/work/./repo']) {
+      expect((await mcp(deps, cwd)).status, cwd).toBe(200)
+      expect(createSession, cwd).toHaveBeenLastCalledWith(expect.objectContaining({ cwd: 'D:/work/repo' }))
+    }
+  })
+
   // Review Focus 2: a project whose folder was moved or deleted after it was registered. The starter
   // probes the folder before any spawn (host/sessionCreate.ts, spawner.ts: CWD_MISSING), and that
   // refusal comes back as a 2, not a session in a missing folder.
@@ -501,5 +536,25 @@ describe('sessions create — an MCP client starts sessions only in a project', 
     const r = await handleCommand(deps, { sessionId: '', role: 'cli' }, 'sessions-create', { account: 'acc_c', cwd: 'D:/elsewhere' })
     expect(r.status).toBe(200)
     expect(createSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Review fix 3, defence in depth: answering a permission prompt is a person's decision. The MCP gate
+// does not list chats-answer, and the command layer refuses role mcp too, so the allowlist is not the
+// only barrier. An MCP client calls with an empty session id, which the older check let through.
+describe('chats answer — refused to an MCP client', () => {
+  it('role mcp is 5 and nothing is answered; the shell is not refused for it', async () => {
+    const chatAnswer = vi.fn(async () => ({ answered: true as const }))
+    const deps = makeDeps({
+      chatPrompts: async () => ({ prompts: [{ id: 'p1', sessionId: 'c1', kind: 'approval', tool: 'Bash', summary: 's' }], complete: true }),
+      chatAnswer
+    } as unknown as Partial<OrchServerDeps>)
+    const r = await handleCommand(deps, { sessionId: '', role: 'mcp' }, 'chats-answer', { id: 'p1', allow: true })
+    expect(r.status).toBe(403)
+    expect(error(r)).toContain('chats answer is for a person')
+    expect(chatAnswer).not.toHaveBeenCalled()
+    const shell = await handleCommand(deps, { sessionId: '', role: 'cli' }, 'chats-answer', { id: 'p1', allow: true })
+    expect(shell.status).toBe(200)
+    expect(chatAnswer).toHaveBeenCalledTimes(1)
   })
 })

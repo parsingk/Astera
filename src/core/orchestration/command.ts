@@ -4084,13 +4084,20 @@ export async function handleCommand(
       const account = str(args.account)
       if (account === null) return bad('--account needs a value: an account id (from `accounts list`)')
       if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
-      const cwd = str(args.cwd)
-      if (cwd === null) return bad('--cwd needs a value: a folder')
+      const asked = str(args.cwd)
+      if (asked === null) return bad('--cwd needs a value: a folder')
       // MCP P1 design §2 (Q5): an MCP client starts a session only in a registered project's root,
       // never an arbitrary folder (MCP spec §68). A root whose folder is gone is the starter's
-      // CWD_MISSING refusal below, probed before anything spawns.
-      if (caller.role === 'mcp' && !findProjectByPath(s, cwd))
-        return denied('MCP clients start sessions only in a registered project')
+      // CWD_MISSING refusal below, probed before anything spawns. **The starter gets the registered
+      // root, not the caller's spelling**: the match resolves `..` as text, while on POSIX the kernel
+      // follows a symlink before the `..` (`<root>/link/..` lands outside), and a relative spelling
+      // resolves against the Host's own folder.
+      let cwd = asked
+      if (caller.role === 'mcp') {
+        const project = findProjectByPath(s, asked)
+        if (!project) return denied('MCP clients start sessions only in a registered project')
+        cwd = project.path
+      }
       const kind = enumFilter('kind', args.kind, ['terminal', 'chat'] as const)
       if ('error' in kind) return bad(kind.error)
       const sessionKind = kind.value ?? 'terminal'
@@ -4154,6 +4161,10 @@ export async function handleCommand(
       // and calls with an empty session id. `chats pending` is a read and stays open to every caller.
       if (routed === 'chats-answer' && caller.sessionId !== '')
         return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
+      // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
+      // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
+      if (routed === 'chats-answer' && caller.role === 'mcp')
+        return denied('chats answer is for a person: run it from a shell, not from an MCP client')
       if (!deps.chatPrompts || !deps.chatAnswer)
         return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
       const session = args.session === undefined ? undefined : str(args.session)
