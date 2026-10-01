@@ -177,7 +177,8 @@ account of that provider that is logged in, the one `list_accounts` marks `defau
 account of that provider logged in, `create_job` is refused with `INVALID_ARGUMENTS`. When both are
 given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart: true` in `get_job`
 and `list_jobs` until `run_job` starts it, and a Job with no Run has `outcome: "pending"`, also after
-a `run_job` that failed.
+a `run_job` that failed. A Run that `stop_run` paused has `paused: true` and `outcome: "paused"`, in
+`get_run`, `list_runs` and its Job, until `resume_run`.
 
 **Who plans the Tasks.** A Job from `create_job` carries only its objective. Run it as it is and its
 coordinator plans it first: it breaks the objective into a few Tasks, with dependencies, an account

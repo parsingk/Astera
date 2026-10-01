@@ -8085,3 +8085,33 @@ describe('runs stop and runs resume with a coordinator', () => {
     expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
   })
 })
+
+// e2e 2026-10-01 second run: after stop_run, get_run read `paused: true` beside `outcome: "running"`.
+// A paused Run reads `paused` as its outcome, the JOB_STATES word stateWord already gives it.
+describe('a paused Run reads paused', () => {
+  const stoppedRun = async (): Promise<{ deps: OrchServerDeps; runId: string; jobId: string }> => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const run = deps.getState().runs[0]
+    expect((await call(deps, 'runs-stop', { id: run.id })).status).toBe(200)
+    return { deps, runId: run.id, jobId: run.jobId }
+  }
+
+  it('runs get, runs list and jobs get say outcome: paused', async () => {
+    const { deps, runId, jobId } = await stoppedRun()
+    expect((await call(deps, 'runs-get', { id: runId })).body).toMatchObject({ paused: true, outcome: 'paused' })
+    expect((await call(deps, 'runs-list', {})).body).toEqual([expect.objectContaining({ id: runId, outcome: 'paused' })])
+    expect((await call(deps, 'jobs-get', { id: jobId })).body).toMatchObject({ outcome: 'paused', run: { outcome: 'paused' } })
+  })
+
+  it('jobs list --status paused finds it, and --status running does not', async () => {
+    const { deps, jobId } = await stoppedRun()
+    expect(((await call(deps, 'jobs-list', { status: 'paused' })).body as Array<{ id: string }>).map((j) => j.id)).toEqual([jobId])
+    expect((await call(deps, 'jobs-list', { status: 'running' })).body).toEqual([])
+  })
+
+  it('resumed, it reads running again', async () => {
+    const { deps, runId } = await stoppedRun()
+    expect((await call(deps, 'runs-resume', { id: runId })).body).toMatchObject({ outcome: 'running' })
+  })
+})

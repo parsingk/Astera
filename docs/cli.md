@@ -117,8 +117,10 @@ otherwise. A script that read `.data.stopped` or `.data.sessions` off a refused 
 nothing is.
 
 A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
-A run is running while it has work in flight: a worker session open on one of its tasks, or a task
-being validated or reviewed. A run whose tasks have not started yet is not. Neither is one whose
+A run is running while it has work in flight: a worker session open on one of its tasks, a task
+being validated or reviewed, or its coordinator attached while the run is neither paused nor finished
+(a coordinator planning a run that has no tasks yet counts). A run whose tasks have not started yet,
+and that has no coordinator, is not. Neither is one whose
 workers were all stopped, unless one of its tasks is still being validated or reviewed. `runs stop`
 closes the run's worker sessions and pauses it, but it does not end a validation or a review, and a
 paused run with such a task still counts. The Host finishes that task itself (with a Host that does
@@ -596,8 +598,9 @@ list. Filters on one command combine.
   is the word the first column of `--human` shows, in lower case (`COMPLETE` is `completed`), so a
   script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
   `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
-  failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, which is what the table shows; a run
-  stopped with `runs stop` is paused on the run, and `runs get` shows it.
+  failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, or a
+  latest run stopped with `runs stop`: that run has `paused: true`, and both it (`runs get`, `runs
+  list`) and its Job have `outcome: "paused"` until `runs resume`.
 - **`jobs list --project <path>`** keeps the Jobs of the project a folder belongs to, found the way
   `projects find` finds it (below). A folder no project holds is a 4 with `astera projects list` as its
   step. A Job belongs to the project it was created in. A Job with no project of its own, such as one

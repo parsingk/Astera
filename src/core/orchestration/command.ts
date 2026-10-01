@@ -763,7 +763,9 @@ const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string
   // `pendingStart: true` (the e2e check of 2026-10-01). `pending` is JOB_STATES' word for it, and
   // stateWord reads it as PENDING. The app's sidebar keeps its own row (view.ts) with its
   // not-started chip, and a scheduled Job still reads SCHEDULED, since stateWord asks that first.
-  ...(run === undefined ? { outcome: 'pending' } : {})
+  ...(run === undefined ? { outcome: 'pending' } : {}),
+  // Its latest Run is paused: the same word runView gives that Run.
+  ...(run?.paused === true ? { outcome: 'paused' } : {})
 })
 
 /**
@@ -854,9 +856,13 @@ const limitedUntil = (s: OrchState, runId: string, now: string): string | null =
   return earliest
 }
 
+/** A paused Run's `outcome` is `paused` (e2e 2026-10-01: `runs stop` left `paused: true` beside
+ *  `outcome: "running"`). outcomeOf reads only the Tasks, so it cannot see the pause. `paused` is the
+ *  JOB_STATES word, and stateWord puts it ahead of the Tasks' outcome, as this does. */
 const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
   ...run,
-  ...derivedFor(s, run.id, [run.id])
+  ...derivedFor(s, run.id, [run.id]),
+  ...(run.paused === true ? { outcome: 'paused' } : {})
 })
 
 /**
