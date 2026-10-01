@@ -32,7 +32,7 @@ const answering = (answers: Record<string, { status: number; body: unknown }>) =
 }
 
 /** Feeds JSON-RPC lines to `serveMcp` over its own streams and collects what it writes back. */
-function served(link: HostLink) {
+function served(link: HostLink, drainCapMs?: number) {
   const stdin = new PassThrough()
   const stdout = new PassThrough()
   const lines: string[] = []
@@ -44,10 +44,18 @@ function served(link: HostLink) {
     version: '1.4.1',
     stdin,
     stdout,
-    link
+    link,
+    ...(drainCapMs === undefined ? {} : { drainCapMs })
   })
   const send = (m: unknown): void => void stdin.write(JSON.stringify(m) + '\n')
   return { stdin, lines, done, send }
+}
+
+/** The one text block a result carries: its sentence, a newline, then its structured data as JSON. */
+const textOf = (r: unknown): string => {
+  const content = (r as { content: Array<{ type: string; text: string }> }).content
+  expect(content).toHaveLength(1)
+  return content[0].text
 }
 
 const INITIALIZE = {
@@ -181,6 +189,66 @@ describe('the MCP server', () => {
     expect(Array.isArray((r.structuredContent as { nextSteps?: unknown }).nextSteps)).toBe(true)
   })
 
+  it('a refusal naming a request in flight points at requests show and carries the id as details', async () => {
+    const client = await connected(
+      answering({ 'jobs-run': { status: 409, body: { error: 'request rq-1 is already running', requestId: 'rq-1' } } }).link
+    )
+    const r = await client.callTool({ name: 'run_job', arguments: { jobId: 'job_1', requestId: 'rq-1' } })
+    const data = r.structuredContent as { nextSteps: string[]; details?: Record<string, unknown> }
+    expect(data.details).toEqual({ requestId: 'rq-1' })
+    expect(data.nextSteps.some((s) => s.includes('requests show') && s.includes('rq-1'))).toBe(true)
+  })
+
+  it('a refusal naming no ids carries no details', async () => {
+    const client = await connected(answering({ 'runs-get': { status: 404, body: { error: 'unknown run: run_9' } } }).link)
+    const r = await client.callTool({ name: 'get_run', arguments: { runId: 'run_9' } })
+    expect('details' in (r.structuredContent as object)).toBe(false)
+  })
+
+  it('run_job hides the Run fields get_run hides', async () => {
+    const run = {
+      id: 'run_1',
+      jobId: 'job_1',
+      ordinal: 1,
+      coordinatorStop: { at: 'T' },
+      coordinatorStartingAt: 'T',
+      coordinatorStopPending: true
+    }
+    const client = await connected(answering({ 'jobs-run': { status: 200, body: run } }).link)
+    const data = (await client.callTool({ name: 'run_job', arguments: { jobId: 'job_1' } })).structuredContent as object
+    expect(data).toMatchObject({ id: 'run_1', jobId: 'job_1' })
+    for (const hidden of ['coordinatorStop', 'coordinatorStartingAt', 'coordinatorStopPending']) expect(hidden in data).toBe(false)
+  })
+
+  it('carries the data in content too: the sentence, a newline, then the structured data as JSON', async () => {
+    const client = await connected(answering({ 'runs-get': { status: 200, body: { id: 'run_1', jobId: 'job_1' } } }).link)
+    const ok = await client.callTool({ name: 'get_run', arguments: { runId: 'run_1' } })
+    const [sentence, json] = textOf(ok).split('\n')
+    expect(sentence).toBe('Get a Run.')
+    expect(JSON.parse(json)).toEqual(ok.structuredContent)
+
+    const failing = await connected(answering({ 'runs-get': { status: 404, body: { error: 'unknown run: run_1' } } }).link)
+    const err = await failing.callTool({ name: 'get_run', arguments: { runId: 'run_1' } })
+    const [line, errJson] = textOf(err).split('\n')
+    expect(line).toBe('NOT_FOUND: unknown run: run_1')
+    expect(JSON.parse(errJson)).toEqual(err.structuredContent)
+  })
+
+  it('redacts free text but leaves ids and paths alone', async () => {
+    const token = 'sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const client = await connected(
+      answering({
+        'jobs-get': { status: 200, body: { id: 'job_1', objective: `use ${token}`, cwd: `D:/repo/${token}` } }
+      }).link
+    )
+    const data = (await client.callTool({ name: 'get_job', arguments: { jobId: 'job_1' } })).structuredContent as Record<
+      string,
+      unknown
+    >
+    expect(data.cwd).toBe(`D:/repo/${token}`)
+    expect(String(data.objective)).not.toContain(token)
+  })
+
   it('maps a link failure to its code', async () => {
     const link: HostLink = { call: async () => ({ code: 'HOST_NOT_RUNNING', message: 'm' }), close: () => {} }
     const r = await (await connected(link)).callTool({ name: 'list_jobs', arguments: {} })
@@ -211,15 +279,31 @@ describe('the MCP server', () => {
 
   it('writes nothing to process.stdout while serving over its own streams', async () => {
     const write = vi.spyOn(process.stdout, 'write')
-    const s = served(answering({}).link)
+    const s = served(answering({ 'jobs-list': { status: 200, body: [{ id: 'job_1', objective: 'o' }] } }).link)
     s.send(INITIALIZE)
+    s.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+    s.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'list_jobs', arguments: {} } })
     await new Promise((r) => setTimeout(r, 50))
     s.stdin.end()
     await s.done
     expect(write).not.toHaveBeenCalled()
-    expect(s.lines.length).toBeGreaterThan(0)
-    for (const l of s.lines) expect(JSON.parse(l)).toHaveProperty('jsonrpc', '2.0')
+    const messages = s.lines.map((l) => JSON.parse(l))
+    for (const m of messages) expect(m).toHaveProperty('jsonrpc', '2.0')
+    expect(messages.map((m) => m.id)).toEqual([1, 2])
+    expect(messages[1].result.structuredContent).toEqual({ jobs: [{ id: 'job_1', objective: 'o' }] })
     write.mockRestore()
+  })
+
+  it('stops waiting for a call that never answers once the drain cap passes', async () => {
+    let closed = false
+    const link: HostLink = { call: () => new Promise(() => {}), close: () => void (closed = true) }
+    const s = served(link, 50)
+    s.send(INITIALIZE)
+    s.send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+    s.send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_run', arguments: { runId: 'run_1' } } })
+    s.stdin.end()
+    await s.done
+    expect(closed).toBe(true)
   })
 
   it('answers a call still in flight when stdin ends, then closes the link', async () => {

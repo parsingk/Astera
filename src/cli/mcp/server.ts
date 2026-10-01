@@ -5,32 +5,70 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { connectHost } from '../../core/host/connect'
-import { codeForStatus, dataFor, nextStepsFor, type CliErrorCode } from '../../core/orchestration/cliOutput'
+import {
+  codeForStatus,
+  dataFor,
+  nextStepsFor,
+  refusalDetailsOf,
+  type CliErrorCode
+} from '../../core/orchestration/cliOutput'
 import { publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { TOOLS, type ToolDef } from './tools'
 
-/** Every string in a result goes through the same secret filter the checkpoint uses. */
-const redact = (v: unknown): unknown =>
+/** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
+ *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
+ *  because a filter that rewrites a path breaks the next call that uses it. */
+const FREE_TEXT = new Set([
+  'question',
+  'resolution',
+  'spec',
+  'result',
+  'objective',
+  'error',
+  'message',
+  'summary',
+  'answer',
+  'failureSummary',
+  'title'
+])
+
+/** Every string under a free-text key, however deep (an array or an object under such a key included). */
+const redactAll = (v: unknown): unknown =>
   typeof v === 'string'
     ? sanitize(v)
     : Array.isArray(v)
-      ? v.map(redact)
+      ? v.map(redactAll)
       : v !== null && typeof v === 'object'
-        ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redact(x)]))
+        ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactAll(x)]))
         : v
 
-const errorResult = (code: CliErrorCode, message: string, cmd?: string): CallToolResult => ({
-  isError: true,
-  content: [{ type: 'text', text: `${code}: ${message}` }],
-  structuredContent: { code, message, nextSteps: nextStepsFor({ code, cmd }) }
-})
+const redact = (v: unknown): unknown =>
+  Array.isArray(v)
+    ? v.map(redact)
+    : v !== null && typeof v === 'object'
+      ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, FREE_TEXT.has(k) ? redactAll(x) : redact(x)]))
+      : v
+
+/** One text block: the sentence, a newline, then the structured data as JSON. No outputSchema is
+ *  declared, so a client may read only `content`, and it must find the data there too. */
+const textResult = (sentence: string, data: Record<string, unknown>): CallToolResult['content'] => [
+  { type: 'text', text: `${sentence}\n${JSON.stringify(data)}` }
+]
+
+const errorResult = (code: CliErrorCode, message: string, cmd?: string, body?: unknown): CallToolResult => {
+  // The same details the CLI's envelope carries (run.ts), so nextSteps branches the same way: a
+  // request in flight points at `requests show`, a repair only the app can make gets none.
+  const details = refusalDetailsOf(body)
+  const data = { code, message, nextSteps: nextStepsFor({ code, cmd, details }), ...(details ? { details } : {}) }
+  return { isError: true, content: textResult(`${code}: ${message}`, data), structuredContent: data }
+}
 
 const refusalMessage = (status: number, body: unknown): string => {
   const error = (body as { error?: unknown } | null)?.error
-  return typeof error === 'string' ? error : `status ${status}`
+  return typeof error === 'string' ? sanitize(error) : `status ${status}`
 }
 
 async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
@@ -40,20 +78,25 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
     const project = await link.call('projects-get', { id: input.projectId })
     if ('code' in project) return errorResult(project.code, project.message, 'projects-get')
     if (project.status !== 200)
-      return errorResult(codeForStatus(project.status), refusalMessage(project.status, project.body), 'projects-get')
+      return errorResult(
+        codeForStatus(project.status),
+        refusalMessage(project.status, project.body),
+        'projects-get',
+        project.body
+      )
     args = { ...input, cwd: (project.body as { path: string }).path }
   }
   const r = await link.call(t.cmd, t.args(args), typeof input.requestId === 'string' ? input.requestId : undefined)
   if ('code' in r) return errorResult(r.code, r.message, t.cmd)
-  if (r.status < 200 || r.status >= 300) return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd)
+  if (r.status < 200 || r.status >= 300)
+    return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd, r.body)
   const shaped = redact(publicFor(t.cmd, r.body))
   const count = Array.isArray(shaped) ? ` (${shaped.length})` : ''
+  // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
+  const data = dataFor(t.cmd, shaped)
   return {
-    content: [
-      { type: 'text', text: `${t.title}${count}${r.replayed ? ', replayed from the first call with this requestId' : ''}.` }
-    ],
-    // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
-    structuredContent: dataFor(t.cmd, shaped)
+    content: textResult(`${t.title}${count}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
+    structuredContent: data
   }
 }
 
@@ -83,6 +126,9 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
   return server
 }
 
+/** How long the end of stdin waits for calls still in flight. */
+const DRAIN_CAP_MS = 10_000
+
 export async function serveMcp(a: {
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
@@ -92,6 +138,8 @@ export async function serveMcp(a: {
   stdout?: Writable
   /** Test injection; without it the real link to this profile's Host is opened. */
   link?: HostLink
+  /** How long the end of stdin waits for calls still in flight before closing anyway. Test injection. */
+  drainCapMs?: number
 }): Promise<void> {
   const log = (m: string): void => void process.stderr.write(`astera mcp: ${m}\n`)
   const stdin = a.stdin ?? process.stdin
@@ -135,13 +183,21 @@ export async function serveMcp(a: {
   })
   await Promise.race([ended, closed])
   // A turn of the event loop lets the last lines read start their handlers; then wait for their Host
-  // calls, and one more turn for each answer to be written.
+  // calls, and one more turn for each answer to be written. **At most `drainCapMs`**: a call the
+  // Host never answers must not keep a client's server alive after the client has gone.
   const turn = (): Promise<void> => new Promise((r) => setImmediate(r))
-  await turn()
-  while (inFlight > 0) {
-    await new Promise<void>((r) => (idle = r))
+  let cap: NodeJS.Timeout | undefined
+  const capped = new Promise<'cap'>((r) => (cap = setTimeout(() => r('cap'), a.drainCapMs ?? DRAIN_CAP_MS)))
+  const drained = (async (): Promise<'drained'> => {
     await turn()
-  }
+    while (inFlight > 0) {
+      await new Promise<void>((r) => (idle = r))
+      await turn()
+    }
+    return 'drained'
+  })()
+  if ((await Promise.race([drained, capped])) === 'cap') log(`closing with ${inFlight} call(s) still unanswered`)
+  clearTimeout(cap)
   await server.close()
   await closed
   link.close()

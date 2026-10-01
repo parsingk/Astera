@@ -31,6 +31,7 @@ import {
   messageFrom,
   nextStepsFor,
   okEnvelope,
+  refusalDetailsOf,
   silentHostEnd,
   sessionTurnEnd,
   type CliError,
@@ -596,23 +597,6 @@ export function lostAnswerDetails(a: {
     ...head,
     retryCommand: retryCommandLine({ argv: a.argv, request: a.request, implicit: a.implicit })
   }
-}
-
-/** The ids a refusal names, as `details` for the envelope, or nothing: `requestId` (the 409 for a
- *  request already in flight), `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
- *  D), `repair` (the profile file a 409 says only the app can repair, Host S2) and `retry` (a 409
- *  from a Host that is leaving, which the same command retried once a Host is up clears) and `runId` (a
- *  later `jobs run` whose coordinator did not start: the run it left behind, host S4+S5 Task 15; and the
- *  Run a `check --ack` of no such batch was checked against, for its `check --run <runId>` step). Undefined
- *  rather than an empty object so a failure that names none prints `details: {}` exactly as it did before. */
-export function refusalDetailsOf(body: unknown): Record<string, unknown> | undefined {
-  if (body === null || typeof body !== 'object') return undefined
-  const out: Record<string, unknown> = {}
-  for (const key of ['requestId', 'jobId', 'repair', 'retry', 'runId'] as const) {
-    const id = (body as Record<string, unknown>)[key]
-    if (typeof id === 'string' && id !== '') out[key] = id
-  }
-  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
@@ -1224,6 +1208,8 @@ export async function main(): Promise<void> {
         message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
       })
     await serveMcp({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    // A pipe on POSIX is asynchronous: let the last answer leave before the process does.
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
     process.exit(0)
   }
 

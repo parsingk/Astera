@@ -3,7 +3,7 @@ import { GIT_WRITE_TIMEOUT_MS } from '../core/worktrees/git'
 import { MERGE_CLIENT_TIMEOUT_MS } from '../core/orchestration/cliKeepalive'
 import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 import { LAUNCH_WAIT_MAX_MS } from '../core/workspace/script'
-import { exitCodeFor } from '../core/orchestration/cliOutput'
+import { exitCodeFor, refusalDetailsOf } from '../core/orchestration/cliOutput'
 import { promises as fs, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -23,7 +23,6 @@ import {
   retryCommandLine,
   implicitArgs,
   stdinMissingError,
-  refusalDetailsOf,
   shownReceipt,
   callHost,
   timedCall,

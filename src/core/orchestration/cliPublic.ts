@@ -286,6 +286,8 @@ const SHAPE: Record<string, readonly string[]> = {
   'jobs-create': JOB,
   'runs-list': RUN,
   'runs-get': RUN,
+  // `jobs run` answers with the Run it started (runView), so it hides what `runs get` hides.
+  'jobs-run': RUN,
   'tasks-list': TASK,
   'tasks-add': TASK,
   'tasks-dispatch': TASK_DISPATCH,
