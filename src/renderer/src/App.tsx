@@ -134,6 +134,8 @@ sessionBus.init()
 /** Whether this renderer has shown the astera command offer (see where it is used). Module scope,
  *  not a ref: StrictMode's dev-only remount would reset a ref and show a second toast. */
 let cliOfferedThisRun = false
+/** Whether this renderer has asked about the user Path repair at start, for the same StrictMode reason. */
+let cliPathRepairAskedThisRun = false
 
 /** The key a record tab's narrowed-flow-step memory (scopedNode) uses. Carries both the project and
  *  the record — a tab id (`record:<id>`) has no project in it, so two projects sharing a record id
@@ -914,6 +916,28 @@ export default function App(): React.JSX.Element {
         cliOfferedThisRun = false
       })
   }, [accounts.length])
+  // win32: the start took the astera folder off the user Path because it made that Path too long for
+  // new shells (main/userPath.ts takeOffUserPathIfItBreaks). Said once, with the way back in Settings.
+  useEffect(() => {
+    if (cliPathRepairAskedThisRun) return
+    cliPathRepairAskedThisRun = true
+    void window.api.cli
+      .pathRepairedAtStart()
+      .then((removed) => {
+        if (!removed) return
+        const id = toast.info(tRef.current('settings.cli.pathRepaired.toast'), {
+          action: {
+            label: tRef.current('settings.cli.offer.open'),
+            onClick: () => {
+              dismiss(id)
+              setSettingsTab('cli')
+              setShowSettings(true)
+            }
+          }
+        })
+      })
+      .catch(() => {})
+  }, [])
   const cliRef = useRef(cli)
   cliRef.current = cli
   // The install button on the toast is pressed later — it has to see the real number of running sessions at that moment
