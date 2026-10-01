@@ -9,6 +9,7 @@ import {
   COORDINATOR_STOP_RETRY_CAP_TRIES,
   COORDINATOR_STOP_RETRY_MAX_MS,
   COORDINATOR_STOP_RETRY_MS,
+  FINISHED_RUN_GRACE_MS,
   createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
 import { coordinatorReleaseOf } from './releaseDefer'
 import { handleCommand, type OrchServerDeps } from '../command'
@@ -178,6 +179,7 @@ function rig(o: RigOpts = {}) {
   })
   const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
   const stopCoordinator = vi.fn(async (_sessionId: string): Promise<void> => {})
+  const releaseWorker = vi.fn(async (_a: { dispatchId: string }): Promise<void> => {})
 
   const deps = {
     getState: () => state,
@@ -195,6 +197,7 @@ function rig(o: RigOpts = {}) {
     startWorker,
     startCoordinator,
     stopCoordinator,
+    releaseWorker,
     listAccounts: async () => [{ id: 'accA', label: 'accA', provider: 'claude' as const }],
     log: () => {},
     runningSessions: () => 0,
@@ -258,6 +261,7 @@ function rig(o: RigOpts = {}) {
     startWorker,
     startCoordinator,
     stopCoordinator,
+    releaseWorker,
     logs,
     typed,
     reaped,
@@ -660,7 +664,7 @@ describe('a finished scheduled Run’s coordinator is stopped (U4)', () => {
     expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
   })
 
-  it('leaves a manual Run’s coordinator alone, finished or not', async () => {
+  it('leaves a manual Run’s coordinator alone while its grace runs', async () => {
     const h = rig()
     withCoordinator(h, 'run_1', 'coord-1')
     finish(h, 'run_1')
@@ -730,6 +734,109 @@ describe('stopFinishedCoordinators asks mayStart before each stop', () => {
     await h.loop.run()
     expect(h.handled().filter((c) => c === 'run-coordinator-stop')).toHaveLength(1)
     expect(h.stopCoordinator).toHaveBeenCalledTimes(1)
+  })
+})
+
+// The user's decision of 2026-10-02 (e2e "Fourth run"): a manual Run that has finished kept its
+// coordinator alive for good, so `host stop` refused and an MCP client had nothing to end it with. Its
+// coordinator now stops once FINISHED_RUN_GRACE_MS has passed since the later of the Run finishing (its
+// Tasks' last change) and the last time a person typed into that session.
+describe('a finished manual Run’s coordinator stops after the grace', () => {
+  const MIN = 60_000
+  const finishedWithCoordinator = () => {
+    const h = rig()
+    const s = h.state()
+    h.setState({
+      ...s,
+      runs: s.runs.map((r) => (r.id === 'run_1' ? { ...r, coordinatorSessionId: 'coord-1' } : r)),
+      tasks: s.tasks.map((t) => (t.runId === 'run_1' ? { ...t, status: 'completed' as const } : t))
+    })
+    return h
+  }
+  const pass = async (h: ReturnType<typeof rig>): Promise<void> => {
+    await h.loop.run()
+    await h.settle()
+  }
+  const stops = (h: ReturnType<typeof rig>): number => h.handled().filter((c) => c === 'run-coordinator-stop').length
+
+  it('is 10 minutes', () => {
+    expect(FINISHED_RUN_GRACE_MS).toBe(10 * MIN)
+  })
+
+  it('leaves it alone 9 minutes after the finish, and sends the stop once at 10', async () => {
+    const h = finishedWithCoordinator()
+    h.clock = NOW_MS + 9 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(0)
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+    expect(h.stopCoordinator.mock.calls).toEqual([['coord-1']])
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
+  it('the timer tick sends it too, with nothing committed', async () => {
+    const h = finishedWithCoordinator()
+    h.clock = NOW_MS + 10 * MIN
+    await h.loop.nudge()
+    await h.settle()
+    expect(h.stopCoordinator.mock.calls).toEqual([['coord-1']])
+  })
+
+  it('a person typing into it at minute 8 moves the stop to minute 18', async () => {
+    const h = finishedWithCoordinator()
+    h.ctx.lastPersonInputAt = (id) => (id === 'coord-1' ? NOW_MS + 8 * MIN : null)
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    h.clock = NOW_MS + 18 * MIN - 1
+    await pass(h)
+    expect(stops(h)).toBe(0)
+    h.clock = NOW_MS + 18 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
+  it('input before the finish counts for nothing: the finish is the later of the two', async () => {
+    const h = finishedWithCoordinator()
+    h.ctx.lastPersonInputAt = () => NOW_MS - 5 * MIN
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
+  it('the loop’s own nudge into it is not a person’s input', async () => {
+    const h = finishedWithCoordinator()
+    // An unread report from long ago: the loop types a nudge into the coordinator on its tick.
+    const s = h.state()
+    h.setState({ ...s, messages: [message({ id: 'msg_up', type: 'status', createdAt: new Date(NOW_MS - 120_000).toISOString() })] })
+    h.clock = NOW_MS + 5 * MIN
+    await h.loop.nudge()
+    await h.settle()
+    expect(h.typed.length).toBeGreaterThan(0)
+    h.clock = NOW_MS + 10 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(1)
+  })
+
+  it('leaves the coordinator of a Run that has not finished alone, however long', async () => {
+    const h = rig()
+    const s = h.state()
+    h.setState({ ...s, runs: s.runs.map((r) => (r.id === 'run_1' ? { ...r, coordinatorSessionId: 'coord-1' } : r)) })
+    // No slot to fill: both Tasks wait, and the Run is still running.
+    h.setState({ ...h.state(), tasks: h.state().tasks.map((t) => ({ ...t, status: 'pending' as const })) })
+    h.clock = NOW_MS + 60 * MIN
+    await pass(h)
+    expect(stops(h)).toBe(0)
+  })
+
+  it('only the driving process stops it', async () => {
+    const h = finishedWithCoordinator()
+    h.clock = NOW_MS + 10 * MIN
+    const other = createDispatchLoop({ ...h.ctx, mayStart: () => false })
+    await other.run()
+    await other.nudge()
+    expect(h.stopCoordinator).not.toHaveBeenCalled()
   })
 })
 

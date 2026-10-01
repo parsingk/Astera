@@ -132,6 +132,27 @@ describe('PtyRegistry', () => {
     expect(r.lastWrite('p1')).toBe(2000)
   })
 
+  // 2026-10-02: a finished Run's sessions end once nobody has typed into them for a while
+  // (dispatchLoop.ts, FINISHED_RUN_GRACE_MS). The Host's own writes (a nudge, a spawn's or a roll's
+  // prompt) are input to the pty but not a person's, so only a write marked `person` moves this.
+  it('only a write marked as a person’s moves lastPersonWrite, and terminal reports never do', () => {
+    const esc = String.fromCharCode(27)
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', 'nudge\r')
+    expect(r.lastWrite('p1')).toBe(1000)
+    expect(r.lastPersonWrite('p1')).toBe(null)
+    clock = 2000
+    r.write('p1', 'x', { person: true })
+    expect(r.lastPersonWrite('p1')).toBe(2000)
+    clock = 3000
+    r.write('p1', `${esc}[I`, { person: true })
+    r.write('p1', 'prompt\r')
+    expect(r.lastPersonWrite('p1')).toBe(2000)
+    expect(r.lastPersonWrite('nope')).toBe(null)
+  })
+
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it
   // before it learned the pty exited.
   it('ignores every command for an id it does not have', () => {

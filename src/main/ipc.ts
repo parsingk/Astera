@@ -58,6 +58,7 @@ import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, HOST_ACT_SLACK_ANSWER, type Client
 import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
+import { isOnlyTerminalReports } from '../core/terminal/reports'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { orchAccountsFor } from '../core/accounts/accountsFile'
@@ -2273,6 +2274,12 @@ export function registerIpc(
   })
 
   // ── Starting orchestration ─────────────────────────────────────────
+  /** When a person last typed into each session in this app's tabs (the renderer's `sessions.write`,
+   *  terminal reports left out), by session id. A finished Run's sessions end once nobody has typed into
+   *  them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS); the app's own writes (a nudge, a prompt)
+   *  go through core.sessions.write directly and are not here. */
+  const personInputAt = new Map<string, number>()
+
   // It sits directly after spawnSession above because that function is the session creation the
   // coordinator needs, and the busy verdict reads this file's busyState too. Once the server is
   // listening, sessions start receiving ASTERA_*.
@@ -2992,6 +2999,7 @@ export function registerIpc(
           .some((x) => x.id === id && x.status === 'exited' && x.exitCode !== undefined && x.exitCode !== PTY_LOST_SIGHT_EXIT_CODE),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
+      lastPersonInputAt: (id) => personInputAt.get(id) ?? null,
       // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).
       // 슬롯마다 다시 묻으므로, 한 바퀴 도중에 그런 Host 가 붙으면 그 자리에서 멈춘다.
       mayStart: () => orch !== null && !hostDrives(),
@@ -3819,7 +3827,10 @@ export function registerIpc(
   // Host to reach, and every session it starts is given the CLI. The toggles that used to be the
   // other four reasons to come here now only decide which commands are answered.
   if (orchWiring) void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
-  ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
+  ipcMain.on('sessions.write', (_e, id, data) => {
+    if (typeof data === 'string' && !isOnlyTerminalReports(data)) personInputAt.set(id, Date.now())
+    core.sessions.write(id, data)
+  })
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
   ipcMain.handle('sessions.kill', (_e, id) => {

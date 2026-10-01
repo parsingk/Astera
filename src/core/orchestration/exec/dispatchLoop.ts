@@ -38,7 +38,8 @@ import { reapableChildRuns } from '../reap'
 import { lostAttemptOf } from '../../recovery/candidates'
 import { slotsToFill, tasksMissingAccounts, type Slot } from '../schedule'
 import { coordinatorStarting, jobOf, type OrchState } from '../state'
-import { DEFAULT_CONCURRENCY, FAILURE_LIMIT } from '../types'
+import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun } from '../types'
+import { tasksOwnedBy } from '../running'
 import { outcomeOf } from '../view'
 import type { Integration } from './integrateGit'
 
@@ -66,6 +67,12 @@ export const COORDINATOR_STOP_RETRY_MAX_MS = 10 * 60_000
  *  each time. Giving up is logged once and is in memory only: the slot and its pending mark stay, so a
  *  restart or a new driver asks again, and a session later known to be gone is still released. */
 export const COORDINATOR_STOP_RETRY_CAP_TRIES = 6
+/** How long a finished manual Run keeps its coordinator, counted from the later of the Run finishing and
+ *  the last time a person typed into that session (the user's decision of 2026-10-02). Ten minutes: long
+ *  enough to read the coordinator's closing summary or ask it a follow-up, and a follow-up starts the
+ *  count again; short enough that a finished Run does not keep its sessions, and with them the Host,
+ *  alive for good. A scheduled Run gets none, since nothing watches it. */
+export const FINISHED_RUN_GRACE_MS = 10 * 60_000
 
 export interface DispatchLoopContext {
   /** handleCommand under this process's own caller id (the app's UI_CALLER, the Host's HOST_CALLER). */
@@ -88,6 +95,11 @@ export interface DispatchLoopContext {
   /** true busy, false idle, null cannot tell. */
   sessionBusy(sessionId: string): boolean | null
   typeInto(sessionId: string, text: string): void
+  /** When a person last typed into the session, in ms since the epoch, or null when this process has
+   *  not seen it (FINISHED_RUN_GRACE_MS). Only a person's typing: never this loop's own `typeInto`, a
+   *  prompt a spawn or a roll types, or a terminal's own reports. In memory, so a restart forgets it.
+   *  Optional: without it the grace counts from the Run's finish alone. */
+  lastPersonInputAt?(sessionId: string): number | null
   /** Asked on entry and again before each slot (§4.3). */
   mayStart(): boolean
   log(m: string): void
@@ -190,14 +202,27 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  timed from the mark itself, so a stop a command has just sent is not sent again by the next pass. */
   const stopRetry = new Map<string, { tries: number; nextAt: number; capped: number; gaveUp: boolean }>()
 
+  /** Whether a finished Run's session may be ended now (FINISHED_RUN_GRACE_MS): at once for a scheduled
+   *  Job's Run, otherwise once the grace has passed since the later of the Run's finish and the last time
+   *  a person typed into that session. The finish is the latest `updatedAt` of the Run's Tasks: the
+   *  commit that made the last one terminal stamps it, and nothing on the Run records the moment. A later
+   *  edit of a finished Task moves it on, which only waits longer. */
+  const graceOver = (s: OrchState, run: JobRun, sessionId: string, nowMs: number): boolean => {
+    if (jobOf(s, run)?.schedule !== undefined) return true
+    const finishedAt = Math.max(...tasksOwnedBy(s, run.id).map((t) => Date.parse(t.updatedAt)))
+    const typedAt = c.lastPersonInputAt?.(sessionId) ?? null
+    return nowMs - Math.max(finishedAt, typedAt ?? finishedAt) >= FINISHED_RUN_GRACE_MS
+  }
+
   /**
-   * **A scheduled Job's Run that has finished gets its coordinator stopped** (the user's U4 of
-   * 2026-09-25). Otherwise every fire leaves one more coordinator looping on `check --wait` for good.
-   * A finished Run is one whose outcome is no longer `running` (every Task done, view.ts). Only a Job
-   * with a schedule: a manual `jobs run` Run keeps its coordinator, since a person may be reading its
-   * tab (the controller's ruling on U4's scope). **A slot marked `coordinatorStopPending` is sent
-   * again too** (L1), whatever its Run's outcome: a fire's replacement leaves that Run paused and
-   * unfinished.
+   * **A Run that has finished gets its coordinator stopped** (the user's U4 of 2026-09-25, widened to
+   * every Run on 2026-10-02). Otherwise every fire leaves one more coordinator looping on `check --wait`
+   * for good, and a finished manual Run keeps its session, and with it the Host, alive with nothing an
+   * MCP client can call to end it (e2e "Fourth run"). A finished Run is one whose outcome is no longer
+   * `running` (every Task done, view.ts). A scheduled Job's Run is stopped at once; any other waits out
+   * `graceOver`, since a person may be reading its tab or asking it a follow-up. **A slot marked
+   * `coordinatorStopPending` is sent again too** (L1), whatever its Run's outcome: a fire's replacement
+   * leaves that Run paused and unfinished.
    *
    * **Only the process that drives does it.** The caller has asked `mayStart` just before, and this
    * asks again before each stop, so the app and the Host never both stop one coordinator. The stop and
@@ -215,8 +240,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       if (sessionId === undefined) continue
       const pending = run.coordinatorStopPending !== undefined
       if (!pending) {
-        if (jobOf(s, run)?.schedule === undefined) continue
         if (outcomeOf(s, run.id) === 'running') continue
+        if (!graceOver(s, run, sessionId, c.nowMs())) continue
       }
       // **A session this process knows has ended is the stop confirmed** (L1): its exit was never heard
       // (no exit release came), so nothing else would ever empty the slot, and a stop sent to it goes
@@ -258,7 +283,10 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       const capped = (retry?.capped ?? 0) + (wait === COORDINATOR_STOP_RETRY_MAX_MS ? 1 : 0)
       stopRetry.set(sessionId, { tries, nextAt: nowMs + wait, capped, gaveUp: false })
       const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
-      const what = tries === 1 ? `scheduled run=${run.id} finished` : `run=${run.id} (stop attempt ${tries})`
+      const what =
+        tries === 1
+          ? `${jobOf(s, run)?.schedule !== undefined ? 'scheduled ' : ''}run=${run.id} finished`
+          : `run=${run.id} (stop attempt ${tries})`
       try {
         const r = await c.handle('run-coordinator-stop', { run: run.id })
         log(
@@ -741,7 +769,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       // 세션을 닫고 `git worktree remove` 를 함께 돌리게 된다. 운전하지 않는 프로세스는 일을 하지 않는다.
       // 앱에서는 mayStart 가 언제나 참이므로(orch 는 한 번 서면 내려가지 않는다) 앱의 동작은 그대로다.
       if (!c.mayStart()) return
-      // U4: 끝난 예약 회차의 코디네이터를 세우고(L1: 확인될 때까지 다시), 낡은 기동 표시를 걷는다(L2).
+      // U4: finished Runs' coordinators are stopped (a manual Run's after its grace; L1: again until
+      // confirmed), and stale start marks are dropped (L2).
       // 회수보다 앞이다.
       await tidyCoordinators()
       if (!c.mayStart()) return
