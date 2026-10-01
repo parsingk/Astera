@@ -124,7 +124,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `get_job` | One Job and its latest Run. |
 | `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
-| `list_runs` | Runs, newest first by ordinal, optionally of one Job. |
+| `list_runs` | Runs, newest first, optionally of one Job. |
 | `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. |
 | `stop_run` | Stop a Run: its open workers are closed and the Run is paused. Use `resume_run` to continue it. |
 | `resume_run` | Resume a Run that `stop_run` paused. A Run that is not paused is returned as it is. |
@@ -145,7 +145,7 @@ given, `coordinatorAccountId` wins. A Job that has never run shows `pendingStart
 to a minute.
 
 Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
-first by `createdAt`, `list_runs` newest first by `ordinal`, and `list_questions` oldest first by
+first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions` oldest first by
 `createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and `list_projects` and
 `list_accounts` keep Astera's. The list is ordered first and cut second. A cut list carries
 `truncated: true` and `total` (how many there were) beside it; a whole list carries neither.

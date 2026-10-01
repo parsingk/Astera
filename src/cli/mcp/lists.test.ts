@@ -10,9 +10,22 @@ describe('orderAndCut', () => {
     expect(list.map((r) => (r as { id: string }).id)).toEqual(['x2', 'x1', 'x0'])
   })
 
-  it('list_runs is newest first by ordinal', () => {
-    const { list } = orderAndCut('list_runs', [{ id: 'a', ordinal: 1 }, { id: 'c', ordinal: 3 }, { id: 'b', ordinal: 2 }], 50)
-    expect(list.map((r) => (r as { id: string }).id)).toEqual(['c', 'b', 'a'])
+  // `ordinal` counts per Job, so across Jobs it is not time: a young Job's newest Run has ordinal 1.
+  it('list_runs is newest first by createdAt, across Jobs, before the cut', () => {
+    const runs = [
+      { id: 'old1', jobId: 'j1', ordinal: 1, createdAt: '2026-10-01T00:00:01.000Z' },
+      { id: 'old2', jobId: 'j1', ordinal: 2, createdAt: '2026-10-01T00:00:02.000Z' },
+      { id: 'old3', jobId: 'j1', ordinal: 3, createdAt: '2026-10-01T00:00:03.000Z' },
+      { id: 'late', jobId: 'j2', ordinal: 1, createdAt: '2026-10-01T00:00:09.000Z' }
+    ]
+    const { list } = orderAndCut('list_runs', runs, 2)
+    expect(list.map((r) => (r as { id: string }).id)).toEqual(['late', 'old3'])
+  })
+
+  it('list_runs breaks a createdAt tie by ordinal, highest first', () => {
+    const at = '2026-10-01T00:00:00.000Z'
+    const { list } = orderAndCut('list_runs', [{ id: 'a', ordinal: 1, createdAt: at }, { id: 'b', ordinal: 2, createdAt: at }], 50)
+    expect(list.map((r) => (r as { id: string }).id)).toEqual(['b', 'a'])
   })
 
   it('list_questions is oldest first by createdAt', () => {

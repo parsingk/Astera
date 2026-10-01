@@ -18,7 +18,9 @@ const num = (r: unknown, k: string): number => {
  *  creation order), list_projects and list_accounts. Every sort is stable, so ties keep it too. */
 const ORDER: Record<string, (a: unknown, b: unknown) => number> = {
   list_jobs: (a, b) => text(b, 'createdAt').localeCompare(text(a, 'createdAt')),
-  list_runs: (a, b) => num(b, 'ordinal') - num(a, 'ordinal'),
+  // createdAt, not ordinal: ordinal counts per Job, so across Jobs it would put a young Job's newest
+  // Run behind an old Job's old ones and the cut would drop it. Ordinal breaks a tie.
+  list_runs: (a, b) => text(b, 'createdAt').localeCompare(text(a, 'createdAt')) || num(b, 'ordinal') - num(a, 'ordinal'),
   list_questions: (a, b) => text(a, 'createdAt').localeCompare(text(b, 'createdAt'))
 }
 

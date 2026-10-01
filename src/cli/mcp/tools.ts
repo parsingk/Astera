@@ -125,7 +125,7 @@ export const TOOLS: ToolDef[] = [
     title: 'List Runs',
     readOnly: true,
     cmd: 'runs-list',
-    description: 'Runs, newest first by ordinal, optionally of one Job.',
+    description: 'Runs, newest first, optionally of one Job.',
     inputSchema: { jobId: id.optional(), limit },
     args: (i) => (i.jobId ? { job: i.jobId } : {})
   },
