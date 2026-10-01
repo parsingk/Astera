@@ -25,7 +25,7 @@ import { main } from './run'
 import { hostAddress } from '../host/address'
 import { encodeLine, createLineReader } from '../host/framing'
 import { startHostServer, ADDRESS_TAKEN, type HostServer } from '../host/server'
-import { ensureHostKey } from '../core/host/hostKey'
+import { ensureHostKey, hostProof } from '../core/host/hostKey'
 import { createHostOrch, type HostOrch } from '../host/orch'
 import { createHostJournal } from '../host/hostJournal'
 import { JournalReader } from '../core/continuity/journalReader'
@@ -51,7 +51,7 @@ import {
   type ClientMessage,
   type HostMessage
 } from '../core/host/protocol'
-import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState, type Res } from '../core/orchestration/state'
+import { createGate, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState, type Res } from '../core/orchestration/state'
 import { ensureProject } from '../core/orchestration/projects'
 import { CLI_PROTOCOL, codeForStatus, exitCodeFor } from '../core/orchestration/cliOutput'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -1053,18 +1053,21 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   /** A connected client and its own close, which a test may call early; the cleanup closes it otherwise. */
   async function mcpClient(
     rig: Rig,
-    o: { clientInfo?: { name: string; version: string } } = {}
+    /** `log` hears every line serveMcp would write to stderr: the link's, the connection's and, with
+     *  `debug` (ASTERA_MCP_LOG_LEVEL=debug), the server's line per tool call. */
+    o: { clientInfo?: { name: string; version: string }; log?: (m: string) => void; debug?: boolean } = {}
   ): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
     const addr = hostAddress({ profileDir: rig.profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+    const log = o.log ?? ((): void => {})
     const link = openHostLink({
       // As serveMcp connects: the hello names the client initialize named (MCP spec §29).
       connect: () =>
-        connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', client: server.server.getClientVersion(), log: () => {} }),
+        connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', client: server.server.getClientVersion(), log }),
       // The rig's Host is always up: a link that had to start one would be a fault here.
       startHost: async () => false,
-      log: () => {}
+      log
     })
-    const server = createMcpServer({ link, version: 'test', log: () => {} })
+    const server = createMcpServer({ link, version: 'test', log, debug: o.debug })
     const [a, b] = InMemoryTransport.createLinkedPair()
     const client = new Client(o.clientInfo ?? { name: 'it', version: '0' })
     await Promise.all([server.connect(a), client.connect(b)])
@@ -1276,6 +1279,91 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect((runs.structuredContent as { runs: Array<{ id: string }> }).runs.map((r) => r.id)).toEqual([runId])
     // The Host's own record agrees: the Run is neither stopped nor paused by the client leaving.
     expect(h.state().runs.find((r) => r.id === runId)?.paused).toBeFalsy()
+  })
+
+  // Spec §98 scenario E: a whole flow, with every log line the MCP server and the Host write kept, and
+  // none of them carries the Host key, a handshake proof, an account's credentials file (its path or
+  // what it holds) or the tokens a question's text and an answer carry.
+  it('no secret reaches the MCP server log or the Host log over a full flow', async () => {
+    const token = 'sk-ant-' + 'q'.repeat(12) + '0123456789abcdefghij'
+    const answerToken = 'sk-' + 'a'.repeat(40)
+    const projectPath = await makeRepo('astera-mcp-int-project-')
+    cleanups.push(() => rmrf(projectPath))
+    const now = '2026-10-01T00:00:00.000Z'
+    const need = <T>(r: Res<T>): { state: OrchState; value: T } => {
+      if (!r.ok) throw new Error(r.error)
+      return r
+    }
+    // A Run waiting on a question whose text carries a token, built with the pure layer.
+    const project = ensureProject(emptyState(), { path: projectPath, now })
+    const job = need(createJob(project.state, { objective: 'the asking job', cwd: projectPath, concurrency: 1 }, now))
+    const run = need(startJobRun(job.state, job.value.id, now))
+    const task = need(createTask(run.state, { runId: run.value.id, title: 'one', spec: 'do it', deps: [], accountIds: ['acc_claude_0'] }, now))
+    const gate = need(createGate(task.state, { taskId: task.value.id, question: `which key? I found ${token} in .env` }, now))
+    const h = await hostRig({ repo: false, seed: gate.state, continuity: true })
+    // The account's credentials file, with something in it worth stealing. Only its presence is read.
+    const accounts = JSON.parse(await fs.readFile(path.join(h.profileDir, 'accounts.json'), 'utf8')) as { accounts: Array<{ configDir: string }> }
+    const credentialsPath = path.join(accounts.accounts[0].configDir, '.credentials.json')
+    const credentials = `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-${'c'.repeat(32)}"}}`
+    await fs.writeFile(credentialsPath, credentials)
+    const hostKey = (await fs.readFile(path.join(h.profileDir, 'host', 'host.key'), 'utf8')).trim()
+    expect(hostKey).toMatch(/^[0-9a-f]{64}$/)
+
+    // Every nonce a client sends, so each proof the Host answers with can be computed and looked for.
+    const nonces: string[] = []
+    const realConnect = net.connect.bind(net) as (...a: unknown[]) => net.Socket
+    const spy = vi.spyOn(net, 'connect').mockImplementation(((...a: unknown[]) => {
+      const sock = realConnect(...a)
+      const write = sock.write.bind(sock) as (chunk: unknown, ...rest: unknown[]) => boolean
+      sock.write = ((chunk: unknown, ...rest: unknown[]) => {
+        for (const m of String(chunk).matchAll(/"nonce":"([0-9a-f]+)"/g)) nonces.push(m[1])
+        return write(chunk, ...rest)
+      }) as typeof sock.write
+      return sock
+    }) as typeof net.connect)
+    cleanups.push(() => spy.mockRestore())
+
+    const mcpLog: string[] = []
+    const mcp = await mcpClient(h, { log: (m) => mcpLog.push(m), debug: true })
+    const listed = await mcp.call('list_projects', {})
+    const projectId = (listed.structuredContent as { projects: Array<{ id: string }> }).projects[0].id
+    const created = await mcp.call('create_job', { projectId, objective: 'a second job', coordinatorAccountId: h.accountId, requestId: 's-1' })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    const ran = await mcp.call('run_job', { jobId: (created.structuredContent as { id: string }).id, requestId: 's-2' })
+    expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+    const open = await mcp.call('list_questions', { status: 'open' })
+    const questions = (open.structuredContent as { questions: Array<{ id: string }> }).questions
+    expect(questions.map((q) => q.id)).toContain(gate.value.id)
+    // The tool result is redacted too (server.test.ts has the shapes); this test is about the logs.
+    expect(JSON.stringify(open)).not.toContain(token)
+    const answered = await mcp.call('answer_question', { questionId: gate.value.id, answer: `use ${answerToken}`, requestId: 's-3' })
+    expect(answered.isError, answered.content[0]?.text).toBeFalsy()
+    // A refusal and a link failure are logged too.
+    expect((await mcp.call('get_run', { runId: 'run_missing' })).isError).toBe(true)
+    await h.stop()
+    expect((await mcp.call('get_run', { runId: 'run_missing' })).isError).toBe(true)
+
+    // The debug line per call and the link's close line were written, so the logs were really heard.
+    expect(mcpLog.some((l) => l.startsWith('answer_question: ok'))).toBe(true)
+    expect(mcpLog).toContain('the Host connection closed')
+    expect(h.logs.length).toBeGreaterThan(0)
+    expect(nonces.length).toBeGreaterThan(0)
+    const secrets = [
+      hostKey,
+      ...nonces.map((n) => hostProof(hostKey, n)),
+      credentialsPath,
+      credentialsPath.split(path.sep).join('/'),
+      credentials,
+      'sk-ant-oat01-',
+      token,
+      answerToken
+    ]
+    for (const [where, lines] of [['MCP server', mcpLog], ['Host', h.logs]] as const)
+      for (const line of lines) {
+        for (const secret of secrets) expect(line, `${where} log: ${line}`).not.toContain(secret)
+        // Nothing the shape of a key or a proof at all.
+        expect(line, `${where} log: ${line}`).not.toMatch(/[0-9a-f]{64}/)
+      }
   })
 
   // Spec §81 Case C. The link targets the profile's address, which a restart does not change, so the
