@@ -24,6 +24,7 @@ import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { pidLives } from '../core/host/pidFile'
 import { privateDirProblem } from '../core/host/socketDir'
 import { hostProof } from '../core/host/hostKey'
+import { mcpClientOf, type McpClient } from '../core/continuity/actor'
 
 /** Thrown by `startHostServer` when another Host already answers at this address. The entry point
  *  turns it into a quiet exit: losing the race is the normal outcome of two apps starting at once. */
@@ -293,6 +294,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
    *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
   const yields = new Map<net.Socket, ReadonlySet<string>>()
+  /** The MCP client each `mcp` socket's hello named, cleaned on arrival (MCP spec §29). Written and
+   *  deleted beside `roles`; a socket of any other role never has one. */
+  const mcpClients = new Map<net.Socket, McpClient>()
   /** Every connected socket by its number, so `yieldsOf` can answer for the number `exits` keeps.
    *  Set when the number is handed out and deleted in `gone`. */
   const socketByNo = new Map<number, net.Socket>()
@@ -507,6 +511,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
+          // The client names itself, so it is cleaned here whatever the sender did (never trust the wire).
+          const client = roles.get(socket) === 'mcp' ? mcpClientOf(m.client) : undefined
+          if (client) mcpClients.set(socket, client)
+          else mcpClients.delete(socket)
           if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) lastAppPid = m.pid
           if (isApp(socket) || wasApp) tellAppsChanged()
           send({
@@ -588,8 +596,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // said hello must hear nothing, here the same as everywhere else `send` is used directly
           // instead of through `broadcast`.
           if (!greetedSockets.has(socket)) return
+          const client = mcpClients.get(socket)
           const from: OrchCaller = {
             role: outwardRole(socket),
+            ...(client ? { client } : {}),
             toOthers: (msg) => {
               const line = lazyLine(msg)
               // The sender holds this state already; anything older held for it would put it back.
@@ -651,6 +661,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const role = outwardRole(socket)
       roles.delete(socket)
       yields.delete(socket)
+      mcpClients.delete(socket)
       dropState(socket)
       stateLanes.delete(socket)
       if (wasGreeted && wasApp) tellAppsChanged()
@@ -805,6 +816,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         greetedSockets.clear()
         roles.clear()
         yields.clear()
+        mcpClients.clear()
         socketByNo.clear()
         // Destroying a socket fires its 'close' asynchronously, so the refusals `gone` sends would
         // arrive after this Host has already gone. Refused here instead, while there is still

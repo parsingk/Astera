@@ -1438,7 +1438,7 @@ export function createHostOrch(a: {
         await ready()
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
-        const actor = actorOf({ sessionId, role: from?.role, state: store.get() })
+        const actor = actorOf({ sessionId, role: from?.role, client: from?.client, state: store.get() })
         const r = await handleCommand(depsFor(marks, actor), { sessionId }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields

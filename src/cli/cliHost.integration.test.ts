@@ -1051,17 +1051,22 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   }
 
   /** A connected client and its own close, which a test may call early; the cleanup closes it otherwise. */
-  async function mcpClient(rig: Rig): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
+  async function mcpClient(
+    rig: Rig,
+    o: { clientInfo?: { name: string; version: string } } = {}
+  ): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
     const addr = hostAddress({ profileDir: rig.profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
     const link = openHostLink({
-      connect: () => connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', log: () => {} }),
+      // As serveMcp connects: the hello names the client initialize named (MCP spec §29).
+      connect: () =>
+        connectHost({ address: addr.address, profileDir: rig.profileDir, app: 'test', role: 'mcp', client: server.server.getClientVersion(), log: () => {} }),
       // The rig's Host is always up: a link that had to start one would be a fault here.
       startHost: async () => false,
       log: () => {}
     })
     const server = createMcpServer({ link, version: 'test', log: () => {} })
     const [a, b] = InMemoryTransport.createLinkedPair()
-    const client = new Client({ name: 'it', version: '0' })
+    const client = new Client(o.clientInfo ?? { name: 'it', version: '0' })
     await Promise.all([server.connect(a), client.connect(b)])
     let closed = false
     const close = async (): Promise<void> => {
@@ -1125,7 +1130,10 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(ran.isError, ran.content[0]?.text).toBeFalsy()
     const runId = (ran.structuredContent as { id: string }).id
     expect(runId).toMatch(/^run_/)
-    await until(() => expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'mcp' }))
+    // And which client: the one this test's initialize named (MCP spec §29).
+    await until(() =>
+      expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'mcp', client: { name: 'it', version: '0' } })
+    )
   })
 
   it('a repeated create_job with the same requestId makes one Job', async () => {
@@ -1149,13 +1157,13 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(h.state().jobs).toHaveLength(1)
   })
 
-  it('answers a question and the journal row says mcp', async () => {
+  it('answers a question and the journal row says mcp, and which client', async () => {
     const h = await hostRig({ continuity: true })
     // The question a Host opens when a worker ends without reporting (the CLI tests above).
     const { runId, taskId, worker } = await runningJob(h)
     h.exitWorker(worker, 1)
     await until(() => expect(h.state().gates.filter((g) => g.status === 'open')).toHaveLength(1))
-    const mcp = await mcpClient(h)
+    const mcp = await mcpClient(h, { clientInfo: { name: 'claude-code', version: '1.2.3' } })
 
     const open = await mcp.call('list_questions', { runId, status: 'open' })
     expect(open.isError).toBeFalsy()
@@ -1170,7 +1178,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
 
     await until(() =>
       expect(h.journalRows(runId).filter((e) => e.type === 'GATE_RESOLVED')).toEqual([
-        expect.objectContaining({ taskId, actor: { surface: 'mcp' }, payload: expect.objectContaining({ gateId: questionId, resolution: 'Use the existing DB.' }) })
+        expect.objectContaining({
+          taskId,
+          actor: { surface: 'mcp', client: { name: 'claude-code', version: '1.2.3' } },
+          payload: expect.objectContaining({ gateId: questionId, resolution: 'Use the existing DB.' })
+        })
       ])
     )
     // And the answer did what an answer does: the Host places the worker again.

@@ -180,7 +180,17 @@ export async function serveMcp(a: {
   const inner =
     a.link ??
     openHostLink({
-      connect: () => connectHost({ address: target.address, profileDir: target.profileDir, app: a.version, role: 'mcp', log }),
+      // The link opens at the first tool call, after initialize, so the hello names the client that
+      // initialize named (MCP spec §29); connectHost cleans it before it is sent.
+      connect: () =>
+        connectHost({
+          address: target.address,
+          profileDir: target.profileDir,
+          app: a.version,
+          role: 'mcp',
+          client: server.server.getClientVersion(),
+          log
+        }),
       startHost: async () =>
         (await runHostCommand({ cmd: 'host-start', env: a.env, platform: a.platform, home: a.home, noKeepalive: true })).ok,
       log

@@ -2,6 +2,13 @@ import { describe, it, expect, vi } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { PassThrough } from 'node:stream'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { hostAddress } from '../../host/address'
+import { startHostServer } from '../../host/server'
+import { ensureHostKey } from '../../core/host/hostKey'
+import { HOST_PROTOCOL } from '../../core/host/protocol'
 import { createMcpServer, serveMcp } from './server'
 import type { HostLink } from './hostLink'
 
@@ -443,6 +450,48 @@ describe('the MCP server', () => {
     expect(messages.map((m) => m.id)).toEqual([1, 2])
     expect(messages[1].result.structuredContent).toEqual({ jobs: [{ id: 'job_1', objective: 'o' }] })
     write.mockRestore()
+  })
+
+  // MCP spec §29: the link opens at the first tool call, after initialize, so its hello can name the
+  // client the initialize request named. Its own link to a real Host server whose command layer records
+  // who called.
+  it("names the client from initialize in the Host hello, so the Host's command layer hears it", async () => {
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-client-'))
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
+    const heard: unknown[] = []
+    const host = await startHostServer({
+      address: addr.address,
+      dirToPrepare: addr.dirToPrepare,
+      version: '9.9.9',
+      idleMs: 60_000,
+      onIdle: () => {},
+      hostKey: await ensureHostKey(profileDir),
+      log: { write: () => {}, close: () => {} },
+      orch: {
+        call: async (c) => {
+          heard.push({ role: c.from?.role, client: c.from?.client })
+          return { status: 200, body: { id: 'run_1' } }
+        }
+      }
+    })
+    try {
+      const stdin = new PassThrough()
+      const stdout = new PassThrough()
+      const lines: string[] = []
+      stdout.on('data', (c: Buffer) => lines.push(...c.toString('utf8').split('\n').filter(Boolean)))
+      const done = serveMcp({ env: { ASTERA_PROFILE_DIR: profileDir }, platform: process.platform, home: os.tmpdir(), version: '1.4.1', stdin, stdout })
+      const send = (m: unknown): void => void stdin.write(JSON.stringify(m) + '\n')
+      send({ ...INITIALIZE, params: { ...INITIALIZE.params, clientInfo: { name: 'claude-code', version: '1.2.3' } } })
+      send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+      send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_run', arguments: { runId: 'run_1' } } })
+      await vi.waitFor(() => expect(lines.map((l) => JSON.parse(l)).some((m) => m.id === 2)).toBe(true), { timeout: 5000 })
+      stdin.end()
+      await done
+      expect(heard).toEqual([{ role: 'mcp', client: { name: 'claude-code', version: '1.2.3' } }])
+    } finally {
+      await host.close()
+      await fs.rm(profileDir, { recursive: true, force: true })
+    }
   })
 
   it('stops waiting for a call that never answers once the drain cap passes', async () => {

@@ -620,6 +620,39 @@ describe('startHostServer', () => {
     expect(roles).toEqual(['mcp'])
   })
 
+  // MCP spec §29: the client an MCP hello names reaches the command layer, cleaned again here (the
+  // wire is not trusted), and only from an mcp socket.
+  it("hands an mcp hello's client to the command layer, cleaned, and no client from a cli hello", async () => {
+    const clients: unknown[] = []
+    const base = versionOnlyOrchCall({ version: '9.9.9' })
+    const h = await start({
+      orch: {
+        ...base,
+        call: async (c) => {
+          clients.push(c.from?.client)
+          return base.call(c)
+        }
+      }
+    })
+    const hello = async (extra: Record<string, unknown>): Promise<{ send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> }> => {
+      const sock = await h.connectSilent()
+      const chan = messageChannel(sock)
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...extra } as ClientMessage)
+      await chan.next()
+      return chan
+    }
+    const named = await hello({ role: 'mcp', client: { name: 'claude-code\n<x>', version: '1.2.3', extra: 'dropped' } })
+    named.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+    await named.next()
+    const junk = await hello({ role: 'mcp', client: { name: 7 } })
+    junk.send({ t: 'orch-call', call: 'c2', cmd: 'version', args: {} })
+    await junk.next()
+    const cli = await hello({ role: 'cli', client: { name: 'claude-code' } })
+    cli.send({ t: 'orch-call', call: 'c3', cmd: 'version', args: {} })
+    await cli.next()
+    expect(clients).toEqual([{ name: 'claude-codex', version: '1.2.3' }, undefined, undefined])
+  })
+
   it('announces the extra features it was given, after the built-in ones', async () => {
     const h = await server({ features: ['spawn'] })
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])

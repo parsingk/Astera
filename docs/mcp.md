@@ -217,6 +217,12 @@ restart forgets them.
 The setting is read on every call, so a change applies to a connected client at its next call without
 reconnecting. Every other Host command is refused to MCP clients whatever the setting says.
 
+**The Job Journal records which client acted.** What an MCP client does is journalled as surface
+`mcp`, with the client's name and version as its MCP `initialize` request gave them (for example
+`claude-code` `1.2.3`). The client names itself, so Astera keeps only ASCII letters, digits, `.`,
+`_`, `-`, `/`, `@` and spaces, cuts the name to 64 characters and the version to 32, and leaves out
+a field with nothing left.
+
 ## How it stays local
 
 - The server talks to the client over stdio. It opens no network port.
