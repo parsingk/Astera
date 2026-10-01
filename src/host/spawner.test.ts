@@ -354,6 +354,17 @@ describe('createHostSpawner', () => {
     expect(h.spawned[0].pty.killed).toBe(true)
   })
 
+  it('logs the reason a coordinator was stopped for, and a neutral line without one', async () => {
+    const h = rig()
+    const r = await h.spawner!.startCoordinator({ runId: 'run_abcdefghijklmn', cwd: repo, accountId: 'acc1', brief: 'b' })
+    expect(h.spawner!.stopSession!(r.sessionId, 'the run was stopped')).toBe(true)
+    expect(h.logs).toContain(`coordinator ${r.sessionId} stopped: the run was stopped`)
+    const r2 = await h.spawner!.startCoordinator({ runId: 'run_abcdefghijklmn', cwd: repo, accountId: 'acc1', brief: 'b' })
+    expect(h.spawner!.stopSession!(r2.sessionId)).toBe(true)
+    expect(h.logs).toContain(`coordinator ${r2.sessionId} stopped`)
+    expect(h.logs.some((l) => l.includes('another coordinator already manages'))).toBe(false)
+  })
+
   it('logs a release for a dispatch it cannot find, as the app does', async () => {
     const h = rig()
     await h.spawner!.releaseWorker({ dispatchId: 'dsp_gone' })

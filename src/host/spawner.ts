@@ -73,7 +73,7 @@ export interface HostLocal {
   /** Kills the pty of this session when this Host's registry holds it, and answers whether it did
    *  (Task 1 fix round 1, I2: a coordinator the hand-over must stop). Optional, and not a
    *  HostLocalName: `hostOrchDeps` builds `stopCoordinator` by hand over it. */
-  stopSession?(sessionId: string): boolean
+  stopSession?(sessionId: string, reason?: string): boolean
   /** Whether this call is the Host's to answer (R1). */
   owns(name: HostLocalName, args: unknown[]): boolean
 }
@@ -736,11 +736,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         throw !trace.opened && err instanceof Error ? refusedBeforeActing(err) : err
       }
     }),
-    stopSession: (sessionId) => {
+    stopSession: (sessionId, reason) => {
       const p = registry.sessionPty(sessionId)
       if (!p) return false
       registry.kill(p)
-      log(`coordinator ${sessionId} stopped: another coordinator already manages its Run`)
+      log(`coordinator ${sessionId} stopped${reason === undefined ? '' : `: ${reason}`}`)
       return true
     },
     releaseWorker: async ({ dispatchId }) => {

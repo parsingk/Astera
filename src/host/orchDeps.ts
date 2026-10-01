@@ -993,8 +993,8 @@ export function hostOrchDeps(a: {
    * started it, is asked, best-effort. Never flagged as the app being required: the command has
    * already decided its answer (the slot it kept), and this only tidies up.
    */
-  const stopCoordinator = async (sessionId: string): Promise<void> => {
-    if (a.local?.stopSession?.(sessionId)) return
+  const stopCoordinator = async (sessionId: string, reason?: string): Promise<void> => {
+    if (a.local?.stopSession?.(sessionId, reason)) return
     if (!a.hasApp()) {
       a.log(`coordinator ${sessionId} could not be stopped: this Host does not hold it and no app is attached`)
       return

@@ -7023,6 +7023,7 @@ describe('the hand-over of a fired Run lands on the current state', () => {
 describe('fix round 1: what counts as running, and one coordinator per Run', () => {
   const coordDeps = () => {
     const stopped: string[] = []
+    const reasons: Array<string | undefined> = []
     const logs: string[] = []
     const deps = makeDeps()
     const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
@@ -7033,14 +7034,15 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
       startCoordinator,
       enterCheckWait: (runId: string, sessionId: string) => waits.enter(runId, sessionId),
       coordinatorIdle: (runId: string, sessionId: string) => waits.parked(runId, sessionId),
-      stopCoordinator: async (sessionId: string) => {
+      stopCoordinator: async (sessionId: string, reason?: string) => {
         stopped.push(sessionId)
+        reasons.push(reason)
       },
       log: (m: string) => {
         logs.push(m)
       }
     })
-    return Object.assign(deps, { startCoordinator, stopped, logs })
+    return Object.assign(deps, { startCoordinator, stopped, reasons, logs })
   }
   const scheduledJob = async (deps: OrchServerDeps): Promise<string> => {
     const r = await call(deps, 'run-create', {
@@ -7509,6 +7511,7 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(run.coordinatorSessionId).toBe('coord-other')
     expect(run).not.toHaveProperty('coordinatorStartingAt')
     expect(deps.stopped).toEqual(['coord-mine'])
+    expect(deps.reasons).toEqual(['another coordinator already manages its Run'])
     expect(deps.logs.join('\n')).toMatch(/coord-mine/)
   })
 
@@ -8035,16 +8038,18 @@ describe('handleCommand — waitingForApproval', () => {
 describe('runs stop and runs resume with a coordinator', () => {
   const coordDeps = () => {
     const stopped: string[] = []
+    const reasons: Array<string | undefined> = []
     const deps = makeDeps()
     const startCoordinator = vi.fn(async (a: { runId: string; brief: string }) => ({ sessionId: `coord-${a.runId}` }))
     Object.assign(deps, {
       listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
       startCoordinator,
-      stopCoordinator: async (sessionId: string) => {
+      stopCoordinator: async (sessionId: string, reason?: string) => {
         stopped.push(sessionId)
+        reasons.push(reason)
       }
     })
-    return Object.assign(deps, { startCoordinator, stopped })
+    return Object.assign(deps, { startCoordinator, stopped, reasons })
   }
   /** A Job with a coordinator account, run once: its Run has coordinator `coord-<runId>`. */
   const coordinatedRun = async (deps: OrchServerDeps): Promise<string> => {
@@ -8065,6 +8070,7 @@ describe('runs stop and runs resume with a coordinator', () => {
     expect(r.status).toBe(200)
     expect(r.body).toMatchObject({ runId, stopped: 0, paused: true, coordinatorStopped: true })
     expect(deps.stopped).toEqual([`coord-${runId}`])
+    expect(deps.reasons).toEqual(['the run was stopped'])
     // The slot is kept, marked, until the exit release confirms the stop (retireCoordinator, L1).
     const run = deps.getState().runs.find((x) => x.id === runId)!
     expect(run.paused).toBe(true)
