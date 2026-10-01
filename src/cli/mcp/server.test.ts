@@ -186,22 +186,26 @@ describe('the MCP server', () => {
     expect(calls).toEqual([])
   })
 
-  it('create_job holds the convergence knobs to their bounds', async () => {
+  // The same values the Host's run-create takes (command.ts posInt, an integer >= 1), so MCP and the CLI agree.
+  it('create_job takes the convergence knobs the Host takes, and refuses the rest before calling it', async () => {
     const { link, calls } = answering({})
     const client = await connected(link)
     for (const knob of [
       { maxFixAttempts: 0 },
-      { maxFixAttempts: 21 },
       { maxFixAttempts: 1.5 },
-      { maxReviewRounds: 21 },
+      { maxReviewRounds: -1 },
       { maxTotalMinutes: 0 },
-      { maxTotalMinutes: 1441 },
       { blockingSeverity: 'low' }
     ]) {
       const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', convergence: true, ...knob } })
       expect(r.isError, JSON.stringify(knob)).toBe(true)
     }
     expect(calls).toEqual([])
+    for (const knob of [{ maxFixAttempts: 1 }, { maxFixAttempts: 50 }, { maxReviewRounds: 21 }, { maxTotalMinutes: 5000 }]) {
+      const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', convergence: true, ...knob } })
+      expect(r.isError, JSON.stringify(knob)).toBeFalsy()
+      expect(calls.at(-1)?.args).toMatchObject(knob)
+    }
   })
 
   it('create_job says what convergence does', async () => {

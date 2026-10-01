@@ -31,22 +31,19 @@ const cursor = z
   )
 
 /** create_job's completion-convergence policy knobs: the CLI's `jobs create` flags, camel-cased as its
- *  parser hands them to run-create (`--max-fix-attempts` is `maxFixAttempts`). */
-const rounds = z.number().int().min(1).max(20)
+ *  parser hands them to run-create (`--max-fix-attempts` is `maxFixAttempts`). The numbers take what
+ *  run-create takes (command.ts `posInt`, an integer >= 1), no narrower, so MCP and the CLI agree. */
+const positive = z.number().int().min(1)
 export const CONVERGENCE_KNOBS = {
-  maxFixAttempts: rounds.optional().describe('Repair attempts per Task (1-20). Needs convergence: true.'),
-  maxReviewRounds: rounds.optional().describe('Review rounds per Task (1-20). Needs convergence: true.'),
+  maxFixAttempts: positive.optional().describe('Repair attempts per Task (an integer >= 1). Needs convergence: true.'),
+  maxReviewRounds: positive.optional().describe('Review rounds per Task (an integer >= 1). Needs convergence: true.'),
   blockingSeverity: z
     .enum(['high', 'medium'])
     .optional()
     .describe('Which review findings block a Task: high only, or medium and high. Needs convergence: true.'),
-  maxTotalMinutes: z
-    .number()
-    .int()
-    .min(1)
-    .max(1440)
+  maxTotalMinutes: positive
     .optional()
-    .describe('Time budget per Task in minutes (1-1440). Needs convergence: true.')
+    .describe('Time budget per Task in minutes (an integer >= 1). Needs convergence: true.')
 }
 
 /** Why create_job's input is refused before the Host is asked, or null. A knob without

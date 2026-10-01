@@ -178,9 +178,9 @@ and `list_jobs` until `run_job` starts it, and a Job with no Run has `outcome: "
 a `run_job` that failed.
 
 **Completion convergence.** `create_job` takes the same policy `astera jobs create --convergence`
-does. `convergence: true` turns it on with the default bounds; `maxFixAttempts` and
-`maxReviewRounds` (integers from 1 to 20), `blockingSeverity` (`high`, or `medium` for medium and
-high findings) and `maxTotalMinutes` (1 to 1440) change them. A knob given without
+does. `convergence: true` turns it on with the default bounds; `maxFixAttempts`,
+`maxReviewRounds` and `maxTotalMinutes` (each an integer of 1 or more, the values the CLI takes) and
+`blockingSeverity` (`high`, or `medium` for medium and high findings) change them. A knob given without
 `convergence: true` is refused with `INVALID_ARGUMENTS`, as the CLI refuses it, since it would set a
 policy that is off. The Job carries the policy as `convergence`, and `get_completion` shows the
 loops as they run.
