@@ -22,7 +22,8 @@ export function createTranscriptWatcher(d: {
 }): TranscriptWatcher {
   const debounceMs = d.debounceMs ?? WATCH_DEBOUNCE_MS
   const files = new Map<string, { dir: string; name: string; stamp: Stamp; timer: NodeJS.Timeout | null }>()
-  const dirs = new Map<string, DirWatch>()
+  // dir -> its watch and the watched basenames in it, each with its full path
+  const dirs = new Map<string, { w: DirWatch; names: Map<string, string> }>()
   let closed = false
 
   const fire = (p: string): void => {
@@ -47,7 +48,7 @@ export function createTranscriptWatcher(d: {
   }
 
   const sweep = (): void => {
-    for (const w of dirs.values()) w.arm()
+    for (const { w } of dirs.values()) w.arm()
     for (const [p, f] of files) if (!sameStamp(stampOf(p), f.stamp)) schedule(p)
   }
   // unref: a timer whose only job is to catch up must never be the reason the process stays alive.
@@ -55,28 +56,42 @@ export function createTranscriptWatcher(d: {
   sweeper.unref?.()
 
   return {
-    watch(p) {
+    // Paths are resolved, so one file spelled two ways is one entry. Case is the caller's: on Windows,
+    // two spellings that differ only in case are two entries.
+    watch(given) {
+      const p = path.resolve(given)
       if (closed || files.has(p)) return
       const dir = path.dirname(p)
-      files.set(p, { dir, name: path.basename(p), stamp: stampOf(p), timer: null })
-      if (dirs.has(dir)) return
+      const name = path.basename(p)
+      files.set(p, { dir, name, stamp: stampOf(p), timer: null })
+      const known = dirs.get(dir)
+      if (known) {
+        known.names.set(name, p)
+        return
+      }
+      const names = new Map([[name, p]])
       const w = dirWatch(
         dir,
-        (name) => {
-          for (const [fp, f] of files) if (f.dir === dir && f.name === name) schedule(fp)
+        (n) => {
+          const fp = names.get(n)
+          if (fp) schedule(fp)
         },
         d.log
       )
-      dirs.set(dir, w)
+      dirs.set(dir, { w, names })
       w.arm()
     },
-    unwatch(p) {
+    unwatch(given) {
+      const p = path.resolve(given)
       const f = files.get(p)
       if (!f) return
       if (f.timer) clearTimeout(f.timer)
       files.delete(p)
-      for (const other of files.values()) if (other.dir === f.dir) return
-      dirs.get(f.dir)?.close()
+      const entry = dirs.get(f.dir)
+      if (!entry) return
+      entry.names.delete(f.name)
+      if (entry.names.size > 0) return
+      entry.w.close()
       dirs.delete(f.dir)
     },
     close() {
@@ -84,7 +99,7 @@ export function createTranscriptWatcher(d: {
       clearInterval(sweeper)
       for (const f of files.values()) if (f.timer) clearTimeout(f.timer)
       files.clear()
-      for (const w of dirs.values()) w.close()
+      for (const { w } of dirs.values()) w.close()
       dirs.clear()
     }
   }

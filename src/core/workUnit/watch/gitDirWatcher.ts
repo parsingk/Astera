@@ -83,13 +83,22 @@ export function createGitDirWatcher(d: {
   sweeper.unref?.()
 
   return {
-    watch(root) {
+    // Roots are resolved, so one root spelled two ways is one entry. Case is the caller's: on Windows,
+    // two spellings that differ only in case are two entries.
+    watch(given) {
+      const root = path.resolve(given)
       if (closed || roots.has(root)) return
       const e: Entry = { dir: null, stamps: [], watches: [], timer: null }
       roots.set(root, e)
-      // Resolved once. Not a repository is a settled answer here, as it is for GitWatcher.
-      const fail = (err: unknown): void =>
+      // Resolved once per watch, and not on the sweep. A root with no git dir (not a repository, git
+      // failed) leaves no entry, so the next watch(root) asks again, as GitWatcher.watch does.
+      const ours = (): boolean => !closed && roots.get(root) === e
+      const fail = (err: unknown): void => {
+        // Unwatched, rewatched or closed while git answered: this answer belongs to nobody.
+        if (!ours()) return
+        roots.delete(root)
         d.log(`git-dir watcher could not resolve the git dir of ${root}: ${err instanceof Error ? err.message : String(err)}`)
+      }
       let asked: Promise<string | null>
       try {
         asked = d.gitDir(root)
@@ -98,13 +107,14 @@ export function createGitDirWatcher(d: {
         return
       }
       asked.then((dir) => {
-        // Unwatched, rewatched or closed while git answered: this answer belongs to nobody.
-        if (closed || roots.get(root) !== e) return
-        if (!dir) d.log(`git-dir watcher: ${root} is not a git repository, not watched`)
-        else start(root, e, dir)
+        if (!ours()) return
+        if (dir) return start(root, e, dir)
+        roots.delete(root)
+        d.log(`git-dir watcher: ${root} is not a git repository, not watched`)
       }, fail)
     },
-    unwatch(root) {
+    unwatch(given) {
+      const root = path.resolve(given)
       const e = roots.get(root)
       if (!e) return
       if (e.timer) clearTimeout(e.timer)

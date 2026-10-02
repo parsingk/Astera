@@ -151,6 +151,36 @@ describe('createTranscriptWatcher', () => {
     expect(changes).toEqual([later, later])
   })
 
+  it('a watched directory that is deleted and recreated is re-armed by the sweep, with no error event', () => {
+    vi.useFakeTimers()
+    const t = make(1000, 20)
+    t.watch(file)
+    const first = live(dir)[0]
+    rmSync(dir, { recursive: true }) // Linux and macOS raise no error event for this
+    vi.advanceTimersByTime(1000)
+    expect(first.closed).toBe(true)
+    mkdirSync(dir)
+    vi.advanceTimersByTime(1000)
+    expect(live(dir)).toHaveLength(1)
+    expect(live(dir)[0]).not.toBe(first)
+    changes.length = 0
+    emit(dir, 'sess-1.jsonl')
+    vi.advanceTimersByTime(20)
+    expect(changes).toEqual([file])
+  })
+
+  it('the same path spelled differently is one entry, reported resolved', () => {
+    vi.useFakeTimers()
+    const t = make()
+    t.watch(file)
+    t.watch(`${dir}/x/../sess-1.jsonl`) // a template, not path.join, which would normalise it
+    emit(dir, 'sess-1.jsonl')
+    vi.advanceTimersByTime(50)
+    expect(changes).toEqual([path.resolve(file)])
+    t.unwatch(`${dir}/./sess-1.jsonl`)
+    expect(live(dir)).toHaveLength(0)
+  })
+
   it('unwatch stops events, a pending one included, and closes the directory watch with its last file', () => {
     vi.useFakeTimers()
     const t = make(1000, 20)

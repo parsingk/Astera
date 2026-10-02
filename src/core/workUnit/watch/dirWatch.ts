@@ -27,15 +27,24 @@ export function sameStamp(a: Stamp, b: Stamp): boolean {
 
 export interface DirWatch {
   armed(): boolean
-  /** Starts the watch if it is not running. A directory that cannot be watched (missing, EPERM) is
-   *  logged once and left to the next arm(), which the owner's sweep calls. Never throws. */
+  /** Starts the watch if it is not running, or restarts it when its directory is gone or replaced. A
+   *  directory that cannot be watched (missing, EPERM) is logged once and left to the next arm(), which
+   *  the owner's sweep calls. Never throws. */
   arm(): void
   close(): void
 }
 
 export function dirWatch(dir: string, onName: (name: string) => void, log: (m: string) => void): DirWatch {
   let watcher: FSWatcher | null = null
+  let ino: number | null = null // of the directory the running watch was armed on
   let failureLogged = false
+  const inoOf = (): number | null => {
+    try {
+      return statSync(dir).ino
+    } catch {
+      return null
+    }
+  }
   const drop = (): void => {
     try {
       watcher?.close()
@@ -47,7 +56,15 @@ export function dirWatch(dir: string, onName: (name: string) => void, log: (m: s
   return {
     armed: () => watcher !== null,
     arm() {
-      if (watcher) return
+      if (watcher) {
+        // On Linux and macOS a deleted watched directory raises no `error`: the watcher stays open on
+        // a directory that is gone and a recreated one is never watched. So a directory that is missing,
+        // or is not the one the watch was armed on, drops the watch here. (An inode the filesystem hands
+        // back to the recreated directory goes unnoticed; the sweep still covers that case.)
+        const now = inoOf()
+        if (now !== null && now === ino) return
+        drop()
+      }
       try {
         const w = watch(dir, (_event, filename) => {
           // A null filename names nothing this watch can filter on; the sweep covers that platform.
@@ -58,7 +75,10 @@ export function dirWatch(dir: string, onName: (name: string) => void, log: (m: s
           log(`watch error on ${dir}: ${err.message}`)
           if (watcher === w) drop()
         })
+        // The fs.watch handle is ref'd and keeps the event loop alive until close(). That is fine for the
+        // Host, a long-running process that closes its watchers when it stops.
         watcher = w
+        ino = inoOf()
         failureLogged = false
       } catch (err) {
         if (!failureLogged) log(`watch failed on ${dir}, relying on the sweep: ${err instanceof Error ? err.message : String(err)}`)

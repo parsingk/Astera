@@ -184,6 +184,75 @@ describe('createGitDirWatcher', () => {
     expect(logs.some((l) => l.includes('sync boom'))).toBe(true)
   })
 
+  it('a root whose gitDir failed (null, reject, sync throw) is asked again on the next watch', async () => {
+    vi.useFakeTimers()
+    for (const first of [
+      async (): Promise<string | null> => null,
+      async (): Promise<string | null> => Promise.reject(new Error('git timed out')),
+      (): Promise<string | null> => {
+        throw new Error('sync boom')
+      }
+    ]) {
+      fakes.list.length = 0
+      let calls = 0
+      const t = make({ gitDir: () => (++calls === 1 ? first() : Promise.resolve(gd)) })
+      t.watch(repo)
+      await settle()
+      expect(fakes.list).toHaveLength(0)
+      t.watch(repo)
+      await settle()
+      expect(calls).toBe(2)
+      expect(live(gd)).toHaveLength(1)
+      t.close()
+    }
+  })
+
+  it('a gitDir rejection that settles after unwatch or close is dropped, not logged', async () => {
+    vi.useFakeTimers()
+    let reject: (e: Error) => void = () => {}
+    const t = make({ gitDir: () => new Promise<string | null>((_res, rej) => (reject = rej)) })
+    t.watch(repo)
+    t.unwatch(repo)
+    reject(new Error('late failure one'))
+    await settle()
+    t.watch(repo)
+    t.close()
+    reject(new Error('late failure two'))
+    await settle()
+    expect(logs.filter((l) => l.includes('late failure'))).toEqual([])
+  })
+
+  it('a watched git dir that is deleted and recreated is re-armed by the sweep, with no error event', async () => {
+    vi.useFakeTimers()
+    const t = make({ sweepMs: 1000 })
+    t.watch(repo)
+    await settle()
+    const first = live(logsDir)[0]
+    rmSync(logsDir, { recursive: true }) // Linux and macOS raise no error event for this
+    vi.advanceTimersByTime(1000)
+    expect(first.closed).toBe(true)
+    mkdirSync(logsDir)
+    writeFileSync(path.join(logsDir, 'HEAD'), 'r0\n')
+    vi.advanceTimersByTime(1000)
+    expect(live(logsDir)).toHaveLength(1)
+    expect(live(logsDir)[0]).not.toBe(first)
+  })
+
+  it('the same root spelled differently is one entry, reported resolved', async () => {
+    vi.useFakeTimers()
+    const asked: string[] = []
+    const t = make({ gitDir: async (r) => (asked.push(r), gd) })
+    t.watch(repo)
+    t.watch(`${repo}/sub/..`) // a template, not path.join, which would normalise it
+    await settle()
+    expect(asked).toEqual([path.resolve(repo)])
+    emit(gd, 'HEAD')
+    vi.advanceTimersByTime(50)
+    expect(changes).toEqual([path.resolve(repo)])
+    t.unwatch(`${repo}/.`)
+    expect(live(gd)).toHaveLength(0)
+  })
+
   it('a throwing onChange is logged, not thrown', async () => {
     vi.useFakeTimers()
     const t = make({ onChange: () => { throw new Error('consumer broke') } })
