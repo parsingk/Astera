@@ -483,6 +483,7 @@ async function hostRig(
     statusLinePayload: async () => null,
     onSpawned: () => {},
     onRolloutLocated: () => {},
+    onBusyChanged: () => {},
     retarget: () => {},
     // `sessions create`'s terminal start: a pty opened under the note the Host spawner writes, and
     // nothing run in it.

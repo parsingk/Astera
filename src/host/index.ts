@@ -29,9 +29,13 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
 import { createHostUnderstanding } from './hostUnderstanding'
+import { createHostWorkUnits, readWorkUnitTracking, workUnitSessionsOf, type HostWorkUnits } from './hostWorkUnits'
+import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
+import { readFileRetrying } from '../core/renameRetry'
+import { outcomeOf } from '../core/orchestration/running'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { readRange } from '../core/git/range'
 import { createHostOrch } from './orch'
@@ -200,6 +204,8 @@ async function main(): Promise<void> {
     // from here on, and every chain is quieted. No roll waits: `killAll` below ends every session, a roll
     // in flight included, and the spawner refuses new respawns from `closeAndSettle` on. Never throws.
     rollingWiring?.dispose()
+    // The work units' watchers and their sync timer stop with them. Never throws.
+    hostWorkUnits?.dispose()
     // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
@@ -261,6 +267,10 @@ async function main(): Promise<void> {
   // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
 
+  /** Session work units (E2 §4): built below, once `orch` exists, and only with a spawner. Declared here
+   *  because the worktrees' `git-op` and the rolling's events reach it, and both are built first. */
+  let hostWorkUnits: HostWorkUnits | null = null
+
   // The Host's own worktree registry (Host S3 §3.1, §3.3, §3.4): forks, merges and removes Job
   // worktrees over its own registry, whether or not an app is attached. Construction reads and writes
   // nothing, so building it unconditionally keeps S2's "constructed, not loaded" rule — at start its
@@ -275,7 +285,12 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     getState: () => orch.state(),
-    broadcast: (m) => server.broadcast(m),
+    // E2 §4: a merge this Host runs is its own git operation for its work units too, registered before
+    // the merge starts (the `begin` is told right before `git merge`).
+    broadcast: (m) => {
+      if (m.t === 'git-op') hostWorkUnits?.onGitOp(m)
+      server.broadcast(m)
+    },
     log: (m) => log.write(m),
     app: { hasApp: () => server.hasApp(), act: (name, args) => server.act(name, args), lastAppPid: () => server.lastAppPid() }
   })
@@ -394,7 +409,12 @@ async function main(): Promise<void> {
           nowIso: () => new Date().toISOString(),
           // Slack in the Host Task 6: the Host's own rolls and every hook event are its Slack's sources.
           // Read at the call: the Slack composition is built below, and each tap isolates itself.
-          onRollEvent: (e) => slackWiring?.onRollEvent(e),
+          // E2 §4: and its work units, first, so the open unit is re-keyed before the old pty's exit lands.
+          onRollEvent: (e) => {
+            if (e.t === 'session-rolled')
+              hostWorkUnits?.onRolled({ oldSessionId: e.oldSessionId, newSessionId: e.info.id, transcriptPath: e.dest, kind: e.info.kind })
+            slackWiring?.onRollEvent(e)
+          },
           hookTap: (sid, p) => slackWiring?.onHookEvent(sid, p)
         })
       : null
@@ -587,6 +607,42 @@ async function main(): Promise<void> {
         log: (m) => log.write(m)
       })
     : null
+  // Session work units (E2 §3, §4): the collector over this Host's own sessions, writing workUnits.json while
+  // no attached app keeps the duty, read per write. **Only with a spawner**, as the duty is announced: a
+  // Host that cannot start sessions has none to watch. Tracking is read now; the collector starts once the
+  // server listens and this Host is the writer, and its start interrupts the units of sessions not alive.
+  if (spawner) {
+    hostWorkUnits = createHostWorkUnits({
+      file: path.join(profileDir, 'workUnits.json'),
+      writer: () => server !== undefined && !server.appsKeep(HOST_YIELD_WORK_UNITS),
+      sessions: () => workUnitSessionsOf(registry.list()),
+      accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying),
+      descriptors: makeDescriptors(process.platform),
+      statusLinePayload: (id) => spawner.statusLinePayload(id),
+      tracking: () => readWorkUnitTracking(path.join(profileDir, 'app-settings.json')),
+      // The command layer's isWorker || isRunCoordinator, as the app's inRun asks it (ipc.ts). Before the
+      // state is loaded nothing is known, and nothing is skipped.
+      inRun: (sessionId) => {
+        if (!orch.loaded()) return false
+        const st = orch.state()
+        if (st.dispatches.some((x) => x.sessionId === sessionId)) return true
+        return st.runs.some((r) => r.coordinatorSessionId === sessionId && outcomeOf(st, r.id) === 'running')
+      },
+      hostMerges: () => readHostMerges(hostMergesPathIn(profileDir)),
+      understanding: hostUnderstanding,
+      push: (m) => server.broadcast(m),
+      log: (m) => log.write(m)
+    })
+    const workUnits = hostWorkUnits
+    spawner.onBusyChanged((sessionId, busy) => workUnits.onBusy(sessionId, busy))
+    // Every session pty's exit: the Host holds the pty, so an exit here is the session ending.
+    registry.onExit((ptyId) => {
+      const meta = registry.metaOf(ptyId)
+      if (meta?.kind === 'session') void workUnits.onSessionExit(meta.id)
+    })
+    await workUnits.start()
+  }
+
   // Protocol 4: the proof every client checks before it hands this Host anything (core/host/hostKey.ts).
   // Made before the bind, so no client can meet this Host before its key exists. A Host that cannot
   // make one would be refused by every client, so it does not serve at all.
@@ -661,6 +717,8 @@ async function main(): Promise<void> {
         slackWiring?.onAppsChanged()
         // E1: an app that kept How It Works leaving makes this Host the writer.
         void hostUnderstanding.writerMayHaveChanged()
+        // E2: the same for the work units: the collector starts or stops with it.
+        void hostWorkUnits?.writerMayHaveChanged()
       },
       // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello. Limits L3:
       // and who drives, so its Jobs sidebar can say why a parked Host starts nothing. Each isolates itself.
@@ -670,6 +728,8 @@ async function main(): Promise<void> {
         rollingWiring?.appGreeted(send)
         wiring?.appGreeted(send)
         void hostJournal.appGreeted(() => (orch.loaded() ? orch.state() : null))
+        // E2: and the work units read the tracking setting again, for a work-units-reload that never arrived.
+        void hostWorkUnits?.reload()
       },
       log
     })
@@ -695,6 +755,8 @@ async function main(): Promise<void> {
   slackWiring?.start()
   // And How It Works: with no app attached yet this Host is the writer now (E1 §2).
   void hostUnderstanding.writerMayHaveChanged()
+  // And the work units (E2 §3).
+  void hostWorkUnits?.writerMayHaveChanged()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

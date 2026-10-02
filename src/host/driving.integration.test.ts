@@ -261,6 +261,7 @@ async function rig(o: RigOpts) {
     statusLinePayload: async () => null,
     onSpawned: () => {},
     onRolloutLocated: () => {},
+    onBusyChanged: () => {},
     retarget: () => {},
     createSession: async () => {
       throw new Error('not in this rig')
@@ -843,7 +844,8 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     expect(src.slice(intake, intake + 300)).toMatch(/slackWiring\.forwarded\(m\.event\)/)
     expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send)'))
     const rollingCall = src.slice(src.indexOf('composeHostRolling('))
-    expect(rollingCall).toMatch(/onRollEvent: \(e\) => slackWiring\?\.onRollEvent\(e\)/)
+    // E2 §4: a roll reaches the work units first, then the Slack.
+    expect(rollingCall).toMatch(/onRollEvent: \(e\) => \{[^}]*hostWorkUnits\?\.onRolled\([^]*?slackWiring\?\.onRollEvent\(e\)/)
     expect(rollingCall).toMatch(/hookTap: \(sid, p\) => slackWiring\?\.onHookEvent\(sid, p\)/)
     const slackCall = src.slice(src.indexOf('composeHostSlack('), src.indexOf('createHostOrch({'))
     expect(slackCall).toMatch(/chats: rollingWiring\.chats/)

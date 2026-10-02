@@ -147,6 +147,13 @@ export const HOST_FEATURE_JOURNAL = 'journal'
  *  Additive, so HOST_PROTOCOL stays 4. */
 export const HOST_FEATURE_UNDERSTANDING = 'understanding'
 
+/** The Host detects session work units itself (E2 §3, §4): it runs the work unit collector over the
+ *  sessions in its registry, writes workUnits.json while no attached app keeps the duty
+ *  (HOST_YIELD_WORK_UNITS), hands closed units to its How It Works records, and pushes
+ *  `work-units-state` after every write and `work-units-goal-ignored` for the notice. Announced only with
+ *  `spawn`: a Host that cannot start sessions has none to watch. Additive, so HOST_PROTOCOL stays 4. */
+export const HOST_FEATURE_WORK_UNITS = 'work-units'
+
 /** The Host runs agent app workspaces (agent workspace design): it answers `app-js` and the app only
  *  orch-calls `workspace-list`, `workspace-stop` and `workspace-close`, and pushes `workspace` to the
  *  apps that yield `workspace`. Announced by a win32, linux or darwin Host (workspaceSupported). An app
@@ -207,6 +214,10 @@ export const HOST_YIELD_JOURNAL = 'journal'
  *  reads understanding.json read-only and hands its closed session units and its regenerates to the Host
  *  (E1 §2). An app that keeps the duty keeps writing, and the Host then writes nothing. */
 export const HOST_YIELD_UNDERSTANDING = 'understanding'
+/** `hello.yields` value: this app runs no work unit collector while its Host announces `work-units`; it
+ *  reads workUnits.json read-only and forwards a person's button presses and its history-resume forks to
+ *  the Host (E2 §3, §6). An app that keeps the duty runs its own collector, and the Host writes nothing. */
+export const HOST_YIELD_WORK_UNITS = 'work-units'
 /** `hello.yields` value: this app shows the Host's agent app workspaces in a mirror tab, so the Host
  *  may push `workspace` to it and captures frames only while one such app is attached. An older app
  *  sends none and is pushed nothing. */
@@ -511,6 +522,12 @@ export type HostMessage =
    *  The app forwards it to its renderer as `understanding:changed`, which reads again rather than compares.
    *  An older app ignores it. */
   | { t: 'understanding-state'; root: string }
+  /** The Host just wrote workUnits.json for this project (E2 §4), the raw session cwd it stores under. The
+   *  app forwards it to its renderer as `sessionTasks:changed`, which reads again. An older app ignores it. */
+  | { t: 'work-units-state'; root: string }
+  /** A goal a session declared opened nothing, because a unit was already open there (the collector's
+   *  onGoalIgnored): the app shows the notice its renderer shows today. An older app ignores it. */
+  | { t: 'work-units-goal-ignored'; projectPath: string; objective: string; blockingUnitId: string }
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
   /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has
