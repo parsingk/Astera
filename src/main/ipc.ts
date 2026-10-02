@@ -3770,7 +3770,8 @@ export function registerIpc(
             (id) => {
               const d = store.get().dispatches.find((x) => x.id === id)
               return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
-            }
+            },
+            (id) => store.get().dispatches.find((x) => x.id === id)?.endedAt !== undefined
           )
         })
       },

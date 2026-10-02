@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { checkOutputSlice, tailWindow } from './taskOutput'
+import { checkOutputSlice, cutTail, tailWindow } from './taskOutput'
 import type { Task } from './types'
 import { WorkerTails } from './exec/tail'
 
@@ -50,5 +50,23 @@ describe('tailWindow', () => {
   it('is empty for empty text and past the start', () => {
     expect(tailWindow('', 0, 3)).toEqual({ lines: [], totalLines: 0, more: false })
     expect(tailWindow(ten, 20, 3)).toEqual({ lines: [], totalLines: 10, more: false })
+  })
+})
+
+describe('cutTail (a check log and a worker tail cut at their cap)', () => {
+  const nl = String.fromCharCode(10)
+  it('keeps output within the cap whole', () => {
+    expect(cutTail(`a${nl}b`, 10)).toBe(`a${nl}b`)
+  })
+  // The cut can fall inside a secret: its tail alone matches no pattern, so the partial line goes.
+  it('drops the partial first line the cut leaves', () => {
+    const all = `head token=abcdef0123456789XYZ${nl}next${nl}last`
+    expect(cutTail(all, 12)).toBe(`next${nl}last`)
+  })
+  it('keeps the first line when the cut falls just after a line break', () => {
+    expect(cutTail(`old${nl}next${nl}last`, 9)).toBe(`next${nl}last`)
+  })
+  it('is empty when the kept text is one partial line', () => {
+    expect(cutTail('x'.repeat(20), 10)).toBe('')
   })
 })

@@ -4,6 +4,22 @@ import type { Task } from './types'
 
 export type CheckOutputSlice = { check: string; total: number; offset: number; text: string }
 
+/** `text` after its first line break: what is left of a text cut from the front once the partial
+ *  line it begins with is gone. A cut can fall inside a secret, whose tail alone matches no pattern
+ *  of the filter, so the partial line is dropped rather than redacted. No line break: nothing. */
+export function dropPartialLine(text: string): string {
+  const i = text.indexOf('\n')
+  return i < 0 ? '' : text.slice(i + 1)
+}
+
+/** The last `cap` characters of `all`, and when that cut a line, from the next line on: what a
+ *  check keeps of its log (4000) and a worker tail of its output (64 KB). */
+export function cutTail(all: string, cap: number): string {
+  if (all.length <= cap) return all
+  const kept = all.slice(-cap)
+  return all[all.length - cap - 1] === '\n' ? kept : dropPartialLine(kept)
+}
+
 /** A slice of one failed check's `outputTail`. Without a name, the first check that kept output. */
 export function checkOutputSlice(
   task: Task,

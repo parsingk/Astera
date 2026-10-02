@@ -827,10 +827,14 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     },
     retarget: ({ dispatchId, sessionId, previousSessionId }) => {
       startedOn.set(dispatchId, sessionId)
-      tails.start({ dispatchId, sessionId, previousSessionId }, (id) => {
-        const x = d.getState().dispatches.find((y) => y.id === id)
-        return x === undefined || x.endedAt !== undefined || x.outcome !== undefined
-      })
+      tails.start(
+        { dispatchId, sessionId, previousSessionId },
+        (id) => {
+          const x = d.getState().dispatches.find((y) => y.id === id)
+          return x === undefined || x.endedAt !== undefined || x.outcome !== undefined
+        },
+        (id) => d.getState().dispatches.find((y) => y.id === id)?.endedAt !== undefined
+      )
     }
   }
 }
