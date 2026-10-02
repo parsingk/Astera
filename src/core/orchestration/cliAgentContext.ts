@@ -316,6 +316,36 @@ const SESSION = {
       req('number', '<n>', 'the issue number')
     ]
   },
+  'github-pr-create': {
+    summary: "open a pull request from a finished Run's branch, through the Host's gh (the MCP server's create_pr)",
+    detail:
+      'Refused while the Run is still working, while its worktree has uncommitted changes, and when its branch adds no commits (409). Title and body default from the commits. Pushes only a branch with no upstream or a gone one, never with force. MCP clients need the "Let MCP clients act on GitHub" setting.',
+    flags: [
+      RUN_ARG('<runId>', 'the Run whose worktree branch to open it from'),
+      { name: 'title', value: '<text>', about: 'the title (default: the one commit, or the branch name)' },
+      { name: 'body', value: '<text>', about: 'the body (default: from the commits)' },
+      { name: 'draft', value: '<true|false>', about: 'open it as a draft (default true)' },
+      { name: 'base', value: '<branch>', about: "the branch to open it against (default: the worktree's base)" }
+    ]
+  },
+  'github-ci-rerun': {
+    summary: "rerun the failed jobs of a CI run, through the Host's gh (the MCP server's retry_ci)",
+    detail: 'MCP clients need the "Let MCP clients act on GitHub" setting.',
+    flags: [
+      req('project', '<projectId>', 'the project whose repository the CI run is in (from `projects list`)'),
+      req('run-id', '<ciRunId>', "the CI run to rerun (a check's runId)")
+    ]
+  },
+  'jobs-create-from-issue': {
+    summary: "create a Job from a GitHub issue of a project, through the Host's gh (the MCP server's create_job_from_issue)",
+    detail:
+      "The Job's objective is the issue, quoted as data, and its folder is the project's. Refused for a pull request or a closed issue (409) and for an author who is not the repository's owner, a member or a collaborator (403). Takes `jobs create`'s other flags. MCP clients need the \"Let MCP clients act on GitHub\" setting.",
+    flags: [
+      req('project', '<projectId>', 'the project whose repository to read (from `projects list`)'),
+      req('number', '<n>', 'the issue number'),
+      ...(USAGE['jobs-create'].flags ?? []).filter((f) => f.name !== 'objective' && f.name !== 'cwd')
+    ]
+  },
   'runs-completion': {
     summary: "where each Task of a run stands in completion (the MCP server's get_completion)",
     flags: [req('id', '<runId>', 'the run to read')]

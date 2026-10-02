@@ -96,10 +96,12 @@ import { runningRunCount } from './running'
 import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
 import type { JobEvent, RunOutcome, WorktreeInfo } from '../types'
-import type { GhFailed, GhRunner } from '../github/gh'
-import { failedLogTail, readPrChecks } from '../github/checks'
+import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
+import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { prForBranch } from '../github/prs'
-import { readIssue } from '../github/issue'
+import { ISSUE_JOB_ASSOCIATIONS, issueObjective, readIssue } from '../github/issue'
+import { fillFromCommits, type CommitSummary } from '../github/fill'
+import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -579,9 +581,19 @@ export interface OrchServerDeps {
   /** GitHub through the user's gh (MCP P2-B): the runner, and the worktree registry's entry for a
    *  Run's worktree (its branch, base and repository), or null when the registry does not hold it.
    *  `worktreeOf` is absent on a Host that never loaded its registry (one with no spawner).
+   *  `github-pr-create`'s four: push then create (`createPullRequest`), the commits the branch adds
+   *  over a base, the worktree's uncommitted change count (throws when git cannot read it), and
+   *  whether the branch has an upstream and whether that upstream is gone.
    *  **Only the Host injects it**: gh runs on the Host's PATH and login. Absent, the `github-*`
    *  commands answer 409. */
-  github?: { run: GhRunner; worktreeOf?(path: string): WorktreeInfo | null }
+  github?: {
+    run: GhRunner
+    worktreeOf?(path: string): WorktreeInfo | null
+    createPr(req: PrCreateRequest): Promise<PrCreateResult>
+    readCommits(worktree: string, base: string): Promise<CommitSummary[]>
+    isClean(worktree: string): Promise<{ changedCount: number }>
+    pushState(worktree: string, branch: string): Promise<{ hasUpstream: boolean; upstreamGone: boolean }>
+  }
 }
 
 /** A chat session's turn as `chatTurn` reads it. `prompt` is the open prompt, as `chats pending` lists
@@ -4354,6 +4366,101 @@ export async function handleCommand(
       if (n === null) return bad('--number is required: the issue number')
       const read = await readIssue(t.gh, t.cwd, n)
       return read.ok ? okBody(read.issue) : ghRefusal(read)
+    }
+    /**
+     * The GitHub writes (MCP P2-B), behind `mcpGithubWrite` at the gate. Only `jobs-create-from-issue`
+     * commits a state of its own, so what keeps a keyed retry of the other two from acting twice is the
+     * effect the Host's github dep marks (orchDeps).
+     *
+     * `github-pr-create` opens a pull request from a finished Run's branch: finished is the outcome
+     * `runs-get` answers (`runView`) reading completed or failed; running and paused are not. A dirty
+     * worktree is refused, and so is a branch that adds nothing. It pushes only a branch with no
+     * upstream or a gone one, never with force (`createPullRequest`).
+     */
+    case 'github-pr-create': {
+      const title = args.title === undefined ? undefined : str(args.title)
+      if (title === null) return bad('--title needs a value')
+      if (args.body !== undefined && typeof args.body !== 'string') return bad('--body must be text')
+      const body = args.body as string | undefined
+      if (args.draft !== undefined && typeof args.draft !== 'boolean') return bad('--draft must be true or false')
+      const draft = args.draft !== false
+      const baseArg = args.base === undefined ? undefined : str(args.base)
+      if (baseArg === null) return bad('--base needs a value: the branch to open the pull request against')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      if (!('branch' in t)) return bad("github-pr-create takes --run, not --project: a pull request is opened from a Run's branch")
+      // githubTarget answered for a Run, so the dep is there.
+      const g = deps.github!
+      const outcome = runView(s, t.run).outcome
+      if (outcome !== 'completed' && outcome !== 'failed') return conflict('This Run is still working')
+      let changed: number
+      try {
+        changed = (await g.isClean(t.cwd)).changedCount
+      } catch (err) {
+        return conflict(`Could not read the Run's worktree: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      if (changed > 0) return conflict(`The Run's worktree has ${changed} uncommitted changes`)
+      const base = baseArg ?? t.baseRef
+      const commits = await g.readCommits(t.cwd, base)
+      if (commits.length === 0) return conflict("The Run's branch adds no commits")
+      const filled = fillFromCommits(t.branch, commits)
+      const upstream = await g.pushState(t.cwd, t.branch)
+      const needsPush = !upstream.hasUpstream || upstream.upstreamGone
+      const made = await g.createPr({
+        worktreePath: t.cwd,
+        repoPath: t.repoPath,
+        branch: t.branch,
+        base,
+        title: title ?? filled.title,
+        body: body ?? filled.body,
+        draft,
+        needsPush
+      })
+      if (made.ok) return okBody({ url: made.url, draft, pushed: needsPush })
+      // `pushed` rides on every failure: a create that failed after a push left the branch on the
+      // remote. `exists` keeps gh's own words, which end with the existing pull request's URL.
+      if (made.kind === 'exists') return { status: 409, body: { error: made.detail.trim(), pushed: made.pushed } }
+      if (made.kind === 'rejected') return { status: 409, body: { error: 'The push was rejected', pushed: made.pushed } }
+      const refused = ghRefusal({ ok: false, ...ghFailureSentence({ ok: false, stdout: '', stderr: made.detail }) })
+      return { status: refused.status, body: { ...(refused.body as object), pushed: made.pushed } }
+    }
+    case 'github-ci-rerun': {
+      if (args.run !== undefined) return bad('--run does not go with github-ci-rerun: give --project')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      const runId = posInt(args.runId)
+      if (runId === null) return bad("--run-id is required: the CI run id (a positive integer, from a check's runId)")
+      const r = await rerunFailed(t.gh, t.cwd, runId)
+      return r.ok ? okBody({ runId, rerun: true }) : ghRefusal(r)
+    }
+    /**
+     * An issue becomes a Job, through `jobs-create` with the issue as its objective (`issueObjective`).
+     * The checks are here, on the Host, so no client can skip them: a pull request, a closed issue and
+     * an author the repository does not already trust with its code are refused. The objective and the
+     * folder are the issue's and the project's, so a caller that gives either is refused.
+     */
+    case 'jobs-create-from-issue': {
+      if (args.run !== undefined) return bad('--run does not go with jobs-create-from-issue: give --project')
+      if (args.objective !== undefined)
+        return bad("--objective does not go with jobs-create-from-issue: the issue is the Job's objective")
+      if (args.cwd !== undefined) return bad("--cwd does not go with jobs-create-from-issue: the Job works in the project's folder")
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      const n = posInt(args.number)
+      if (n === null) return bad('--number is required: the issue number')
+      const read = await readIssue(t.gh, t.cwd, n)
+      if (!read.ok) return ghRefusal(read)
+      const issue = read.issue
+      if (issue.isPullRequest) return conflict(`#${n} is a pull request, not an issue`)
+      if (issue.state === 'closed') return conflict(`Issue #${n} is closed`)
+      if (!(ISSUE_JOB_ASSOCIATIONS as readonly string[]).includes(issue.authorAssociation))
+        return denied(
+          `Issue #${n} was written by a ${issue.authorAssociation} of the repository; only an owner, member or collaborator's issue becomes a Job`
+        )
+      const { project: _project, number: _number, ...rest } = args
+      const reply = await handleCommand(deps, caller, 'jobs-create', { ...rest, cwd: t.cwd, objective: issueObjective(issue) })
+      if (reply.status < 200 || reply.status >= 300) return reply
+      return okBody({ ...(reply.body as object), issue: { number: issue.number, url: issue.url } })
     }
     case 'reset': {
       const open = s.dispatches.filter((d) => !d.endedAt)
