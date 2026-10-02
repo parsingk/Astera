@@ -101,8 +101,13 @@ export interface HostUnderstandingDeps {
 
 export interface HostUnderstanding {
   /** Once, at Host start, writer or not: the store's load, which marks a record left `generating` as
-   *  failed/INTERRUPTED (its agent was a child of the Host that died). Never rejects. */
+   *  failed/INTERRUPTED (its agent was a child of the Host that died), saved at once when this Host is
+   *  the writer and otherwise kept for writerMayHaveChanged. Never rejects. */
   load(): Promise<void>
+  /** Who writes may have changed (the server's `onAppsChanged`, and once the server listens): an
+   *  interruption load marked but could not save is saved now, when this Host is the writer and nobody
+   *  wrote the file since. Never rejects. */
+  writerMayHaveChanged(): Promise<void>
   /** A Run finished (E1 §3): recorded when this Host writes and tracking is on. Resolves once the record
    *  is queued, never waits on the agent. Never rejects. */
   onRunFinished(input: RunRecordInput & { projectPath: string }): Promise<void>
@@ -165,13 +170,35 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     }
   )
 
+  /** The projects load marked interrupted in memory and no write has saved yet. Left `generating` in
+   *  the file, the app (a reader) and MCP would show them spinning for good. */
+  let unsaved: string[] = []
+  const saveUnstuck = async (): Promise<void> => {
+    if (unsaved.length === 0 || !isWriter()) return
+    const roots = unsaved
+    unsaved = []
+    try {
+      // Another process wrote the file since load: its file is the newer one, and a `generating`
+      // record in it may be that writer's own generation in flight, so nothing is unstuck over it.
+      if (await store.refresh()) return
+      for (const root of roots) {
+        const u = store.get(root)
+        if (u) await store.set(root, u)
+      }
+    } catch (err) {
+      d.log(`understanding: the interrupted records could not be saved: ${message(err)}`)
+    }
+  }
+
   const loadStore = async (): Promise<void> => {
     try {
-      const { recovered } = await store.load()
+      const { recovered, unstuck } = await store.load()
       if (recovered) d.log('understanding.json could not be read or parsed, kept the .bak and started empty')
+      unsaved = unstuck
     } catch (err) {
       d.log(`understanding.json load failed: ${message(err)}`)
     }
+    await saveUnstuck()
   }
   /** What the pipeline asks synchronously, as **the most recent call** read it: a generation queued
    *  behind others runs with the settings and accounts of the newest call, not of the call that queued it
@@ -201,6 +228,7 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
 
   return {
     load: loadStore,
+    writerMayHaveChanged: saveUnstuck,
     isWriter,
     onRunFinished: async (input) => {
       try {

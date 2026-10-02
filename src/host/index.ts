@@ -293,12 +293,13 @@ async function main(): Promise<void> {
 
   // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
   // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
-  // Host left `generating` reads as interrupted. `server` is assigned below; `writer` and `push` run only
-  // inside a call. `orch` hands it every Run a commit finishes.
+  // Host left `generating` reads as interrupted; **not the writer before the server listens** (a Host that
+  // loses the bind race must write nothing), so that interruption is saved once it does, below, or when
+  // the apps change. `orch` hands it every Run a commit finishes.
   const hostUnderstanding = createHostUnderstanding({
     file: path.join(profileDir, 'understanding.json'),
     profileDir,
-    writer: () => !server.appsKeep(HOST_YIELD_UNDERSTANDING),
+    writer: () => server !== undefined && !server.appsKeep(HOST_YIELD_UNDERSTANDING),
     accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
     descriptors: makeDescriptors(process.platform),
     // The Host's own registry; empty without a spawner, which never loads it, and then no key folds.
@@ -658,6 +659,8 @@ async function main(): Promise<void> {
         rollingWiring?.onAppsChanged()
         // P4: an app that keeps Slack attaching closes the Host's socket; the last one leaving opens it.
         slackWiring?.onAppsChanged()
+        // E1: an app that kept How It Works leaving makes this Host the writer.
+        void hostUnderstanding.writerMayHaveChanged()
       },
       // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello. Limits L3:
       // and who drives, so its Jobs sidebar can say why a parked Host starts nothing. Each isolates itself.
@@ -690,6 +693,8 @@ async function main(): Promise<void> {
 
   // The Host's Slack starts once the server exists: who keeps Slack is the server's to say.
   slackWiring?.start()
+  // And How It Works: with no app attached yet this Host is the writer now (E1 §2).
+  void hostUnderstanding.writerMayHaveChanged()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

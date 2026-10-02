@@ -184,6 +184,50 @@ describe('createHostUnderstanding', () => {
     expect(old?.reason).toBe('INTERRUPTED')
   })
 
+  // Final review item 1: the unstick is saved, so the app (a reader) and MCP stop showing it spinning.
+  const stuckRecord = (): WorkRecord => ({ ...hostRecord('old'), status: 'generating' })
+
+  it('as the writer, load saves the interrupted record at once, with no other write, and pushes its root', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const { u, pushed } = make()
+    await u.load()
+    const [old] = await recordsOnDisk(project)
+    expect(old.status).toBe('failed')
+    expect(old.reason).toBe('INTERRUPTED')
+    expect(pushed).toEqual([project])
+  })
+
+  it('not the writer at load: the file is left alone, and saved once this Host becomes the writer', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const { u, box, pushed } = make()
+    box.writer = false
+    await u.load()
+    expect((await recordsOnDisk(project))[0].status).toBe('generating')
+    await u.writerMayHaveChanged()
+    expect((await recordsOnDisk(project))[0].status).toBe('generating')
+    box.writer = true
+    await u.writerMayHaveChanged()
+    expect((await recordsOnDisk(project))[0]).toMatchObject({ status: 'failed', reason: 'INTERRUPTED' })
+    expect(pushed).toEqual([project])
+    // Once: a later change of writer has nothing left to save.
+    await u.writerMayHaveChanged()
+    expect(pushed).toEqual([project])
+  })
+
+  it('an app that wrote the file before this Host became the writer: its file is kept, nothing is unstuck over it', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const { u, box, pushed } = make()
+    box.writer = false
+    await u.load()
+    // The app, the writer meanwhile, saved its own state (its own generation in flight among it).
+    const appState = { projects: { [project]: { records: [{ ...stuckRecord(), id: 'app-gen' }, hostRecord('old')] } } }
+    await fs.writeFile(file(), JSON.stringify(appState, null, 2))
+    box.writer = true
+    await u.writerMayHaveChanged()
+    expect(await onDisk()).toEqual(appState)
+    expect(pushed).toEqual([])
+  })
+
   it('reads the settings per call: tracking turned off between two Runs records only the first', async () => {
     await settings(ON)
     const { u } = make()
