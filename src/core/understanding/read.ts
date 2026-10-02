@@ -1,6 +1,7 @@
-// understanding.json read by something other than the app (MCP P2-C): the Host answers How It Works
-// records to MCP clients from the same file the app writes. **Read only**: the app's
-// UnderstandingStore is the file's one writer, so this never recovers, backs up or rewrites it.
+// understanding.json read without its store (MCP P2-C, E1): the Host answers How It Works records to MCP
+// clients, and an app in front of a writer Host shows them, from the file one UnderstandingStore writes,
+// the Host's or an app's (E1 §2, one writer at a time). **Read only**: that store is the file's writer,
+// so this never recovers, backs up or rewrites it.
 //
 // The shape guard lives here and the store imports it, so the two readers cannot drift on what a
 // valid file is.
