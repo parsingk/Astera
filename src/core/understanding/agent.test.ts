@@ -21,8 +21,8 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import { existsSync } from 'node:fs'
 import { runAgent } from './agent'
-import { makeDescriptors } from '../../core/providers/descriptor'
-import type { Account } from '../../core/types'
+import { makeDescriptors } from '../providers/descriptor'
+import type { Account } from '../types'
 
 const account = { id: 'a1', provider: 'claude', configDir: 'C:/nowhere/.claude' } as unknown as Account
 const base = {

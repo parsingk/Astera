@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { WorkRecord } from './types'
-import { UnderstandingStore } from '../../main/understanding/store'
+import { UnderstandingStore } from './store'
 import { readUnderstandingFile, recordDetail, recordSummary, recordsFor, type StoreShape } from './read'
 
 let dir: string

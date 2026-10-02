@@ -6,10 +6,10 @@
 // project does. Sharing a file would let one side's cleanup rule delete the other's data.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { ProjectUnderstanding } from '../../core/understanding/types'
+import type { ProjectUnderstanding } from './types'
 // The shape guard is core's so the Host's read-only reader (core/understanding/read.ts) takes and
 // refuses exactly what this store does.
-import { isValid, type StoreShape } from '../../core/understanding/read'
+import { isValid, type StoreShape } from './read'
 
 export class UnderstandingStore {
   private state: StoreShape = { projects: {} }

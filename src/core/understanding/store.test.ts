@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ProjectUnderstanding } from '../../core/understanding/types'
+import type { ProjectUnderstanding } from './types'
 import { UnderstandingStore } from './store'
 
 let dir: string
