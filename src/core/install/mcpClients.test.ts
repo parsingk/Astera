@@ -142,6 +142,17 @@ describe('registerMcpClient', () => {
     expect(r.calls).toEqual([removeArgs('claude')])
   })
 
+  // The remove went through, so the client now has no astera entry at all: the message must say so,
+  // or the person reads the failure as "nothing changed".
+  it('says the earlier entry was removed when the add after a successful remove fails', async () => {
+    const r = runner({ add: { ok: false, stdout: '', stderr: 'Error: disk full\nat x' } })
+    expect(await registerMcpClient('codex', 'different', WANT, r.run)).toEqual({
+      ok: false,
+      message: 'Error: disk full. The earlier astera entry was removed; register again, or by hand with the copied line'
+    })
+    expect(r.calls).toEqual([removeArgs('codex'), addArgs('codex', WANT)])
+  })
+
   it('carries the first line of a failed add, stdout when stderr is empty', async () => {
     const r = runner({ add: { ok: false, stdout: 'MCP server astera already exists in user config\n', stderr: '' } })
     expect(await registerMcpClient('claude', 'absent', WANT, r.run)).toEqual({

@@ -129,9 +129,13 @@ export async function registerMcpClient(
   if (state === 'registered') return { ok: true }
   if (state === 'not-installed') return { ok: false, message: `${client} is not installed` }
   const steps = state === 'different' ? [removeArgs(client), addArgs(client, server)] : [addArgs(client, server)]
-  for (const args of steps) {
+  for (const [i, args] of steps.entries()) {
     const r = await run(args)
-    if (!r.ok) return { ok: false, message: firstLine(r.stderr) || firstLine(r.stdout) || `${client} ${args.slice(0, 2).join(' ')} failed` }
+    if (r.ok) continue
+    const why = firstLine(r.stderr) || firstLine(r.stdout) || `${client} ${args.slice(0, 2).join(' ')} failed`
+    // An add that fails after the remove went through leaves no astera entry at all.
+    const removed = i > 0 ? `. The earlier ${NAME} entry was removed; register again, or by hand with the copied line` : ''
+    return { ok: false, message: why + removed }
   }
   return { ok: true }
 }
