@@ -131,7 +131,8 @@ const HOST_RESOLVES = ['resolveProjectRoot'] as const
  * **The writer, not "an app is attached".** While an attached app keeps the `work-units` duty its own
  * collector holds the units and the Host's is stopped (it would answer "work unit tracking is off"), so
  * the question goes to the app, as before E2, PROPAGATES' way: an app that cannot be asked answers
- * CONFLICT. The writer is asked once per call, before anything is called.
+ * CONFLICT. The writer is asked once per dependency call, before anything is called (a session-task
+ * command makes two: the toggle, then the declaration).
  *
  * **A settings file the Host cannot read** (`RepairNeeded`) is flagged with its file, as
  * LOCAL_WHEN_ABSENT flags one: only the app can repair it. A Host built without work units
@@ -1128,7 +1129,7 @@ export function hostOrchDeps(a: {
     }
   }
 
-  /** HOST_TRACKS: the Host's own work units while they are the writer, asked once per call; null otherwise. */
+  /** HOST_TRACKS: the Host's own work units while they are the writer, asked once per dependency call; null otherwise. */
   const writingUnits = () => {
     const w = a.workUnits
     return w && w.isWriter() ? w : null

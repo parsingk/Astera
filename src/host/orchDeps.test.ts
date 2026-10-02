@@ -1410,6 +1410,17 @@ describe('hostOrchDeps and the Host work units (E2 §5)', () => {
     expect(refused).toEqual([])
   })
 
+  it('with an attached app that yields the duty, the Host answers and the app is never asked', async () => {
+    const act = vi.fn()
+    const u = units(true)
+    const deps = hostOrchDeps(base({ act, hasApp: () => true, workUnits: u.w }))
+    expect(await deps.trackingEnabled?.()).toBe(true)
+    expect(await deps.sessionTasks?.start('ses1', 'Fix it')).toEqual({ ok: true, id: 'wu-1' })
+    expect(await deps.sessionTasks?.complete('ses1', { source: 'agent' })).toEqual({ ok: true, id: 'wu-1' })
+    expect(await deps.sessionTasks?.cancel('ses1')).toEqual({ ok: true, id: 'wu-1' })
+    expect(act).not.toHaveBeenCalled()
+  })
+
   it('the Host’s own declarations mark an effect once they acted, never over a refusal; trackingEnabled marks nothing', async () => {
     let acted = 0
     const u = units(true)

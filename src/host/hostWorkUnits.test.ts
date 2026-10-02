@@ -176,6 +176,42 @@ describe('createHostWorkUnits', () => {
     expect(onDisk().projects[project].units[0]).toMatchObject({ status: 'interrupted', reason: 'INTERRUPTED_BY_TRACKING_OFF' })
   })
 
+  it('becoming the writer again reads the toggle the app that kept the duty left (Ruling 5)', async () => {
+    const r = rig()
+    r.state.writer = false
+    const hw = createHostWorkUnits(r.deps)
+    await hw.start()
+    expect(hw.isRunning()).toBe(false)
+    // the app that keeps the duty turns tracking off, then leaves: no reload, no greeting
+    r.state.tracking = false
+    r.state.writer = true
+    await hw.writerMayHaveChanged()
+    expect(hw.isRunning()).toBe(false)
+    // and the other way: it turned tracking on before it left
+    r.state.writer = false
+    await hw.writerMayHaveChanged()
+    r.state.tracking = true
+    r.state.writer = true
+    await hw.writerMayHaveChanged()
+    expect(hw.isRunning()).toBe(true)
+  })
+
+  it('trackingEnabled follows the file it just read, so a declaration before any reload is answered (Ruling 5)', async () => {
+    const r = rig()
+    r.state.tracking = false
+    const hw = createHostWorkUnits(r.deps)
+    await hw.start()
+    expect(hw.isRunning()).toBe(false)
+    r.state.tracking = true
+    expect(await hw.trackingEnabled()).toBe(true)
+    expect(hw.isRunning()).toBe(true)
+    expect((await hw.sessionTasks.start('s1', 'Fix it')).ok).toBe(true)
+    // and off again: the collector stops with the answer
+    r.state.tracking = false
+    expect(await hw.trackingEnabled()).toBe(false)
+    expect(hw.isRunning()).toBe(false)
+  })
+
   it('keeps the collector as it was when the settings cannot be read, and says so', async () => {
     const r = rig()
     const hw = createHostWorkUnits(r.deps)

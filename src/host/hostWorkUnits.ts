@@ -135,9 +135,11 @@ export interface HostWorkUnits {
   /** `work-units-reload` and each app greeting: the tracking setting is read again, and the collector
    *  starts or stops with it. A setting that cannot be read leaves the collector as it was. */
   reload(): Promise<void>
-  /** Who writes may have changed (the server's `onAppsChanged`, and once the server listens). */
+  /** Who writes may have changed (the server's `onAppsChanged`, and once the server listens). The tracking
+   *  setting is read again first. */
   writerMayHaveChanged(): Promise<void>
-  /** The command layer's `trackingEnabled`: the setting, read now. Throws when it cannot be read. */
+  /** The command layer's `trackingEnabled`: the setting, read now; a value that changed since the last read
+   *  starts or stops the collector before the answer. Throws when it cannot be read. */
   trackingEnabled(): Promise<boolean>
   /** The collector's declarations and the screen's reads, by session and by id. `start`, `complete` and
    *  `cancel` run one collector round first, so a session that appeared since the last round is known. */
@@ -426,8 +428,23 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       await readTracking()
       await apply()
     },
-    writerMayHaveChanged: () => apply(),
-    trackingEnabled: () => d.tracking(),
+    // Read again first (Ruling 5): an app that kept the duty may have changed the toggle and left with no
+    // reload, and the value read at its greeting would run the collector against the file.
+    writerMayHaveChanged: async () => {
+      await readTracking()
+      await apply()
+    },
+    // The command layer's toggle, reconciled with the collector (Ruling 5): a file that changed since the
+    // last read starts or stops it before the answer, so a declaration that passes the toggle finds it
+    // running. Unreadable: thrown, and the collector stays as it was.
+    trackingEnabled: async () => {
+      const now = await d.tracking()
+      if (now !== tracking) {
+        tracking = now
+        await apply()
+      }
+      return now
+    },
     sessionTasks: {
       start: async (sessionId, objective) => {
         await caughtUp()
