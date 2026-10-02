@@ -49,6 +49,9 @@ export interface PipelineDeps {
    *  when it did not answer in time. Defaults to a stat through the budgeted session-folder probe
    *  (defaultFileProbe); a test seam. */
   fileProbe?: (abs: string) => Promise<ProbeResult>
+  /** The agent round trip; defaults to runAgent (agent.ts). A test seam: the Host's tests run its
+   *  pipeline with a fake one. */
+  runAgent?: typeof runAgent
 }
 
 export interface RunRecordInput {
@@ -196,7 +199,7 @@ export class UnderstandingPipeline {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: ready.reason }))
       return
     }
-    const run = await runAgent({
+    const run = await (this.deps.runAgent ?? runAgent)({
       ...ready.ctx,
       cwd: projectRoot,
       prompt: buildRecordPrompt({

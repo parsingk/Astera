@@ -29,8 +29,11 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
+import { createHostUnderstanding } from './hostUnderstanding'
+import { makeDescriptors } from '../core/providers/descriptor'
+import { readRange } from '../core/git/range'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
@@ -287,6 +290,25 @@ async function main(): Promise<void> {
     log: (m) => log.write(m)
   })
   await hostJournal.start()
+
+  // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
+  // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
+  // Host left `generating` reads as interrupted. `server` is assigned below; `writer` and `push` run only
+  // inside a call. Task 3 hands it the finished Runs at the commits; nothing calls it yet.
+  const hostUnderstanding = createHostUnderstanding({
+    file: path.join(profileDir, 'understanding.json'),
+    profileDir,
+    writer: () => !server.appsKeep(HOST_YIELD_UNDERSTANDING),
+    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    descriptors: makeDescriptors(process.platform),
+    // The Host's own registry; empty without a spawner, which never loads it, and then no key folds.
+    worktrees: () => worktrees.list(),
+    // The app's reader for the same material (ipc.ts): no range, or one git could not read, gives none.
+    readCommits: async (root, from, to) => (from && to ? ((await readRange(root, from, to))?.subjects ?? []) : []),
+    log: (m) => log.write(m),
+    push: (root) => server.broadcast({ t: 'understanding-state', root })
+  })
+  await hostUnderstanding.load()
 
   // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in
   // this registry, so a coordinator's worker-start works with no Astera window open. Null when the

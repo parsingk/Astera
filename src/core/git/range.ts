@@ -1,9 +1,10 @@
 // git range reader (before..after) — the Host and the app both use it, so it lives in core.
 import { git, type GitResult } from '../worktrees/git'
 
-/** 감시 고리(gitWatcher) 안에서 도는 호출은 매달리면 안 된다 — 이 파일의 함수 넷이 전부 같은
- *  회차(gitRound) 안에서 불리므로 넷 다 이 값을 쓴다. 어댑터 기본값(30초)을 쓰면 git 하나가
- *  매달릴 때 수집기의 직렬 큐 전체가 그만큼 선다. ipc.ts 의 git.status 와 같은 값. */
+/** A call made inside the watch loop (gitWatcher) must not hang. readRange here and the round
+ *  functions in main/workUnit/gitProbe.ts all run inside the same round (gitRound), so they all use
+ *  this value. With the adapter's default (30 s), one stuck git would hold the collector's serial
+ *  queue that long. The same value as ipc.ts's git.status. */
 export const WATCH_ROUND_TIMEOUT_MS = 5_000
 
 /** git 한 번을 띄우는 길. 기본은 어댑터(`core/worktrees/git`)이고, 테스트는 이것을 감싸 이 파일이 한
