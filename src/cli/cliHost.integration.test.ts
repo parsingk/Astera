@@ -292,6 +292,10 @@ interface Rig {
   journalRows(runId: string): JournalEventRow[]
   /** Test seams inside the Host's own commands. */
   hooks: { release?: () => Promise<void> }
+  /** How It Works: the finished Runs the Host has handed it and it has handled, and a promise that
+   *  resolves once every generation and save it queued has landed. Together, a test's signal that a write
+   *  that did not happen is not merely late. */
+  understanding: { runsHandled(): number; settled(): Promise<void> }
 }
 
 async function hostRig(
@@ -528,12 +532,13 @@ async function hostRig(
   await journal?.start()
 
   // How It Works (E1 §2, §3), built the way index.ts builds it: the Host writes understanding.json while
-  // every attached app yields `understanding`, with only the agent faked.
+  // every attached app yields `understanding`, not before its server listens, and reads accounts.json and
+  // app-settings.json itself; only the agent is faked. Told who writes may have changed once the server
+  // listens and whenever the apps change, as index.ts tells it.
   const hostUnderstanding = createHostUnderstanding({
     file: path.join(profileDir, 'understanding.json'),
     profileDir,
-    writer: () => !serverOf().appsKeep(HOST_YIELD_UNDERSTANDING),
-    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    writer: () => box.server !== null && !box.server.appsKeep(HOST_YIELD_UNDERSTANDING),
     descriptors: makeDescriptors(process.platform),
     worktrees: () => worktrees.list(),
     log,
@@ -551,6 +556,8 @@ async function hostRig(
 
   /** Exits the Host has handed to the command layer, counted so the teardown can wait them out. */
   let exitsHandled = 0
+  /** Finished Runs the Host has handed How It Works, counted once it handled each. */
+  let runsHandled = 0
   const orch = createHostOrch({
     profileDir,
     version: '9.9.9',
@@ -585,7 +592,17 @@ async function hostRig(
     ...(o.github ? { github: o.github } : {}),
     // How It Works records (MCP P2-C), as host/index.ts wires them: the profile's understanding.json.
     readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
-    understanding: hostUnderstanding,
+    // Counted as the rig counts exits, the call itself unchanged.
+    understanding: {
+      ...hostUnderstanding,
+      onRunFinished: async (input) => {
+        try {
+          await hostUnderstanding.onRunFinished(input)
+        } finally {
+          runsHandled += 1
+        }
+      }
+    },
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -617,10 +634,15 @@ async function hostRig(
     orch,
     features: hostFeatures({ spawns: true, slack: false }),
     ...wiring.serverHooks,
+    onAppsChanged: () => {
+      wiring.serverHooks.onAppsChanged()
+      void hostUnderstanding.writerMayHaveChanged()
+    },
     onAppGreeted: (send) => wiring.appGreeted(send),
     log: { write: log, close: () => {} }
   })
   box.server = server
+  void hostUnderstanding.writerMayHaveChanged()
 
   // Teardown in `leave()`'s order: the driver stops, the spawner retires, the server closes, the ptys
   // end, and the exits those ends start run out before the folders are removed. Run once: a test may
@@ -669,7 +691,8 @@ async function hostRig(
         reader.close()
       }
     },
-    hooks
+    hooks,
+    understanding: { runsHandled: () => runsHandled, settled: () => hostUnderstanding.settled() }
   }
 }
 
@@ -1976,6 +1999,29 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       expect(rowsOf(await mcp.call('list_work_records', { projectId })).map((r) => r.id)).toEqual([row.id])
     })
 
+    // E1 §2: a Host is not the writer before its server listens, so the interruption its load marked is
+    // saved by the post-listen writerMayHaveChanged, as index.ts calls it, with no Run or other write.
+    it('a record a dead Host left generating reads INTERRUPTED in the file shortly after the Host listens, with no other write', async () => {
+      const profileDir = await tempDir(PROFILE_PREFIX)
+      const projectPath = path.join(profileDir, 'a-project')
+      const left = {
+        id: 'left-generating',
+        at: '2026-10-01T00:00:00.000Z',
+        source: { kind: 'job', runId: 'r-dead', jobName: 'j', taskIds: [] },
+        request: 'the dead Host was writing this',
+        changedFiles: [],
+        git: { startHead: null, endHead: null },
+        status: 'generating'
+      }
+      const file = path.join(profileDir, 'understanding.json')
+      await fs.writeFile(file, JSON.stringify({ projects: { [projectPath]: { records: [left] } } }))
+      const h = await hostRig({ profileDir, repo: false })
+      expect(h.server.hasApp()).toBe(false)
+      await until(async () =>
+        expect((await readUnderstandingFile(file)).projects[projectPath]?.records).toEqual([{ ...left, status: 'failed', reason: 'INTERRUPTED' }])
+      )
+    })
+
     it('an attached app that keeps How It Works (no understanding yield) stops the Host writing, and regenerate_work_record is CONFLICT', async () => {
       const { a, runAgent } = fakeAgent()
       const { h, projectId, projectPath } = await projectRig({ runAgent })
@@ -1987,7 +2033,9 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const mcp = await mcpClient(h)
 
       await finishedRun(h, projectPath)
-      await new Promise((r) => setTimeout(r, 200))
+      // Handled, and nothing it could have queued is left to land: the file not being there is not a late write.
+      await until(() => expect(h.understanding.runsHandled()).toBe(1))
+      await h.understanding.settled()
       expect(existsSync(path.join(h.profileDir, 'understanding.json'))).toBe(false)
       expect(a.calls).toBe(0)
 
@@ -2006,7 +2054,8 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const refused = await mcp.call('regenerate_work_record', { projectId, recordId: 'by-app', requestId: 'regen-2' })
       expect(refused.isError).toBe(true)
       expect(errorOf(refused)).toMatchObject({ code: 'CONFLICT', message: 'an older Astera app is writing How It Works records; regenerate there' })
-      await new Promise((r) => setTimeout(r, 100))
+      // Answered, and nothing queued is left to land.
+      await h.understanding.settled()
       expect(await fs.readFile(path.join(h.profileDir, 'understanding.json'), 'utf8')).toBe(written)
       expect(a.calls).toBe(0)
     })

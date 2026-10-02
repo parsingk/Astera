@@ -158,7 +158,7 @@ describe('UnderstandingStore', () => {
 
   // Final review item 1: load marks them in memory only, so it says which projects it changed, for a
   // writer to save them.
-  it('load names the projects whose generating records it marked interrupted', async () => {
+  it('load names the projects whose generating records it marked interrupted, and those records', async () => {
     const stuck: ProjectUnderstanding = {
       records: [
         { id: 'r1', at: 'x', source: { kind: 'session', sessionId: 's', label: 'l' }, request: 'q',
@@ -169,9 +169,9 @@ describe('UnderstandingStore', () => {
     await a.load()
     await a.set('C:/p', stuck)
     await a.set('C:/q', sample)
-    expect((await new UnderstandingStore(file).load()).unstuck).toEqual(['C:/p'])
+    expect(await new UnderstandingStore(file).load()).toMatchObject({ unstuck: ['C:/p'], interrupted: ['r1'] })
     await fs.rm(file)
-    expect((await new UnderstandingStore(file).load()).unstuck).toEqual([])
+    expect(await new UnderstandingStore(file).load()).toMatchObject({ unstuck: [], interrupted: [] })
   })
 
   // Final review item 7: a rename refused past its retries leaves no temp file of this process behind.

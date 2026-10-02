@@ -18,7 +18,7 @@
 import path from 'node:path'
 import type { Account, Provider, WorktreeInfo } from '../core/types'
 import type { ProviderDescriptor } from '../core/providers/descriptor'
-import type { ProjectUnderstanding } from '../core/understanding/types'
+import type { ProjectUnderstanding, WorkRecord } from '../core/understanding/types'
 import type { SessionWorkUnit } from '../core/workUnit/types'
 import { UnderstandingStore } from '../core/understanding/store'
 import { UnderstandingPipeline, type PipelineDeps, type RunRecordInput } from '../core/understanding/pipeline'
@@ -107,8 +107,9 @@ export interface HostUnderstanding {
    *  the writer and otherwise kept for writerMayHaveChanged. Never rejects. */
   load(): Promise<void>
   /** Who writes may have changed (the server's `onAppsChanged`, and once the server listens): an
-   *  interruption load marked but could not save is saved now, when this Host is the writer and nobody
-   *  wrote the file since. Never rejects. */
+   *  interruption load marked but could not save is saved now, when this Host is the writer. Over a file
+   *  another process wrote since, only the records load marked that are still `generating` there. Owed
+   *  until the write lands. Never rejects. */
   writerMayHaveChanged(): Promise<void>
   /** A Run finished (E1 §3): recorded when this Host writes. Resolves once the record
    *  is queued, never waits on the agent. Never rejects. */
@@ -121,6 +122,8 @@ export interface HostUnderstanding {
     recordId: string
   ): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }>
   isWriter(): boolean
+  /** Test seam: resolves once every generation queued so far and every save have landed. Never rejects. */
+  settled(): Promise<void>
 }
 
 /** The core store with the writer gate at every write, and the push after it. A write while an app keeps
@@ -135,9 +138,15 @@ class GatedStore extends UnderstandingStore {
   }
 
   override async set(projectPath: string, value: ProjectUnderstanding): Promise<void> {
-    if (!this.may()) return
+    await this.trySet(projectPath, value)
+  }
+
+  /** set, answering whether the write landed: false when the gate dropped it. */
+  async trySet(projectPath: string, value: ProjectUnderstanding): Promise<boolean> {
+    if (!this.may()) return false
     await super.set(projectPath, value)
     this.wrote(projectPath)
+    return true
   }
 }
 
@@ -175,20 +184,41 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     }
   )
 
-  /** The projects load marked interrupted in memory and no write has saved yet. Left `generating` in
-   *  the file, the app (a reader) and MCP would show them spinning for good. */
+  /** The projects load marked interrupted in memory and no write has saved yet, and the records it
+   *  marked (by id). Left `generating` in the file, the app (a reader) and MCP would show them spinning
+   *  for good. A project leaves the list only once its write landed, or once the file says its marked
+   *  records are no longer `generating`: a write the gate dropped (the writer flipped after the check
+   *  below) is retried at the next change of writer. */
   let unsaved: string[] = []
-  const saveUnstuck = async (): Promise<void> => {
+  let interrupted = new Set<string>()
+  /** Whether saveUnstuck has read another process's file since load. */
+  let adopted = false
+  const owed = (r: WorkRecord): boolean => r.status === 'generating' && interrupted.has(r.id)
+  /** One at a time: two calls (the apps changing, the server listening) must not save twice. */
+  let saving: Promise<void> = Promise.resolve()
+  const saveUnstuck = (): Promise<void> => (saving = saving.then(saveUnstuckNow))
+  const saveUnstuckNow = async (): Promise<void> => {
     if (unsaved.length === 0 || !isWriter()) return
-    const roots = unsaved
-    unsaved = []
     try {
-      // Another process wrote the file since load: its file is the newer one, and a `generating`
-      // record in it may be that writer's own generation in flight, so nothing is unstuck over it.
-      if (await store.refresh()) return
-      for (const root of roots) {
+      // Another process may have written the file since load, and then its file is the one read here. A
+      // `generating` record in it that load did not mark may be that writer's own generation in flight
+      // and is left alone; one load marked is still the dead Host's, and is marked again. Also when the
+      // other write landed between load's stamp and its read (store.ts load), which this refresh reads
+      // once more and adopts. Remembered: a save the gate dropped after an adoption is retried with the
+      // file's records, and the next refresh no longer says it adopted them. Never adopted, memory holds
+      // load's marks (and any generation this Host started since, which is not marked again).
+      if (await store.refresh()) adopted = true
+      for (const root of [...unsaved]) {
         const u = store.get(root)
-        if (u) await store.set(root, u)
+        const again = adopted && u?.records.some(owed) === true
+        if (!u || (adopted && !again)) {
+          unsaved = unsaved.filter((k) => k !== root)
+          continue
+        }
+        const next = again
+          ? { ...u, records: u.records.map((r) => (owed(r) ? { ...r, status: 'failed' as const, reason: 'INTERRUPTED' } : r)) }
+          : u
+        if (await store.trySet(root, next)) unsaved = unsaved.filter((k) => k !== root)
       }
     } catch (err) {
       d.log(`understanding: the interrupted records could not be saved: ${message(err)}`)
@@ -197,9 +227,10 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
 
   const loadStore = async (): Promise<void> => {
     try {
-      const { recovered, unstuck } = await store.load()
-      if (recovered) d.log('understanding.json could not be read or parsed, kept the .bak and started empty')
-      unsaved = unstuck
+      const loaded = await store.load()
+      if (loaded.recovered) d.log('understanding.json could not be read or parsed, kept the .bak and started empty')
+      unsaved = loaded.unstuck
+      interrupted = new Set(loaded.interrupted)
     } catch (err) {
       d.log(`understanding.json load failed: ${message(err)}`)
     }
@@ -235,6 +266,11 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     load: loadStore,
     writerMayHaveChanged: saveUnstuck,
     isWriter,
+    settled: async () => {
+      await saving
+      await pipeline.settled()
+      await store.settled()
+    },
     onRunFinished: async (input) => {
       try {
         if (!isWriter()) return
@@ -285,6 +321,9 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
       }
       // The answer says `generating`: the file says so first, since the fill may be queued behind another
       // generation. A write failure is logged, the fill still queued.
+      // This Host's own generation from here on: a save of load's interruptions still owed must not mark
+      // it interrupted.
+      interrupted.delete(recordId)
       try {
         await pipeline.markGenerating(root, recordId)
       } catch (err) {

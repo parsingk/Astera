@@ -188,9 +188,17 @@ export class UnderstandingPipeline {
       await this.deps.store.refresh()
       const cur = this.deps.store.get(projectRoot)?.records.find((r) => r.id === recordId)
       if (!cur) return
-      await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))
+      // Already `generating` (markGenerating wrote it, E1 §5): the same write again would only push the
+      // apps a second identical state.
+      if (cur.status !== 'generating')
+        await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))
       await this.fill(projectRoot, recordId, cur.git.commits ?? [])
     })
+  }
+
+  /** Test seam: resolves once every generation queued so far has ended. Never rejects (see enqueue). */
+  settled(): Promise<void> {
+    return this.chain
   }
 
   /** Sets one record to `generating`, **outside the queue**: a caller that answers "generating" at once
