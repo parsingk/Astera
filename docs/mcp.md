@@ -259,14 +259,19 @@ shows as waiting.
    A window with no change answers with empty `events` and `ending: null`: call again with the same
    `seen`.
 
-`events` holds the Run's timeline entries after the first `seen`, in the timeline's order (time,
-then kind): each has `at`, `kind` (`run-created`, `task-created`, `dispatch-started`, `message`,
-`gate-opened`, `gate-resolved`, `limit-hit`, `resumed`, `runtime-lost`, `recovery`), `sourceId`,
-and when they apply `taskId`, `taskTitle`, `messageType`, `summary`, `outcome`, `provider`, `retry`,
-`review` and `repair`: the fields `astera runs follow` prints. The server keeps nothing between
-calls, so it cuts the list at `seen` rather than remembering which events it sent. A new event almost
-always sorts last, since its time is when it was written; one that sorts before an event already
-seen would shift the cut by one, so that answer repeats one old event and leaves out the new one.
+`events` holds the Run's timeline entries the caller has not been sent, in the timeline's order
+(time, then kind): each has `at`, `kind` (`run-created`, `task-created`, `dispatch-started`,
+`message`, `gate-opened`, `gate-resolved`, `limit-hit`, `resumed`, `runtime-lost`, `recovery`),
+`sourceId`, and when they apply `taskId`, `taskTitle`, `messageType`, `summary`, `outcome`,
+`provider`, `retry`, `review` and `repair`: the fields `astera runs follow` prints. A new event does
+not always sort last: a journal row the Host serves late can carry an earlier time. So, like
+`astera runs follow`, the server remembers which events it sent for each of the last 50 Runs it
+followed, and when `seen` is the count it handed out, `events` is everything not sent yet, wherever
+it sorts. Any other `seen` (from another session, or from before the server restarted) gets the
+events after the first `seen` instead; there a late event that sorts before one already seen shifts
+the cut by one, so that answer repeats an old event and leaves out the new one.
+
+A Run that is deleted while it is followed answers `NOT_FOUND`: stop the loop.
 
 The window is at most 40 seconds because the server gives the Host 50 seconds to answer any call and
 Cursor and Codex end a tool call at 60. It needs only "Read only".
@@ -499,11 +504,12 @@ a field with nothing left.
   the server sends anything.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
   results, questions, answers, review issues and suggested fixes, failure summaries, error messages,
-  and the summaries and Task titles of the events `wait_for_run` returns) is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
-  What the GitHub tools return from GitHub is redacted the same way: pull request and issue titles,
-  issue bodies, labels and authors, check names and workflows, the failed CI log, and `gh`'s own
-  words in an error message. So are the How It Works records: the request, the reason, a session's
-  label or a Job's name, and every text field of the write-up; changed files and other paths are not.
+  and the summaries and Task titles of the events `wait_for_run` returns) is redacted of anything
+  that looks like a secret; ids, paths and timestamps are left as they are. What the GitHub tools
+  return from GitHub is redacted the same way: pull request and issue titles, issue bodies, labels
+  and authors, check names and workflows, the failed CI log, and `gh`'s own words in an error
+  message. So are the How It Works records: the request, the reason, a session's label or a Job's
+  name, and every text field of the write-up; changed files and other paths are not.
 - Session and output text is redacted the same way: every screen and scrollback row, every turn's
   text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
   every line of `get_task_output`. `get_check_output` redacts the whole log first and pages it
