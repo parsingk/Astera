@@ -2798,7 +2798,7 @@ export async function handleCommand(
       if (typeof skipLines === 'string') return bad(skipLines)
       if (typeof lines === 'string') return bad(lines)
       const latest = s.dispatches
-        .filter((d) => d.taskId === id)
+        .filter((d) => d.taskId === id && !d.review)
         .reduce<(typeof s.dispatches)[number] | undefined>((a, d) => (!a || d.startedAt > a.startedAt ? d : a), undefined)
       if (!latest) return conflict('no worker has run this task yet')
       const raw = await deps.readWorker({ dispatchId: latest.id, limit: 100000 })

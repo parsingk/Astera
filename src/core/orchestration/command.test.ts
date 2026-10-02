@@ -7984,6 +7984,26 @@ describe('handleCommand — tasks-check-output and tasks-output', () => {
     expect(older.body).toMatchObject({ lines: ['l1', 'l2'], more: false })
   })
 
+  it('tasks-output: a later review Dispatch is not the worker', async () => {
+    const rev = { ...dispatch('d3', '2026-01-03'), review: true }
+    const deps = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01'), rev] }))
+    const asked: unknown[] = []
+    deps.readWorker = async (a) => {
+      asked.push(a)
+      return 'x'
+    }
+    await call(deps, 'tasks-output', { id: 't1' }, '')
+    expect(asked).toEqual([{ dispatchId: 'd1', limit: 100000 }])
+    const onlyReview = makeDeps(seeded({ dispatches: [rev] }))
+    expect((await call(onlyReview, 'tasks-output', { id: 't1' }, '')).status).toBe(409)
+  })
+
+  it('tasks-check-output: a named check that is unknown or has no output is 409', async () => {
+    const deps = makeDeps(seeded({}, { checks: [...failed.checks, { configId: 'c0', name: 'lint', status: 'passed' }] }))
+    expect((await call(deps, 'tasks-check-output', { id: 't1', check: 'nope' }, '')).status).toBe(409)
+    expect((await call(deps, 'tasks-check-output', { id: 't1', check: 'c0' }, '')).status).toBe(409)
+  })
+
   it('tasks-output: untracked is recorded false, empty is recorded true, no Dispatch is 409', async () => {
     const withD = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01')] }))
     withD.readWorker = async () => TAIL_UNTRACKED

@@ -35,6 +35,10 @@ describe('tailWindow', () => {
     expect(tailWindow(ten, 0, 3)).toEqual({ lines: ['l8', 'l9', 'l10'], totalLines: 10, more: true })
     expect(tailWindow(ten, 8, 3)).toEqual({ lines: ['l1', 'l2'], totalLines: 10, more: false })
   })
+  it('does not count trailing blank lines', () => {
+    const nl = String.fromCharCode(10)
+    expect(tailWindow(['a', 'b', '', ''].join(nl), 0, 5)).toEqual({ lines: ['a', 'b'], totalLines: 2, more: false })
+  })
   it('is empty for empty text and past the start', () => {
     expect(tailWindow('', 0, 3)).toEqual({ lines: [], totalLines: 0, more: false })
     expect(tailWindow(ten, 20, 3)).toEqual({ lines: [], totalLines: 10, more: false })

@@ -25,7 +25,7 @@ export function tailWindow(
   skipLines: number,
   lines: number
 ): { lines: string[]; totalLines: number; more: boolean } {
-  const all = text === '' ? [] : text.replace(/\r?\n$/, '').split(/\r?\n/)
+  const all = text === '' ? [] : text.replace(/(\r?\n)+$/, '').split(/\r?\n/)
   const end = Math.max(0, all.length - skipLines)
   const start = Math.max(0, end - lines)
   return { lines: all.slice(start, end), totalLines: all.length, more: start > 0 }
