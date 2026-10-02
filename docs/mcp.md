@@ -204,6 +204,7 @@ set by [MCP access](#mcp-access).
 | `create_job_from_issue` | Create a Job in a project (`projectId`) from one of its open issues (`number`), as `create_job` does from an objective: it does not start execution, so use `run_job`. The coordinator and convergence fields are `create_job`'s; there is no `objective`, since the issue is the objective. Returns the Job with `issue` (`number`, `url`). Needs the GitHub setting and "Read and control". |
 | `list_work_records` | A project's [How It Works](#how-it-works) records (`projectId`), newest first: `id`, `at`, `title` (`null` before the write-up has one), `request`, `status`, `reason`, `source`, `changedFiles` (how many) and `verification` (its `status`, or `null`). |
 | `get_work_record` | One How It Works record in full (`projectId` and `recordId`): the request, source, changed files, git heads and commits, verification (`validation` on an older record), Job tasks, status, reason and the write-up (`explanation`). |
+| `regenerate_work_record` | Start a new write-up of one How It Works record (`projectId` and `recordId`) in the background, as the app's regenerate button does: it overwrites the current write-up. It answers at once with the record's `id` and `status: "generating"`; read `get_work_record` for the result. While an older Astera app is the one writing the records, it is refused with `CONFLICT`. Needs "Read and control". |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
 `coordinatorAccountId` from `list_accounts`, or, without one, the default account of
@@ -378,23 +379,36 @@ Every result carries the data twice, as `structuredContent` and as the same JSON
 content. An error is the exception: its text content is a `CODE: message` line followed by the JSON
 (`code`, `message`, `nextSteps` and, when there are any, `details`), and it carries no
 `structuredContent`, because some clients (Cursor) validate `structuredContent` even on an error.
-The eleven tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
+The twelve tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
 `resume_run`, `answer_question`, `send_message`, `create_session`, `create_pr`, `retry_ci`,
-`create_job_from_issue`) accept an optional `requestId`. Retrying with the same id returns the first
-result instead of acting twice; for a failed GitHub write, see [GitHub](#github). The Host keeps
-these receipts in memory for one hour, and a Host restart forgets them.
+`create_job_from_issue`, `regenerate_work_record`) accept an optional `requestId`. Retrying with
+the same id returns the first result instead of acting twice; for a failed GitHub write, see
+[GitHub](#github). The Host keeps these receipts in memory for one hour, and a Host restart forgets
+them.
 
 ### How It Works
 
 How It Works is the Astera view that keeps a write-up of each piece of work an agent finished in a
 project: what the person asked for, which files changed, what was checked, and an explanation an
 agent wrote once the work closed. `list_work_records` and `get_work_record` read those records for a
-`projectId` from `list_projects`. They are answered by the Astera Host, which reads the file the app
-keeps them in (`understanding.json` in the profile) on every call, so they work while the app is
-closed and show a record the moment the app has written it.
+`projectId` from `list_projects`, and `regenerate_work_record` writes one again. All three are
+answered by the Astera Host, which reads the records from `understanding.json` in the profile on
+every call.
 
-- **Read only.** No tool refreshes or regenerates a write-up; only the app writes them. They follow
-  MCP access like every other read, with no setting of their own.
+- **The Host writes the records.** A Job's Run is recorded by the Host when it finishes, so its
+  record appears with the app closed. A record of a person's own session is written only while the
+  app is open, since the app is what notices the session's work end. The two read tools follow MCP
+  access like every other read, with no setting of their own; `regenerate_work_record` needs
+  "Read and control".
+- **`regenerate_work_record` answers at once.** It starts a new write-up in the background and
+  overwrites the current one, as the app's regenerate button does. The answer is the record's `id`
+  with `status: "generating"`; the agent takes a minute or more, and `get_work_record` shows the
+  result once its `status` is no longer `generating`. Retrying with the same `requestId` starts one
+  write-up, not two.
+- **An older Astera app writes them itself.** While an app from before the Host wrote these
+  records is attached, it is the one writer, and the Host writes nothing: a Run that finishes then
+  is recorded by that app, and `regenerate_work_record` is `CONFLICT` with "an older Astera app is
+  writing How It Works records; regenerate there". Update the app, or regenerate from it.
 - **They may be out of date.** A write-up describes the code as it was when the work finished.
 - **`request` is the person's own words**, verbatim. `title` and everything in `explanation` are the
   agent's. Every free-text field is redacted like the rest (see [How it stays local](#how-it-stays-local)).
