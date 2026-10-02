@@ -34,7 +34,9 @@ import type { RollJournal } from './rollJournal'
 import type { HostSlackWiring } from './slackWiring'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
-import type { HostUnderstanding } from './hostUnderstanding'
+import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
+import { findProject } from '../core/orchestration/projects'
+import type { SessionWorkUnit } from '../core/workUnit/types'
 import { justFinished, runRecordInputOf } from '../core/orchestration/runRecord'
 import type { WorkspaceManager } from './workspace/manager'
 import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
@@ -219,6 +221,14 @@ export function receiptsToEvict(
     kept++
   }
   return gone
+}
+
+/** Whether `understanding-unit`'s unit has the fields the pipeline reads before its own guard: the app's
+ *  collector sends a whole SessionWorkUnit, so this only turns away a call that is not one. */
+const isUnitShaped = (u: unknown): u is SessionWorkUnit => {
+  if (typeof u !== 'object' || u === null || Array.isArray(u)) return false
+  const o = u as Record<string, unknown>
+  return typeof o.id === 'string' && typeof o.sessionId === 'string' && typeof o.status === 'string' && typeof o.git === 'object' && o.git !== null
 }
 
 /** A reply body as a bag of fields, for the two predicates below. Anything that is not an object
@@ -466,9 +476,10 @@ export function createHostOrch(a: {
   /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
    *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
   journal?: Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> | null
-  /** How It Works in the Host (hostUnderstanding.ts, E1 §3): handed every Run a commit finishes. Absent:
-   *  this Host records no Run. */
-  understanding?: Pick<HostUnderstanding, 'onRunFinished'> | null
+  /** How It Works in the Host (hostUnderstanding.ts, E1 §3, §4): handed every Run a commit finishes, and
+   *  the app's `understanding-unit` and the app's and MCP's `understanding-regenerate`. Absent: this Host
+   *  records no Run, and both calls answer 501. */
+  understanding?: Pick<HostUnderstanding, 'onRunFinished' | 'onUnitClosed' | 'regenerate' | 'isWriter'> | null
   /** The agent app workspace (agent workspace design): `app-js` below the receipt line (plan ruling
    *  P2), and the app only `workspace-list`, `workspace-stop` and `workspace-close` above it. Absent: all
    *  four answer 501. */
@@ -1160,6 +1171,38 @@ export function createHostOrch(a: {
     return r
   }
 
+  /** `understanding-regenerate` (E1 §4, §5): one command for both its callers, and the role decides
+   *  which argument names the project. The app sends its `projectPath`; an MCP client sends a project
+   *  id (`project`), resolved here to the project's root, as `understanding-list` resolves it. */
+  const understandingRegenerate = async (args: Record<string, unknown>, from: OrchCaller | undefined, marks: CallMarks): Promise<Reply> => {
+    const role = from?.role
+    if (role !== 'app' && role !== 'mcp')
+      return { status: 403, body: { error: 'understanding-regenerate is for the app and MCP clients' } }
+    if (!a.understanding) return { status: 501, body: { error: 'this Host does not write How It Works records' } }
+    const recordId = args.recordId
+    if (typeof recordId !== 'string' || recordId === '')
+      return { status: 400, body: { error: 'understanding-regenerate needs a recordId' } }
+    let projectPath: string
+    if (role === 'app') {
+      const given = args.projectPath
+      if (typeof given !== 'string' || given === '') return { status: 400, body: { error: 'understanding-regenerate needs a projectPath' } }
+      projectPath = given
+    } else {
+      const projectId = args.project
+      if (typeof projectId !== 'string' || projectId === '')
+        return { status: 400, body: { error: 'understanding-regenerate needs a project id' } }
+      await ready()
+      const project = findProject(store.get(), projectId)
+      if (!project) return { status: 404, body: { error: `unknown project: ${projectId}` } }
+      projectPath = project.path
+    }
+    if (!a.understanding.isWriter()) return { status: 409, body: { error: NOT_WRITER } }
+    const r = await a.understanding.regenerate(projectPath, recordId)
+    if (!r.ok) return { status: r.status, body: { error: r.error } }
+    marks.effects += 1
+    return { status: 200, body: { id: r.id, status: 'generating' } }
+  }
+
   /**
    * **The answer to "did my call land?"** (request receipts design §6). Three states, and 200 for all
    * three: not finding a receipt is an answer, not a failure. Notably it is not a 404 — `NOT_FOUND`
@@ -1337,6 +1380,7 @@ export function createHostOrch(a: {
             cmd === 'slack-reload' ||
             cmd === 'journal-append' ||
             cmd === 'journal-reload' ||
+            cmd === 'understanding-unit' ||
             cmd === 'coordinator-idle' ||
             cmd === 'workspace-list' ||
             cmd === 'workspace-stop' ||
@@ -1438,6 +1482,19 @@ export function createHostOrch(a: {
           if ('error' in parsed) return { status: 400, body: { error: parsed.error } }
           return a.journal.append(parsed.ops)
         }
+        // **Beside journal-append, for its reason (E1 §4).** A session unit the app's collector closed, sent
+        // while this Host writes How It Works. Never a command layer command, never a receipt.
+        if (cmd === 'understanding-unit') {
+          if (from?.role !== 'app') return { status: 403, body: { error: 'understanding-unit is the app’s to send' } }
+          if (!a.understanding) return { status: 501, body: { error: 'this Host does not write How It Works records' } }
+          const projectPath = args.projectPath
+          if (typeof projectPath !== 'string' || projectPath === '' || !isUnitShaped(args.unit))
+            return { status: 400, body: { error: 'understanding-unit needs a projectPath and a unit' } }
+          if (!a.understanding.isWriter()) return { status: 409, body: { error: NOT_WRITER } }
+          const r = await a.understanding.onUnitClosed(projectPath, args.unit)
+          if (r.ok) return { status: 200, body: { recorded: true } }
+          return { status: r.reason === NOT_WRITER ? 409 : 500, body: { error: r.reason ?? 'the unit was not recorded' } }
+        }
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and
         // its two buttons. Never a command layer command, never a receipt.
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close') {
@@ -1473,6 +1530,13 @@ export function createHostOrch(a: {
         // call, so a command above the line would refuse `astera app js` outright.
         if (cmd === 'app-js') {
           const answered = await appJs(args, sessionId, marks)
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Answered by the Host, below the receipt line for app-js' reason** (E1 §5): MCP puts a request id
+        // on every regenerate_work_record. A generation started marks one effect, so a retried id replays
+        // the answer instead of starting a second one; a refusal marks nothing and leaves no receipt.
+        if (cmd === 'understanding-regenerate') {
+          const answered = await understandingRegenerate(args, from, marks)
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // **Answered by the Host, like the two above — but on *this* side of the receipt line.**

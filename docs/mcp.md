@@ -165,8 +165,8 @@ If the client cannot find `astera`, give `command` the full path of the installe
 
 ## The tools
 
-The server offers 33 tools: 19 for projects, accounts and Jobs, four for sessions, two that read
-a Task's output, six for GitHub and two that read How It Works records. What a client may call is
+The server offers 34 tools: 19 for projects, accounts and Jobs, four for sessions, two that read
+a Task's output, six for GitHub, two that read How It Works records and one that regenerates one. What a client may call is
 set by [MCP access](#mcp-access).
 
 | Tool | What it does |
@@ -450,7 +450,7 @@ as quoted data.
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
 | Read only | The list and get tools, `get_run`, `wait_for_run`, `get_completion`, `list_run_configs`, `get_check_output`, `get_task_output`, `get_pr_status`, `get_ci`, `get_issue`, `list_work_records` and `get_work_record` included; `list_sessions` and `get_session` only with the session setting on. |
-| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`; with the session setting on, `send_message` and `create_session`; and with the GitHub setting on, `create_pr`, `retry_ci` and `create_job_from_issue`. This is the default. |
+| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run`, `answer_question` and `regenerate_work_record`; with the session setting on, `send_message` and `create_session`; and with the GitHub setting on, `create_pr`, `retry_ci` and `create_job_from_issue`. This is the default. |
 
 **Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
 `create_session` also need **Let MCP clients see and use sessions** (Settings, CLI tab), which is off

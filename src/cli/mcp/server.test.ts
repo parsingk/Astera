@@ -18,7 +18,7 @@ const TOOLS = [
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
   'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
-  'list_work_records', 'get_work_record', 'wait_for_run'
+  'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record'
 ]
 
 async function connected(link: HostLink) {
@@ -79,7 +79,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-three tools', async () => {
+  it('lists exactly the thirty-four tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -1269,9 +1269,9 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-three tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-four tools, six of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(33)
+    expect(tools).toHaveLength(34)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
     for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
@@ -1559,6 +1559,36 @@ describe('the How It Works tools (MCP P2-C)', () => {
       'understanding-list': { status: 500, body: { error: 'understanding.json could not be read' } }
     })
     expect(errorOf(r500.r)).toMatchObject({ code: 'FAILED', message: 'understanding.json could not be read' })
+  })
+
+  it('regenerate_work_record sends the project id, the record id and the request id to understanding-regenerate, and is not read-only', async () => {
+    const { r, calls } = await call(
+      'regenerate_work_record',
+      { projectId: 'p1', recordId: 'w1', requestId: 'q1' },
+      { 'understanding-regenerate': { status: 200, body: { id: 'w1', status: 'generating' } } }
+    )
+    expect(r.isError).toBeFalsy()
+    expect(calls).toEqual([{ cmd: 'understanding-regenerate', args: { project: 'p1', recordId: 'w1' }, request: 'q1' }])
+    expect(r.structuredContent).toEqual({ id: 'w1', status: 'generating' })
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    expect(tools.find((t) => t.name === 'regenerate_work_record')?.annotations?.readOnlyHint).toBe(false)
+  })
+
+  it('regenerate_work_record’s description: control access, in the background, overwrites, read get_work_record', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const d = String(tools.find((t) => t.name === 'regenerate_work_record')?.description)
+    expect(d).toMatch(/Read and control/)
+    expect(d).toMatch(/background/)
+    expect(d).toMatch(/overwrites/)
+    expect(d).toMatch(/get_work_record/)
+  })
+
+  it('regenerate_work_record: a Host that is not the writer is CONFLICT with its sentence, an unknown record NOT_FOUND', async () => {
+    const sentence = 'an older Astera app is writing How It Works records; regenerate there'
+    const r409 = await call('regenerate_work_record', { projectId: 'p1', recordId: 'w1' }, { 'understanding-regenerate': { status: 409, body: { error: sentence } } })
+    expect(errorOf(r409.r)).toMatchObject({ code: 'CONFLICT', message: sentence })
+    const r404 = await call('regenerate_work_record', { projectId: 'p1', recordId: 'x' }, { 'understanding-regenerate': { status: 404, body: { error: 'no How It Works record x' } } })
+    expect(errorOf(r404.r)).toMatchObject({ code: 'NOT_FOUND' })
   })
 })
 

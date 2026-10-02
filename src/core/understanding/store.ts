@@ -18,6 +18,9 @@ export class UnderstandingStore {
   /** The file as this store last loaded or saved it (mtime and size), or null when it has seen none.
    *  refresh() compares the file with it to tell another process's write from its own. */
   private seen: string | null = null
+  /** Counts set and remove. refresh() adopts the file only when none ran while it was reading: a write
+   *  made meanwhile is newer than the file it read, and may not have reached the disk yet. */
+  private writes = 0
 
   constructor(private filePath: string) {}
 
@@ -47,8 +50,13 @@ export class UnderstandingStore {
    *  **Never unsticks.** A `generating` record in the file may be this process's own generation in
    *  flight; only load, at start, may call it interrupted. It waits for this store's queued saves first,
    *  so it never reads a file under its own pending write. A file that cannot be read or is not valid is
-   *  not adopted: what this store holds stays, as a write over a damaged file did before. */
+   *  not adopted: what this store holds stays, as a write over a damaged file did before.
+   *
+   *  **Not over a newer write.** A caller outside the pipeline's queue (the Host's regenerate) can refresh
+   *  while the pipeline sets: a set made after this refresh began is kept, and the file it read is not
+   *  adopted. The next refresh compares again. */
   async refresh(): Promise<boolean> {
+    const writes = this.writes
     await this.queue.catch(() => {})
     const now = await this.stamp(this.filePath)
     if (now === null || now === this.seen) return false
@@ -58,7 +66,7 @@ export class UnderstandingStore {
     } catch {
       return false
     }
-    if (!isValid(parsed)) return false
+    if (!isValid(parsed) || this.writes !== writes) return false
     this.state = parsed
     this.seen = now
     return true
@@ -70,11 +78,13 @@ export class UnderstandingStore {
 
   set(projectPath: string, value: ProjectUnderstanding): Promise<void> {
     this.state.projects[projectPath] = value
+    this.writes += 1
     return this.save()
   }
 
   remove(projectPath: string): Promise<void> {
     delete this.state.projects[projectPath]
+    this.writes += 1
     return this.save()
   }
 

@@ -183,6 +183,9 @@ export class UnderstandingPipeline {
    *  background, not the user). */
   regenerate(projectRoot: string, recordId: string): Promise<void> {
     return this.enqueue(async () => {
+      // The file first, as prepend and patch read it: the record and its commits may be another
+      // process's (store.refresh).
+      await this.deps.store.refresh()
       const cur = this.deps.store.get(projectRoot)?.records.find((r) => r.id === recordId)
       if (!cur) return
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))

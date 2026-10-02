@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -178,6 +178,38 @@ describe('UnderstandingStore', () => {
       await fs.writeFile(file, '{ broken', 'utf8')
       expect(await s.refresh()).toBe(false)
       expect(s.get('C:/p')).toEqual(sample)
+    })
+
+    // Task 2 re-review: a refresh outside the pipeline's queue (the Host's regenerate) must not adopt the
+    // file over a write this store made while the refresh was reading.
+    it('does not adopt the file over a set made while it was reading', async () => {
+      const s = new UnderstandingStore(file)
+      await s.load()
+      await s.set('C:/p', sample)
+      const other = new UnderstandingStore(file)
+      await other.load()
+      await other.set('C:/q', generating)
+      const real = fs.readFile.bind(fs)
+      let reading: () => void = () => {}
+      const started = new Promise<void>((r) => (reading = r))
+      let release: () => void = () => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const spy = vi.spyOn(fs, 'readFile').mockImplementationOnce((async (...args: Parameters<typeof fs.readFile>) => {
+        const text = await real(...args)
+        reading()
+        await gate
+        return text
+      }) as typeof fs.readFile)
+      try {
+        const refreshed = s.refresh()
+        await started
+        await s.set('C:/r', sample)
+        release()
+        await refreshed
+      } finally {
+        spy.mockRestore()
+      }
+      expect(s.get('C:/r')).toEqual(sample)
     })
   })
 })

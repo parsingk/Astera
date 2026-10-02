@@ -2,7 +2,6 @@
 // Real store file, real settings file, real validation; only the agent is fake (the runAgent seam).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, readFileSync } from 'node:fs'
-import { promises as fsp } from 'node:fs'
 import os from 'node:os'
 import net from 'node:net'
 import path from 'node:path'
@@ -351,9 +350,9 @@ describe('createHostUnderstanding', () => {
     await settings(ON)
     const { u } = make()
     await u.load()
-    const real = fsp.readFile
+    const real = fs.readFile
     const reads: string[] = []
-    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
       reads.push(String(args[0]))
       return real(...args)
     }) as typeof real)
@@ -374,9 +373,9 @@ describe('createHostUnderstanding', () => {
     await settings(ON)
     const { u } = make()
     await u.load()
-    const real = fsp.readFile
+    const real = fs.readFile
     let busy = 1
-    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
       if (String(args[0]).endsWith('app-settings.json') && busy-- > 0) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
       return real(...args)
     }) as typeof real)

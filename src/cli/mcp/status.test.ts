@@ -66,7 +66,7 @@ describe('mcpStatus', () => {
         tools: TOOLS.length
       }
     })
-    expect(TOOLS.length).toBe(33)
+    expect(TOOLS.length).toBe(34)
   })
 
   it('no settings file reads as the default, control', async () => {

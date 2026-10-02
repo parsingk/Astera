@@ -1,4 +1,4 @@
-// The thirty-three MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D). Each is one Host command; `args` maps the
+// The thirty-four MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D, E1). Each is one Host command; `args` maps the
 // tool's input to the command's arguments exactly as the CLI's parser would produce them: flag names
 // camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
@@ -34,7 +34,7 @@ const GITHUB_WRITE =
   'Needs "Let MCP clients act on GitHub" turned on in Astera Settings (CLI tab), off by default, MCP access "Read and control", and the GitHub CLI (gh) installed and logged in on the machine running the Astera Host.'
 /** What a How It Works tool's answer is, in its description (P2-C). */
 const WORK_RECORDS =
-  "How It Works records are write-ups of finished work that an agent wrote after the work closed, kept by the Astera app in its How It Works view. They may be out of date: the code may have changed since. Read only: no tool here refreshes or regenerates a write-up. request is the person's own words, verbatim; the rest is the agent's. Needs MCP access \"Read only\" or \"Read and control\"."
+  "How It Works records are write-ups of finished work that an agent wrote after the work closed, shown in the Astera app's How It Works view. They may be out of date: the code may have changed since. Read only: regenerate_work_record is the one tool that writes a record again. request is the person's own words, verbatim; the rest is the agent's. Needs MCP access \"Read only\" or \"Read and control\"."
 const id = z.string().min(1).max(MCP_LIMITS.id)
 const requestId = z
   .string()
@@ -617,5 +617,16 @@ export const TOOLS: ToolDef[] = [
     description: `One How It Works record in full: request, source, changed files, git heads and commits, verification (validation on older records), Job tasks, status, reason, and the explanation (overview, user-visible changes, flow, decisions, implementation and evidence). ${WORK_RECORDS}`,
     inputSchema: { projectId: id, recordId: id.describe('A record id from list_work_records.') },
     args: (i) => ({ project: i.projectId, id: i.recordId })
+  },
+  // E1 §5. The Host's understanding-regenerate, the command behind the app's own regenerate button.
+  {
+    name: 'regenerate_work_record',
+    title: 'Regenerate a work record',
+    readOnly: false,
+    cmd: 'understanding-regenerate',
+    description:
+      'Start a new write-up of one How It Works record in the background. It overwrites the current write-up, as the regenerate button in the Astera app does, and answers at once with the record id and status generating. The agent takes a minute or more: read get_work_record for the result, whose status leaves generating when it is done. While an older Astera app is the one writing How It Works records, this is refused with CONFLICT. Needs MCP access "Read and control".',
+    inputSchema: { projectId: id, recordId: id.describe('A record id from list_work_records.'), requestId },
+    args: (i) => ({ project: i.projectId, recordId: i.recordId })
   }
 ]

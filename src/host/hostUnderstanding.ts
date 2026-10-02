@@ -226,7 +226,8 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     regenerate: async (projectPath, recordId) => {
       if (!isWriter()) return { ok: false, status: 409, error: NOT_WRITER }
       const root = fold(projectPath)
-      // The record may be one an app wrote while it was the writer.
+      // The record may be one an app wrote while it was the writer. Outside the pipeline's queue, so it
+      // answers at once; refresh adopts no file over a write the pipeline made meanwhile.
       await store.refresh()
       if (!store.get(root)?.records.some((r) => r.id === recordId))
         return { ok: false, status: 404, error: `no How It Works record ${recordId} in ${root}` }
