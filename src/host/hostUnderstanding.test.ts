@@ -244,6 +244,8 @@ describe('createHostUnderstanding', () => {
     }) as typeof real)
     try {
       await u.writerMayHaveChanged()
+      // The flip landed in the refresh's one stamp: a refresh that stats more, or not at all, fails here.
+      expect(spy).toHaveBeenCalledTimes(1)
     } finally {
       spy.mockRestore()
     }
@@ -269,6 +271,8 @@ describe('createHostUnderstanding', () => {
     }) as typeof real)
     try {
       await u.writerMayHaveChanged()
+      // The flip landed in the refresh's one stamp: a refresh that stats more, or not at all, fails here.
+      expect(spy).toHaveBeenCalledTimes(1)
     } finally {
       spy.mockRestore()
     }
@@ -277,6 +281,48 @@ describe('createHostUnderstanding', () => {
     await u.writerMayHaveChanged()
     expect((await recordsOnDisk(project))[0]).toMatchObject({ status: 'failed', reason: 'INTERRUPTED' })
     expect(pushed).toEqual([project])
+  })
+
+  // Review follow-up: a dropped save after an adoption leaves the record owed; the writer returns and a
+  // regenerate of that very record lands before the queued saveUnstuck. The Host's own generation is not
+  // marked interrupted.
+  it('a regenerate of a record load marked, before the owed save runs, is not marked interrupted by it', async () => {
+    await settings(ON)
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const agentIn = deferred()
+    const agentGo = deferred()
+    const { u, box } = make({
+      runAgent: async () => {
+        agentIn.resolve()
+        await agentGo.promise
+        return { ok: true, value: explanation }
+      }
+    })
+    box.writer = false
+    await u.load()
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }, null, 2))
+    box.writer = true
+    const real = fs.stat
+    const spy = vi.spyOn(fs, 'stat').mockImplementationOnce((async (...args: Parameters<typeof real>) => {
+      box.writer = false
+      return real(...args)
+    }) as typeof real)
+    try {
+      await u.writerMayHaveChanged()
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      spy.mockRestore()
+    }
+    box.writer = true
+    try {
+      await expect(u.regenerate(project, 'old')).resolves.toEqual({ ok: true, id: 'old' })
+      await u.writerMayHaveChanged()
+      await agentIn.promise
+      expect((await recordsOnDisk(project))[0]).toMatchObject({ id: 'old', status: 'generating' })
+    } finally {
+      agentGo.resolve()
+    }
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
   })
 
   // E1 leftovers item 2: load stamps before it reads, so a write landing between the two is read by load and

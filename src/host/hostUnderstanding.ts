@@ -321,6 +321,9 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
       }
       // The answer says `generating`: the file says so first, since the fill may be queued behind another
       // generation. A write failure is logged, the fill still queued.
+      // This Host's own generation from here on: a save of load's interruptions still owed must not mark
+      // it interrupted.
+      interrupted.delete(recordId)
       try {
         await pipeline.markGenerating(root, recordId)
       } catch (err) {
