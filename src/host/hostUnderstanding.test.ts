@@ -228,6 +228,95 @@ describe('createHostUnderstanding', () => {
     expect(pushed).toEqual([])
   })
 
+  // E1 leftovers item 1: the writer flips between saveUnstuck's own writer check and the gated write. The
+  // write is dropped; the unstick stays owed, and the next change of writer saves it.
+  it('a writer flip between the check and the write keeps the unstick owed, and the next change of writer saves it', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const { u, box, pushed } = make()
+    box.writer = false
+    await u.load()
+    box.writer = true
+    const real = fs.stat
+    // The refresh's stamp is the first stat after the writer check: an app that keeps the duty attaches there.
+    const spy = vi.spyOn(fs, 'stat').mockImplementationOnce((async (...args: Parameters<typeof real>) => {
+      box.writer = false
+      return real(...args)
+    }) as typeof real)
+    try {
+      await u.writerMayHaveChanged()
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await recordsOnDisk(project))[0].status).toBe('generating')
+    expect(pushed).toEqual([])
+    box.writer = true
+    await u.writerMayHaveChanged()
+    expect((await recordsOnDisk(project))[0]).toMatchObject({ status: 'failed', reason: 'INTERRUPTED' })
+    expect(pushed).toEqual([project])
+  })
+
+  it('a writer flip after an adopted file: the retry still marks the record load marked', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const { u, box, pushed } = make()
+    box.writer = false
+    await u.load()
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }, null, 2))
+    box.writer = true
+    const real = fs.stat
+    const spy = vi.spyOn(fs, 'stat').mockImplementationOnce((async (...args: Parameters<typeof real>) => {
+      box.writer = false
+      return real(...args)
+    }) as typeof real)
+    try {
+      await u.writerMayHaveChanged()
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await recordsOnDisk(project))[0].status).toBe('generating')
+    box.writer = true
+    await u.writerMayHaveChanged()
+    expect((await recordsOnDisk(project))[0]).toMatchObject({ status: 'failed', reason: 'INTERRUPTED' })
+    expect(pushed).toEqual([project])
+  })
+
+  // E1 leftovers item 2: load stamps before it reads, so a write landing between the two is read by load and
+  // then read again by the next refresh, which adopts it. The record load marked is still owed its save.
+  it('a write that landed between load’s stamp and its read: the record load marked is still saved interrupted', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const real = fs.readFile
+    const spy = vi.spyOn(fs, 'readFile').mockImplementationOnce((async (...args: Parameters<typeof real>) => {
+      // Another writer's save, the same record still generating, another size than the stamped file.
+      await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }, null, 2))
+      return real(...args)
+    }) as typeof real)
+    const { u, pushed } = make()
+    try {
+      await u.load()
+    } finally {
+      spy.mockRestore()
+    }
+    expect((await recordsOnDisk(project))[0]).toMatchObject({ status: 'failed', reason: 'INTERRUPTED' })
+    expect(pushed).toEqual([project])
+  })
+
+  it('an adopted file: the record load marked is saved interrupted, one the other writer started after load is left generating', async () => {
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [stuckRecord()] } } }))
+    const { u, box, pushed } = make()
+    box.writer = false
+    await u.load()
+    // The app, the writer meanwhile, saved: its own generation in flight, and the stuck record untouched.
+    const appState = { projects: { [project]: { records: [{ ...stuckRecord(), id: 'app-gen' }, stuckRecord()] } } }
+    await fs.writeFile(file(), JSON.stringify(appState, null, 2))
+    box.writer = true
+    await u.writerMayHaveChanged()
+    const records = await recordsOnDisk(project)
+    expect(records.map((r) => [r.id, r.status, r.reason])).toEqual([
+      ['app-gen', 'generating', undefined],
+      ['old', 'failed', 'INTERRUPTED']
+    ])
+    expect(pushed).toEqual([project])
+  })
+
   it('reads the settings per call: a generator chosen between two Runs fills the second', async () => {
     await settings({ lang: 'en' })
     const { u } = make()
