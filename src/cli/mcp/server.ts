@@ -17,6 +17,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
+import { registerPrompts, registerResources } from './resources'
 import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
 import { MCP_LIMITS, TOOLS, convergenceRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
@@ -173,6 +174,21 @@ async function sessionKind(link: HostLink, t: ToolDef, id: unknown): Promise<str
   return typeof session?.kind === 'string' ? session.kind : undefined
 }
 
+/** The one read path under a tool and a resource (MCP P2-A), so they cannot drift: the Host call, the
+ *  refusal mapped to its CLI code, then the public allowlist, the check-output drop and the redaction.
+ *  `tool` names the tool whose result this is, for the output redaction that is per tool. */
+export type HostRead =
+  | { ok: true; shaped: unknown; replayed: boolean }
+  | { ok: false; code: CliErrorCode; message: string; body?: unknown }
+
+export async function hostRead(link: HostLink, cmd: string, tool: string, args: Record<string, unknown>, request?: string): Promise<HostRead> {
+  const r = await link.call(cmd, args, request)
+  if ('code' in r) return { ok: false, code: r.code, message: r.message }
+  if (r.status < 200 || r.status >= 300)
+    return { ok: false, code: codeForStatus(r.status), message: refusalMessage(r.status, r.body), body: r.body }
+  return { ok: true, shaped: redactOutput(tool, redact(dropCheckOutput(publicFor(cmd, r.body)))), replayed: r.replayed === true }
+}
+
 async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
   let args = input
   // A list tool's cursor (lists.ts) is read before anything reaches the Host: one from another tool,
@@ -255,11 +271,9 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
         )
     }
   }
-  const r = await link.call(t.cmd, t.args(args), typeof input.requestId === 'string' ? input.requestId : undefined)
-  if ('code' in r) return errorResult(r.code, r.message, t.cmd)
-  if (r.status < 200 || r.status >= 300)
-    return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd, r.body)
-  const shaped = redactOutput(t.name, redact(dropCheckOutput(publicFor(t.cmd, r.body))))
+  const read = await hostRead(link, t.cmd, t.name, t.args(args), typeof input.requestId === 'string' ? input.requestId : undefined)
+  if (!read.ok) return errorResult(read.code, read.message, t.cmd, read.body)
+  const { shaped, replayed } = read
   // A list tool orders its rows and cuts the page the cursor names (lists.ts); `truncated`, `total`
   // and `nextCursor` sit beside the list.
   const cut = Array.isArray(shaped)
@@ -294,7 +308,7 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
     data = { ...data, total: data.text.length, offset: from, text: data.text.slice(from, from + take) }
   }
   return {
-    content: textResult(`${t.title}${count}${note}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
+    content: textResult(`${t.title}${count}${note}${replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
     structuredContent: data
   }
 }
@@ -322,6 +336,8 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
         return result
       }
     )
+  registerResources(server, (cmd, tool, args) => hostRead(a.link, cmd, tool, args))
+  registerPrompts(server)
   return server
 }
 

@@ -245,6 +245,41 @@ The eight tools that change something (`create_job`, `create_task`, `run_job`, `
 result instead of acting twice. The Host keeps these receipts in memory for one hour, and a Host
 restart forgets them.
 
+## Resources and prompts
+
+### Resources
+
+The server also offers five read-only resources, for clients that let a person or an agent attach
+a resource to a conversation. Each is one of the reads above, so it follows the same
+[MCP access](#mcp-access) rules and returns the same JSON as its tool. Support for resources varies
+by client; every one of these is also available as a tool.
+
+| URI | Same as |
+| --- | --- |
+| `astera://projects/{projectId}` | `get_project` |
+| `astera://jobs/{jobId}` | `get_job` |
+| `astera://runs/{runId}` | `get_run` |
+| `astera://runs/{runId}/completion` | `get_completion` |
+| `astera://tasks/{taskId}` | `get_task` |
+
+`resources/list` shows the newest 50 Jobs and the newest 50 Runs, each with a title (the Job's
+objective, or the Run id and its Job). Projects and Tasks are read by id. A refusal (for example
+access turned off) or a Host that cannot be reached is an MCP error whose text starts with the CLI
+code, such as `PERMISSION_DENIED`, never an empty resource. Free text is redacted exactly as in the
+tools. There are no session resources.
+
+### Prompts
+
+Three prompts give a client a ready-made instruction. Each returns one user message that names the
+tools to call, in order. A prompt calls nothing itself, and the values you pass appear in the message
+as quoted data.
+
+| Prompt | Arguments | What it asks the agent to do |
+| --- | --- | --- |
+| `delegate_large_task` | `objective` (up to 20 000 characters), `projectId` (optional) | `list_projects` when no project is given, `list_accounts`, `list_run_configs`, `create_job` with `convergence: true` and a `requestId`, `run_job`, then poll `get_run`, `get_completion` and `list_questions`, and `answer_question` when needed. |
+| `inspect_failed_run` | `runId` | `get_run`, `get_completion` (the `lastFailure`), `get_check_output`, `get_task_output`, `list_questions`. |
+| `resume_blocked_job` | `runId` | `list_questions`, `answer_question`, `resume_run`, `get_run`. |
+
 ## MCP access
 
 **Settings, CLI tab, MCP access** decides what a connected client may do:
