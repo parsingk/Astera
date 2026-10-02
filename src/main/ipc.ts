@@ -88,12 +88,11 @@ import {
 import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
-import { UnderstandingStore } from '../core/understanding/store'
 import { readUnderstandingFile } from '../core/understanding/read'
 import { WorkUnitStore } from './workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
-import { createAppUnderstanding } from './understanding/appUnderstanding'
+import { AppUnderstandingStore, createAppUnderstanding } from './understanding/appUnderstanding'
 import { promptWriteEventOf } from '../core/continuity/promptWrite'
 import { readGitSummary } from '../core/orchestration/exec/gitSummary'
 import { RecoveryReconciler } from './recovery/reconciler'
@@ -4549,7 +4548,8 @@ export function registerIpc(
   // failed. So it is constructed here, unconditionally, at the same scope as assertAllowedPath
   // (needed by the handler below) rather than beside OrchestrationStore.
   const understandingFile = path.join(app.getPath('userData'), 'understanding.json')
-  const understanding = new UnderstandingStore(understandingFile)
+  // Write-gated: closed the moment a greeting says the Host writes How It Works (appUnderstanding below).
+  const understanding = new AppUnderstandingStore(understandingFile)
   // registerIpc is synchronous, so this cannot be awaited here — the handler below awaits it instead,
   // which keeps the handler itself registered on every startup while still never serving before load
   // has actually finished.
@@ -6875,7 +6875,7 @@ export function registerIpc(
       remirrorOrchState?.()
       appJournal.greeted()
       // How It Works follows this greeting (E1 §2): the answer is kept until the next one, and a switch
-      // to the Host first lets this app's own queued write-up finish.
+      // to the Host closes this app's store at once and hands the Host what it was writing.
       hostWritesUnderstanding = hostSpeaksUnderstanding(hostClient?.status() ?? { connected: false, features: [] })
       void appUnderstanding.onGreeting(hostWritesUnderstanding)
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this

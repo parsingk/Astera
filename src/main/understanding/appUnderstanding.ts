@@ -5,27 +5,71 @@
 // Host's `understanding-state` push to the renderer. Before any greeting, and in front of an older Host,
 // it keeps its own store and pipeline, as it always has.
 //
-// The mode is sticky per greeting, as appJournal's writer decision is (P8): a dropped socket does not
-// make this app a second writer in front of a Host that is still running and writing. It changes only
-// when a Host greets:
-// - writer to reader: the generation this app already queued runs to the end and writes its record
-//   first (its writes start from the file, so the Host's writes meanwhile survive), bounded by
-//   DRAIN_BOUND_MS. Runs are not recorded here from the greeting on, even while that drains: the Host
-//   reads this app's yield in the same hello and records them itself.
-// - reader to writer (an older Host greets): the store reloads from the file before the next read or
-//   write, since the Host wrote it while this app only read.
+// The mode is sticky per greeting, as appJournal's writer decision is (P8). **A reader whose Host is gone
+// stays a reader** until the next greeting: a dropped socket does not make this app a second writer in
+// front of a Host that may still be running and writing, so a closed unit is dropped (logged) and a
+// regenerate is refused until a Host answers again. The app restarts a Host when none answers, and that
+// Host's greeting decides.
+//
+// The switches, both at the greeting itself:
+// - writer to reader is **immediate and single-writer** (E1 §2, review ruling 6). The Host is the writer
+//   from the hello on, so the app's store stops writing in the same turn (AppUnderstandingStore's gate),
+//   and nothing the app's pipeline still does reaches the file. What it was doing is handed to the Host:
+//   every record this app put in `generating` goes as `understanding-regenerate` (its agent run is wasted),
+//   and every unit or regenerate it had not started yet goes as the call it would have been. A Run waiting
+//   in that queue cannot be handed over (no call takes one) and is logged.
+// - reader to writer (an older Host greets): the gate opens and the store reloads from the file, which
+//   the Host wrote while this app only read.
 import { isSamePath } from '../../core/files/tree'
 import type { ProjectUnderstanding } from '../../core/understanding/types'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
-import type { UnderstandingStore } from '../../core/understanding/store'
+import { UnderstandingStore } from '../../core/understanding/store'
 import type { UnderstandingPipeline, RunRecordInput } from '../../core/understanding/pipeline'
 import type { StoreShape } from '../../core/understanding/read'
 
-/** How long a switch to reader waits for this app's own queued generations. */
-export const DRAIN_BOUND_MS = 120_000
+/** The app's store: the core store with a write gate, and a memory of which `generating` records this
+ *  process made, so the switch hands over its own write-ups and not ones it only read from the file. */
+export class AppUnderstandingStore extends UnderstandingStore {
+  private gated = false
+  /** Record id to project key, for each record this process set to `generating`. */
+  private readonly mine = new Map<string, string>()
+  /** Counts the records this process set to `generating`: tells whether a pipeline step started its record. */
+  started = 0
+
+  /** Closed: set and remove do nothing, memory included, as the Host's GatedStore drops a write. */
+  gate(closed: boolean): void {
+    this.gated = closed
+  }
+
+  override set(projectPath: string, value: ProjectUnderstanding): Promise<void> {
+    if (this.gated) return Promise.resolve()
+    const before = new Map((this.get(projectPath)?.records ?? []).map((r) => [r.id, r.status]))
+    for (const r of value.records) {
+      if (r.status !== 'generating') this.mine.delete(r.id)
+      else if (before.get(r.id) !== 'generating') {
+        this.mine.set(r.id, projectPath)
+        this.started += 1
+      }
+    }
+    return super.set(projectPath, value)
+  }
+
+  override remove(projectPath: string): Promise<void> {
+    if (this.gated) return Promise.resolve()
+    return super.remove(projectPath)
+  }
+
+  /** The records this process set to `generating` that still are, in memory. */
+  ownGenerating(): Array<{ projectPath: string; recordId: string }> {
+    const out: Array<{ projectPath: string; recordId: string }> = []
+    for (const [recordId, projectPath] of this.mine)
+      if (this.get(projectPath)?.records.some((r) => r.id === recordId && r.status === 'generating')) out.push({ projectPath, recordId })
+    return out
+  }
+}
 
 export interface AppUnderstandingDeps {
-  localStore: UnderstandingStore
+  localStore: AppUnderstandingStore
   localPipeline: UnderstandingPipeline
   /** The last greeting's answer: whether that Host announces `understanding`; null before any greeting. */
   hostAnnounces(): boolean | null
@@ -35,8 +79,6 @@ export interface AppUnderstandingDeps {
   /** The renderer's `understanding:changed`. */
   notify(root: string): void
   log(m: string): void
-  /** Test seam: DRAIN_BOUND_MS when left out. */
-  drainBoundMs?: number
   /** Test seam: the platform the file's keys are matched on (isSamePath). */
   platform?: string
 }
@@ -56,37 +98,98 @@ export interface AppUnderstanding {
   onHostPush(root: string): void
 }
 
+/** One piece of local work, waiting for the pipeline or in it. */
+type Step =
+  | { kind: 'unit'; projectPath: string; unit: SessionWorkUnit }
+  | { kind: 'regenerate'; projectPath: string; recordId: string }
+  | { kind: 'run'; input: RunRecordInput & { projectPath: string } }
+
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 export function createAppUnderstanding(d: AppUnderstandingDeps): AppUnderstanding {
   let mode: 'writer' | 'reader' = 'writer'
-  /** Bumped by every greeting: a switch still draining gives way to a later greeting's answer. */
-  let greetings = 0
-  /** The last promise the local pipeline handed back. Its queue is serial, so this settles after
-   *  everything queued before it. */
-  let localTail: Promise<void> = Promise.resolve()
-  const local = (p: Promise<void>): Promise<void> => (localTail = p)
-  /** The reload after a switch back to writer; every local read and write waits for it. */
+  /** The reload after a switch back to writer. It matters for a writer-mode `get`, which reads memory:
+   *  the pipeline refreshes from the file before each of its writes anyway. */
   let reloaded: Promise<void> = Promise.resolve()
+  /** Local work not handed to the pipeline yet, in order. Fed one step at a time, so a switch knows
+   *  which steps the pipeline never saw. */
+  const waiting: Array<{ step: Step; done: () => void }> = []
+  /** The step in the pipeline now, and `started` as it was when it went in. */
+  let inPipeline: { step: Step; started: number } | null = null
+  let pumping = false
 
-  /** Waits for the local queue, including what is queued while it waits; false when the bound ran out. */
-  const drain = async (): Promise<boolean> => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const out = new Promise<'out'>((r) => (timer = setTimeout(() => r('out'), d.drainBoundMs ?? DRAIN_BOUND_MS)))
+  const runStep = (step: Step): Promise<void> => {
+    if (step.kind === 'unit') return d.localPipeline.onUnitClosed(step.projectPath, step.unit)
+    if (step.kind === 'regenerate') return d.localPipeline.regenerate(step.projectPath, step.recordId)
+    const { projectPath, ...input } = step.input
+    return d.localPipeline.onRunFinished(projectPath, input)
+  }
+  const pump = async (): Promise<void> => {
+    if (pumping) return
+    pumping = true
     try {
-      for (;;) {
-        const seen = localTail
-        if ((await Promise.race([seen.then(() => 'done' as const), out])) === 'out') return false
-        if (seen === localTail) return true
+      await reloaded
+      while (mode === 'writer' && waiting.length > 0) {
+        const next = waiting.shift()!
+        inPipeline = { step: next.step, started: d.localStore.started }
+        try {
+          await runStep(next.step) // never rejects (the pipeline's enqueue)
+        } finally {
+          inPipeline = null
+          next.done()
+        }
       }
     } finally {
-      clearTimeout(timer)
+      pumping = false
     }
   }
+  const local = (step: Step): Promise<void> =>
+    new Promise<void>((done) => {
+      waiting.push({ step, done })
+      void pump()
+    })
 
   /** The file's own spelling of this project's key (isSamePath), or undefined when it has none. */
   const keyIn = (state: StoreShape, projectPath: string): string | undefined =>
     Object.keys(state.projects).find((k) => isSamePath(k, projectPath, d.platform))
+
+  const sendUnit = (projectPath: string, unit: SessionWorkUnit): Promise<void> =>
+    // A 409 or a lost link drops the unit: never written here while a writer Host exists (E1 §4).
+    Promise.resolve()
+      .then(() => d.orchCall('understanding-unit', { projectPath, unit }))
+      .then(
+        (r) => {
+          if (r.status !== 200) d.log(`understanding: the Host did not take a closed unit (${r.status}): ${JSON.stringify(r.body)}`)
+        },
+        (err) => d.log(`understanding: a closed unit could not reach the Host and is dropped: ${message(err)}`)
+      )
+  /** A write-up this app started, handed to the Host at the switch: logged when the Host does not take it. */
+  const handOver = (projectPath: string, recordId: string): Promise<void> =>
+    Promise.resolve()
+      .then(() => d.orchCall('understanding-regenerate', { projectPath, recordId }))
+      .then(
+        (r) => {
+          if (r.status !== 200) d.log(`understanding: the Host did not take over the write-up of ${recordId} (${r.status}): ${JSON.stringify(r.body)}`)
+        },
+        (err) => d.log(`understanding: the write-up of ${recordId} could not be handed to the Host: ${message(err)}`)
+      )
+  const handStep = (step: Step): Promise<void> => {
+    if (step.kind === 'unit') return sendUnit(step.projectPath, step.unit)
+    if (step.kind === 'regenerate') return handOver(step.projectPath, step.recordId)
+    d.log(`understanding: Run ${step.input.runId} finished before the Host took How It Works over, and is not recorded`)
+    return Promise.resolve()
+  }
+
+  /** Writer to reader, in the greeting's own turn. */
+  const yieldToHost = (): Promise<void> => {
+    d.localStore.gate(true)
+    mode = 'reader'
+    const sends: Array<Promise<void>> = d.localStore.ownGenerating().map((g) => handOver(g.projectPath, g.recordId))
+    // The pipeline took this step but has not started its record: the Host is handed the step instead.
+    if (inPipeline && d.localStore.started === inPipeline.started) sends.push(handStep(inPipeline.step))
+    for (const w of waiting.splice(0)) sends.push(handStep(w.step).then(w.done))
+    return Promise.all(sends).then(() => {})
+  }
 
   return {
     get: async (projectPath) => {
@@ -105,32 +208,18 @@ export function createAppUnderstanding(d: AppUnderstandingDeps): AppUnderstandin
       const key = keyIn(state, projectPath)
       return key === undefined ? null : state.projects[key]
     },
-    onRunFinished: async ({ projectPath, ...input }) => {
-      // The greeting's answer, not the mode: the Host records Runs from the hello on, drain or not.
-      if (d.hostAnnounces() === true) return
-      await reloaded
-      await local(d.localPipeline.onRunFinished(projectPath, input))
+    onRunFinished: async (input) => {
+      // The greeting's answer: the Host records Runs from the hello on.
+      if (d.hostAnnounces() === true || mode === 'reader') return
+      await local({ kind: 'run', input })
     },
     onUnitClosed: async (projectPath, unit) => {
-      if (mode === 'writer') {
-        await reloaded
-        await local(d.localPipeline.onUnitClosed(projectPath, unit))
-        return
-      }
-      // A 409 or a lost link drops the unit: never written here while a writer Host exists (E1 §4).
-      await Promise.resolve()
-        .then(() => d.orchCall('understanding-unit', { projectPath, unit }))
-        .then(
-          (r) => {
-            if (r.status !== 200) d.log(`understanding: the Host did not take a closed unit (${r.status}): ${JSON.stringify(r.body)}`)
-          },
-          (err) => d.log(`understanding: a closed unit could not reach the Host and is dropped: ${message(err)}`)
-        )
+      if (mode === 'writer') return local({ kind: 'unit', projectPath, unit })
+      await sendUnit(projectPath, unit)
     },
     regenerate: async (projectPath, recordId) => {
       if (mode === 'writer') {
-        await reloaded
-        void local(d.localPipeline.regenerate(projectPath, recordId))
+        void local({ kind: 'regenerate', projectPath, recordId })
         return
       }
       // As the file spells it: the Host looks the record up by that exact key, and get matched it as a path.
@@ -145,23 +234,19 @@ export function createAppUnderstanding(d: AppUnderstandingDeps): AppUnderstandin
       }
     },
     onGreeting: async (announces) => {
-      const seq = ++greetings
       if (announces) {
-        if (mode === 'reader') return
-        const drained = await drain()
-        if (seq !== greetings) return
-        if (!drained)
-          d.log(`understanding: this app's own write-up did not finish within ${(d.drainBoundMs ?? DRAIN_BOUND_MS) / 1000} s; the Host writes How It Works from now on`)
-        mode = 'reader'
+        if (mode === 'writer') await yieldToHost()
         return
       }
       if (mode === 'writer') return
+      d.localStore.gate(false)
       mode = 'writer'
       reloaded = d.localStore.refresh().then(
         () => {},
         (err) => d.log(`understanding: reloading How It Works from the file failed: ${message(err)}`)
       )
       await reloaded
+      void pump()
     },
     onHostPush: (root) => {
       try {

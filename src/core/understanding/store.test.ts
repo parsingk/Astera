@@ -36,6 +36,28 @@ describe('UnderstandingStore', () => {
     expect(b.get('C:/p')).toEqual(sample)
   })
 
+  it('saves through a temp file of its own, named for its pid, and leaves only the target behind', async () => {
+    const s = new UnderstandingStore(file)
+    await s.load()
+    const written: string[] = []
+    const renamed: string[] = []
+    const write = vi.spyOn(fs, 'writeFile')
+    const rename = vi.spyOn(fs, 'rename')
+    try {
+      await s.set('C:/p', sample)
+      written.push(...write.mock.calls.map((c) => String(c[0])))
+      renamed.push(...rename.mock.calls.map((c) => `${String(c[0])} -> ${String(c[1])}`))
+    } finally {
+      write.mockRestore()
+      rename.mockRestore()
+    }
+    const tmp = `${file}.${process.pid}.tmp`
+    expect(written).toEqual([tmp])
+    expect(renamed).toEqual([`${tmp} -> ${file}`])
+    expect(await fs.readdir(dir)).toEqual(['understanding.json'])
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ projects: { 'C:/p': sample } })
+  })
+
   it('프로젝트끼리 섞이지 않는다', async () => {
     const s = new UnderstandingStore(file)
     await s.load()

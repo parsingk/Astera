@@ -91,7 +91,9 @@ export class UnderstandingStore {
   private save(): Promise<void> {
     const snapshot = JSON.stringify(this.state, null, 2)
     const run = async (): Promise<void> => {
-      const tmp = this.filePath + '.tmp'
+      // Its own temp file (E1 §2): the Host and an app can both hold a store over this file, and a shared
+      // `.tmp` would let one process rename the other's half-written snapshot into place.
+      const tmp = `${this.filePath}.${process.pid}.tmp`
       await fs.mkdir(path.dirname(this.filePath), { recursive: true })
       await fs.writeFile(tmp, snapshot, 'utf8')
       // Stamped from the temp file: a rename keeps mtime and size, and reading the target after it

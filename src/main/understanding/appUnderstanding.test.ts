@@ -7,10 +7,9 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
 import type { ProjectUnderstanding, WorkRecord } from '../../core/understanding/types'
-import { UnderstandingStore } from '../../core/understanding/store'
 import { UnderstandingPipeline, type RunRecordInput } from '../../core/understanding/pipeline'
 import { readUnderstandingFile, type StoreShape } from '../../core/understanding/read'
-import { createAppUnderstanding, type AppUnderstandingDeps } from './appUnderstanding'
+import { AppUnderstandingStore, createAppUnderstanding, type AppUnderstandingDeps } from './appUnderstanding'
 
 let dir: string
 let file: string
@@ -84,7 +83,7 @@ async function make(
   fake: { hold?: Promise<void> } = {}
 ) {
   const agent = { hold: fake.hold, calls: 0 }
-  const store = new UnderstandingStore(file)
+  const store = new AppUnderstandingStore(file)
   await store.load()
   const pipeline = new UnderstandingPipeline({
     store,
@@ -181,7 +180,7 @@ describe('createAppUnderstanding: reader mode', () => {
   it('get matches the key as the Host spelt it (isSamePath)', async () => {
     const m = await make({ platform: 'win32' })
     await m.greet(true)
-    await fs.writeFile(file, JSON.stringify({ projects: { 'D:\\Work\\Repo': { records: [hostRecord('h1')] } } }), 'utf8')
+    await fs.writeFile(file, JSON.stringify({ projects: { 'D:/Work/Repo': { records: [hostRecord('h1')] } } }), 'utf8')
     expect(((await m.u.get('d:/work/repo')) as ProjectUnderstanding).records[0].id).toBe('h1')
   })
 
@@ -236,9 +235,9 @@ describe('createAppUnderstanding: reader mode', () => {
   it('regenerate names the project as the file spells it, so a record get showed is the one the Host finds', async () => {
     const m = await make({ platform: 'win32' })
     await m.greet(true)
-    await fs.writeFile(file, JSON.stringify({ projects: { 'D:\\Work\\Repo': { records: [hostRecord('h1')] } } }), 'utf8')
+    await fs.writeFile(file, JSON.stringify({ projects: { 'D:/Work/Repo': { records: [hostRecord('h1')] } } }), 'utf8')
     await m.u.regenerate('d:/work/repo', 'h1')
-    expect(m.calls).toEqual([{ cmd: 'understanding-regenerate', args: { projectPath: 'D:\\Work\\Repo', recordId: 'h1' } }])
+    expect(m.calls).toEqual([{ cmd: 'understanding-regenerate', args: { projectPath: 'D:/Work/Repo', recordId: 'h1' } }])
   })
 
   it("the Host's understanding-state push reaches the renderer", async () => {
@@ -250,72 +249,112 @@ describe('createAppUnderstanding: reader mode', () => {
 })
 
 describe('createAppUnderstanding: the switch', () => {
-  it('writer to reader waits for the generation in flight, and the record it writes survives (Review Focus 1)', async () => {
+  it('writer to reader is immediate: no app write reaches the file after the greeting, and the record in flight is handed to the Host', async () => {
     const hold = deferred()
     const m = await make({}, { hold: hold.promise })
-    void m.u.onUnitClosed(root, unit())
+    const first = m.u.onUnitClosed(root, unit())
     // The record is saved as generating before the agent runs.
     await new Promise((r) => setTimeout(r, 30))
-    expect((await onDisk())[0]?.status).toBe('generating')
-
-    let switched = false
-    const greeting = m.greet(true).then(() => (switched = true))
-    // The Host, now the writer, records a Run meanwhile, from the file.
     const local = (await onDisk())[0]
-    await hostWrites([hostRecord('h1'), local])
-    await new Promise((r) => setTimeout(r, 30))
-    expect(switched).toBe(false)
-    // Still the writer while it drains: a read is the app store's.
-    expect(m.calls).toEqual([])
+    expect(local.status).toBe('generating')
 
+    await m.greet(true)
+    expect(m.calls).toEqual([{ cmd: 'understanding-regenerate', args: { projectPath: root, recordId: local.id } }])
+    // The Host, now the one writer, writes meanwhile.
+    await hostWrites([hostRecord('h1'), local])
+    const hostFile = await fs.readFile(file, 'utf8')
+
+    // The app's agent finishes: its write-up is dropped, the file stays the Host's.
     hold.resolve()
-    await greeting
-    const records = ((await m.u.get(root)) as ProjectUnderstanding).records
-    expect(records.map((r) => [r.id, r.status])).toEqual([
-      ['h1', 'ready'],
-      [local.id, 'ready']
-    ])
-    // Reader now.
-    await m.u.onUnitClosed(root, unit())
-    expect(m.calls.map((c) => c.cmd)).toEqual(['understanding-unit'])
+    await first
+    await new Promise((r) => setTimeout(r, 30))
+    expect(m.agent.calls).toBe(1)
+    expect(await fs.readFile(file, 'utf8')).toBe(hostFile)
+    // Memory may follow the Host's file (refresh), but never takes the app's own write-up.
+    expect(m.store.get(root)?.records.find((r) => r.id === local.id)?.status).toBe('generating')
   })
 
-  it('a Run finishing while the switch drains is not recorded by the app (Review Focus 2)', async () => {
+  it('a unit queued behind the one in flight is handed to the Host as understanding-unit, not lost', async () => {
     const hold = deferred()
     const m = await make({}, { hold: hold.promise })
     void m.u.onUnitClosed(root, unit())
+    const second = m.u.onUnitClosed(root, unit({ id: 'wu-2', objective: 'the second one' }))
     await new Promise((r) => setTimeout(r, 30))
-    const greeting = m.greet(true)
-    await m.u.onRunFinished(runInput())
+    const local = (await onDisk())[0]
+    await m.greet(true)
+    await second
+    expect(m.calls).toEqual([
+      { cmd: 'understanding-regenerate', args: { projectPath: root, recordId: local.id } },
+      { cmd: 'understanding-unit', args: { projectPath: root, unit: unit({ id: 'wu-2', objective: 'the second one' }) } }
+    ])
     hold.resolve()
-    await greeting
-    const records = await onDisk()
-    expect(records.map((r) => r.source.kind)).toEqual(['session'])
+    await new Promise((r) => setTimeout(r, 30))
+    expect((await onDisk()).map((r) => r.request)).toEqual(['fix the limit check'])
     expect(m.agent.calls).toBe(1)
   })
 
-  it('a drain that outlasts its bound is logged and the app switches anyway', async () => {
-    const m = await make({ drainBoundMs: 40 }, { hold: new Promise(() => {}) })
-    void m.u.onUnitClosed(root, unit())
-    await new Promise((r) => setTimeout(r, 20))
+  it('a unit still waiting for the pipeline is handed over as a unit', async () => {
+    const m = await make()
+    const p = m.u.onUnitClosed(root, unit())
     await m.greet(true)
-    expect(m.logs.some((l) => /did not finish/.test(l))).toBe(true)
-    await m.u.onUnitClosed(root, unit())
-    expect(m.calls.map((c) => c.cmd)).toEqual(['understanding-unit'])
+    await p
+    await new Promise((r) => setTimeout(r, 30))
+    expect(m.calls).toEqual([{ cmd: 'understanding-unit', args: { projectPath: root, unit: unit() } }])
+    expect(await onDisk()).toEqual([])
   })
 
-  it('an older Host greeting while the switch drains keeps the app the writer', async () => {
+  it('a unit already in the pipeline whose record is not saved yet is handed over as a unit', async () => {
+    const m = await make()
+    const p = m.u.onUnitClosed(root, unit())
+    // A few turns: the step has left the waiting list for the pipeline, whose prepend still reads the file.
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    await m.greet(true)
+    await p
+    await new Promise((r) => setTimeout(r, 30))
+    expect(m.calls).toEqual([{ cmd: 'understanding-unit', args: { projectPath: root, unit: unit() } }])
+    expect(await onDisk()).toEqual([])
+    expect(m.agent.calls).toBe(0)
+  })
+
+  it('a Run queued at the greeting is not recorded by the app, and that is logged (Review Focus 2)', async () => {
     const hold = deferred()
     const m = await make({}, { hold: hold.promise })
     void m.u.onUnitClosed(root, unit())
+    const run = m.u.onRunFinished(runInput())
     await new Promise((r) => setTimeout(r, 30))
-    const first = m.greet(true)
-    await m.greet(false)
+    await m.greet(true)
+    await run
     hold.resolve()
-    await first
-    await m.u.onUnitClosed(root, unit({ id: 'wu-2' }))
+    await new Promise((r) => setTimeout(r, 30))
+    expect((await onDisk()).map((r) => r.source.kind)).toEqual(['session'])
+    expect(m.logs.some((l) => l.includes('run-1'))).toBe(true)
+    expect(m.calls.map((c) => c.cmd)).toEqual(['understanding-regenerate'])
+  })
+
+  it("a generating record the app only read from the file (the Host's own) is not handed over", async () => {
+    const m = await make()
+    // The Host's own write-up in flight, adopted by the app's refresh before its next write.
+    await hostWrites([hostRecord('h2', { status: 'generating' })])
+    await m.u.onUnitClosed(root, unit())
+    expect(m.store.get(root)?.records.map((r) => [r.id === 'h2' ? 'h2' : 'mine', r.status])).toEqual([
+      ['mine', 'ready'],
+      ['h2', 'generating']
+    ])
+    await m.greet(true)
     expect(m.calls).toEqual([])
-    expect(m.agent.calls).toBe(2)
+  })
+
+  it('a reader whose Host is gone stays a reader until the next greeting (P8)', async () => {
+    const m = await make({
+      orchCall: async () => {
+        throw new Error('the Host is gone')
+      }
+    })
+    await m.greet(true)
+    await m.u.onUnitClosed(root, unit())
+    await m.u.onRunFinished(runInput())
+    expect(await onDisk()).toEqual([])
+    expect(m.agent.calls).toBe(0)
   })
 
   it('reader to writer reloads the store from the file before the next read and write', async () => {

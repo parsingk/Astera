@@ -4,8 +4,8 @@
 //
 // The shape guard lives here and the store imports it, so the two readers cannot drift on what a
 // valid file is.
-import { promises as fs } from 'node:fs'
 import { isSamePath } from '../files/tree'
+import { readFileRetrying } from '../renameRetry'
 import type { ProjectUnderstanding, RecordSource, RecordStatus, Verification, WorkRecord } from './types'
 
 /** projectPath to that project's understanding. As in orchestration.json, projects are told apart by
@@ -36,7 +36,8 @@ export const UNREADABLE = 'understanding.json could not be read'
 export async function readUnderstandingFile(filePath: string): Promise<StoreShape> {
   let text: string
   try {
-    text = await fs.readFile(filePath, 'utf8')
+    // Retried through a writer's rename-replace (EBUSY/EPERM on win32): that lasts milliseconds.
+    text = await readFileRetrying(filePath)
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { projects: {} }
     throw new Error(UNREADABLE)
