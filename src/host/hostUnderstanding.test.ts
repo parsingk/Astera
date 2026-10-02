@@ -513,10 +513,11 @@ describe('createHostUnderstanding', () => {
       // regenerate's refresh has read the file; a pipeline write lands, then the app's own save.
       const text = await real(...args)
       await u.onUnitClosed(project, unit())
+      // Ordered, not timed: the agent is entered only once the pipeline's saves before it (the generating
+      // row, its commits) have landed, so the app's save below is the later one.
       await agentIn.promise
       const s = await onDisk()
       s.projects[project].records.push(hostRecord('by-app'))
-      await new Promise((r) => setTimeout(r, 15))
       await fs.writeFile(file(), JSON.stringify(s))
       return text
     }) as typeof real)
