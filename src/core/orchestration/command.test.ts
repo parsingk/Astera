@@ -8585,8 +8585,7 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       const working: [string, Task[], Partial<JobRun>][] = [
         ['no Tasks yet', [], { worktree: WT }],
         ['a Task still dispatched', [task('completed'), task('dispatched')], { worktree: WT }],
-        ['a failed Task with retries left', [task('failed', { consecutiveFailures: 1 })], { worktree: WT }],
-        ['paused', [task('completed')], { worktree: WT, paused: true }]
+        ['a failed Task with retries left', [task('failed', { consecutiveFailures: 1 })], { worktree: WT }]
       ]
       for (const [why, tasks, run] of working) {
         const { deps, asked, gh } = await prSetup({}, tasks, run)
@@ -8606,6 +8605,19 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
         expect((await call(deps, 'runs-get', { id: 'r1' }, '')).body, why).toMatchObject({ outcome: why === 'completed' ? 'completed' : 'failed' })
         expect((await call(deps, 'github-pr-create', { run: 'r1' }, '')).status, why).toBe(200)
       }
+    })
+
+    // runs-get answers `paused` for it whatever its Tasks say, and "still working" would be wrong when they
+    // are all finished.
+    it('github-pr-create refuses a paused Run with its own 409, even when its Tasks are all finished', async () => {
+      const { deps, asked, gh } = await prSetup({}, [task('completed')], { worktree: WT, paused: true })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: 'This Run is paused; resume it or stop it first' }
+      })
+      expect(asked.createPr).toEqual([])
+      expect(asked.isClean).toEqual([])
+      expect(gh.calls).toEqual([])
     })
 
     it('github-pr-create refuses a dirty worktree, naming the count (409), and a branch with no commits (409)', async () => {
