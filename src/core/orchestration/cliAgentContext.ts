@@ -316,6 +316,20 @@ const SESSION = {
       req('number', '<n>', 'the issue number')
     ]
   },
+  'understanding-list': {
+    summary: "a project's How It Works records, newest first, read from understanding.json by the Host (the MCP server's list_work_records)",
+    detail:
+      'Each row is a summary: id, at, title (null before the write-up has one), the request in the person\'s own words, status, reason, source, how many files changed, and the verification status. Read only; the records are written by the app.',
+    flags: [req('project', '<projectId>', 'the project whose records to read (from `projects list`)')]
+  },
+  'understanding-get': {
+    summary: "one How It Works record of a project in full, read from understanding.json by the Host (the MCP server's get_work_record)",
+    detail: 'The request, source, changed files, git heads, verification, Job tasks, status, reason and the write-up. Unknown project or record: 404.',
+    flags: [
+      req('project', '<projectId>', 'the project the record belongs to (from `projects list`)'),
+      req('id', '<recordId>', 'the record to read (from `understanding-list`)')
+    ]
+  },
   'github-pr-create': {
     summary: "open a pull request from a finished Run's branch, through the Host's gh (the MCP server's create_pr)",
     detail:

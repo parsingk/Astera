@@ -57,6 +57,7 @@ import { workspaceSupported } from '../core/workspace/platform'
 import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
 import { defaultGhRunner } from '../core/github/gh'
+import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { isCleanWorktree } from '../core/worktrees/git'
 
@@ -520,6 +521,9 @@ async function main(): Promise<void> {
       readCommits: (wt, base) => readCommits(wt, base),
       isClean: (wt) => isCleanWorktree(wt)
     },
+    // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
+    // call and never written, so a record the app wrote is there while the app is closed.
+    readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,

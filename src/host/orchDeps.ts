@@ -415,7 +415,8 @@ const NOT_FORWARDED = [
   'dispatchTask',
   'createSession',
   'journalTimeline',
-  'github'
+  'github',
+  'readUnderstanding'
 ] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -544,7 +545,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   // NOT_FORWARDED as well (MCP P2-B): the Host's own gh runner and worktree registry, passed through
   // whole, never the app's. This flag is never read for a name outside `REMOTE`: the writes through it
   // are marked member by member where `hostOrchDeps` builds it (its `const github`).
-  github: false
+  github: false,
+  // NOT_FORWARDED as well (MCP P2-C): a read of this Host's profile's understanding.json, never the
+  // app's. It never writes the file and leaves nothing outside the call.
+  readUnderstanding: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -654,6 +658,9 @@ export function hostOrchDeps(a: {
   /** GitHub through the Host's gh (MCP P2-B): the runner and the Host's worktree registry. Absent: the
    *  `github-*` commands answer 409, as a caller that is not the Host. */
   github?: OrchServerDeps['github']
+  /** How It Works records (MCP P2-C): this Host's profile's understanding.json, read per call. Absent:
+   *  the `understanding-*` commands answer 409, as a caller that is not the Host. */
+  readUnderstanding?: OrchServerDeps['readUnderstanding']
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -1165,6 +1172,7 @@ export function hostOrchDeps(a: {
     ...(a.createSession ? { createSession } : {}),
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
     ...(github ? { github } : {}),
+    ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),

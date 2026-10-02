@@ -165,8 +165,9 @@ If the client cannot find `astera`, give `command` the full path of the installe
 
 ## The tools
 
-The server offers 30 tools: 18 for projects, accounts and Jobs, four for sessions, two that read
-a Task's output and six for GitHub. What a client may call is set by [MCP access](#mcp-access).
+The server offers 32 tools: 18 for projects, accounts and Jobs, four for sessions, two that read
+a Task's output, six for GitHub and two that read How It Works records. What a client may call is
+set by [MCP access](#mcp-access).
 
 | Tool | What it does |
 | --- | --- |
@@ -200,6 +201,8 @@ a Task's output and six for GitHub. What a client may call is set by [MCP access
 | `create_pr` | Push a finished Run's branch (`runId`) and open a pull request for it. It opens a draft unless `draft: false`, and never force pushes. `title` (up to 256 characters) and `body` (up to 50 000) default to what the Run's commits say. Returns `url`, `draft` and `pushed`, whether the push ran and succeeded. Needs the GitHub setting and "Read and control". |
 | `retry_ci` | Rerun the failed jobs of a GitHub Actions run (`projectId` and `ciRunId`, a `runId` from `get_ci`'s checks). It does not wait for the rerun: poll `get_ci`. Needs the GitHub setting and "Read and control". |
 | `create_job_from_issue` | Create a Job in a project (`projectId`) from one of its open issues (`number`), as `create_job` does from an objective: it does not start execution, so use `run_job`. The coordinator and convergence fields are `create_job`'s; there is no `objective`, since the issue is the objective. Returns the Job with `issue` (`number`, `url`). Needs the GitHub setting and "Read and control". |
+| `list_work_records` | A project's [How It Works](#how-it-works) records (`projectId`), newest first: `id`, `at`, `title` (`null` before the write-up has one), `request`, `status`, `reason`, `source`, `changedFiles` (how many) and `verification` (its `status`, or `null`). |
+| `get_work_record` | One How It Works record in full (`projectId` and `recordId`): the request, source, changed files, git heads and commits, verification (`validation` on an older record), Job tasks, status, reason and the write-up (`explanation`). |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
 `coordinatorAccountId` from `list_accounts`, or, without one, the default account of
@@ -323,8 +326,8 @@ the branch is already on GitHub, and the next `create_pr`'s push has nothing to 
 Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
 first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions`
 oldest first by `createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and
-`list_projects`, `list_accounts` and `list_run_configs` keep Astera's, and `list_sessions` puts live
-sessions first and otherwise keeps Astera's. The list is ordered first and cut second. A cut
+`list_projects`, `list_accounts` and `list_run_configs` keep Astera's, `list_sessions` puts live
+sessions first and otherwise keeps Astera's, and `list_work_records` comes newest first by `at`. The list is ordered first and cut second. A cut
 list carries `truncated: true` and `total` (how many there were) beside it; a whole list carries
 neither.
 
@@ -347,6 +350,28 @@ The eleven tools that change something (`create_job`, `create_task`, `run_job`, 
 `create_job_from_issue`) accept an optional `requestId`. Retrying with the same id returns the first
 result instead of acting twice; for a failed GitHub write, see [GitHub](#github). The Host keeps
 these receipts in memory for one hour, and a Host restart forgets them.
+
+### How It Works
+
+How It Works is the Astera view that keeps a write-up of each piece of work an agent finished in a
+project: what the person asked for, which files changed, what was checked, and an explanation an
+agent wrote once the work closed. `list_work_records` and `get_work_record` read those records for a
+`projectId` from `list_projects`. They are answered by the Astera Host, which reads the file the app
+keeps them in (`understanding.json` in the profile) on every call, so they work while the app is
+closed and show a record the moment the app has written it.
+
+- **Read only.** No tool refreshes or regenerates a write-up; only the app writes them. They follow
+  MCP access like every other read, with no setting of their own.
+- **They may be out of date.** A write-up describes the code as it was when the work finished.
+- **`request` is the person's own words**, verbatim. `title` and everything in `explanation` are the
+  agent's. Every free-text field is redacted like the rest (see [How it stays local](#how-it-stays-local)).
+- `status` is about the write-up, not the work, which is already done: `generating`, `ready`,
+  `needs-review` or `failed`, with `reason` saying why for the last two. `verification.status` is
+  `verified`, `partial`, `unverified` or `failed`; an older record carries `validation` instead, and
+  `list_work_records` reads its status (`passed`, `failed` or `unknown`) into `verification`.
+- A project with no records is an empty list. An unknown `projectId` or `recordId` is `NOT_FOUND`.
+  A file the Host cannot read is `FAILED` with "understanding.json could not be read" and nothing
+  from the file.
 
 ## Resources and prompts
 
@@ -391,7 +416,7 @@ as quoted data.
 | Value | Allows |
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
-| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output`, `get_task_output`, `get_pr_status`, `get_ci` and `get_issue` included; `list_sessions` and `get_session` only with the session setting on. |
+| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output`, `get_task_output`, `get_pr_status`, `get_ci`, `get_issue`, `list_work_records` and `get_work_record` included; `list_sessions` and `get_session` only with the session setting on. |
 | Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`; with the session setting on, `send_message` and `create_session`; and with the GitHub setting on, `create_pr`, `retry_ci` and `create_job_from_issue`. This is the default. |
 
 **Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
@@ -449,7 +474,8 @@ a field with nothing left.
   is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
   What the GitHub tools return from GitHub is redacted the same way: pull request and issue titles,
   issue bodies, labels and authors, check names and workflows, the failed CI log, and `gh`'s own
-  words in an error message.
+  words in an error message. So are the How It Works records: the request, the reason, a session's
+  label or a Job's name, and every text field of the write-up; changed files and other paths are not.
 - Session and output text is redacted the same way: every screen and scrollback row, every turn's
   text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
   every line of `get_task_output`. `get_check_output` redacts the whole log first and pages it

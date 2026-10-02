@@ -67,6 +67,7 @@ import { createMcpServer } from './mcp/server'
 import { openHostLink, type HostLink } from './mcp/hostLink'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import { issueObjective, parseIssue } from '../core/github/issue'
+import { readUnderstandingFile } from '../core/understanding/read'
 
 /** Every wait is bounded: long enough for real git on a loaded Windows runner, short enough to fail. */
 const WAIT = { timeout: 25_000, interval: 25 }
@@ -555,6 +556,8 @@ async function hostRig(
     journal,
     // The `github-*` commands over a test's own gh (MCP P2-B); absent, they answer 409 as a Host without it.
     ...(o.github ? { github: o.github } : {}),
+    // How It Works records (MCP P2-C), as host/index.ts wires them: the profile's understanding.json.
+    readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -1477,7 +1480,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 30 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 32 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)
@@ -1747,5 +1750,68 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(stranger.isError).toBe(true)
     expect(errorOf(stranger)).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('CONTRIBUTOR') })
     expect(h.state().jobs).toHaveLength(1)
+  })
+
+  it('How It Works records through the Host: an MCP client lists and gets a record from the profile\'s understanding.json', async () => {
+    const { h, projectId, projectPath } = await projectRig()
+    const mcp = await mcpClient(h)
+    // Before the app has written anything: no records, not an error.
+    const none = await mcp.call('list_work_records', { projectId })
+    expect(none.isError, none.content[0]?.text).toBeFalsy()
+    expect(none.structuredContent).toEqual({ records: [] })
+
+    const SK = 'sk-' + 'abcdefghijklmnopqrstuvwxyz012345'
+    const record = (id: string, at: string, over: Record<string, unknown> = {}) => ({
+      id,
+      at,
+      source: { kind: 'session', sessionId: 's1', label: 'Terminal 1' },
+      request: `request ${id}`,
+      changedFiles: ['src/a.ts'],
+      git: { startHead: 'aaa', endHead: 'bbb' },
+      status: 'ready',
+      ...over
+    })
+    // The key as the app writes it on win32 may differ in case and separators from the project's path.
+    const key = process.platform === 'win32' ? projectPath.split(path.sep).join('/').toUpperCase() : projectPath
+    await fs.writeFile(
+      path.join(h.profileDir, 'understanding.json'),
+      JSON.stringify({
+        projects: {
+          [key]: {
+            records: [
+              record('w-old', '2026-09-01T00:00:00.000Z', { validation: { status: 'passed' } }),
+              record('w-new', '2026-10-01T00:00:00.000Z', {
+                request: `deploy with ${SK}`,
+                explanation: {
+                  title: 'Deploy', overview: `uses ${SK}`, userVisibleChanges: [], flow: [], decisions: [], implementation: [],
+                  evidence: [], userEdited: false, generatedAt: '2026-10-01T00:00:01.000Z'
+                }
+              })
+            ]
+          }
+        }
+      })
+    )
+    // Read per call: the file written after the first call is what the second one sees.
+    const listed = await mcp.call('list_work_records', { projectId })
+    expect(listed.isError, listed.content[0]?.text).toBeFalsy()
+    const rows = (listed.structuredContent as { records: Array<Record<string, unknown>> }).records
+    expect(rows.map((r) => r.id)).toEqual(['w-new', 'w-old'])
+    expect(rows[0]).toMatchObject({ title: 'Deploy', request: 'deploy with [REDACTED]', changedFiles: 1, verification: null })
+    expect(rows[1]).toMatchObject({ title: null, verification: { status: 'passed' } })
+
+    const got = await mcp.call('get_work_record', { projectId, recordId: 'w-new' })
+    expect(got.isError, got.content[0]?.text).toBeFalsy()
+    expect(got.structuredContent).toMatchObject({ id: 'w-new', changedFiles: ['src/a.ts'], explanation: { overview: 'uses [REDACTED]' } })
+    expect(JSON.stringify(got)).not.toContain(SK)
+
+    const missing = await mcp.call('get_work_record', { projectId, recordId: 'nope' })
+    expect(errorOf(missing)).toMatchObject({ code: 'NOT_FOUND' })
+
+    // A file the Host cannot read: one fixed sentence, nothing from the file.
+    await fs.writeFile(path.join(h.profileDir, 'understanding.json'), `{ broken ${SK}`)
+    const broken = await mcp.call('list_work_records', { projectId })
+    expect(errorOf(broken)).toMatchObject({ code: 'FAILED', message: 'understanding.json could not be read' })
+    expect(JSON.stringify(broken)).not.toContain('broken')
   })
 })

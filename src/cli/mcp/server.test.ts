@@ -17,7 +17,8 @@ const TOOLS = [
   'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
-  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue'
+  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
+  'list_work_records', 'get_work_record'
 ]
 
 async function connected(link: HostLink) {
@@ -78,7 +79,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty tools', async () => {
+  it('lists exactly the thirty-two tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -1268,9 +1269,9 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-two tools, six of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(30)
+    expect(tools).toHaveLength(32)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
     for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
@@ -1436,5 +1437,127 @@ describe('the GitHub tools (MCP P2-B)', () => {
     // Only create_pr's: another tool's refusal never gains it.
     const { r } = await call('retry_ci', { projectId: 'p1', ciRunId: 5 }, { 'github-ci-rerun': { status: 502, body: { error: 'gh failed', pushed: true } } })
     expect(errorOf(r).details).toBeUndefined()
+  })
+})
+
+describe('the How It Works tools (MCP P2-C)', () => {
+  const PAT = 'github_pat_' + 'A1b2C3d4E5f6G7h8I9j0K1l2'
+  const SK = 'sk-' + 'abcdefghijklmnopqrstuvwxyz012345'
+  const call = async (name: string, args: Record<string, unknown>, answers: Record<string, { status: number; body: unknown }> = {}) => {
+    const { link, calls } = answering(answers)
+    const r = await (await connected(link)).callTool({ name, arguments: args })
+    return { r, calls }
+  }
+  const summary = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    at: '2026-10-01T00:00:00.000Z',
+    title: null,
+    request: `request ${id}`,
+    status: 'ready',
+    source: { kind: 'session', sessionId: 's1', label: 'Terminal 1' },
+    changedFiles: 1,
+    verification: null,
+    ...over
+  })
+
+  it('maps each tool to its command and exact args, and both are read-only', async () => {
+    const cases: Array<[string, Record<string, unknown>, string, Record<string, unknown>]> = [
+      ['list_work_records', { projectId: 'p1' }, 'understanding-list', { project: 'p1' }],
+      ['list_work_records', { projectId: 'p1', limit: 5 }, 'understanding-list', { project: 'p1' }],
+      ['get_work_record', { projectId: 'p1', recordId: 'w1' }, 'understanding-get', { project: 'p1', id: 'w1' }]
+    ]
+    for (const [name, input, cmd, args] of cases) {
+      const { r, calls } = await call(name, input, { [cmd]: { status: 200, body: cmd === 'understanding-list' ? [] : summary('w1') } })
+      expect(r.isError, name).toBeFalsy()
+      expect(calls, name).toEqual([{ cmd, args, request: undefined }])
+    }
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    for (const n of ['list_work_records', 'get_work_record']) expect(tools.find((t) => t.name === n)?.annotations?.readOnlyHint).toBe(true)
+  })
+
+  it("descriptions say the records are write-ups that may be out of date, read only, with the request in the person's own words", async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    for (const n of ['list_work_records', 'get_work_record']) {
+      const d = String(tools.find((t) => t.name === n)?.description)
+      expect(d, n).toMatch(/How It Works/)
+      expect(d, n).toMatch(/out of date/)
+      expect(d, n).toMatch(/[Rr]ead only/)
+      expect(d, n).toMatch(/own words/)
+    }
+  })
+
+  it('list_work_records puts the rows under records and pages them with limit and cursor', async () => {
+    const rows = [summary('a'), summary('b'), summary('c')]
+    const answers = { 'understanding-list': { status: 200, body: rows } }
+    const first = await call('list_work_records', { projectId: 'p1', limit: 2 }, answers)
+    const page1 = first.r.structuredContent as { records: { id: string }[]; truncated?: true; total?: number; nextCursor?: string }
+    expect(page1.records.map((r) => r.id)).toEqual(['a', 'b'])
+    expect(page1).toMatchObject({ truncated: true, total: 3 })
+    const second = await call('list_work_records', { projectId: 'p1', limit: 2, cursor: page1.nextCursor }, answers)
+    const page2 = second.r.structuredContent as { records: { id: string }[]; nextCursor?: string }
+    expect(page2.records.map((r) => r.id)).toEqual(['c'])
+    expect(page2.nextCursor).toBeUndefined()
+    const whole = await call('list_work_records', { projectId: 'p1' }, answers)
+    expect(whole.r.structuredContent).toEqual({ records: rows })
+  })
+
+  it("redacts secrets in a record's request, reason, source label and write-up; paths and ids stay", async () => {
+    const list = await call('list_work_records', { projectId: 'p1' }, {
+      'understanding-list': {
+        status: 200,
+        body: [summary('w1', { request: `use ${SK}`, title: `t ${PAT}`, reason: `r ${SK}`, source: { kind: 'session', sessionId: 's1', label: `l ${PAT}` } })]
+      }
+    })
+    const l = JSON.stringify(list.r.structuredContent)
+    expect(l).not.toContain(SK)
+    expect(l).not.toContain(PAT)
+    expect((list.r.structuredContent as { records: Array<{ request: string }> }).records[0].request).toBe('use [REDACTED]')
+    expect(textOf(list.r)).not.toContain(SK)
+
+    const detail = {
+      id: 'w1',
+      at: '2026-10-01T00:00:00.000Z',
+      source: { kind: 'job', runId: 'run_1', jobName: `job ${SK}`, taskIds: ['t1'] },
+      request: `deploy with ${PAT}`,
+      changedFiles: ['src/a.ts'],
+      git: { startHead: 'aaa', endHead: 'bbb', commits: ['bbb'] },
+      verification: { status: 'partial', checks: [{ name: `npm test ${SK}`, status: 'passed' }], summary: `s ${PAT}` },
+      jobTasks: [{ title: `t ${SK}`, outcome: `o ${PAT}` }],
+      status: 'needs-review',
+      reason: `why ${SK}`,
+      explanation: {
+        title: `title ${SK}`,
+        overview: `overview ${SK}`,
+        userVisibleChanges: [`change ${PAT}`],
+        flow: [{ id: 'n1', label: `step ${SK}`, description: `d ${PAT}`, type: 'step', next: [{ targetId: 'n2', condition: `c ${SK}` }] }],
+        decisions: [{ id: 'd1', title: `dt ${SK}`, reason: `dr ${PAT}`, source: 'agent', sourceLabel: `sl ${SK}` }],
+        implementation: [{ role: `role ${PAT}`, path: 'src/a.ts' }],
+        evidence: [{ id: 'e1', type: 'source-file', label: `ev ${SK}`, path: 'src/a.ts' }],
+        userEdited: false,
+        generatedAt: '2026-10-01T00:00:01.000Z'
+      }
+    }
+    const got = await call('get_work_record', { projectId: 'p1', recordId: 'w1' }, { 'understanding-get': { status: 200, body: detail } })
+    const g = got.r.structuredContent as typeof detail
+    const text = JSON.stringify(g)
+    expect(text).not.toContain(SK)
+    expect(text).not.toContain(PAT)
+    expect(textOf(got.r)).not.toContain(SK)
+    expect(g.request).toBe('deploy with [REDACTED]')
+    expect(g.explanation.overview).toBe('overview [REDACTED]')
+    expect(g.explanation.flow[0].next[0]).toEqual({ targetId: 'n2', condition: 'c [REDACTED]' })
+    expect(g.explanation.implementation[0]).toEqual({ role: 'role [REDACTED]', path: 'src/a.ts' })
+    expect(g.changedFiles).toEqual(['src/a.ts'])
+    expect(g.git).toEqual(detail.git)
+    expect(g.source).toEqual({ kind: 'job', runId: 'run_1', jobName: 'job [REDACTED]', taskIds: ['t1'] })
+  })
+
+  it('a refusal from the Host comes back with its code', async () => {
+    const r404 = await call('get_work_record', { projectId: 'p1', recordId: 'x' }, { 'understanding-get': { status: 404, body: { error: 'unknown record: x' } } })
+    expect(errorOf(r404.r)).toMatchObject({ code: 'NOT_FOUND' })
+    const r500 = await call('list_work_records', { projectId: 'p1' }, {
+      'understanding-list': { status: 500, body: { error: 'understanding.json could not be read' } }
+    })
+    expect(errorOf(r500.r)).toMatchObject({ code: 'FAILED', message: 'understanding.json could not be read' })
   })
 })

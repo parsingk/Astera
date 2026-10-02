@@ -8797,3 +8797,127 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     })
   })
 })
+
+describe('handleCommand — understanding-list and understanding-get', () => {
+  const rec = (id: string, at: string, over: Record<string, unknown> = {}) => ({
+    id,
+    at,
+    source: { kind: 'session', sessionId: 's1', label: 'Terminal 1' },
+    request: `request ${id}`,
+    changedFiles: ['a.ts'],
+    git: { startHead: null, endHead: null },
+    status: 'ready',
+    ...over
+  })
+  const setup = (read: () => Promise<unknown>) => {
+    const reg = ensureProject(emptyState(), { path: 'D:/repo', now: NOW })
+    const deps = makeDeps(reg.state)
+    let reads = 0
+    deps.readUnderstanding = async () => {
+      reads++
+      return (await read()) as never
+    }
+    return { deps, projectId: reg.project.id, reads: () => reads }
+  }
+  const file = {
+    projects: {
+      'D:/repo': {
+        records: [
+          rec('old', '2026-09-01T00:00:00.000Z', { validation: { status: 'passed' } }),
+          rec('new', '2026-10-01T00:00:00.000Z', { explanation: { title: 'New thing', overview: 'o' } })
+        ]
+      },
+      'D:/other': { records: [rec('elsewhere', '2026-10-02T00:00:00.000Z')] }
+    }
+  }
+
+  it("understanding-list gives the project's record summaries, newest first", async () => {
+    const { deps, projectId } = setup(async () => file)
+    const r = await call(deps, 'understanding-list', { project: projectId }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual([
+      {
+        id: 'new',
+        at: '2026-10-01T00:00:00.000Z',
+        title: 'New thing',
+        request: 'request new',
+        status: 'ready',
+        source: { kind: 'session', sessionId: 's1', label: 'Terminal 1' },
+        changedFiles: 1,
+        verification: null
+      },
+      expect.objectContaining({ id: 'old', title: null, verification: { status: 'passed' } })
+    ])
+  })
+
+  it('understanding-list of a project with no records is an empty list', async () => {
+    const { deps, projectId } = setup(async () => ({ projects: {} }))
+    expect(await call(deps, 'understanding-list', { project: projectId }, '')).toEqual({ status: 200, body: [] })
+  })
+
+  it('understanding-get gives the whole record', async () => {
+    const { deps, projectId } = setup(async () => file)
+    const r = await call(deps, 'understanding-get', { project: projectId, id: 'old' }, '')
+    expect(r).toEqual({ status: 200, body: file.projects['D:/repo'].records[0] })
+  })
+
+  it("an unknown project is 404, and a record of another project or none is 404", async () => {
+    const { deps, projectId } = setup(async () => file)
+    expect((await call(deps, 'understanding-list', { project: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'understanding-get', { project: 'nope', id: 'old' }, '')).status).toBe(404)
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'elsewhere' }, '')).status).toBe(404)
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'missing' }, '')).status).toBe(404)
+  })
+
+  it('a missing project or id is 400', async () => {
+    const { deps, projectId } = setup(async () => file)
+    expect((await call(deps, 'understanding-list', {}, '')).status).toBe(400)
+    expect((await call(deps, 'understanding-get', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'understanding-get', { id: 'old' }, '')).status).toBe(400)
+  })
+
+  it('reads the file on every call', async () => {
+    let current: unknown = { projects: {} }
+    const { deps, projectId, reads } = setup(async () => current)
+    expect((await call(deps, 'understanding-list', { project: projectId }, '')).body).toEqual([])
+    current = file
+    expect((await call(deps, 'understanding-list', { project: projectId }, '')).body).toHaveLength(2)
+    expect(reads()).toBe(2)
+  })
+
+  it('a file that cannot be read is a fixed sentence with nothing from the file', async () => {
+    const { deps, projectId } = setup(async () => {
+      throw new Error('Unexpected token s in JSON at position 3: sk-ant-secret-from-the-file')
+    })
+    for (const [cmd, args] of [
+      ['understanding-list', { project: projectId }],
+      ['understanding-get', { project: projectId, id: 'old' }]
+    ] as const) {
+      const r = await call(deps, cmd, args, '')
+      expect(r).toEqual({ status: 500, body: { error: 'understanding.json could not be read' } })
+    }
+  })
+
+  it('malformed records are skipped, not a generic failure', async () => {
+    const { deps, projectId } = setup(async () => ({
+      projects: { 'D:/repo': { records: [null, { id: 'x', at: 5 }, { id: 'nofiles', at: '2026-10-01T00:00:00.000Z', status: 'ready' }] } }
+    }))
+    const list = await call(deps, 'understanding-list', { project: projectId }, '')
+    expect(list.status).toBe(200)
+    expect(list.body).toEqual([expect.objectContaining({ id: 'nofiles', changedFiles: 0 })])
+    const got = await call(deps, 'understanding-get', { project: projectId, id: 'nofiles' }, '')
+    expect(got).toMatchObject({ status: 200, body: { id: 'nofiles', changedFiles: [] } })
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'x' }, '')).status).toBe(404)
+  })
+
+  it("without the readUnderstanding dep both answer 409: they are the Host's", async () => {
+    const deps = makeDeps()
+    for (const [cmd, args] of [
+      ['understanding-list', { project: 'p1' }],
+      ['understanding-get', { project: 'p1', id: 'r1' }]
+    ] as const) {
+      const r = await call(deps, cmd, args, '')
+      expect(r).toEqual({ status: 409, body: { error: 'How It Works records are answered by the Astera Host' } })
+    }
+  })
+})
