@@ -142,7 +142,8 @@ export interface HostWorkUnits {
    *  starts or stops the collector before the answer. Throws when it cannot be read. */
   trackingEnabled(): Promise<boolean>
   /** The collector's declarations and the screen's reads, by session and by id. `start`, `complete` and
-   *  `cancel` run one collector round first, so a session that appeared since the last round is known. */
+   *  `cancel` run one collector round first, so a session that appeared since the last round is known.
+   *  `completeById` and `cancelById` work with the collector stopped too: they read the file first then. */
   sessionTasks: {
     start: C['startTask']
     complete: C['completeTask']
@@ -414,6 +415,23 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
   /** The Host's own merges, registered as the app registers them (core/workUnit/hostGitOps.ts). */
   const gitOps = createHostGitOps(collector)
 
+  /** The screen's buttons by id. The screen lists the file's rows whether or not the collector runs, and
+   *  a stopped collector's store holds what this Host last read, or nothing when it never started: so
+   *  then the file is read first (only when another process wrote it since). Queued with the start/stop
+   *  decisions, so it never reads under a start's load; the write still goes through the gate. */
+  const byId = <T>(act: () => Promise<T>): Promise<T> => {
+    const p = applying.then(async () => {
+      if (!running && !disposed)
+        await store.refresh().catch((err) => log(`workUnits.json could not be read again: ${message(err)}`))
+      return act()
+    })
+    applying = p.then(
+      () => undefined,
+      () => undefined
+    )
+    return p
+  }
+
   /** Declarations run one round first: the collector knows a session only from a round. */
   const caughtUp = async (): Promise<void> => {
     if (running) await collector.flush()
@@ -458,8 +476,8 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
         await caughtUp()
         return collector.cancelTask(sessionId, reason)
       },
-      completeById: (projectPath, id) => collector.completeTaskById(projectPath, id),
-      cancelById: (projectPath, id) => collector.cancelTaskById(projectPath, id),
+      completeById: (projectPath, id) => byId(() => collector.completeTaskById(projectPath, id)),
+      cancelById: (projectPath, id) => byId(() => collector.cancelTaskById(projectPath, id)),
       list: (projectPath) => collector.listOpen(projectPath)
     },
     fork: (newSessionId, transcriptPath, oldSessionId) => collector.onSessionForked(newSessionId, transcriptPath, oldSessionId),

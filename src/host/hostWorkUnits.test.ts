@@ -301,6 +301,79 @@ describe('createHostWorkUnits', () => {
     expect(r.closed).toEqual([])
   })
 
+  // The screen lists the file's interrupted rows whether or not tracking is on; before E2 the app's
+  // store was loaded at boot, so [Done] and [Cancel] worked with the collector stopped.
+  describe('by id while tracking is off', () => {
+    const interrupted = (id: string): SessionWorkUnit => ({
+      id,
+      sessionId: 'gone',
+      projectPath: project,
+      objective: `Left ${id}`,
+      status: 'interrupted',
+      reason: 'INTERRUPTED_BY_SESSION_END',
+      startedAt: '2026-10-02T10:00:00.000Z',
+      sawWrite: true,
+      git: { startHead: 'c0', observedChangedFiles: ['src/a.ts'] },
+      encounteredExternalGitChangeIds: []
+    })
+    const seed = async (...units: SessionWorkUnit[]): Promise<void> =>
+      fs.writeFile(file(), JSON.stringify({ projects: { [project]: { units, cursors: [], externalGitChanges: [] } } }))
+
+    it('completeById reads the file first, closes the unit and records it', async () => {
+      const r = rig()
+      r.state.tracking = false
+      await seed(interrupted('wu-1'))
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      expect(hw.isRunning()).toBe(false)
+      expect(await hw.sessionTasks.completeById(project, 'wu-1')).toEqual({ ok: true, recorded: true })
+      await hw.settled()
+      expect(onDisk().projects[project].units).toEqual([expect.objectContaining({ id: 'wu-1', status: 'completed' })])
+      expect(r.closed).toHaveLength(1)
+      expect(r.closed[0].unit).toMatchObject({ id: 'wu-1', status: 'completed' })
+    })
+
+    it('cancelById reads the file first and closes the unit', async () => {
+      const r = rig()
+      r.state.tracking = false
+      await seed(interrupted('wu-1'))
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      expect(await hw.sessionTasks.cancelById(project, 'wu-1')).toEqual({ ok: true })
+      await hw.settled()
+      expect(onDisk().projects[project].units).toEqual([expect.objectContaining({ id: 'wu-1', status: 'cancelled' })])
+      expect(r.closed).toEqual([])
+    })
+
+    it('reads what an app wrote after this Host last read the file', async () => {
+      const r = rig()
+      r.state.tracking = false
+      await seed(interrupted('wu-1'))
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      expect((await hw.sessionTasks.cancelById(project, 'wu-1')).ok).toBe(true)
+      await hw.settled()
+      // an app was the writer meanwhile and left another row
+      await seed(interrupted('wu-2'))
+      expect((await hw.sessionTasks.completeById(project, 'wu-2')).ok).toBe(true)
+      await hw.settled()
+      expect(onDisk().projects[project].units).toEqual([expect.objectContaining({ id: 'wu-2', status: 'completed' })])
+    })
+
+    it('writes nothing while an attached app keeps the duty', async () => {
+      const r = rig()
+      r.state.tracking = false
+      r.state.writer = false
+      await seed(interrupted('wu-1'))
+      const before = readFileSync(file(), 'utf8')
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      await hw.sessionTasks.completeById(project, 'wu-1')
+      await hw.settled()
+      expect(readFileSync(file(), 'utf8')).toBe(before)
+    })
+  })
+
   it('writes nothing and pushes nothing while an attached app keeps the duty', async () => {
     const r = rig()
     r.state.writer = false
