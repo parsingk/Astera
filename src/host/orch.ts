@@ -503,7 +503,7 @@ export function createHostOrch(a: {
   /** E1 §3: a Run this commit finished, caught as an edge (runRecord.ts), is handed to How It Works so
    *  a Run that finishes with no Astera window open still gets its record. **Fire and forget**: the
    *  commit has already landed, and nothing the record does, a throw included, may turn it into a failed
-   *  command. Whether to record (writer, tracking, settings) is hostUnderstanding's to judge and log. */
+   *  command. Whether to record (writer, settings) is hostUnderstanding's to judge and log. */
   const recordFinishedRuns = (prev: OrchState, next: OrchState): void => {
     const understanding = a.understanding
     if (!understanding) return

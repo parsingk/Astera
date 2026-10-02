@@ -228,16 +228,16 @@ describe('createHostUnderstanding', () => {
     expect(pushed).toEqual([])
   })
 
-  it('reads the settings per call: tracking turned off between two Runs records only the first', async () => {
-    await settings(ON)
+  it('reads the settings per call: a generator chosen between two Runs fills the second', async () => {
+    await settings({ lang: 'en' })
     const { u } = make()
     await u.load()
     await u.onRunFinished(runInput())
-    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
-    await settings({ ...ON, workUnitTrackingEnabled: false })
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.reason).toBe('NO_GENERATOR_ACCOUNT'))
+    await settings(ON)
     await u.onRunFinished(runInput({ runId: 'run-2' }))
-    await new Promise((r) => setTimeout(r, 50))
-    expect((await recordsOnDisk(project)).map((r) => (r.source.kind === 'job' ? r.source.runId : ''))).toEqual(['run-1'])
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+    expect((await recordsOnDisk(project)).map((r) => (r.source.kind === 'job' ? r.source.runId : ''))).toEqual(['run-2', 'run-1'])
   })
 
   it('reads the language per call', async () => {
@@ -253,25 +253,22 @@ describe('createHostUnderstanding', () => {
     expect(prompts[1]).toContain('in English')
   })
 
-  it('tracking needs exactly true; no settings file means off', async () => {
+  // Ruling 9: the app never gated Run records on the tracking toggle (it gates session units), and the
+  // toggle defaults off; the Host records a Run as the app does.
+  it('records a finished Run whatever the tracking toggle says', async () => {
+    await settings({ ...ON, workUnitTrackingEnabled: false })
     const { u } = make()
     await u.load()
     await u.onRunFinished(runInput())
-    await settings({ ...ON, workUnitTrackingEnabled: 'yes' })
-    await u.onRunFinished(runInput())
-    await new Promise((r) => setTimeout(r, 50))
-    expect(await recordsOnDisk(project)).toEqual([])
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
   })
 
-  it('tracking off: a finished Run records nothing and logs one line', async () => {
-    await settings({ ...ON, workUnitTrackingEnabled: false })
-    const { u, logs } = make()
+  it('no settings file: the Run is recorded, and fails for want of a generator account', async () => {
+    const { u } = make()
     await u.load()
     await u.onRunFinished(runInput())
-    await new Promise((r) => setTimeout(r, 50))
-    expect(await recordsOnDisk(project)).toEqual([])
-    expect(logs.filter((l) => l.includes('run-1'))).toHaveLength(1)
-    expect(logs.find((l) => l.includes('run-1'))).toMatch(/tracking is off/)
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('failed'))
+    expect((await recordsOnDisk(project))[0].reason).toBe('NO_GENERATOR_ACCOUNT')
   })
 
   it('an unreadable settings file records nothing for a Run and logs it', async () => {

@@ -9,9 +9,10 @@
 // store.refresh before each prepend and patch), so an app's records written meanwhile survive.
 //
 // What the app supplies from its own state, the Host reads here: the accounts per call, the generator
-// settings, the tracking toggle and the language from one read of app-settings.json per call (the app's own
-// keys: `generator`, `workUnitTrackingEnabled`, `lang`), and the key folding with repoPathOf over the
-// Host's own worktree registry, as the app folds over its own (ipc.ts understandingKeyOf).
+// settings and the language from one read of app-settings.json per call (the app's own keys: `generator`,
+// `lang`), and the key folding with repoPathOf over the Host's own worktree registry, as the app folds
+// over its own (ipc.ts understandingKeyOf). **No tracking gate on Runs** (ruling 9): the app never gated
+// Run records on its tracking toggle, which gates session units, and the toggle defaults off.
 //
 // Imports nothing from electron, src/main or src/renderer (importFence.test.ts).
 import path from 'node:path'
@@ -35,17 +36,15 @@ export const NOT_WRITER = 'an older Astera app is writing How It Works records; 
 
 export interface UnderstandingSettings {
   generator: GeneratorSettings
-  /** The app's How It Works toggle: a finished Run is recorded only while it is on. */
-  tracking: boolean
   lang: Lang
 }
 
 /** The OS locale as node reports it, the app's fallback for a file with no `lang` (checks.ts osLang). */
 const osLang = (): Lang => pickInitialLang(Intl.DateTimeFormat().resolvedOptions().locale)
 
-/** One read of app-settings.json. No file is the app's defaults (no generator, tracking off, the OS
- *  locale); a file that cannot be read or is not a settings object **throws**: tracking cannot be known,
- *  and the caller records nothing rather than guess (E1 error handling). The language follows checks.ts'
+/** One read of app-settings.json. No file is the app's defaults (no generator, the OS locale); a file
+ *  that cannot be read or is not a settings object **throws**: the generator cannot be known, and the
+ *  caller records nothing rather than guess (E1 error handling). The language follows checks.ts'
  *  lang(): the file's `lang` when it is one, the OS locale otherwise. */
 export async function readUnderstandingSettings(settingsPath: string): Promise<UnderstandingSettings> {
   let text: string | null
@@ -70,7 +69,6 @@ export async function readUnderstandingSettings(settingsPath: string): Promise<U
   const lang = o?.lang
   return {
     generator: readGeneratorSettings(o?.generator),
-    tracking: o?.workUnitTrackingEnabled === true,
     lang: isLang(lang) ? lang : osLang()
   }
 }
@@ -108,7 +106,7 @@ export interface HostUnderstanding {
    *  interruption load marked but could not save is saved now, when this Host is the writer and nobody
    *  wrote the file since. Never rejects. */
   writerMayHaveChanged(): Promise<void>
-  /** A Run finished (E1 §3): recorded when this Host writes and tracking is on. Resolves once the record
+  /** A Run finished (E1 §3): recorded when this Host writes. Resolves once the record
    *  is queued, never waits on the agent. Never rejects. */
   onRunFinished(input: RunRecordInput & { projectPath: string }): Promise<void>
   /** A session unit the app's collector closed (`understanding-unit`). */
@@ -233,15 +231,10 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     onRunFinished: async (input) => {
       try {
         if (!isWriter()) return
-        let s: UnderstandingSettings
         try {
-          s = await take()
+          await take()
         } catch (err) {
           d.log(`understanding: app-settings.json or accounts.json could not be read, run ${input.runId} is not recorded: ${message(err)}`)
-          return
-        }
-        if (!s.tracking) {
-          d.log(`understanding: How It Works tracking is off, run ${input.runId} is not recorded`)
           return
         }
         const { projectPath, ...record } = input

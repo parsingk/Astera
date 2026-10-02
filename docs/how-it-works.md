@@ -33,8 +33,8 @@ Only one piece of work can be recorded per session at a time. Complete the curre
 starting the next. A piece of work that changed no files leaves no completed record.
 
 Claude Code's and Codex's `/goal` can also be recorded. Claude completes the record when the
-work finishes; Codex requires you to mark it **Done** in How It Works. Completed Jobs Runs are
-recorded too when tracking is enabled. A Job's explanation is generated after the Run finishes.
+work finishes; Codex requires you to mark it **Done** in How It Works. Completed Job Runs are
+recorded too, whether or not tracking is enabled. A Job's explanation is generated after the Run finishes.
 The Astera Host records a Job's Run, so a Run that finishes while the app is closed is recorded
 too and appears when you open the app again. A session's work is recorded only while the app is open.
 
