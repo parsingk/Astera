@@ -319,7 +319,7 @@ const SESSION = {
   'github-pr-create': {
     summary: "open a pull request from a finished Run's branch, through the Host's gh (the MCP server's create_pr)",
     detail:
-      'Refused while the Run is still working, while its worktree has uncommitted changes, and when its branch adds no commits (409). Title and body default from the commits. Pushes only a branch with no upstream or a gone one, never with force. MCP clients need the "Let MCP clients act on GitHub" setting.',
+      'Refused while the Run is still working or paused, while its worktree has uncommitted changes, and when its branch adds no commits (409). Title and body default from the commits. Always pushes the branch first, never with force; a diverged branch is refused (409). MCP clients need the "Let MCP clients act on GitHub" setting.',
     flags: [
       RUN_ARG('<runId>', 'the Run whose worktree branch to open it from'),
       { name: 'title', value: '<text>', about: 'the title (default: the one commit, or the branch name)' },
