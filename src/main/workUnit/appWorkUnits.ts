@@ -101,7 +101,7 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 
 /** The collector's answer to a [완료] press, as the IPC handler always mapped it. Both of the collector's
  *  refusals here (`unknown task: …`, the row dropped; `task is …`, it closed some other way) mean the row
- *  is gone, which is what the button wanted. */
+ *  is gone, which is what the button wanted. A reader checks the file before an `unknown task` gets here. */
 const completed = (
   r: { ok: true; recorded: boolean } | { ok: false; reason: string },
   id: string
@@ -248,8 +248,18 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
         return completed(await d.collector.completeTaskById(projectPath, id), id)
       }
       if (mode === 'undecided') throw notReady()
-      const body = await call('work-units-complete', { projectPath: await fileKey(projectPath), id })
-      return completed(body as { ok: true; recorded: boolean } | { ok: false; reason: string }, id)
+      const key = await fileKey(projectPath)
+      const r = (await call('work-units-complete', { projectPath: key, id })) as
+        | { ok: true; recorded: boolean }
+        | { ok: false; reason: string }
+      // `unknown task` means the row is gone only when the file agrees: a Host whose store does not hold
+      // a row the screen lists closed nothing, and reading that as success would hide it.
+      if (!r.ok && r.reason === `unknown task: ${id}`) {
+        const state = await d.readFile()
+        const k = keyIn(state, key)
+        if (openTasksOf(k === undefined ? undefined : state.projects[k]).some((t) => t.id === id)) throw new Error(r.reason)
+      }
+      return completed(r, id)
     },
     cancel: async (projectPath, id) => {
       let r: { ok: true } | { ok: false; reason: string }

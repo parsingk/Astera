@@ -170,8 +170,11 @@ describe('createAppWorkUnits: in front of a Host that announces work-units', () 
     expect(m.calls).toEqual([{ cmd: 'work-units-complete', args: { projectPath: root, id: 'wu-host' } }])
     m.state.reply = async () => ({ status: 200, body: { ok: true, recorded: false } })
     expect(await w.complete(root, 'wu-host')).toEqual({ recorded: false })
-    // The row is already gone: what the button wanted is true.
+    // The Host does not know the row the file still lists: nothing was closed, so it is not a success.
     m.state.reply = async () => ({ status: 200, body: { ok: false, reason: 'unknown task: wu-host' } })
+    await expect(w.complete(root, 'wu-host')).rejects.toThrow('unknown task: wu-host')
+    // The row is already gone from the file: what the button wanted is true.
+    await hostWrites([])
     expect(await w.complete(root, 'wu-host')).toEqual({ recorded: true })
     m.state.reply = async () => ({ status: 200, body: { ok: false, reason: 'task is completed' } })
     expect(await w.complete(root, 'wu-host')).toEqual({ recorded: true })
