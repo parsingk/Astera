@@ -25,6 +25,15 @@ Each client launches the same command: `astera mcp serve`.
 the form for your operating system, each with a copy button. The lines appear once the command line
 tool is installed; before that the tab says to install it first.
 
+The Claude Code and Codex rows also have a **Register** button, which runs that line's command for
+you through the client's own CLI. It runs only when you press it. The row then shows Registered, or
+Register again when the client has Astera under another command, such as an older install path.
+Codex's CLI rewrites the formatting of the other entries in `~/.codex/config.toml` whenever it adds
+or removes one; their values stay the same. Typing the line yourself does the same. On Windows, a
+Claude Code or Codex installed through npm runs through cmd, so Register refuses an install path
+with `&`, `|`, `<`, `>`, `^`, `%`, `!`, a quote or parentheses in it. Register that one by hand, as
+described below.
+
 **The Settings lines name the installed command by its full path**, so they work whatever the
 client's `PATH` holds. On Windows, a folder just put on the user Path reaches only programs started
 after that, so a client that was already running cannot find `astera`. On macOS and Linux,
@@ -32,13 +41,13 @@ after that, so a client that was already running cannot find `astera`. On macOS 
 looks like this:
 
 ```bash
-claude mcp add astera -- cmd /c call "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
+claude mcp add -s user astera -- cmd /c call "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
 ```
 
 and on macOS or Linux like this:
 
 ```bash
-claude mcp add astera -- '/Users/you/.local/bin/astera' mcp serve
+claude mcp add -s user astera -- '/Users/you/.local/bin/astera' mcp serve
 ```
 
 The Cursor line carries the same as `"command": "cmd"` with

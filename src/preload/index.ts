@@ -155,6 +155,10 @@ const api = {
     uninstall: invoke('cli.uninstall'),
     pathRepairedAtStart: invoke('cli.pathRepairedAtStart')
   },
+  mcpClients: {
+    status: invoke('mcpClients.status'),
+    register: invoke('mcpClients.register')
+  },
   settings: {
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),

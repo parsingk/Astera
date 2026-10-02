@@ -68,6 +68,8 @@ import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
 import { installCommandFor } from '../core/install/cliInstall'
 import { locateCli } from './cliLocate'
+import { mcpClientsStatus, registerMcpClientNow } from './mcpClients'
+import { mcpServerFor, shimPathFor } from '../core/install/mcpRegistration'
 import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
@@ -5500,6 +5502,17 @@ export function registerIpc(
         )
       : Promise.resolve(false)
   ipcMain.handle('cli.pathRepairedAtStart', () => pathRepair)
+
+  // The Register buttons beside the MCP registration lines (main/mcpClients.ts). The argv is the one
+  // the copied lines and the Cursor entry carry, for the shim in the install folder. Nothing here runs
+  // unless the person presses Register; reading the status never starts the server.
+  const mcpServer = () =>
+    mcpServerFor({ platform: process.platform, shimPath: shimPathFor({ platform: process.platform, dir: cliBinDir() }) })
+  ipcMain.handle('mcpClients.status', () => mcpClientsStatus(mcpServer(), app.getPath('home')))
+  ipcMain.handle('mcpClients.register', (_e, client: unknown) => {
+    if (client !== 'claude' && client !== 'codex') throw new Error(`INVALID_MCP_CLIENT: ${String(client)}`)
+    return registerMcpClientNow(client, mcpServer(), app.getPath('home'))
+  })
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
   // sent is validated before being written to disk. Registered unconditionally here (not inside

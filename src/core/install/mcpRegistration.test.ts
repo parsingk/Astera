@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mcpRegistrationLines, shimPathFor } from './mcpRegistration'
+import { mcpRegistrationLines, mcpServerFor, shimPathFor } from './mcpRegistration'
 import { shuttleNames } from '../orchestration/exec/shuttle'
 
 const WIN_SPACE = 'C:\\Users\\Jane Doe\\AppData\\Local\\astera\\bin\\astera.cmd'
@@ -12,7 +12,7 @@ describe('mcpRegistrationLines', () => {
   // mcpRegistration.ts). `call` keeps the quotes when the folder name has `&` or parentheses.
   it.each([WIN_SPACE, WIN_HANGUL, WIN_SPECIAL])('win32 launches the full path through cmd /c call: %s', (shimPath) => {
     expect(mcpRegistrationLines({ platform: 'win32', shimPath })).toEqual([
-      { client: 'Claude Code', line: `claude mcp add astera -- cmd /c call "${shimPath}" mcp serve` },
+      { client: 'Claude Code', line: `claude mcp add -s user astera -- cmd /c call "${shimPath}" mcp serve` },
       { client: 'Codex', line: `codex mcp add astera -- cmd /c call "${shimPath}" mcp serve` },
       {
         client: 'Cursor',
@@ -28,7 +28,7 @@ describe('mcpRegistrationLines', () => {
 
   it.each(['darwin', 'linux'])('%s launches the full path, single-quoted for the shell', (platform) => {
     expect(mcpRegistrationLines({ platform, shimPath: '/Users/Jane Doe/.local/bin/astera' })).toEqual([
-      { client: 'Claude Code', line: "claude mcp add astera -- '/Users/Jane Doe/.local/bin/astera' mcp serve" },
+      { client: 'Claude Code', line: "claude mcp add -s user astera -- '/Users/Jane Doe/.local/bin/astera' mcp serve" },
       { client: 'Codex', line: "codex mcp add astera -- '/Users/Jane Doe/.local/bin/astera' mcp serve" },
       { client: 'Cursor', line: '{"mcpServers":{"astera":{"command":"/Users/Jane Doe/.local/bin/astera","args":["mcp","serve"]}}}' }
     ])
@@ -36,7 +36,7 @@ describe('mcpRegistrationLines', () => {
 
   it('posix quoting survives a quote and non-ASCII in the path', () => {
     const lines = mcpRegistrationLines({ platform: 'linux', shimPath: "/home/홍 o'neil/.local/bin/astera" })
-    expect(lines[0].line).toBe("claude mcp add astera -- '/home/홍 o'\\''neil/.local/bin/astera' mcp serve")
+    expect(lines[0].line).toBe("claude mcp add -s user astera -- '/home/홍 o'\\''neil/.local/bin/astera' mcp serve")
     expect(JSON.parse(lines[2].line).mcpServers.astera.command).toBe("/home/홍 o'neil/.local/bin/astera")
   })
 
@@ -45,6 +45,12 @@ describe('mcpRegistrationLines', () => {
       const cursor = mcpRegistrationLines({ platform, shimPath }).find((l) => l.client === 'Cursor')!
       expect(() => JSON.parse(cursor.line)).not.toThrow()
     }
+  })
+
+  // The Register buttons (mcpClients.ts) run this argv; it must be what the Cursor JSON carries.
+  it.each([['win32', WIN_SPECIAL], ['linux', '/a b/astera']])('mcpServerFor is the Cursor entry on %s', (platform, shimPath) => {
+    const cursor = mcpRegistrationLines({ platform, shimPath }).find((l) => l.client === 'Cursor')!
+    expect(mcpServerFor({ platform, shimPath })).toEqual(JSON.parse(cursor.line).mcpServers.astera)
   })
 })
 
