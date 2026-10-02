@@ -526,7 +526,7 @@ export const TOOLS: ToolDef[] = [
     title: 'Open a pull request',
     readOnly: false,
     cmd: 'github-pr-create',
-    description: `Push a finished Run's branch and open a pull request for it. It opens a draft unless draft: false, and never force pushes. The Run must have finished, with no uncommitted changes and at least one commit on its branch; a branch that already has a pull request is refused with CONFLICT. Without title and body they come from the Run's commits. Returns the url, draft and whether the branch was pushed. ${GITHUB_WRITE}`,
+    description: `Push a finished Run's branch and open a pull request for it. It opens a draft unless draft: false, and never force pushes. The Run must have finished, with no uncommitted changes and at least one commit on its branch; a branch that already has a pull request is refused with CONFLICT. Without title and body they come from the Run's commits. Returns the url, draft and whether the branch was pushed; a failed create says in details.pushed whether the branch already reached the remote. ${GITHUB_WRITE}`,
     inputSchema: {
       runId: id,
       title: z.string().min(1).max(MCP_LIMITS.prTitle).optional().describe("The pull request's title (default: from the commits)."),

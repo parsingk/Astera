@@ -1408,4 +1408,15 @@ describe('the GitHub tools (MCP P2-B)', () => {
     expect(textOf(r)).not.toContain(SK)
     expect(String(errorOf(r).message)).toContain('[REDACTED]')
   })
+
+  it('a failed create_pr says in its details whether the branch was already pushed', async () => {
+    for (const pushed of [true, false]) {
+      const { r } = await call('create_pr', { runId: 'r1' }, { 'github-pr-create': { status: 502, body: { error: 'gh failed', pushed } } })
+      expect(r.isError).toBe(true)
+      expect(errorOf(r).details, String(pushed)).toEqual({ pushed })
+    }
+    // Only create_pr's: another tool's refusal never gains it.
+    const { r } = await call('retry_ci', { projectId: 'p1', ciRunId: 5 }, { 'github-ci-rerun': { status: 502, body: { error: 'gh failed', pushed: true } } })
+    expect(errorOf(r).details).toBeUndefined()
+  })
 })

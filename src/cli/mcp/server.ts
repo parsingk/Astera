@@ -142,8 +142,12 @@ const textResult = (sentence: string, data: Record<string, unknown>): CallToolRe
 const errorResult = (code: CliErrorCode, message: string, cmd?: string, body?: unknown): CallToolResult => {
   // The same details the CLI's envelope carries (run.ts), so nextSteps branches the same way: a
   // request in flight points at `requests show`, a repair only the app can make gets none.
-  const details = refusalDetailsOf(body)
-  const data = { code, message, nextSteps: nextStepsFor({ code, cmd, details }), ...(details ? { details } : {}) }
+  let details = refusalDetailsOf(body)
+  const nextSteps = nextStepsFor({ code, cmd, details })
+  // A create_pr that failed after its push left the branch on the remote: the Host says so in `pushed`.
+  const pushed = cmd === 'github-pr-create' ? (body as { pushed?: unknown } | undefined)?.pushed : undefined
+  if (typeof pushed === 'boolean') details = { ...details, pushed }
+  const data = { code, message, nextSteps, ...(details ? { details } : {}) }
   // **No structuredContent on an error.** Cursor validates it even when isError is set, so an error
   // carries its data only in `content`: the code/message line, then the same JSON.
   return { isError: true, content: textResult(`${code}: ${message}`, data) }
