@@ -111,6 +111,7 @@ import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
 import { leftNothingBehind } from '../host/orchProtocol'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
+import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -592,6 +593,10 @@ export interface OrchServerDeps {
     readCommits(worktree: string, base: string): Promise<CommitSummary[]>
     isClean(worktree: string): Promise<{ changedCount: number }>
   }
+  /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
+   *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
+   *  app has the records in its own store and no caller asks it. Absent, `understanding-*` answer 409. */
+  readUnderstanding?(): Promise<StoreShape>
 }
 
 /** A chat session's turn as `chatTurn` reads it. `prompt` is the open prompt, as `chats pending` lists
@@ -4364,6 +4369,33 @@ export async function handleCommand(
       if (n === null) return bad('--number is required: the issue number')
       const read = await readIssue(t.gh, t.cwd, n)
       return read.ok ? okBody(read.issue) : ghRefusal(read)
+    }
+    /**
+     * How It Works records (MCP P2-C), read only, answered by the Host only (`deps.readUnderstanding`).
+     * `--project` is the project's id, as for `github-*`; its records are the understanding.json entry
+     * whose key is the project's root (`recordsFor`). The file is read on every call, so a record the
+     * app wrote a moment ago is there, and a file that cannot be read answers one fixed sentence:
+     * nothing from the file, which holds the person's requests verbatim, goes into the refusal.
+     */
+    case 'understanding-list':
+    case 'understanding-get': {
+      if (!deps.readUnderstanding) return conflict('How It Works records are answered by the Astera Host')
+      const projectId = str(args.project)
+      if (projectId === null) return bad('--project is required: a project id (from `projects list`)')
+      const id = cmd === 'understanding-get' ? str(args.id) : null
+      if (cmd === 'understanding-get' && id === null) return bad('--id is required: a record id (from `understanding-list`)')
+      const project = findProject(s, projectId)
+      if (!project) return notFound(`unknown project: ${projectId}`)
+      let file: StoreShape
+      try {
+        file = await deps.readUnderstanding()
+      } catch {
+        return { status: 500, body: { error: UNREADABLE } }
+      }
+      const records = recordsFor(file, project.path)
+      if (cmd === 'understanding-list') return okBody(records.map(recordSummary))
+      const found = records.find((r) => r.id === id)
+      return found ? okBody(recordDetail(found)) : notFound(`unknown record: ${id}`)
     }
     /**
      * The GitHub writes (MCP P2-B), behind `mcpGithubWrite` at the gate. Only `jobs-create-from-issue`

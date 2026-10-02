@@ -3668,3 +3668,37 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(await orch.call({ cmd: 'journal-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: { enabled: true, writer: true } })
   })
 })
+
+// MCP P2-C: the Host answers How It Works records from its readUnderstanding dep, never asking the app.
+describe('How It Works records (MCP P2-C)', () => {
+  it('readUnderstanding reaches the command, and the app is not asked', async () => {
+    await seed()
+    const file = path.join(dir, 'orchestration.json')
+    const reg = ensureProject(JSON.parse(await fs.readFile(file, 'utf8')) as OrchState, { path: 'D:/p', now: NOW })
+    await fs.writeFile(file, JSON.stringify(reg.state), 'utf8')
+    const acts: string[] = []
+    const record = {
+      id: 'w1', at: NOW, source: { kind: 'session', sessionId: 's', label: 'T' }, request: 'r',
+      changedFiles: [], git: { startHead: null, endHead: null }, status: 'ready'
+    }
+    const orch = orchOver({
+      act: async (name) => {
+        acts.push(name)
+        return {}
+      },
+      readUnderstanding: async () => ({ projects: { 'D:/p': { records: [record as never] } } })
+    })
+    await orch.ready()
+    const list = await orch.call({ cmd: 'understanding-list', args: { project: reg.project.id }, sessionId: '' })
+    expect(list.status).toBe(200)
+    expect((list.body as { id: string }[]).map((r) => r.id)).toEqual(['w1'])
+    const got = await orch.call({ cmd: 'understanding-get', args: { project: reg.project.id, id: 'w1' }, sessionId: '' })
+    expect(got).toMatchObject({ status: 200, body: record })
+    expect(acts).toEqual([])
+  })
+
+  it('without readUnderstanding the Host answers 409 too', async () => {
+    const r = await orchOver().call({ cmd: 'understanding-list', args: { project: 'p1' }, sessionId: '' })
+    expect(r.status).toBe(409)
+  })
+})

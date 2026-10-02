@@ -26,6 +26,13 @@ describe('mcpRefusal', () => {
   it('tasks-check-output and tasks-output are reads: get_check_output and get_task_output', () => {
     for (const cmd of ['tasks-check-output', 'tasks-output']) expect(mcpRefusal(cmd, 'read', false, false)).toBeNull()
   })
+  it('understanding-list and understanding-get are reads, with no second setting: list_work_records and get_work_record', () => {
+    for (const cmd of ['understanding-list', 'understanding-get']) {
+      expect(MCP_READ_COMMANDS).toContain(cmd)
+      for (const access of ['read', 'control'] as const) expect(mcpRefusal(cmd, access, false, false)).toBeNull()
+      expect(mcpRefusal(cmd, 'off', true, true)?.status).toBe(403)
+    }
+  })
   it('refuses everything else whatever the setting', () => {
     for (const sessions of [false, true])
       for (const cmd of ['worker-start', 'chats-answer', 'state-put', 'run-delete', 'task-create', 'run-configs', 'run-resume'])

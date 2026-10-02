@@ -20,7 +20,10 @@ export const MCP_READ_COMMANDS = [
   'tasks-output',
   'github-pr',
   'github-ci',
-  'github-issue'
+  'github-issue',
+  // How It Works records (MCP P2-C): read only, from the Host's copy of understanding.json.
+  'understanding-list',
+  'understanding-get'
 ] as const
 
 export const MCP_CONTROL_COMMANDS = [
