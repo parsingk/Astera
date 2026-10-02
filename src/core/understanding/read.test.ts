@@ -110,6 +110,22 @@ describe('recordsFor', () => {
     expect(records.map((r) => r.id)).toEqual(['old', 'new'])
   })
 
+  it('skips a record that is not an object with a string id and at, and reads a missing changedFiles as none', () => {
+    const records = [
+      null,
+      'text',
+      { id: 'no-at', status: 'ready' },
+      { id: 'bad-at', at: 5 },
+      { id: 7, at: '2026-10-01T00:00:00.000Z' },
+      { ...record({ id: 'no-files', at: '2026-09-01T00:00:00.000Z' }), changedFiles: undefined },
+      record({ id: 'ok', at: '2026-10-01T00:00:00.000Z' })
+    ] as unknown as WorkRecord[]
+    const got = recordsFor(state('D:/repo', records), 'D:/repo')
+    expect(got.map((r) => r.id)).toEqual(['ok', 'no-files'])
+    expect(got[1].changedFiles).toEqual([])
+    expect(got.map(recordSummary).map((r) => r.changedFiles)).toEqual([2, 0])
+  })
+
   it('gives none for a project with no entry', () => {
     expect(recordsFor(state('D:/repo', [record()]), 'D:/other')).toEqual([])
     expect(recordsFor({ projects: {} }, 'D:/repo')).toEqual([])

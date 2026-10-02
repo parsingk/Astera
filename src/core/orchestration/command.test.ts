@@ -8898,6 +8898,18 @@ describe('handleCommand — understanding-list and understanding-get', () => {
     }
   })
 
+  it('malformed records are skipped, not a generic failure', async () => {
+    const { deps, projectId } = setup(async () => ({
+      projects: { 'D:/repo': { records: [null, { id: 'x', at: 5 }, { id: 'nofiles', at: '2026-10-01T00:00:00.000Z', status: 'ready' }] } }
+    }))
+    const list = await call(deps, 'understanding-list', { project: projectId }, '')
+    expect(list.status).toBe(200)
+    expect(list.body).toEqual([expect.objectContaining({ id: 'nofiles', changedFiles: 0 })])
+    const got = await call(deps, 'understanding-get', { project: projectId, id: 'nofiles' }, '')
+    expect(got).toMatchObject({ status: 200, body: { id: 'nofiles', changedFiles: [] } })
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'x' }, '')).status).toBe(404)
+  })
+
   it("without the readUnderstanding dep both answer 409: they are the Host's", async () => {
     const deps = makeDeps()
     for (const [cmd, args] of [
