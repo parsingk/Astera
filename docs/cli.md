@@ -795,10 +795,12 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-twenty-four tools that create, plan, run, observe, answer, stop and resume Jobs, and read and use
-sessions when Settings allows it. What it may do is set by MCP access in Settings (CLI tab). The six
-Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`, `resume_run`,
-`answer_question`) take an optional `requestId`, and so do `send_message` and `create_session`. See
+thirty tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions
+when Settings allows it, and read pull requests, CI and issues on GitHub and, when Settings allows
+it, act on them. What it may do is set by MCP access in Settings (CLI tab). The six Job tools that
+change something (`create_job`, `create_task`, `run_job`, `stop_run`, `resume_run`,
+`answer_question`) take an optional `requestId`, and so do `send_message`, `create_session` and the
+three GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`). See
 [MCP](mcp.md).
 
 **`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
