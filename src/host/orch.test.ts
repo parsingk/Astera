@@ -3896,7 +3896,7 @@ describe('understanding-unit and understanding-regenerate (E1 §4, §5)', () => 
     })
     it('hands the unit to onUnitClosed and answers 200', async () => {
       const d = duty()
-      expect(await orchOver({ understanding: d.understanding }).call(unitCall(app))).toEqual({ status: 200, body: { recorded: true } })
+      expect(await orchOver({ understanding: d.understanding }).call(unitCall(app))).toEqual({ status: 200, body: { accepted: true } })
       expect(d.understanding.onUnitClosed).toHaveBeenCalledWith('D:/p', unit)
     })
     it('maps onUnitClosed’s refusals: the writer sentence is 409, unreadable settings 500', async () => {

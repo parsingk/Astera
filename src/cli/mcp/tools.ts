@@ -34,7 +34,7 @@ const GITHUB_WRITE =
   'Needs "Let MCP clients act on GitHub" turned on in Astera Settings (CLI tab), off by default, MCP access "Read and control", and the GitHub CLI (gh) installed and logged in on the machine running the Astera Host.'
 /** What a How It Works tool's answer is, in its description (P2-C). */
 const WORK_RECORDS =
-  "How It Works records are write-ups of finished work that an agent wrote after the work closed, shown in the Astera app's How It Works view. They may be out of date: the code may have changed since. Read only: regenerate_work_record is the one tool that writes a record again. request is the person's own words, verbatim; the rest is the agent's. Needs MCP access \"Read only\" or \"Read and control\"."
+  "How It Works records are write-ups of finished work that an agent wrote after the work closed, shown in the Astera app's How It Works view. They may be out of date: the code may have changed since. These two tools only read; regenerate_work_record writes a record again. request is the person's own words, verbatim; the rest is the agent's. Needs MCP access \"Read only\" or \"Read and control\"."
 const id = z.string().min(1).max(MCP_LIMITS.id)
 const requestId = z
   .string()

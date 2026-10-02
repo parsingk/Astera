@@ -23,6 +23,7 @@ import { UnderstandingStore } from '../core/understanding/store'
 import { UnderstandingPipeline, type PipelineDeps, type RunRecordInput } from '../core/understanding/pipeline'
 import { readGeneratorSettings, type GeneratorSettings } from '../core/understanding/generatorSettings'
 import { settingsObjectOf } from '../core/settings/settingsObject'
+import { RepairNeeded } from '../core/settings/repairNeeded'
 import { readFileRetrying } from '../core/renameRetry'
 import { repoPathOf } from '../core/worktrees/repo'
 import { isLang, type Lang } from '../core/i18n'
@@ -56,7 +57,16 @@ export async function readUnderstandingSettings(settingsPath: string): Promise<U
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     text = null
   }
-  const o = text === null ? null : settingsObjectOf(text)
+  let o: Record<string, unknown> | null = null
+  if (text !== null) {
+    try {
+      o = settingsObjectOf(text)
+    } catch {
+      // A fixed sentence, as readAppSettingsObject's: a JSON.parse message can quote the file, and this
+      // one reaches MCP clients in regenerate's 500.
+      throw new RepairNeeded('app-settings.json is not a valid settings file; open Astera to repair it', 'app-settings.json')
+    }
+  }
   const lang = o?.lang
   return {
     generator: readGeneratorSettings(o?.generator),
@@ -228,8 +238,12 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
       const root = fold(projectPath)
       // The record may be one an app wrote while it was the writer. Outside the pipeline's queue, so it
       // answers at once; refresh adopts no file over a write the pipeline made meanwhile.
+      const known = (): boolean => store.get(root)?.records.some((r) => r.id === recordId) === true
       await store.refresh()
-      if (!store.get(root)?.records.some((r) => r.id === recordId))
+      // Declined by such a write, the refresh read nothing, and an app's save may have landed after it:
+      // once more before the answer is a 404.
+      if (!known()) await store.refresh()
+      if (!known())
         return { ok: false, status: 404, error: `no How It Works record ${recordId} in ${root}` }
       try {
         await take()

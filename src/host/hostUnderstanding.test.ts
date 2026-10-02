@@ -69,6 +69,22 @@ const unit = (): SessionWorkUnit => ({
   encounteredExternalGitChangeIds: []
 })
 
+/** A ready record as a writer leaves it, with no write-up. */
+const hostRecord = (id: string): WorkRecord => ({
+  id,
+  at: '2026-10-01T00:00:00.000Z',
+  source: { kind: 'job', runId: `run-${id}`, jobName: 'j', taskIds: [] },
+  request: `request ${id}`,
+  changedFiles: ['src/a.ts'],
+  git: { startHead: null, endHead: null },
+  status: 'ready'
+})
+const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+  let resolve!: () => void
+  const promise = new Promise<void>((r) => (resolve = r))
+  return { promise, resolve }
+}
+
 const make = (over: Partial<HostUnderstandingDeps> = {}) => {
   const box = { writer: true, worktrees: [] as WorktreeInfo[] }
   const pushed: string[] = []
@@ -225,6 +241,23 @@ describe('createHostUnderstanding', () => {
     expect(logs.some((l) => l.includes('app-settings.json'))).toBe(true)
   })
 
+  it('a settings file that is not JSON is refused with one fixed sentence, nothing from the file', async () => {
+    const leak = 'sk-abcdefghijklmnop'
+    await fs.writeFile(path.join(dir, 'app-settings.json'), `{ ${leak} not json`)
+    const r1 = hostRecord('r1')
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [r1] } } }))
+    const { u } = make()
+    await u.load()
+    const regen = await u.regenerate(project, 'r1')
+    const unitAnswer = await u.onUnitClosed(project, unit())
+    for (const answer of [regen, unitAnswer]) {
+      expect(JSON.stringify(answer)).toContain('app-settings.json is not a valid settings file')
+      expect(JSON.stringify(answer)).not.toContain(leak.slice(3, 9))
+      expect(JSON.stringify(answer)).not.toContain('not json')
+    }
+    expect(regen).toMatchObject({ ok: false, status: 500 })
+  })
+
   it('a missing generator account fails the record with NO_GENERATOR_ACCOUNT', async () => {
     await settings({ ...ON, generator: { accountId: 'gone' } })
     const { u } = make()
@@ -260,6 +293,42 @@ describe('createHostUnderstanding', () => {
     await expect(u.regenerate(project, id)).resolves.toEqual({ ok: true, id })
     await vi.waitFor(() => expect(prompts).toHaveLength(2))
     await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+  })
+
+  // The app's late save lands after a pipeline save that declined regenerate's refresh (the write counter):
+  // one more refresh reads it before the answer is a 404.
+  it('regenerate refreshes once more when its refresh was declined, and finds a record an app saved meanwhile', async () => {
+    await settings(ON)
+    const agentIn = deferred()
+    const agentGo = deferred()
+    const { u } = make({
+      runAgent: async () => {
+        agentIn.resolve()
+        await agentGo.promise
+        return { ok: true, value: explanation }
+      }
+    })
+    await u.load()
+    await fs.writeFile(file(), JSON.stringify({ projects: {} }))
+    const real = fs.readFile
+    const spy = vi.spyOn(fs, 'readFile').mockImplementationOnce((async (...args: Parameters<typeof real>) => {
+      // regenerate's refresh has read the file; a pipeline write lands, then the app's own save.
+      const text = await real(...args)
+      await u.onUnitClosed(project, unit())
+      await agentIn.promise
+      const s = await onDisk()
+      s.projects[project].records.push(hostRecord('by-app'))
+      await new Promise((r) => setTimeout(r, 15))
+      await fs.writeFile(file(), JSON.stringify(s))
+      return text
+    }) as typeof real)
+    try {
+      await expect(u.regenerate(project, 'by-app')).resolves.toEqual({ ok: true, id: 'by-app' })
+    } finally {
+      spy.mockRestore()
+      agentGo.resolve()
+    }
+    await vi.waitFor(async () => expect((await recordsOnDisk(project)).every((r) => r.status === 'ready')).toBe(true))
   })
 
   it('reads the writer per write: a generation that ends after the duty is kept elsewhere writes nothing more', async () => {

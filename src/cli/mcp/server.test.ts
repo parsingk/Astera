@@ -1482,6 +1482,7 @@ describe('the How It Works tools (MCP P2-C)', () => {
       expect(d, n).toMatch(/How It Works/)
       expect(d, n).toMatch(/out of date/)
       expect(d, n).toMatch(/[Rr]ead only/)
+      expect(d, n).toContain('These two tools only read; regenerate_work_record writes a record again.')
       expect(d, n).toMatch(/own words/)
     }
   })

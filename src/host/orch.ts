@@ -1492,7 +1492,7 @@ export function createHostOrch(a: {
             return { status: 400, body: { error: 'understanding-unit needs a projectPath and a unit' } }
           if (!a.understanding.isWriter()) return { status: 409, body: { error: NOT_WRITER } }
           const r = await a.understanding.onUnitClosed(projectPath, args.unit)
-          if (r.ok) return { status: 200, body: { recorded: true } }
+          if (r.ok) return { status: 200, body: { accepted: true } }
           return { status: r.reason === NOT_WRITER ? 409 : 500, body: { error: r.reason ?? 'the unit was not recorded' } }
         }
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and

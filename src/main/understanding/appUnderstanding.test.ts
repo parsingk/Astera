@@ -103,7 +103,7 @@ async function make(
   const calls: Array<{ cmd: string; args: Record<string, unknown> }> = []
   const logs: string[] = []
   const notified: string[] = []
-  const answer: { status: number; body: unknown } = { status: 200, body: { recorded: true } }
+  const answer: { status: number; body: unknown } = { status: 200, body: { accepted: true } }
   const u = createAppUnderstanding({
     localStore: store,
     localPipeline: pipeline,
