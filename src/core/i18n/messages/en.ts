@@ -73,7 +73,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcp.sessions.loadFailed': 'Could not read the MCP sessions setting: {detail}',
   'settings.mcp.githubWrite.label': 'Let MCP clients act on GitHub',
   'settings.mcp.githubWrite.hint':
-    'Creates draft pull requests, reruns failed CI and turns issues written by repository members into Jobs.',
+    'Pushes Run branches and opens pull requests (drafts unless asked), reruns failed CI and turns issues written by repository members into Jobs.',
   'settings.mcp.githubWrite.saveFailed': 'Could not save the MCP GitHub writes setting: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'Could not read the MCP GitHub writes setting: {detail}',
   // Agent permission mode

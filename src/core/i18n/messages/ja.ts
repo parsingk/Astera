@@ -43,7 +43,7 @@ export const ja: Catalog = {
   'settings.mcp.sessions.loadFailed': 'MCP セッションの設定を読み込めませんでした: {detail}',
   'settings.mcp.githubWrite.label': 'MCP クライアントに GitHub での操作を許可する',
   'settings.mcp.githubWrite.hint':
-    'ドラフトのプルリクエストを作成し、失敗した CI を再実行し、リポジトリのメンバーが書いた Issue を Job に変換します。',
+    'Run のブランチをプッシュしてプルリクエストを開き（指定がなければドラフト）、失敗した CI を再実行し、リポジトリのメンバーが書いた Issue を Job に変換します。',
   'settings.mcp.githubWrite.saveFailed': 'MCP の GitHub 書き込み設定を保存できませんでした: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'MCP の GitHub 書き込み設定を読み込めませんでした: {detail}',
   // エージェント権限モード

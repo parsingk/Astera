@@ -44,7 +44,7 @@ export const es: Catalog = {
   'settings.mcp.sessions.loadFailed': 'No se pudo leer el ajuste de sesiones MCP: {detail}',
   'settings.mcp.githubWrite.label': 'Permitir que los clientes MCP actúen en GitHub',
   'settings.mcp.githubWrite.hint':
-    'Crea pull requests en borrador, vuelve a ejecutar la CI que falló y convierte en Jobs las incidencias escritas por miembros del repositorio.',
+    'Sube las ramas de los Runs y abre pull requests (en borrador salvo que se pida otra cosa), vuelve a ejecutar la CI que falló y convierte en Jobs las incidencias escritas por miembros del repositorio.',
   'settings.mcp.githubWrite.saveFailed': 'No se pudo guardar el ajuste de escritura de GitHub en MCP: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'No se pudo leer el ajuste de escritura de GitHub en MCP: {detail}',
   // Modo de permisos del agente

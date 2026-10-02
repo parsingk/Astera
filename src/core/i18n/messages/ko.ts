@@ -77,7 +77,7 @@ export const ko = {
   'settings.mcp.sessions.loadFailed': 'MCP 세션 설정을 읽지 못했습니다: {detail}',
   'settings.mcp.githubWrite.label': 'MCP 클라이언트가 GitHub 에서 작업하게 하기',
   'settings.mcp.githubWrite.hint':
-    '초안 풀 리퀘스트를 만들고, 실패한 CI 를 다시 실행하고, 저장소 멤버가 작성한 이슈를 Job 으로 바꿉니다.',
+    'Run 의 브랜치를 푸시하고 풀 리퀘스트를 엽니다(따로 요청하지 않으면 초안). 실패한 CI 를 다시 실행하고, 저장소 멤버가 작성한 이슈를 Job 으로 바꿉니다.',
   'settings.mcp.githubWrite.saveFailed': 'MCP GitHub 쓰기 설정을 저장하지 못했습니다: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'MCP GitHub 쓰기 설정을 읽지 못했습니다: {detail}',
   // 에이전트 권한 모드
