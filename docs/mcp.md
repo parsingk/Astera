@@ -28,13 +28,13 @@ after that, so a client that was already running cannot find `astera`. On macOS 
 looks like this:
 
 ```bash
-claude mcp add astera -- cmd /c call "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
+claude mcp add -s user astera -- cmd /c call "C:\Users\you\AppData\Local\astera\bin\astera.cmd" mcp serve
 ```
 
 and on macOS or Linux like this:
 
 ```bash
-claude mcp add astera -- '/Users/you/.local/bin/astera' mcp serve
+claude mcp add -s user astera -- '/Users/you/.local/bin/astera' mcp serve
 ```
 
 The Cursor line carries the same as `"command": "cmd"` with

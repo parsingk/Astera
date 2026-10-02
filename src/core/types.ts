@@ -893,6 +893,17 @@ export type AgentPermissionMode = 'yolo' | 'manual'
 /** What an MCP client may do through the Host (MCP design M5). Default 'control' (M6). */
 export type McpAccess = 'off' | 'read' | 'control'
 
+/** An MCP client Settings can register Astera with by its CLI (core/install/mcpClients.ts). */
+export type McpClient = 'claude' | 'codex'
+/** Whether Astera is registered with that client: with the command Settings would register, with
+ *  another one (an older install path, other args), not at all, or the client's CLI is not found. */
+export interface McpClientStatus {
+  state: 'registered' | 'different' | 'absent' | 'not-installed'
+  /** Why a client reads as absent when its config could not be read; shown on the button. */
+  detail?: string
+}
+export type McpRegisterResult = { ok: true } | { ok: false; message: string }
+
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
 export interface HostStatus {
@@ -1204,6 +1215,12 @@ export interface CoreApi {
      *  made that Path too long for new shells (main/userPath.ts takeOffUserPathIfItBreaks). Waits for
      *  that check, so the answer holds however early it is asked. */
     pathRepairedAtStart(): Promise<boolean>
+  }
+  /** Whether `astera mcp serve` is registered with Claude Code and Codex, and registering it through
+   *  their CLIs (main/mcpClients.ts). Runs only when the person presses Register in Settings. */
+  mcpClients: {
+    status(): Promise<Record<McpClient, McpClientStatus>>
+    register(client: McpClient): Promise<McpRegisterResult>
   }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
