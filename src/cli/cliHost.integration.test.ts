@@ -1631,12 +1631,14 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       recorded: true,
       totalLines: 5,
       more: false,
-      lines: ['step 1', 'step 2', 'using [REDACTED]', 'step 4', 'step 5']
+      // Adjacent lines are redacted as pairs too, since a worker's screen wraps a long key over two:
+      // the word that starts the line after a token reads as the token's end, so it goes with it.
+      lines: ['step 1', 'step 2', 'using [REDACTED]', '[REDACTED] 4', 'step 5']
     })
     expect(JSON.stringify(tail)).not.toContain(token)
     // Counted from the end: skip the newest line, take the two before it.
     const page = await mcp.call('get_task_output', { taskId, skipLines: 1, lines: 2 })
-    expect(page.structuredContent).toMatchObject({ recorded: true, totalLines: 5, more: true, lines: ['using [REDACTED]', 'step 4'] })
+    expect(page.structuredContent).toMatchObject({ recorded: true, totalLines: 5, more: true, lines: ['using [REDACTED]', '[REDACTED] 4'] })
 
     // The tail lived in the Host that started the worker. The next one has none: an answer, not an
     // error, and no text from before.

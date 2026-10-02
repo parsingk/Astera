@@ -804,7 +804,8 @@ describe('the session and output tools (MCP P1)', () => {
       ['get_session', { sessionId: 's1', turns: 5 }, 'sessions-read', { id: 's1', turns: 5 }],
       ['send_message', { sessionId: 's1', text: 'hello' }, 'sessions-send', { id: 's1', text: 'hello' }],
       ['get_check_output', { taskId: 't1' }, 'tasks-check-output', { id: 't1' }],
-      ['get_check_output', { taskId: 't1', check: 'test', offset: 10, limit: 20 }, 'tasks-check-output', { id: 't1', check: 'test', offset: 10, limit: 20 }],
+      // offset and limit page the redacted log in the server, never the Host's raw one.
+      ['get_check_output', { taskId: 't1', check: 'test', offset: 10, limit: 20 }, 'tasks-check-output', { id: 't1', check: 'test' }],
       ['get_task_output', { taskId: 't1' }, 'tasks-output', { id: 't1' }],
       ['get_task_output', { taskId: 't1', skipLines: 200, lines: 50 }, 'tasks-output', { id: 't1', skipLines: 200, lines: 50 }]
     ]
@@ -1073,7 +1074,9 @@ describe('the session and output tools (MCP P1)', () => {
         'tasks-check-output': { status: 200, body: { taskId: 't1', check: 'test', total: 99, offset: 0, text: `fail\n${leak}` } },
         'tasks-output': {
           status: 200,
-          body: { taskId: 't1', dispatchId: 'd1', recorded: true, totalLines: 3, more: false, lines: ['a', leak, 'c'] }
+          // A line after a token is redacted too when it starts with token characters, since the pair
+          // check reads it as the token's wrapped end: '- c' starts with neither.
+          body: { taskId: 't1', dispatchId: 'd1', recorded: true, totalLines: 3, more: false, lines: ['a', leak, '- c'] }
         }
       }).link
     )
@@ -1083,11 +1086,12 @@ describe('the session and output tools (MCP P1)', () => {
       expect(textOf(r)).not.toContain(SK)
       expect(textOf(r)).not.toContain(BEARER)
     }
-    expect(check.structuredContent).toMatchObject({ taskId: 't1', check: 'test', total: 99, offset: 0 })
+    const checkText = (check.structuredContent as { text: string }).text
+    expect(check.structuredContent).toMatchObject({ taskId: 't1', check: 'test', total: checkText.length, offset: 0 })
     expect((check.structuredContent as { text: string }).text.startsWith('fail\n')).toBe(true)
     const lines = (out.structuredContent as { lines: string[] }).lines
     expect(lines).toHaveLength(3)
-    expect([lines[0], lines[2]]).toEqual(['a', 'c'])
+    expect([lines[0], lines[2]]).toEqual(['a', '- c'])
     expect(out.structuredContent).toMatchObject({ dispatchId: 'd1', recorded: true, totalLines: 3, more: false })
   })
 
@@ -1110,5 +1114,137 @@ describe('the session and output tools (MCP P1)', () => {
     expect(r.isError).toBe(true)
     expect(r.structuredContent).toBeUndefined()
     expect(errorOf(r)).toMatchObject({ code: 'PERMISSION_DENIED', message: error })
+  })
+})
+
+describe('the session and output tools: final review fixes', () => {
+  const SK = 'sk-abcdefghijklmnopqrstuvwxyz0123456789'
+  const BEARER = 'abcDEF123ghiJKL456mnoPQR789'
+  const ESC = String.fromCharCode(27)
+  const CR = String.fromCharCode(13)
+  const LF = String.fromCharCode(10)
+  const TAB = String.fromCharCode(9)
+
+  /** A Host whose tasks-check-output slices `full` by the offset and limit it is sent, as command.ts does. */
+  const checkHost = (full: string): HostLink => ({
+    call: async (cmd, args) => {
+      if (cmd !== 'tasks-check-output') return { status: 200, body: {} }
+      const offset = typeof args.offset === 'number' ? args.offset : 0
+      const limit = typeof args.limit === 'number' ? args.limit : 4000
+      return { status: 200, body: { check: 'test', total: full.length, offset, text: full.slice(offset, offset + limit) } }
+    },
+    close: () => {}
+  })
+
+  it('get_check_output redacts the whole log before paging, so an offset inside a secret returns none of it', async () => {
+    const full = `step 1\nAuthorization: Bearer ${BEARER}\ntoken=${BEARER}\nkey ${SK}\nend\n`
+    const client = await connected(checkHost(full))
+    for (const at of [full.indexOf(BEARER), full.indexOf(`=${BEARER}`) + 1, full.indexOf(SK) + 1, full.indexOf(SK) + 3]) {
+      const r = await client.callTool({ name: 'get_check_output', arguments: { taskId: 't1', offset: at, limit: 4000 } })
+      const text = (r.structuredContent as { text: string }).text
+      for (const piece of [BEARER.slice(4, 14), SK.slice(5, 15)]) expect(text, `offset ${at}`).not.toContain(piece)
+      expect(textOf(r)).not.toContain(BEARER.slice(4, 14))
+    }
+    // total and offset count the redacted log.
+    const whole = await client.callTool({ name: 'get_check_output', arguments: { taskId: 't1' } })
+    const w = whole.structuredContent as { text: string; total: number; offset: number }
+    expect(w.total).toBe(w.text.length)
+    expect(w.offset).toBe(0)
+    expect(w.text).toContain('[REDACTED]')
+    const page = await client.callTool({ name: 'get_check_output', arguments: { taskId: 't1', offset: 5, limit: 10 } })
+    expect(page.structuredContent).toMatchObject({ total: w.total, offset: 5, text: w.text.slice(5, 15) })
+  })
+
+  it('get_session drops the leading rows that continue a line above the window, and says how many', async () => {
+    // The key's head is above the window: what is returned starts on its second row.
+    const tail = SK.slice(20)
+    const body = {
+      id: 's1', kind: 'terminal', alive: true, cols: 20, rows: 24,
+      scrollback: [SK.slice(10, 20), tail, '$ ls'], screen: ['ok'],
+      scrollbackWrapped: [true, true, false], screenWrapped: [false]
+    }
+    const r = await (await connected(answering({ 'sessions-read': { status: 200, body } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's1', lines: 3 }
+    })
+    const d = r.structuredContent as Record<string, unknown>
+    expect(d.scrollback).toEqual(['$ ls'])
+    expect(d.scrollbackWrapped).toEqual([false])
+    expect(d.screen).toEqual(['ok'])
+    expect(d.droppedPartialRows).toBe(2)
+    expect(textOf(r)).not.toContain(tail)
+    expect(textOf(r).split('\n')[0]).toMatch(/2 rows/)
+    // A window that starts on a line's first row keeps every row, and says nothing.
+    const whole = await (await connected(answering({ 'sessions-read': { status: 200, body: { ...body, scrollbackWrapped: [false, true, false] } } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's1', lines: 3 }
+    })
+    expect((whole.structuredContent as { scrollback: string[] }).scrollback).toHaveLength(3)
+    expect('droppedPartialRows' in (whole.structuredContent as object)).toBe(false)
+  })
+
+  it('get_task_output redacts a key a worker screen split over two lines', async () => {
+    const lines = ['run', `export KEY ${SK.slice(0, 20)}`, SK.slice(20), 'done']
+    const body = { taskId: 't1', dispatchId: 'd1', recorded: true, totalLines: 4, more: false, lines }
+    const r = await (await connected(answering({ 'tasks-output': { status: 200, body } }).link)).callTool({
+      name: 'get_task_output',
+      arguments: { taskId: 't1' }
+    })
+    const out = (r.structuredContent as { lines: string[] }).lines
+    expect(out).toHaveLength(4)
+    for (const piece of [SK.slice(3, 12), SK.slice(-10)]) expect(out.join('|')).not.toContain(piece)
+    expect(out[0]).toBe('run')
+    expect(out[3]).toBe('done')
+  })
+
+  it('send_message refuses control characters other than a line feed and a tab, before calling the Host', async () => {
+    const { link, calls } = answering({ 'sessions-list': { status: 200, body: [{ id: 's1', kind: 'chat' }] } })
+    const client = await connected(link)
+    for (const text of [`a${ESC}[Zb`, `line${CR}more`, `stop${String.fromCharCode(3)}`, `x${String.fromCharCode(127)}`, `y${String.fromCharCode(0x9b)}Z`]) {
+      const r = await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text } })
+      expect(r.isError, JSON.stringify(text)).toBe(true)
+      expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+      expect(String(errorOf(r).message)).toMatch(/control character.*U\+0020.*line feed.*tab/)
+    }
+    expect(calls.filter((c) => c.cmd === 'sessions-send')).toEqual([])
+    const ok = await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text: `a${TAB}b` } })
+    expect(ok.isError).toBeFalsy()
+  })
+
+  it('send_message takes a line break into a chat session only: a terminal would take it as Enter', async () => {
+    const sessions = [
+      { id: 's1', kind: 'terminal' },
+      { id: 's2', kind: 'chat' }
+    ]
+    const { link, calls } = answering({ 'sessions-list': { status: 200, body: sessions } })
+    const client = await connected(link)
+    for (const sessionId of ['s1', 's9']) {
+      const r = await client.callTool({ name: 'send_message', arguments: { sessionId, text: `one${LF}two` } })
+      expect(r.isError, sessionId).toBe(true)
+      expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+      expect(String(errorOf(r).message)).toMatch(/line break.*chat session/)
+    }
+    expect(calls.filter((c) => c.cmd === 'sessions-send')).toEqual([])
+    const chat = await client.callTool({ name: 'send_message', arguments: { sessionId: 's2', text: `one${LF}two` } })
+    expect(chat.isError).toBeFalsy()
+    expect(calls.at(-1)).toMatchObject({ cmd: 'sessions-send', args: { id: 's2', text: `one${LF}two` } })
+    // Text with no line break is sent without reading the list.
+    calls.length = 0
+    await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text: 'go' } })
+    expect(calls.map((c) => c.cmd)).toEqual(['sessions-send'])
+    const { tools } = await client.listTools()
+    expect(String(tools.find((t) => t.name === 'send_message')?.description)).toMatch(/line break.*chat session/)
+  })
+
+  it('get_session, when its read of the session list is refused, names get_session and not sessions-list', async () => {
+    const error = 'sessions-list is off: turn on "Let MCP clients see and use sessions" in Astera Settings (CLI tab).'
+    const r = await (await connected(answering({ 'sessions-list': { status: 403, body: { error } } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's1' }
+    })
+    expect(r.isError).toBe(true)
+    const message = String(errorOf(r).message)
+    expect(message).toMatch(/^get_session is off/)
+    expect(message).not.toContain('sessions-list')
   })
 })

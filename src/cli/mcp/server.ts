@@ -18,7 +18,7 @@ import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
 import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
-import { TOOLS, convergenceRefusal, taskTargetRefusal, type ToolDef } from './tools'
+import { MCP_LIMITS, TOOLS, convergenceRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
@@ -84,16 +84,36 @@ const redactOutput = (tool: string, v: unknown): unknown => {
   // joined back into lines first (sessionText.ts).
   const o = v as Record<string, unknown>
   if (tool === 'get_session' && Array.isArray(o.screen) && Array.isArray(o.scrollback)) {
-    const scrollback = o.scrollback.map(String)
-    const screen = o.screen.map(String)
-    const marks =
+    let scrollback = o.scrollback.map(String)
+    let screen = o.screen.map(String)
+    let marks =
       Array.isArray(o.scrollbackWrapped) && Array.isArray(o.screenWrapped)
         ? [...o.scrollbackWrapped, ...o.screenWrapped].map((m) => m === true)
         : undefined
+    // **Rows that continue a line above the window are left out** (P1 final review I2): the line's
+    // head, and the head of any secret on it, is not in the read, and a key's tail alone matches no
+    // pattern. Their marks go with them, and droppedPartialRows says how many.
+    let dropped = 0
+    if (marks !== undefined && marks.length === scrollback.length + screen.length) {
+      while (dropped < marks.length && marks[dropped]) dropped++
+      if (dropped > 0) {
+        const fromScrollback = Math.min(dropped, scrollback.length)
+        const scrollbackMarks = marks.slice(fromScrollback, scrollback.length)
+        scrollback = scrollback.slice(fromScrollback)
+        screen = screen.slice(dropped - fromScrollback)
+        marks = marks.slice(dropped)
+        out.scrollbackWrapped = scrollbackMarks
+        out.screenWrapped = marks.slice(scrollbackMarks.length)
+        out.droppedPartialRows = dropped
+      }
+    }
     const rows = redactRows([...scrollback, ...screen], marks, typeof o.cols === 'number' ? o.cols : undefined)
     out.scrollback = rows.slice(0, scrollback.length)
     out.screen = rows.slice(scrollback.length)
   }
+  // A worker's screen wraps a long line itself, so a key can run over two of these lines: each
+  // adjacent pair is redacted together as well (P1 final review I3).
+  if (tool === 'get_task_output' && Array.isArray(o.lines)) out.lines = redactRows(o.lines.map(String), undefined)
   return out
 }
 
@@ -133,6 +153,25 @@ const refusalMessage = (status: number, body: unknown): string => {
 
 /** get_session's terminal rows when no `lines` is given (P1 Global Constraints). */
 const SESSION_LINES_DEFAULT = 100
+
+/** The kind sessions-list gives a session (undefined for an id it does not have), read before the
+ *  tool's own call, or that read's error. **The error is the tool's** (P1 final review M5): the
+ *  client called get_session or send_message, so a refusal names it, not sessions-list. */
+async function sessionKind(link: HostLink, t: ToolDef, id: unknown): Promise<string | undefined | CallToolResult> {
+  const listed = await link.call('sessions-list', {})
+  if ('code' in listed) return errorResult(listed.code, listed.message, t.cmd)
+  if (listed.status !== 200)
+    return errorResult(
+      codeForStatus(listed.status),
+      refusalMessage(listed.status, listed.body).replaceAll('sessions-list', t.name),
+      t.cmd,
+      listed.body
+    )
+  const session = Array.isArray(listed.body)
+    ? (listed.body as Array<{ id?: unknown; kind?: unknown }>).find((x) => x.id === id)
+    : undefined
+  return typeof session?.kind === 'string' ? session.kind : undefined
+}
 
 async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
   let args = input
@@ -195,14 +234,25 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   // 200, and a chat session takes no `lines` at all (the Host refuses it), so the kind is read first.
   // An id the list does not have goes to the read as it is, for its own NOT_FOUND.
   if (t.name === 'get_session' && input.lines === undefined && input.turns === undefined) {
-    const listed = await link.call('sessions-list', {})
-    if ('code' in listed) return errorResult(listed.code, listed.message, 'sessions-list')
-    if (listed.status !== 200)
-      return errorResult(codeForStatus(listed.status), refusalMessage(listed.status, listed.body), 'sessions-list', listed.body)
-    const session = Array.isArray(listed.body)
-      ? (listed.body as Array<{ id?: unknown; kind?: unknown }>).find((x) => x.id === input.sessionId)
-      : undefined
-    if (session?.kind === 'terminal') args = { ...input, lines: SESSION_LINES_DEFAULT }
+    const kind = await sessionKind(link, t, input.sessionId)
+    if (typeof kind === 'object') return kind
+    if (kind === 'terminal') args = { ...input, lines: SESSION_LINES_DEFAULT }
+  }
+  // send_message types its text as it is (P1 final review I4): a control character is a key, and a
+  // line break into a terminal is Enter, so only a session the list says is a chat takes one.
+  if (t.name === 'send_message') {
+    const text = String(input.text)
+    const bad = sendTextRefusal(text)
+    if (bad !== null) return errorResult('INVALID_ARGUMENTS', bad)
+    if (text.includes('\n')) {
+      const kind = await sessionKind(link, t, input.sessionId)
+      if (typeof kind === 'object') return kind
+      if (kind !== 'chat')
+        return errorResult(
+          'INVALID_ARGUMENTS',
+          'text holds a line break, which only a chat session takes: a terminal session takes it as Enter, so send it one line at a time'
+        )
+    }
   }
   const r = await link.call(t.cmd, t.args(args), typeof input.requestId === 'string' ? input.requestId : undefined)
   if ('code' in r) return errorResult(r.code, r.message, t.cmd)
@@ -227,11 +277,20 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   // get_session holds at most SESSION_TEXT_CAP characters of text, the newest, cut after redaction.
   let note = ''
   if (t.name === 'get_session') {
+    if (typeof data.droppedPartialRows === 'number')
+      note = `, without its first ${data.droppedPartialRows} rows: they continue a line that starts above them, so ask for more lines to read it whole`
     const capped = capSession(data)
     if (capped.truncated) {
       data = { ...capped.data, truncated: true }
-      note = `, cut to its newest ${SESSION_TEXT_CAP} characters of text: ask for fewer lines or turns to read less at once`
+      note += `, cut to its newest ${SESSION_TEXT_CAP} characters of text: ask for fewer lines or turns to read less at once`
     }
+  }
+  // get_check_output pages the log only once all of it is redacted (P1 final review I1): `total`
+  // and `offset` count the redacted text, so a page can never begin inside a secret.
+  if (t.name === 'get_check_output' && typeof data.text === 'string') {
+    const from = typeof input.offset === 'number' ? input.offset : 0
+    const take = typeof input.limit === 'number' ? input.limit : MCP_LIMITS.checkOutput
+    data = { ...data, total: data.text.length, offset: from, text: data.text.slice(from, from + take) }
   }
   return {
     content: textResult(`${t.title}${count}${note}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
