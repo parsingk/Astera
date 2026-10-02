@@ -15,6 +15,7 @@ import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { readMcpAccess } from '../core/settings/mcpAccess'
+import { readMcpSessions } from '../core/settings/mcpSessions'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
@@ -1267,7 +1268,8 @@ export function createHostOrch(a: {
         // `app js` reads its toggle: the app may change it while the Host runs. A settings file that
         // cannot be read refuses (readMcpAccess throws; the catch below answers 500 with its message).
         if (from?.role === 'mcp') {
-          const refused = mcpRefusal(cmd, await readMcpAccess(path.join(a.profileDir, 'app-settings.json')))
+          const settingsFile = path.join(a.profileDir, 'app-settings.json')
+          const refused = mcpRefusal(cmd, await readMcpAccess(settingsFile), await readMcpSessions(settingsFile))
           if (refused) return refused
         }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
@@ -1449,7 +1451,7 @@ export function createHostOrch(a: {
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
         const actor = actorOf({ sessionId, role: from?.role, client: from?.client, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor), { sessionId }, cmd, runArgs)
+        const r = await handleCommand(depsFor(marks, actor), { sessionId, role: from?.role }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.

@@ -115,10 +115,14 @@ export async function startWorkerWithChain(
   // previous dispatch's tail freezes where it is. Only a dispatch that has reached a terminal
   // state is eligible for eviction — a live worker's tail is not dropped even past the cap (see
   // tail.ts).
-  ctx.tails.start({ dispatchId: a.dispatchId, sessionId: started.sessionId }, (id) => {
-    const d = ctx.getState().dispatches.find((x) => x.id === id)
-    return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
-  })
+  ctx.tails.start(
+    { dispatchId: a.dispatchId, sessionId: started.sessionId },
+    (id) => {
+      const d = ctx.getState().dispatches.find((x) => x.id === id)
+      return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
+    },
+    (id) => ctx.getState().dispatches.find((x) => x.id === id)?.endedAt !== undefined
+  )
   return started
 }
 

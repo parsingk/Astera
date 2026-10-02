@@ -794,10 +794,12 @@ second run is all `unchanged`.
 skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
-protocol. It connects to the Host of this profile, starting one when none answers, and serves eighteen
-tools that create, plan, run, observe, answer, stop and resume Jobs. What it may do is set by MCP
-access in Settings (CLI tab). The six tools that change something (`create_job`, `create_task`,
-`run_job`, `stop_run`, `resume_run`, `answer_question`) take an optional `requestId`. See [MCP](mcp.md).
+protocol. It connects to the Host of this profile, starting one when none answers, and serves
+twenty-four tools that create, plan, run, observe, answer, stop and resume Jobs, and read and use
+sessions when Settings allows it. What it may do is set by MCP access in Settings (CLI tab). The six
+Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`, `resume_run`,
+`answer_question`) take an optional `requestId`, and so do `send_message` and `create_session`. See
+[MCP](mcp.md).
 
 **`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
 `cliVersion`, `transport` (`stdio`), `host` (`running`, and for a running Host its `version`,
@@ -810,7 +812,7 @@ and `warning` says why: the Host then fails every MCP call until the file is rep
 
 ```json
 {"ok":true,"data":{"cliVersion":"1.4.1","transport":"stdio","host":{"running":true,"version":"1.4.1",
-  "protocol":4,"mcp":true},"access":"control","tools":16}}
+  "protocol":4,"mcp":true},"access":"control","tools":24}}
 ```
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
@@ -886,12 +888,15 @@ into a terminal emulator at the tab's current size and returns what that termina
 `data.screen` is the visible rows, top first, with the empty rows below the last painted one left
 off, and `data.scrollback` is up to `--lines` rows (default 200, at most 10000) from just above the screen, oldest
 first. Each row is the text of its cells with trailing spaces trimmed; colours and other styling are
-not included. `data.cols` and `data.rows` are the size it was rendered at. `--human` prints the
-scrollback and then the screen, one row per line.
+not included. `data.cols` and `data.rows` are the size it was rendered at. `data.screenWrapped` and
+`data.scrollbackWrapped` hold one mark per row of `screen` and `scrollback`: `true` when that row
+continues the one above it, because the terminal wrapped a line wider than the tab; join them to get
+the line back. `--human` prints the scrollback and then the screen, one row per line.
 
 ```json
 {"ok":true,"data":{"id":"…","kind":"terminal","alive":true,"cols":100,"rows":30,
-  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"]}}
+  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"],
+  "screenWrapped":[false,false,false,false],"scrollbackWrapped":[false]}}
 ```
 
 The Host keeps about 256,000 characters of each session's output while it runs, so scrollback goes

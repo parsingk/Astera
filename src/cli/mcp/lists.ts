@@ -21,7 +21,10 @@ const ORDER: Record<string, (a: unknown, b: unknown) => number> = {
   // createdAt, not ordinal: ordinal counts per Job, so across Jobs it would put a young Job's newest
   // Run behind an old Job's old ones and the cut would drop it. Ordinal breaks a tie.
   list_runs: (a, b) => text(b, 'createdAt').localeCompare(text(a, 'createdAt')) || num(b, 'ordinal') - num(a, 'ordinal'),
-  list_questions: (a, b) => text(a, 'createdAt').localeCompare(text(b, 'createdAt'))
+  list_questions: (a, b) => text(a, 'createdAt').localeCompare(text(b, 'createdAt')),
+  // A session's public shape has no timestamp: live ones first, then the Host's registry order
+  // (terminals, then chats, each in spawn order).
+  list_sessions: (a, b) => Number(field(b, 'alive') === true) - Number(field(a, 'alive') === true)
 }
 
 /** The page of the list from `offset`, in its tool's order, cut to `limit` (spec §48). A page that is

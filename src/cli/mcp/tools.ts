@@ -1,10 +1,27 @@
-// The eighteen MCP tools (MCP design §4). Each is one Host command; `args` maps the tool's input to the
-// command's arguments exactly as the CLI's parser would produce them: flag names camel-cased
-// (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
+// The twenty-four MCP tools (MCP design §4, P1 design §4). Each is one Host command; `args` maps the
+// tool's input to the command's arguments exactly as the CLI's parser would produce them: flag names
+// camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
 import { LIST_LIMIT } from './lists'
+import { SESSION_TEXT_CAP } from './sessionText'
 
-export const MCP_LIMITS = { objective: 20_000, answer: 20_000, spec: 50_000, title: 200, id: 200, cursor: 512 } as const
+export const MCP_LIMITS = {
+  objective: 20_000,
+  answer: 20_000,
+  spec: 50_000,
+  text: 50_000,
+  title: 200,
+  id: 200,
+  cursor: 512,
+  sessionLines: 500,
+  sessionTurns: 50,
+  checkOutput: 4000,
+  taskLines: 500
+} as const
+/** What a session tool needs, in its description (P1 design §1). */
+const SESSIONS_SETTING = 'needs "Let MCP clients see and use sessions" turned on in Astera Settings (CLI tab), off by default'
+const SESSIONS_READ = `It ${SESSIONS_SETTING}, and MCP access "Read only" or "Read and control".`
+const SESSIONS_WRITE = `It ${SESSIONS_SETTING}, and MCP access "Read and control".`
 const id = z.string().min(1).max(MCP_LIMITS.id)
 const requestId = z
   .string()
@@ -57,6 +74,21 @@ export function taskTargetRefusal(input: Record<string, unknown>): string | null
 export function convergenceRefusal(input: Record<string, unknown>): string | null {
   const knobs = Object.keys(CONVERGENCE_KNOBS).filter((k) => input[k] !== undefined)
   return knobs.length > 0 && input.convergence !== true ? `${knobs.join(', ')} need convergence: true` : null
+}
+
+/** Why send_message's text is refused before the Host is asked, or null (P1 final review I4). The
+ *  Host types it into the session as it is, so a control character is a key: ESC [ Z (Shift+Tab)
+ *  cycles a Claude Code session's permission mode, a carriage return submits early, Ctrl-C
+ *  interrupts. A line feed and a tab pass here; whether they may go to this session is server.ts's
+ *  question, which reads the session's kind (a chat only). The C1 range is refused as well, since
+ *  U+009B is CSI to a terminal that reads 8-bit controls. */
+export function sendTextRefusal(text: string): string | null {
+  for (const ch of text) {
+    const c = ch.charCodeAt(0)
+    if ((c < 0x20 && c !== 0x0a && c !== 0x09) || (c >= 0x7f && c <= 0x9f))
+      return `text holds a control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}): send_message refuses every character below U+0020 except a line feed and a tab (those two into a chat session only), and U+007F to U+009F, since a terminal takes them as keys${c === 0x0d ? '; use LF line breaks' : ''}`
+  }
+  return null
 }
 
 export interface ToolDef {
@@ -301,5 +333,125 @@ export const TOOLS: ToolDef[] = [
       "The run configurations of a Job's project folder (id, name, type): the checks a Task can name in create_task's validate.",
     inputSchema: { jobId: id, limit, cursor },
     args: (i) => ({ job: i.jobId })
+  },
+  // P1 design §4. The session tools sit behind a second setting on top of MCP access (core/host/mcpGate.ts).
+  {
+    name: 'list_sessions',
+    title: 'List sessions',
+    readOnly: true,
+    cmd: 'sessions-list',
+    description: `The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by status (alive, ended, or a terminal's working, waiting or unknown), by the provider of the session's account, and by project. ${SESSIONS_READ}`,
+    inputSchema: {
+      status: z.enum(['alive', 'ended', 'working', 'waiting', 'unknown']).optional(),
+      provider: z.enum(['claude', 'codex']).optional(),
+      projectId: id.optional().describe('Only the sessions in this project, from list_projects: its folder, or started by a Run of its Jobs.'),
+      limit,
+      cursor
+    },
+    args: (i) => ({
+      ...(i.status ? { status: i.status } : {}),
+      ...(i.provider ? { provider: i.provider } : {}),
+      ...(i.projectPath ? { project: i.projectPath } : {})
+    })
+  },
+  {
+    name: 'get_session',
+    title: 'Get a session',
+    readOnly: true,
+    cmd: 'sessions-read',
+    description: `What a session shows now. A terminal session gives its last rendered rows (screen, the visible rows, and scrollback, the rows above them); a chat session gives its last turns and, when it holds one open, the approval or question it waits on (pending). Anything in the text that looks like a secret is redacted. One answer holds at most ${SESSION_TEXT_CAP} characters of text, the newest: over that, the oldest rows or turns are left out and truncated: true says so. ${SESSIONS_READ}`,
+    inputSchema: {
+      sessionId: id,
+      lines: z
+        .number()
+        .int()
+        .min(1)
+        .max(MCP_LIMITS.sessionLines)
+        .optional()
+        .describe(
+          `A terminal session's rows of scrollback above the screen, 1 to ${MCP_LIMITS.sessionLines} (default 100); the visible screen rows always come on top of these. Refused for a chat session.`
+        ),
+      turns: z
+        .number()
+        .int()
+        .min(1)
+        .max(MCP_LIMITS.sessionTurns)
+        .optional()
+        .describe(`A chat session's turns, 1 to ${MCP_LIMITS.sessionTurns} (default 20). Refused for a terminal session.`)
+    },
+    // server.ts fills `lines` with 100 for a terminal session read with neither bound.
+    args: (i) => ({
+      id: i.sessionId,
+      ...(i.lines !== undefined ? { lines: i.lines } : {}),
+      ...(i.turns !== undefined ? { turns: i.turns } : {})
+    })
+  },
+  {
+    name: 'send_message',
+    title: 'Send to a session',
+    readOnly: false,
+    cmd: 'sessions-send',
+    description: `Type text into a live session and press Enter (a chat session takes it as one turn). This returns as soon as the text is accepted, not when the session has answered: poll get_session to see the answer. A terminal session waiting on a permission prompt or a question is refused with CONFLICT and nothing is typed, as is a chat session holding an approval or a question open; a person answers those in Astera. Text holding a control character (below U+0020 but a line feed or a tab, U+007F, or U+0080 to U+009F) is refused with INVALID_ARGUMENTS, since a terminal takes those as keys. A line break or a tab is taken only by a chat session, as part of its turn: a terminal would take them as keys (Enter, Tab), so send a terminal session one line at a time, without tabs. ${SESSIONS_WRITE}`,
+    inputSchema: { sessionId: id, text: z.string().min(1).max(MCP_LIMITS.text), requestId },
+    // Never `wait` (P1 Q6) and never `noEnter`: Enter is always pressed.
+    args: (i) => ({ id: i.sessionId, text: i.text })
+  },
+  {
+    name: 'create_session',
+    title: 'Start a session',
+    readOnly: false,
+    cmd: 'sessions-create',
+    description: `Start a terminal or chat session in a registered project's folder (projectId from list_projects; never another folder). Without accountId it runs on provider's default account (claude unless given), the one list_accounts marks default: true. A terminal session's prompt is passed on the command line, so one holding " & | < > ^ % or a line break is refused with INVALID_ARGUMENTS; start a chat session for such text. ${SESSIONS_WRITE}`,
+    inputSchema: {
+      projectId: id,
+      provider: z.enum(['claude', 'codex']).optional().describe("Without accountId, that provider's default account runs it (default claude)."),
+      accountId: id.optional().describe('The account it runs on, from list_accounts.'),
+      kind: z.enum(['terminal', 'chat']).optional().describe('default terminal'),
+      title: z.string().min(1).max(MCP_LIMITS.title).optional(),
+      prompt: z.string().min(1).max(MCP_LIMITS.text).optional().describe('The first thing the session is asked.'),
+      requestId
+    },
+    // server.ts reads the project's folder into `projectPath` and the default account into `accountId`.
+    args: (i) => ({
+      account: i.accountId,
+      cwd: i.projectPath,
+      ...(i.kind !== undefined ? { kind: i.kind } : {}),
+      ...(i.title !== undefined ? { title: i.title } : {}),
+      ...(i.prompt !== undefined ? { prompt: i.prompt } : {})
+    })
+  },
+  {
+    name: 'get_check_output',
+    title: 'Get check output',
+    readOnly: true,
+    cmd: 'tasks-check-output',
+    description: `The output of a Task's failed check (the named one, or the first that failed): the last ${MCP_LIMITS.checkOutput} characters of its log, from the last round only, with anything that looks like a secret redacted. offset and limit page through the redacted log; total is how many characters it has. A Task with no failed check output is refused with CONFLICT. Needs MCP access "Read only" or "Read and control".`,
+    inputSchema: {
+      taskId: id,
+      check: id.optional().describe('A run configuration id from the Task\'s checks (default: the first failed one).'),
+      offset: z.number().int().min(0).optional().describe('Characters to skip from the start (default 0).'),
+      limit: z.number().int().min(1).max(MCP_LIMITS.checkOutput).optional().describe(`Characters to return, 1 to ${MCP_LIMITS.checkOutput} (default ${MCP_LIMITS.checkOutput}).`)
+    },
+    // **Never offset or limit**: the Host returns the whole log (at most 4000 characters) and
+    // server.ts redacts it before it pages, since a page that starts inside a secret holds only its
+    // tail, which no pattern of the filter recognises (P1 final review I1).
+    args: (i) => ({ id: i.taskId, ...(i.check !== undefined ? { check: i.check } : {}) })
+  },
+  {
+    name: 'get_task_output',
+    title: 'Get task output',
+    readOnly: true,
+    cmd: 'tasks-output',
+    description: `What the latest worker of a Task printed, counted from the end: skip skipLines newest lines and return the next lines older ones, oldest first; more: true says older lines remain. Anything that looks like a secret is redacted. Worker output exists only while the process that started the worker runs, and only its last 64 KB: after Astera restarts, recorded: false says there is none. Needs MCP access "Read only" or "Read and control".`,
+    inputSchema: {
+      taskId: id,
+      skipLines: z.number().int().min(0).optional().describe('Newest lines to skip (default 0).'),
+      lines: z.number().int().min(1).max(MCP_LIMITS.taskLines).optional().describe(`Lines to return, 1 to ${MCP_LIMITS.taskLines} (default 200).`)
+    },
+    args: (i) => ({
+      id: i.taskId,
+      ...(i.skipLines !== undefined ? { skipLines: i.skipLines } : {}),
+      ...(i.lines !== undefined ? { lines: i.lines } : {})
+    })
   }
 ]

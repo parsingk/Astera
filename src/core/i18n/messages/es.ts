@@ -29,6 +29,11 @@ export const es: Catalog = {
     'Instala primero la herramienta de línea de comandos de arriba y después añade Astera a tu cliente MCP.',
   'settings.mcp.saveFailed': 'No se pudo guardar el acceso MCP: {detail}',
   'settings.mcp.loadFailed': 'No se pudo leer el acceso MCP: {detail}',
+  'settings.mcp.sessions.label': 'Permitir que los clientes MCP vean y usen sesiones',
+  'settings.mcp.sessions.hint':
+    'Abarca todas las sesiones que tiene Astera, incluidas tus propias terminales. Verlas requiere al menos solo lectura; escribir en ellas e iniciarlas requiere lectura y control. Una sesión que inicia un cliente sigue «Ejecutar agentes sin comprobar permisos» (activado por defecto), así que puede ejecutar comandos sin preguntar.',
+  'settings.mcp.sessions.saveFailed': 'No se pudo guardar el ajuste de sesiones MCP: {detail}',
+  'settings.mcp.sessions.loadFailed': 'No se pudo leer el ajuste de sesiones MCP: {detail}',
   // Modo de permisos del agente
   'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
   'settings.agentPermission.hint':

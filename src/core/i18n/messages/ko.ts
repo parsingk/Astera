@@ -63,6 +63,10 @@ export const ko = {
   'settings.mcp.installFirst': '위의 명령줄 도구를 먼저 설치한 다음 MCP 클라이언트에 Astera 를 추가하세요.',
   'settings.mcp.saveFailed': 'MCP 접근 설정을 저장하지 못했습니다: {detail}',
   'settings.mcp.loadFailed': 'MCP 접근 설정을 읽지 못했습니다: {detail}',
+  'settings.mcp.sessions.label': 'MCP 클라이언트가 세션을 보고 사용하게 하기',
+  'settings.mcp.sessions.hint': 'Astera 가 가진 모든 세션이 대상이며, 직접 연 터미널도 포함됩니다. 세션을 보려면 읽기 전용 이상이면 되고, 입력하거나 시작하려면 읽기와 제어가 필요합니다. 클라이언트가 시작한 세션은 "권한 확인 없이 에이전트 실행"(기본값 켜짐)을 따르므로, 묻지 않고 명령을 실행할 수 있습니다.',
+  'settings.mcp.sessions.saveFailed': 'MCP 세션 설정을 저장하지 못했습니다: {detail}',
+  'settings.mcp.sessions.loadFailed': 'MCP 세션 설정을 읽지 못했습니다: {detail}',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
   'settings.agentPermission.hint':

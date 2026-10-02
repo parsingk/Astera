@@ -51,6 +51,8 @@ import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
 import { taskDetailOf } from './taskDetail'
+import { checkOutputSlice, tailWindow } from './taskOutput'
+import { TAIL_UNTRACKED, TAIL_EMPTY } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -148,12 +150,16 @@ export interface HostSession {
 /** What `sessions read` shows: a terminal session's scrollback replayed into a terminal at the size
  *  the tab has (host/sessions.ts). `screen` is the visible rows, top first, with the blank rows under
  *  the last painted one dropped; `scrollback` is up to `--lines` rows just above it, oldest first.
- *  Each row is the text in its cells, trailing spaces trimmed. */
+ *  Each row is the text in its cells, trailing spaces trimmed. `screenWrapped` and `scrollbackWrapped`
+ *  say, row for row, whether that row continues the one above it (the terminal wrapped a line wider
+ *  than the tab); absent from a Host older than them. */
 export interface SessionScreen {
   cols: number
   rows: number
   screen: string[]
   scrollback: string[]
+  screenWrapped?: boolean[]
+  scrollbackWrapped?: boolean[]
 }
 
 /** What a turn sent to a chat session came to. The app refuses one while the session holds a card
@@ -591,6 +597,13 @@ export interface SessionCreate {
 
 type Reply = { status: number; body: unknown }
 const okBody = (body: unknown): Reply => ({ status: 200, body })
+/** An optional integer flag within [min, max]; the error text when it is not. */
+const boundedInt = (v: unknown, name: string, min: number, max: number, fallback: number): number | string => {
+  if (v === undefined) return fallback
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max)
+    return max === Number.MAX_SAFE_INTEGER ? `--${name} must be an integer >= ${min}` : `--${name} must be an integer from ${min} to ${max}`
+  return v
+}
 const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
 /** 지목한 것이 없다. **400 과 가르는 이유는 CLI 다** — 스크립트가 "인자를 잘못 줬다"(exit 2)와
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
@@ -1086,7 +1099,9 @@ function parseAccountList(
 
 export async function handleCommand(
   deps: OrchServerDeps,
-  caller: { sessionId: string },
+  /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
+   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. */
+  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' },
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
@@ -2766,6 +2781,36 @@ export async function handleCommand(
       const detail = taskDetailOf(s, id, await waitingForApprovalIn(deps, s.dispatches.filter((d) => d.taskId === id)))
       return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
     }
+    case 'tasks-check-output': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const task = s.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      const offset = boundedInt(args.offset, 'offset', 0, Number.MAX_SAFE_INTEGER, 0)
+      const limit = boundedInt(args.limit, 'limit', 1, 4000, 4000)
+      if (typeof offset === 'string') return bad(offset)
+      if (typeof limit === 'string') return bad(limit)
+      const slice = checkOutputSlice(task, str(args.check) ?? undefined, offset, limit)
+      return 'error' in slice ? conflict(slice.error) : okBody(slice)
+    }
+    case 'tasks-output': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      if (!s.tasks.some((t) => t.id === id)) return notFound(`unknown task: ${id}`)
+      const skipLines = boundedInt(args.skipLines, 'skip-lines', 0, Number.MAX_SAFE_INTEGER, 0)
+      const lines = boundedInt(args.lines, 'lines', 1, 500, 200)
+      if (typeof skipLines === 'string') return bad(skipLines)
+      if (typeof lines === 'string') return bad(lines)
+      const latest = s.dispatches
+        .filter((d) => d.taskId === id && !d.review)
+        .reduce<(typeof s.dispatches)[number] | undefined>((a, d) => (!a || d.startedAt > a.startedAt ? d : a), undefined)
+      if (!latest) return conflict('no worker has run this task yet')
+      const raw = await deps.readWorker({ dispatchId: latest.id, limit: 100000 })
+      if (raw === TAIL_UNTRACKED)
+        return okBody({ taskId: id, dispatchId: latest.id, recorded: false, totalLines: 0, more: false, lines: [] })
+      const window = tailWindow(raw === TAIL_EMPTY ? '' : raw, skipLines, lines)
+      return okBody({ taskId: id, dispatchId: latest.id, recorded: true, ...window })
+    }
     case 'tasks-list': {
       let tasks = s.tasks
       // A named Run that is not there is a 404, not an empty list — the list would read as "that
@@ -3965,13 +4010,17 @@ export async function handleCommand(
        * The person in a shell, the app and the Host still answer. A session whose state is not known
        * (a Codex terminal, one typed into since its last event) is not refused: nothing says it is
        * at a prompt. An observed replay types nothing and is not checked.
+       * **An MCP client is refused the same way** (MCP P1 design §2, Q4): it calls with an empty
+       * session id, which reads as a shell, but its text comes from an agent all the same.
        */
-      const fromAgent = caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER
+      const fromMcp = caller.role === 'mcp'
+      const fromAgent =
+        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
         const now = await deps.sessionTurn(id)
         if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
           return conflict(
-            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from an agent session would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
+            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${fromMcp ? 'an MCP client' : 'an agent session'} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
           )
       }
       let waitFor: (() => Promise<TurnEnding | null>) | null = null
@@ -4078,8 +4127,20 @@ export async function handleCommand(
       const account = str(args.account)
       if (account === null) return bad('--account needs a value: an account id (from `accounts list`)')
       if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
-      const cwd = str(args.cwd)
-      if (cwd === null) return bad('--cwd needs a value: a folder')
+      const asked = str(args.cwd)
+      if (asked === null) return bad('--cwd needs a value: a folder')
+      // MCP P1 design §2 (Q5): an MCP client starts a session only in a registered project's root,
+      // never an arbitrary folder (MCP spec §68). A root whose folder is gone is the starter's
+      // CWD_MISSING refusal below, probed before anything spawns. **The starter gets the registered
+      // root, not the caller's spelling**: the match resolves `..` as text, while on POSIX the kernel
+      // follows a symlink before the `..` (`<root>/link/..` lands outside), and a relative spelling
+      // resolves against the Host's own folder.
+      let cwd = asked
+      if (caller.role === 'mcp') {
+        const project = findProjectByPath(s, asked)
+        if (!project) return denied('MCP clients start sessions only in a registered project')
+        cwd = project.path
+      }
       const kind = enumFilter('kind', args.kind, ['terminal', 'chat'] as const)
       if ('error' in kind) return bad(kind.error)
       const sessionKind = kind.value ?? 'terminal'
@@ -4143,6 +4204,10 @@ export async function handleCommand(
       // and calls with an empty session id. `chats pending` is a read and stays open to every caller.
       if (routed === 'chats-answer' && caller.sessionId !== '')
         return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
+      // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
+      // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
+      if (routed === 'chats-answer' && caller.role === 'mcp')
+        return denied('chats answer is for a person: run it from a shell, not from an MCP client')
       if (!deps.chatPrompts || !deps.chatAnswer)
         return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
       const session = args.session === undefined ? undefined : str(args.session)

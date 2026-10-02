@@ -22,6 +22,7 @@ import {
   stampPolicySnapshot,
   type OrchState
 } from '../state'
+import { cutTail } from '../taskOutput'
 import type { Dispatch } from '../types'
 import { repairTargetFor } from './repair'
 import { TaskValidator } from './validator'
@@ -99,7 +100,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         const started = c.runs.start({ projectPath: cwd, projectName, config, command, validation: true })
         return { runId: started.runId, name: config.name }
       },
-      output: (runId) => c.runs.recentOutput(runId).slice(-4000),
+      output: (runId) => cutTail(c.runs.recentOutput(runId), 4000),
       // 타임아웃이 이 PTY 를 두 번째로 멈춘다(validator.ts 의 startCheck 타이머). **c.runs.stop 을
       // 직접 부른다 — 앱의 `ipcMain.handle('run.stop', ...)` 을 거치지 않는다.** 그 핸들러는 사용자가
       // 화면에서 직접 멈춘 검증 실행에 `orchValidator.markStopped` 까지 얹어 "실패가 아니라 증명

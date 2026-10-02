@@ -17,7 +17,8 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
-import { TOOLS, convergenceRefusal, taskTargetRefusal, type ToolDef } from './tools'
+import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
+import { MCP_LIMITS, TOOLS, convergenceRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
@@ -63,6 +64,59 @@ const redactAll = (v: unknown): unknown =>
         ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactAll(x)]))
         : v
 
+/** The fields of each P1 tool's result that carry a session's or a worker's text (P1 design §4),
+ *  redacted by name rather than through FREE_TEXT: a screen row, a turn or a log line is text from
+ *  wherever it was printed, so every string in them, at any depth, goes through the filter. */
+const OUTPUT_TEXT: Record<string, readonly string[]> = {
+  get_session: ['screen', 'scrollback', 'turns', 'pending'],
+  get_check_output: ['text'],
+  get_task_output: ['lines']
+}
+
+const redactOutput = (tool: string, v: unknown): unknown => {
+  const keys = OUTPUT_TEXT[tool]
+  if (keys === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return v
+  const out: Record<string, unknown> = Object.fromEntries(
+    Object.entries(v).map(([k, x]) => [k, keys.includes(k) ? redactAll(x) : x])
+  )
+  // A terminal's rows are visual rows: a line wider than the tab wraps onto the next, a secret with
+  // it. The scrollback runs straight on into the screen, so the two are redacted as one list of rows,
+  // joined back into lines first (sessionText.ts).
+  const o = v as Record<string, unknown>
+  if (tool === 'get_session' && Array.isArray(o.screen) && Array.isArray(o.scrollback)) {
+    let scrollback = o.scrollback.map(String)
+    let screen = o.screen.map(String)
+    let marks =
+      Array.isArray(o.scrollbackWrapped) && Array.isArray(o.screenWrapped)
+        ? [...o.scrollbackWrapped, ...o.screenWrapped].map((m) => m === true)
+        : undefined
+    // **Rows that continue a line above the window are left out** (P1 final review I2): the line's
+    // head, and the head of any secret on it, is not in the read, and a key's tail alone matches no
+    // pattern. Their marks go with them, and droppedPartialRows says how many.
+    let dropped = 0
+    if (marks !== undefined && marks.length === scrollback.length + screen.length) {
+      while (dropped < marks.length && marks[dropped]) dropped++
+      if (dropped > 0) {
+        const fromScrollback = Math.min(dropped, scrollback.length)
+        const scrollbackMarks = marks.slice(fromScrollback, scrollback.length)
+        scrollback = scrollback.slice(fromScrollback)
+        screen = screen.slice(dropped - fromScrollback)
+        marks = marks.slice(dropped)
+        out.scrollbackWrapped = scrollbackMarks
+        out.screenWrapped = marks.slice(scrollbackMarks.length)
+        out.droppedPartialRows = dropped
+      }
+    }
+    const rows = redactRows([...scrollback, ...screen], marks, typeof o.cols === 'number' ? o.cols : undefined)
+    out.scrollback = rows.slice(0, scrollback.length)
+    out.screen = rows.slice(scrollback.length)
+  }
+  // A worker's screen wraps a long line itself, so a key can run over two of these lines: each
+  // adjacent pair is redacted together as well (P1 final review I3).
+  if (tool === 'get_task_output' && Array.isArray(o.lines)) out.lines = redactRows(o.lines.map(String), undefined)
+  return out
+}
+
 const redact = (v: unknown): unknown =>
   Array.isArray(v)
     ? v.map(redact)
@@ -97,6 +151,28 @@ const refusalMessage = (status: number, body: unknown): string => {
   return typeof error === 'string' ? sanitize(error) : `status ${status}`
 }
 
+/** get_session's terminal rows when no `lines` is given (P1 Global Constraints). */
+const SESSION_LINES_DEFAULT = 100
+
+/** The kind sessions-list gives a session (undefined for an id it does not have), read before the
+ *  tool's own call, or that read's error. **The error is the tool's** (P1 final review M5): the
+ *  client called get_session or send_message, so a refusal names it, not sessions-list. */
+async function sessionKind(link: HostLink, t: ToolDef, id: unknown): Promise<string | undefined | CallToolResult> {
+  const listed = await link.call('sessions-list', {})
+  if ('code' in listed) return errorResult(listed.code, listed.message, t.cmd)
+  if (listed.status !== 200)
+    return errorResult(
+      codeForStatus(listed.status),
+      refusalMessage(listed.status, listed.body).replaceAll('sessions-list', t.name),
+      t.cmd,
+      listed.body
+    )
+  const session = Array.isArray(listed.body)
+    ? (listed.body as Array<{ id?: unknown; kind?: unknown }>).find((x) => x.id === id)
+    : undefined
+  return typeof session?.kind === 'string' ? session.kind : undefined
+}
+
 async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
   let args = input
   // A list tool's cursor (lists.ts) is read before anything reaches the Host: one from another tool,
@@ -119,7 +195,13 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   }
   // create_job and list_jobs take a project id; the Host's jobs-create (`--cwd`) and jobs-list
   // (`--project`) take the project's folder. An unknown id is projects-get's own NOT_FOUND.
-  if (t.name === 'create_job' || (t.name === 'list_jobs' && input.projectId !== undefined)) {
+  // create_session (`--cwd`) and list_sessions (`--project`) the same; the Host checks again that an
+  // MCP session starts in a registered project's root.
+  if (
+    t.name === 'create_job' ||
+    t.name === 'create_session' ||
+    ((t.name === 'list_jobs' || t.name === 'list_sessions') && input.projectId !== undefined)
+  ) {
     const project = await link.call('projects-get', { id: input.projectId })
     if ('code' in project) return errorResult(project.code, project.message, 'projects-get')
     if (project.status !== 200)
@@ -131,11 +213,53 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
       )
     args = { ...input, projectPath: (project.body as { path: string }).path }
   }
+  // create_session without an accountId runs on its provider's default account, the one
+  // accounts-list marks `default: true` (claude unless another provider is given).
+  if (t.name === 'create_session' && input.accountId === undefined) {
+    const provider = input.provider ?? 'claude'
+    const accounts = await link.call('accounts-list', { agent: provider })
+    if ('code' in accounts) return errorResult(accounts.code, accounts.message, 'accounts-list')
+    if (accounts.status !== 200)
+      return errorResult(codeForStatus(accounts.status), refusalMessage(accounts.status, accounts.body), 'accounts-list', accounts.body)
+    const found = Array.isArray(accounts.body)
+      ? (accounts.body as Array<{ id?: unknown; provider?: unknown; default?: unknown }>).find(
+          (a) => a.default === true && a.provider === provider
+        )
+      : undefined
+    if (typeof found?.id !== 'string')
+      return errorResult('INVALID_ARGUMENTS', `accountId is required: no ${provider} account is logged in to default to`)
+    args = { ...args, accountId: found.id }
+  }
+  // get_session with neither bound: a terminal session reads 100 rows (P1 limits), not the Host's
+  // 200, and a chat session takes no `lines` at all (the Host refuses it), so the kind is read first.
+  // An id the list does not have goes to the read as it is, for its own NOT_FOUND.
+  if (t.name === 'get_session' && input.lines === undefined && input.turns === undefined) {
+    const kind = await sessionKind(link, t, input.sessionId)
+    if (typeof kind === 'object') return kind
+    if (kind === 'terminal') args = { ...input, lines: SESSION_LINES_DEFAULT }
+  }
+  // send_message types its text as it is (P1 final review I4): a control character is a key, and a
+  // line break or a tab into a terminal is one too (Enter; Tab, a Claude Code key like Shift+Tab), so
+  // only a session the list says is a chat takes them.
+  if (t.name === 'send_message') {
+    const text = String(input.text)
+    const bad = sendTextRefusal(text)
+    if (bad !== null) return errorResult('INVALID_ARGUMENTS', bad)
+    if (text.includes('\n') || text.includes('\t')) {
+      const kind = await sessionKind(link, t, input.sessionId)
+      if (typeof kind === 'object') return kind
+      if (kind !== 'chat')
+        return errorResult(
+          'INVALID_ARGUMENTS',
+          'text holds a line break or a tab, which only a chat session takes: a terminal session takes them as keys (Enter, Tab), so send a terminal one line at a time, without tabs'
+        )
+    }
+  }
   const r = await link.call(t.cmd, t.args(args), typeof input.requestId === 'string' ? input.requestId : undefined)
   if ('code' in r) return errorResult(r.code, r.message, t.cmd)
   if (r.status < 200 || r.status >= 300)
     return errorResult(codeForStatus(r.status), refusalMessage(r.status, r.body), t.cmd, r.body)
-  const shaped = redact(dropCheckOutput(publicFor(t.cmd, r.body)))
+  const shaped = redactOutput(t.name, redact(dropCheckOutput(publicFor(t.cmd, r.body))))
   // A list tool orders its rows and cuts the page the cursor names (lists.ts); `truncated`, `total`
   // and `nextCursor` sit beside the list.
   const cut = Array.isArray(shaped)
@@ -143,7 +267,7 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
     : null
   const count = cut === null ? '' : cut.total === undefined ? ` (${cut.list.length})` : ` (${cut.list.length} of ${cut.total})`
   // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
-  const data =
+  let data =
     cut === null
       ? dataFor(t.cmd, shaped)
       : {
@@ -151,8 +275,26 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
           ...(cut.truncated ? { truncated: true, total: cut.total } : {}),
           ...(cut.nextCursor !== undefined ? { nextCursor: cut.nextCursor } : {})
         }
+  // get_session holds at most SESSION_TEXT_CAP characters of text, the newest, cut after redaction.
+  let note = ''
+  if (t.name === 'get_session') {
+    if (typeof data.droppedPartialRows === 'number')
+      note = `, without its first ${data.droppedPartialRows} rows: they continue a line that starts above them, so ask for more lines to read it whole`
+    const capped = capSession(data)
+    if (capped.truncated) {
+      data = { ...capped.data, truncated: true }
+      note += `, cut to its newest ${SESSION_TEXT_CAP} characters of text: ask for fewer lines or turns to read less at once`
+    }
+  }
+  // get_check_output pages the log only once all of it is redacted (P1 final review I1): `total`
+  // and `offset` count the redacted text, so a page can never begin inside a secret.
+  if (t.name === 'get_check_output' && typeof data.text === 'string') {
+    const from = typeof input.offset === 'number' ? input.offset : 0
+    const take = typeof input.limit === 'number' ? input.limit : MCP_LIMITS.checkOutput
+    data = { ...data, total: data.text.length, offset: from, text: data.text.slice(from, from + take) }
+  }
   return {
-    content: textResult(`${t.title}${count}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
+    content: textResult(`${t.title}${count}${note}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
     structuredContent: data
   }
 }
@@ -162,7 +304,7 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
     { name: 'astera', version: a.version },
     {
       instructions:
-        'Control Astera projects, Jobs, Runs, Tasks, questions, and completion state through the local Astera Host.'
+        'Control Astera projects, Jobs, Runs, Tasks, questions, and completion state through the local Astera Host, and, when the person allows it in Astera Settings, its sessions.'
     }
   )
   for (const t of TOOLS)

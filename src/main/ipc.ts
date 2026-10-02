@@ -3770,7 +3770,8 @@ export function registerIpc(
             (id) => {
               const d = store.get().dispatches.find((x) => x.id === id)
               return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
-            }
+            },
+            (id) => store.get().dispatches.find((x) => x.id === id)?.endedAt !== undefined
           )
         })
       },
@@ -5622,6 +5623,14 @@ export function registerIpc(
   ipcMain.handle('settings.setMcpAccess', async (_e, v: unknown) => {
     if (v !== 'off' && v !== 'read' && v !== 'control') throw new Error(`INVALID_MCP_ACCESS: ${String(v)}`)
     await core.appSettings.setMcpAccess(v)
+  })
+
+  // Whether an MCP client may see and use sessions (MCP P1 design §5). The Host reads the file on
+  // every MCP call (readMcpSessions), so saving it is the whole effect.
+  ipcMain.handle('settings.getMcpSessions', () => core.appSettings.getMcpSessions())
+  ipcMain.handle('settings.setMcpSessions', async (_e, v: unknown) => {
+    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_SESSIONS: ${String(v)}`)
+    await core.appSettings.setMcpSessions(v)
   })
 
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/

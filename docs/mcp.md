@@ -149,6 +149,9 @@ If the client cannot find `astera`, give `command` the full path of the installe
 
 ## The tools
 
+The server offers 24 tools: 18 for projects, accounts and Jobs, four for sessions and two that read
+a Task's output. What a client may call is set by [MCP access](#mcp-access).
+
 | Tool | What it does |
 | --- | --- |
 | `list_projects` | The projects registered in Astera. Use a project id with `create_job`. |
@@ -168,6 +171,12 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
 | `create_task` | Add a Task to a Job's plan (`jobId`: every Run started from then on copies it) or to one Run (`runId`); give exactly one. `spec` is the work in full (up to 50 000 characters), `title` a short name (up to 200), `deps` the Task ids it waits for, `validate` run configuration ids from `list_run_configs` that must pass, `review: true` asks for a review. Without `accountId` the Task runs on the Job's coordinator account. |
 | `list_run_configs` | The run configurations of a Job's project folder (`id`, `name`, `type`): the checks a Task can name in `create_task`'s `validate`. |
+| `list_sessions` | The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by `status` (`alive`, `ended`, or a terminal's `working`, `waiting` or `unknown`), `provider`, and `projectId`. Needs the session setting (below). |
+| `get_session` | What the session `sessionId` (from `list_sessions`) shows now: a terminal's visible rows (`screen`) and the rows above them (`scrollback`, `lines` 1 to 500, 100 when not given; `lines` sizes the scrollback only, and the screen comes on top of it), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). One answer holds at most 40 000 characters of text, the newest; over that the oldest rows or turns are left out, the scrollback first and then the top rows of the screen, and `truncated: true` says so, so ask for fewer `lines` or `turns`. `screenWrapped` and `scrollbackWrapped` mark each row that continues the one above it. Needs the session setting. |
+| `send_message` | Type `text` (up to 50 000 characters) into the live session `sessionId` and press Enter; a chat session takes it as one turn. Returns as soon as the text is accepted, not when the session has answered: poll `get_session`. A session waiting on a prompt is refused (see [MCP access](#mcp-access)). Text holding a control character, any character below U+0020 but a line feed or a tab, or U+007F to U+009F, is refused with `INVALID_ARGUMENTS`, since a terminal takes them as keys (`ESC [ Z`, Shift+Tab, cycles a Claude Code session's permission mode; a carriage return submits early; Ctrl-C interrupts). A line break or a tab is taken only by a chat session, as part of its turn; into a terminal session, which would take them as keys (Enter, and Tab, a Claude Code key like Shift+Tab), they are refused with `INVALID_ARGUMENTS`, so send a terminal one line at a time, without tabs. Needs the session setting and "Read and control". |
+| `create_session` | Start a session in a registered project's folder (`projectId`), on `accountId` or, without one, on `provider`'s default account (`claude` unless given). `kind` is `terminal` (the default) or `chat`; `title` (up to 200 characters) names it and `prompt` (up to 50 000) is the first thing it is asked. A terminal session's prompt goes on the command line, so one holding `"`, `&`, `\|`, `<`, `>`, `^`, `%` or a line break is refused with `INVALID_ARGUMENTS`; start a chat session for such text. Needs the session setting and "Read and control". |
+| `get_check_output` | The output of a Task's failed check (`check`, or the first that failed): the last 4000 characters of its log, last round only. `offset` and `limit` (1 to 4000) page through them once they are redacted; `total` is how many characters the redacted log has. A Task with no failed check output is `CONFLICT`. |
+| `get_task_output` | What the latest worker of a Task printed, counted from the end: skip `skipLines` newest lines, return the next `lines` (1 to 500, 200 when not given) older ones, oldest first; `more: true` says older lines remain. After Astera restarts it answers `recorded: false` with no lines, since worker output exists only while the process that started the worker runs (its last 64 KB). The output stops at the end of the worker's Dispatch: what is typed into its terminal afterwards is not kept. A Task that never had a worker is `CONFLICT` ("no worker has run this task yet"). |
 | `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and, per Task, a `failureSummary` (what fails in the current round: each failed check, its exit code and its last output line) and a `lastFailure` (the same for the last round of failed checks, not reviews; kept while it is rechecked and after it converged, so it says why a repair ran). Astera runs the checks and repairs; this only reads them. |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
@@ -212,7 +221,8 @@ shows as waiting.
 Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
 first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions`
 oldest first by `createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and
-`list_projects`, `list_accounts` and `list_run_configs` keep Astera's. The list is ordered first and cut second. A cut
+`list_projects`, `list_accounts` and `list_run_configs` keep Astera's, and `list_sessions` puts live
+sessions first and otherwise keeps Astera's. The list is ordered first and cut second. A cut
 list carries `truncated: true` and `total` (how many there were) beside it; a whole list carries
 neither.
 
@@ -230,8 +240,8 @@ Every result carries the data twice, as `structuredContent` and as the same JSON
 content. An error is the exception: its text content is a `CODE: message` line followed by the JSON
 (`code`, `message`, `nextSteps` and, when there are any, `details`), and it carries no
 `structuredContent`, because some clients (Cursor) validate `structuredContent` even on an error.
-The six tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
-`resume_run`, `answer_question`) accept an optional `requestId`. Retrying with the same id returns the first
+The eight tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
+`resume_run`, `answer_question`, `send_message`, `create_session`) accept an optional `requestId`. Retrying with the same id returns the first
 result instead of acting twice. The Host keeps these receipts in memory for one hour, and a Host
 restart forgets them.
 
@@ -242,11 +252,37 @@ restart forgets them.
 | Value | Allows |
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
-| Read only | The list and get tools, `get_run`, `get_completion` and `list_run_configs` included. |
-| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`. This is the default. |
+| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output` and `get_task_output` included; `list_sessions` and `get_session` only with the session setting on. |
+| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`, and, with the session setting on, `send_message` and `create_session`. This is the default. |
 
-The setting is read on every call, so a change applies to a connected client at its next call without
-reconnecting. Every other Host command is refused to MCP clients whatever the setting says.
+**Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
+`create_session` also need **Let MCP clients see and use sessions** (Settings, CLI tab), which is off
+by default: they reach every session Astera holds, the person's own terminals included. With it on,
+the two reads follow "Read only" and the two writes need "Read and control"; with it off, each is
+refused with `PERMISSION_DENIED` naming the setting. A session an MCP client starts follows
+**Run agents without permission checks** (Settings, Agents), which is on by default, so with "Read
+and control" and the session setting on, a client can start an agent that runs commands without
+asking. `get_check_output` and `get_task_output` read
+Job data and need only MCP access, not the session setting.
+
+Two refusals hold whatever the settings say:
+
+- **No answering a prompt.** `send_message` into a terminal session waiting on a permission prompt
+  or a question, or a chat session holding an approval or a question open, is refused with
+  `CONFLICT`, the message says what it waits on, and nothing is typed. A person answers those in
+  Astera; no MCP tool answers a prompt. A terminal's prompt is read from the hook events Claude Code
+  writes, as for a worker waiting for approval (above). A Codex terminal writes none, so
+  whether it waits on a prompt is not known and it is not refused. The refusal also relies on the
+  session's last hook event being newer than the last thing typed into it: once a person has
+  pressed a key inside an open dialog, its state reads unknown, and a send gets through.
+- **Only in a project.** `create_session` takes a `projectId`, never a folder, and the Host checks it
+  again: an MCP client's session starts only in a registered project's root folder, and anything
+  else, a folder inside the project included, is refused with `PERMISSION_DENIED`. A project whose
+  folder was moved or deleted is refused with `INVALID_ARGUMENTS` (`CWD_MISSING`) and nothing
+  starts.
+
+Both settings are read on every call, so a change applies to a connected client at its next call without
+reconnecting. Every other Host command is refused to MCP clients whatever the settings say.
 
 **The Job Journal records which client acted.** What an MCP client does is journalled as surface
 `mcp`, with the client's name and version as its MCP `initialize` request gave them (for example
@@ -262,8 +298,28 @@ a field with nothing left.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
   results, questions, answers, review issues and suggested fixes, failure summaries, error messages)
   is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
-- Raw check output is not returned. `list_tasks` and `get_task` carry each check's status and exit
-  code without its log, and so does `get_completion`. The one exception is `get_completion`'s
+- Session and output text is redacted the same way: every screen and scrollback row, every turn's
+  text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
+  every line of `get_task_output`. `get_check_output` redacts the whole log first and pages it
+  after, so a page that starts inside a secret holds none of it; `total` and `offset` count the
+  redacted log. Each pair of adjacent lines of `get_task_output` is also checked together, since a
+  worker's screen wraps a long line itself, so a key split over two lines is caught (one over three
+  or more is not), and a line that starts with token characters right after a token can be
+  redacted with it.
+- Both output logs are kept only to a size, the check log to its last 4000 characters and the
+  worker output to its last 64 KB. When that cut falls inside a line, the partial line is dropped,
+  since it may hold the end of a secret whose head was cut away. When what is kept is one line,
+  only up to its first whitespace is dropped, since a secret holds none.
+- A line the terminal wrapped over several rows is joined and redacted as one line, with the spaces
+  the Host trimmed at a row's end put back, so a key split across rows is caught; every row is also
+  redacted on its own. From a Host too old to mark wrapped rows, each pair of adjacent rows is
+  checked together instead, which can redact a row that only follows a token. When the rows returned
+  start in the middle of a line (the first row continues one above it), the start of that line,
+  and the head of any secret on it, lies above what was returned, so those leading rows are left
+  out: `droppedPartialRows` says how many, and the result's sentence says so too. Ask for more
+  `lines` to read the whole line.
+- Raw check output is not returned by the Job tools. `list_tasks` and `get_task` carry each check's
+  status and exit code without its log, and so does `get_completion`. The one exception is `get_completion`'s
   `failureSummary` and `lastFailure`: they carry each failed check's last output line, cut to 200
   characters and redacted like the rest of the free text. `failureSummary` is the same line
   `astera runs checks` prints, for the current round only; `lastFailure` is that line for the last round
@@ -292,8 +348,9 @@ The Host is from before an update and cannot talk to this build. Open Astera, wh
 run `astera host start --replace`. The sessions that Host was running end with it.
 
 **`PERMISSION_DENIED`**
-MCP access does not allow that tool. Change it in Settings, CLI tab. A client already connected sees
-the change at its next call. The same code with the message "something answered at the Host's address
+MCP access does not allow that tool. Change it in Settings, CLI tab. A session tool whose message
+names "Let MCP clients see and use sessions" needs that setting turned on there as well. A client
+already connected sees the change at its next call. The same code with the message "something answered at the Host's address
 but could not prove it is this account's Host" means a process at the Host's address failed the Host
 key proof. The server sent it nothing and does not start a Host beside it. Find what holds that
 address before you retry.
