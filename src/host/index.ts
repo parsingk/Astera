@@ -572,6 +572,9 @@ async function main(): Promise<void> {
     journal: hostJournal,
     // How It Works (E1 §3): every Run a commit finishes, recorded here while this Host is the writer.
     understanding: hostUnderstanding,
+    // Session work units (E2 §5): built below, after this orch, since their in-Run test reads its state;
+    // asked per call. Null without a spawner, and then the session-task commands only forward.
+    workUnits: () => hostWorkUnits,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
     // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
     specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,

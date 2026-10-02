@@ -35,6 +35,7 @@ import type { HostSlackWiring } from './slackWiring'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
 import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
+import type { HostWorkUnits } from './hostWorkUnits'
 import { findProject } from '../core/orchestration/projects'
 import type { SessionWorkUnit } from '../core/workUnit/types'
 import { justFinished, runRecordInputOf } from '../core/orchestration/runRecord'
@@ -230,6 +231,12 @@ const isUnitShaped = (u: unknown): u is SessionWorkUnit => {
   const o = u as Record<string, unknown>
   return typeof o.id === 'string' && typeof o.sessionId === 'string' && typeof o.status === 'string' && typeof o.git === 'object' && o.git !== null
 }
+
+/** The app's calls into the Host's session work units (E2 §5), answered above the receipt line. */
+const WORK_UNITS_CALLS: ReadonlySet<string> = new Set(['work-units-fork', 'work-units-reload', 'work-units-complete', 'work-units-cancel'])
+
+/** `work-units-*`'s 409: an attached app keeps the duty, and its collector holds the units. */
+export const NOT_WORK_UNITS_WRITER = 'an attached Astera app is tracking session work units; ask it'
 
 /** A reply body as a bag of fields, for the two predicates below. Anything that is not an object
  *  reads as empty, which makes every question asked of it answer "no". */
@@ -484,6 +491,17 @@ export function createHostOrch(a: {
    *  P2), and the app only `workspace-list`, `workspace-stop` and `workspace-close` above it. Absent: all
    *  four answer 501. */
   workspaces?: Pick<WorkspaceManager, 'run' | 'stop' | 'close' | 'list'>
+  /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
+   *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
+   *  `work-units-fork`, `-reload`, `-complete` and `-cancel`. Absent, or null (no spawner, so no duty):
+   *  the session-task commands are forwarded as before and the four answer 501. `sessionTasks.list` is not
+   *  here on purpose: it answers from the collector's memory, which is stale while the collector is stopped,
+   *  so a reader app reads workUnits.json itself (E2 §6) and the Host serves no list. */
+  workUnits?():
+    | (Pick<HostWorkUnits, 'isWriter' | 'isRunning' | 'trackingEnabled' | 'fork' | 'reload'> & {
+        sessionTasks: Omit<HostWorkUnits['sessionTasks'], 'list'>
+      })
+    | null
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
   // Built at the first ask: only a call that marks the default needs the descriptors.
@@ -695,6 +713,7 @@ export function createHostOrch(a: {
       ...(a.createSession ? { createSession: a.createSession } : {}),
       ...(a.github ? { github: a.github } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+      workUnits: a.workUnits?.() ?? null,
       ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {
         marks.effects += 1
@@ -1203,6 +1222,40 @@ export function createHostOrch(a: {
     return { status: 200, body: { id: r.id, status: 'generating' } }
   }
 
+  /** The app's four `work-units-*` calls (E2 §5): 403 for any other caller, 501 without the duty, 400 for
+   *  missing arguments, 409 while an attached app keeps the duty. `-complete` and `-cancel` answer the
+   *  collector's own result as it is, a refusal included (`unknown task: <id>`, `task is <status>`): which
+   *  of those the renderer's button reads as done is the app's mapping (ipc.ts), not the Host's. */
+  const workUnitsCall = async (cmd: string, args: Record<string, unknown>, from: OrchCaller | undefined): Promise<Reply> => {
+    if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
+    const units = a.workUnits?.() ?? null
+    if (!units) return { status: 501, body: { error: 'this Host does not track session work units' } }
+    const optional = (v: unknown): v is string | undefined => v === undefined || (typeof v === 'string' && v !== '')
+    if (cmd === 'work-units-fork') {
+      const { newSessionId, transcriptPath, oldSessionId } = args
+      if (typeof newSessionId !== 'string' || newSessionId === '' || !optional(transcriptPath) || !optional(oldSessionId))
+        return { status: 400, body: { error: 'work-units-fork needs a newSessionId, and takes a transcriptPath and an oldSessionId' } }
+      if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+      units.fork(newSessionId, transcriptPath, oldSessionId)
+      // A collector that is not running ignores a fork (tracking off): said, so the app need not guess.
+      return { status: 200, body: { forked: units.isRunning() } }
+    }
+    if (cmd === 'work-units-reload') {
+      if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+      await units.reload()
+      return { status: 200, body: { reloaded: true, running: units.isRunning() } }
+    }
+    const { projectPath, id } = args
+    if (typeof projectPath !== 'string' || projectPath === '' || typeof id !== 'string' || id === '')
+      return { status: 400, body: { error: `${cmd} needs a projectPath and an id` } }
+    if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+    const r =
+      cmd === 'work-units-complete'
+        ? await units.sessionTasks.completeById(projectPath, id)
+        : await units.sessionTasks.cancelById(projectPath, id)
+    return { status: 200, body: r }
+  }
+
   /**
    * **The answer to "did my call land?"** (request receipts design §6). Three states, and 200 for all
    * three: not finding a receipt is an answer, not a failure. Notably it is not a 404 — `NOT_FOUND`
@@ -1381,6 +1434,7 @@ export function createHostOrch(a: {
             cmd === 'journal-append' ||
             cmd === 'journal-reload' ||
             cmd === 'understanding-unit' ||
+            WORK_UNITS_CALLS.has(cmd) ||
             cmd === 'coordinator-idle' ||
             cmd === 'workspace-list' ||
             cmd === 'workspace-stop' ||
@@ -1495,6 +1549,10 @@ export function createHostOrch(a: {
           if (r.ok) return { status: 200, body: { accepted: true } }
           return { status: r.reason === NOT_WRITER ? 409 : 500, body: { error: r.reason ?? 'the unit was not recorded' } }
         }
+        // **Beside understanding-unit, for its reason (E2 §5).** What only the app sees of session work units:
+        // a history-resume fork, the tracking toggle, and the renderer's two buttons. Never a command layer
+        // command, never a receipt.
+        if (WORK_UNITS_CALLS.has(cmd)) return await workUnitsCall(cmd, args, from)
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and
         // its two buttons. Never a command layer command, never a receipt.
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close') {
