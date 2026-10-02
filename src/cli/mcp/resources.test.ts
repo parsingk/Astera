@@ -4,8 +4,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createMcpServer } from './server'
 import type { HostLink } from './hostLink'
 
-async function connected(link: HostLink) {
-  const server = createMcpServer({ link, version: '1.4.1', log: () => {} })
+async function connected(link: HostLink, logs: string[] = []) {
+  const server = createMcpServer({ link, version: '1.4.1', log: (m) => void logs.push(m) })
   const [a, b] = InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'test-client', version: '0' })
   await Promise.all([server.connect(a), client.connect(b)])
@@ -111,9 +111,44 @@ describe('MCP resources', () => {
     expect(j.every((x) => x.mimeType === 'application/json')).toBe(true)
   })
 
-  it('a list failure is an MCP error, not an empty list', async () => {
-    const { link } = answering({ 'jobs-list': { status: 403, body: { error: 'off' } } })
-    await expect((await connected(link)).listResources()).rejects.toThrow(/PERMISSION_DENIED/)
+  it('a failing list source shows nothing and is logged; the other source still lists, and a read still errors', async () => {
+    const logs: string[] = []
+    const { link } = answering({
+      'jobs-list': { status: 403, body: { error: 'off' } },
+      'jobs-get': { status: 403, body: { error: 'off' } },
+      'runs-list': { status: 200, body: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'x' }] }
+    })
+    const client = await connected(link, logs)
+    const { resources } = await client.listResources()
+    expect(resources.map((r) => r.uri)).toEqual(['astera://runs/run_1'])
+    expect(logs.join(' ')).toMatch(/PERMISSION_DENIED/)
+    await expect(client.readResource({ uri: 'astera://jobs/job_1' })).rejects.toThrow(/PERMISSION_DENIED/)
+    const down = await connected({ call: async () => ({ code: 'HOST_NOT_RUNNING', message: 'm' }), close: () => {} })
+    await expect(down.listResources()).resolves.toMatchObject({ resources: [] })
+  })
+
+  it('maps a malformed percent sequence to INVALID_ARGUMENTS and checks the length after decoding', async () => {
+    const client = await connected(answering({}).link)
+    await expect(client.readResource({ uri: 'astera://jobs/%E0%A4%A' })).rejects.toThrow(/INVALID_ARGUMENTS/)
+    // 150 encoded characters would decode to 50; 201 decoded characters are too long however they are written.
+    await expect(client.readResource({ uri: `astera://jobs/${'a'.repeat(201)}` })).rejects.toThrow(/INVALID_ARGUMENTS/)
+    const { link, calls } = answering({})
+    await (await connected(link)).readResource({ uri: `astera://jobs/${'%61'.repeat(150)}` })
+    expect(calls[0].args).toEqual({ id: 'a'.repeat(150) })
+  })
+
+  it('encodes an id in a listed URI', async () => {
+    const { link } = answering({ 'jobs-list': { status: 200, body: [{ id: 'a b/c', objective: 'o', createdAt: 'x' }] } })
+    const { resources } = await (await connected(link)).listResources()
+    expect(resources[0].uri).toBe('astera://jobs/a%20b%2Fc')
+  })
+
+  it('the tasks resource drops check output', async () => {
+    const { link } = answering({
+      'tasks-get': { status: 200, body: { id: 't1', validation: { checks: [{ name: 'c', status: 'failed', outputTail: 'LOGLINE' }] } } }
+    })
+    const text = bodyOf((await (await connected(link)).readResource({ uri: 'astera://tasks/t1' })).contents[0])
+    expect(text).not.toContain('LOGLINE')
   })
 
   it('has no session resources', async () => {

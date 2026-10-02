@@ -336,7 +336,7 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
         return result
       }
     )
-  registerResources(server, (cmd, tool, args) => hostRead(a.link, cmd, tool, args))
+  registerResources(server, (cmd, tool, args) => hostRead(a.link, cmd, tool, args), a.log)
   registerPrompts(server)
   return server
 }

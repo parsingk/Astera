@@ -263,9 +263,10 @@ by client; every one of these is also available as a tool.
 | `astera://tasks/{taskId}` | `get_task` |
 
 `resources/list` shows the newest 50 Jobs and the newest 50 Runs, each with a title (the Job's
-objective, or the Run id and its Job). Projects and Tasks are read by id. A refusal (for example
-access turned off) or a Host that cannot be reached is an MCP error whose text starts with the CLI
-code, such as `PERMISSION_DENIED`, never an empty resource. Free text is redacted exactly as in the
+objective, or the Run id and its Job). Projects and Tasks are read by id. A read that is refused (for example
+access turned off) or cannot reach the Host is an MCP error whose text starts with the CLI code, such
+as `PERMISSION_DENIED`, never an empty resource. A list shows nothing for a source it may not read,
+so the server still connects cleanly with access off. Free text is redacted exactly as in the
 tools. There are no session resources.
 
 ### Prompts

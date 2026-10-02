@@ -27,10 +27,16 @@ async function shapedOrThrow(read: Read, cmd: string, tool: string, args: Record
 }
 
 const variable = (v: string | string[] | undefined): string => {
-  const s = Array.isArray(v) ? v[0] : v
-  if (typeof s !== 'string' || s.length === 0 || s.length > MCP_LIMITS.id)
-    throw new McpError(ErrorCode.InvalidParams, `INVALID_ARGUMENTS: the id in the URI must be 1 to ${MCP_LIMITS.id} characters`)
-  return decodeURIComponent(s)
+  const bad = (why: string): McpError => new McpError(ErrorCode.InvalidParams, `INVALID_ARGUMENTS: ${why}`)
+  const raw = Array.isArray(v) ? v[0] : v
+  let id: string
+  try {
+    id = typeof raw === 'string' ? decodeURIComponent(raw) : ''
+  } catch {
+    throw bad('the id in the URI is not valid percent-encoding')
+  }
+  if (id.length === 0 || id.length > MCP_LIMITS.id) throw bad(`the id in the URI must be 1 to ${MCP_LIMITS.id} characters`)
+  return id
 }
 
 /** The five read-only templates. The URI variable is the id the matching tool takes. */
@@ -53,18 +59,26 @@ const LISTS: Record<string, { cmd: string; tool: string; title: (row: Record<str
   run: { cmd: 'runs-list', tool: 'list_runs', title: (r) => `Run ${r.id} of Job ${r.jobId}` }
 }
 
-export function registerResources(server: McpServer, read: Read): void {
+export function registerResources(server: McpServer, read: Read, log: (m: string) => void): void {
   for (const r of RESOURCES) {
     const listing = LISTS[r.name]
     const template = new ResourceTemplate(r.uri, {
       list: listing
         ? async () => {
-            const rows = await shapedOrThrow(read, listing.cmd, listing.tool, {})
+            // A list must not fail: clients call it on connect and may take an error for a broken server.
+            // A source that cannot be read (access off, no Host) lists nothing, and says why in the log.
+            let rows: unknown
+            try {
+              rows = await shapedOrThrow(read, listing.cmd, listing.tool, {})
+            } catch (e) {
+              log(`resources/list: ${r.name} entries left out (${e instanceof Error ? e.message : String(e)})`)
+              return { resources: [] }
+            }
             const page = orderAndCut(listing.tool, Array.isArray(rows) ? rows : [], LIST_LIMIT.default).list
             return {
               resources: page.map((row) => {
                 const x = row as Record<string, unknown>
-                return { uri: r.uri.replace(/\{\w+\}/, String(x.id)), name: String(x.id), title: listing.title(x), mimeType: JSON_TYPE }
+                return { uri: r.uri.replace(/\{\w+\}/, encodeURIComponent(String(x.id))), name: String(x.id), title: listing.title(x), mimeType: JSON_TYPE }
               })
             }
           }
