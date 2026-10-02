@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { checkOutputSlice, tailWindow } from './taskOutput'
 import type { Task } from './types'
+import { WorkerTails } from './exec/tail'
 
 const task = (checks: Task['checks']): Task =>
   ({ id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'failed', consecutiveFailures: 0, createdAt: 'x', updatedAt: 'x', checks }) as Task
@@ -38,6 +39,13 @@ describe('tailWindow', () => {
   it('does not count trailing blank lines', () => {
     const nl = String.fromCharCode(10)
     expect(tailWindow(['a', 'b', '', ''].join(nl), 0, 5)).toEqual({ lines: ['a', 'b'], totalLines: 2, more: false })
+  })
+  it('reads a terminal tail with CRLF line ends, as WorkerTails hands it back, without a carriage return left on the last line', () => {
+    const crlf = String.fromCharCode(13, 10)
+    const tails = new WorkerTails()
+    tails.start({ dispatchId: 'd1', sessionId: 's1' }, () => false)
+    tails.push('s1', ['step 1', 'step 2', ''].join(crlf))
+    expect(tailWindow(tails.read('d1', 100000), 0, 5)).toEqual({ lines: ['step 1', 'step 2'], totalLines: 2, more: false })
   })
   it('is empty for empty text and past the start', () => {
     expect(tailWindow('', 0, 3)).toEqual({ lines: [], totalLines: 0, more: false })

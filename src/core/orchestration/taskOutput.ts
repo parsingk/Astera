@@ -19,13 +19,15 @@ export function checkOutputSlice(
   return { check: found.configId, total: text.length, offset, text: text.slice(offset, offset + limit) }
 }
 
-/** `lines` lines ending `skipLines` lines before the end of `text`, oldest first. `more`: older lines exist. */
+/** `lines` lines ending `skipLines` lines before the end of `text`, oldest first. `more`: older lines exist.
+ *  Any run of CR and LF at the end is a line end: WorkerTails.read trims only the LFs, so a terminal's
+ *  CRLF tail reaches here ending in a lone CR. */
 export function tailWindow(
   text: string,
   skipLines: number,
   lines: number
 ): { lines: string[]; totalLines: number; more: boolean } {
-  const all = text === '' ? [] : text.replace(/(\r?\n)+$/, '').split(/\r?\n/)
+  const all = text === '' ? [] : text.replace(/[\r\n]+$/, '').split(/\r?\n/)
   const end = Math.max(0, all.length - skipLines)
   const start = Math.max(0, end - lines)
   return { lines: all.slice(start, end), totalLines: all.length, more: start > 0 }
