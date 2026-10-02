@@ -581,9 +581,8 @@ export interface OrchServerDeps {
   /** GitHub through the user's gh (MCP P2-B): the runner, and the worktree registry's entry for a
    *  Run's worktree (its branch, base and repository), or null when the registry does not hold it.
    *  `worktreeOf` is absent on a Host that never loaded its registry (one with no spawner).
-   *  `github-pr-create`'s four: push then create (`createPullRequest`), the commits the branch adds
-   *  over a base, the worktree's uncommitted change count (throws when git cannot read it), and
-   *  whether the branch has an upstream and whether that upstream is gone.
+   *  `github-pr-create`'s three: push then create (`createPullRequest`), the commits the branch adds
+   *  over a base, and the worktree's uncommitted change count (throws when git cannot read it).
    *  **Only the Host injects it**: gh runs on the Host's PATH and login. Absent, the `github-*`
    *  commands answer 409. */
   github?: {
@@ -592,7 +591,6 @@ export interface OrchServerDeps {
     createPr(req: PrCreateRequest): Promise<PrCreateResult>
     readCommits(worktree: string, base: string): Promise<CommitSummary[]>
     isClean(worktree: string): Promise<{ changedCount: number }>
-    pushState(worktree: string, branch: string): Promise<{ hasUpstream: boolean; upstreamGone: boolean }>
   }
 }
 
@@ -4374,8 +4372,9 @@ export async function handleCommand(
      *
      * `github-pr-create` opens a pull request from a finished Run's branch: finished is the outcome
      * `runs-get` answers (`runView`) reading completed or failed; running and paused are not. A dirty
-     * worktree is refused, and so is a branch that adds nothing. It pushes only a branch with no
-     * upstream or a gone one, never with force (`createPullRequest`).
+     * worktree is refused, and so is a branch that adds nothing. It always pushes first, never with
+     * force (`createPullRequest`): an up-to-date branch is a no-op, a branch ahead of its upstream would
+     * otherwise open the PR from the stale remote head, and a diverged one is rejected.
      */
     case 'github-pr-create': {
       const title = args.title === undefined ? undefined : str(args.title)
@@ -4406,8 +4405,6 @@ export async function handleCommand(
       const commits = await g.readCommits(t.cwd, base)
       if (commits.length === 0) return conflict("The Run's branch adds no commits")
       const filled = fillFromCommits(t.branch, commits)
-      const upstream = await g.pushState(t.cwd, t.branch)
-      const needsPush = !upstream.hasUpstream || upstream.upstreamGone
       const made = await g.createPr({
         worktreePath: t.cwd,
         repoPath: t.repoPath,
@@ -4416,9 +4413,9 @@ export async function handleCommand(
         title: title ?? filled.title,
         body: body ?? filled.body,
         draft,
-        needsPush
+        needsPush: true
       })
-      if (made.ok) return okBody({ url: made.url, draft, pushed: needsPush })
+      if (made.ok) return okBody({ url: made.url, draft, pushed: true })
       // `pushed` rides on every failure: a create that failed after a push left the branch on the
       // remote. `exists` keeps gh's own words, which end with the existing pull request's URL.
       if (made.kind === 'exists') return { status: 409, body: { error: made.detail.trim(), pushed: made.pushed } }

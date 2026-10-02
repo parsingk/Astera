@@ -1698,8 +1698,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
         },
         createPr: unused,
         readCommits: unused,
-        isClean: unused,
-        pushState: unused
+        isClean: unused
       }
     })
     const mcp = await mcpClient(h)

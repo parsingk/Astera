@@ -8316,8 +8316,7 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       worktreeOf: (p) => (p === WT ? info : null),
       createPr: unexpected('createPr'),
       readCommits: unexpected('readCommits'),
-      isClean: unexpected('isClean'),
-      pushState: unexpected('pushState')
+      isClean: unexpected('isClean')
     }
     return { deps, gh, projectId: reg.project.id, projectPath: reg.project.path }
   }
@@ -8503,14 +8502,13 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     const PR_URL = 'https://github.com/o/r/pull/13'
     const task = (status: Task['status'], over: Partial<Task> = {}): Task =>
       ({ id: `t_${status}_${Math.random()}`, runId: 'r1', title: 't', spec: 's', deps: [], status, consecutiveFailures: 0, ...over }) as Task
-    /** The four write-side members of the github dep, each recording what it was asked. */
+    /** The three write-side members of the github dep, each recording what it was asked. */
     const writes = (o: {
       commits?: CommitSummary[]
       changed?: number | Error
-      push?: { hasUpstream: boolean; upstreamGone: boolean }
       created?: PrCreateResult
     } = {}) => {
-      const asked = { createPr: [] as PrCreateRequest[], readCommits: [] as [string, string][], isClean: [] as string[], pushState: [] as [string, string][] }
+      const asked = { createPr: [] as PrCreateRequest[], readCommits: [] as [string, string][], isClean: [] as string[] }
       return {
         asked,
         dep: {
@@ -8526,10 +8524,6 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
             asked.isClean.push(wt)
             if (o.changed instanceof Error) throw o.changed
             return { changedCount: o.changed ?? 0 }
-          },
-          pushState: async (wt: string, branch: string) => {
-            asked.pushState.push([wt, branch])
-            return o.push ?? { hasUpstream: false, upstreamGone: false }
           }
         }
       }
@@ -8555,7 +8549,6 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       })
       expect(asked.isClean).toEqual([WT])
       expect(asked.readCommits).toEqual([[WT, 'origin/main']])
-      expect(asked.pushState).toEqual([[WT, 'u/a']])
       expect(asked.createPr).toEqual([
         {
           worktreePath: WT, repoPath: 'D:/repo', branch: 'u/a', base: 'origin/main',
@@ -8565,13 +8558,12 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(gh.calls).toEqual([])
     })
 
-    it('github-pr-create does not push a branch whose upstream exists, and pushes one whose upstream is gone', async () => {
-      const kept = await prSetup({ push: { hasUpstream: true, upstreamGone: false } })
-      expect((await call(kept.deps, 'github-pr-create', { run: 'r1' }, '')).body).toEqual({ url: PR_URL, draft: true, pushed: false })
-      expect(kept.asked.createPr[0].needsPush).toBe(false)
-      const gone = await prSetup({ push: { hasUpstream: true, upstreamGone: true } })
-      expect((await call(gone.deps, 'github-pr-create', { run: 'r1' }, '')).body).toEqual({ url: PR_URL, draft: true, pushed: true })
-      expect(gone.asked.createPr[0].needsPush).toBe(true)
+    // Ruling 12: a branch ahead of a live upstream would otherwise open its PR from the stale remote
+    // head. The push is never forced, so an up-to-date branch is a no-op and a diverged one is rejected.
+    it('github-pr-create asks for the push whatever the branch upstream is', async () => {
+      const { deps, asked } = await prSetup()
+      expect((await call(deps, 'github-pr-create', { run: 'r1' }, '')).body).toEqual({ url: PR_URL, draft: true, pushed: true })
+      expect(asked.createPr[0].needsPush).toBe(true)
     })
 
     it('github-pr-create takes the title, body, draft and base it is given; several commits default to the branch name', async () => {
@@ -8602,7 +8594,7 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
           status: 409,
           body: { error: 'This Run is still working' }
         })
-        expect(asked, why).toEqual({ createPr: [], readCommits: [], isClean: [], pushState: [] })
+        expect(asked, why).toEqual({ createPr: [], readCommits: [], isClean: [] })
         expect(gh.calls, why).toEqual([])
       }
       const finished: [string, Task[]][] = [
