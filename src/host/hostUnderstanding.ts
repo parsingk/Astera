@@ -122,6 +122,8 @@ export interface HostUnderstanding {
     recordId: string
   ): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }>
   isWriter(): boolean
+  /** Test seam: resolves once every generation queued so far and every save have landed. Never rejects. */
+  settled(): Promise<void>
 }
 
 /** The core store with the writer gate at every write, and the push after it. A write while an app keeps
@@ -264,6 +266,11 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     load: loadStore,
     writerMayHaveChanged: saveUnstuck,
     isWriter,
+    settled: async () => {
+      await saving
+      await pipeline.settled()
+      await store.settled()
+    },
     onRunFinished: async (input) => {
       try {
         if (!isWriter()) return

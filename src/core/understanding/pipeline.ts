@@ -196,6 +196,11 @@ export class UnderstandingPipeline {
     })
   }
 
+  /** Test seam: resolves once every generation queued so far has ended. Never rejects (see enqueue). */
+  settled(): Promise<void> {
+    return this.chain
+  }
+
   /** Sets one record to `generating`, **outside the queue**: a caller that answers "generating" at once
    *  (the Host's regenerate, E1 §5) makes the file say so before its answer, while regenerate's own fill
    *  may wait behind another generation. Through patch, so it starts from the file. A record that is not

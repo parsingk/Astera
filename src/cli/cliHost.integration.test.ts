@@ -292,6 +292,10 @@ interface Rig {
   journalRows(runId: string): JournalEventRow[]
   /** Test seams inside the Host's own commands. */
   hooks: { release?: () => Promise<void> }
+  /** How It Works: the finished Runs the Host has handed it and it has handled, and a promise that
+   *  resolves once every generation and save it queued has landed. Together, a test's signal that a write
+   *  that did not happen is not merely late. */
+  understanding: { runsHandled(): number; settled(): Promise<void> }
 }
 
 async function hostRig(
@@ -552,6 +556,8 @@ async function hostRig(
 
   /** Exits the Host has handed to the command layer, counted so the teardown can wait them out. */
   let exitsHandled = 0
+  /** Finished Runs the Host has handed How It Works, counted once it handled each. */
+  let runsHandled = 0
   const orch = createHostOrch({
     profileDir,
     version: '9.9.9',
@@ -586,7 +592,17 @@ async function hostRig(
     ...(o.github ? { github: o.github } : {}),
     // How It Works records (MCP P2-C), as host/index.ts wires them: the profile's understanding.json.
     readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
-    understanding: hostUnderstanding,
+    // Counted as the rig counts exits, the call itself unchanged.
+    understanding: {
+      ...hostUnderstanding,
+      onRunFinished: async (input) => {
+        try {
+          await hostUnderstanding.onRunFinished(input)
+        } finally {
+          runsHandled += 1
+        }
+      }
+    },
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -675,7 +691,8 @@ async function hostRig(
         reader.close()
       }
     },
-    hooks
+    hooks,
+    understanding: { runsHandled: () => runsHandled, settled: () => hostUnderstanding.settled() }
   }
 }
 
@@ -2016,7 +2033,9 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const mcp = await mcpClient(h)
 
       await finishedRun(h, projectPath)
-      await new Promise((r) => setTimeout(r, 200))
+      // Handled, and nothing it could have queued is left to land: the file not being there is not a late write.
+      await until(() => expect(h.understanding.runsHandled()).toBe(1))
+      await h.understanding.settled()
       expect(existsSync(path.join(h.profileDir, 'understanding.json'))).toBe(false)
       expect(a.calls).toBe(0)
 
@@ -2035,7 +2054,8 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const refused = await mcp.call('regenerate_work_record', { projectId, recordId: 'by-app', requestId: 'regen-2' })
       expect(refused.isError).toBe(true)
       expect(errorOf(refused)).toMatchObject({ code: 'CONFLICT', message: 'an older Astera app is writing How It Works records; regenerate there' })
-      await new Promise((r) => setTimeout(r, 100))
+      // Answered, and nothing queued is left to land.
+      await h.understanding.settled()
       expect(await fs.readFile(path.join(h.profileDir, 'understanding.json'), 'utf8')).toBe(written)
       expect(a.calls).toBe(0)
     })
