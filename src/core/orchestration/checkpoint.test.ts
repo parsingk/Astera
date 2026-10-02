@@ -381,3 +381,13 @@ describe('sanitize — URL userinfo and credential-named query parameters', () =
     }
   })
 })
+
+describe('sanitize — fine-grained GitHub tokens', () => {
+  it('redacts a github_pat_ token, which the gh[oprsu]_ prefixes do not cover', () => {
+    expect(sanitize('x github_pat_11ABCDEFGHIJKLMNOPQRST_abcdef y')).toBe('x [REDACTED] y')
+  })
+
+  it('leaves the bare word alone', () => {
+    expect(sanitize('a github_pat_ prefix is fine-grained')).toBe('a github_pat_ prefix is fine-grained')
+  })
+})

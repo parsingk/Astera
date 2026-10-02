@@ -121,6 +121,17 @@ describe('createPullRequest', () => {
     expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'truncated' })
   })
 
+  // A gh that is not installed leaves stderr empty; the Host's create_pr needs the spawn error to
+  // say so rather than "gh failed".
+  it('keeps the spawnError of a failed create on the result', async () => {
+    const r = await createPullRequest(req(), {
+      runGit: async () => okGit,
+      runGh: async () => ({ ok: false, stdout: '', stderr: '', spawnError: 'ENOENT' }),
+      normalizeBase: async (_r, b) => b
+    })
+    expect(r).toMatchObject({ ok: false, stage: 'create', spawnError: 'ENOENT' })
+  })
+
   it('passes the normalised base, and --draft only when asked', async () => {
     let args: string[] = []
     await createPullRequest(req({ base: 'origin/develop', draft: true }), {

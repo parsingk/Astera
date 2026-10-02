@@ -1,3 +1,4 @@
+import { ghFailureSentence, type GhFailed, type GhRunner } from './gh'
 import type { PrChecks, PrInfo, PrState } from './types'
 
 /** The PR window per repository. Branches older than the newest 200 PRs are not found — accepted
@@ -92,4 +93,20 @@ export function parsePrList(stdout: string): Record<string, PrInfo> | null {
     }
   }
   return byBranch
+}
+
+/** The PR of one head branch, by the same fold as the coordinator's list: an open PR wins, else the
+ *  newest. Five rows is enough to find an open one behind a few closed retries of the same branch. */
+export async function prForBranch(
+  run: GhRunner,
+  cwd: string,
+  branch: string
+): Promise<{ ok: true; pr: PrInfo | null } | GhFailed> {
+  const fields = PR_LIST_ARGS[PR_LIST_ARGS.length - 1]
+  const r = await run(['pr', 'list', '--head', branch, '--state', 'all', '--limit', '5', '--json', fields], cwd)
+  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  const byBranch = parsePrList(r.stdout)
+  if (byBranch === null)
+    return { ok: false, kind: 'other', message: 'gh pr list answered with something that is not JSON' }
+  return { ok: true, pr: byBranch[branch] ?? null }
 }

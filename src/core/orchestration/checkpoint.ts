@@ -287,11 +287,13 @@ export function sanitize(text: string): string {
   )
   // key=value 모양이 아니어도 알아볼 수 있는 벤더 토큰 접두어. **접두어만으로는 부족한 것이
   // `sk-` 하나다** — 그 모양은 소문자 Jira 브랜치 이름(`sk-1042-fix-login`)과 구별되지 않아서,
-  // 실제 키 길이(sk-ant-…/sk-proj-… 는 40자를 넘는다)를 요구하는 쪽으로 좁혔다. 나머지 셋은
+  // 실제 키 길이(sk-ant-…/sk-proj-… 는 40자를 넘는다)를 요구하는 쪽으로 좁혔다. 나머지 넷은
   // 접두어 자체가 산문에 나올 수 없는 모양이라 그대로 둔다.
   for (const re of [
     /\bsk-[A-Za-z0-9_-]{32,}\b/g,
     /\bgh[oprsu]_[A-Za-z0-9]{16,}\b/g,
+    // A fine-grained GitHub token, which the gh[oprsu]_ prefixes do not cover.
+    /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
     /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
     /\bAKIA[0-9A-Z]{12,}\b/g
   ]) {

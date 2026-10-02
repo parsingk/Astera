@@ -44,6 +44,7 @@ import { HostRetiring } from '../core/host/hostRetiring'
 import { pendingReportFileName, pendingReportsDirIn, serializePendingReport } from '../core/orchestration/pendingReports'
 import { createHostProjectRoots } from './projectRoots'
 import { createHostExits } from './exits'
+import { ensureProject } from '../core/orchestration/projects'
 import { createHostRollTap } from './rollTapHost'
 import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 import type { HostJournal } from './hostJournal'
@@ -140,6 +141,19 @@ describe('createHostOrch', () => {
       expect((await list()).status).not.toBe(403)
       await settings(JSON.stringify({ mcpAccess: 'control', mcpSessions: false }))
       expect((await list()).status).toBe(403)
+    })
+    it('a GitHub write from MCP needs mcpGithubWrite as well as control, read per call', async () => {
+      const orch = orchOver()
+      const rerun = (): ReturnType<typeof orch.call> => orch.call({ cmd: 'github-ci-rerun', args: {}, sessionId: '', from: caller('mcp') })
+      await settings(JSON.stringify({ mcpAccess: 'control' }))
+      const off = await rerun()
+      expect(off.status).toBe(403)
+      expect(JSON.stringify(off.body)).toContain('Let MCP clients act on GitHub')
+      await settings(JSON.stringify({ mcpAccess: 'control', mcpGithubWrite: true }))
+      const on = await rerun()
+      expect(on.status).not.toBe(403)
+      expect(JSON.stringify(on.body)).not.toContain('Let MCP clients act on GitHub')
+      expect(JSON.stringify(on.body)).not.toContain('needs MCP access')
     })
     // MCP P1 design §2: the connection's role reaches handleCommand, which refuses an MCP client a
     // session outside a registered project. The CLI's call is not refused for that.
@@ -2017,6 +2031,123 @@ describe('receiptsToEvict — 무엇이 떨어져 나가는가', () => {
   // 일찍 버리는 값은 호출자의 답이다.
   it('읽을 수 없는 시각은 만료로 치지 않는다', () => {
     expect(receiptsToEvict([entry('sesA\u0000req-1', '시각 아님')], nowMs)).toEqual([])
+  })
+})
+
+// Ruling 6 (MCP P2-B): a repeated request id on each GitHub write acts once and replays the first
+// answer. Two of the three commit nothing, so only the github dep's effect mark keeps their receipt.
+describe('GitHub writes and request receipts (MCP P2-B)', () => {
+  const WT = 'D:/wt-run'
+  const ISSUE = {
+    number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: [], user: { login: 'pk' },
+    author_association: 'OWNER', html_url: 'https://github.com/o/r/issues/5'
+  }
+  /** A seeded profile whose one Run has finished in a worktree, in a registered project. */
+  const finishedRun = async (): Promise<{ runId: string; projectId: string }> => {
+    await seed()
+    const file = path.join(dir, 'orchestration.json')
+    const s = JSON.parse(await fs.readFile(file, 'utf8')) as OrchState
+    const reg = ensureProject(s, { path: 'D:/p', now: NOW })
+    const next: OrchState = {
+      ...reg.state,
+      runs: reg.state.runs.map((r) => ({ ...r, worktree: WT })),
+      tasks: reg.state.tasks.map((t) => ({ ...t, status: 'completed' as const }))
+    }
+    await fs.writeFile(file, JSON.stringify(next), 'utf8')
+    return { runId: next.runs[0].id, projectId: reg.project.id }
+  }
+  const github = () => {
+    const ghCalls: string[] = []
+    const created: unknown[] = []
+    return {
+      ghCalls,
+      created,
+      dep: {
+        run: async (args: string[]) => {
+          ghCalls.push(args.join(' '))
+          const stdout = args[0] === 'api' ? JSON.stringify(ISSUE) : ''
+          return { ok: true, stdout, stderr: '' }
+        },
+        worktreeOf: (p: string) =>
+          p === WT ? { id: 'w1', repoPath: 'D:/p', path: WT, name: 'a', branch: 'u/a', baseRef: 'origin/main', createdAt: NOW } : null,
+        createPr: async (req: unknown) => {
+          created.push(req)
+          return { ok: true as const, url: `https://github.com/o/r/pull/${created.length}` }
+        },
+        readCommits: async () => [{ subject: 'Add a', body: '' }],
+        isClean: async () => ({ changedCount: 0 })
+      }
+    }
+  }
+  const act = async (name: string, args: unknown[]): Promise<unknown> => (name === 'resolveProjectRoot' ? args[0] : {})
+  const answer = (r: { status: number; body: unknown }): string => JSON.stringify({ status: r.status, body: r.body })
+
+  it('github-pr-create with the same request id opens one pull request and replays the first answer', async () => {
+    const { runId } = await finishedRun()
+    const g = github()
+    const orch = orchOver({ act, github: g.dep })
+    const first = await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '', request: 'req-pr' })
+    const second = await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '', request: 'req-pr' })
+    expect(first.status).toBe(200)
+    expect(g.created, 'the retry opened a second pull request').toHaveLength(1)
+    expect(answer(second)).toBe(answer(first))
+    expect(second.replayed).toBe(true)
+  })
+
+  it('github-ci-rerun with the same request id reruns once and replays the first answer', async () => {
+    const { projectId } = await finishedRun()
+    const g = github()
+    const orch = orchOver({ act, github: g.dep })
+    const args = { project: projectId, runId: 77 }
+    const first = await orch.call({ cmd: 'github-ci-rerun', args, sessionId: '', request: 'req-ci' })
+    const second = await orch.call({ cmd: 'github-ci-rerun', args, sessionId: '', request: 'req-ci' })
+    expect(first.status).toBe(200)
+    expect(g.ghCalls, 'the retry reran CI a second time').toEqual(['run rerun 77 --failed'])
+    expect(answer(second)).toBe(answer(first))
+    expect(second.replayed).toBe(true)
+  })
+
+  it('jobs-create-from-issue with the same request id makes one Job and replays the first answer', async () => {
+    const { projectId } = await finishedRun()
+    const g = github()
+    const orch = orchOver({ act, github: g.dep })
+    const args = { project: projectId, number: 5 }
+    const first = await orch.call({ cmd: 'jobs-create-from-issue', args, sessionId: '', request: 'req-issue' })
+    const second = await orch.call({ cmd: 'jobs-create-from-issue', args, sessionId: '', request: 'req-issue' })
+    expect(first.status).toBe(200)
+    expect(answer(second)).toBe(answer(first))
+    expect(second.replayed).toBe(true)
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    expect(saved.jobs, 'the retry made a second Job').toHaveLength(2)
+    expect(g.ghCalls, 'the retry read the issue again').toHaveLength(1)
+  })
+
+  // The mark is on the write itself, so a refusal before it (a dirty worktree) keeps no receipt and
+  // the same id works once the worktree is clean.
+  it('github-pr-create refused before it acted keeps no receipt; the same id then opens the pull request', async () => {
+    const { runId } = await finishedRun()
+    const g = github()
+    let changedCount = 2
+    const orch = orchOver({ act, github: { ...g.dep, isClean: async () => ({ changedCount }) } })
+    const refused = await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '', request: 'req-pr' })
+    expect(refused.status).toBe(409)
+    changedCount = 0
+    const retried = await orch.call({ cmd: 'github-pr-create', args: { run: runId }, sessionId: '', request: 'req-pr' })
+    expect(retried.status, 'the refusal was kept as a receipt').toBe(200)
+    expect(retried.replayed).not.toBe(true)
+    expect(g.created).toHaveLength(1)
+  })
+
+  // The reads still leave no receipt: a second read reads GitHub again.
+  it('a GitHub read with a request id leaves no receipt', async () => {
+    const { projectId } = await finishedRun()
+    const g = github()
+    const orch = orchOver({ act, github: g.dep })
+    const args = { project: projectId, number: 5 }
+    await orch.call({ cmd: 'github-issue', args, sessionId: '', request: 'req-read' })
+    const second = await orch.call({ cmd: 'github-issue', args, sessionId: '', request: 'req-read' })
+    expect(second.replayed).not.toBe(true)
+    expect(g.ghCalls).toHaveLength(2)
   })
 })
 

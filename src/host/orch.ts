@@ -16,6 +16,7 @@ import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
+import { readMcpGithubWrite } from '../core/settings/mcpGithubWrite'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
@@ -454,6 +455,9 @@ export function createHostOrch(a: {
   /** `sessions create` (sessionCreate.ts), passed through to `hostOrchDeps`. Absent: the command
    *  answers 409. */
   createSession?: OrchServerDeps['createSession']
+  /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
+   *  commands answer 409. */
+  github?: OrchServerDeps['github']
   /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
    *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
   journal?: Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> | null
@@ -644,6 +648,7 @@ export function createHostOrch(a: {
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       ...(a.createSession ? { createSession: a.createSession } : {}),
+      ...(a.github ? { github: a.github } : {}),
       ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {
         marks.effects += 1
@@ -1269,7 +1274,12 @@ export function createHostOrch(a: {
         // cannot be read refuses (readMcpAccess throws; the catch below answers 500 with its message).
         if (from?.role === 'mcp') {
           const settingsFile = path.join(a.profileDir, 'app-settings.json')
-          const refused = mcpRefusal(cmd, await readMcpAccess(settingsFile), await readMcpSessions(settingsFile))
+          const refused = mcpRefusal(
+            cmd,
+            await readMcpAccess(settingsFile),
+            await readMcpSessions(settingsFile),
+            await readMcpGithubWrite(settingsFile)
+          )
           if (refused) return refused
         }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt

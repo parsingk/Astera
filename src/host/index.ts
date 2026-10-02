@@ -56,6 +56,9 @@ import { probeLinuxTools, realProbeDeps } from './workspace/linuxTools'
 import { workspaceSupported } from '../core/workspace/platform'
 import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
+import { defaultGhRunner } from '../core/github/gh'
+import { createPullRequest, readCommits } from '../core/github/prCreate'
+import { isCleanWorktree } from '../core/worktrees/git'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -506,6 +509,17 @@ async function main(): Promise<void> {
       list: () => hostSessions.listSessions(),
       log: (m) => log.write(m)
     }),
+    // The `github-*` commands (MCP P2-B): the user's gh on this Host's PATH, and a Run's branch from this
+    // Host's worktree registry. With no spawner the registry is never loaded, so `worktreeOf` is left
+    // out and a Run-scoped command says so; the project-scoped ones still answer.
+    github: {
+      run: defaultGhRunner,
+      ...(spawner ? { worktreeOf: (p: string) => worktrees.infoOf(p) } : {}),
+      // github-pr-create: the app's own create PR path (push, then gh pr create), over the Run's worktree.
+      createPr: (req) => createPullRequest(req),
+      readCommits: (wt, base) => readCommits(wt, base),
+      isClean: (wt) => isCleanWorktree(wt)
+    },
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,

@@ -19,11 +19,13 @@ import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
 import { registerPrompts, registerResources } from './resources'
 import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
-import { MCP_LIMITS, TOOLS, convergenceRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
+import { MCP_LIMITS, TOOLS, convergenceRefusal, githubTargetRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
- *  because a filter that rewrites a path breaks the next call that uses it. */
+ *  because a filter that rewrites a path breaks the next call that uses it. The set is one for every
+ *  tool on purpose: a field added for the GitHub tools (`name`, `text`, `body`...) is filtered wherever
+ *  it appears, which costs at most a redacted word and never lets a secret through. */
 const FREE_TEXT = new Set([
   'question',
   'resolution',
@@ -39,7 +41,15 @@ const FREE_TEXT = new Set([
   'title',
   'description',
   'suggestedFix',
-  'retryOnceFailed'
+  'retryOnceFailed',
+  // The GitHub tools (MCP P2-B): an issue's and a pull request's text is written by someone else, and a
+  // CI log is whatever the build printed.
+  'body',
+  'name',
+  'workflow',
+  'labels',
+  'author',
+  'text'
 ])
 
 /** Every object in a `checks` array, at any depth, without its `outputTail`: raw validator output
@@ -134,8 +144,12 @@ const textResult = (sentence: string, data: Record<string, unknown>): CallToolRe
 const errorResult = (code: CliErrorCode, message: string, cmd?: string, body?: unknown): CallToolResult => {
   // The same details the CLI's envelope carries (run.ts), so nextSteps branches the same way: a
   // request in flight points at `requests show`, a repair only the app can make gets none.
-  const details = refusalDetailsOf(body)
-  const data = { code, message, nextSteps: nextStepsFor({ code, cmd, details }), ...(details ? { details } : {}) }
+  let details = refusalDetailsOf(body)
+  const nextSteps = nextStepsFor({ code, cmd, details })
+  // A create_pr that failed after its push left the branch on the remote: the Host says so in `pushed`.
+  const pushed = cmd === 'github-pr-create' ? (body as { pushed?: unknown } | undefined)?.pushed : undefined
+  if (typeof pushed === 'boolean') details = { ...details, pushed }
+  const data = { code, message, nextSteps, ...(details ? { details } : {}) }
   // **No structuredContent on an error.** Cursor validates it even when isError is set, so an error
   // carries its data only in `content`: the code/message line, then the same JSON.
   return { isError: true, content: textResult(`${code}: ${message}`, data) }
@@ -195,7 +209,16 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   // or one that is no cursor at all, is the caller's mistake.
   const offset = typeof input.cursor === 'string' ? cursorOffset(t.name, input.cursor) : 0
   if (typeof offset !== 'number') return errorResult('INVALID_ARGUMENTS', offset.error)
-  const refused = t.name === 'create_job' ? convergenceRefusal(input) : t.name === 'create_task' ? taskTargetRefusal(input) : null
+  const refused =
+    t.name === 'create_job' || t.name === 'create_job_from_issue'
+      ? convergenceRefusal(input)
+      : t.name === 'create_task'
+        ? taskTargetRefusal(input)
+        : t.name === 'get_pr_status'
+          ? githubTargetRefusal(input, 'branch')
+          : t.name === 'get_ci'
+            ? githubTargetRefusal(input, 'pr')
+            : null
   if (refused !== null) return errorResult('INVALID_ARGUMENTS', refused)
   // create_task without an accountId runs on the Job's coordinator account, the default the
   // coordinator's own planning brief uses. jobs-get takes a Job id or a Run id.

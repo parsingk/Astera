@@ -1,7 +1,7 @@
-import { classifyGhFailure, gh, type GhResult } from '../core/github/gh'
-import { git, type GitResult } from '../core/worktrees/git'
-import { normalizeBaseForGh } from '../core/worktrees/push'
-import type { CommitSummary } from '../core/github/fill'
+import { classifyGhFailure, defaultGhRunner, type GhRunner } from './gh'
+import { git, type GitResult } from '../worktrees/git'
+import { normalizeBaseForGh } from '../worktrees/push'
+import type { CommitSummary } from './fill'
 
 export interface PrCreateRequest {
   worktreePath: string
@@ -40,6 +40,9 @@ export type PrCreateResult =
       /** Whether the branch reached the remote. A create-stage failure leaves it pushed, and
        *  saying so is what stops someone undoing a push that was fine. */
       pushed: boolean
+      /** The gh spawn error of a create-stage failure, when there was one (ENOENT: gh is not installed).
+       *  stderr is empty then, so without it the failure reads as unclassified. */
+      spawnError?: string
     }
 
 /** `git push` is the one git call this function makes, and git()'s 30s default is far too short for
@@ -49,7 +52,7 @@ const PUSH_TIMEOUT_MS = 180_000
 
 export interface PrCreateDeps {
   runGit?: (args: string[], cwd: string) => Promise<GitResult>
-  runGh?: (args: string[], cwd: string) => Promise<GhResult>
+  runGh?: GhRunner
   normalizeBase?: (repo: string, base: string) => Promise<string>
 }
 
@@ -61,7 +64,7 @@ export async function createPullRequest(
 ): Promise<PrCreateResult> {
   const runGit =
     deps.runGit ?? ((a: string[], cwd: string) => git(a, { cwd, timeoutMs: PUSH_TIMEOUT_MS }))
-  const runGh = deps.runGh ?? ((a: string[], cwd: string) => gh(a, { cwd }))
+  const runGh = deps.runGh ?? defaultGhRunner
   const normalize = deps.normalizeBase ?? normalizeBaseForGh
 
   if (req.needsPush) {
@@ -82,7 +85,14 @@ export async function createPullRequest(
   const kind: PrCreateFailureKind = /already exists/i.test(created.stderr)
     ? 'exists'
     : classifyGhFailure(created.stderr, created.spawnError)
-  return { ok: false, stage: 'create', kind, detail: created.stderr, pushed: req.needsPush }
+  return {
+    ok: false,
+    stage: 'create',
+    kind,
+    detail: created.stderr,
+    pushed: req.needsPush,
+    ...(created.spawnError ? { spawnError: created.spawnError } : {})
+  }
 }
 
 /** The commits this branch adds over its base, newest first — the order gh --fill uses. */

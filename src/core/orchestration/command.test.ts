@@ -22,7 +22,7 @@ import {
 } from './state'
 import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
-import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
+import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
 import { runningRunCount } from './running'
@@ -31,6 +31,10 @@ import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
 import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
+import type { GhResult } from '../github/gh'
+import type { CommitSummary } from '../github/fill'
+import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
+import { issueObjective, parseIssue } from '../github/issue'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -8262,5 +8266,534 @@ describe('a paused Run reads paused', () => {
   it('resumed, it reads running again', async () => {
     const { deps, runId } = await stoppedRun()
     expect((await call(deps, 'runs-resume', { id: runId })).body).toMatchObject({ outcome: 'running' })
+  })
+})
+
+// MCP P2-B: the three GitHub reads, answered by the Host over the user's gh. The runner here is a
+// fake keyed by argv; nothing in these tests runs a real gh.
+describe('handleCommand — github-pr, github-ci and github-issue', () => {
+  const WT = 'D:/wt/a'
+  const info = { id: 'w1', repoPath: 'D:/repo', path: WT, name: 'a', branch: 'u/a', baseRef: 'origin/main', createdAt: NOW }
+  const prRow = (over: Record<string, unknown> = {}) => ({
+    number: 12, title: 'Add a', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/12', headRefName: 'u/a', statusCheckRollup: [], ...over
+  })
+  const PR_LIST = 'pr list --head u/a --state all --limit 5 --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+  const CHECKS = (n: number) => `pr checks ${n} --json name,state,bucket,link,workflow,startedAt,completedAt`
+  const checkRow = {
+    name: 'build', state: 'FAILURE', bucket: 'fail', link: 'https://github.com/o/r/actions/runs/77/job/1',
+    workflow: 'CI', startedAt: '2026-10-01T00:00:00Z', completedAt: '2026-10-01T00:05:00Z'
+  }
+  const issueJson = {
+    number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: [{ name: 'bug' }], user: { login: 'pk' },
+    author_association: 'OWNER', html_url: 'https://github.com/o/r/issues/5'
+  }
+  /** A gh that answers by argv and records every call; an argv it was not given fails as gh would. */
+  const fakeGh = (answers: Record<string, Partial<GhResult>>) => {
+    const calls: { args: string[]; cwd: string }[] = []
+    const run = async (args: string[], cwd: string): Promise<GhResult> => {
+      calls.push({ args, cwd })
+      const a = answers[args.join(' ')]
+      return a
+        ? { ok: true, stdout: '', stderr: '', ...a }
+        : { ok: false, stdout: '', stderr: `unexpected gh call: ${args.join(' ')}`, exitCode: 1 }
+    }
+    return { run, calls }
+  }
+  const setup = (answers: Record<string, Partial<GhResult>>, run: Partial<JobRun> = { worktree: WT }) => {
+    const reg = ensureProject(emptyState(), { path: 'D:/repo', now: NOW })
+    const state: OrchState = {
+      ...reg.state,
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/repo', createdAt: NOW }],
+      runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...run } as JobRun]
+    }
+    const deps = makeDeps(state)
+    const gh = fakeGh(answers)
+    const unexpected = (name: string) => async (): Promise<never> => {
+      throw new Error(`${name} was not expected`)
+    }
+    deps.github = {
+      run: gh.run,
+      worktreeOf: (p) => (p === WT ? info : null),
+      createPr: unexpected('createPr'),
+      readCommits: unexpected('readCommits'),
+      isClean: unexpected('isClean')
+    }
+    return { deps, gh, projectId: reg.project.id, projectPath: reg.project.path }
+  }
+
+  it('github-pr with a run reads the PR of its worktree branch, in the worktree', async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { stdout: JSON.stringify([prRow()]) } })
+    const r = await call(deps, 'github-pr', { run: 'r1' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+    })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([WT])
+  })
+
+  it('github-pr with a project and a branch reads in the project root; no PR is pr: null', async () => {
+    const { deps, gh, projectId, projectPath } = setup({ [PR_LIST]: { stdout: '[]' } })
+    const r = await call(deps, 'github-pr', { project: projectId, branch: 'u/a' }, '')
+    expect(r).toEqual({ status: 200, body: { branch: 'u/a', pr: null } })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([projectPath])
+    expect((await call(deps, 'github-pr', { project: projectId }, '')).status).toBe(400)
+  })
+
+  it('run and project: exactly one of the two (400); an unknown one is 404; gh is not run', async () => {
+    const { deps, gh, projectId } = setup({})
+    expect((await call(deps, 'github-pr', {}, '')).status).toBe(400)
+    expect((await call(deps, 'github-pr', { run: 'r1', project: projectId, branch: 'b' }, '')).status).toBe(400)
+    expect((await call(deps, 'github-pr', { run: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'github-pr', { project: 'nope', branch: 'b' }, '')).status).toBe(404)
+    expect((await call(deps, 'github-issue', { project: 'nope', number: 5 }, '')).status).toBe(404)
+    expect(gh.calls).toEqual([])
+  })
+
+  it('a Run with no worktree, or one the registry no longer knows, has no branch of its own (409); gh is not run', async () => {
+    for (const run of [{}, { worktree: 'D:/wt/gone' }]) {
+      const { deps, gh } = setup({}, run)
+      for (const cmd of ['github-pr', 'github-ci']) {
+        const r = await call(deps, cmd, { run: 'r1' }, '')
+        expect(r).toEqual({ status: 409, body: { error: 'This Run has no branch of its own' } })
+      }
+      expect(gh.calls).toEqual([])
+    }
+  })
+
+  // The github-pr form of this test stops at github-pr's own --branch 400; github-ci with no --pr
+  // reaches githubTarget, so these are its 400s.
+  it('githubTarget: run and project both given, or either one empty, is 400; gh is not run', async () => {
+    const { deps, gh, projectId } = setup({})
+    expect(await call(deps, 'github-ci', { run: 'r1', project: projectId }, '')).toEqual({
+      status: 400,
+      body: { error: 'give exactly one of --run (a Run id) or --project (a project id)' }
+    })
+    expect(await call(deps, 'github-ci', { run: '' }, '')).toEqual({
+      status: 400,
+      body: { error: '--run needs a value: a Run id' }
+    })
+    expect(await call(deps, 'github-ci', { project: '' }, '')).toEqual({
+      status: 400,
+      body: { error: '--project needs a value: a project id (from `projects list`)' }
+    })
+    expect(gh.calls).toEqual([])
+  })
+
+  it('a Host that has not loaded its worktree registry says so for a Run, rather than "no branch of its own"', async () => {
+    const { deps, gh, projectId } = setup({ 'api repos/{owner}/{repo}/issues/5': { stdout: JSON.stringify(issueJson) } })
+    deps.github = { ...deps.github!, worktreeOf: undefined }
+    for (const cmd of ['github-pr', 'github-ci']) {
+      expect(await call(deps, cmd, { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "This Host has not loaded its worktree registry (it starts no sessions), so it cannot find a Run's branch" }
+      })
+    }
+    expect(gh.calls).toEqual([])
+    // Project-scoped commands need no registry.
+    expect((await call(deps, 'github-issue', { project: projectId, number: 5 }, '')).status).toBe(200)
+  })
+
+  it("github-ci with a run whose PR lookup fails answers ghRefusal's status, and the checks are not read", async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { ok: false, stderr: 'dial tcp: lookup api.github.com: no such host' } })
+    expect(await call(deps, 'github-ci', { run: 'r1' }, '')).toEqual({
+      status: 502,
+      body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host' }
+    })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  it("without the github dep the three answer 409: they are the Host's", async () => {
+    const deps = makeDeps()
+    const asked: [string, Record<string, unknown>][] = [
+      ['github-pr', { run: 'r1' }],
+      ['github-ci', { run: 'r1' }],
+      ['github-issue', { project: 'p1', number: 5 }]
+    ]
+    for (const [cmd, args] of asked) {
+      const r = await call(deps, cmd, args, '')
+      expect(r.status).toBe(409)
+      expect((r.body as { error: string }).error).toMatch(/answered by the Astera Host/)
+    }
+  })
+
+  it('github-ci with a run finds its PR, then reads the checks; a failing check is a result', async () => {
+    const { deps, gh } = setup({
+      [PR_LIST]: { stdout: JSON.stringify([prRow()]) },
+      [CHECKS(12)]: { ok: false, exitCode: 1, stdout: JSON.stringify([checkRow]) }
+    })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toEqual({ status: 200, body: { pr: 12, checks: [{ ...checkRow, runId: 77 }] } })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([WT, WT])
+  })
+
+  it("github-ci with a run whose branch has no PR is 409, and the checks are not read", async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { stdout: '[]' } })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toEqual({ status: 409, body: { error: "This Run's branch has no pull request" } })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  it('github-ci with a project, a pr and log returns the failed log tail', async () => {
+    const long = 'x'.repeat(9000) + '\nlast line'
+    const { deps, gh, projectId, projectPath } = setup({
+      [CHECKS(12)]: { stdout: JSON.stringify([checkRow]) },
+      'run view 77 --log-failed': { stdout: long }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 12, log: 77 }, '')
+    expect(r.status).toBe(200)
+    const body = r.body as { pr: number; checks: unknown[]; log: { runId: number; text: string; cut: boolean } }
+    expect(body.pr).toBe(12)
+    expect(body.checks).toHaveLength(1)
+    expect(body.log.runId).toBe(77)
+    expect(body.log.cut).toBe(true)
+    expect(body.log.text.endsWith('last line')).toBe(true)
+    expect(body.log.text.length).toBeLessThanOrEqual(8000)
+    expect(gh.calls.every((c) => c.cwd === projectPath)).toBe(true)
+    expect((await call(deps, 'github-ci', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'github-ci', { project: projectId, pr: 12, log: 0 }, '')).status).toBe(400)
+  })
+
+  it('github-issue reads one issue of the project', async () => {
+    const { deps, gh, projectId, projectPath } = setup({ 'api repos/{owner}/{repo}/issues/5': { stdout: JSON.stringify(issueJson) } })
+    const r = await call(deps, 'github-issue', { project: projectId, number: 5 }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: {
+        number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: ['bug'], author: 'pk',
+        authorAssociation: 'OWNER', url: 'https://github.com/o/r/issues/5', isPullRequest: false
+      }
+    })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([projectPath])
+    expect((await call(deps, 'github-issue', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'github-issue', { number: 5 }, '')).status).toBe(400)
+  })
+
+  it('gh failures: not installed and not logged in are 409, not found is 404, the rest 502', async () => {
+    const ask = async (a: Partial<GhResult>) => {
+      const { deps, projectId } = setup({ 'api repos/{owner}/{repo}/issues/5': { ok: false, ...a } })
+      return call(deps, 'github-issue', { project: projectId, number: 5 }, '')
+    }
+    expect(await ask({ spawnError: 'ENOENT' })).toEqual({
+      status: 409,
+      body: { error: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH" }
+    })
+    expect(await ask({ stderr: 'To get started with GitHub CLI, please run:  gh auth login' })).toEqual({
+      status: 409,
+      body: { error: 'gh is not logged in: run `gh auth login`' }
+    })
+    expect((await ask({ stderr: 'gh: Not Found (HTTP 404)' })).status).toBe(404)
+    expect(await ask({ stderr: 'dial tcp: lookup api.github.com: no such host' })).toEqual({
+      status: 502,
+      body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host' }
+    })
+  })
+
+  // Ruling 2: gh's GraphQL wording for a missing pull request or issue is a 404 from these commands too.
+  it('GraphQL "Could not resolve to a PullRequest" is 404', async () => {
+    const { deps, projectId } = setup({
+      [CHECKS(999)]: { ok: false, exitCode: 1, stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 999. (repository.pullRequest)' }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 999 }, '')
+    expect(r.status).toBe(404)
+    expect((r.body as { error: string }).error).toMatch(/Could not resolve to a PullRequest/)
+  })
+
+  describe('the writes: github-pr-create, github-ci-rerun and jobs-create-from-issue', () => {
+    const PR_URL = 'https://github.com/o/r/pull/13'
+    const task = (status: Task['status'], over: Partial<Task> = {}): Task =>
+      ({ id: `t_${status}_${Math.random()}`, runId: 'r1', title: 't', spec: 's', deps: [], status, consecutiveFailures: 0, ...over }) as Task
+    /** The three write-side members of the github dep, each recording what it was asked. */
+    const writes = (o: {
+      commits?: CommitSummary[]
+      changed?: number | Error
+      created?: PrCreateResult
+    } = {}) => {
+      const asked = { createPr: [] as PrCreateRequest[], readCommits: [] as [string, string][], isClean: [] as string[] }
+      return {
+        asked,
+        dep: {
+          createPr: async (req: PrCreateRequest) => {
+            asked.createPr.push(req)
+            return o.created ?? { ok: true as const, url: PR_URL }
+          },
+          readCommits: async (wt: string, base: string) => {
+            asked.readCommits.push([wt, base])
+            return o.commits ?? [{ subject: 'Add a', body: 'Because a was missing' }]
+          },
+          isClean: async (wt: string) => {
+            asked.isClean.push(wt)
+            if (o.changed instanceof Error) throw o.changed
+            return { changedCount: o.changed ?? 0 }
+          }
+        }
+      }
+    }
+    /** A Run with a worktree, its Tasks in `tasks`, and the write fakes over `setup`'s gh. */
+    const prSetup = async (
+      w: Parameters<typeof writes>[0] = {},
+      tasks: Task[] = [task('completed')],
+      run: Partial<JobRun> = { worktree: WT }
+    ) => {
+      const base = setup({}, run)
+      await base.deps.setState({ ...base.deps.getState(), tasks })
+      const fakes = writes(w)
+      base.deps.github = { ...base.deps.github!, ...fakes.dep }
+      return { ...base, asked: fakes.asked }
+    }
+
+    it('github-pr-create with defaults opens a draft PR titled by the one commit, pushing a branch with no upstream', async () => {
+      const { deps, asked, gh } = await prSetup()
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 200,
+        body: { url: PR_URL, draft: true, pushed: true }
+      })
+      expect(asked.isClean).toEqual([WT])
+      expect(asked.readCommits).toEqual([[WT, 'origin/main']])
+      expect(asked.createPr).toEqual([
+        {
+          worktreePath: WT, repoPath: 'D:/repo', branch: 'u/a', base: 'origin/main',
+          title: 'Add a', body: 'Because a was missing', draft: true, needsPush: true
+        }
+      ])
+      expect(gh.calls).toEqual([])
+    })
+
+    // Ruling 12: a branch ahead of a live upstream would otherwise open its PR from the stale remote
+    // head. The push is never forced, so an up-to-date branch is a no-op and a diverged one is rejected.
+    it('github-pr-create asks for the push whatever the branch upstream is', async () => {
+      const { deps, asked } = await prSetup()
+      expect((await call(deps, 'github-pr-create', { run: 'r1' }, '')).body).toEqual({ url: PR_URL, draft: true, pushed: true })
+      expect(asked.createPr[0].needsPush).toBe(true)
+    })
+
+    it('github-pr-create takes the title, body, draft and base it is given; several commits default to the branch name', async () => {
+      const commits = [{ subject: 'two', body: '' }, { subject: 'one', body: '' }]
+      const given = await prSetup({ commits })
+      const r = await call(given.deps, 'github-pr-create', { run: 'r1', title: 'T', body: 'B', draft: false, base: 'dev' }, '')
+      expect(r).toEqual({ status: 200, body: { url: PR_URL, draft: false, pushed: true } })
+      expect(given.asked.readCommits).toEqual([[WT, 'dev']])
+      expect(given.asked.createPr[0]).toMatchObject({ title: 'T', body: 'B', draft: false, base: 'dev' })
+      const filled = await prSetup({ commits })
+      await call(filled.deps, 'github-pr-create', { run: 'r1' }, '')
+      expect(filled.asked.createPr[0]).toMatchObject({ title: 'u/a', body: '- two\n- one' })
+    })
+
+    // Ruling 1: "finished" is the outcome `runs-get` answers (runView). completed and failed are
+    // terminal; running (no Tasks yet, a Task still open, a failed Task with retries left) and paused
+    // are not.
+    it("github-pr-create refuses a Run runs-get does not call finished (409), and touches nothing", async () => {
+      const working: [string, Task[], Partial<JobRun>][] = [
+        ['no Tasks yet', [], { worktree: WT }],
+        ['a Task still dispatched', [task('completed'), task('dispatched')], { worktree: WT }],
+        ['a failed Task with retries left', [task('failed', { consecutiveFailures: 1 })], { worktree: WT }]
+      ]
+      for (const [why, tasks, run] of working) {
+        const { deps, asked, gh } = await prSetup({}, tasks, run)
+        expect(await call(deps, 'github-pr-create', { run: 'r1' }, ''), why).toEqual({
+          status: 409,
+          body: { error: 'This Run is still working' }
+        })
+        expect(asked, why).toEqual({ createPr: [], readCommits: [], isClean: [] })
+        expect(gh.calls, why).toEqual([])
+      }
+      const finished: [string, Task[]][] = [
+        ['completed', [task('completed')]],
+        ['failed for good', [task('completed'), task('failed', { consecutiveFailures: FAILURE_LIMIT })]]
+      ]
+      for (const [why, tasks] of finished) {
+        const { deps } = await prSetup({}, tasks)
+        expect((await call(deps, 'runs-get', { id: 'r1' }, '')).body, why).toMatchObject({ outcome: why === 'completed' ? 'completed' : 'failed' })
+        expect((await call(deps, 'github-pr-create', { run: 'r1' }, '')).status, why).toBe(200)
+      }
+    })
+
+    // runs-get answers `paused` for it whatever its Tasks say, and "still working" would be wrong when they
+    // are all finished.
+    it('github-pr-create refuses a paused Run with its own 409, even when its Tasks are all finished', async () => {
+      const { deps, asked, gh } = await prSetup({}, [task('completed')], { worktree: WT, paused: true })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: 'This Run is paused; resume it first' }
+      })
+      expect(asked.createPr).toEqual([])
+      expect(asked.isClean).toEqual([])
+      expect(gh.calls).toEqual([])
+    })
+
+    it('github-pr-create refuses a dirty worktree, naming the count (409), and a branch with no commits (409)', async () => {
+      const dirty = await prSetup({ changed: 3 })
+      expect(await call(dirty.deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "The Run's worktree has 3 uncommitted changes" }
+      })
+      expect(dirty.asked.createPr).toEqual([])
+      const empty = await prSetup({ commits: [] })
+      expect(await call(empty.deps, 'github-pr-create', { run: 'r1', title: 'T', body: 'B' }, '')).toEqual({
+        status: 409,
+        body: { error: "The Run's branch adds no commits" }
+      })
+      expect(empty.asked.createPr).toEqual([])
+    })
+
+    it("github-pr-create: a worktree git cannot read is 409 with git's words; nothing is created", async () => {
+      const { deps, asked } = await prSetup({ changed: new Error('GIT_REMOVE_FAILED: status check failed (not a git repository)') })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "Could not read the Run's worktree: status check failed (not a git repository)" }
+      })
+      expect(asked.createPr).toEqual([])
+    })
+
+    it("github-pr-create failures: exists keeps gh's message with the URL, rejected says so, the rest map as the reads do", async () => {
+      const failed = async (kind: string, detail: string, stage: 'push' | 'create' = 'create') => {
+        const { deps } = await prSetup({ created: { ok: false, stage, kind, detail, pushed: stage === 'create' } as PrCreateResult })
+        return call(deps, 'github-pr-create', { run: 'r1' }, '')
+      }
+      const exists = 'a pull request for branch "u/a" into branch "main" already exists:\nhttps://github.com/o/r/pull/9'
+      expect(await failed('exists', exists)).toEqual({ status: 409, body: { error: exists, pushed: true } })
+      expect(await failed('rejected', '! [rejected] u/a -> u/a (fetch first)', 'push')).toEqual({
+        status: 409,
+        body: { error: 'The push was rejected', pushed: false }
+      })
+      expect(await failed('auth', 'To get started with GitHub CLI, please run:  gh auth login')).toEqual({
+        status: 409,
+        body: { error: 'gh is not logged in: run `gh auth login`', pushed: true }
+      })
+      expect(await failed('network', 'dial tcp: lookup api.github.com: no such host')).toEqual({
+        status: 502,
+        body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host', pushed: true }
+      })
+    })
+
+    it('github-pr-create with gh not installed answers the not-installed sentence (409)', async () => {
+      const { deps } = await prSetup({
+        created: { ok: false, stage: 'create', kind: 'other', detail: '', pushed: true, spawnError: 'ENOENT' }
+      })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH", pushed: true }
+      })
+    })
+
+    // parseArgs keeps flag values as strings, so `--draft false` typed on the command line is 'false'.
+    it('github-pr-create takes draft as a boolean or the strings true and false; anything else is 400', async () => {
+      for (const [given, draft] of [[false, false], ['false', false], ['true', true], [true, true]] as const) {
+        const { deps, asked } = await prSetup()
+        const r = await call(deps, 'github-pr-create', { run: 'r1', draft: given }, '')
+        expect(r, String(given)).toEqual({ status: 200, body: { url: PR_URL, draft, pushed: true } })
+        expect(asked.createPr[0].draft, String(given)).toBe(draft)
+      }
+      const { deps } = await prSetup()
+      expect((await call(deps, 'github-pr-create', { run: 'r1', draft: 'no' }, '')).status).toBe(400)
+    })
+
+    it('github-pr-create argument refusals (400): a project, an empty title or base, a draft that is not true or false', async () => {
+      const { deps, asked, projectId } = await prSetup()
+      for (const args of [
+        { project: projectId },
+        { run: 'r1', title: '' },
+        { run: 'r1', base: '' },
+        { run: 'r1', body: 5 },
+        { run: 'r1', draft: 'yes' }
+      ]) {
+        expect((await call(deps, 'github-pr-create', args, '')).status, JSON.stringify(args)).toBe(400)
+      }
+      expect(asked.createPr).toEqual([])
+    })
+
+    it('github-ci-rerun reruns the failed jobs of a CI run in the project root', async () => {
+      const { deps, gh, projectId, projectPath } = setup({ 'run rerun 77 --failed': {} })
+      expect(await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).toEqual({
+        status: 200,
+        body: { runId: 77, rerun: true }
+      })
+      expect(gh.calls).toEqual([{ args: ['run', 'rerun', '77', '--failed'], cwd: projectPath }])
+    })
+
+    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or a --run, is 400', async () => {
+      const { deps, gh, projectId } = setup({ 'run rerun 77 --failed': { ok: false, stderr: 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/77/rerun-failed-jobs)' } })
+      expect((await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).status).toBe(404)
+      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1', runId: 77 }])
+        expect((await call(deps, 'github-ci-rerun', args, '')).status, JSON.stringify(args)).toBe(400)
+      expect(gh.calls).toHaveLength(1)
+    })
+
+    const ISSUE_API = 'api repos/{owner}/{repo}/issues/5'
+    const issueSetup = (over: Record<string, unknown> = {}) => setup({ [ISSUE_API]: { stdout: JSON.stringify({ ...issueJson, ...over }) } })
+
+    it("jobs-create-from-issue makes an OWNER's issue a Job in the project, its objective the delimited issue", async () => {
+      const { deps, projectId, projectPath } = issueSetup()
+      const r = await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5, concurrency: 2 }, '')
+      expect(r.status).toBe(200)
+      const body = r.body as { id: string; objective: string; cwd: string; concurrency?: number; issue: unknown }
+      expect(body.issue).toEqual({ number: 5, url: 'https://github.com/o/r/issues/5' })
+      const job = deps.getState().jobs.find((j) => j.id === body.id)
+      expect(job?.objective).toBe(issueObjective(parseIssue(JSON.stringify(issueJson))!))
+      expect(job?.cwd).toBe(projectPath)
+      expect(job?.concurrency).toBe(2)
+      expect(body.objective).toBe(job?.objective)
+    })
+
+    it('jobs-create-from-issue refuses an author outside OWNER, MEMBER and COLLABORATOR (403), and makes no Job', async () => {
+      for (const association of ['CONTRIBUTOR', 'NONE']) {
+        const { deps, projectId } = issueSetup({ author_association: association })
+        const before = deps.getState().jobs.length
+        expect(await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')).toEqual({
+          status: 403,
+          body: { error: `Issue #5 was written by a ${association} of the repository; only an owner, member or collaborator's issue becomes a Job` }
+        })
+        expect(deps.getState().jobs).toHaveLength(before)
+      }
+      for (const association of ['MEMBER', 'COLLABORATOR']) {
+        const { deps, projectId } = issueSetup({ author_association: association })
+        expect((await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')).status, association).toBe(200)
+      }
+    })
+
+    it('jobs-create-from-issue refuses a closed issue and a pull request (409), and makes no Job', async () => {
+      const closed = issueSetup({ state: 'closed' })
+      expect(await call(closed.deps, 'jobs-create-from-issue', { project: closed.projectId, number: 5 }, '')).toEqual({
+        status: 409,
+        body: { error: 'Issue #5 is closed' }
+      })
+      const pr = issueSetup({ state: 'closed', pull_request: { url: 'https://api.github.com/repos/o/r/pulls/5' } })
+      expect(await call(pr.deps, 'jobs-create-from-issue', { project: pr.projectId, number: 5 }, '')).toEqual({
+        status: 409,
+        body: { error: '#5 is a pull request, not an issue' }
+      })
+      expect(closed.deps.getState().jobs).toHaveLength(1)
+      expect(pr.deps.getState().jobs).toHaveLength(1)
+    })
+
+    it('jobs-create-from-issue refuses an objective or a cwd of its own, a missing number and a --run (400); gh is not run', async () => {
+      const { deps, gh, projectId } = issueSetup()
+      for (const args of [
+        { project: projectId, number: 5, objective: 'do something else' },
+        { project: projectId, number: 5, cwd: 'D:/elsewhere' },
+        { project: projectId },
+        { run: 'r1', number: 5 }
+      ])
+        expect((await call(deps, 'jobs-create-from-issue', args, '')).status, JSON.stringify(args)).toBe(400)
+      expect(gh.calls).toEqual([])
+    })
+
+    it('jobs-create-from-issue: a gh failure is ghRefusal, and no Job', async () => {
+      const { deps, projectId } = setup({ [ISSUE_API]: { ok: false, stderr: 'gh: Not Found (HTTP 404)' } })
+      expect((await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')).status).toBe(404)
+      expect(deps.getState().jobs).toHaveLength(1)
+    })
+
+    it("without the github dep the three writes answer 409: they are the Host's", async () => {
+      const deps = makeDeps()
+      for (const [cmd, args] of [
+        ['github-pr-create', { run: 'r1' }],
+        ['github-ci-rerun', { project: 'p1', runId: 1 }],
+        ['jobs-create-from-issue', { project: 'p1', number: 5 }]
+      ] as const) {
+        const r = await call(deps, cmd, { ...args }, '')
+        expect(r.status, cmd).toBe(409)
+        expect((r.body as { error: string }).error).toMatch(/answered by the Astera Host/)
+      }
+    })
   })
 })

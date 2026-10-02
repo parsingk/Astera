@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parsePrList, PR_LIST_ARGS, PR_LIST_LIMIT } from './prs'
+import { parsePrList, prForBranch, PR_LIST_ARGS, PR_LIST_LIMIT } from './prs'
+import type { GhResult, GhRunner } from './gh'
 
 type Row = Record<string, unknown>
 const row = (over: Row): Row => ({
@@ -92,5 +93,41 @@ describe('parsePrList', () => {
   it('the argv embeds the window constant', () => {
     expect(PR_LIST_ARGS).toContain(String(PR_LIST_LIMIT))
     expect(PR_LIST_ARGS.slice(0, 2)).toEqual(['pr', 'list'])
+  })
+})
+
+describe('prForBranch', () => {
+  const result = (over: Partial<GhResult>): GhResult => ({ ok: false, stdout: '', stderr: '', ...over })
+
+  it("lists the branch's PRs with the coordinator's fields and picks the branch's one", async () => {
+    const seen: { args: string[]; cwd: string }[] = []
+    const run: GhRunner = async (args, cwd) => {
+      seen.push({ args, cwd })
+      return result({ ok: true, stdout: feed([row({ number: 9, headRefName: 'feat/x' })]) })
+    }
+    const r = await prForBranch(run, 'D:/repo', 'feat/x')
+    expect(seen).toEqual([
+      {
+        args: ['pr', 'list', '--head', 'feat/x', '--state', 'all', '--limit', '5', '--json', PR_LIST_ARGS.at(-1)],
+        cwd: 'D:/repo'
+      }
+    ])
+    expect(r).toMatchObject({ ok: true, pr: { number: 9, state: 'open' } })
+  })
+
+  it('no PR for the branch is pr: null', async () => {
+    const r = await prForBranch(async () => result({ ok: true, stdout: '[]' }), 'd', 'feat/x')
+    expect(r).toEqual({ ok: true, pr: null })
+  })
+
+  it('a gh failure maps to a sentence, output that is not JSON to other', async () => {
+    expect(await prForBranch(async () => result({ stderr: 'no git remotes found' }), 'd', 'b')).toMatchObject({
+      ok: false,
+      kind: 'no-remote'
+    })
+    expect(await prForBranch(async () => result({ ok: true, stdout: 'x' }), 'd', 'b')).toMatchObject({
+      ok: false,
+      kind: 'other'
+    })
   })
 })

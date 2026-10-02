@@ -1,0 +1,20 @@
+[
+  {
+    "bucket": "pass",
+    "completedAt": "2026-09-02T00:38:23Z",
+    "link": "https://github.com/parsingk/Astera/actions/runs/33575878266/job/100079618840",
+    "name": "build (windows-latest)",
+    "startedAt": "2026-09-02T00:34:24Z",
+    "state": "SUCCESS",
+    "workflow": "CI"
+  },
+  {
+    "bucket": "pass",
+    "completedAt": "2026-09-02T00:35:45Z",
+    "link": "https://github.com/parsingk/Astera/actions/runs/33575878266/job/100079618618",
+    "name": "build (macos-latest)",
+    "startedAt": "2026-09-02T00:34:24Z",
+    "state": "SUCCESS",
+    "workflow": "CI"
+  }
+]

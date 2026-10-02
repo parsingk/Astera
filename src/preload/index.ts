@@ -155,6 +155,10 @@ const api = {
     uninstall: invoke('cli.uninstall'),
     pathRepairedAtStart: invoke('cli.pathRepairedAtStart')
   },
+  mcpClients: {
+    status: invoke('mcpClients.status'),
+    register: invoke('mcpClients.register')
+  },
   settings: {
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),
@@ -179,6 +183,8 @@ const api = {
     setMcpAccess: invoke('settings.setMcpAccess'),
     getMcpSessions: invoke('settings.getMcpSessions'),
     setMcpSessions: invoke('settings.setMcpSessions'),
+    getMcpGithubWrite: invoke('settings.getMcpGithubWrite'),
+    setMcpGithubWrite: invoke('settings.setMcpGithubWrite'),
     getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
     setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),

@@ -24,9 +24,17 @@ export const es: Catalog = {
     'con lectura y control también puede crear, ejecutar, detener y reanudar Jobs y responder preguntas.',
   'settings.mcp.copyFailed': 'No se pudo copiar la línea: {detail}',
   'settings.mcp.register':
-    'Para añadir Astera a un cliente MCP, ejecuta o pega la línea de ese cliente. Las líneas están escritas para este sistema operativo.',
+    'Para añadir Astera a un cliente MCP, ejecuta o pega la línea de ese cliente. Las líneas están escritas para este sistema operativo. Claude Code y Codex también se pueden configurar con Registrar.',
   'settings.mcp.installFirst':
     'Instala primero la herramienta de línea de comandos de arriba y después añade Astera a tu cliente MCP.',
+  'settings.mcp.client.register': 'Registrar',
+  'settings.mcp.client.registerAgain': 'Registrar de nuevo',
+  'settings.mcp.client.registered': 'Registrado',
+  'settings.mcp.client.registering': 'Registrando…',
+  'settings.mcp.client.notInstalled': 'No instalado',
+  'settings.mcp.client.done': 'Astera está registrado en {client}.',
+  'settings.mcp.client.failed': 'No se pudo registrar Astera en {client}: {detail}',
+  'settings.mcp.client.loadFailed': 'No se pudo leer si Astera está registrado en cada cliente MCP: {detail}',
   'settings.mcp.saveFailed': 'No se pudo guardar el acceso MCP: {detail}',
   'settings.mcp.loadFailed': 'No se pudo leer el acceso MCP: {detail}',
   'settings.mcp.sessions.label': 'Permitir que los clientes MCP vean y usen sesiones',
@@ -34,6 +42,11 @@ export const es: Catalog = {
     'Abarca todas las sesiones que tiene Astera, incluidas tus propias terminales. Verlas requiere al menos solo lectura; escribir en ellas e iniciarlas requiere lectura y control. Una sesión que inicia un cliente sigue «Ejecutar agentes sin comprobar permisos» (activado por defecto), así que puede ejecutar comandos sin preguntar.',
   'settings.mcp.sessions.saveFailed': 'No se pudo guardar el ajuste de sesiones MCP: {detail}',
   'settings.mcp.sessions.loadFailed': 'No se pudo leer el ajuste de sesiones MCP: {detail}',
+  'settings.mcp.githubWrite.label': 'Permitir que los clientes MCP actúen en GitHub',
+  'settings.mcp.githubWrite.hint':
+    'Sube las ramas de los Runs y abre pull requests (en borrador salvo que se pida otra cosa), vuelve a ejecutar la CI que falló y convierte en Jobs las incidencias escritas por miembros del repositorio.',
+  'settings.mcp.githubWrite.saveFailed': 'No se pudo guardar el ajuste de escritura de GitHub en MCP: {detail}',
+  'settings.mcp.githubWrite.loadFailed': 'No se pudo leer el ajuste de escritura de GitHub en MCP: {detail}',
   // Modo de permisos del agente
   'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
   'settings.agentPermission.hint':

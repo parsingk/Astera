@@ -18,6 +18,12 @@
 // The quoted `claude`/`codex` lines below gave the client exactly that argv when typed into cmd,
 // PowerShell 7 and Windows PowerShell 5.1.
 //
+// **The Claude Code line registers at user scope (`-s user`).** Without a scope `claude mcp add`
+// writes the server under the folder it is typed in only, so it would be missing from every other
+// project. Measured 2026-10-02 on claude 2.1.287: `-s user` writes the top-level `mcpServers` of
+// `~/.claude.json` (of `$CLAUDE_CONFIG_DIR/.claude.json` when that is set), the argv after `--`
+// unchanged. The Register buttons beside these lines run the same argv (mcpServerFor, mcpClients.ts).
+//
 // **Not handled: a folder name with `$`, a backtick, `^` or `%`.** PowerShell expands `$` and the
 // backtick inside double quotes, and cmd (and `call`) reads `^` and `%` in the path. A person whose
 // install folder has one of these registers the server by hand (`$`, backtick: a JSON or TOML entry
@@ -41,16 +47,23 @@ export function shimPathFor(a: { platform: string; dir: string }): string {
   return a.platform === 'win32' ? `${a.dir.replace(/[\\/]+$/, '')}\\astera.cmd` : `${a.dir.replace(/\/+$/, '')}/astera`
 }
 
+/** The command and args a client starts the server with: the Cursor entry, and the argv the Register
+ *  buttons hand `claude mcp add` and `codex mcp add` (mcpClients.ts), so no one re-splits a line. */
+export function mcpServerFor(a: { platform: string; shimPath: string }): { command: string; args: string[] } {
+  return a.platform === 'win32'
+    ? { command: 'cmd', args: ['/c', 'call', a.shimPath, 'mcp', 'serve'] }
+    : { command: a.shimPath, args: ['mcp', 'serve'] }
+}
+
 export function mcpRegistrationLines(a: { platform: string; shimPath: string }): McpRegistrationLine[] {
   const win = a.platform === 'win32'
   // Double quotes on Windows read the same in cmd and in PowerShell for a path with spaces, Hangul,
   // `&` or parentheses.
   const launch = win ? `cmd /c call "${a.shimPath}" mcp serve` : `${shQuote(a.shimPath)} mcp serve`
-  const server = win
-    ? { command: 'cmd', args: ['/c', 'call', a.shimPath, 'mcp', 'serve'] }
-    : { command: a.shimPath, args: ['mcp', 'serve'] }
+  const server = mcpServerFor(a)
   return [
-    { client: 'Claude Code', line: `claude mcp add astera -- ${launch}` },
+    // `-s user` (see the top of this file); Codex has one global list and no scope.
+    { client: 'Claude Code', line: `claude mcp add -s user astera -- ${launch}` },
     { client: 'Codex', line: `codex mcp add astera -- ${launch}` },
     { client: 'Cursor', line: JSON.stringify({ mcpServers: { astera: server } }) }
   ]

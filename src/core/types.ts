@@ -893,6 +893,17 @@ export type AgentPermissionMode = 'yolo' | 'manual'
 /** What an MCP client may do through the Host (MCP design M5). Default 'control' (M6). */
 export type McpAccess = 'off' | 'read' | 'control'
 
+/** An MCP client Settings can register Astera with by its CLI (core/install/mcpClients.ts). */
+export type McpClient = 'claude' | 'codex'
+/** Whether Astera is registered with that client: with the command Settings would register, with
+ *  another one (an older install path, other args), not at all, or the client's CLI is not found. */
+export interface McpClientStatus {
+  state: 'registered' | 'different' | 'absent' | 'not-installed'
+  /** Why a client reads as absent when its config could not be read; shown on the button. */
+  detail?: string
+}
+export type McpRegisterResult = { ok: true } | { ok: false; message: string }
+
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
 export interface HostStatus {
@@ -1093,7 +1104,7 @@ export interface CoreApi {
       /** null is unknown — the base did not resolve — and must not be drawn as 0. */
       behindCount: number | null
     }>
-    /** Mirrors PrCreateRequest (src/main/prCreate.ts) field-for-field, for the same reason as the
+    /** Mirrors PrCreateRequest (src/core/github/prCreate.ts) field-for-field, for the same reason as the
      *  kind union below, and with the same obligation: nothing type-checks the two declarations
      *  against each other, since preload's invoke returns Promise<any>. */
     create(req: {
@@ -1110,9 +1121,9 @@ export interface CoreApi {
       | {
           ok: false
           stage: 'push' | 'create'
-          /** Deliberately mirrors PrCreateFailureKind (src/main/prCreate.ts) member-for-member,
+          /** Deliberately mirrors PrCreateFailureKind (src/core/github/prCreate.ts) member-for-member,
            *  rather than importing it. Unlike BranchPushState above, this type's home is not just a
-           *  node-touching shape file — prCreate.ts is main-only run logic (push + gh create), so
+           *  node-touching shape file — prCreate.ts is run logic (push + gh create), so
            *  moving the declaration to core/types.ts the way BranchRef/BranchPushState were moved
            *  would mean relocating logic, not a shape. If prCreate.ts's union ever changes, update
            *  this copy to match. */
@@ -1205,6 +1216,14 @@ export interface CoreApi {
      *  that check, so the answer holds however early it is asked. */
     pathRepairedAtStart(): Promise<boolean>
   }
+  /** Whether `astera mcp serve` is registered with Claude Code and Codex, and registering it through
+   *  their CLIs (main/mcpClients.ts). `status` runs on opening the CLI tab in Settings and only reads
+   *  (it finds the CLIs and asks `codex mcp get --json`); `register` runs only when the person presses
+   *  Register. */
+  mcpClients: {
+    status(): Promise<Record<McpClient, McpClientStatus>>
+    register(client: McpClient): Promise<McpRegisterResult>
+  }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
@@ -1254,6 +1273,9 @@ export interface CoreApi {
     // Whether an MCP client may see and use sessions at all (off by default).
     getMcpSessions(): Promise<boolean>
     setMcpSessions(v: boolean): Promise<void>
+    // Whether an MCP client may act on GitHub (off by default; needs access Read and control).
+    getMcpGithubWrite(): Promise<boolean>
+    setMcpGithubWrite(v: boolean): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
