@@ -241,7 +241,7 @@ import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
-import { createPullRequest, readCommits } from './prCreate'
+import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { fillFromCommits } from '../core/github/fill'
 
 /** startOrchestration 이 배선에게 돌려주는 손잡이. index.ts 가 이것을 들고 있는다.

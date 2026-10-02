@@ -1093,7 +1093,7 @@ export interface CoreApi {
       /** null is unknown — the base did not resolve — and must not be drawn as 0. */
       behindCount: number | null
     }>
-    /** Mirrors PrCreateRequest (src/main/prCreate.ts) field-for-field, for the same reason as the
+    /** Mirrors PrCreateRequest (src/core/github/prCreate.ts) field-for-field, for the same reason as the
      *  kind union below, and with the same obligation: nothing type-checks the two declarations
      *  against each other, since preload's invoke returns Promise<any>. */
     create(req: {
@@ -1110,9 +1110,9 @@ export interface CoreApi {
       | {
           ok: false
           stage: 'push' | 'create'
-          /** Deliberately mirrors PrCreateFailureKind (src/main/prCreate.ts) member-for-member,
+          /** Deliberately mirrors PrCreateFailureKind (src/core/github/prCreate.ts) member-for-member,
            *  rather than importing it. Unlike BranchPushState above, this type's home is not just a
-           *  node-touching shape file — prCreate.ts is main-only run logic (push + gh create), so
+           *  node-touching shape file — prCreate.ts is run logic (push + gh create), so
            *  moving the declaration to core/types.ts the way BranchRef/BranchPushState were moved
            *  would mean relocating logic, not a shape. If prCreate.ts's union ever changes, update
            *  this copy to match. */

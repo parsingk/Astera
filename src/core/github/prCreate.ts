@@ -1,7 +1,7 @@
-import { classifyGhFailure, gh, type GhResult } from '../core/github/gh'
-import { git, type GitResult } from '../core/worktrees/git'
-import { normalizeBaseForGh } from '../core/worktrees/push'
-import type { CommitSummary } from '../core/github/fill'
+import { classifyGhFailure, gh, type GhResult } from './gh'
+import { git, type GitResult } from '../worktrees/git'
+import { normalizeBaseForGh } from '../worktrees/push'
+import type { CommitSummary } from './fill'
 
 export interface PrCreateRequest {
   worktreePath: string
