@@ -13,7 +13,6 @@
 // same values; typing the copied line does the same.)
 
 import path from 'node:path'
-import { isSamePath } from '../files/tree'
 import { findOnWindowsPath } from '../sessions/windowsExecutable'
 import type { McpClient, McpClientStatus, McpRegisterResult } from '../types'
 
@@ -44,7 +43,12 @@ export function removeArgs(client: McpClient): string[] {
 }
 
 /** Each word equal, or on win32 two absolute paths naming the same file (an install path written
- *  with other case or separators is the same install). */
+ *  with other case or separators is the same install). Resolved with path.win32 rather than
+ *  isSamePath, whose path.resolve follows the machine running it: on a posix machine it would keep
+ *  `\` and `/` apart and fail to see a win32 path as the same. */
+const sameWin32Path = (a: string, b: string): boolean =>
+  path.win32.resolve(a).toLowerCase() === path.win32.resolve(b).toLowerCase()
+
 function sameServer(command: unknown, args: unknown, want: McpServerCommand, platform: string): boolean {
   if (typeof command !== 'string' || !Array.isArray(args)) return false
   const have = [command, ...args]
@@ -58,7 +62,7 @@ function sameServer(command: unknown, args: unknown, want: McpServerCommand, pla
           typeof w === 'string' &&
           path.win32.isAbsolute(w) &&
           path.win32.isAbsolute(need[i]) &&
-          isSamePath(w, need[i], 'win32'))
+          sameWin32Path(w, need[i]))
     )
   )
 }
