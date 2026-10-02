@@ -26,6 +26,7 @@ import { readGeneratorSettings, type GeneratorSettings } from '../core/understan
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { readFileRetrying } from '../core/renameRetry'
+import { readAccountEntries } from '../core/accounts/accountsFile'
 import { repoPathOf } from '../core/worktrees/repo'
 import { isSamePath } from '../core/files/tree'
 import { isLang, type Lang } from '../core/i18n'
@@ -80,8 +81,8 @@ export interface HostUnderstandingDeps {
   profileDir: string
   /** true while every attached app yields `understanding`, or none is attached. */
   writer(): boolean
-  /** accounts.json, read per call. */
-  accounts(): Account[] | Promise<Account[]>
+  /** Read per call. Defaults to <profileDir>/accounts.json, read with readFileRetrying. */
+  accounts?(): Account[] | Promise<Account[]>
   descriptors: Record<Provider, ProviderDescriptor>
   /** Read per call. Defaults to readUnderstandingSettings over <profileDir>/app-settings.json. */
   settings?(): Promise<UnderstandingSettings>
@@ -145,6 +146,9 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstanding {
   const settingsPath = path.join(d.profileDir, 'app-settings.json')
   const readSettings = d.settings ?? (() => readUnderstandingSettings(settingsPath))
+  // Retried, as the settings are: a Run that finishes while the app's save holds accounts.json (EPERM on
+  // win32) is still recorded with its generator account.
+  const readAccounts = d.accounts ?? (() => readAccountEntries(path.join(d.profileDir, 'accounts.json'), readFileRetrying))
 
   const isWriter = (): boolean => {
     try {
@@ -208,7 +212,7 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
   /** Settings and accounts, read now; throws when either cannot be read. */
   const take = async (): Promise<UnderstandingSettings> => {
     const s = await readSettings()
-    const accounts = await d.accounts()
+    const accounts = await readAccounts()
     current = { generator: s.generator, lang: s.lang, accounts }
     return s
   }

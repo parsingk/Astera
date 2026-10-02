@@ -538,6 +538,27 @@ describe('createHostUnderstanding', () => {
     await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
   })
 
+  // Final review item 6: accounts.json is read the same way, so a Run that finishes during the app's
+  // account save still finds its generator account.
+  it('rides out a busy accounts.json during the app’s save, and still fills the Run', async () => {
+    await settings(ON)
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [account] }))
+    const { u } = make({ accounts: undefined })
+    await u.load()
+    const real = fs.readFile
+    let busy = 1
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+      if (String(args[0]).endsWith('accounts.json') && busy-- > 0) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      return real(...args)
+    }) as typeof real)
+    try {
+      await u.onRunFinished(runInput())
+    } finally {
+      spy.mockRestore()
+    }
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+  })
+
   // The gate index.ts hands in, through the real server: an app that keeps the duty attaching between two
   // writes stops the second.
   describe('the one writer, judged by the attached apps', () => {

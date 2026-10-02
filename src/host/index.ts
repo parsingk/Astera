@@ -300,7 +300,7 @@ async function main(): Promise<void> {
     file: path.join(profileDir, 'understanding.json'),
     profileDir,
     writer: () => server !== undefined && !server.appsKeep(HOST_YIELD_UNDERSTANDING),
-    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    // accounts.json and app-settings.json: hostUnderstanding reads both per call, retried.
     descriptors: makeDescriptors(process.platform),
     // The Host's own registry; empty without a spawner, which never loads it, and then no key folds.
     worktrees: () => worktrees.list(),
