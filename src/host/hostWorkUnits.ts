@@ -360,7 +360,13 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
     },
     inRun: (sessionId) => d.inRun(sessionId),
     // Called inside the collector's chain and not awaited, as the app's: the write-up runs an agent.
+    // Handed over before the collector's save of the closed unit, and that save goes through the gate: a
+    // Host that stopped writing here would record a unit the file still holds open.
     onUnitClosed: (projectPath, unit) => {
+      if (disposed || !isWriter()) {
+        log(`a closed unit of ${projectPath} is not recorded: this Host does not write workUnits.json now`)
+        return
+      }
       void d.understanding.onUnitClosed(projectPath, unit).then(
         (r) => {
           if (!r.ok) log(`a closed unit of ${projectPath} is not recorded: ${r.reason ?? 'refused'}`)

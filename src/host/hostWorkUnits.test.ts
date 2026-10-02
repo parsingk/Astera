@@ -376,6 +376,40 @@ describe('createHostWorkUnits', () => {
     })
   })
 
+  // The collector hands a closed unit over before its save, and the gate can drop that save: the record
+  // would then stand for a unit the file still holds open.
+  describe('a closed unit whose save the gate drops is not recorded', () => {
+    const closeOne = async (r: Rig, hw: ReturnType<typeof createHostWorkUnits>): Promise<string> => {
+      await hw.start()
+      const started = (await hw.sessionTasks.start('s1', 'Fix it')) as { ok: true; id: string }
+      await fs.appendFile(t1, wrote())
+      r.git.files = ['src/a.ts']
+      return started.id
+    }
+
+    it('when an app that keeps the duty attached mid-round', async () => {
+      const r = rig()
+      const hw = createHostWorkUnits(r.deps)
+      await closeOne(r, hw)
+      r.state.writer = false
+      expect((await hw.sessionTasks.complete('s1', { source: 'agent' })).ok).toBe(true)
+      await hw.settled()
+      expect(r.closed).toEqual([])
+      expect(onDisk().projects[project].units[0].status).toBe('active')
+    })
+
+    it('after dispose', async () => {
+      const r = rig()
+      const hw = createHostWorkUnits(r.deps)
+      const id = await closeOne(r, hw)
+      hw.dispose()
+      expect((await hw.sessionTasks.completeById(project, id)).ok).toBe(true)
+      await hw.settled()
+      expect(r.closed).toEqual([])
+      expect(onDisk().projects[project].units[0].status).toBe('active')
+    })
+  })
+
   it('writes nothing and pushes nothing while an attached app keeps the duty', async () => {
     const r = rig()
     r.state.writer = false
