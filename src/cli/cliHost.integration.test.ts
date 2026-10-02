@@ -1466,7 +1466,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 24 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 30 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)

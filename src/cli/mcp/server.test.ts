@@ -16,7 +16,8 @@ const TOOLS = [
   'list_projects', 'get_project', 'list_accounts', 'list_jobs', 'get_job', 'create_job', 'run_job',
   'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
   'get_completion', 'create_task', 'list_run_configs',
-  'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output'
+  'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
+  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue'
 ]
 
 async function connected(link: HostLink) {
@@ -77,7 +78,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the twenty-four tools', async () => {
+  it('lists exactly the thirty tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -1255,5 +1256,156 @@ describe('the session and output tools: final review fixes', () => {
     const message = String(errorOf(r).message)
     expect(message).toMatch(/^get_session is off/)
     expect(message).not.toContain('sessions-list')
+  })
+})
+
+describe('the GitHub tools (MCP P2-B)', () => {
+  const PAT = 'github_pat_' + 'A1b2C3d4E5f6G7h8I9j0K1l2'
+  const SK = 'sk-' + 'abcdefghijklmnopqrstuvwxyz012345'
+  const call = async (name: string, args: Record<string, unknown>, answers: Record<string, { status: number; body: unknown }> = {}) => {
+    const { link, calls } = answering(answers)
+    const r = await (await connected(link)).callTool({ name, arguments: args })
+    return { r, calls }
+  }
+
+  it('lists thirty tools, six of them GitHub: the reads read-only, the writes not', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    expect(tools).toHaveLength(30)
+    const by = (n: string) => tools.find((t) => t.name === n)
+    for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
+    for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
+  })
+
+  it('maps each tool to its command and exact args', async () => {
+    const cases: Array<[string, Record<string, unknown>, string, Record<string, unknown>, string?]> = [
+      ['get_pr_status', { runId: 'r1' }, 'github-pr', { run: 'r1' }],
+      ['get_pr_status', { projectId: 'p1', branch: 'feat/x' }, 'github-pr', { project: 'p1', branch: 'feat/x' }],
+      ['get_ci', { runId: 'r1' }, 'github-ci', { run: 'r1' }],
+      ['get_ci', { projectId: 'p1', pr: 7, failedLogOf: 99 }, 'github-ci', { project: 'p1', pr: 7, log: 99 }],
+      ['get_issue', { projectId: 'p1', number: 12 }, 'github-issue', { project: 'p1', number: 12 }],
+      ['create_pr', { runId: 'r1', requestId: 'q1' }, 'github-pr-create', { run: 'r1', draft: true }, 'q1'],
+      ['create_pr', { runId: 'r1', title: 'T', body: 'B', draft: false }, 'github-pr-create', { run: 'r1', title: 'T', body: 'B', draft: false }],
+      ['retry_ci', { projectId: 'p1', ciRunId: 55, requestId: 'q2' }, 'github-ci-rerun', { project: 'p1', runId: 55 }, 'q2'],
+      [
+        'create_job_from_issue',
+        { projectId: 'p1', number: 3, requestId: 'q3' },
+        'jobs-create-from-issue',
+        { project: 'p1', number: 3, coordinatorProvider: 'claude' },
+        'q3'
+      ],
+      [
+        'create_job_from_issue',
+        { projectId: 'p1', number: 3, coordinatorAccountId: 'acc', coordinatorProvider: 'codex', convergence: true, maxFixAttempts: 2, blockingSeverity: 'high' },
+        'jobs-create-from-issue',
+        { project: 'p1', number: 3, coordinatorAccount: 'acc', convergence: true, maxFixAttempts: 2, blockingSeverity: 'high' }
+      ]
+    ]
+    for (const [name, input, cmd, args, request] of cases) {
+      const { r, calls } = await call(name, input)
+      expect(r.isError, name).toBeFalsy()
+      expect(calls, name).toEqual([{ cmd, args, request }])
+    }
+  })
+
+  it('create_job_from_issue never sends objective or cwd, and refuses a knob without convergence', async () => {
+    const { calls } = await call('create_job_from_issue', { projectId: 'p1', number: 3 })
+    expect(Object.keys(calls[0].args)).not.toContain('objective')
+    expect(Object.keys(calls[0].args)).not.toContain('cwd')
+    const bad = await call('create_job_from_issue', { projectId: 'p1', number: 3, maxFixAttempts: 2 })
+    expect(bad.r.isError).toBe(true)
+    expect(errorOf(bad.r)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+    expect(bad.calls).toEqual([])
+  })
+
+  it('a target that is not exactly a Run or a project is INVALID_ARGUMENTS before any Host call', async () => {
+    const bad: Array<[string, Record<string, unknown>]> = [
+      ['get_pr_status', { runId: 'r1', projectId: 'p1', branch: 'b' }],
+      ['get_pr_status', {}],
+      ['get_pr_status', { projectId: 'p1' }],
+      ['get_pr_status', { runId: 'r1', branch: 'b' }],
+      ['get_ci', { runId: 'r1', projectId: 'p1', pr: 1 }],
+      ['get_ci', {}],
+      ['get_ci', { projectId: 'p1' }],
+      ['get_ci', { runId: 'r1', pr: 1 }]
+    ]
+    for (const [name, input] of bad) {
+      const { r, calls } = await call(name, input)
+      expect(r.isError, `${name} ${JSON.stringify(input)}`).toBe(true)
+      expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+      expect(calls).toEqual([])
+    }
+  })
+
+  it('the input schema bounds the title and the body of create_pr', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const props = (tools.find((t) => t.name === 'create_pr')?.inputSchema.properties ?? {}) as Record<string, { maxLength?: number }>
+    expect(props.title.maxLength).toBe(256)
+    expect(props.body.maxLength).toBe(50_000)
+    const { r, calls } = await call('create_pr', { runId: 'r1', title: 'x'.repeat(257) })
+    expect(r.isError).toBe(true)
+    expect(calls).toEqual([])
+  })
+
+  it('descriptions name the GitHub CLI, the untrusted issue text and the write setting', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const d = (n: string) => String(tools.find((t) => t.name === n)?.description)
+    for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(d(n)).toMatch(/GitHub CLI.*logged in.*Host/)
+    expect(d('get_issue')).toMatch(/untrusted/)
+    for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) {
+      expect(d(n)).toContain('"Let MCP clients act on GitHub"')
+      expect(d(n)).toContain('"Read and control"')
+    }
+    expect(d('create_pr')).toMatch(/draft/)
+    expect(d('create_pr')).toMatch(/never force push/)
+  })
+
+  it('redacts secrets in an issue, its labels and author, and in a CI log and check names', async () => {
+    const issue = await call(
+      'get_issue',
+      { projectId: 'p1', number: 1 },
+      {
+        'github-issue': {
+          status: 200,
+          body: { number: 1, title: `t ${SK}`, body: `leak ${PAT}`, state: 'open', labels: [`l ${SK}`], author: `a ${PAT}`, authorAssociation: 'OWNER', url: 'u', isPullRequest: false }
+        }
+      }
+    )
+    const i = issue.r.structuredContent as Record<string, unknown>
+    expect(JSON.stringify(i)).not.toContain(PAT)
+    expect(JSON.stringify(i)).not.toContain(SK)
+    expect(i.body).toBe('leak [REDACTED]')
+    expect(i.labels).toEqual(['l [REDACTED]'])
+    expect(i.author).toBe('a [REDACTED]')
+    const ci = await call(
+      'get_ci',
+      { projectId: 'p1', pr: 1, failedLogOf: 9 },
+      {
+        'github-ci': {
+          status: 200,
+          body: {
+            pr: 1,
+            checks: [{ name: `n ${SK}`, workflow: `w ${PAT}`, state: 'FAILURE', bucket: 'fail', link: 'l', runId: 9 }],
+            log: { runId: 9, text: `step ${SK} and ${PAT}`, cut: false }
+          }
+        }
+      }
+    )
+    const c = JSON.stringify(ci.r.structuredContent)
+    expect(c).not.toContain(PAT)
+    expect(c).not.toContain(SK)
+    expect(c).toContain('[REDACTED]')
+    expect(textOf(ci.r)).not.toContain(PAT)
+  })
+
+  it("redacts a secret in the Host's error text: a gh stderr echoed in a refusal", async () => {
+    const { r } = await call(
+      'create_pr',
+      { runId: 'r1' },
+      { 'github-pr-create': { status: 502, body: { error: `gh failed: remote: ${PAT} and ${SK}` } } }
+    )
+    expect(r.isError).toBe(true)
+    expect(textOf(r)).not.toContain(PAT)
+    expect(textOf(r)).not.toContain(SK)
+    expect(String(errorOf(r).message)).toContain('[REDACTED]')
   })
 })
