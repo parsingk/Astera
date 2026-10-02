@@ -151,6 +151,7 @@ describe('createHostOrch', () => {
       expect(JSON.stringify(off.body)).toContain('Let MCP clients act on GitHub')
       await settings(JSON.stringify({ mcpAccess: 'control', mcpGithubWrite: true }))
       const on = await rerun()
+      expect(on.status).not.toBe(403)
       expect(JSON.stringify(on.body)).not.toContain('Let MCP clients act on GitHub')
       expect(JSON.stringify(on.body)).not.toContain('needs MCP access')
     })
