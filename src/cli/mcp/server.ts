@@ -12,7 +12,7 @@ import {
   refusalDetailsOf,
   type CliErrorCode
 } from '../../core/orchestration/cliOutput'
-import { publicFor } from '../../core/orchestration/cliPublic'
+import { publicEvent, publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
@@ -61,7 +61,9 @@ const FREE_TEXT = new Set([
   'label',
   'sourceLabel',
   'jobName',
-  'outcome'
+  'outcome',
+  // A Run's timeline events (MCP P2-D, wait_for_run): `summary` is above; a Task's title rides on each.
+  'taskTitle'
 ])
 
 /** Every object in a `checks` array, at any depth, without its `outputTail`: raw validator output
@@ -177,6 +179,25 @@ const refusalMessage = (status: number, body: unknown): string => {
   const error = (body as { error?: unknown } | null)?.error
   return typeof error === 'string' ? sanitize(error) : `status ${status}`
 }
+
+/**
+ * wait_for_run's answer from runs-follow's (MCP P2-D). Once the Run has more events than `seen`, the
+ * Host sends its whole timeline, in order; `astera runs follow` then prints each event it has not
+ * printed, keyed across its calls. An MCP server keeps nothing between calls, so this keeps the events
+ * after the first `seen` instead. That is the same set whenever a new event sorts after the ones
+ * already seen, which is how a timeline grows: an event's time is when its record was written. An
+ * event that sorts before one already seen (the order is time, then kind, then id) shifts the cut by
+ * one: a seen event comes again and the new one is not in this answer, though the app's timeline and
+ * the Run's own records still have it. Each event carries the public fields `runs follow` prints.
+ */
+const waitAnswer = (data: Record<string, unknown>, seen: number): Record<string, unknown> => ({
+  runId: data.runId,
+  jobId: data.jobId,
+  seen: data.count,
+  progress: data.progress,
+  events: (Array.isArray(data.events) ? data.events.slice(seen) : []).map(publicEvent),
+  ending: data.ending ?? null
+})
 
 /** get_session's terminal rows when no `lines` is given (P1 Global Constraints). */
 const SESSION_LINES_DEFAULT = 100
@@ -334,6 +355,15 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
       data = { ...capped.data, truncated: true }
       note += `, cut to its newest ${SESSION_TEXT_CAP} characters of text: ask for fewer lines or turns to read less at once`
     }
+  }
+  if (t.name === 'wait_for_run') {
+    data = waitAnswer(data, typeof input.seen === 'number' ? input.seen : 0)
+    const n = (data.events as unknown[]).length
+    const ending = data.ending as { state?: unknown } | null
+    note =
+      n === 0 && ending === null
+        ? ', nothing new within the window'
+        : `, ${n} new event${n === 1 ? '' : 's'}${ending !== null ? `, ending: ${String(ending.state)}` : ''}`
   }
   // get_check_output pages the log only once all of it is redacted (P1 final review I1): `total`
   // and `offset` count the redacted text, so a page can never begin inside a secret.

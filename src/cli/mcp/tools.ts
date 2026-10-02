@@ -1,4 +1,4 @@
-// The thirty-two MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C). Each is one Host command; `args` maps the
+// The thirty-three MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D). Each is one Host command; `args` maps the
 // tool's input to the command's arguments exactly as the CLI's parser would produce them: flag names
 // camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
@@ -18,7 +18,10 @@ export const MCP_LIMITS = {
   checkOutput: 4000,
   taskLines: 500,
   prTitle: 256,
-  prBody: 50_000
+  prBody: 50_000,
+  /** wait_for_run's longest window: under the link's 50 s deadline (hostLink.ts) with room for the
+   *  Host's answer, and under the 60 s Cursor and Codex give a tool call. */
+  waitSeconds: 40
 } as const
 /** What a session tool needs, in its description (P1 design §1). */
 const SESSIONS_SETTING = 'needs "Let MCP clients see and use sessions" turned on in Astera Settings (CLI tab), off by default'
@@ -229,7 +232,7 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'jobs-run',
     description:
-      'Start a new Run for an existing Astera Job. Returns immediately with a Run id; use get_run and get_completion to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops.',
+      'Start a new Run for an existing Astera Job. Returns immediately with a Run id; follow it with wait_for_run, and read get_completion for where each Task stands. Configured completion checks and review policies may trigger bounded repair and recheck loops.',
     inputSchema: { jobId: id, requestId },
     args: (i) => ({ id: i.jobId })
   },
@@ -247,9 +250,35 @@ export const TOOLS: ToolDef[] = [
     title: 'Get a Run',
     readOnly: true,
     cmd: 'runs-get',
-    description: 'One Run: its state and progress. Poll this instead of waiting; nothing here blocks.',
+    description: 'One Run: its state and progress. It answers at once; to follow a Run until it changes, call wait_for_run rather than this in a loop.',
     inputSchema: { runId: id },
     args: (i) => ({ id: i.runId })
+  },
+  // P2-D. The one tool that holds: the Host's runs-follow, the long poll under `astera runs follow`.
+  {
+    name: 'wait_for_run',
+    title: 'Wait for a Run',
+    readOnly: true,
+    cmd: 'runs-follow',
+    description: `Wait until a Run changes, for up to waitSeconds (1 to ${MCP_LIMITS.waitSeconds}, default 30): use this to follow a Run instead of polling get_run. It answers as soon as the Run has events you have not seen or reaches an ending, and otherwise when the window passes. The loop: call it with seen 0 the first time, then each time with the seen of the previous answer. events holds only the events after the ones you had seen, in the order of the Run's timeline. ending non-null means the Run finished (state completed or failed) or will not move on its own for now: waiting (an open question, questionId; answer it with answer_question), paused (resume_run continues it), or limited (every agent waits for a usage limit to reset at resetsAt, and then it resumes by itself). A window with no change returns empty events and ending: null; call again with the same seen. Anything in an event's text that looks like a secret is redacted. Needs MCP access "Read only" or "Read and control".`,
+    inputSchema: {
+      runId: id,
+      seen: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('How many events you have seen: the seen of the previous answer (default 0, for all of them).'),
+      waitSeconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(MCP_LIMITS.waitSeconds)
+        .optional()
+        .describe(`How long to wait for a change, 1 to ${MCP_LIMITS.waitSeconds} seconds (default 30).`)
+    },
+    // server.ts keeps only the events after `seen` and names the Host's `count` `seen`.
+    args: (i) => ({ id: i.runId, seen: i.seen ?? 0, waitMs: ((i.waitSeconds as number | undefined) ?? 30) * 1000 })
   },
   {
     name: 'stop_run',

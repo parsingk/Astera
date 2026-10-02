@@ -18,7 +18,7 @@ const TOOLS = [
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
   'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
-  'list_work_records', 'get_work_record'
+  'list_work_records', 'get_work_record', 'wait_for_run'
 ]
 
 async function connected(link: HostLink) {
@@ -79,7 +79,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-two tools', async () => {
+  it('lists exactly the thirty-three tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -1269,9 +1269,9 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-two tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-three tools, six of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(32)
+    expect(tools).toHaveLength(33)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
     for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
@@ -1559,5 +1559,139 @@ describe('the How It Works tools (MCP P2-C)', () => {
       'understanding-list': { status: 500, body: { error: 'understanding.json could not be read' } }
     })
     expect(errorOf(r500.r)).toMatchObject({ code: 'FAILED', message: 'understanding.json could not be read' })
+  })
+})
+
+describe('wait_for_run (MCP P2-D)', () => {
+  const SK = 'sk-' + 'abcdefghijklmnopqrstuvwxyz012345'
+  const call = async (args: Record<string, unknown>, answers: Record<string, { status: number; body: unknown }> = {}) => {
+    const { link, calls } = answering(answers)
+    const r = await (await connected(link)).callTool({ name: 'wait_for_run', arguments: args })
+    return { r, calls }
+  }
+  const event = (n: number, over: Record<string, unknown> = {}) => ({
+    at: `2026-10-02T00:00:0${n}.000Z`,
+    kind: 'message',
+    sourceId: `m${n}`,
+    taskId: 't1',
+    taskTitle: 'one',
+    messageType: 'progress',
+    summary: `event ${n}`,
+    ...over
+  })
+  const page = (over: Record<string, unknown> = {}) => ({
+    runId: 'r1',
+    jobId: 'j1',
+    count: 4,
+    progress: { done: 1, total: 2 },
+    events: [event(1), event(2), event(3), event(4)],
+    ending: null,
+    ...over
+  })
+
+  it('maps runId, seen and waitSeconds to runs-follow: seen 0 and 30 s unless given, the window in milliseconds', async () => {
+    const cases: Array<[Record<string, unknown>, Record<string, unknown>]> = [
+      [{ runId: 'r1' }, { id: 'r1', seen: 0, waitMs: 30_000 }],
+      [{ runId: 'r1', seen: 3, waitSeconds: 5 }, { id: 'r1', seen: 3, waitMs: 5_000 }],
+      [{ runId: 'r1', seen: 0, waitSeconds: 1 }, { id: 'r1', seen: 0, waitMs: 1_000 }],
+      [{ runId: 'r1', waitSeconds: 40 }, { id: 'r1', seen: 0, waitMs: 40_000 }]
+    ]
+    for (const [input, args] of cases) {
+      const { r, calls } = await call(input, { 'runs-follow': { status: 200, body: page() } })
+      expect(r.isError, JSON.stringify(input)).toBeFalsy()
+      expect(calls).toEqual([{ cmd: 'runs-follow', args, request: undefined }])
+    }
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const t = tools.find((x) => x.name === 'wait_for_run')
+    expect(t?.annotations?.readOnlyHint).toBe(true)
+    const props = (t?.inputSchema.properties ?? {}) as Record<string, { minimum?: number; maximum?: number }>
+    expect([props.waitSeconds.minimum, props.waitSeconds.maximum]).toEqual([1, 40])
+    expect(props.seen.minimum).toBe(0)
+  })
+
+  it('refuses waitSeconds 0 and 41, a negative or fractional seen, and a fractional window, before calling the Host', async () => {
+    for (const input of [
+      { runId: 'r1', waitSeconds: 0 },
+      { runId: 'r1', waitSeconds: 41 },
+      { runId: 'r1', waitSeconds: 1.5 },
+      { runId: 'r1', seen: -1 },
+      { runId: 'r1', seen: 1.5 },
+      { seen: 0 }
+    ]) {
+      const { r, calls } = await call(input)
+      expect(r.isError, JSON.stringify(input)).toBe(true)
+      // The SDK checks the input schema before the tool runs: JSON-RPC InvalidParams, the protocol's
+      // invalid arguments, as for every other bounded input here.
+      expect(textOf(r), JSON.stringify(input)).toMatch(/Input validation error/)
+      expect(calls).toEqual([])
+    }
+  })
+
+  it("returns only the events after seen, in the Host's order, with seen set to the Host's count", async () => {
+    const { r } = await call({ runId: 'r1', seen: 2, waitSeconds: 5 }, { 'runs-follow': { status: 200, body: page() } })
+    const data = r.structuredContent as Record<string, unknown>
+    expect(data).toEqual({
+      runId: 'r1',
+      jobId: 'j1',
+      seen: 4,
+      progress: { done: 1, total: 2 },
+      events: [event(3), event(4)],
+      ending: null
+    })
+    expect(data).not.toHaveProperty('count')
+    // The text carries the same data after its sentence.
+    expect(JSON.parse(textOf(r).split('\n')[1])).toEqual(data)
+    expect(textOf(r).split('\n')[0]).toContain('2 new events')
+  })
+
+  it('carries the public fields of an event only, as runs follow prints them: no body, no sessionId', async () => {
+    const body = page({ count: 1, events: [event(1, { body: 'the long text', sessionId: 'ses_1', outcome: 'success' })] })
+    const { r } = await call({ runId: 'r1' }, { 'runs-follow': { status: 200, body } })
+    expect((r.structuredContent as { events: unknown[] }).events).toEqual([event(1, { outcome: 'success' })])
+  })
+
+  it('passes the ending through: a Run that needs a person says which question', async () => {
+    const ending = { runId: 'r1', jobId: 'j1', progress: { done: 1, total: 2 }, state: 'waiting', questionId: 'g1', taskId: 't1' }
+    const { r } = await call(
+      { runId: 'r1', seen: 4 },
+      { 'runs-follow': { status: 200, body: page({ count: 5, events: [...page().events, event(5, { kind: 'gate-opened', sourceId: 'g1' })], ending }) } }
+    )
+    const data = r.structuredContent as { seen: number; events: Array<{ sourceId: string }>; ending: unknown }
+    expect(data.seen).toBe(5)
+    expect(data.events.map((e) => e.sourceId)).toEqual(['g1'])
+    expect(data.ending).toEqual(ending)
+    expect(textOf(r).split('\n')[0]).toContain('waiting')
+  })
+
+  it('a window with nothing new: no events, ending null, seen unchanged', async () => {
+    const { r } = await call({ runId: 'r1', seen: 4, waitSeconds: 1 }, { 'runs-follow': { status: 200, body: page({ events: [] }) } })
+    expect(r.structuredContent).toEqual({ runId: 'r1', jobId: 'j1', seen: 4, progress: { done: 1, total: 2 }, events: [], ending: null })
+    expect(textOf(r).split('\n')[0]).toContain('nothing new')
+  })
+
+  it("redacts a secret in an event's summary and its Task's title; ids and times stay", async () => {
+    const leaky = event(1, { summary: `uses ${SK}`, taskTitle: `deploy ${SK}` })
+    const { r } = await call({ runId: 'r1' }, { 'runs-follow': { status: 200, body: page({ count: 1, events: [leaky] }) } })
+    const e = (r.structuredContent as { events: Array<Record<string, unknown>> }).events[0]
+    expect(JSON.stringify(r.structuredContent)).not.toContain(SK)
+    expect(textOf(r)).not.toContain(SK)
+    expect(e).toEqual({ ...leaky, summary: 'uses [REDACTED]', taskTitle: 'deploy [REDACTED]' })
+  })
+
+  it('a Run the Host does not know is NOT_FOUND', async () => {
+    const { r } = await call({ runId: 'r9' }, { 'runs-follow': { status: 404, body: { error: 'unknown run: r9' } } })
+    expect(errorOf(r)).toMatchObject({ code: 'NOT_FOUND', message: 'unknown run: r9' })
+  })
+
+  it('the description tells the loop: pass the previous seen, ending non-null means finished or needs a person, an empty window', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const d = String(tools.find((t) => t.name === 'wait_for_run')?.description)
+    expect(d).toMatch(/seen/)
+    expect(d).toMatch(/previous/)
+    expect(d).toMatch(/ending/)
+    expect(d).toMatch(/question/)
+    expect(d).toMatch(/empty events and ending: null/)
+    // get_run no longer tells the agent to poll it instead of waiting.
+    expect(String(tools.find((t) => t.name === 'get_run')?.description)).toContain('wait_for_run')
   })
 })
