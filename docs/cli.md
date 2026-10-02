@@ -812,7 +812,7 @@ and `warning` says why: the Host then fails every MCP call until the file is rep
 
 ```json
 {"ok":true,"data":{"cliVersion":"1.4.1","transport":"stdio","host":{"running":true,"version":"1.4.1",
-  "protocol":4,"mcp":true},"access":"control","tools":16}}
+  "protocol":4,"mcp":true},"access":"control","tools":24}}
 ```
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code

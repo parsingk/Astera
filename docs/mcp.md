@@ -149,6 +149,9 @@ If the client cannot find `astera`, give `command` the full path of the installe
 
 ## The tools
 
+The server offers 24 tools: 18 for projects, accounts and Jobs, four for sessions and two that read
+a Task's output. What a client may call is set by [MCP access](#mcp-access).
+
 | Tool | What it does |
 | --- | --- |
 | `list_projects` | The projects registered in Astera. Use a project id with `create_job`. |
@@ -169,9 +172,9 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `create_task` | Add a Task to a Job's plan (`jobId`: every Run started from then on copies it) or to one Run (`runId`); give exactly one. `spec` is the work in full (up to 50 000 characters), `title` a short name (up to 200), `deps` the Task ids it waits for, `validate` run configuration ids from `list_run_configs` that must pass, `review: true` asks for a review. Without `accountId` the Task runs on the Job's coordinator account. |
 | `list_run_configs` | The run configurations of a Job's project folder (`id`, `name`, `type`): the checks a Task can name in `create_task`'s `validate`. |
 | `list_sessions` | The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by `status` (`alive`, `ended`, or a terminal's `working`, `waiting` or `unknown`), `provider`, and `projectId`. Needs the session setting (below). |
-| `get_session` | What a session shows now: a terminal's visible rows (`screen`) and the rows above them (`scrollback`, `lines` 1 to 500, 100 when not given; `lines` sizes the scrollback only, and the screen comes on top of it), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). One answer holds at most 40 000 characters of text, the newest; over that the oldest rows or turns are left out, the scrollback first and then the top rows of the screen, and `truncated: true` says so, so ask for fewer `lines` or `turns`. `screenWrapped` and `scrollbackWrapped` mark each row that continues the one above it. Needs the session setting. |
-| `send_message` | Type `text` (up to 50 000 characters) into a live session and press Enter; a chat session takes it as one turn. Returns as soon as the text is accepted, not when the session has answered: poll `get_session`. Needs the session setting and "Read and control". |
-| `create_session` | Start a terminal or chat session in a registered project's folder (`projectId`), on `accountId` or, without one, on `provider`'s default account (`claude` unless given). Needs the session setting and "Read and control". |
+| `get_session` | What the session `sessionId` (from `list_sessions`) shows now: a terminal's visible rows (`screen`) and the rows above them (`scrollback`, `lines` 1 to 500, 100 when not given; `lines` sizes the scrollback only, and the screen comes on top of it), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). One answer holds at most 40 000 characters of text, the newest; over that the oldest rows or turns are left out, the scrollback first and then the top rows of the screen, and `truncated: true` says so, so ask for fewer `lines` or `turns`. `screenWrapped` and `scrollbackWrapped` mark each row that continues the one above it. Needs the session setting. |
+| `send_message` | Type `text` (up to 50 000 characters) into the live session `sessionId` and press Enter; a chat session takes it as one turn. Returns as soon as the text is accepted, not when the session has answered: poll `get_session`. A session waiting on a prompt is refused (see [MCP access](#mcp-access)). Needs the session setting and "Read and control". |
+| `create_session` | Start a session in a registered project's folder (`projectId`), on `accountId` or, without one, on `provider`'s default account (`claude` unless given). `kind` is `terminal` (the default) or `chat`; `title` (up to 200 characters) names it and `prompt` (up to 50 000) is the first thing it is asked. A terminal session's prompt goes on the command line, so one holding `"`, `&`, `\|`, `<`, `>`, `^`, `%` or a line break is refused with `INVALID_ARGUMENTS`; start a chat session for such text. Needs the session setting and "Read and control". |
 | `get_check_output` | The output of a Task's failed check (`check`, or the first that failed): the last 4000 characters of its log, last round only. `offset` and `limit` (1 to 4000) page through them; `total` is how many there are. A Task with no failed check output is `CONFLICT`. |
 | `get_task_output` | What the latest worker of a Task printed, counted from the end: skip `skipLines` newest lines, return the next `lines` (1 to 500, 200 when not given) older ones, oldest first; `more: true` says older lines remain. After Astera restarts it answers `recorded: false` with no lines, since worker output exists only while the process that started the worker runs (its last 64 KB). |
 | `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and, per Task, a `failureSummary` (what fails in the current round: each failed check, its exit code and its last output line) and a `lastFailure` (the same for the last round of failed checks, not reviews; kept while it is rechecked and after it converged, so it says why a repair ran). Astera runs the checks and repairs; this only reads them. |
@@ -256,12 +259,22 @@ restart forgets them.
 `create_session` also need **Let MCP clients see and use sessions** (Settings, CLI tab), which is off
 by default: they reach every session Astera holds, the person's own terminals included. With it on,
 the two reads follow "Read only" and the two writes need "Read and control"; with it off, each is
-refused with `PERMISSION_DENIED` naming the setting. Two refusals hold whatever the settings say:
-`send_message` into a terminal session waiting on a permission prompt or a question, or a chat
-session holding an approval or a question open, is refused with `CONFLICT` and nothing is typed (a
-person answers those in Astera; no MCP tool answers a prompt), and `create_session` starts a session
-only in a registered project's folder. A Codex terminal writes no hook events, so whether it waits
-on a prompt is not known and it is not refused.
+refused with `PERMISSION_DENIED` naming the setting. `get_check_output` and `get_task_output` read
+Job data and need only MCP access, not the session setting.
+
+Two refusals hold whatever the settings say:
+
+- **No answering a prompt.** `send_message` into a terminal session waiting on a permission prompt
+  or a question, or a chat session holding an approval or a question open, is refused with
+  `CONFLICT`, the message says what it waits on, and nothing is typed. A person answers those in
+  Astera; no MCP tool answers a prompt. A terminal's prompt is read from the hook events Claude Code
+  writes, as for a worker waiting for approval (above). A Codex terminal writes none, so
+  whether it waits on a prompt is not known and it is not refused.
+- **Only in a project.** `create_session` takes a `projectId`, never a folder, and the Host checks it
+  again: an MCP client's session starts only in a registered project's root folder, and anything
+  else, a folder inside the project included, is refused with `PERMISSION_DENIED`. A project whose
+  folder was moved or deleted is refused with `INVALID_ARGUMENTS` (`CWD_MISSING`) and nothing
+  starts.
 
 Both settings are read on every call, so a change applies to a connected client at its next call without
 reconnecting. Every other Host command is refused to MCP clients whatever the settings say.
@@ -321,8 +334,9 @@ The Host is from before an update and cannot talk to this build. Open Astera, wh
 run `astera host start --replace`. The sessions that Host was running end with it.
 
 **`PERMISSION_DENIED`**
-MCP access does not allow that tool. Change it in Settings, CLI tab. A client already connected sees
-the change at its next call. The same code with the message "something answered at the Host's address
+MCP access does not allow that tool. Change it in Settings, CLI tab. A session tool whose message
+names "Let MCP clients see and use sessions" needs that setting turned on there as well. A client
+already connected sees the change at its next call. The same code with the message "something answered at the Host's address
 but could not prove it is this account's Host" means a process at the Host's address failed the Host
 key proof. The server sent it nothing and does not start a Host beside it. Find what holds that
 address before you retry.
