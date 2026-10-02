@@ -14,6 +14,7 @@
 
 import path from 'node:path'
 import { isSamePath } from '../files/tree'
+import { findOnWindowsPath } from '../sessions/windowsExecutable'
 import type { McpClient, McpClientStatus, McpRegisterResult } from '../types'
 
 export type { McpClient, McpClientStatus, McpRegisterResult }
@@ -70,8 +71,10 @@ export function claudeStatusFrom(configText: string | null, want: McpServerComma
   let config: unknown
   try {
     config = JSON.parse(configText)
-  } catch (err) {
-    return { state: 'absent', detail: err instanceof Error ? err.message : String(err) }
+  } catch {
+    // A fixed reason, never the parser's message: it quotes the text around the error, and this file
+    // holds tokens. detail reaches the renderer.
+    return { state: 'absent', detail: '~/.claude.json is not valid JSON' }
   }
   if (!isObject(config)) return { state: 'absent', detail: 'not a JSON object' }
   const servers = config.mcpServers
@@ -92,11 +95,15 @@ export function codexStatusFrom(run: CliRun, want: McpServerCommand, platform: s
   let entry: unknown
   try {
     entry = JSON.parse(run.stdout)
-  } catch (err) {
-    return { state: 'absent', detail: err instanceof Error ? err.message : String(err) }
+  } catch {
+    // Fixed, as for ~/.claude.json: the parser's message would quote the output.
+    return { state: 'absent', detail: 'codex mcp get returned output that is not JSON' }
   }
   const transport = isObject(entry) ? entry.transport : undefined
   if (!isObject(transport)) return { state: 'different' }
+  // A disabled entry does not run, so it is not "registered"; Register again removes and adds it, and
+  // a fresh add is enabled.
+  if (isObject(entry) && entry.enabled === false) return { state: 'different' }
   return { state: sameServer(transport.command, transport.args, want, platform) ? 'registered' : 'different' }
 }
 
@@ -127,4 +134,39 @@ export async function registerMcpClient(
     if (!r.ok) return { ok: false, message: firstLine(r.stderr) || firstLine(r.stdout) || `${client} ${args.slice(0, 2).join(' ')} failed` }
   }
   return { ok: true }
+}
+
+const RUNNABLE = ['.exe', '.com', '.bat', '.cmd']
+
+/** The file to run for `cli` where locateCli found it. On win32 `Get-Command` can answer with the
+ *  `.ps1` of npm's three-file shim set (`codex`, `codex.cmd`, `codex.ps1`), and `cmd /c call` on
+ *  a .ps1 hands it to its file association: the CLI never runs. So anything but .exe/.com/.bat/.cmd
+ *  is swapped for the runnable sibling in the same folder, by PATHEXT order; null when there is none
+ *  (read as not installed). */
+export function executableFor(
+  cli: McpClient,
+  found: string,
+  platform: string,
+  env: NodeJS.ProcessEnv,
+  exists?: (p: string) => boolean
+): string | null {
+  if (platform !== 'win32') return found
+  if (RUNNABLE.includes(path.win32.extname(found).toLowerCase())) return found
+  return findOnWindowsPath(cli, { PATH: path.win32.dirname(found), PATHEXT: env.PATHEXT ?? env.Pathext }, exists)
+}
+
+/** Characters cmd.exe reads as syntax or expands, even inside quotes for `%` and `!`. */
+const CMD_SYNTAX = /[&|<>^%()"!]/
+
+/** Why a run is refused, or null. A .cmd or .bat CLI on win32 runs through `cmd.exe /d /c call`
+ *  (windowsSpawn), and execFile quotes a word only when it has a space, so a word with `&` and no
+ *  space reaches cmd bare; the CLI's own `%*` then reads every word again. Rather than a quoting rule
+ *  for two layers of cmd, such a run is refused and the person registers by hand. An .exe is started
+ *  directly and no cmd reads its words. */
+export function cmdRefusal(file: string, args: string[], platform: string): string | null {
+  if (platform !== 'win32') return null
+  if (!['.bat', '.cmd'].includes(path.win32.extname(file).toLowerCase())) return null
+  const bad = [file, ...args].find((w) => CMD_SYNTAX.test(w))
+  if (bad === undefined) return null
+  return `${path.win32.basename(file)} runs through cmd, which reads & | < > ^ % ( ) ! or a quote in "${bad}" as syntax; register Astera by hand with the copied line or the JSON entry (docs/mcp.md, Connect a client)`
 }

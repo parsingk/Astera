@@ -4,7 +4,9 @@
 // Each CLI is found where the machine says it is now (locateCli), not on this process's PATH, which
 // was copied when the app started and misses a CLI installed since. It is then spawned by that
 // absolute path with no shell: directly for an .exe, through `cmd.exe /d /c call` for a .cmd shim on
-// win32 (windowsSpawn; an npm install of either CLI is a .cmd, which execFile cannot start).
+// win32 (windowsSpawn; an npm install of either CLI is a .cmd, which execFile cannot start). The .ps1
+// that locateCli can answer with for an npm install is swapped for its .cmd sibling (executableFor),
+// and a .cmd run whose words cmd would read as syntax is refused (cmdRefusal).
 import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -12,7 +14,9 @@ import { locateCli } from './cliLocate'
 import { windowsSpawn } from '../core/sessions/windowsExecutable'
 import {
   claudeStatusFrom,
+  cmdRefusal,
   codexStatusFrom,
+  executableFor,
   registerMcpClient,
   type CliRun,
   type McpClient,
@@ -24,6 +28,8 @@ import {
 const TIMEOUT_MS = 30_000
 
 function runAt(found: string, args: string[]): Promise<CliRun> {
+  const refused = cmdRefusal(found, args, process.platform)
+  if (refused !== null) return Promise.resolve({ ok: false, stdout: '', stderr: refused })
   const spawn = process.platform === 'win32' ? windowsSpawn(path.win32.basename(found), args, () => found) : { file: found, args }
   return new Promise((resolve) => {
     execFile(spawn.file, spawn.args, { timeout: TIMEOUT_MS, windowsHide: true }, (err, stdout, stderr) => {
@@ -38,6 +44,12 @@ function runAt(found: string, args: string[]): Promise<CliRun> {
       })
     })
   })
+}
+
+/** The file to run for `cli`, or null when it is not installed (core/install/mcpClients.ts executableFor). */
+async function locate(cli: McpClient): Promise<string | null> {
+  const found = await locateCli(cli)
+  return found === null ? null : executableFor(cli, found, process.platform, process.env)
 }
 
 /** Where `claude mcp add -s user` writes (measured, core/install/mcpClients.ts). */
@@ -66,14 +78,14 @@ async function statusOf(client: McpClient, want: McpServerCommand, home: string,
 
 export async function mcpClientsStatus(want: McpServerCommand, home: string): Promise<Record<McpClient, McpClientStatus>> {
   const [claude, codex] = await Promise.all(
-    (['claude', 'codex'] as const).map(async (c) => statusOf(c, want, home, await locateCli(c)))
+    (['claude', 'codex'] as const).map(async (c) => statusOf(c, want, home, await locate(c)))
   )
   return { claude, codex }
 }
 
 /** Looks again before it runs anything: what the screen showed may be stale. */
 export async function registerMcpClientNow(client: McpClient, want: McpServerCommand, home: string): Promise<McpRegisterResult> {
-  const found = await locateCli(client)
+  const found = await locate(client)
   const { state } = await statusOf(client, want, home, found)
   // state is 'not-installed' when found is null, and registerMcpClient then runs nothing.
   return registerMcpClient(client, state, want, (args) => runAt(found ?? client, args))

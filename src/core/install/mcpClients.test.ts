@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   addArgs,
+  cmdRefusal,
+  executableFor,
   claudeStatusFrom,
   codexStatusFrom,
   registerMcpClient,
@@ -153,5 +155,74 @@ describe('registerMcpClient', () => {
     expect(await registerMcpClient('claude', 'registered', WANT, r.run)).toEqual({ ok: true })
     expect((await registerMcpClient('codex', 'not-installed', WANT, r.run)).ok).toBe(false)
     expect(r.calls).toEqual([])
+  })
+})
+
+describe('review fixes', () => {
+  it('never echoes the text of ~/.claude.json into detail (it may hold tokens)', () => {
+    const text = '{ "mcpServers": {}, "oauthAccount": { "token": "sk-SECRET-123" '
+    const s = claudeStatusFrom(text, WANT, 'win32')
+    expect(s).toEqual({ state: 'absent', detail: '~/.claude.json is not valid JSON' })
+  })
+
+  it('never echoes codex output into detail when it is not JSON', () => {
+    const s = codexStatusFrom({ ok: true, stdout: '{"name":"astera","token":"sk-SECRET', stderr: '' }, WANT, 'win32')
+    expect(s).toEqual({ state: 'absent', detail: 'codex mcp get returned output that is not JSON' })
+  })
+
+  it('reads a disabled Codex entry as different, so Register again turns it back on', () => {
+    const entry = JSON.parse(codexJson('cmd', WANT.args))
+    entry.enabled = false
+    expect(codexStatusFrom({ ok: true, stdout: JSON.stringify(entry), stderr: '' }, WANT, 'win32')).toEqual({ state: 'different' })
+  })
+})
+
+describe('executableFor (win32)', () => {
+  const env = { PATHEXT: '.COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC;.PS1' }
+  const has = (...files: string[]) => (p: string) => files.map((f) => f.toLowerCase()).includes(p.toLowerCase())
+
+  // Get-Command answers with npm's codex.ps1 of the three-file shim set; cmd /c call on a .ps1 hands it
+  // to the file association and the CLI never runs.
+  it('takes the .cmd beside a .ps1 that Get-Command found', () => {
+    const dir = 'C:\\Users\\me\\AppData\\Roaming\\npm'
+    const exists = has(`${dir}\\codex`, `${dir}\\codex.cmd`, `${dir}\\codex.ps1`)
+    expect(executableFor('codex', `${dir}\\codex.ps1`, 'win32', env, exists)).toBe(`${dir}\\codex.cmd`)
+  })
+
+  it('keeps an .exe, .com, .cmd or .bat as found', () => {
+    for (const f of ['C:\\a\\claude.exe', 'C:\\a\\claude.com', 'C:\\a\\claude.cmd', 'C:\\a\\claude.bat'])
+      expect(executableFor('claude', f, 'win32', env, () => false)).toBe(f)
+  })
+
+  it('is null when nothing runnable is beside it (not installed)', () => {
+    expect(executableFor('codex', 'C:\\a\\codex.ps1', 'win32', env, has('C:\\a\\codex.ps1'))).toBeNull()
+  })
+
+  it('leaves a posix path alone', () => {
+    expect(executableFor('codex', '/usr/local/bin/codex', 'linux', {}, () => false)).toBe('/usr/local/bin/codex')
+  })
+})
+
+describe('cmdRefusal', () => {
+  const SAFE = 'C:\\Users\\Jane Doe\\AppData\\Local\\astera\\bin\\astera.cmd'
+
+  it('lets an .exe through whatever its args hold: no cmd reads them', () => {
+    expect(cmdRefusal('C:\\a\\claude.exe', ['mcp', 'add', 'C:\\a&b(c)\\astera.cmd'], 'win32')).toBeNull()
+  })
+
+  it('lets a .cmd through when no word has a character cmd reads as syntax', () => {
+    expect(cmdRefusal('C:\\npm\\codex.cmd', addArgs('codex', mcpServerFor({ platform: 'win32', shimPath: SAFE })), 'win32')).toBeNull()
+  })
+
+  it.each(['&', '|', '<', '>', '^', '%', '(', ')', '"', '!'])('refuses a .cmd run when a word holds %s, and says to register by hand', (ch) => {
+    const shim = `C:\\Users\\a${ch}b\\astera.cmd`
+    const msg = cmdRefusal('C:\\npm\\claude.cmd', addArgs('claude', mcpServerFor({ platform: 'win32', shimPath: shim })), 'win32')
+    expect(msg).toContain(shim)
+    expect(msg).toMatch(/by hand/)
+    expect(cmdRefusal(`C:\\n${ch}pm\\claude.cmd`, ['mcp', 'get', 'astera'], 'win32')).toMatch(/by hand/)
+  })
+
+  it('never refuses off win32', () => {
+    expect(cmdRefusal('/a&b/claude', ['x&y'], 'linux')).toBeNull()
   })
 })
