@@ -4,8 +4,9 @@ How It Works turns a finished piece of work into an explanation you can read wit
 every code change. Each record keeps your original request and explains what changed, how it
 works, why it was built that way, and which files are involved.
 
-It is experimental and off by default. It records work declared after you enable tracking;
-it does not scan your old conversations to create a history.
+It is experimental. A session's work is recorded only after you enable tracking, which is off by
+default; a finished Job Run is recorded either way. It does not scan your old conversations to
+create a history.
 
 <img src="../assets/how-it-works-demo.gif" width="820" alt="Example-data walkthrough of Astera's How It Works task list, completed explanation, flow diagram, and step-specific implementation references" />
 
