@@ -2,7 +2,7 @@
 // `status()`: nothing else in slice 1 depends on the Host being there, and every failure ends here,
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_SLACK, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_SLACK, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { HOST_UNRESPONSIVE_MS, PING_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
@@ -599,6 +599,9 @@ export class HostClient {
     // yield before that would make the Host a second writer.
     // `understanding` (E1 §2): a Host that announces it writes How It Works records, and this app reads
     // understanding.json and hands it its closed units and regenerates (appUnderstanding.ts).
+    // `work-units` (E2 §3): a Host that announces it detects session work units and writes workUnits.json,
+    // and this app reads it and forwards its button presses, forks and tracking toggle (appWorkUnits.ts).
+    // Sent only by a build that never starts its collector in front of such a Host.
     // `workspace` (agent workspace design): this app shows the Host's workspaces in a mirror tab, so the Host may push them.
     // `slack` (Slack in the Host P4): this app opens no socket and posts nothing in front of a Host that
     // announces `slack-owner`, and forwards what only it sees. Left out while this app holds its own socket
@@ -621,7 +624,7 @@ export class HostClient {
       // arrives, and its commit hook diffs against the last one it took, so a push a newer one replaced
       // is never missed. The one reader that needs every commit — the app's own journal recorder — is
       // idle while the Host announces `journal`, and every Host that reads this name does.
-      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])],
+      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])],
       nonce
     })
   }

@@ -586,20 +586,7 @@ export class WorkUnitCollector {
    *  (active, interrupted — UnderstandingView.tsx) and a single sort before the split is enough:
    *  filtering by status preserves relative order, so each section comes out newest-first too. */
   listOpen(projectPath: string): OpenSessionTask[] {
-    const state = this.deps.store.get(projectPath)
-    if (!state) return []
-    return state.units
-      .filter((u) => u.status === 'active' || u.status === 'interrupted')
-      .map((u) => ({
-        id: u.id,
-        objective: u.objective,
-        status: u.status as 'active' | 'interrupted',
-        startedAt: u.startedAt,
-        endedAt: u.endedAt,
-        reason: u.reason,
-        sessionId: u.sessionId
-      }))
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    return openTasksOf(this.deps.store.get(projectPath))
   }
 
   // ── Astera 자신의 git 동작 등록 (EG §26) ───────────────────────────────
@@ -1859,4 +1846,22 @@ function groupByProject(sessions: readonly CollectorSession[]): Map<string, Coll
     else out.set(s.projectPath, [s])
   }
   return out
+}
+
+/** One project's open-task rows, newest first (listOpen's contract). Shared with the app that reads the
+ *  file a Host writes (appWorkUnits.ts), so both modes show the same rows. */
+export function openTasksOf(state: WorkUnitState | undefined): OpenSessionTask[] {
+  if (!state) return []
+  return state.units
+    .filter((u) => u.status === 'active' || u.status === 'interrupted')
+    .map((u) => ({
+      id: u.id,
+      objective: u.objective,
+      status: u.status as 'active' | 'interrupted',
+      startedAt: u.startedAt,
+      endedAt: u.endedAt,
+      reason: u.reason,
+      sessionId: u.sessionId
+    }))
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }

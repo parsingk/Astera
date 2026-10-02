@@ -8,7 +8,7 @@
 //      기존 파일을 다음 쓰기가 덮어쓴다.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { renameRetrying } from '../renameRetry'
+import { readFileRetrying, renameRetrying } from '../renameRetry'
 import type { ExternalGitChange } from '../git/types'
 import type { SessionWorkUnit, TranscriptCursor } from './types'
 
@@ -53,7 +53,7 @@ export interface WorkUnitState {
  *  written and read back verbatim (ipc.ts's `sessionTasks.list` handler explains why folding here
  *  would be wrong: it would ask the *other* store's key of *this* one, which holds nothing under
  *  it). Confusing the two key spaces is exactly what Task 5's Critical bug was. */
-interface StoreShape {
+export interface StoreShape {
   projects: Record<string, WorkUnitState>
 }
 
@@ -98,6 +98,24 @@ function migrate(parsed: StoreShape): void {
       if (!u.objective && legacy.title) u.objective = legacy.title
     }
   }
+}
+
+/** workUnits.json as it is on disk, read-only: for an app that reads the file a Host writes (E2 §6).
+ *  Retried through a writer's rename-replace (EBUSY/EPERM on win32). No file is an empty store; a file
+ *  that cannot be read or is not valid throws, and nothing is backed up or written. The legacy
+ *  statuses are migrated in the copy read, as load() migrates them. */
+export async function readWorkUnitsFile(filePath: string): Promise<StoreShape> {
+  let text: string
+  try {
+    text = await readFileRetrying(filePath)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { projects: {} }
+    throw e
+  }
+  const parsed: unknown = JSON.parse(text)
+  if (!isValid(parsed)) throw new Error('workUnits.json is not a valid work unit store')
+  migrate(parsed)
+  return parsed
 }
 
 export class WorkUnitStore {

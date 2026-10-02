@@ -39,7 +39,7 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { APP_CALLER } from '../core/host/driver'
-import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover, hostSpeaksUnderstanding } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover, hostSpeaksUnderstanding, hostSpeaksWorkUnits } from './host/outdated'
 import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
@@ -89,10 +89,11 @@ import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { WorkUnitStore } from '../core/workUnit/store'
+import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
 import { AppUnderstandingStore, createAppUnderstanding } from './understanding/appUnderstanding'
+import { AppWorkUnitStore, createAppWorkUnits } from './workUnit/appWorkUnits'
 import { promptWriteEventOf } from '../core/continuity/promptWrite'
 import { readGitSummary } from '../core/orchestration/exec/gitSummary'
 import { RecoveryReconciler } from './recovery/reconciler'
@@ -2138,7 +2139,8 @@ export function registerIpc(
     // is that old session's id, but even if its task is still sitting `interrupted`, this resume
     // gives no grounds to revive it as `active`: the person never called `/astera-task` again.
     // `onSessionForked`'s doc records this decision and why (Important 3).
-    if (resumeTranscriptDest !== undefined) workUnitCollector.onSessionForked(info.id, resumeTranscriptDest)
+    // In front of a Host that writes work units, the fork goes to it as work-units-fork (appWorkUnits).
+    if (resumeTranscriptDest !== undefined) appWorkUnits.fork(info.id, resumeTranscriptDest)
     // Route to the per-provider coordinator — a mix is already blocked by the guard above, so the primary account's provider decides
     if ((opts.rollAccountIds?.length ?? 0) >= 1) {
       // The rolling coordinators are separate per-provider implementations and are deliberately not
@@ -4641,16 +4643,10 @@ export function registerIpc(
   // watcher) can call it on a default install, and it is start() that the work unit toggle gates.
   // Those trigger sites appear earlier in this function than this declaration and close over it;
   // registerIpc is synchronous, so none of them can run before this line has executed.
-  const workUnits = new WorkUnitStore(path.join(app.getPath('userData'), 'workUnits.json'))
-  // Same shape and the same two reasons as understandingLoaded above: registerIpc is synchronous so
-  // this cannot be awaited here, and the .catch keeps one failed load from rejecting every later await.
-  const workUnitsLoaded = workUnits
-    .load()
-    .then((loaded) => {
-      if (loaded.recovered)
-        orchLog('failed to read or parse workUnits.json — kept the .bak and started from an empty state')
-    })
-    .catch((e) => orchLog(`workUnits.json load failed: ${String(e)}`))
+  // Write-gated, closed until this app is the writer, and loaded only then (appWorkUnits below): in
+  // front of a Host that announces `work-units` the Host writes the file and this app only reads it.
+  const workUnitsFile = path.join(app.getPath('userData'), 'workUnits.json')
+  const workUnits = new AppWorkUnitStore(workUnitsFile)
 
   /** 수집기가 이번에 볼 세션들. **수집기는 세션을 스스로 찾지 않는다** — 어느 세션이 어느 파일을
    *  쓰는지는 이 파일만 아는 일이고(tabResumeTextFor 가 같은 값을 같은 방식으로 얻는다), 그것을
@@ -4749,18 +4745,31 @@ export function registerIpc(
       send('sessionTasks:goalIgnored', { projectPath, blockingUnitId }),
     log: orchLog
   })
-  // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
-  // 뒤늦게 끝난 load() 가 통째로 덮어쓴다.
-  void workUnitsLoaded
-    .then(() =>
-      core.appSettings.getWorkUnitTrackingEnabled() ? workUnitCollector.start() : undefined
-    )
-    .catch((e) => orchLog(`work unit collector start failed: ${String(e)}`))
+  /** Who writes workUnits.json (E2 §3, §6): this app's store and collector above, or, in front of a Host
+   *  that announces `work-units`, the Host, which this app then reads and hands its presses, forks and
+   *  toggle. **The collector starts only once that is decided** (a greeting, or the startup chain settling
+   *  with no Host): started earlier, its seed would interrupt every unit a Host session opened. The load
+   *  waits for the decision too, and the start for the load (토글이 꺼져 있으면 시작하지 않는다), so a
+   *  late load never overwrites what the collector wrote. */
+  const appWorkUnits = createAppWorkUnits({
+    store: workUnits,
+    collector: workUnitCollector,
+    tracking: () => core.appSettings.getWorkUnitTrackingEnabled(),
+    orchCall: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
+    readFile: () => readWorkUnitsFile(workUnitsFile),
+    notify: (root) => send('sessionTasks:changed', root),
+    goalIgnored: (info) => send('sessionTasks:goalIgnored', info),
+    log: orchLog
+  })
+  // Settles on every path out of the startup chain; null is the one where no Host ever answered. A
+  // greeting before it has decided already, and this does nothing then.
+  void hostSessionsTakenBack.then((taken) => appWorkUnits.onStartupSettled(taken === null))
   // 이어받기 알림을 배선에 넘긴다. **토글과 무관하게 항상 넘긴다** — `onTabResumeReady` 와
   // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
-  // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다.
+  // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다. A roll this app made itself goes to a work-units
+  // Host as work-units-fork, as a history resume does.
   onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId) =>
-    workUnitCollector.onSessionForked(sessionId, transcriptPath, oldSessionId)
+    appWorkUnits.fork(sessionId, transcriptPath, oldSessionId)
   )
 
   // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
@@ -4779,31 +4788,22 @@ export function registerIpc(
   // (via the fold above) shows up under the origin repo no matter which tab produced it. That
   // asymmetry is real and already exists for work-unit state generally; it is parked for a later
   // plan (docs/2026-08-30-understanding-generation-conformance.md), not something to fix here.
+  //
+  // In front of a work-units Host the list is read from the file it writes and the presses go to it
+  // (appWorkUnits). The row can already be gone by the time a [완료] lands — the goal-ignored toast's
+  // own [완료] action (App.tsx) does not auto-dismiss, so it can outlive the row it names — and that is
+  // answered as success in both modes (appWorkUnits' `completed` has the full reasoning).
   ipcMain.handle('sessionTasks.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
-    return workUnitCollector.listOpen(projectPath)
+    return appWorkUnits.list(projectPath)
   })
   ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
-    const r = await workUnitCollector.completeTaskById(projectPath, id)
-    if (!r.ok) {
-      // The row can already be gone by the time this lands — newly reachable since the
-      // goal-ignored toast's own [완료] action (App.tsx) does not auto-dismiss, so it can outlive
-      // the row it names if the person closes it some other way first, or a goal's own end signal
-      // already did. Both of collector.ts's own reasons for `!ok` here (`unknown task: …` — the row
-      // was dropped entirely, `finish`'s empty-drop; `task is …` — it closed under some other
-      // status) mean the same thing from this click's point of view: what the button wanted, the
-      // row gone, is already true. Treated as success, not a failure the person has to read.
-      if (r.reason === `unknown task: ${id}` || r.reason.startsWith('task is '))
-        return { recorded: true }
-      throw new Error(r.reason)
-    }
-    return { recorded: r.recorded }
+    return appWorkUnits.complete(projectPath, id)
   })
   ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
-    const r = await workUnitCollector.cancelTaskById(projectPath, id)
-    if (!r.ok) throw new Error(r.reason)
+    await appWorkUnits.cancel(projectPath, id)
   })
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
@@ -5535,9 +5535,10 @@ export function registerIpc(
       throw new Error(`INVALID_WORK_UNIT_TRACKING_ENABLED: ${String(enabled)}`)
     await core.appSettings.setWorkUnitTrackingEnabled(enabled)
     // 켜면 **그 순간의 파일 끝**을 커서로 잡고(이전 커서는 버린다), 끄면 열려 있던 Unit 을 그 자리에서
-    // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
-    await workUnitsLoaded
-    await workUnitCollector.onEnabledChanged(enabled)
+    // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다
+    // (appWorkUnits). In front of a work-units Host this sends work-units-reload instead, and before the
+    // writer is decided it does nothing: the decision reads the saved toggle.
+    await appWorkUnits.trackingChanged(enabled)
     // **A retry, not the reason the server exists.** It comes up at app start on its own; this only
     // covers a start where that failed, so turning the toggle on gets a second chance rather than
     // nothing. Turning it off does not close the server — see the startOrch comment.
@@ -6345,6 +6346,8 @@ export function registerIpc(
     client.onMessage((m) => {
       if (m.t === 'understanding-state') appUnderstanding.onHostPush(m.root)
     })
+    // E2 §6: the Host wrote workUnits.json, or ignored a /goal. onHostPush never throws.
+    client.onMessage((m) => appWorkUnits.onHostPush(m))
 
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
      *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
@@ -6878,6 +6881,9 @@ export function registerIpc(
       // to the Host closes this app's store at once and hands the Host what it was writing.
       hostWritesUnderstanding = hostSpeaksUnderstanding(hostClient?.status() ?? { connected: false, features: [] })
       void appUnderstanding.onGreeting(hostWritesUnderstanding)
+      // Session work units follow it too (E2 §3): a work-units Host makes this app a reader at once, an
+      // older one makes it the writer, which loads the file the Host wrote and only then starts.
+      void appWorkUnits.onGreeting(hostSpeaksWorkUnits(hostClient?.status() ?? { connected: false, features: [] }))
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its

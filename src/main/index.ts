@@ -796,10 +796,8 @@ app.whenReady().then(async () => {
     // interrupt it for no reason: a usage limit is not a completion. claudeCoordinator.ts's roll() goes
     // kill → spawn → this publish with no await in between, so the killed session's real
     // (asynchronous) exit event is guaranteed to arrive after this notification. (A Host roll's exit
-    // is held until this has run — hostRollView.) **codex sessions do not create a Unit today** (see
-    // collector.ts's header comment for why), so passing `oldSessionId` there has nothing to re-key and
-    // quietly does nothing for now. Passed anyway, because an asymmetry caught on only one side becomes
-    // a silent bug the day codex support arrives.
+    // is held until this has run — hostRollView.) codex sessions create units too (a codex `/goal`, or
+    // the task stub), so a codex roll re-keys its open unit the same way.
     try {
       if (channel === 'session:rolled') {
         const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }

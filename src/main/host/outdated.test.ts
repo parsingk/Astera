@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal, hostSpeaksUnderstanding } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal, hostSpeaksUnderstanding, hostSpeaksWorkUnits } from './outdated'
 import { HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_SLACK_OWNER } from '../../core/host/protocol'
 
 describe('hostIsOutdated', () => {
@@ -155,5 +155,14 @@ describe('hostSpeaksUnderstanding (E1 §2)', () => {
     expect(hostSpeaksUnderstanding({ connected: false, unresponsive: true, features: ['understanding'] })).toBe(true)
     expect(hostSpeaksUnderstanding({ connected: false, features: ['understanding'] })).toBe(false)
     expect(hostSpeaksUnderstanding({ connected: true, features: ['journal'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksWorkUnits (E2 §3)', () => {
+  it('holds for a connected or unresponsive Host that announced work-units, and nothing else', () => {
+    expect(hostSpeaksWorkUnits({ connected: true, features: ['work-units'] })).toBe(true)
+    expect(hostSpeaksWorkUnits({ connected: false, unresponsive: true, features: ['work-units'] })).toBe(true)
+    expect(hostSpeaksWorkUnits({ connected: false, features: ['work-units'] })).toBe(false)
+    expect(hostSpeaksWorkUnits({ connected: true, features: ['understanding'] })).toBe(false)
   })
 })
