@@ -239,18 +239,19 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
     if (kind === 'terminal') args = { ...input, lines: SESSION_LINES_DEFAULT }
   }
   // send_message types its text as it is (P1 final review I4): a control character is a key, and a
-  // line break into a terminal is Enter, so only a session the list says is a chat takes one.
+  // line break or a tab into a terminal is one too (Enter; Tab, a Claude Code key like Shift+Tab), so
+  // only a session the list says is a chat takes them.
   if (t.name === 'send_message') {
     const text = String(input.text)
     const bad = sendTextRefusal(text)
     if (bad !== null) return errorResult('INVALID_ARGUMENTS', bad)
-    if (text.includes('\n')) {
+    if (text.includes('\n') || text.includes('\t')) {
       const kind = await sessionKind(link, t, input.sessionId)
       if (typeof kind === 'object') return kind
       if (kind !== 'chat')
         return errorResult(
           'INVALID_ARGUMENTS',
-          'text holds a line break, which only a chat session takes: a terminal session takes it as Enter, so send it one line at a time'
+          'text holds a line break or a tab, which only a chat session takes: a terminal session takes them as keys (Enter, Tab), so send a terminal one line at a time, without tabs'
         )
     }
   }

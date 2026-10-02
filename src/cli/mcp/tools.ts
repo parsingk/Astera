@@ -79,14 +79,14 @@ export function convergenceRefusal(input: Record<string, unknown>): string | nul
 /** Why send_message's text is refused before the Host is asked, or null (P1 final review I4). The
  *  Host types it into the session as it is, so a control character is a key: ESC [ Z (Shift+Tab)
  *  cycles a Claude Code session's permission mode, a carriage return submits early, Ctrl-C
- *  interrupts. A line feed and a tab pass here; whether a line feed may go to this session is
- *  server.ts's question, which reads the session's kind. The C1 range is refused as well, since
+ *  interrupts. A line feed and a tab pass here; whether they may go to this session is server.ts's
+ *  question, which reads the session's kind (a chat only). The C1 range is refused as well, since
  *  U+009B is CSI to a terminal that reads 8-bit controls. */
 export function sendTextRefusal(text: string): string | null {
   for (const ch of text) {
     const c = ch.charCodeAt(0)
     if ((c < 0x20 && c !== 0x0a && c !== 0x09) || (c >= 0x7f && c <= 0x9f))
-      return `text holds a control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}): send_message refuses every character below U+0020 except a line feed and a tab, and U+007F to U+009F, since a terminal takes them as keys`
+      return `text holds a control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}): send_message refuses every character below U+0020 except a line feed and a tab (those two into a chat session only), and U+007F to U+009F, since a terminal takes them as keys`
   }
   return null
 }
@@ -391,7 +391,7 @@ export const TOOLS: ToolDef[] = [
     title: 'Send to a session',
     readOnly: false,
     cmd: 'sessions-send',
-    description: `Type text into a live session and press Enter (a chat session takes it as one turn). This returns as soon as the text is accepted, not when the session has answered: poll get_session to see the answer. A terminal session waiting on a permission prompt or a question is refused with CONFLICT and nothing is typed, as is a chat session holding an approval or a question open; a person answers those in Astera. Text holding a control character (below U+0020 but a line feed or a tab, U+007F, or U+0080 to U+009F) is refused with INVALID_ARGUMENTS, since a terminal takes those as keys. A line break is taken only by a chat session, as part of its turn: a terminal would take it as Enter, so send a terminal session one line at a time. ${SESSIONS_WRITE}`,
+    description: `Type text into a live session and press Enter (a chat session takes it as one turn). This returns as soon as the text is accepted, not when the session has answered: poll get_session to see the answer. A terminal session waiting on a permission prompt or a question is refused with CONFLICT and nothing is typed, as is a chat session holding an approval or a question open; a person answers those in Astera. Text holding a control character (below U+0020 but a line feed or a tab, U+007F, or U+0080 to U+009F) is refused with INVALID_ARGUMENTS, since a terminal takes those as keys. A line break or a tab is taken only by a chat session, as part of its turn: a terminal would take them as keys (Enter, Tab), so send a terminal session one line at a time, without tabs. ${SESSIONS_WRITE}`,
     inputSchema: { sessionId: id, text: z.string().min(1).max(MCP_LIMITS.text), requestId },
     // Never `wait` (P1 Q6) and never `noEnter`: Enter is always pressed.
     args: (i) => ({ id: i.sessionId, text: i.text })

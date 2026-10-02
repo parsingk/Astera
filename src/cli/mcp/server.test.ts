@@ -1211,20 +1211,24 @@ describe('the session and output tools: final review fixes', () => {
     expect(ok.isError).toBeFalsy()
   })
 
-  it('send_message takes a line break into a chat session only: a terminal would take it as Enter', async () => {
+  it('send_message takes a line break or a tab into a chat session only: a terminal would take them as keys', async () => {
     const sessions = [
       { id: 's1', kind: 'terminal' },
       { id: 's2', kind: 'chat' }
     ]
     const { link, calls } = answering({ 'sessions-list': { status: 200, body: sessions } })
     const client = await connected(link)
-    for (const sessionId of ['s1', 's9']) {
-      const r = await client.callTool({ name: 'send_message', arguments: { sessionId, text: `one${LF}two` } })
-      expect(r.isError, sessionId).toBe(true)
-      expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
-      expect(String(errorOf(r).message)).toMatch(/line break.*chat session/)
-    }
+    // A tab too: Tab is a key to a Claude Code terminal, as Shift+Tab is.
+    for (const sessionId of ['s1', 's9'])
+      for (const text of [`one${LF}two`, `one${TAB}two`]) {
+        const r = await client.callTool({ name: 'send_message', arguments: { sessionId, text } })
+        expect(r.isError, `${sessionId} ${JSON.stringify(text)}`).toBe(true)
+        expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS' })
+        expect(String(errorOf(r).message)).toMatch(/line break or a tab.*chat session/)
+      }
     expect(calls.filter((c) => c.cmd === 'sessions-send')).toEqual([])
+    const tab = await client.callTool({ name: 'send_message', arguments: { sessionId: 's2', text: `one${TAB}two` } })
+    expect(tab.isError).toBeFalsy()
     const chat = await client.callTool({ name: 'send_message', arguments: { sessionId: 's2', text: `one${LF}two` } })
     expect(chat.isError).toBeFalsy()
     expect(calls.at(-1)).toMatchObject({ cmd: 'sessions-send', args: { id: 's2', text: `one${LF}two` } })
@@ -1233,7 +1237,7 @@ describe('the session and output tools: final review fixes', () => {
     await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text: 'go' } })
     expect(calls.map((c) => c.cmd)).toEqual(['sessions-send'])
     const { tools } = await client.listTools()
-    expect(String(tools.find((t) => t.name === 'send_message')?.description)).toMatch(/line break.*chat session/)
+    expect(String(tools.find((t) => t.name === 'send_message')?.description)).toMatch(/line break or a tab.*chat session/)
   })
 
   it('get_session, when its read of the session list is refused, names get_session and not sessions-list', async () => {
