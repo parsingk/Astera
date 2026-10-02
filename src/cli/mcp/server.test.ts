@@ -1207,6 +1207,11 @@ describe('the session and output tools: final review fixes', () => {
       expect(String(errorOf(r).message)).toMatch(/control character.*U\+0020.*line feed.*tab/)
     }
     expect(calls.filter((c) => c.cmd === 'sessions-send')).toEqual([])
+    // A CR says what to send instead.
+    const cr = await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text: `one${CR}${LF}two` } })
+    expect(String(errorOf(cr).message)).toContain('use LF line breaks')
+    const esc = await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text: `a${ESC}b` } })
+    expect(String(errorOf(esc).message)).not.toContain('use LF line breaks')
     const ok = await client.callTool({ name: 'send_message', arguments: { sessionId: 's1', text: `a${TAB}b` } })
     expect(ok.isError).toBeFalsy()
   })

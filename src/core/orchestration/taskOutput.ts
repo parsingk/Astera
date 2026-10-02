@@ -6,10 +6,14 @@ export type CheckOutputSlice = { check: string; total: number; offset: number; t
 
 /** `text` after its first line break: what is left of a text cut from the front once the partial
  *  line it begins with is gone. A cut can fall inside a secret, whose tail alone matches no pattern
- *  of the filter, so the partial line is dropped rather than redacted. No line break: nothing. */
+ *  of the filter, so the partial line is dropped rather than redacted. With no line break (a
+ *  minified stack trace, a JSON error blob) only up to the first whitespace goes, since a secret is
+ *  a run without whitespace; with no whitespace either, nothing is left. */
 export function dropPartialLine(text: string): string {
-  const i = text.indexOf('\n')
-  return i < 0 ? '' : text.slice(i + 1)
+  const line = text.indexOf('\n')
+  if (line >= 0) return text.slice(line + 1)
+  const space = text.search(/\s/)
+  return space < 0 ? '' : text.slice(space + 1)
 }
 
 /** The last `cap` characters of `all`, and when that cut a line, from the next line on: what a

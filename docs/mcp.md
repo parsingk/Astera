@@ -308,7 +308,8 @@ a field with nothing left.
   redacted with it.
 - Both output logs are kept only to a size, the check log to its last 4000 characters and the
   worker output to its last 64 KB. When that cut falls inside a line, the partial line is dropped,
-  since it may hold the end of a secret whose head was cut away.
+  since it may hold the end of a secret whose head was cut away. When what is kept is one line,
+  only up to its first whitespace is dropped, since a secret holds none.
 - A line the terminal wrapped over several rows is joined and redacted as one line, with the spaces
   the Host trimmed at a row's end put back, so a key split across rows is caught; every row is also
   redacted on its own. From a Host too old to mark wrapped rows, each pair of adjacent rows is

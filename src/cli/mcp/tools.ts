@@ -86,7 +86,7 @@ export function sendTextRefusal(text: string): string | null {
   for (const ch of text) {
     const c = ch.charCodeAt(0)
     if ((c < 0x20 && c !== 0x0a && c !== 0x09) || (c >= 0x7f && c <= 0x9f))
-      return `text holds a control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}): send_message refuses every character below U+0020 except a line feed and a tab (those two into a chat session only), and U+007F to U+009F, since a terminal takes them as keys`
+      return `text holds a control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}): send_message refuses every character below U+0020 except a line feed and a tab (those two into a chat session only), and U+007F to U+009F, since a terminal takes them as keys${c === 0x0d ? '; use LF line breaks' : ''}`
   }
   return null
 }

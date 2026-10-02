@@ -66,7 +66,15 @@ describe('cutTail (a check log and a worker tail cut at their cap)', () => {
   it('keeps the first line when the cut falls just after a line break', () => {
     expect(cutTail(`old${nl}next${nl}last`, 9)).toBe(`next${nl}last`)
   })
-  it('is empty when the kept text is one partial line', () => {
+  it('is empty when the kept text is one partial run with no whitespace', () => {
     expect(cutTail('x'.repeat(20), 10)).toBe('')
+  })
+  // A minified stack trace or a JSON error blob: one line, so the cut drops only up to its first
+  // whitespace (a secret is a run without whitespace, so the cut fragment still goes).
+  it('drops a one-line tail only up to its first whitespace', () => {
+    const all = 'a'.repeat(1000) + 'b'.repeat(500) + ' Error: boom ' + 'c'.repeat(3487)
+    const kept = all.slice(-4000)
+    expect(cutTail(all, 4000)).toBe(kept.slice(kept.indexOf(' ') + 1))
+    expect(cutTail(all, 4000).startsWith('Error: boom')).toBe(true)
   })
 })
