@@ -451,6 +451,33 @@ describe('createHostUnderstanding', () => {
     await vi.waitFor(async () => expect((await recordsOnDisk(project)).every((r) => r.status === 'ready')).toBe(true))
   })
 
+  // E1 leftovers item 4: markGenerating already wrote `generating`; the queued regenerate does not write
+  // the same again, so the apps hear one push before the agent runs.
+  it('regenerate pushes once before its agent runs: no second identical generating write', async () => {
+    await settings(ON)
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [hostRecord('r1')] } } }))
+    const agentIn = deferred()
+    const agentGo = deferred()
+    const { u, pushed } = make({
+      runAgent: async () => {
+        agentIn.resolve()
+        await agentGo.promise
+        return { ok: true, value: explanation }
+      }
+    })
+    await u.load()
+    try {
+      await expect(u.regenerate(project, 'r1')).resolves.toEqual({ ok: true, id: 'r1' })
+      await agentIn.promise
+      expect(pushed).toEqual([project])
+      expect((await recordsOnDisk(project))[0].status).toBe('generating')
+    } finally {
+      agentGo.resolve()
+    }
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+    expect(pushed).toEqual([project, project])
+  })
+
   // Final review item 4: the read tools match a project's key with isSamePath, so regenerate does too. A
   // case difference with forward slashes, on win32's rule, so the test runs on POSIX as well.
   it('regenerate finds the record under a key spelt in another case, and writes under the file’s own key', async () => {
