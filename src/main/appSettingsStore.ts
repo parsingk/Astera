@@ -118,6 +118,7 @@ export class AppSettingsStore {
   /** What an MCP client may do through `astera mcp serve` (MCP design M5). Default 'control'; only
    *  the two narrower values are written to the file. */
   private mcpAccess: McpAccess = 'control'
+  /** Whether an MCP client may see and use sessions (MCP P1 design §5). Off by default; only true is written. */
   private mcpSessions = false
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID

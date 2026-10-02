@@ -4,7 +4,7 @@ import { CATALOGS, LANGS } from '../../../core/i18n'
 const errors: string[] = []
 vi.mock('../lib/toast', () => ({ toast: { error: (m: string) => void errors.push(m) } }))
 
-const { copyLine, loadMcpAccess, registrationFor, sessionsDisabled, saveMcpSessions } = await import('./McpSettings')
+const { copyLine, loadMcpAccess, registrationFor, loadMcpSessions, sessionsDisabled, saveMcpSessions } = await import('./McpSettings')
 
 const t = (key: string, params?: Record<string, unknown>): string => (params ? `${key} ${JSON.stringify(params)}` : key)
 const withApi = (getMcpAccess: () => Promise<unknown>): void => {
@@ -121,8 +121,33 @@ describe('McpSettings sessions checkbox', () => {
 
   it('has its strings in all four languages, the label exactly as the tool descriptions quote it', () => {
     for (const lang of LANGS)
-      for (const key of ['settings.mcp.sessions.label', 'settings.mcp.sessions.hint', 'settings.mcp.sessions.saveFailed'] as const)
+      for (const key of ['settings.mcp.sessions.label', 'settings.mcp.sessions.hint', 'settings.mcp.sessions.saveFailed', 'settings.mcp.sessions.loadFailed'] as const)
         expect(CATALOGS[lang].messages[key], `${lang} ${key}`).toBeTruthy()
     expect(CATALOGS.en.messages['settings.mcp.sessions.label']).toBe('Let MCP clients see and use sessions')
+  })
+})
+
+describe('McpSettings sessions first read', () => {
+  beforeEach(() => void (errors.length = 0))
+  const withSessions = (getMcpSessions: () => Promise<unknown>): void => {
+    ;(globalThis as { window?: unknown }).window = { api: { settings: { getMcpSessions } } }
+  }
+
+  it('shows the saved value', async () => {
+    withSessions(async () => true)
+    const set = vi.fn()
+    await loadMcpSessions(set, t)
+    expect(set).toHaveBeenCalledWith(true)
+    expect(errors).toEqual([])
+  })
+
+  it('says so when the saved value cannot be read, instead of leaving the box silently unchecked', async () => {
+    withSessions(async () => {
+      throw new Error('ipc gone')
+    })
+    const set = vi.fn()
+    await loadMcpSessions(set, t)
+    expect(set).not.toHaveBeenCalled()
+    expect(errors).toEqual(['settings.mcp.sessions.loadFailed {"detail":"ipc gone"}'])
   })
 })

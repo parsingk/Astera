@@ -33,6 +33,7 @@ export const es: Catalog = {
   'settings.mcp.sessions.hint':
     'Abarca todas las sesiones que tiene Astera, incluidas tus propias terminales. Verlas requiere al menos solo lectura; escribir en ellas e iniciarlas requiere lectura y control.',
   'settings.mcp.sessions.saveFailed': 'No se pudo guardar el ajuste de sesiones MCP: {detail}',
+  'settings.mcp.sessions.loadFailed': 'No se pudo leer el ajuste de sesiones MCP: {detail}',
   // Modo de permisos del agente
   'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
   'settings.agentPermission.hint':
