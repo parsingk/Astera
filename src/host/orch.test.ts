@@ -141,6 +141,18 @@ describe('createHostOrch', () => {
       await settings(JSON.stringify({ mcpAccess: 'control', mcpSessions: false }))
       expect((await list()).status).toBe(403)
     })
+    it('a GitHub write from MCP needs mcpGithubWrite as well as control, read per call', async () => {
+      const orch = orchOver()
+      const rerun = (): ReturnType<typeof orch.call> => orch.call({ cmd: 'github-ci-rerun', args: {}, sessionId: '', from: caller('mcp') })
+      await settings(JSON.stringify({ mcpAccess: 'control' }))
+      const off = await rerun()
+      expect(off.status).toBe(403)
+      expect(JSON.stringify(off.body)).toContain('Let MCP clients act on GitHub')
+      await settings(JSON.stringify({ mcpAccess: 'control', mcpGithubWrite: true }))
+      const on = await rerun()
+      expect(JSON.stringify(on.body)).not.toContain('Let MCP clients act on GitHub')
+      expect(JSON.stringify(on.body)).not.toContain('needs MCP access')
+    })
     // MCP P1 design §2: the connection's role reaches handleCommand, which refuses an MCP client a
     // session outside a registered project. The CLI's call is not refused for that.
     it('the caller role reaches the command layer: MCP sessions-create outside a project is 403', async () => {

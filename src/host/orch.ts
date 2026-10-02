@@ -16,6 +16,7 @@ import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
+import { readMcpGithubWrite } from '../core/settings/mcpGithubWrite'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
@@ -1269,7 +1270,12 @@ export function createHostOrch(a: {
         // cannot be read refuses (readMcpAccess throws; the catch below answers 500 with its message).
         if (from?.role === 'mcp') {
           const settingsFile = path.join(a.profileDir, 'app-settings.json')
-          const refused = mcpRefusal(cmd, await readMcpAccess(settingsFile), await readMcpSessions(settingsFile))
+          const refused = mcpRefusal(
+            cmd,
+            await readMcpAccess(settingsFile),
+            await readMcpSessions(settingsFile),
+            await readMcpGithubWrite(settingsFile)
+          )
           if (refused) return refused
         }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
