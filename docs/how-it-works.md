@@ -4,8 +4,9 @@ How It Works turns a finished piece of work into an explanation you can read wit
 every code change. Each record keeps your original request and explains what changed, how it
 works, why it was built that way, and which files are involved.
 
-It is experimental and off by default. It records work declared after you enable tracking;
-it does not scan your old conversations to create a history.
+It is experimental. A session's work is recorded only after you enable tracking, which is off by
+default; a finished Job Run is recorded either way. It does not scan your old conversations to
+create a history.
 
 <img src="../assets/how-it-works-demo.gif" width="820" alt="Example-data walkthrough of Astera's How It Works task list, completed explanation, flow diagram, and step-specific implementation references" />
 
@@ -33,8 +34,10 @@ Only one piece of work can be recorded per session at a time. Complete the curre
 starting the next. A piece of work that changed no files leaves no completed record.
 
 Claude Code's and Codex's `/goal` can also be recorded. Claude completes the record when the
-work finishes; Codex requires you to mark it **Done** in How It Works. Completed Jobs Runs are
-recorded too when tracking is enabled. A Job's explanation is generated after the Run finishes.
+work finishes; Codex requires you to mark it **Done** in How It Works. Completed Job Runs are
+recorded too, whether or not tracking is enabled. A Job's explanation is generated after the Run finishes.
+The Astera Host records a Job's Run, so a Run that finishes while the app is closed is recorded
+too and appears when you open the app again. A session's work is recorded only while the app is open.
 
 ## Read a completed record
 

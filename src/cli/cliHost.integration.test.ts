@@ -53,6 +53,7 @@ import {
   HOST_YIELD_JOURNAL,
   HOST_YIELD_ROLLING,
   HOST_YIELD_SLACK,
+  HOST_YIELD_UNDERSTANDING,
   HOST_YIELD_WORKTREES,
   type ClientMessage,
   type HostMessage
@@ -68,6 +69,9 @@ import { openHostLink, type HostLink } from './mcp/hostLink'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import { issueObjective, parseIssue } from '../core/github/issue'
 import { readUnderstandingFile } from '../core/understanding/read'
+import { createHostUnderstanding } from '../host/hostUnderstanding'
+import type { PipelineDeps } from '../core/understanding/pipeline'
+import { makeDescriptors } from '../core/providers/descriptor'
 
 /** Every wait is bounded: long enough for real git on a loaded Windows runner, short enough to fail. */
 const WAIT = { timeout: 25_000, interval: 25 }
@@ -291,7 +295,15 @@ interface Rig {
 }
 
 async function hostRig(
-  o: { repo?: boolean; seed?: OrchState; profileDir?: string; continuity?: boolean; github?: OrchServerDeps['github'] } = {}
+  o: {
+    repo?: boolean
+    seed?: OrchState
+    profileDir?: string
+    continuity?: boolean
+    github?: OrchServerDeps['github']
+    /** The How It Works agent round trip. Absent, the rig runs none: a record fails with NO_AGENT_IN_RIG. */
+    runAgent?: PipelineDeps['runAgent']
+  } = {}
 ): Promise<Rig> {
   const profileDir = o.profileDir ?? (await tempDir(PROFILE_PREFIX))
   const home = await tempDir('astera-cli-int-home-')
@@ -515,6 +527,21 @@ async function hostRig(
     : null
   await journal?.start()
 
+  // How It Works (E1 §2, §3), built the way index.ts builds it: the Host writes understanding.json while
+  // every attached app yields `understanding`, with only the agent faked.
+  const hostUnderstanding = createHostUnderstanding({
+    file: path.join(profileDir, 'understanding.json'),
+    profileDir,
+    writer: () => !serverOf().appsKeep(HOST_YIELD_UNDERSTANDING),
+    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    descriptors: makeDescriptors(process.platform),
+    worktrees: () => worktrees.list(),
+    log,
+    push: (root) => serverOf().broadcast({ t: 'understanding-state', root }),
+    runAgent: o.runAgent ?? (async () => ({ ok: false, reason: 'NO_AGENT_IN_RIG' }))
+  })
+  await hostUnderstanding.load()
+
   const hostSessions = registrySessions({
     ptys: registry,
     procs,
@@ -558,6 +585,7 @@ async function hostRig(
     ...(o.github ? { github: o.github } : {}),
     // How It Works records (MCP P2-C), as host/index.ts wires them: the profile's understanding.json.
     readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
+    understanding: hostUnderstanding,
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -1167,12 +1195,12 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   /** A rig whose state already holds one registered project, a git repo of its own: what an app that
    *  opened that folder once leaves behind (projects are only registered by the app). */
   async function projectRig(
-    o: { continuity?: boolean; github?: OrchServerDeps['github'] } = {}
+    o: { continuity?: boolean; github?: OrchServerDeps['github']; runAgent?: PipelineDeps['runAgent'] } = {}
   ): Promise<{ h: Rig; projectId: string; projectPath: string }> {
     const projectPath = await makeRepo('astera-mcp-int-project-')
     cleanups.push(() => rmrf(projectPath))
     const seed = ensureProject(emptyState(), { path: projectPath, now: '2026-10-01T00:00:00.000Z' })
-    const h = await hostRig({ repo: false, seed: seed.state, continuity: o.continuity, github: o.github })
+    const h = await hostRig({ repo: false, seed: seed.state, continuity: o.continuity, github: o.github, runAgent: o.runAgent })
     return { h, projectId: seed.project.id, projectPath }
   }
 
@@ -1480,7 +1508,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 33 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 34 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)
@@ -1858,5 +1886,129 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     const last = await mcp.call('wait_for_run', { runId, seen: after.seen, waitSeconds: 1 })
     expect(last.isError, last.content[0]?.text).toBeFalsy()
     expect(last.structuredContent).toMatchObject({ runId, seen: after.seen, events: [], ending: { state: 'waiting', questionId } })
+  })
+
+  // How It Works in the Host (E1 §2, §3, §5): the Host writes the records itself, with no app attached.
+  describe('How It Works written by the Host', () => {
+    /** What the fake agent answers: a write-up citing the repo's own file, its overview this text. */
+    const writeUp = (overview: string) => ({
+      overview,
+      userVisibleChanges: ['a change'],
+      flow: [{ id: 's', label: 'start', type: 'start', next: [], evidencePaths: ['f.txt'] }],
+      decisions: [],
+      implementation: [{ role: 'r', path: 'f.txt' }],
+      evidencePaths: ['f.txt'],
+      needsReview: false
+    })
+    /** A fake agent: answers `overview` as it is when it answers, and waits on `hold` when one is set. */
+    const fakeAgent = () => {
+      const a = { calls: 0, overview: 'the first write-up', hold: null as Promise<void> | null }
+      const runAgent: PipelineDeps['runAgent'] = async () => {
+        a.calls += 1
+        if (a.hold) await a.hold
+        return { ok: true, value: writeUp(a.overview) }
+      }
+      return { a, runAgent }
+    }
+    /** The profile's settings as a person who turned How It Works on, picked a generator account and gave
+     *  MCP control leaves them, every other key the rig wrote kept. */
+    const turnOn = async (h: Rig): Promise<void> => {
+      const file = path.join(h.profileDir, 'app-settings.json')
+      const settings = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
+      const on = { ...settings, workUnitTrackingEnabled: true, generator: { accountId: h.accountId }, lang: 'en', mcpAccess: 'control' }
+      await fs.writeFile(file, JSON.stringify(on))
+    }
+    /** A one-Task Job in the project, driven to completion through the CLI: the worker reports done. */
+    const finishedRun = async (h: Rig, projectPath: string): Promise<string> => {
+      const job = okData(await astera(['jobs', 'create', '--objective', 'tidy the shortcuts', '--cwd', projectPath, '--concurrency', '1'], h.env), 'jobs create')
+      const jobId = job.id as string
+      okData(await astera(['tasks', 'add', '--job', jobId, '--title', 'one', '--spec', 'do the one thing', '--account', h.accountId], h.env), 'tasks add')
+      const runId = okData(await astera(['jobs', 'run', '--id', jobId], h.env), 'jobs run').id as string
+      await until(() => expect(h.spawns()).toHaveLength(1))
+      const w = h.spawns()[0]
+      okData(
+        await astera(
+          ['send', '--type', 'worker_done', '--task-id', w.taskId, '--dispatch-id', w.dispatchId, '--outcome', 'succeeded', '--subject', 'done'],
+          { ...h.env, ASTERA_SESSION: w.sessionId }
+        ),
+        'send worker_done'
+      )
+      await until(async () => expect(okData(await astera(['runs', 'get', '--id', runId], h.env), 'runs get').outcome).toBe('completed'))
+      return runId
+    }
+    type Row = { id: string; status: string; source: { kind: string; runId?: string } }
+    const rowsOf = (r: { structuredContent?: Record<string, unknown> }): Row[] => (r.structuredContent as { records: Row[] }).records
+
+    it('with no app attached, a finished Run is one record, and regenerate_work_record makes it generating, then the new write-up', async () => {
+      const { a, runAgent } = fakeAgent()
+      const { h, projectId, projectPath } = await projectRig({ runAgent })
+      await turnOn(h)
+      expect(h.server.hasApp()).toBe(false)
+      const mcp = await mcpClient(h)
+
+      const runId = await finishedRun(h, projectPath)
+      await until(async () => expect(rowsOf(await mcp.call('list_work_records', { projectId })).map((r) => r.status)).toEqual(['ready']))
+      const [row] = rowsOf(await mcp.call('list_work_records', { projectId }))
+      expect(row.source).toMatchObject({ kind: 'job', runId })
+      const first = await mcp.call('get_work_record', { projectId, recordId: row.id })
+      expect(first.structuredContent).toMatchObject({ explanation: { overview: 'the first write-up' } })
+      // Exactly one: the file holds this one record, and the agent ran once.
+      const file = await readUnderstandingFile(path.join(h.profileDir, 'understanding.json'))
+      expect(Object.values(file.projects).flatMap((p) => p.records).map((r) => r.id)).toEqual([row.id])
+      expect(a.calls).toBe(1)
+
+      // Regenerate: held in the agent, the record reads generating; released, it reads the new write-up.
+      let release: () => void = () => {}
+      a.hold = new Promise<void>((r) => (release = r))
+      a.overview = 'the second write-up'
+      const started = await mcp.call('regenerate_work_record', { projectId, recordId: row.id, requestId: 'regen-1' })
+      expect(started.isError, started.content[0]?.text).toBeFalsy()
+      expect(started.structuredContent).toMatchObject({ id: row.id, status: 'generating' })
+      await until(async () => expect((await mcp.call('get_work_record', { projectId, recordId: row.id })).structuredContent).toMatchObject({ status: 'generating' }))
+      release()
+      await until(async () =>
+        expect((await mcp.call('get_work_record', { projectId, recordId: row.id })).structuredContent).toMatchObject({
+          status: 'ready',
+          explanation: { overview: 'the second write-up' }
+        })
+      )
+      expect(a.calls).toBe(2)
+      expect(rowsOf(await mcp.call('list_work_records', { projectId })).map((r) => r.id)).toEqual([row.id])
+    })
+
+    it('an attached app that keeps How It Works (no understanding yield) stops the Host writing, and regenerate_work_record is CONFLICT', async () => {
+      const { a, runAgent } = fakeAgent()
+      const { h, projectId, projectPath } = await projectRig({ runAgent })
+      await turnOn(h)
+      // An older Astera: it yields every duty but this one, so it writes How It Works itself.
+      expect(appHello.yields).not.toContain(HOST_YIELD_UNDERSTANDING)
+      await rawClient(h.address, appHello, appAnswers(h.accountId))
+      await until(() => expect(h.server.hasApp()).toBe(true))
+      const mcp = await mcpClient(h)
+
+      await finishedRun(h, projectPath)
+      await new Promise((r) => setTimeout(r, 200))
+      expect(existsSync(path.join(h.profileDir, 'understanding.json'))).toBe(false)
+      expect(a.calls).toBe(0)
+
+      // A record that app wrote: the Host refuses to regenerate it, and leaves the file as it is.
+      const record = {
+        id: 'by-app',
+        at: '2026-10-01T00:00:00.000Z',
+        source: { kind: 'job', runId: 'r-app', jobName: 'j', taskIds: [] },
+        request: 'the app wrote this',
+        changedFiles: [],
+        git: { startHead: null, endHead: null },
+        status: 'ready'
+      }
+      const written = JSON.stringify({ projects: { [projectPath]: { records: [record] } } })
+      await fs.writeFile(path.join(h.profileDir, 'understanding.json'), written)
+      const refused = await mcp.call('regenerate_work_record', { projectId, recordId: 'by-app', requestId: 'regen-2' })
+      expect(refused.isError).toBe(true)
+      expect(errorOf(refused)).toMatchObject({ code: 'CONFLICT', message: 'an older Astera app is writing How It Works records; regenerate there' })
+      await new Promise((r) => setTimeout(r, 100))
+      expect(await fs.readFile(path.join(h.profileDir, 'understanding.json'), 'utf8')).toBe(written)
+      expect(a.calls).toBe(0)
+    })
   })
 })

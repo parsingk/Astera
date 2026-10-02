@@ -29,8 +29,11 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
+import { createHostUnderstanding } from './hostUnderstanding'
+import { makeDescriptors } from '../core/providers/descriptor'
+import { readRange } from '../core/git/range'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
@@ -288,6 +291,26 @@ async function main(): Promise<void> {
   })
   await hostJournal.start()
 
+  // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
+  // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
+  // Host left `generating` reads as interrupted; **not the writer before the server listens** (a Host that
+  // loses the bind race must write nothing), so that interruption is saved once it does, below, or when
+  // the apps change. `orch` hands it every Run a commit finishes.
+  const hostUnderstanding = createHostUnderstanding({
+    file: path.join(profileDir, 'understanding.json'),
+    profileDir,
+    writer: () => server !== undefined && !server.appsKeep(HOST_YIELD_UNDERSTANDING),
+    // accounts.json and app-settings.json: hostUnderstanding reads both per call, retried.
+    descriptors: makeDescriptors(process.platform),
+    // The Host's own registry; empty without a spawner, which never loads it, and then no key folds.
+    worktrees: () => worktrees.list(),
+    // The app's reader for the same material (ipc.ts): no range, or one git could not read, gives none.
+    readCommits: async (root, from, to) => (from && to ? ((await readRange(root, from, to))?.subjects ?? []) : []),
+    log: (m) => log.write(m),
+    push: (root) => server.broadcast({ t: 'understanding-state', root })
+  })
+  await hostUnderstanding.load()
+
   // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in
   // this registry, so a coordinator's worker-start works with no Astera window open. Null when the
   // Host was started without the CLI paths, and then those commands go to the app as before (R1).
@@ -527,6 +550,8 @@ async function main(): Promise<void> {
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,
+    // How It Works (E1 §3): every Run a commit finishes, recorded here while this Host is the writer.
+    understanding: hostUnderstanding,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
     // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
     specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,
@@ -634,6 +659,8 @@ async function main(): Promise<void> {
         rollingWiring?.onAppsChanged()
         // P4: an app that keeps Slack attaching closes the Host's socket; the last one leaving opens it.
         slackWiring?.onAppsChanged()
+        // E1: an app that kept How It Works leaving makes this Host the writer.
+        void hostUnderstanding.writerMayHaveChanged()
       },
       // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello. Limits L3:
       // and who drives, so its Jobs sidebar can say why a parked Host starts nothing. Each isolates itself.
@@ -666,6 +693,8 @@ async function main(): Promise<void> {
 
   // The Host's Slack starts once the server exists: who keeps Slack is the server's to say.
   slackWiring?.start()
+  // And How It Works: with no app attached yet this Host is the writer now (E1 §2).
+  void hostUnderstanding.writerMayHaveChanged()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

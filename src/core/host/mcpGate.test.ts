@@ -33,6 +33,17 @@ describe('mcpRefusal', () => {
       expect(mcpRefusal(cmd, 'off', true, true)?.status).toBe(403)
     }
   })
+  it('understanding-regenerate is a control command, with no second setting: regenerate_work_record', () => {
+    expect(MCP_CONTROL_COMMANDS).toContain('understanding-regenerate')
+    expect(mcpRefusal('understanding-regenerate', 'control', false, false)).toBeNull()
+    const r = mcpRefusal('understanding-regenerate', 'read', true, true)
+    expect(r?.status).toBe(403)
+    expect(r?.body.error).toMatch(/Read and control/)
+    expect(mcpRefusal('understanding-regenerate', 'off', true, true)?.status).toBe(403)
+  })
+  it('understanding-unit is the app’s alone: never open to MCP', () => {
+    for (const access of ['read', 'control'] as const) expect(mcpRefusal('understanding-unit', access, true, true)?.status).toBe(403)
+  })
   it('runs-follow is a read, with no second setting: wait_for_run', () => {
     expect(MCP_READ_COMMANDS).toContain('runs-follow')
     for (const access of ['read', 'control'] as const) expect(mcpRefusal('runs-follow', access, false, false)).toBeNull()

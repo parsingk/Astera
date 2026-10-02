@@ -34,7 +34,9 @@ export const MCP_CONTROL_COMMANDS = [
   'runs-stop',
   'runs-resume',
   'questions-answer',
-  'tasks-add'
+  'tasks-add',
+  // regenerate_work_record (E1 §5): a new write-up of one How It Works record, by the Host.
+  'understanding-regenerate'
 ] as const
 
 /** Session commands are a second gate on top of the access level: they need `mcpSessions` too (P1 design §1). */

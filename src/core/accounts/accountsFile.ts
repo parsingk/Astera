@@ -82,11 +82,15 @@ async function withDefaultMarks(
 
 /** The same read, with every account whole — `configDir` included. For `astera skills`, which runs
  *  in the CLI process and plants files in each account's config folder; never for a reply, which is
- *  what `readAccountsFile`'s projection is for. */
-export async function readAccountEntries(filePath: string): Promise<Account[]> {
+ *  what `readAccountsFile`'s projection is for. `read` is the file read, a plain readFile unless a
+ *  caller rides out the app's save (the Host's How It Works: readFileRetrying). */
+export async function readAccountEntries(
+  filePath: string,
+  read: (p: string) => Promise<string> = (p) => fs.readFile(p, 'utf8')
+): Promise<Account[]> {
   let text: string
   try {
-    text = await fs.readFile(filePath, 'utf8')
+    text = await read(filePath)
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw new RepairNeeded(`accounts.json could not be read (${String(err)}); open Astera to repair it`, 'accounts.json')

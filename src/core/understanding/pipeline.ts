@@ -13,20 +13,20 @@
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
-import type { Account, Provider } from '../../core/types'
-import type { ProviderDescriptor } from '../../core/providers/descriptor'
-import type { ProjectUnderstanding, RecordExplanation, WorkRecord } from '../../core/understanding/types'
-import type { GeneratorSettings } from '../../core/understanding/generatorSettings'
-import type { SessionWorkUnit } from '../../core/workUnit/types'
-import { verificationOf } from '../../core/workUnit/verification'
-import { sessionLabelOf } from '../../core/understanding/changeRecord'
-import { buildRecordPrompt } from '../../core/understanding/prompt'
-import type { Lang } from '../../core/i18n'
-import { validateRecord, type ValidationResult } from '../../core/understanding/validate'
-import { evidenceIdOf } from '../../core/understanding/evidence'
+import type { Account, Provider } from '../types'
+import type { ProviderDescriptor } from '../providers/descriptor'
+import type { ProjectUnderstanding, RecordExplanation, WorkRecord } from './types'
+import type { GeneratorSettings } from './generatorSettings'
+import type { SessionWorkUnit } from '../workUnit/types'
+import { verificationOf } from '../workUnit/verification'
+import { sessionLabelOf } from './changeRecord'
+import { buildRecordPrompt } from './prompt'
+import type { Lang } from '../i18n'
+import { validateRecord, type ValidationResult } from './validate'
+import { evidenceIdOf } from './evidence'
 import type { UnderstandingStore } from './store'
 import { runAgent } from './agent'
-import { createProber, type ProbeResult } from '../../core/sessions/pathProbe'
+import { createProber, type ProbeResult } from '../sessions/pathProbe'
 
 export interface PipelineDeps {
   store: UnderstandingStore
@@ -49,6 +49,9 @@ export interface PipelineDeps {
    *  when it did not answer in time. Defaults to a stat through the budgeted session-folder probe
    *  (defaultFileProbe); a test seam. */
   fileProbe?: (abs: string) => Promise<ProbeResult>
+  /** The agent round trip; defaults to runAgent (agent.ts). A test seam: the Host's tests run its
+   *  pipeline with a fake one. */
+  runAgent?: typeof runAgent
 }
 
 export interface RunRecordInput {
@@ -180,11 +183,22 @@ export class UnderstandingPipeline {
    *  background, not the user). */
   regenerate(projectRoot: string, recordId: string): Promise<void> {
     return this.enqueue(async () => {
+      // The file first, as prepend and patch read it: the record and its commits may be another
+      // process's (store.refresh).
+      await this.deps.store.refresh()
       const cur = this.deps.store.get(projectRoot)?.records.find((r) => r.id === recordId)
       if (!cur) return
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))
       await this.fill(projectRoot, recordId, cur.git.commits ?? [])
     })
+  }
+
+  /** Sets one record to `generating`, **outside the queue**: a caller that answers "generating" at once
+   *  (the Host's regenerate, E1 §5) makes the file say so before its answer, while regenerate's own fill
+   *  may wait behind another generation. Through patch, so it starts from the file. A record that is not
+   *  there is left alone. */
+  markGenerating(projectRoot: string, recordId: string): Promise<void> {
+    return this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))
   }
 
   /** The agent round trip and everything that hangs on its answer. */
@@ -196,7 +210,7 @@ export class UnderstandingPipeline {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: ready.reason }))
       return
     }
-    const run = await runAgent({
+    const run = await (this.deps.runAgent ?? runAgent)({
       ...ready.ctx,
       cwd: projectRoot,
       prompt: buildRecordPrompt({
@@ -316,7 +330,9 @@ export class UnderstandingPipeline {
     }
   }
 
-  private prepend(projectRoot: string, record: WorkRecord): Promise<void> {
+  private async prepend(projectRoot: string, record: WorkRecord): Promise<void> {
+    // The file first: another process may have written it since (store.refresh).
+    await this.deps.store.refresh()
     const cur = this.deps.store.get(projectRoot)
     return this.write(projectRoot, { records: [record, ...(cur?.records ?? [])] })
   }
@@ -329,6 +345,9 @@ export class UnderstandingPipeline {
     recordId: string,
     f: (r: WorkRecord) => WorkRecord
   ): Promise<void> {
+    // The file, not only this process's memory of it: another process may have written it during the
+    // round trip (store.refresh).
+    await this.deps.store.refresh()
     const cur = this.deps.store.get(projectRoot)
     if (!cur || !cur.records.some((r) => r.id === recordId)) return
     await this.write(projectRoot, {

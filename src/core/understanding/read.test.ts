@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { WorkRecord } from './types'
-import { UnderstandingStore } from '../../main/understanding/store'
+import { UnderstandingStore } from './store'
 import { readUnderstandingFile, recordDetail, recordSummary, recordsFor, type StoreShape } from './read'
 
 let dir: string
@@ -32,6 +32,18 @@ const record = (over: Partial<WorkRecord> = {}): WorkRecord => ({
 describe('readUnderstandingFile', () => {
   it('reads a missing file as no projects', async () => {
     expect(await readUnderstandingFile(file)).toEqual({ projects: {} })
+  })
+
+  it('reads through a moment the file is held busy (a writer renaming over it on win32)', async () => {
+    const state: StoreShape = { projects: { 'D:/repo': { records: [record()] } } }
+    await fs.writeFile(file, JSON.stringify(state), 'utf8')
+    const busy = Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+    const spy = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(busy)
+    try {
+      expect(await readUnderstandingFile(file)).toEqual(state)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('reads a valid file as it is', async () => {

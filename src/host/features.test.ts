@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { hostFeatures } from './features'
-import { HOST_FEATURE_BLOCKS, HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_DISPATCH, HOST_FEATURE_DRIVER, HOST_FEATURE_JOURNAL, HOST_FEATURE_ROLLING, HOST_FEATURE_ROLL_JOURNAL, HOST_FEATURE_SLACK_OWNER, HOST_FEATURE_SPAWN, HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKTREES } from '../core/host/protocol'
+import { HOST_FEATURE_BLOCKS, HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_DISPATCH, HOST_FEATURE_DRIVER, HOST_FEATURE_JOURNAL, HOST_FEATURE_ROLLING, HOST_FEATURE_ROLL_JOURNAL, HOST_FEATURE_SLACK_OWNER, HOST_FEATURE_SPAWN, HOST_FEATURE_UNDERSTANDING, HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKTREES } from '../core/host/protocol'
 
 describe('hostFeatures (R17)', () => {
   it('announces spawn, worktrees, dispatch, rolling, blocks and roll-journal together, or none of them', () => {
@@ -14,10 +14,11 @@ describe('hostFeatures (R17)', () => {
       HOST_FEATURE_ROLL_JOURNAL,
       HOST_FEATURE_CHAT_TAKEOVER,
       HOST_FEATURE_COORDINATOR_IDLE,
-      HOST_FEATURE_JOURNAL
+      HOST_FEATURE_JOURNAL,
+      HOST_FEATURE_UNDERSTANDING
     ])
     // coordinator-idle rides no spawner (final round 3): every Host serves the CLI's check --wait.
-    expect(hostFeatures({ spawns: false })).toEqual([HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_JOURNAL])
+    expect(hostFeatures({ spawns: false })).toEqual([HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_JOURNAL, HOST_FEATURE_UNDERSTANDING])
   })
   // Limits L3: the driver report comes from the driving, which exists exactly with a spawner.
   it('announces driver exactly with dispatch', () => {
@@ -33,6 +34,12 @@ describe('hostFeatures (R17)', () => {
   it('announces journal with or without a spawner', () => {
     expect(hostFeatures({ spawns: true })).toContain(HOST_FEATURE_JOURNAL)
     expect(hostFeatures({ spawns: false })).toContain(HOST_FEATURE_JOURNAL)
+  })
+
+  // How It Works in the Host (E1 §2): every Host commits, so every Host can record a finished Run.
+  it('announces understanding with or without a spawner', () => {
+    expect(hostFeatures({ spawns: true })).toContain(HOST_FEATURE_UNDERSTANDING)
+    expect(hostFeatures({ spawns: false })).toContain(HOST_FEATURE_UNDERSTANDING)
   })
 
   it('announces slack-owner only with a spawner and a loaded SDK (Slack in the Host, P1)', () => {

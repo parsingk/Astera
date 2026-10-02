@@ -8,8 +8,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { SessionWorkUnit } from '../../core/workUnit/types'
-import type { WorkRecord } from '../../core/understanding/types'
+import type { SessionWorkUnit } from '../workUnit/types'
+import type { WorkRecord } from './types'
 import { UnderstandingStore } from './store'
 import { UnderstandingPipeline, type RunRecordInput } from './pipeline'
 
@@ -373,5 +373,22 @@ describe('regenerate — 사용자가 [다시] 를 눌렀다', () => {
     const { pipeline } = await make()
     await pipeline.regenerate(projectRoot, '없음')
     expect(agentReply.calls).toBe(0)
+  })
+
+  // Task 2 re-review: the record regenerate reads (its commits feed the prompt) is the file's, not this
+  // process's memory of it, when another process wrote the file since.
+  it('reads the record from the file another process wrote, commits included', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onUnitClosed(projectRoot, unit())
+    const r = store.get(projectRoot)!.records[0]
+    const other = new UnderstandingStore(storeFile)
+    await other.load()
+    await other.set(projectRoot, { records: [{ ...r, git: { ...r.git, commits: ['feat: written by the other process'] } }] })
+
+    await pipeline.regenerate(projectRoot, r.id)
+
+    expect(agentReply.calls).toBe(2)
+    expect(agentReply.lastPrompt).toContain('feat: written by the other process')
   })
 })

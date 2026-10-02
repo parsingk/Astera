@@ -48,6 +48,8 @@ import { ensureProject } from '../core/orchestration/projects'
 import { createHostRollTap } from './rollTapHost'
 import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 import type { HostJournal } from './hostJournal'
+import { createHostUnderstanding, NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
+import { runRecordInputOf } from '../core/orchestration/runRecord'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -3669,6 +3671,124 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
   })
 })
 
+describe('How It Works at the commit points (E1 Task 3)', () => {
+  type Input = Parameters<HostUnderstanding['onRunFinished']>[0]
+  const seedOne = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'Tidy the shortcuts', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+  const done = (a: { taskId: string; dispatchId: string }) => ({
+    cmd: 'send',
+    args: { type: 'worker_done', taskId: a.taskId, dispatchId: a.dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+    sessionId: 'ses_w'
+  })
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  /** A duty whose only working part is onRunFinished: these tests drive commits, not the app's calls. */
+  const runsOnly = (onRunFinished: HostUnderstanding['onRunFinished']): Pick<HostUnderstanding, 'onRunFinished' | 'onUnitClosed' | 'regenerate' | 'isWriter'> => ({
+    onRunFinished,
+    onUnitClosed: async () => ({ ok: true }),
+    regenerate: async (_projectPath, id) => ({ ok: true, id }),
+    isWriter: () => true
+  })
+
+  it('a commit that finishes a Run hands the built record to onRunFinished once, with the Job cwd', async () => {
+    const ids = await seedOne()
+    const calls: Input[] = []
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), understanding: runsOnly(async (i) => void calls.push(i)) })
+    expect((await orch.call(done(ids))).status).toBe(200)
+    const runId = orch.state().runs[0].id
+    expect(outcomeOf(orch.state(), runId)).toBe('completed')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toEqual({ ...runRecordInputOf(orch.state(), runId)!, at: calls[0].at })
+    expect(calls[0].projectPath).toBe('D:/p')
+    expect(calls[0].validation).toEqual({ status: 'passed' })
+    // A later commit over the finished Run records nothing again.
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    expect((await orch.call({ cmd: 'state-put', args: { state: got.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('a commit with no finished Run calls nothing', async () => {
+    await seed()
+    const calls: Input[] = []
+    const orch = orchOver({ understanding: runsOnly(async (i) => void calls.push(i)) })
+    await orch.ready()
+    expect((await orch.call({ cmd: 'runs-stop', args: { id: orch.state().runs[0].id }, sessionId: '' })).status).toBe(200)
+    expect(calls).toEqual([])
+  })
+
+  it('a state-put that finishes a Run records it; one that stands in for the load records nothing', async () => {
+    const ids = await seedOne()
+    const calls: Input[] = []
+    const orch = orchOver({ understanding: runsOnly(async (i) => void calls.push(i)) })
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    const finished: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    expect(outcomeOf(finished, finished.runs[0].id)).toBe('completed')
+    expect((await orch.call({ cmd: 'state-put', args: { state: finished, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(calls.map((c) => c.runId)).toEqual([finished.runs[0].id])
+
+    // A fresh Host whose first sight of the state is the app's put: no previous state, no edge.
+    const before = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    const later: Input[] = []
+    const cold = orchOver({ understanding: runsOnly(async (i) => void later.push(i)) })
+    expect((await cold.call({ cmd: 'state-put', args: { state: before }, sessionId: '', from: app })).status).toBe(200)
+    expect(later).toEqual([])
+  })
+
+  it('an onRunFinished that throws or rejects leaves the commit landed and logs', async () => {
+    for (const understanding of [
+      runsOnly((): Promise<void> => {
+        throw new Error('sync boom')
+      }),
+      runsOnly(async (): Promise<void> => Promise.reject(new Error('async boom')))
+    ]) {
+      logs = []
+      const ids = await seedOne()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), understanding })
+      expect((await orch.call(done(ids))).status).toBe(200)
+      expect(outcomeOf(orch.state(), orch.state().runs[0].id)).toBe('completed')
+      await vi.waitFor(() => expect(logs.some((l) => /boom/.test(l))).toBe(true))
+    }
+  })
+
+  it('through the real Host pipeline: the finished Run lands in understanding.json', async () => {
+    const ids = await seedOne()
+    const project = path.join(dir, 'project')
+    await fs.mkdir(project, { recursive: true })
+    const s = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify({ ...s, jobs: s.jobs.map((j) => ({ ...j, cwd: project })) }), 'utf8')
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ workUnitTrackingEnabled: true, generator: { accountId: 'a1' }, lang: 'en' }))
+    const understanding = createHostUnderstanding({
+      file: path.join(dir, 'understanding.json'),
+      profileDir: dir,
+      writer: () => true,
+      accounts: () => [],
+      descriptors: {} as never,
+      worktrees: () => [],
+      log: (m) => logs.push(m),
+      push: () => {}
+    })
+    await understanding.load()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), understanding })
+    expect((await orch.call(done(ids))).status).toBe(200)
+    const runId = orch.state().runs[0].id
+    await vi.waitFor(async () => {
+      const onDisk = JSON.parse(await fs.readFile(path.join(dir, 'understanding.json'), 'utf8')) as {
+        projects: Record<string, { records: { source: { runId?: string } }[] }>
+      }
+      expect(onDisk.projects[project]?.records.map((r) => r.source.runId)).toEqual([runId])
+    })
+  })
+})
+
 // MCP P2-C: the Host answers How It Works records from its readUnderstanding dep, never asking the app.
 describe('How It Works records (MCP P2-C)', () => {
   it('readUnderstanding reaches the command, and the app is not asked', async () => {
@@ -3700,5 +3820,199 @@ describe('How It Works records (MCP P2-C)', () => {
   it('without readUnderstanding the Host answers 409 too', async () => {
     const r = await orchOver().call({ cmd: 'understanding-list', args: { project: 'p1' }, sessionId: '' })
     expect(r.status).toBe(409)
+  })
+})
+
+// E1 Task 4: the app's calls into the Host's How It Works, and MCP's regenerate_work_record.
+describe('understanding-unit and understanding-regenerate (E1 §4, §5)', () => {
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  const cli: OrchCaller = { role: 'cli', toOthers: () => {} }
+  const mcp: OrchCaller = { role: 'mcp', toOthers: () => {} }
+  const access = (mcpAccess: 'read' | 'control'): Promise<void> =>
+    fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess }))
+  const unit = {
+    id: 'wu-1',
+    sessionId: 'sess-1',
+    projectPath: 'D:/p',
+    objective: 'Fix it',
+    status: 'completed',
+    startedAt: NOW,
+    endedAt: NOW,
+    sawWrite: true,
+    git: { startHead: 'a', endHead: 'b', observedChangedFiles: ['src/a.ts'] },
+    encounteredExternalGitChangeIds: []
+  }
+  const duty = () => {
+    const box = { writer: true }
+    return {
+      box,
+      understanding: {
+        onRunFinished: vi.fn(async () => {}),
+        onUnitClosed: vi.fn(async (): Promise<{ ok: boolean; reason?: string }> => ({ ok: true })),
+        regenerate: vi.fn(
+          async (_projectPath: string, id: string): Promise<{ ok: true; id: string } | { ok: false; status: number; error: string }> => ({ ok: true, id })
+        ),
+        isWriter: vi.fn(() => box.writer)
+      }
+    }
+  }
+  /** The seeded state with D:/p registered as a project: role mcp names it by id. */
+  const seedProject = async (): Promise<string> => {
+    await seed()
+    const file = path.join(dir, 'orchestration.json')
+    const reg = ensureProject(JSON.parse(await fs.readFile(file, 'utf8')) as OrchState, { path: 'D:/p', now: NOW })
+    await fs.writeFile(file, JSON.stringify(reg.state), 'utf8')
+    return reg.project.id
+  }
+  const unitCall = (from: OrchCaller | undefined, args: Record<string, unknown> = { projectPath: 'D:/p', unit }, request?: string) =>
+    ({ cmd: 'understanding-unit', args, sessionId: '', from, ...(request ? { request } : {}) })
+  const regenCall = (from: OrchCaller | undefined, args: Record<string, unknown>, request?: string) =>
+    ({ cmd: 'understanding-regenerate', args, sessionId: '', from, ...(request ? { request } : {}) })
+
+  describe('understanding-unit', () => {
+    it('is the app’s alone: 403 for the CLI, an MCP client and an unknown caller', async () => {
+      await access('control')
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      for (const from of [cli, mcp, undefined]) expect((await orch.call(unitCall(from))).status).toBe(403)
+      expect(d.understanding.onUnitClosed).not.toHaveBeenCalled()
+    })
+    it('501 on a Host without the duty', async () => {
+      expect((await orchOver().call(unitCall(app))).status).toBe(501)
+    })
+    it('409 with the sentence when this Host is not the writer, and onUnitClosed is not called', async () => {
+      const d = duty()
+      d.box.writer = false
+      expect(await orchOver({ understanding: d.understanding }).call(unitCall(app))).toEqual({ status: 409, body: { error: NOT_WRITER } })
+      expect(d.understanding.onUnitClosed).not.toHaveBeenCalled()
+    })
+    it('400 without a projectPath or a unit, and with a request id', async () => {
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      for (const args of [{ unit }, { projectPath: '', unit }, { projectPath: 'D:/p' }, { projectPath: 'D:/p', unit: 'x' }, { projectPath: 'D:/p', unit: { id: 'u' } }])
+        expect((await orch.call(unitCall(app, args))).status).toBe(400)
+      expect((await orch.call(unitCall(app, { projectPath: 'D:/p', unit }, 'r1'))).status).toBe(400)
+      expect(d.understanding.onUnitClosed).not.toHaveBeenCalled()
+    })
+    it('hands the unit to onUnitClosed and answers 200', async () => {
+      const d = duty()
+      expect(await orchOver({ understanding: d.understanding }).call(unitCall(app))).toEqual({ status: 200, body: { accepted: true } })
+      expect(d.understanding.onUnitClosed).toHaveBeenCalledWith('D:/p', unit)
+    })
+    it('maps onUnitClosed’s refusals: the writer sentence is 409, unreadable settings 500', async () => {
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      d.understanding.onUnitClosed.mockResolvedValueOnce({ ok: false, reason: NOT_WRITER })
+      expect(await orch.call(unitCall(app))).toEqual({ status: 409, body: { error: NOT_WRITER } })
+      d.understanding.onUnitClosed.mockResolvedValueOnce({ ok: false, reason: 'the settings could not be read: EACCES' })
+      expect(await orch.call(unitCall(app))).toEqual({ status: 500, body: { error: 'the settings could not be read: EACCES' } })
+    })
+  })
+
+  describe('understanding-regenerate', () => {
+    const byPath = { projectPath: 'D:/p', recordId: 'w1' }
+    it('the app sends a projectPath: answers the id as generating', async () => {
+      const d = duty()
+      expect(await orchOver({ understanding: d.understanding }).call(regenCall(app, byPath))).toEqual({ status: 200, body: { id: 'w1', status: 'generating' } })
+      expect(d.understanding.regenerate).toHaveBeenCalledWith('D:/p', 'w1')
+    })
+    it('403 for the CLI and an unknown caller; 501 without the duty', async () => {
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      for (const from of [cli, undefined]) expect((await orch.call(regenCall(from, byPath))).status).toBe(403)
+      expect(d.understanding.regenerate).not.toHaveBeenCalled()
+      expect((await orchOver().call(regenCall(app, byPath))).status).toBe(501)
+    })
+    it('409 when not the writer, and 404 and 500 from regenerate pass through', async () => {
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      d.box.writer = false
+      expect(await orch.call(regenCall(app, byPath))).toEqual({ status: 409, body: { error: NOT_WRITER } })
+      expect(d.understanding.regenerate).not.toHaveBeenCalled()
+      d.box.writer = true
+      d.understanding.regenerate.mockResolvedValueOnce({ ok: false, status: 404, error: 'no How It Works record w9 in D:/p' })
+      expect(await orch.call(regenCall(app, { projectPath: 'D:/p', recordId: 'w9' }))).toEqual({ status: 404, body: { error: 'no How It Works record w9 in D:/p' } })
+      d.understanding.regenerate.mockResolvedValueOnce({ ok: false, status: 500, error: 'the settings could not be read: EACCES' })
+      expect(await orch.call(regenCall(app, byPath))).toEqual({ status: 500, body: { error: 'the settings could not be read: EACCES' } })
+    })
+    it('400 without a recordId, or without the argument the caller’s role takes', async () => {
+      await access('control')
+      const id = await seedProject()
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      expect((await orch.call(regenCall(app, { projectPath: 'D:/p' }))).status).toBe(400)
+      // The app names the project by its path, MCP by its id: neither takes the other's argument.
+      expect((await orch.call(regenCall(app, { project: id, recordId: 'w1' }))).status).toBe(400)
+      expect((await orch.call(regenCall(mcp, byPath, 'q0'))).status).toBe(400)
+      expect((await orch.call(regenCall(mcp, { project: id }, 'q1'))).status).toBe(400)
+      expect(d.understanding.regenerate).not.toHaveBeenCalled()
+    })
+    it('MCP names the project by id and the Host resolves its root; an unknown id is 404', async () => {
+      await access('control')
+      const id = await seedProject()
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      expect(await orch.call(regenCall(mcp, { project: id, recordId: 'w1' }, 'q1'))).toEqual({ status: 200, body: { id: 'w1', status: 'generating' } })
+      expect(d.understanding.regenerate).toHaveBeenCalledWith('D:/p', 'w1')
+      expect((await orch.call(regenCall(mcp, { project: 'proj_nope', recordId: 'w1' }, 'q2'))).status).toBe(404)
+      expect(d.understanding.regenerate).toHaveBeenCalledTimes(1)
+    })
+    it('MCP with "Read only" is refused at the gate and reaches nothing', async () => {
+      await access('read')
+      const id = await seedProject()
+      const d = duty()
+      expect((await orchOver({ understanding: d.understanding }).call(regenCall(mcp, { project: id, recordId: 'w1' }, 'q1'))).status).toBe(403)
+      expect(d.understanding.regenerate).not.toHaveBeenCalled()
+    })
+    it('a repeated requestId starts one generation and replays the first answer', async () => {
+      await access('control')
+      const id = await seedProject()
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      const call = () => orch.call(regenCall(mcp, { project: id, recordId: 'w1' }, 'q-same'))
+      expect(await call()).toEqual({ status: 200, body: { id: 'w1', status: 'generating' } })
+      expect(await call()).toEqual({ status: 200, body: { id: 'w1', status: 'generating' }, replayed: true })
+      expect(d.understanding.regenerate).toHaveBeenCalledTimes(1)
+    })
+    it('a refused regenerate leaves no receipt, so the retry runs once the Host can write', async () => {
+      await access('control')
+      const id = await seedProject()
+      const d = duty()
+      const orch = orchOver({ understanding: d.understanding })
+      const call = () => orch.call(regenCall(mcp, { project: id, recordId: 'w1' }, 'q-retry'))
+      d.box.writer = false
+      expect((await call()).status).toBe(409)
+      d.box.writer = true
+      expect(await call()).toEqual({ status: 200, body: { id: 'w1', status: 'generating' } })
+      expect(d.understanding.regenerate).toHaveBeenCalledTimes(1)
+    })
+    it('through the real Host pipeline: an MCP regenerate fills the record in again', async () => {
+      await access('control')
+      const id = await seedProject()
+      const record = {
+        id: 'w1', at: NOW, source: { kind: 'session', sessionId: 's', label: 'T' }, request: 'r',
+        changedFiles: [], git: { startHead: null, endHead: null }, status: 'failed', reason: 'INTERRUPTED'
+      }
+      const file = path.join(dir, 'understanding.json')
+      await fs.writeFile(file, JSON.stringify({ projects: { 'D:/p': { records: [record] } } }), 'utf8')
+      const understanding = createHostUnderstanding({
+        file,
+        profileDir: dir,
+        writer: () => true,
+        accounts: () => [],
+        descriptors: {} as never,
+        worktrees: () => [],
+        log: (m) => logs.push(m),
+        push: () => {}
+      })
+      await understanding.load()
+      const orch = orchOver({ understanding })
+      expect(await orch.call(regenCall(mcp, { project: id, recordId: 'w1' }, 'q-real'))).toEqual({ status: 200, body: { id: 'w1', status: 'generating' } })
+      // No generator account in this profile, so the new generation ends as NO_GENERATOR_ACCOUNT, not INTERRUPTED.
+      await vi.waitFor(async () => {
+        const onDisk = JSON.parse(await fs.readFile(file, 'utf8')) as { projects: Record<string, { records: { status: string; reason?: string }[] }> }
+        expect(onDisk.projects['D:/p'].records[0]).toMatchObject({ status: 'failed', reason: 'NO_GENERATOR_ACCOUNT' })
+      })
+    })
   })
 })

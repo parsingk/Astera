@@ -39,7 +39,7 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { APP_CALLER } from '../core/host/driver'
-import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover, hostSpeaksUnderstanding } from './host/outdated'
 import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
@@ -72,7 +72,7 @@ import { mcpClientsStatus, registerMcpClientNow } from './mcpClients'
 import { mcpServerFor, shimPathFor } from '../core/install/mcpRegistration'
 import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
-import { UnderstandingPipeline } from './understanding/pipeline'
+import { UnderstandingPipeline } from '../core/understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { OrchLoadResult } from '../core/orchestration/store'
@@ -88,10 +88,11 @@ import {
 import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
-import { UnderstandingStore } from './understanding/store'
+import { readUnderstandingFile } from '../core/understanding/read'
 import { WorkUnitStore } from './workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
+import { AppUnderstandingStore, createAppUnderstanding } from './understanding/appUnderstanding'
 import { promptWriteEventOf } from '../core/continuity/promptWrite'
 import { readGitSummary } from '../core/orchestration/exec/gitSummary'
 import { RecoveryReconciler } from './recovery/reconciler'
@@ -99,7 +100,8 @@ import { executeRecovery } from './recovery/execute'
 import { readGitFacts } from './recovery/git'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
-import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
+import { readGitRef, isAncestorOf, readChangedFiles } from './workUnit/gitProbe'
+import { readRange } from '../core/git/range'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -135,7 +137,8 @@ import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
-import { jobOf, resolveRunId } from '../core/orchestration/state'
+import { resolveRunId } from '../core/orchestration/state'
+import { runRecordInputOf } from '../core/orchestration/runRecord'
 import type { CliInstallStatus, WorktreeInfo } from '../core/types'
 
 /** 이 프로젝트의 것인 id 전부 — Job 과 그 회차. **한 집합으로 묻는 이유**는 명령이 둘 중 무엇이든
@@ -3029,23 +3032,13 @@ export function registerIpc(
       checkpoint: (events, next) => appJournal.checkpoint(events, next),
       push: pushOrchState,
       // Assembling the record needs the project key and the understanding pipeline, so it stays on
-      // this side; which Runs finished is the hook's judgement (justFinished).
-      onRunFinished: ({ runId, outcome, state }) => {
-        const run = state.runs.find((r) => r.id === runId)
-        if (!run) return
-        const tasks = state.tasks.filter((t) => t.runId === runId)
-        const finishedJob = jobOf(state, run)
-        if (!finishedJob) return
-        void understandingPipeline.onRunFinished(understandingKeyOf(finishedJob.cwd), {
-          runId,
-          jobName: finishedJob.objective.slice(0, 60),
-          objective: finishedJob.objective,
-          at: new Date().toISOString(),
-          taskIds: tasks.map((t) => t.id),
-          tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
-          changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
-          validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
-        })
+      // this side; which Runs finished is the hook's judgement (justFinished), and the record's fields
+      // are core's (runRecordInputOf), shared with the Host's commits. In front of a Host that writes
+      // How It Works, appUnderstanding records nothing: the Host records the Run at its own commit.
+      onRunFinished: ({ runId, state }) => {
+        const built = runRecordInputOf(state, runId)
+        if (!built) return
+        void appUnderstanding.onRunFinished({ ...built, projectPath: understandingKeyOf(built.projectPath) })
       },
       previous: () => prevOrchState,
       remember: (next) => {
@@ -4554,9 +4547,9 @@ export function registerIpc(
   // orchestration — a project's stored explanation must be readable even on a start where the server
   // failed. So it is constructed here, unconditionally, at the same scope as assertAllowedPath
   // (needed by the handler below) rather than beside OrchestrationStore.
-  const understanding = new UnderstandingStore(
-    path.join(app.getPath('userData'), 'understanding.json')
-  )
+  const understandingFile = path.join(app.getPath('userData'), 'understanding.json')
+  // Write-gated: closed the moment a greeting says the Host writes How It Works (appUnderstanding below).
+  const understanding = new AppUnderstandingStore(understandingFile)
   // registerIpc is synchronous, so this cannot be awaited here — the handler below awaits it instead,
   // which keeps the handler itself registered on every startup while still never serving before load
   // has actually finished.
@@ -4583,7 +4576,7 @@ export function registerIpc(
     await assertAllowedPath(projectPath)
     await understandingLoaded
     // undefined 가 아니라 null 로 넘긴다 — structured clone 에서 undefined 는 구별되는 값으로 살아남지 않는다
-    return understanding.get(understandingKeyOf(projectPath)) ?? null
+    return appUnderstanding.get(understandingKeyOf(projectPath))
   })
 
   /** 작업 단위가 닫히면 그것을 설명으로 옮기는 층. **수집기와 따로 세운다** — 수집기는 하류가
@@ -4616,12 +4609,28 @@ export function registerIpc(
     log: orchLog
   })
 
+  /** The last greeting's answer: whether that Host writes How It Works (E1 §2). null before any greeting.
+   *  Set at every handshake (hostClient.onConnect below) and kept across a dropped socket, as appJournal
+   *  keeps its own (P8). */
+  let hostWritesUnderstanding: boolean | null = null
+  /** Who writes understanding.json: this app's store and pipeline above, or, in front of a Host that
+   *  announces `understanding`, the Host, which this app then reads and hands its units and regenerates. */
+  const appUnderstanding = createAppUnderstanding({
+    localStore: understanding,
+    localPipeline: understandingPipeline,
+    hostAnnounces: () => hostWritesUnderstanding,
+    orchCall: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
+    readFile: () => readUnderstandingFile(understandingFile),
+    notify: (root) => send('understanding:changed', root),
+    log: orchLog
+  })
+
   ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, recordId: string) => {
     await assertAllowedPath(projectPath)
     if (typeof recordId !== 'string' || recordId === '')
       throw new Error(`INVALID_RECORD_ID: ${String(recordId)}`)
     await understandingLoaded
-    void understandingPipeline.regenerate(understandingKeyOf(projectPath), recordId)
+    await appUnderstanding.regenerate(understandingKeyOf(projectPath), recordId)
   })
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
@@ -4715,7 +4724,7 @@ export function registerIpc(
     // reason as understandingKeyOf's own comment (a worktree session's "project" is the origin repo,
     // not the worktree).
     onUnitClosed: (projectPath, unit) => {
-      void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
+      void appUnderstanding.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
     // The open-task section's redraw trigger. **Not folded** — same reason as the sessionTasks.*
     // handlers just below (their own comment has the full story): workUnits.json is keyed by the raw
@@ -6332,6 +6341,10 @@ export function registerIpc(
         hostLog(`host: a worktrees-state or git-op push could not be applied: ${String(err)}`)
       }
     })
+    // E1 §4: the Host wrote understanding.json, so the window reads it again. onHostPush never throws.
+    client.onMessage((m) => {
+      if (m.t === 'understanding-state') appUnderstanding.onHostPush(m.root)
+    })
 
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
      *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
@@ -6861,6 +6874,10 @@ export function registerIpc(
       // sends one. Idempotent, and cheap.
       remirrorOrchState?.()
       appJournal.greeted()
+      // How It Works follows this greeting (E1 §2): the answer is kept until the next one, and a switch
+      // to the Host closes this app's store at once and hands the Host what it was writing.
+      hostWritesUnderstanding = hostSpeaksUnderstanding(hostClient?.status() ?? { connected: false, features: [] })
+      void appUnderstanding.onGreeting(hostWritesUnderstanding)
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its

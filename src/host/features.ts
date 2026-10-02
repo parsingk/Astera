@@ -9,6 +9,7 @@ import {
   HOST_FEATURE_ROLL_JOURNAL,
   HOST_FEATURE_SLACK_OWNER,
   HOST_FEATURE_SPAWN,
+  HOST_FEATURE_UNDERSTANDING,
   HOST_FEATURE_WORKSPACE,
   HOST_FEATURE_WORKTREES
 } from '../core/host/protocol'
@@ -25,8 +26,9 @@ export function hostFeatures(a: { spawns: boolean; slack?: boolean; workspace?: 
   if (a.spawns && a.slack === true) spawning.push(HOST_FEATURE_SLACK_OWNER)
   // `coordinator-idle` (final round 3) does not ride that fact: every Host serves the CLI's
   // `check --wait`, spawner or not, and it is exactly the Host an app drives in front of that is asked.
-  // `journal` (Host journal P6) rides no spawner either: every Host commits.
+  // `journal` (Host journal P6) rides no spawner either: every Host commits. `understanding` (E1 §2) the
+  // same: a finished Run is seen at a commit.
   // `workspace` rides no spawner: the Host answers `app js` from any session, and index.ts asks for it
   // on every platform the workspace runs on (workspaceSupported: win32, linux, darwin).
-  return [...spawning, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_JOURNAL, ...(a.workspace === true ? [HOST_FEATURE_WORKSPACE] : [])]
+  return [...spawning, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_JOURNAL, HOST_FEATURE_UNDERSTANDING, ...(a.workspace === true ? [HOST_FEATURE_WORKSPACE] : [])]
 }

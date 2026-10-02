@@ -141,6 +141,12 @@ export const HOST_FEATURE_SLACK_OWNER = 'slack-owner'
  *  `journal-reload`. Announced by every Host (plan ruling P6). */
 export const HOST_FEATURE_JOURNAL = 'journal'
 
+/** The Host writes How It Works records (understanding.json) itself (E1 §2, §3): a finished Run's record at
+ *  its commits, a closed session unit and a regenerate the app hands it, and it pushes
+ *  `understanding-state` after every write. Announced by every Host, as `journal`: every Host commits.
+ *  Additive, so HOST_PROTOCOL stays 4. */
+export const HOST_FEATURE_UNDERSTANDING = 'understanding'
+
 /** The Host runs agent app workspaces (agent workspace design): it answers `app-js` and the app only
  *  orch-calls `workspace-list`, `workspace-stop` and `workspace-close`, and pushes `workspace` to the
  *  apps that yield `workspace`. Announced by a win32, linux or darwin Host (workspaceSupported). An app
@@ -197,6 +203,10 @@ export const HOST_YIELD_SLACK = 'slack'
 /** `hello.yields` value: this app writes no journal row while its Host announces `journal`; it reads the
  *  file read-only and sends its reconciler's rows through `journal-append` (J2, J3). */
 export const HOST_YIELD_JOURNAL = 'journal'
+/** `hello.yields` value: this app writes no How It Works record while its Host announces `understanding`; it
+ *  reads understanding.json read-only and hands its closed session units and its regenerates to the Host
+ *  (E1 §2). An app that keeps the duty keeps writing, and the Host then writes nothing. */
+export const HOST_YIELD_UNDERSTANDING = 'understanding'
 /** `hello.yields` value: this app shows the Host's agent app workspaces in a mirror tab, so the Host
  *  may push `workspace` to it and captures frames only while one such app is attached. An older app
  *  sends none and is pushed nothing. */
@@ -497,6 +507,10 @@ export type HostMessage =
    *  counter per Host life, shared with the `worktree-*` replies, reset by the receiver at each
    *  handshake's `worktree-list` fill, and a lower value than the last applied is ignored. */
   | ({ t: 'worktrees-state' } & WorktreesSnapshot)
+  /** The Host just wrote How It Works records for this project root (E1 §4), the folded key it stores under.
+   *  The app forwards it to its renderer as `understanding:changed`, which reads again rather than compares.
+   *  An older app ignores it. */
+  | { t: 'understanding-state'; root: string }
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
   /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has
