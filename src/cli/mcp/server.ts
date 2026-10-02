@@ -12,7 +12,9 @@ import {
   refusalDetailsOf,
   type CliErrorCode
 } from '../../core/orchestration/cliOutput'
-import { publicFor } from '../../core/orchestration/cliPublic'
+import type { JobEvent } from '../../core/types'
+import { eventKey } from '../../core/orchestration/cliFollow'
+import { publicEvent, publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
@@ -61,7 +63,9 @@ const FREE_TEXT = new Set([
   'label',
   'sourceLabel',
   'jobName',
-  'outcome'
+  'outcome',
+  // A Run's timeline events (MCP P2-D, wait_for_run): `summary` is above; a Task's title rides on each.
+  'taskTitle'
 ])
 
 /** Every object in a `checks` array, at any depth, without its `outputTail`: raw validator output
@@ -178,6 +182,51 @@ const refusalMessage = (status: number, body: unknown): string => {
   return typeof error === 'string' ? sanitize(error) : `status ${status}`
 }
 
+/** How many Runs wait_for_run remembers the sent events of, the most recently followed kept. */
+export const WAIT_MEMORY_RUNS = 50
+
+/** The keys (`eventKey`, as `astera runs follow` builds them) of the events this server has sent, per
+ *  Run. `astera mcp serve` is one process per client, so this is that client's follow. */
+export type WaitMemory = Map<string, Set<string>>
+
+/**
+ * wait_for_run's answer from runs-follow's (MCP P2-D). Once the Run has more events than `seen`, the
+ * Host sends its whole timeline, in order, and nothing promises that a new event sorts last: a journal
+ * row the Host served late from its cache can carry a time before an event already sent. So, like
+ * `astera runs follow`, the events sent are remembered by key: when the caller's `seen` is the count
+ * this server handed out for that Run, the answer is every event not sent yet, wherever it sorts.
+ *
+ * **Any other `seen` falls back to the events after the first `seen`** in the Host's order: a seen
+ * from another session, from a server that restarted, or from before the Run was forgotten. Then a
+ * late row that sorts before one already seen shifts the cut by one, and the memory starts again
+ * from this answer's timeline. An answer with no events leaves the memory as it was.
+ *
+ * Each event carries the public fields `runs follow` prints.
+ */
+const waitAnswer = (data: Record<string, unknown>, seen: number, memory: WaitMemory): Record<string, unknown> => {
+  const all = (Array.isArray(data.events) ? data.events : []) as Array<Pick<JobEvent, 'kind' | 'sourceId'>>
+  const runId = String(data.runId)
+  const sent = memory.get(runId)
+  const fresh = sent !== undefined && sent.size === seen ? all.filter((e) => !sent.has(eventKey(e))) : all.slice(seen)
+  if (all.length > 0) {
+    // Most recently followed last, so the first key is the one to forget.
+    memory.delete(runId)
+    memory.set(runId, new Set(all.map(eventKey)))
+    if (memory.size > WAIT_MEMORY_RUNS) memory.delete(memory.keys().next().value as string)
+  } else if (sent !== undefined) {
+    memory.delete(runId)
+    memory.set(runId, sent)
+  }
+  return {
+    runId: data.runId,
+    jobId: data.jobId,
+    seen: data.count,
+    progress: data.progress,
+    events: fresh.map(publicEvent),
+    ending: data.ending ?? null
+  }
+}
+
 /** get_session's terminal rows when no `lines` is given (P1 Global Constraints). */
 const SESSION_LINES_DEFAULT = 100
 
@@ -215,7 +264,7 @@ export async function hostRead(link: HostLink, cmd: string, tool: string, args: 
   return { ok: true, shaped: redactOutput(tool, redact(dropCheckOutput(publicFor(cmd, r.body)))), replayed: r.replayed === true }
 }
 
-async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
+async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown>, memory: WaitMemory): Promise<CallToolResult> {
   let args = input
   // A list tool's cursor (lists.ts) is read before anything reaches the Host: one from another tool,
   // or one that is no cursor at all, is the caller's mistake.
@@ -335,6 +384,15 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
       note += `, cut to its newest ${SESSION_TEXT_CAP} characters of text: ask for fewer lines or turns to read less at once`
     }
   }
+  if (t.name === 'wait_for_run') {
+    data = waitAnswer(data, typeof input.seen === 'number' ? input.seen : 0, memory)
+    const n = (data.events as unknown[]).length
+    const ending = data.ending as { state?: unknown } | null
+    note =
+      n === 0 && ending === null
+        ? ', nothing new within the window'
+        : `, ${n} new event${n === 1 ? '' : 's'}${ending !== null ? `, ending: ${String(ending.state)}` : ''}`
+  }
   // get_check_output pages the log only once all of it is redacted (P1 final review I1): `total`
   // and `offset` count the redacted text, so a page can never begin inside a secret.
   if (t.name === 'get_check_output' && typeof data.text === 'string') {
@@ -356,6 +414,8 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
         'Control Astera projects, Jobs, Runs, Tasks, questions, and completion state through the local Astera Host, and, when the person allows it in Astera Settings, its sessions.'
     }
   )
+  // wait_for_run's events sent, per Run, for this server's one client.
+  const memory: WaitMemory = new Map()
   for (const t of TOOLS)
     server.registerTool(
       t.name,
@@ -366,7 +426,7 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
         annotations: { readOnlyHint: t.readOnly, destructiveHint: false, idempotentHint: t.readOnly, openWorldHint: false }
       },
       async (input: Record<string, unknown>) => {
-        const result = await runTool(a.link, t, input)
+        const result = await runTool(a.link, t, input, memory)
         if (a.debug) a.log(`${t.name}: ${result.isError ? errorCodeOf(result) : 'ok'}`)
         return result
       }

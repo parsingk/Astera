@@ -33,6 +33,11 @@ describe('mcpRefusal', () => {
       expect(mcpRefusal(cmd, 'off', true, true)?.status).toBe(403)
     }
   })
+  it('runs-follow is a read, with no second setting: wait_for_run', () => {
+    expect(MCP_READ_COMMANDS).toContain('runs-follow')
+    for (const access of ['read', 'control'] as const) expect(mcpRefusal('runs-follow', access, false, false)).toBeNull()
+    expect(mcpRefusal('runs-follow', 'off', true, true)?.status).toBe(403)
+  })
   it('refuses everything else whatever the setting', () => {
     for (const sessions of [false, true])
       for (const cmd of ['worker-start', 'chats-answer', 'state-put', 'run-delete', 'task-create', 'run-configs', 'run-resume'])

@@ -23,7 +23,9 @@ export const MCP_READ_COMMANDS = [
   'github-issue',
   // How It Works records (MCP P2-C): read only, from the Host's copy of understanding.json.
   'understanding-list',
-  'understanding-get'
+  'understanding-get',
+  // wait_for_run (MCP P2-D): the long poll under `astera runs follow`, which never writes.
+  'runs-follow'
 ] as const
 
 export const MCP_CONTROL_COMMANDS = [

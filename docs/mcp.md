@@ -165,7 +165,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 
 ## The tools
 
-The server offers 32 tools: 18 for projects, accounts and Jobs, four for sessions, two that read
+The server offers 33 tools: 19 for projects, accounts and Jobs, four for sessions, two that read
 a Task's output, six for GitHub and two that read How It Works records. What a client may call is
 set by [MCP access](#mcp-access).
 
@@ -177,9 +177,10 @@ set by [MCP access](#mcp-access).
 | `list_jobs` | Astera Jobs, newest first, each with the state of its latest Run. Filter by state, and by project with a `projectId` from `list_projects` (an unknown id is `NOT_FOUND`). |
 | `get_job` | One Job and its latest Run. |
 | `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). With `convergence: true`, a Task whose checks or review fail gets bounded repair and recheck loops instead of failing at once. |
-| `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; use `get_run` and `get_completion` to monitor progress. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
+| `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; follow it with `wait_for_run`, and read `get_completion` for where each Task stands. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
 | `list_runs` | Runs, newest first, optionally of one Job. |
-| `get_run` | One Run: its state and progress. Poll this instead of waiting; nothing here blocks. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). |
+| `get_run` | One Run: its state and progress. It answers at once; to follow a Run until it changes, use `wait_for_run` rather than calling this in a loop. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). |
+| `wait_for_run` | Wait until a Run (`runId`) changes, for up to `waitSeconds` (1 to 40, 30 when not given). It answers as soon as the Run has events the caller has not seen (`seen`, 0 when not given) or reaches an ending, and otherwise when the window passes. Returns `runId`, `jobId`, `seen` (how many events the Run has now: pass it to the next call), `progress`, `events` (only the new ones) and `ending`. See [Following a Run](#following-a-run). |
 | `stop_run` | Stop a Run: its open workers are closed, its coordinator is asked to stop (`coordinatorStopped: true` means it had one and was asked, not that it has exited yet), and the Run is paused. Use `resume_run` to continue it. A Run that has already finished is refused with `CONFLICT` and left as it is: its coordinator and idle workers end on their own 10 minutes after it finished or after a person last typed into them (at once for a scheduled Run), so there is nothing to stop. |
 | `resume_run` | Resume a Run that `stop_run` paused. A Job with a coordinator account gets a new coordinator, which looks at what is done and carries on; while the stopped one is still exiting it waits up to 10 seconds, then answers `CONFLICT` and changes nothing, so call it again. A Run that is not paused is returned as it is. |
 | `list_tasks` | The Tasks of a Run, with their status and dependencies (deps). Each spec is cut to 160 characters, and `spec_truncated` says when it was; `get_task` has the whole spec. |
@@ -229,8 +230,7 @@ does. `convergence: true` turns it on with the default bounds; `maxFixAttempts`,
 policy that is off. The Job carries the policy as `convergence`, and `get_completion` shows the
 loops as they run.
 
-No tool waits: an agent polls `get_run`, `get_completion`
-and `list_questions`. `run_job` makes the Run's worktree and starts its coordinator before it
+`run_job` makes the Run's worktree and starts its coordinator before it
 answers, so on a large repository it can take up to a minute.
 
 **A worker waiting for approval.** When a worker runs without skipping permission checks (Settings,
@@ -242,6 +242,39 @@ change. It is read from the hook events Claude Code writes, the same ones `aster
 reads: Claude Code reports the prompt a few seconds after it goes up, and once anyone types into
 that terminal the mark goes until the next event. A Codex worker writes no such events, so it never
 shows as waiting.
+
+### Following a Run
+
+`wait_for_run` is the one tool that holds, and it is how an agent follows a Run instead of calling
+`get_run` every few seconds. It is the same long poll `astera runs follow` makes. The loop:
+
+1. Call it with the `runId` and `seen: 0` (or no `seen`): a Run already has events, so it answers at
+   once with all of them.
+2. Call it again with the `seen` of the previous answer. It waits until the Run has more events than
+   that, or reaches an ending, for at most `waitSeconds`.
+3. Stop when `ending` is not `null`. Its `state` says why: `completed` or `failed` (the Run
+   finished), `waiting` (a question is open: `questionId` and `taskId`; answer it with
+   `answer_question`, then go on with the loop), `paused` (`resume_run` continues it) or `limited`
+   (every agent of the Run waits for a usage limit to reset, at `resetsAt`; it resumes by itself).
+   A window with no change answers with empty `events` and `ending: null`: call again with the same
+   `seen`.
+
+`events` holds the Run's timeline entries the caller has not been sent, in the timeline's order
+(time, then kind): each has `at`, `kind` (`run-created`, `task-created`, `dispatch-started`,
+`message`, `gate-opened`, `gate-resolved`, `limit-hit`, `resumed`, `runtime-lost`, `recovery`),
+`sourceId`, and when they apply `taskId`, `taskTitle`, `messageType`, `summary`, `outcome`,
+`provider`, `retry`, `review` and `repair`: the fields `astera runs follow` prints. A new event does
+not always sort last: a journal row the Host serves late can carry an earlier time. So, like
+`astera runs follow`, the server remembers which events it sent for each of the last 50 Runs it
+followed, and when `seen` is the count it handed out, `events` is everything not sent yet, wherever
+it sorts. Any other `seen` (from another session, or from before the server restarted) gets the
+events after the first `seen` instead; there a late event that sorts before one already seen shifts
+the cut by one, so that answer repeats an old event and leaves out the new one.
+
+A Run that is deleted while it is followed answers `NOT_FOUND`: stop the loop.
+
+The window is at most 40 seconds because the server gives the Host 50 seconds to answer any call and
+Cursor and Codex end a tool call at 60. It needs only "Read only".
 
 ### GitHub
 
@@ -405,9 +438,9 @@ as quoted data.
 
 | Prompt | Arguments | What it asks the agent to do |
 | --- | --- | --- |
-| `delegate_large_task` | `objective` (up to 20 000 characters), `projectId` (optional) | `list_projects` when no project is given, `list_accounts`, `list_run_configs`, `create_job` with `convergence: true` and a `requestId`, `run_job`, then poll `get_run`, `get_completion` and `list_questions`, and `answer_question` when needed. |
+| `delegate_large_task` | `objective` (up to 20 000 characters), `projectId` (optional) | `list_projects` when no project is given, `list_accounts`, `list_run_configs`, `create_job` with `convergence: true` and a `requestId`, `run_job`, then follow the Run with `wait_for_run` until its `ending` is not `null`, with `get_completion` and `list_questions`, and `answer_question` when needed. |
 | `inspect_failed_run` | `runId` | `get_run`, `get_completion` (the `lastFailure`), `get_check_output`, `get_task_output`, `list_questions`. |
-| `resume_blocked_job` | `runId` | `list_questions`, `answer_question`, `resume_run`, `get_run`. |
+| `resume_blocked_job` | `runId` | `list_questions`, `answer_question`, `resume_run`, then `wait_for_run` to check that it moves. |
 
 ## MCP access
 
@@ -416,7 +449,7 @@ as quoted data.
 | Value | Allows |
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
-| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output`, `get_task_output`, `get_pr_status`, `get_ci`, `get_issue`, `list_work_records` and `get_work_record` included; `list_sessions` and `get_session` only with the session setting on. |
+| Read only | The list and get tools, `get_run`, `wait_for_run`, `get_completion`, `list_run_configs`, `get_check_output`, `get_task_output`, `get_pr_status`, `get_ci`, `get_issue`, `list_work_records` and `get_work_record` included; `list_sessions` and `get_session` only with the session setting on. |
 | Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`; with the session setting on, `send_message` and `create_session`; and with the GitHub setting on, `create_pr`, `retry_ci` and `create_job_from_issue`. This is the default. |
 
 **Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
@@ -470,12 +503,13 @@ a field with nothing left.
 - It reaches the Host only from the same OS account, and the Host proves itself with its key before
   the server sends anything.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
-  results, questions, answers, review issues and suggested fixes, failure summaries, error messages)
-  is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
-  What the GitHub tools return from GitHub is redacted the same way: pull request and issue titles,
-  issue bodies, labels and authors, check names and workflows, the failed CI log, and `gh`'s own
-  words in an error message. So are the How It Works records: the request, the reason, a session's
-  label or a Job's name, and every text field of the write-up; changed files and other paths are not.
+  results, questions, answers, review issues and suggested fixes, failure summaries, error messages,
+  and the summaries and Task titles of the events `wait_for_run` returns) is redacted of anything
+  that looks like a secret; ids, paths and timestamps are left as they are. What the GitHub tools
+  return from GitHub is redacted the same way: pull request and issue titles, issue bodies, labels
+  and authors, check names and workflows, the failed CI log, and `gh`'s own words in an error
+  message. So are the How It Works records: the request, the reason, a session's label or a Job's
+  name, and every text field of the write-up; changed files and other paths are not.
 - Session and output text is redacted the same way: every screen and scrollback row, every turn's
   text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
   every line of `get_task_output`. `get_check_output` redacts the whole log first and pages it
@@ -558,7 +592,8 @@ Use the `cmd /c astera mcp serve` form from [Connect a client](#connect-a-client
 4. Optionally lay the Tasks out yourself: `list_run_configs` for the checks, then `create_task` with
    the `jobId` for each Task. Skip it and the coordinator plans the Job when it runs.
 5. `run_job` with the Job id. It returns a Run id at once.
-6. Poll `get_run` for the Run's state and `get_completion` for where each Task stands in its checks.
+6. Follow the Run with `wait_for_run`, passing the `seen` of each answer to the next, until its
+   `ending` is not `null`; `get_completion` says where each Task stands in its checks.
 7. If a Run is blocked, `list_questions` shows the open questions, and `answer_question` answers one.
 8. `stop_run` pauses the Run and stops its coordinator if it has to stop. `resume_run` lets it go
    again with a new coordinator. A Run that has finished needs no stop: its coordinator and idle

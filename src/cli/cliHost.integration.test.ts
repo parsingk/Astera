@@ -1480,7 +1480,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 32 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 33 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)
@@ -1813,5 +1813,50 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     const broken = await mcp.call('list_work_records', { projectId })
     expect(errorOf(broken)).toMatchObject({ code: 'FAILED', message: 'understanding.json could not be read' })
     expect(JSON.stringify(broken)).not.toContain('broken')
+  })
+
+  it('wait_for_run holds until the Run changes, answers early with only the new events, and an idle window answers empty at its end', async () => {
+    const h = await hostRig({ continuity: true })
+    const { runId, worker } = await runningJob(h)
+    const mcp = await mcpClient(h)
+    type Page = { runId: string; seen: number; events: Array<{ kind: string; sourceId: string }>; ending: Record<string, unknown> | null }
+
+    // seen 0: the Run already has events, so the first call answers at once with all of them.
+    const first = await mcp.call('wait_for_run', { runId, waitSeconds: 3 })
+    expect(first.isError, first.content[0]?.text).toBeFalsy()
+    const all = first.structuredContent as Page
+    expect(all.seen).toBeGreaterThan(0)
+    expect(all.events).toHaveLength(all.seen)
+    expect(all.ending).toBeNull()
+
+    // Nothing new: the call holds for its whole window and answers with no events.
+    let t0 = Date.now()
+    const idle = await mcp.call('wait_for_run', { runId, seen: all.seen, waitSeconds: 1 })
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(950)
+    expect(idle.structuredContent).toMatchObject({ runId, seen: all.seen, events: [], ending: null })
+
+    // The worker ends without reporting while the call waits: the Host opens a question, and the call
+    // answers before its window with only that change and the ending that says a person is needed.
+    t0 = Date.now()
+    const pending = mcp.call('wait_for_run', { runId, seen: all.seen, waitSeconds: 10 })
+    setTimeout(() => h.exitWorker(worker, 1), 300)
+    const changed = await pending
+    expect(Date.now() - t0).toBeLessThan(9_000)
+    expect(changed.isError, changed.content[0]?.text).toBeFalsy()
+    const after = changed.structuredContent as Page
+    const questionId = h.state().gates.find((g) => g.runId === runId && g.status === 'open')?.id
+    expect(after.seen).toBeGreaterThan(all.seen)
+    expect(after.events).toHaveLength(after.seen - all.seen)
+    // Only what the first answer did not have.
+    const before = new Set(all.events.map((e) => `${e.kind}:${e.sourceId}`))
+    for (const e of after.events) expect(before.has(`${e.kind}:${e.sourceId}`), `${e.kind}:${e.sourceId}`).toBe(false)
+    expect(after.events).toContainEqual(expect.objectContaining({ kind: 'gate-opened', sourceId: questionId }))
+    expect(after.ending).toMatchObject({ runId, state: 'waiting', questionId })
+
+    // The seen from that answer and nothing new since: no events. The Run still waits on its question,
+    // so the ending comes back at once rather than at the window.
+    const last = await mcp.call('wait_for_run', { runId, seen: after.seen, waitSeconds: 1 })
+    expect(last.isError, last.content[0]?.text).toBeFalsy()
+    expect(last.structuredContent).toMatchObject({ runId, seen: after.seen, events: [], ending: { state: 'waiting', questionId } })
   })
 })

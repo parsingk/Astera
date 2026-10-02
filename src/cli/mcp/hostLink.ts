@@ -20,7 +20,8 @@ export function openHostLink(a: {
   /** Starts a Host when none answers (MCP design M4). Resolves true when one now answers. */
   startHost(): Promise<boolean>
   log(m: string): void
-  /** Per-call deadline. No MCP tool long-polls. */
+  /** Per-call deadline. Only wait_for_run holds on the Host, for at most MCP_LIMITS.waitSeconds
+   *  (40 s), so the default leaves it 10 s for the Host's answer. */
   timeoutMs?: number
 }): HostLink {
   // 50 s: Cursor cuts a tool call at 60 s and Codex documents 60 s as its default, so answering

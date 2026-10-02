@@ -124,8 +124,8 @@ export function registerPrompts(server: McpServer): void {
         '3. Call list_run_configs to see the run configurations available.',
         '4. Call create_job with the project id, the objective above, convergence: true, and a requestId you generate (so a retry does not create a second Job). Review the Job it returns.',
         '5. Call run_job with the Job id.',
-        '6. Poll get_run until the Run finishes; do not wait inside one call. Read get_completion for where each Task stands, and list_questions for anything that blocks the Run.',
-        '7. When a question is open, call answer_question with its id and an answer you can stand behind; ask the person when you cannot.',
+        '6. Follow the Run with wait_for_run: call it with the Run id and seen 0, then again each time with the seen of its previous answer. It holds up to 40 seconds and answers when something changed; empty events and ending: null mean nothing did, so call again. Stop when ending is not null: the Run finished, or will not move on its own for now (waiting on a question, paused, or limited until a usage limit resets). Read get_completion for where each Task stands, and list_questions for anything that blocks the Run.',
+        '7. When a question is open, call answer_question with its id and an answer you can stand behind; ask the person when you cannot. Then go back to step 6.',
         '8. Report the outcome from get_run and get_completion.'
       ])
   )
@@ -162,7 +162,7 @@ export function registerPrompts(server: McpServer): void {
         '1. Call list_questions and find the questions open on this Run.',
         '2. Call answer_question for each, with its id and an answer you can stand behind; ask the person when you cannot.',
         '3. Call resume_run with the Run id.',
-        '4. Call get_run to check that it is running again, and report its state.'
+        '4. Call wait_for_run with the Run id and seen 0 for its events so far and their count (seen), then once more with that seen, to check that it moves: new events mean it is running again, and a non-null ending says it finished or stopped again. Report its state.'
       ])
   )
 }
