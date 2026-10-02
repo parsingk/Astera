@@ -294,7 +294,7 @@ async function main(): Promise<void> {
   // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
   // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
   // Host left `generating` reads as interrupted. `server` is assigned below; `writer` and `push` run only
-  // inside a call. Task 3 hands it the finished Runs at the commits; nothing calls it yet.
+  // inside a call. `orch` hands it every Run a commit finishes.
   const hostUnderstanding = createHostUnderstanding({
     file: path.join(profileDir, 'understanding.json'),
     profileDir,
@@ -549,6 +549,8 @@ async function main(): Promise<void> {
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,
+    // How It Works (E1 §3): every Run a commit finishes, recorded here while this Host is the writer.
+    understanding: hostUnderstanding,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
     // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
     specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,

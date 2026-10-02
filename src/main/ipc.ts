@@ -136,7 +136,8 @@ import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
-import { jobOf, resolveRunId } from '../core/orchestration/state'
+import { resolveRunId } from '../core/orchestration/state'
+import { runRecordInputOf } from '../core/orchestration/runRecord'
 import type { CliInstallStatus, WorktreeInfo } from '../core/types'
 
 /** 이 프로젝트의 것인 id 전부 — Job 과 그 회차. **한 집합으로 묻는 이유**는 명령이 둘 중 무엇이든
@@ -3030,23 +3031,13 @@ export function registerIpc(
       checkpoint: (events, next) => appJournal.checkpoint(events, next),
       push: pushOrchState,
       // Assembling the record needs the project key and the understanding pipeline, so it stays on
-      // this side; which Runs finished is the hook's judgement (justFinished).
-      onRunFinished: ({ runId, outcome, state }) => {
-        const run = state.runs.find((r) => r.id === runId)
-        if (!run) return
-        const tasks = state.tasks.filter((t) => t.runId === runId)
-        const finishedJob = jobOf(state, run)
-        if (!finishedJob) return
-        void understandingPipeline.onRunFinished(understandingKeyOf(finishedJob.cwd), {
-          runId,
-          jobName: finishedJob.objective.slice(0, 60),
-          objective: finishedJob.objective,
-          at: new Date().toISOString(),
-          taskIds: tasks.map((t) => t.id),
-          tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
-          changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
-          validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
-        })
+      // this side; which Runs finished is the hook's judgement (justFinished), and the record's fields
+      // are core's (runRecordInputOf), shared with the Host's commits.
+      onRunFinished: ({ runId, state }) => {
+        const built = runRecordInputOf(state, runId)
+        if (!built) return
+        const { projectPath, ...input } = built
+        void understandingPipeline.onRunFinished(understandingKeyOf(projectPath), input)
       },
       previous: () => prevOrchState,
       remember: (next) => {

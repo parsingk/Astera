@@ -48,6 +48,8 @@ import { ensureProject } from '../core/orchestration/projects'
 import { createHostRollTap } from './rollTapHost'
 import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 import type { HostJournal } from './hostJournal'
+import { createHostUnderstanding, type HostUnderstanding } from './hostUnderstanding'
+import { runRecordInputOf } from '../core/orchestration/runRecord'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -3666,6 +3668,119 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(await orch.call({ cmd: 'journal-append', args: { ops }, sessionId: '', from: app })).toEqual({ status: 200, body: { applied: 1, failed: 0 } })
     expect(f.journal.append).toHaveBeenCalledWith([{ op: 'recovery-finish', id: 'rca_1', status: 'failed', at: NOW }])
     expect(await orch.call({ cmd: 'journal-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: { enabled: true, writer: true } })
+  })
+})
+
+describe('How It Works at the commit points (E1 Task 3)', () => {
+  type Input = Parameters<HostUnderstanding['onRunFinished']>[0]
+  const seedOne = async (): Promise<{ taskId: string; dispatchId: string }> => {
+    const job = createJob(emptyState(), { objective: 'Tidy the shortcuts', cwd: 'D:/p' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const task = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const dsp = openDispatch(task.state, { taskId: task.value.id, provider: 'codex', accountId: 'accA', sessionId: 'ses_w', cwd: 'D:/p', specPath: 'D:/p/s.md' }, NOW)
+    if (!dsp.ok) throw new Error(dsp.error)
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify(dsp.state), 'utf8')
+    return { taskId: task.value.id, dispatchId: dsp.value.id }
+  }
+  const done = (a: { taskId: string; dispatchId: string }) => ({
+    cmd: 'send',
+    args: { type: 'worker_done', taskId: a.taskId, dispatchId: a.dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+    sessionId: 'ses_w'
+  })
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+
+  it('a commit that finishes a Run hands the built record to onRunFinished once, with the Job cwd', async () => {
+    const ids = await seedOne()
+    const calls: Input[] = []
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), understanding: { onRunFinished: async (i) => void calls.push(i) } })
+    expect((await orch.call(done(ids))).status).toBe(200)
+    const runId = orch.state().runs[0].id
+    expect(outcomeOf(orch.state(), runId)).toBe('completed')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toEqual({ ...runRecordInputOf(orch.state(), runId)!, at: calls[0].at })
+    expect(calls[0].projectPath).toBe('D:/p')
+    expect(calls[0].validation).toEqual({ status: 'passed' })
+    // A later commit over the finished Run records nothing again.
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    expect((await orch.call({ cmd: 'state-put', args: { state: got.state, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('a commit with no finished Run calls nothing', async () => {
+    await seed()
+    const calls: Input[] = []
+    const orch = orchOver({ understanding: { onRunFinished: async (i) => void calls.push(i) } })
+    await orch.ready()
+    expect((await orch.call({ cmd: 'runs-stop', args: { id: orch.state().runs[0].id }, sessionId: '' })).status).toBe(200)
+    expect(calls).toEqual([])
+  })
+
+  it('a state-put that finishes a Run records it; one that stands in for the load records nothing', async () => {
+    const ids = await seedOne()
+    const calls: Input[] = []
+    const orch = orchOver({ understanding: { onRunFinished: async (i) => void calls.push(i) } })
+    const got = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { state: OrchState; version: number }
+    const finished: OrchState = { ...got.state, tasks: got.state.tasks.map((t) => (t.id === ids.taskId ? { ...t, status: 'completed' } : t)) }
+    expect(outcomeOf(finished, finished.runs[0].id)).toBe('completed')
+    expect((await orch.call({ cmd: 'state-put', args: { state: finished, version: got.version }, sessionId: '', from: app })).status).toBe(200)
+    expect(calls.map((c) => c.runId)).toEqual([finished.runs[0].id])
+
+    // A fresh Host whose first sight of the state is the app's put: no previous state, no edge.
+    const before = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    const later: Input[] = []
+    const cold = orchOver({ understanding: { onRunFinished: async (i) => void later.push(i) } })
+    expect((await cold.call({ cmd: 'state-put', args: { state: before }, sessionId: '', from: app })).status).toBe(200)
+    expect(later).toEqual([])
+  })
+
+  it('an onRunFinished that throws or rejects leaves the commit landed and logs', async () => {
+    for (const understanding of [
+      {
+        onRunFinished: (): Promise<void> => {
+          throw new Error('sync boom')
+        }
+      },
+      { onRunFinished: async (): Promise<void> => Promise.reject(new Error('async boom')) }
+    ]) {
+      logs = []
+      const ids = await seedOne()
+      const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), understanding })
+      expect((await orch.call(done(ids))).status).toBe(200)
+      expect(outcomeOf(orch.state(), orch.state().runs[0].id)).toBe('completed')
+      await vi.waitFor(() => expect(logs.some((l) => /boom/.test(l))).toBe(true))
+    }
+  })
+
+  it('through the real Host pipeline: the finished Run lands in understanding.json', async () => {
+    const ids = await seedOne()
+    const project = path.join(dir, 'project')
+    await fs.mkdir(project, { recursive: true })
+    const s = JSON.parse(await fs.readFile(path.join(dir, 'orchestration.json'), 'utf8')) as OrchState
+    await fs.writeFile(path.join(dir, 'orchestration.json'), JSON.stringify({ ...s, jobs: s.jobs.map((j) => ({ ...j, cwd: project })) }), 'utf8')
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ workUnitTrackingEnabled: true, generator: { accountId: 'a1' }, lang: 'en' }))
+    const understanding = createHostUnderstanding({
+      file: path.join(dir, 'understanding.json'),
+      profileDir: dir,
+      writer: () => true,
+      accounts: () => [],
+      descriptors: {} as never,
+      worktrees: () => [],
+      log: (m) => logs.push(m),
+      push: () => {}
+    })
+    await understanding.load()
+    const orch = orchOver({ aliveSessionIds: () => new Set(['ses_w']), understanding })
+    expect((await orch.call(done(ids))).status).toBe(200)
+    const runId = orch.state().runs[0].id
+    await vi.waitFor(async () => {
+      const onDisk = JSON.parse(await fs.readFile(path.join(dir, 'understanding.json'), 'utf8')) as {
+        projects: Record<string, { records: { source: { runId?: string } }[] }>
+      }
+      expect(onDisk.projects[project]?.records.map((r) => r.source.runId)).toEqual([runId])
+    })
   })
 })
 

@@ -204,6 +204,17 @@ describe('createHostUnderstanding', () => {
     expect(await recordsOnDisk(project)).toEqual([])
   })
 
+  it('tracking off: a finished Run records nothing and logs one line', async () => {
+    await settings({ ...ON, workUnitTrackingEnabled: false })
+    const { u, logs } = make()
+    await u.load()
+    await u.onRunFinished(runInput())
+    await new Promise((r) => setTimeout(r, 50))
+    expect(await recordsOnDisk(project)).toEqual([])
+    expect(logs.filter((l) => l.includes('run-1'))).toHaveLength(1)
+    expect(logs.find((l) => l.includes('run-1'))).toMatch(/tracking is off/)
+  })
+
   it('an unreadable settings file records nothing for a Run and logs it', async () => {
     await fs.writeFile(path.join(dir, 'app-settings.json'), '{ not json')
     const { u, logs } = make()
@@ -211,6 +222,7 @@ describe('createHostUnderstanding', () => {
     await u.onRunFinished(runInput())
     await new Promise((r) => setTimeout(r, 50))
     expect(await recordsOnDisk(project)).toEqual([])
+    expect(logs.filter((l) => l.includes('run-1'))).toHaveLength(1)
     expect(logs.some((l) => l.includes('app-settings.json'))).toBe(true)
   })
 

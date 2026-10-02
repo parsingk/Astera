@@ -202,7 +202,10 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
           d.log(`understanding: app-settings.json or accounts.json could not be read, run ${input.runId} is not recorded: ${message(err)}`)
           return
         }
-        if (!s.tracking) return
+        if (!s.tracking) {
+          d.log(`understanding: How It Works tracking is off, run ${input.runId} is not recorded`)
+          return
+        }
         const { projectPath, ...record } = input
         void pipeline.onRunFinished(fold(projectPath), record)
       } catch (err) {
