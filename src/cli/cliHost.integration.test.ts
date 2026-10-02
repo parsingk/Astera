@@ -38,6 +38,12 @@ import { hostFeatures } from '../host/features'
 import { PtyRegistry, type RegistryPty } from '../host/registry'
 import { ProcRegistry } from '../host/procRegistry'
 import type { HostLocal, HostSpawner } from '../host/spawner'
+import { registrySessions } from '../host/sessions'
+import { createHostSessionStarter } from '../host/sessionCreate'
+import { hookEventsDirIn, hookEventsFileIn } from '../core/hooks/sessionState'
+import { readAccountEntries } from '../core/accounts/accountsFile'
+import { defaultCwdProbe } from '../core/sessions/pathProbe'
+import { WorkerTails } from '../core/orchestration/exec/tail'
 import { makeRepo, tempDir } from '../core/worktrees/testRepo'
 import { readDispatchGate } from '../core/host/driver'
 import {
@@ -58,7 +64,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { connectHost } from '../core/host/connect'
 import { createMcpServer } from './mcp/server'
-import { openHostLink } from './mcp/hostLink'
+import { openHostLink, type HostLink } from './mcp/hostLink'
 
 /** Every wait is bounded: long enough for real git on a loaded Windows runner, short enough to fail. */
 const WAIT = { timeout: 25_000, interval: 25 }
@@ -240,7 +246,8 @@ const appHello: ClientMessage = {
 // ---------------------------------------------------------------------------------------------------
 // The Host.
 
-type FakePty = RegistryPty & { exit(code: number): void }
+/** `print` is the agent writing to its terminal; `typed` is everything written into it. */
+type FakePty = RegistryPty & { exit(code: number): void; print(data: string): void; typed: string[] }
 
 interface Spawn {
   dispatchId: string
@@ -262,6 +269,13 @@ interface Rig {
   state(): OrchState
   /** Ends a worker's session the way a crashed agent ends: its pty exits with no report. */
   exitWorker(s: Spawn, code: number): void
+  /** Opens an agent session's pty in the Host's registry, as an app's `pty-open` does: a person's own
+   *  terminal, with the note an app writes (`restore` holds its title, account and folder). */
+  openSession(id: string, restore?: Record<string, unknown>): void
+  /** The pty of an agent session (a worker's or an opened one), by its session id. */
+  ptyOf(sessionId: string): FakePty
+  /** The sessions `sessions create` started here, in order: what the spawner was asked to open. */
+  created(): Array<{ id: string; cwd: string; prompt?: string }>
   /** The Host leaving, as its process would: the rig's teardown, run now and once. The profile stays
    *  for a next `hostRig({ profileDir })`. */
   stop(): Promise<void>
@@ -310,18 +324,25 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
   const registry = new PtyRegistry({
     spawn: () => {
       let onExit: (e: { exitCode: number }) => void = () => {}
+      let onData: (data: string) => void = () => {}
       const pty: FakePty = {
         pid: nextPid++,
-        onData: () => {},
+        onData: (cb) => {
+          onData = cb
+        },
         onExit: (cb) => {
           onExit = cb
         },
-        write() {},
+        write: (data) => {
+          pty.typed.push(data)
+        },
         resize() {},
         kill: () => pty.exit(1),
         pause() {},
         resume() {},
-        exit: (code) => onExit({ exitCode: code })
+        exit: (code) => onExit({ exitCode: code }),
+        print: (data) => onData(data),
+        typed: []
       }
       ptys.set(pty.pid, pty)
       return pty
@@ -329,6 +350,31 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     log
   })
   const procs = new ProcRegistry({ spawn: () => ({ pid: 1, onData() {}, onExit() {}, write() {}, kill() {} }), log })
+  // The workers' output, kept the way the Host spawner keeps it: a tap on the registry by the note's
+  // session id, and a tail per Dispatch from its start (host/spawner.ts, exec/workerStart.ts). In
+  // memory only, so a next `hostRig` on the same profile holds none of it, as a restarted Host.
+  const tails = new WorkerTails()
+  registry.onData((ptyId, data) => {
+    const m = registry.metaOf(ptyId)
+    if (m?.kind === 'session') tails.push(m.id, data)
+  })
+  const openSession = (id: string, restore: Record<string, unknown> = {}): void => {
+    const opened = registry.open({
+      id: `pty_${id}`,
+      file: 'agent',
+      args: [],
+      opts: { cwd: typeof restore.cwd === 'string' ? restore.cwd : profileDir, cols: 80, rows: 24, env: {} },
+      meta: { kind: 'session', id, restore }
+    })
+    if (!opened.ok) throw new Error(opened.error)
+  }
+  const ptyOf = (sessionId: string): FakePty => {
+    const entry = registry.list().find((e) => e.meta?.kind === 'session' && e.meta.id === sessionId)
+    if (!entry) throw new Error(`rig: no pty for ${sessionId}`)
+    return ptys.get(entry.pid)!
+  }
+  /** The sessions `sessions create` started, in order. */
+  const created: Array<{ id: string; cwd: string; prompt?: string }> = []
 
   const box: { orch: HostOrch | null; server: HostServer | null } = { orch: null, server: null }
   const orchOf = (): HostOrch => box.orch!
@@ -378,6 +424,10 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
       await fs.mkdir(path.dirname(specPath), { recursive: true })
       await fs.writeFile(specPath, `the rig's spec for ${a.taskId}`)
       spawns.push({ dispatchId: a.dispatchId, taskId: a.taskId, sessionId, cwd })
+      tails.start({ dispatchId: a.dispatchId, sessionId }, (id) => {
+        const d = orchOf().state().dispatches.find((x) => x.id === id)
+        return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
+      })
       return { sessionId, cwd, specPath }
     },
     startCoordinator: async () => ({ sessionId: 'ses_coord' }),
@@ -386,7 +436,7 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     releaseWorker: async () => {
       await hooks.release?.()
     },
-    readWorker: async () => '',
+    readWorker: async ({ dispatchId, limit }) => tails.read(dispatchId, limit),
     probeLimit: async () => null,
     readReviewFile: async () => null,
     makeRunWorktree: (a) => worktrees.makeRunWorktree(a),
@@ -413,8 +463,14 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     onSpawned: () => {},
     onRolloutLocated: () => {},
     retarget: () => {},
-    createSession: async () => {
-      throw new Error('not in this rig')
+    // `sessions create`'s terminal start: a pty opened under the note the Host spawner writes, and
+    // nothing run in it.
+    createSession: async (o) => {
+      const id = `ses_created_${created.length + 1}`
+      const title = o.title ?? 'a session'
+      openSession(id, { title, accountId: o.accountId, cwd: o.cwd })
+      created.push({ id, cwd: o.cwd, ...(o.initialPrompt !== undefined ? { prompt: o.initialPrompt } : {}) })
+      return { id, accountId: o.accountId, cwd: o.cwd, status: 'running', title }
     }
   } satisfies HostSpawner
 
@@ -454,6 +510,13 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     : null
   await journal?.start()
 
+  const hostSessions = registrySessions({
+    ptys: registry,
+    procs,
+    hookEventsDir: hookEventsDirIn(profileDir),
+    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
+  })
+
   /** Exits the Host has handed to the command layer, counted so the teardown can wait them out. */
   let exitsHandled = 0
   const orch = createHostOrch({
@@ -467,14 +530,20 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     hasApp: () => serverOf().hasApp(),
     onState: (state, version) => serverOf().broadcast({ t: 'orch-state', state, version }),
     log,
-    sessions: {
-      listSessions: async () => [],
-      readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }),
-      sendSession: async () => {},
-      readChat: async () => [],
-      sendChat: async () => {},
-      serial: (_id, run) => run()
-    },
+    // `astera sessions` as index.ts answers it: out of the registries, with each terminal's state from
+    // the hook event files under the profile, which a test writes as the agent's hooks would.
+    sessions: hostSessions,
+    createSession: createHostSessionStarter({
+      spawner,
+      chats: null,
+      rolling: null,
+      readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      bypass: async () => false,
+      probeCwd: defaultCwdProbe,
+      announceProc: () => {},
+      list: () => hostSessions.listSessions(),
+      log
+    }),
     local: spawner,
     specsDir: path.join(profileDir, 'orch', 'specs'),
     worktrees,
@@ -549,11 +618,10 @@ async function hostRig(o: { repo?: boolean; seed?: OrchState; profileDir?: strin
     server,
     spawns: () => spawns,
     state: () => orch.state(),
-    exitWorker: (s, code) => {
-      const entry = registry.list().find((e) => e.meta?.kind === 'session' && e.meta.id === s.sessionId)
-      if (!entry) throw new Error(`rig: no pty for ${s.sessionId}`)
-      ptys.get(entry.pid)!.exit(code)
-    },
+    exitWorker: (s, code) => ptyOf(s.sessionId).exit(code),
+    openSession,
+    ptyOf,
+    created: () => created,
     stop,
     logs,
     journalRows: (runId) => {
@@ -1056,7 +1124,12 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     /** `log` hears every line serveMcp would write to stderr: the link's, the connection's and, with
      *  `debug` (ASTERA_MCP_LOG_LEVEL=debug), the server's line per tool call. */
     o: { clientInfo?: { name: string; version: string }; log?: (m: string) => void; debug?: boolean } = {}
-  ): Promise<{ call(name: string, args: Record<string, unknown>): Promise<ToolResult>; close(): Promise<void> }> {
+  ): Promise<{
+    call(name: string, args: Record<string, unknown>): Promise<ToolResult>
+    /** A Host command sent as it is over this client's own link (role mcp), past the tools. */
+    raw: HostLink['call']
+    close(): Promise<void>
+  }> {
     const addr = hostAddress({ profileDir: rig.profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
     const log = o.log ?? ((): void => {})
     const link = openHostLink({
@@ -1079,7 +1152,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       link.close()
     }
     cleanups.push(close)
-    return { call: async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult, close }
+    return { call: async (name, args) => (await client.callTool({ name, arguments: args })) as ToolResult, raw: link.call, close }
   }
 
   /** A rig whose state already holds one registered project, a git repo of its own: what an app that
@@ -1092,12 +1165,14 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     return { h, projectId: seed.project.id, projectPath }
   }
 
-  /** Rewrites the profile's settings with an MCP access level, keeping the keys the rig wrote. */
-  const setMcpAccess = (h: Rig, mcpAccess: 'off' | 'read' | 'control', continuity = false): Promise<void> =>
-    fs.writeFile(
-      path.join(h.profileDir, 'app-settings.json'),
-      JSON.stringify({ orchAlwaysOnMigrated: true, ...(continuity ? { jobContinuityEnabled: true } : {}), mcpAccess })
-    )
+  /** Rewrites the profile's settings with these MCP keys, keeping every other key the rig wrote. A key
+   *  given as undefined is removed, as the store removes `mcpSessions` when it is turned off. */
+  const setMcpSettings = async (h: Rig, keys: { mcpAccess?: 'off' | 'read' | 'control'; mcpSessions?: true }): Promise<void> => {
+    const file = path.join(h.profileDir, 'app-settings.json')
+    const settings = { ...(JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>), ...keys }
+    await fs.writeFile(file, JSON.stringify(settings))
+  }
+  const setMcpAccess = (h: Rig, mcpAccess: 'off' | 'read' | 'control'): Promise<void> => setMcpSettings(h, { mcpAccess })
 
   it('creates a Job the CLI then sees, and records who did it', async () => {
     const { h, projectId, projectPath } = await projectRig({ continuity: true })
@@ -1424,5 +1499,151 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(run.isError, run.content[0]?.text).toBeFalsy()
     expect(run.structuredContent).toMatchObject({ id: runId, jobId })
     expect(second.state().runs.map((r) => r.id)).toContain(runId)
+  })
+
+  // MCP P1. The sessions are the Host's own registry (registrySessions), each terminal's state is read
+  // from the hook event file a test writes where the agent's hooks append it, and the screen is the
+  // fake pty's output rendered by the Host's emulator.
+
+  /** One hook event, appended the way the capture script appends it: the payload and its newline. */
+  const hookEvent = async (h: Rig, sessionId: string, payload: Record<string, unknown>): Promise<void> => {
+    const dir = hookEventsDirIn(h.profileDir)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(hookEventsFileIn(dir, sessionId), JSON.stringify(payload) + '\n')
+  }
+  const SESSIONS_OFF = 'Let MCP clients see and use sessions'
+
+  it('session tools are refused until the sessions setting is on; then a session is listed and read, its token redacted', async () => {
+    const h = await hostRig({ repo: false })
+    h.openSession('ses_mine', { title: 'my terminal', accountId: h.accountId, cwd: h.profileDir })
+    const key = 'sk-ant-' + 'k'.repeat(12) + '0123456789abcdefghij'
+    // Printed where the 80-column tab wraps it onto the next row.
+    const wrapped = 'sk-' + 'w'.repeat(40)
+    h.ptyOf('ses_mine').print(`hello from the terminal\r\nexport ANTHROPIC_API_KEY=${key}\r\n${'x'.repeat(70)} ${wrapped}\r\n$ `)
+    const mcp = await mcpClient(h)
+
+    for (const [name, args] of [
+      ['list_sessions', {}],
+      ['get_session', { sessionId: 'ses_mine' }],
+      ['send_message', { sessionId: 'ses_mine', text: 'hi' }]
+    ] as const) {
+      const r = await mcp.call(name, args)
+      expect(r.isError, name).toBe(true)
+      expect(errorOf(r), name).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining(SESSIONS_OFF) })
+    }
+    expect(h.ptyOf('ses_mine').typed).toEqual([])
+
+    // Read per call: the same client is let in once the person turns it on.
+    await setMcpSettings(h, { mcpSessions: true })
+    const listed = await mcp.call('list_sessions', {})
+    expect(listed.isError, listed.content[0]?.text).toBeFalsy()
+    expect((listed.structuredContent as { sessions: unknown[] }).sessions).toEqual([
+      expect.objectContaining({ id: 'ses_mine', kind: 'terminal', title: 'my terminal', accountId: h.accountId, alive: true, state: 'unknown' })
+    ])
+
+    const read = await mcp.call('get_session', { sessionId: 'ses_mine' })
+    expect(read.isError, read.content[0]?.text).toBeFalsy()
+    const view = read.structuredContent as { kind: string; alive: boolean; screen: string[]; scrollback: string[] }
+    expect(view).toMatchObject({ id: 'ses_mine', kind: 'terminal', alive: true })
+    expect(view.screen[0]).toBe('hello from the terminal')
+    expect(view.screen).toContain('export ANTHROPIC_API_KEY=[REDACTED]')
+    // Neither the token nor the wrapped one, nor a piece of either, in any field or in the text.
+    const all = JSON.stringify(read)
+    for (const piece of [key, wrapped, 'k'.repeat(12), 'w'.repeat(10)]) expect(all).not.toContain(piece)
+    // The wrapped one is redacted as the line it was printed as, then laid back out at 80 columns.
+    expect(view.screen.slice(2, 4)).toEqual([`${'x'.repeat(70)} [REDACTED`, ']'])
+    expect(view.screen.at(-1)).toBe('$ ')
+
+    // Turned off again (the store removes the key): the next call is refused.
+    await setMcpSettings(h, { mcpSessions: undefined })
+    expect(errorOf(await mcp.call('list_sessions', {}))).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining(SESSIONS_OFF) })
+  })
+
+  it('send_message into a terminal waiting on a permission prompt or a question is refused and types nothing', async () => {
+    const h = await hostRig({ repo: false })
+    await setMcpSettings(h, { mcpSessions: true })
+    h.openSession('ses_asking', { title: 'asking', accountId: h.accountId, cwd: h.profileDir })
+    const pty = h.ptyOf('ses_asking')
+    const mcp = await mcpClient(h)
+
+    // Claude Code's permission dialog, as its Notification hook reports it.
+    await hookEvent(h, 'ses_asking', { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' })
+    const listed = await mcp.call('list_sessions', {})
+    expect((listed.structuredContent as { sessions: unknown[] }).sessions).toEqual([expect.objectContaining({ id: 'ses_asking', state: 'waiting' })])
+    const onPermission = await mcp.call('send_message', { sessionId: 'ses_asking', text: '1' })
+    expect(onPermission.isError).toBe(true)
+    expect(errorOf(onPermission)).toMatchObject({ code: 'CONFLICT', message: expect.stringContaining('waiting on a permission prompt') })
+    expect(errorOf(onPermission).message).toContain('an MCP client')
+    expect(pty.typed).toEqual([])
+
+    // A question (AskUserQuestion) the same way.
+    await hookEvent(h, 'ses_asking', { hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' })
+    const onQuestion = await mcp.call('send_message', { sessionId: 'ses_asking', text: 'yes' })
+    expect(errorOf(onQuestion)).toMatchObject({ code: 'CONFLICT', message: expect.stringContaining('waiting on a question') })
+    expect(pty.typed).toEqual([])
+
+    // The turn ended with no prompt open: the same send is typed, and Enter after it.
+    await hookEvent(h, 'ses_asking', { hook_event_name: 'Stop' })
+    const sent = await mcp.call('send_message', { sessionId: 'ses_asking', text: 'go on' })
+    expect(sent.isError, sent.content[0]?.text).toBeFalsy()
+    expect(sent.structuredContent).toMatchObject({ id: 'ses_asking', sent: true })
+    expect(pty.typed).toEqual(['go on', '\r'])
+  })
+
+  it('a session starts only in a registered project for an MCP client, and the CLI is unchanged', async () => {
+    const { h, projectId, projectPath } = await projectRig()
+    await setMcpSettings(h, { mcpSessions: true })
+    const mcp = await mcpClient(h)
+
+    // The tool takes a projectId and nothing else names a folder; sent past it, over the same mcp
+    // link, a folder that is not a project's root is refused, a folder inside the project as well.
+    for (const cwd of [h.profileDir, path.join(projectPath, 'src')]) {
+      const r = await mcp.raw('sessions-create', { account: h.accountId, cwd })
+      expect('status' in r && r.status, cwd).toBe(403)
+      expect('body' in r && (r.body as { error: string }).error).toContain('MCP clients start sessions only in a registered project')
+    }
+    expect(h.created()).toEqual([])
+
+    const created = await mcp.call('create_session', { projectId, accountId: h.accountId, title: 'from mcp', requestId: 'cs-1' })
+    expect(created.isError, created.content[0]?.text).toBeFalsy()
+    expect(created.structuredContent).toMatchObject({ id: 'ses_created_1', kind: 'terminal', cwd: projectPath, title: 'from mcp', alive: true })
+    expect(h.created()).toEqual([{ id: 'ses_created_1', cwd: projectPath }])
+    const inProject = await mcp.call('list_sessions', { projectId })
+    expect((inProject.structuredContent as { sessions: Array<{ id: string }> }).sessions.map((s) => s.id)).toEqual(['ses_created_1'])
+
+    // A shell may still start one anywhere: the rule is the MCP client's.
+    okData(await astera(['sessions', 'create', '--account', h.accountId, '--cwd', h.profileDir], h.env), 'sessions create')
+    expect(h.created().map((c) => c.cwd)).toEqual([projectPath, h.profileDir])
+  })
+
+  it("get_task_output pages the worker's tail, redacted, and says nothing was recorded after the Host restarts", async () => {
+    const h = await hostRig()
+    const { taskId, worker } = await runningJob(h)
+    const token = 'sk-' + 't'.repeat(40)
+    h.ptyOf(worker.sessionId).print(`\x1b[32mstep 1\x1b[0m\r\nstep 2\r\nusing ${token}\r\nstep 4\r\nstep 5\r\n`)
+    const mcp = await mcpClient(h)
+
+    const tail = await mcp.call('get_task_output', { taskId })
+    expect(tail.isError, tail.content[0]?.text).toBeFalsy()
+    expect(tail.structuredContent).toEqual({
+      taskId,
+      dispatchId: worker.dispatchId,
+      recorded: true,
+      totalLines: 5,
+      more: false,
+      lines: ['step 1', 'step 2', 'using [REDACTED]', 'step 4', 'step 5']
+    })
+    expect(JSON.stringify(tail)).not.toContain(token)
+    // Counted from the end: skip the newest line, take the two before it.
+    const page = await mcp.call('get_task_output', { taskId, skipLines: 1, lines: 2 })
+    expect(page.structuredContent).toMatchObject({ recorded: true, totalLines: 5, more: true, lines: ['using [REDACTED]', 'step 4'] })
+
+    // The tail lived in the Host that started the worker. The next one has none: an answer, not an
+    // error, and no text from before.
+    await h.stop()
+    await hostRig({ repo: false, profileDir: h.profileDir })
+    const after = await mcp.call('get_task_output', { taskId })
+    expect(after.isError, after.content[0]?.text).toBeFalsy()
+    expect(after.structuredContent).toEqual({ taskId, dispatchId: worker.dispatchId, recorded: false, totalLines: 0, more: false, lines: [] })
   })
 })
