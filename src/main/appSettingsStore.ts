@@ -121,6 +121,8 @@ export class AppSettingsStore {
   private mcpAccess: McpAccess = 'control'
   /** Whether an MCP client may see and use sessions (MCP P1 design §5). Off by default; only true is written. */
   private mcpSessions = false
+  /** Whether an MCP client may act on GitHub: push, open pull requests, rerun CI, make Jobs from
+   *  issues (MCP P2-B design). Off by default; only true is written. */
   private mcpGithubWrite = false
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID

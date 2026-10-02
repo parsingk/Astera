@@ -23,7 +23,9 @@ import { MCP_LIMITS, TOOLS, convergenceRefusal, githubTargetRefusal, sendTextRef
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
- *  because a filter that rewrites a path breaks the next call that uses it. */
+ *  because a filter that rewrites a path breaks the next call that uses it. The set is one for every
+ *  tool on purpose: a field added for the GitHub tools (`name`, `text`, `body`...) is filtered wherever
+ *  it appears, which costs at most a redacted word and never lets a secret through. */
 const FREE_TEXT = new Set([
   'question',
   'resolution',
