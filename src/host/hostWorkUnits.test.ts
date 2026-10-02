@@ -1,7 +1,7 @@
 // The Host's work unit collector (E2 §3, §4): the core collector and store over the sessions the Host
 // runs, behind the writer rule. Real store file, real transcript files; the sessions, git, watchers
 // and the How It Works pipeline are fakes the test drives.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, existsSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -19,6 +19,7 @@ import type { GitRef } from '../core/git/types'
 import type { SessionWorkUnit } from '../core/workUnit/types'
 import type { WorkUnitState } from '../core/workUnit/store'
 import type { Account } from '../core/types'
+import { OPERATION_GRACE_MS } from '../core/git/provenance'
 
 let dir: string
 let project: string
@@ -295,6 +296,30 @@ describe('createHostWorkUnits', () => {
     expect(hw.isRunning()).toBe(false)
   })
 
+  // E1's trySet has no await between its gate and its write; here the refresh is one, so the gate is asked again.
+  it('drops a write when the writer flips while the store refreshes before it', async () => {
+    const r = rig()
+    const hw = createHostWorkUnits(r.deps)
+    await hw.start()
+    await hw.settled()
+    const before = readFileSync(file(), 'utf8')
+    const pushed = r.pushes.length
+    const real = fs.stat.bind(fs)
+    const stat = vi.spyOn(fs, 'stat').mockImplementation((async (...args: Parameters<typeof fs.stat>) => {
+      // the refresh's stamp of workUnits.json: the app's hello lands right then
+      if (String(args[0]) === file()) r.state.writer = false
+      return real(...args)
+    }) as typeof fs.stat)
+    try {
+      await hw.sessionTasks.start('s1', 'Fix it')
+      await hw.settled()
+    } finally {
+      stat.mockRestore()
+    }
+    expect(readFileSync(file(), 'utf8')).toBe(before)
+    expect(r.pushes.length).toBe(pushed)
+  })
+
   it('reads the file again when it becomes the writer, so what the app wrote meanwhile is kept', async () => {
     const r = rig()
     r.state.writer = false
@@ -323,21 +348,96 @@ describe('createHostWorkUnits', () => {
     expect(onDisk().projects[project].units[0].objective).toBe('Fix it')
   })
 
-  it('pushes work-units-state with the raw session cwd after each write', async () => {
+  // Ruling 3: a push says the screen has something new to show, so it follows the units, not every write.
+  it('pushes work-units-state with the raw session cwd when the units changed, and not for a cursor-only round', async () => {
     const r = rig()
     const hw = createHostWorkUnits(r.deps)
     await hw.start()
     await hw.settled()
-    const afterStart = statePushes(r).length
-    expect(afterStart).toBeGreaterThanOrEqual(1)
+    const count = (): number => statePushes(r).length
+    let n = count()
+    // a transcript line with nothing in it for a unit: the cursor moves on disk, nothing is pushed
+    const cursorBefore = onDisk().projects[project].cursors.find((c) => c.sessionId === 's1')!.offset
+    await fs.appendFile(t1, '{"type":"user","message":{"role":"user","content":"just talking"}}\n')
+    r.transcripts().onChange(t1)
+    await hw.flush()
+    await hw.settled()
+    expect(onDisk().projects[project].cursors.find((c) => c.sessionId === 's1')!.offset).toBeGreaterThan(cursorBefore)
+    expect(count()).toBe(n)
+    // start, cancel, complete and an exit's interruption each push
     await hw.sessionTasks.start('s1', 'One')
     await hw.settled()
-    const afterTask = statePushes(r).length
-    expect(afterTask).toBeGreaterThan(afterStart)
+    expect(count()).toBeGreaterThan(n)
+    n = count()
     await hw.sessionTasks.cancel('s1', 'not needed')
     await hw.settled()
-    expect(statePushes(r).length).toBeGreaterThan(afterTask)
+    expect(count()).toBeGreaterThan(n)
+    n = count()
+    await hw.sessionTasks.start('s1', 'Two')
+    await fs.appendFile(t1, wrote())
+    r.git.files = ['src/a.ts']
+    await hw.sessionTasks.complete('s1', { source: 'agent' })
+    await hw.settled()
+    expect(r.closed).toHaveLength(1)
+    expect(count()).toBeGreaterThan(n)
+    await hw.sessionTasks.start('s1', 'Three')
+    await hw.settled()
+    n = count()
+    r.sessions.splice(0, 1)
+    await hw.onSessionExit('s1')
+    await hw.settled()
+    expect(hw.sessionTasks.list(project)).toEqual([expect.objectContaining({ status: 'interrupted' })])
+    expect(count()).toBeGreaterThan(n)
     expect(statePushes(r).every((m) => m.t === 'work-units-state' && m.root === project)).toBe(true)
+  })
+
+  // At Host leave a round the collector armed earlier can still fire; it must write and watch nothing.
+  it('after dispose, a round still to come persists nothing, pushes nothing and watches nothing', async () => {
+    const r = rig()
+    const hw = createHostWorkUnits(r.deps)
+    await hw.start()
+    await hw.sessionTasks.start('s1', 'Open at leave')
+    await hw.settled()
+    const before = readFileSync(file(), 'utf8')
+    const pushed = r.pushes.length
+    await fs.appendFile(t1, wrote())
+    r.transcripts().onChange(t1)
+    hw.dispose()
+    // the round the transcript change armed, run now rather than waited for
+    await hw.flush()
+    await hw.settled()
+    expect(readFileSync(file(), 'utf8')).toBe(before)
+    expect(r.pushes.length).toBe(pushed)
+    expect([...r.transcripts().watched]).toEqual([])
+    expect([...r.gitDirs().watched]).toEqual([])
+    // and the open unit was not interrupted on the way out: the next Host's start does that
+    expect(hw.sessionTasks.list(project)).toEqual([expect.objectContaining({ status: 'active' })])
+  })
+
+  // On the Host a session can end while busy, and the spawner then sends no idle edge.
+  it('a session that exits while busy interrupts its unit and closes its attribution window', async () => {
+    let clock = Date.parse('2026-10-03T09:00:00.000Z')
+    const r = rig({ now: () => clock })
+    r.sessions.push({ sessionId: 's2', cwd: project, accountId: 'a1', rolloutPath: null })
+    const hw = createHostWorkUnits(r.deps)
+    await hw.start()
+    r.gitDirs().onChange(project)
+    await hw.flush()
+    await hw.sessionTasks.start('s1', 'Busy at the end')
+    hw.onBusy('s1', true)
+    await hw.settled()
+    r.sessions.splice(0, 1)
+    await hw.onSessionExit('s1')
+    expect(hw.sessionTasks.list(project)).toEqual([
+      expect.objectContaining({ status: 'interrupted', reason: 'INTERRUPTED_BY_SESSION_END' })
+    ])
+    // past the grace, a HEAD move is no longer the dead session's: it is recorded as from outside
+    clock += OPERATION_GRACE_MS + 1_000
+    r.git.ref = { branch: 'main', head: 'c1' }
+    r.gitDirs().onChange(project)
+    await hw.flush()
+    await hw.settled()
+    expect(onDisk().projects[project].externalGitChanges).toHaveLength(1)
   })
 
   it('pushes work-units-goal-ignored when a goal arrives while a unit is open', async () => {
@@ -440,7 +540,7 @@ describe('createHostWorkUnits', () => {
     })
 
     it('a HEAD move inside a Host git-op is Astera own', async () => {
-      expect(await moveHead((hw) => hw.onGitOp({ op: 'op-1', phase: 'begin', cwd: project }))).toBe(0)
+      expect(await moveHead((hw) => hw.onGitOp({ t: 'git-op', op: 'op-1', phase: 'begin', kind: 'job-merge', cwd: project }))).toBe(0)
     })
   })
 

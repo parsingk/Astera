@@ -30,6 +30,7 @@ import { extractStatusLineSession } from '../core/usage/statusline'
 import { WorkUnitCollector, type CollectorGit, type CollectorSession } from '../core/workUnit/collector'
 import { WorkUnitStore, type WorkUnitState } from '../core/workUnit/store'
 import { probeGit } from '../core/workUnit/gitProbe'
+import { createHostGitOps } from '../core/workUnit/hostGitOps'
 import { createTranscriptWatcher, type TranscriptWatcher } from '../core/workUnit/watch/transcriptWatcher'
 import { createGitDirWatcher, type GitDirWatcher } from '../core/workUnit/watch/gitDirWatcher'
 import { WATCH_SWEEP_MS } from '../core/workUnit/watch/dirWatch'
@@ -156,8 +157,8 @@ export interface HostWorkUnits {
   onSessionExit(sessionId: string): Promise<void>
   /** The Host's own `session-rolled`: the open unit moves to the new id. Chat sessions are not tracked. */
   onRolled(e: { oldSessionId: string; newSessionId: string; transcriptPath?: string; kind?: string }): void
-  /** The Host's `git-op` around a merge it runs. */
-  onGitOp(m: { op: string; phase: 'begin' | 'end'; cwd: string }): void
+  /** The Host's `git-op` around a merge it runs; any other message is ignored. */
+  onGitOp(m: HostMessage): void
   isWriter(): boolean
   /** Whether the collector runs now (tracking on and this Host the writer). */
   isRunning(): boolean
@@ -171,7 +172,12 @@ export interface HostWorkUnits {
 }
 
 /** The core store with the writer gate at every write, the refresh before it, and the push after it. A
- *  write while an app keeps the duty is dropped whole (the file and the push), as E1's GatedStore. */
+ *  write while an app keeps the duty is dropped whole (the file and the push), as E1's GatedStore. The
+ *  gate is asked again after the refresh: unlike E1's trySet, there is an await between the two.
+ *
+ *  **The push follows the units, not every write** (ruling 3): a round that only moved a cursor writes
+ *  the file and has nothing new for the screen, and a session writing would otherwise push about once a
+ *  second. The collector mutates the stored object in place, so what was last pushed is kept as text. */
 class GatedWorkUnitStore extends WorkUnitStore {
   constructor(
     filePath: string,
@@ -181,11 +187,24 @@ class GatedWorkUnitStore extends WorkUnitStore {
     super(filePath)
   }
 
+  /** root -> its units as serialized at the last push. */
+  private pushed = new Map<string, string>()
+
+  /** A load starts over: the file may be another writer's, so the next write of each root pushes. */
+  override async load(): Promise<{ recovered: boolean }> {
+    this.pushed.clear()
+    return super.load()
+  }
+
   override async set(projectPath: string, value: WorkUnitState): Promise<void> {
     if (!this.may()) return
     // From the file, not from memory: an older app may have written it since this store last read it.
     await this.refresh()
+    if (!this.may()) return
     await super.set(projectPath, value)
+    const units = JSON.stringify(value.units)
+    if (this.pushed.get(projectPath) === units) return
+    this.pushed.set(projectPath, units)
     this.wrote(projectPath)
   }
 }
@@ -216,9 +235,15 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
     }
   }
 
+  /** Set at Host leave. A round the collector armed before it can still fire (its own debounce timer);
+   *  from here on it persists nothing and watches nothing. The collector is not stopped: that would
+   *  interrupt every open unit, which is the next Host's start to do. */
+  let disposed = false
+
   const store = new GatedWorkUnitStore(
     d.file,
     () => {
+      if (disposed) return false
       if (isWriter()) return true
       log('an attached app keeps the work units now, a Host write is dropped')
       return false
@@ -245,7 +270,7 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
   /** The transcripts watched now, kept to the listed sessions' (the collector watches git itself). */
   const watched = new Set<string>()
   const syncTranscripts = (listed: readonly CollectorSession[], nudge: boolean): void => {
-    if (!running) return
+    if (!running || disposed) return
     const want = new Set(listed.map((s) => s.transcriptPath).filter((p): p is string => p !== null))
     let added = false
     for (const p of [...watched])
@@ -310,7 +335,7 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
     // The collector holds one watch per project for the life of its start (its syncWatchers); a folder
     // that is not a repository yet answers null and is asked again at the next round.
     watchGit: async (projectPath) => {
-      if ((await gitDirOf(projectPath)) === null) return null
+      if (disposed || (await gitDirOf(projectPath)) === null || disposed) return null
       gitDirs.watch(projectPath)
       return async () => gitDirs.unwatch(projectPath)
     },
@@ -349,6 +374,7 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
   /** One at a time: a reload and a change of writer must not start the collector twice. */
   let applying: Promise<void> = Promise.resolve()
   const applyNow = async (): Promise<void> => {
+    if (disposed) return
     try {
       const want = tracking === true && isWriter()
       if (want && !running) {
@@ -383,8 +409,8 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
   /** Busy edges in order: a busy edge reads the accounts, and the idle edge after it must not overtake it
    *  (an attribution window opened after its close would never close). */
   let edges: Promise<void> = Promise.resolve()
-  /** The Host's git-op ids, to the collector's registration ids. */
-  const ops = new Map<string, string>()
+  /** The Host's own merges, registered as the app registers them (core/workUnit/hostGitOps.ts). */
+  const gitOps = createHostGitOps(collector)
 
   /** Declarations run one round first: the collector knows a session only from a round. */
   const caughtUp = async (): Promise<void> => {
@@ -438,16 +464,7 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       if (e.kind === 'chat') return
       collector.onSessionForked(e.newSessionId, e.transcriptPath, e.oldSessionId)
     },
-    onGitOp: (m) => {
-      if (m.phase === 'begin') {
-        const id = collector.beginGitOperation('job-merge', m.cwd)
-        if (id !== '') ops.set(m.op, id)
-        return
-      }
-      const id = ops.get(m.op)
-      ops.delete(m.op)
-      if (id !== undefined) collector.endGitOperation(id)
-    },
+    onGitOp: (m) => gitOps.pushed(m),
     isWriter,
     isRunning: () => running,
     flush: () => collector.flush(),
@@ -457,6 +474,7 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       await store.settled()
     },
     dispose: () => {
+      disposed = true
       stopSync()
       transcripts.close()
       gitDirs.close()

@@ -1,7 +1,8 @@
 // Mirrors the Host's own merges into this app's Work Unit tracking (host S3 ruling R7, §3.3): a merge
 // the Host runs is registered here the same way one this app runs itself already is, so the Work Unit
-// screen does not read the HEAD move `git-op` announces as a change from outside.
-import type { HostMessage } from '../../core/host/protocol'
+// screen does not read the HEAD move `git-op` announces as a change from outside. In core since E2: the
+// Host's own work unit collector takes the same messages from its worktrees (host/hostWorkUnits.ts).
+import type { HostMessage } from '../host/protocol'
 
 export function createHostGitOps(collector: {
   beginGitOperation(kind: 'job-merge', cwd: string): string
