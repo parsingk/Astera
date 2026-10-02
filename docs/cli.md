@@ -795,7 +795,7 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-thirty-two tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+thirty-three tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
 sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
 allows it, act on them, and read the How It Works records of a project. What it may do is set by
 MCP access in Settings (CLI tab). The six Job tools that change something (`create_job`,
