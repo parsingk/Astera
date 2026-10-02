@@ -25,22 +25,26 @@ export class UnderstandingStore {
 
   constructor(private filePath: string) {}
 
-  async load(): Promise<{ recovered: boolean }> {
+  /** `unstuck` names the projects whose `generating` records it marked interrupted, **in memory only**:
+   *  saving them is a writer's call (the Host saves them only while it is the one writer, E1 §2). */
+  async load(): Promise<{ recovered: boolean; unstuck: string[] }> {
     let parsed: unknown
+    // Stamped before the read: taken after, a write landing between the two would be taken for the file
+    // this store read, and refresh() would never adopt it.
+    const stamp = await this.stamp(this.filePath)
     try {
       parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
     } catch (e) {
       // **ENOENT 만 "아직 없다" 다.** 나머지 읽기 오류(EACCES·EPERM·EISDIR)를 같이 삼키면, 읽지
       // 못한 기존 파일을 다음 set() 이 조용히 덮어쓴다 — 사용자에게 아무 신호 없이 데이터가 사라진다.
       // OrchestrationStore.load 가 같은 이유로 이 갈래를 가른다.
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false, unstuck: [] }
       return this.recover()
     }
     if (!isValid(parsed)) return this.recover()
     this.state = parsed
-    this.seen = await this.stamp(this.filePath)
-    this.unstick()
-    return { recovered: false }
+    this.seen = stamp
+    return { recovered: false, unstuck: this.unstick() }
   }
 
   /** Reads the file again **only when another process wrote it** since this store last loaded or saved
@@ -107,7 +111,13 @@ export class UnderstandingStore {
       const stamp = await this.stamp(tmp)
       // Retried: on win32 a rename over a file another process is reading (the app's reader, an MCP
       // read tool) is refused for the moment the handle is open.
-      await renameRetrying(tmp, this.filePath)
+      try {
+        await renameRetrying(tmp, this.filePath)
+      } catch (err) {
+        // Refused past its retries: this process's temp file would otherwise stay beside the target.
+        await fs.rm(tmp, { force: true }).catch(() => {})
+        throw err
+      }
       this.seen = stamp
     }
     // then(run, run) 의 두 인자가 같은 이유: 앞선 쓰기가 실패해도 다음 쓰기는 진행돼야 한다.
@@ -130,21 +140,24 @@ export class UnderstandingStore {
    *  참조가 남고, 그것은 처음부터 다시 하는 것보다 나쁜 상태다.
    *
    *  copyFile 을 쓰는 이유: 내용을 읽지 못해서 온 경우(권한 오류)에도 원본을 물려 둘 수 있다. */
-  private async recover(): Promise<{ recovered: boolean }> {
+  private async recover(): Promise<{ recovered: boolean; unstuck: string[] }> {
     await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
     this.state = { projects: {} }
-    return { recovered: true }
+    return { recovered: true, unstuck: [] }
   }
 
   /** A record left in `generating` on disk is always a lie: the agent is a child of this process and
    *  died with it. Left alone it spins forever with no way to retry. **True only here** — load runs
-   *  once, before any generation. */
-  private unstick(): void {
-    for (const u of Object.values(this.state.projects))
+   *  once, before any generation. Returns the projects it changed. */
+  private unstick(): string[] {
+    const changed: string[] = []
+    for (const [key, u] of Object.entries(this.state.projects))
       for (const r of u.records)
         if (r.status === 'generating') {
           r.status = 'failed'
           r.reason = 'INTERRUPTED'
+          if (!changed.includes(key)) changed.push(key)
         }
+    return changed
   }
 }

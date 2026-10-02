@@ -156,6 +156,60 @@ describe('UnderstandingStore', () => {
     expect(b.get('C:/p')!.records[0].reason).toBe('INTERRUPTED')
   })
 
+  // Final review item 1: load marks them in memory only, so it says which projects it changed, for a
+  // writer to save them.
+  it('load names the projects whose generating records it marked interrupted', async () => {
+    const stuck: ProjectUnderstanding = {
+      records: [
+        { id: 'r1', at: 'x', source: { kind: 'session', sessionId: 's', label: 'l' }, request: 'q',
+          changedFiles: [], git: { startHead: null, endHead: null }, status: 'generating' }
+      ]
+    }
+    const a = new UnderstandingStore(file)
+    await a.load()
+    await a.set('C:/p', stuck)
+    await a.set('C:/q', sample)
+    expect((await new UnderstandingStore(file).load()).unstuck).toEqual(['C:/p'])
+    await fs.rm(file)
+    expect((await new UnderstandingStore(file).load()).unstuck).toEqual([])
+  })
+
+  // Final review item 7: a rename refused past its retries leaves no temp file of this process behind.
+  it('removes its own temp file when the rename fails for good', async () => {
+    const s = new UnderstandingStore(file)
+    await s.load()
+    const busy = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(busy)
+    try {
+      await expect(s.set('C:/p', sample)).rejects.toThrow('EPERM')
+    } finally {
+      rename.mockRestore()
+    }
+    expect(await fs.readdir(dir)).toEqual([])
+  })
+
+  // Final review item 8: the stamp is the file as it was before the read. Taken after, a write that
+  // landed between the read and the stamp would be taken for the file this store read, and never adopted.
+  it('load stamps the file before reading it, so a write landing just after the read is adopted later', async () => {
+    await new UnderstandingStore(file).set('C:/p', sample)
+    const real = fs.readFile.bind(fs)
+    const spy = vi.spyOn(fs, 'readFile').mockImplementationOnce((async (...args: Parameters<typeof fs.readFile>) => {
+      const text = await real(...args)
+      // Another process saves right after this read; a different size, so the stamp differs.
+      await fs.writeFile(file, JSON.stringify({ projects: { 'C:/p': sample, 'C:/other': sample } }), 'utf8')
+      return text
+    }) as typeof fs.readFile)
+    const s = new UnderstandingStore(file)
+    try {
+      await s.load()
+    } finally {
+      spy.mockRestore()
+    }
+    expect(s.get('C:/other')).toBeUndefined()
+    expect(await s.refresh()).toBe(true)
+    expect(s.get('C:/other')).toEqual(sample)
+  })
+
   // E1 Task 2 review I1: two processes may write this file one after the other (the Host and an older
   // app), so a write starts from the file, not from memory. refresh() is that read, and only when the
   // file is not the one this store last loaded or saved.
