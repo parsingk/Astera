@@ -177,6 +177,8 @@ const api = {
     setAgentPermissionMode: invoke('settings.setAgentPermissionMode'),
     getMcpAccess: invoke('settings.getMcpAccess'),
     setMcpAccess: invoke('settings.setMcpAccess'),
+    getMcpSessions: invoke('settings.getMcpSessions'),
+    setMcpSessions: invoke('settings.setMcpSessions'),
     getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
     setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),

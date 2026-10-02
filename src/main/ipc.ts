@@ -5624,6 +5624,14 @@ export function registerIpc(
     await core.appSettings.setMcpAccess(v)
   })
 
+  // Whether an MCP client may see and use sessions (MCP P1 design §5). The Host reads the file on
+  // every MCP call (readMcpSessions), so saving it is the whole effect.
+  ipcMain.handle('settings.getMcpSessions', () => core.appSettings.getMcpSessions())
+  ipcMain.handle('settings.setMcpSessions', async (_e, v: unknown) => {
+    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_SESSIONS: ${String(v)}`)
+    await core.appSettings.setMcpSessions(v)
+  })
+
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
   // settings.ts); this handler validates the value and starts the orchestration wiring the journal
   // hooks live in, the way the other toggles do, and opens or closes the recorder with the toggle.

@@ -28,6 +28,10 @@ export const ja: Catalog = {
   'settings.mcp.installFirst': '先に上のコマンドラインツールをインストールしてから、MCP クライアントに Astera を追加してください。',
   'settings.mcp.saveFailed': 'MCP アクセスの設定を保存できませんでした: {detail}',
   'settings.mcp.loadFailed': 'MCP アクセスの設定を読み込めませんでした: {detail}',
+  'settings.mcp.sessions.label': 'MCP クライアントにセッションの閲覧と操作を許可する',
+  'settings.mcp.sessions.hint':
+    'Astera が保持するすべてのセッションが対象で、自分で開いたターミナルも含まれます。閲覧には読み取り専用以上、入力と開始には読み取りと操作が必要です。',
+  'settings.mcp.sessions.saveFailed': 'MCP セッションの設定を保存できませんでした: {detail}',
   // エージェント権限モード
   'settings.agentPermission.label': '権限確認なしでエージェントを実行',
   'settings.agentPermission.hint':

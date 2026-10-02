@@ -59,6 +59,9 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcp.installFirst': 'Install the command line tool above first, then add Astera to your MCP client.',
   'settings.mcp.saveFailed': 'Could not save MCP access: {detail}',
   'settings.mcp.loadFailed': 'Could not read MCP access: {detail}',
+  'settings.mcp.sessions.label': 'Let MCP clients see and use sessions',
+  'settings.mcp.sessions.hint': 'Covers every session Astera holds, your own terminals included. Seeing them needs Read only; typing into them and starting them need Read and control.',
+  'settings.mcp.sessions.saveFailed': 'Could not save the MCP sessions setting: {detail}',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':

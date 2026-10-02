@@ -920,3 +920,40 @@ describe('mcpAccess', () => {
     expect(store.getMcpAccess()).toBe('off')
   })
 })
+
+describe('mcpSessions', () => {
+  it('defaults to false and is not written while it is', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpSessions()).toBe(false)
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpSessions')
+    await store.setMcpSessions(true)
+    await store.setMcpSessions(false)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpSessions')
+  })
+
+  it('keeps true across a reload', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setMcpSessions(true)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpSessions).toBe(true)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getMcpSessions()).toBe(true)
+  })
+
+  it('anything but true in the file reads as false', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpSessions: 'yes' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpSessions()).toBe(false)
+  })
+
+  it('a recovered profile reads false', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpSessions()).toBe(false)
+  })
+})

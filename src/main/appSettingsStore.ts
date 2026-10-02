@@ -21,6 +21,7 @@ import type { SkillSettings } from '../core/orchestration/skills'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
 import { mcpAccessOf } from '../core/settings/mcpAccess'
+import { mcpSessionsOf } from '../core/settings/mcpSessions'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 
 /** The three settings that gate Astera's agent skills when the file does not say otherwise — a
@@ -117,6 +118,7 @@ export class AppSettingsStore {
   /** What an MCP client may do through `astera mcp serve` (MCP design M5). Default 'control'; only
    *  the two narrower values are written to the file. */
   private mcpAccess: McpAccess = 'control'
+  private mcpSessions = false
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
   /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
@@ -190,6 +192,8 @@ export class AppSettingsStore {
       )
       // The same function the Host's read uses (readMcpAccess), so the two cannot differ.
       this.mcpAccess = mcpAccessOf((parsed as { mcpAccess?: unknown }).mcpAccess)
+      // The same function the Host's read uses (readMcpSessions): only an explicit true turns it on.
+      this.mcpSessions = mcpSessionsOf((parsed as { mcpSessions?: unknown }).mcpSessions)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -238,6 +242,7 @@ export class AppSettingsStore {
         this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
         this.agentPermissionMode = 'yolo'
         this.mcpAccess = 'control'
+        this.mcpSessions = false
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         this.defaultSessionKind = 'terminal'
@@ -271,6 +276,7 @@ export class AppSettingsStore {
       this.agentPermissionMode = 'manual'
       // The narrower side, as agentPermissionMode: the file may have said off.
       this.mcpAccess = 'off'
+      this.mcpSessions = false
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.defaultSessionKind = 'terminal'
@@ -404,6 +410,16 @@ export class AppSettingsStore {
   /** The Host reads the file on every MCP call (readMcpAccess), so saving it is the whole effect. */
   async setMcpAccess(v: McpAccess): Promise<void> {
     this.mcpAccess = v
+    await this.persist()
+  }
+
+  getMcpSessions(): boolean {
+    return this.mcpSessions
+  }
+
+  /** The Host reads the file on every MCP call (readMcpSessions), so saving it is the whole effect. */
+  async setMcpSessions(v: boolean): Promise<void> {
+    this.mcpSessions = v
     await this.persist()
   }
 
@@ -543,6 +559,7 @@ export class AppSettingsStore {
       resumeStrategy?: ResumeStrategy
       agentPermissionMode?: AgentPermissionMode
       mcpAccess?: McpAccess
+      mcpSessions?: true
       terminalFont?: TerminalFont
       theme?: ThemeId
       defaultSessionKind?: SessionKind
@@ -578,6 +595,7 @@ export class AppSettingsStore {
     if (this.agentPermissionMode === 'manual') data.agentPermissionMode = 'manual'
     // Written only when narrower than the default, like agentPermissionMode.
     if (this.mcpAccess !== 'control') data.mcpAccess = this.mcpAccess
+    if (this.mcpSessions) data.mcpSessions = true
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)

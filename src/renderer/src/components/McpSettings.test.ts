@@ -4,7 +4,7 @@ import { CATALOGS, LANGS } from '../../../core/i18n'
 const errors: string[] = []
 vi.mock('../lib/toast', () => ({ toast: { error: (m: string) => void errors.push(m) } }))
 
-const { copyLine, loadMcpAccess, registrationFor } = await import('./McpSettings')
+const { copyLine, loadMcpAccess, registrationFor, sessionsDisabled, saveMcpSessions } = await import('./McpSettings')
 
 const t = (key: string, params?: Record<string, unknown>): string => (params ? `${key} ${JSON.stringify(params)}` : key)
 const withApi = (getMcpAccess: () => Promise<unknown>): void => {
@@ -87,5 +87,42 @@ describe('McpSettings registration lines', () => {
 
   it('has its install-first string in all four languages', () => {
     for (const lang of LANGS) expect(CATALOGS[lang].messages['settings.mcp.installFirst'], lang).toBeTruthy()
+  })
+})
+
+describe('McpSettings sessions checkbox', () => {
+  beforeEach(() => void (errors.length = 0))
+
+  it('is disabled while access is off and enabled otherwise', () => {
+    expect(sessionsDisabled('off')).toBe(true)
+    expect(sessionsDisabled('read')).toBe(false)
+    expect(sessionsDisabled('control')).toBe(false)
+  })
+
+  it('saves the new value and keeps it', async () => {
+    const set = vi.fn()
+    const setMcpSessions = vi.fn(async () => {})
+    ;(globalThis as { window?: unknown }).window = { api: { settings: { setMcpSessions } } }
+    await saveMcpSessions(true, false, set, t)
+    expect(setMcpSessions).toHaveBeenCalledWith(true)
+    expect(set).toHaveBeenCalledWith(true)
+    expect(errors).toEqual([])
+  })
+
+  it('reverts and says so when the save fails', async () => {
+    const set = vi.fn()
+    ;(globalThis as { window?: unknown }).window = {
+      api: { settings: { setMcpSessions: async () => { throw new Error('disk full') } } }
+    }
+    await saveMcpSessions(true, false, set, t)
+    expect(set.mock.calls).toEqual([[true], [false]])
+    expect(errors).toEqual(['settings.mcp.sessions.saveFailed {"detail":"disk full"}'])
+  })
+
+  it('has its strings in all four languages, the label exactly as the tool descriptions quote it', () => {
+    for (const lang of LANGS)
+      for (const key of ['settings.mcp.sessions.label', 'settings.mcp.sessions.hint', 'settings.mcp.sessions.saveFailed'] as const)
+        expect(CATALOGS[lang].messages[key], `${lang} ${key}`).toBeTruthy()
+    expect(CATALOGS.en.messages['settings.mcp.sessions.label']).toBe('Let MCP clients see and use sessions')
   })
 })

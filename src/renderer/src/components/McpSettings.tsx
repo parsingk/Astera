@@ -16,6 +16,25 @@ export function loadMcpAccess(
   })
 }
 
+/** The sessions checkbox does nothing while access is off (the Host refuses every call then). */
+export function sessionsDisabled(access: McpAccess): boolean {
+  return access === 'off'
+}
+
+/** Shows `next` at once, saves it, and puts `prev` back with a toast when the save fails. */
+export function saveMcpSessions(
+  next: boolean,
+  prev: boolean,
+  set: (v: boolean) => void,
+  t: (key: MessageKey, params?: MessageParams) => string
+): Promise<void> {
+  set(next)
+  return window.api.settings.setMcpSessions(next).catch((err) => {
+    set(prev)
+    toast.error(t('settings.mcp.sessions.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+  })
+}
+
 /** A registration line onto the clipboard, or a toast when the clipboard refuses it. */
 export function copyLine(line: string, t: (key: MessageKey, params?: MessageParams) => string): Promise<void> {
   return navigator.clipboard.writeText(line).catch((err) => {
@@ -44,9 +63,12 @@ export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null 
   const { t } = useI18n()
   const registration = registrationFor(cliStatus, window.api.platform)
   const [access, setAccess] = useState<McpAccess>('control')
+  const [sessions, setSessions] = useState(false)
 
   useEffect(() => {
     void loadMcpAccess(setAccess, t)
+    // A read failure leaves the box unchecked, the default; the access control above already says so.
+    void window.api.settings.getMcpSessions().then(setSessions, () => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, as before; a language change must not re-read over a choice in flight
   }, [])
 
@@ -74,6 +96,16 @@ export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null 
         />
       </div>
       <span className="settings-hint">{t('settings.mcp.hint')}</span>
+      <label className="settings-row">
+        <span>{t('settings.mcp.sessions.label')}</span>
+        <input
+          type="checkbox"
+          checked={sessions}
+          disabled={sessionsDisabled(access)}
+          onChange={(e) => void saveMcpSessions(e.target.checked, sessions, setSessions, t)}
+        />
+      </label>
+      <span className="settings-hint">{t('settings.mcp.sessions.hint')}</span>
       {/* The registration line for each client, in this platform's form (mcpRegistration.ts). */}
       {registration === 'install-first' && <span className="settings-hint">{t('settings.mcp.installFirst')}</span>}
       {Array.isArray(registration) && (
