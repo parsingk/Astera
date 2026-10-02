@@ -168,6 +168,12 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `answer_question` | Answer a blocking question raised in an Astera Run. Use `list_questions` first to retrieve open questions. |
 | `create_task` | Add a Task to a Job's plan (`jobId`: every Run started from then on copies it) or to one Run (`runId`); give exactly one. `spec` is the work in full (up to 50 000 characters), `title` a short name (up to 200), `deps` the Task ids it waits for, `validate` run configuration ids from `list_run_configs` that must pass, `review: true` asks for a review. Without `accountId` the Task runs on the Job's coordinator account. |
 | `list_run_configs` | The run configurations of a Job's project folder (`id`, `name`, `type`): the checks a Task can name in `create_task`'s `validate`. |
+| `list_sessions` | The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by `status` (`alive`, `ended`, or a terminal's `working`, `waiting` or `unknown`), `provider`, and `projectId`. Needs the session setting (below). |
+| `get_session` | What a session shows now: a terminal's last rendered rows (`screen`, `scrollback`; `lines` 1 to 500, 100 when not given), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). Needs the session setting. |
+| `send_message` | Type `text` (up to 50 000 characters) into a live session and press Enter; a chat session takes it as one turn. Returns as soon as the text is accepted, not when the session has answered: poll `get_session`. Needs the session setting and "Read and control". |
+| `create_session` | Start a terminal or chat session in a registered project's folder (`projectId`), on `accountId` or, without one, on `provider`'s default account (`claude` unless given). Needs the session setting and "Read and control". |
+| `get_check_output` | The output of a Task's failed check (`check`, or the first that failed): the last 4000 characters of its log, last round only. `offset` and `limit` (1 to 4000) page through them; `total` is how many there are. A Task with no failed check output is `CONFLICT`. |
+| `get_task_output` | What the latest worker of a Task printed, counted from the end: skip `skipLines` newest lines, return the next `lines` (1 to 500, 200 when not given) older ones, oldest first; `more: true` says older lines remain. After Astera restarts it answers `recorded: false` with no lines, since worker output exists only while the process that started the worker runs (its last 64 KB). |
 | `get_completion` | Where each Task of a Run stands in completion: not-started, working, checking, fixing, rechecking, reviewing, waiting-for-user, exhausted, converged or failed, with attempts and check results, and, per Task, a `failureSummary` (what fails in the current round: each failed check, its exit code and its last output line) and a `lastFailure` (the same for the last round of failed checks, not reviews; kept while it is rechecked and after it converged, so it says why a repair ran). Astera runs the checks and repairs; this only reads them. |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
@@ -212,7 +218,8 @@ shows as waiting.
 Every list tool takes a `limit` from 1 to 200, 50 when it is not given. `list_jobs` comes newest
 first by `createdAt`, `list_runs` newest first by `createdAt` (then `ordinal`), and `list_questions`
 oldest first by `createdAt`; `list_tasks` keeps the Run's order (dependencies, then creation), and
-`list_projects`, `list_accounts` and `list_run_configs` keep Astera's. The list is ordered first and cut second. A cut
+`list_projects`, `list_accounts` and `list_run_configs` keep Astera's, and `list_sessions` puts live
+sessions first and otherwise keeps Astera's. The list is ordered first and cut second. A cut
 list carries `truncated: true` and `total` (how many there were) beside it; a whole list carries
 neither.
 
@@ -230,8 +237,8 @@ Every result carries the data twice, as `structuredContent` and as the same JSON
 content. An error is the exception: its text content is a `CODE: message` line followed by the JSON
 (`code`, `message`, `nextSteps` and, when there are any, `details`), and it carries no
 `structuredContent`, because some clients (Cursor) validate `structuredContent` even on an error.
-The six tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
-`resume_run`, `answer_question`) accept an optional `requestId`. Retrying with the same id returns the first
+The eight tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
+`resume_run`, `answer_question`, `send_message`, `create_session`) accept an optional `requestId`. Retrying with the same id returns the first
 result instead of acting twice. The Host keeps these receipts in memory for one hour, and a Host
 restart forgets them.
 
@@ -242,11 +249,22 @@ restart forgets them.
 | Value | Allows |
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
-| Read only | The list and get tools, `get_run`, `get_completion` and `list_run_configs` included. |
+| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output` and `get_task_output` included. |
 | Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`. This is the default. |
 
-The setting is read on every call, so a change applies to a connected client at its next call without
-reconnecting. Every other Host command is refused to MCP clients whatever the setting says.
+**Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
+`create_session` also need **Let MCP clients see and use sessions** (Settings, CLI tab), which is off
+by default: they reach every session Astera holds, the person's own terminals included. With it on,
+the two reads follow "Read only" and the two writes need "Read and control"; with it off, each is
+refused with `PERMISSION_DENIED` naming the setting. Two refusals hold whatever the settings say:
+`send_message` into a terminal session waiting on a permission prompt or a question, or a chat
+session holding an approval or a question open, is refused with `CONFLICT` and nothing is typed (a
+person answers those in Astera; no MCP tool answers a prompt), and `create_session` starts a session
+only in a registered project's folder. A Codex terminal writes no hook events, so whether it waits
+on a prompt is not known and it is not refused.
+
+Both settings are read on every call, so a change applies to a connected client at its next call without
+reconnecting. Every other Host command is refused to MCP clients whatever the settings say.
 
 **The Job Journal records which client acted.** What an MCP client does is journalled as surface
 `mcp`, with the client's name and version as its MCP `initialize` request gave them (for example
@@ -262,7 +280,11 @@ a field with nothing left.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
   results, questions, answers, review issues and suggested fixes, failure summaries, error messages)
   is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
-- Raw check output is not returned. `list_tasks` and `get_task` carry each check's status and exit
+- Session and output text is redacted the same way: every screen and scrollback row, every turn's
+  text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
+  every line of `get_task_output`. `total` and `offset` of `get_check_output` count the log before
+  redaction.
+- Raw check output is not returned by the Job tools. `list_tasks` and `get_task` carry each check's status and exit
   code without its log, and so does `get_completion`. The one exception is `get_completion`'s
   `failureSummary` and `lastFailure`: they carry each failed check's last output line, cut to 200
   characters and redacted like the rest of the free text. `failureSummary` is the same line

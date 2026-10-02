@@ -15,7 +15,8 @@ import type { HostLink } from './hostLink'
 const TOOLS = [
   'list_projects', 'get_project', 'list_accounts', 'list_jobs', 'get_job', 'create_job', 'run_job',
   'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
-  'get_completion', 'create_task', 'list_run_configs'
+  'get_completion', 'create_task', 'list_run_configs',
+  'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output'
 ]
 
 async function connected(link: HostLink) {
@@ -76,7 +77,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the eighteen tools', async () => {
+  it('lists exactly the twenty-four tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -754,5 +755,290 @@ describe('the MCP server', () => {
     const answer = s.lines.map((l) => JSON.parse(l)).find((m) => m.id === 2)
     expect(answer?.result?.structuredContent).toMatchObject({ id: 'run_1' })
     expect(closed).toBe(true)
+  })
+})
+
+describe('the session and output tools (MCP P1)', () => {
+  const SK = 'sk-abcdefghijklmnopqrstuvwxyz0123456789'
+  const BEARER = 'abcDEF123ghiJKL456mnoPQR789'
+  const PROJECT = { 'projects-get': { status: 200, body: { id: 'p1', name: 'Astera', path: 'D:/repo', addedAt: 'x' } } }
+  const ACCOUNTS = {
+    'accounts-list': {
+      status: 200,
+      body: [
+        { id: 'acc_c1', label: 'c1', provider: 'claude' },
+        { id: 'acc_c2', label: 'c2', provider: 'claude', default: true },
+        { id: 'acc_x1', label: 'x1', provider: 'codex', default: true }
+      ]
+    }
+  }
+
+  it('marks the four reads read-only and the two writes not', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    for (const name of ['list_sessions', 'get_session', 'get_check_output', 'get_task_output'])
+      expect(tools.find((t) => t.name === name)?.annotations?.readOnlyHint, name).toBe(true)
+    for (const name of ['send_message', 'create_session'])
+      expect(tools.find((t) => t.name === name)?.annotations?.readOnlyHint, name).toBe(false)
+  })
+
+  it('says in each description what it needs, and how send_message and get_task_output behave', async () => {
+    const { tools } = await (await connected(answering({}).link)).listTools()
+    const d = (name: string): string => String(tools.find((t) => t.name === name)?.description)
+    for (const name of ['list_sessions', 'get_session', 'send_message', 'create_session'])
+      expect(d(name), name).toContain('Let MCP clients see and use sessions')
+    for (const name of ['list_sessions', 'get_session', 'get_check_output', 'get_task_output']) expect(d(name), name).toContain('Read only')
+    for (const name of ['send_message', 'create_session']) expect(d(name), name).toContain('Read and control')
+    expect(d('send_message')).toMatch(/returns as soon as the text is accepted/)
+    expect(d('send_message')).toContain('get_session')
+    expect(d('get_task_output')).toMatch(/only while the process that started the worker runs/)
+  })
+
+  it('sends each tool as its Host command with the keys its handler reads', async () => {
+    const cases: Array<[string, Record<string, unknown>, string, Record<string, unknown>]> = [
+      ['list_sessions', {}, 'sessions-list', {}],
+      ['list_sessions', { status: 'waiting', provider: 'codex' }, 'sessions-list', { status: 'waiting', provider: 'codex' }],
+      ['get_session', { sessionId: 's1', lines: 30 }, 'sessions-read', { id: 's1', lines: 30 }],
+      ['get_session', { sessionId: 's1', turns: 5 }, 'sessions-read', { id: 's1', turns: 5 }],
+      ['send_message', { sessionId: 's1', text: 'hello' }, 'sessions-send', { id: 's1', text: 'hello' }],
+      ['get_check_output', { taskId: 't1' }, 'tasks-check-output', { id: 't1' }],
+      ['get_check_output', { taskId: 't1', check: 'test', offset: 10, limit: 20 }, 'tasks-check-output', { id: 't1', check: 'test', offset: 10, limit: 20 }],
+      ['get_task_output', { taskId: 't1' }, 'tasks-output', { id: 't1' }],
+      ['get_task_output', { taskId: 't1', skipLines: 200, lines: 50 }, 'tasks-output', { id: 't1', skipLines: 200, lines: 50 }]
+    ]
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    for (const [name, input, cmd, args] of cases) {
+      const r = await client.callTool({ name, arguments: input })
+      expect(r.isError, `${name} ${JSON.stringify(r.content)}`).toBeFalsy()
+      expect(calls.at(-1), name).toEqual({ cmd, args, request: undefined })
+    }
+  })
+
+  it('list_sessions with a projectId filters by the project folder', async () => {
+    const { link, calls } = answering(PROJECT)
+    await (await connected(link)).callTool({ name: 'list_sessions', arguments: { projectId: 'p1' } })
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['projects-get', { id: 'p1' }],
+      ['sessions-list', { project: 'D:/repo' }]
+    ])
+  })
+
+  it('list_sessions lists live sessions first and pages like every list tool', async () => {
+    const rows = [1, 2, 3].map((i) => ({ id: `s${i}`, kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/repo', alive: i !== 1, state: 'unknown' }))
+    const client = await connected(answering({ 'sessions-list': { status: 200, body: rows } }).link)
+    const r = await client.callTool({ name: 'list_sessions', arguments: { limit: 2 } })
+    const data = r.structuredContent as { sessions: Array<{ id: string }>; truncated?: boolean; nextCursor?: string }
+    expect(data.sessions.map((s) => s.id)).toEqual(['s2', 's3'])
+    expect(data).toMatchObject({ truncated: true, total: 3 })
+    const next = await client.callTool({ name: 'list_sessions', arguments: { limit: 2, cursor: data.nextCursor } })
+    expect((next.structuredContent as { sessions: Array<{ id: string }> }).sessions.map((s) => s.id)).toEqual(['s1'])
+  })
+
+  // The Host refuses `--lines` for a chat session and defaults a terminal to 200 rows; MCP's terminal
+  // default is 100, so with neither bound given the session's kind is read first.
+  it('get_session with no bound reads a terminal session at 100 rows and a chat at the Host default', async () => {
+    const sessions = [
+      { id: 's1', kind: 'terminal', alive: true },
+      { id: 's2', kind: 'chat', alive: true }
+    ]
+    const { link, calls } = answering({ 'sessions-list': { status: 200, body: sessions } })
+    const client = await connected(link)
+    await client.callTool({ name: 'get_session', arguments: { sessionId: 's1' } })
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['sessions-list', {}],
+      ['sessions-read', { id: 's1', lines: 100 }]
+    ])
+    calls.length = 0
+    await client.callTool({ name: 'get_session', arguments: { sessionId: 's2' } })
+    expect(calls.at(-1)?.args).toEqual({ id: 's2' })
+    // An id the list does not have is the read's own NOT_FOUND.
+    calls.length = 0
+    await client.callTool({ name: 'get_session', arguments: { sessionId: 's9' } })
+    expect(calls.at(-1)).toEqual({ cmd: 'sessions-read', args: { id: 's9' }, request: undefined })
+  })
+
+  it('bounds get_session, send_message, get_check_output and get_task_output before calling the Host', async () => {
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    for (const [name, input] of [
+      ['get_session', { sessionId: 's1', lines: 0 }],
+      ['get_session', { sessionId: 's1', lines: 501 }],
+      ['get_session', { sessionId: 's1', turns: 0 }],
+      ['get_session', { sessionId: 's1', turns: 51 }],
+      ['send_message', { sessionId: 's1', text: '' }],
+      ['send_message', { sessionId: 's1', text: 'x'.repeat(50_001) }],
+      ['get_check_output', { taskId: 't1', limit: 0 }],
+      ['get_check_output', { taskId: 't1', limit: 4001 }],
+      ['get_check_output', { taskId: 't1', offset: -1 }],
+      ['get_task_output', { taskId: 't1', lines: 0 }],
+      ['get_task_output', { taskId: 't1', lines: 501 }],
+      ['get_task_output', { taskId: 't1', skipLines: -1 }]
+    ] as const) {
+      const r = await client.callTool({ name, arguments: input })
+      expect(r.isError, `${name} ${JSON.stringify(input).slice(0, 80)}`).toBe(true)
+    }
+    expect(calls).toEqual([])
+    for (const [name, input] of [
+      ['get_session', { sessionId: 's1', lines: 500 }],
+      ['get_session', { sessionId: 's1', turns: 50 }],
+      ['send_message', { sessionId: 's1', text: 'x'.repeat(50_000) }],
+      ['get_check_output', { taskId: 't1', limit: 4000 }],
+      ['get_task_output', { taskId: 't1', lines: 500 }]
+    ] as const)
+      expect((await client.callTool({ name, arguments: input })).isError, name).toBeFalsy()
+  })
+
+  it('send_message passes the requestId on and never waits or holds back Enter', async () => {
+    const { link, calls } = answering({ 'sessions-send': { status: 200, body: { id: 's1', sent: true, enter: true } } })
+    const r = await (await connected(link)).callTool({
+      name: 'send_message',
+      arguments: { sessionId: 's1', text: 'go', requestId: 'rq-s', wait: true, noEnter: true }
+    })
+    expect(calls).toEqual([{ cmd: 'sessions-send', args: { id: 's1', text: 'go' }, request: 'rq-s' }])
+    expect(r.structuredContent).toEqual({ id: 's1', sent: true, enter: true })
+  })
+
+  it('a send refused because the session waits on a prompt comes back as CONFLICT with no structuredContent', async () => {
+    const error = 's1 is waiting on a permission prompt, and text sent from an MCP client would answer it; nothing was sent.'
+    const r = await (await connected(answering({ 'sessions-send': { status: 409, body: { error } } }).link)).callTool({
+      name: 'send_message',
+      arguments: { sessionId: 's1', text: 'yes' }
+    })
+    expect(r.isError).toBe(true)
+    expect(r.structuredContent).toBeUndefined()
+    expect(errorOf(r)).toMatchObject({ code: 'CONFLICT', message: error })
+  })
+
+  it("create_session starts in the project's folder on the provider's default account", async () => {
+    const { link, calls } = answering({
+      ...PROJECT,
+      ...ACCOUNTS,
+      'sessions-create': { status: 200, body: { id: 's9', kind: 'chat', title: 'x', accountId: 'acc_c2', cwd: 'D:/repo', alive: true, state: 'unknown' } }
+    })
+    const client = await connected(link)
+    const r = await client.callTool({
+      name: 'create_session',
+      arguments: { projectId: 'p1', kind: 'chat', title: 'x', prompt: 'hi', requestId: 'rq-c' }
+    })
+    expect(r.isError, JSON.stringify(r.content)).toBeFalsy()
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['projects-get', { id: 'p1' }],
+      ['accounts-list', { agent: 'claude' }],
+      ['sessions-create', { account: 'acc_c2', cwd: 'D:/repo', kind: 'chat', title: 'x', prompt: 'hi' }]
+    ])
+    expect(calls.at(-1)?.request).toBe('rq-c')
+    expect(r.structuredContent).toMatchObject({ id: 's9', cwd: 'D:/repo' })
+    calls.length = 0
+    await client.callTool({ name: 'create_session', arguments: { projectId: 'p1', provider: 'codex' } })
+    expect(calls.slice(1).map((c) => [c.cmd, c.args])).toEqual([
+      ['accounts-list', { agent: 'codex' }],
+      ['sessions-create', { account: 'acc_x1', cwd: 'D:/repo' }]
+    ])
+    // An explicit account is sent as it is; no default is looked up.
+    calls.length = 0
+    await client.callTool({ name: 'create_session', arguments: { projectId: 'p1', accountId: 'acc_c1', kind: 'terminal' } })
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['projects-get', { id: 'p1' }],
+      ['sessions-create', { account: 'acc_c1', cwd: 'D:/repo', kind: 'terminal' }]
+    ])
+  })
+
+  it('create_session with no default account for the provider is INVALID_ARGUMENTS, and starts nothing', async () => {
+    const { link, calls } = answering({ ...PROJECT, 'accounts-list': { status: 200, body: [{ id: 'acc_c1', label: 'c1', provider: 'claude' }] } })
+    const r = await (await connected(link)).callTool({ name: 'create_session', arguments: { projectId: 'p1' } })
+    expect(r.isError).toBe(true)
+    expect(errorOf(r)).toMatchObject({ code: 'INVALID_ARGUMENTS', message: expect.stringContaining('accountId') })
+    expect(calls.map((c) => c.cmd)).toEqual(['projects-get', 'accounts-list'])
+  })
+
+  it('create_session with an unknown project is NOT_FOUND, and starts nothing', async () => {
+    const { link, calls } = answering({ 'projects-get': { status: 404, body: { error: 'unknown project: p9' } } })
+    const r = await (await connected(link)).callTool({ name: 'create_session', arguments: { projectId: 'p9' } })
+    expect(errorOf(r)).toMatchObject({ code: 'NOT_FOUND', message: 'unknown project: p9' })
+    expect(calls.map((c) => c.cmd)).toEqual(['projects-get'])
+  })
+
+  it('get_session redacts a token in every text field of a terminal and a chat read', async () => {
+    const leak = `key ${SK} and Bearer ${BEARER}`
+    const terminal = { id: 's1', kind: 'terminal', alive: true, cols: 80, rows: 24, screen: ['ok', leak], scrollback: [leak, 'old'] }
+    const chat = {
+      id: 's2',
+      kind: 'chat',
+      alive: true,
+      turns: [
+        { role: 'user', text: leak, tools: [] },
+        { role: 'assistant', text: 'fine', tools: [`Bash ${leak}`, { name: 'Read', input: leak }] }
+      ],
+      pending: { kind: 'approval', summary: leak }
+    }
+    const client = await connected(
+      answering({ 'sessions-read': { status: 200, body: terminal } }).link
+    )
+    const t = await client.callTool({ name: 'get_session', arguments: { sessionId: 's1', lines: 10 } })
+    const c = await (await connected(answering({ 'sessions-read': { status: 200, body: chat } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's2', turns: 5 }
+    })
+    for (const r of [t, c]) {
+      const text = textOf(r)
+      expect(text).not.toContain(SK)
+      expect(text).not.toContain(BEARER)
+      expect(JSON.stringify(r.structuredContent)).not.toContain(SK)
+      expect(JSON.stringify(r.structuredContent)).not.toContain(BEARER)
+    }
+    const td = t.structuredContent as { screen: string[]; scrollback: string[] }
+    expect(td.screen[0]).toBe('ok')
+    expect(td.screen[1]).toContain('key ')
+    expect(td.scrollback[1]).toBe('old')
+    const cd = c.structuredContent as { turns: Array<{ text: string; tools: unknown[] }>; pending: { kind: string; summary: string } }
+    expect(cd.turns[1].text).toBe('fine')
+    expect(cd.turns[1].tools[0]).toContain('Bash key ')
+    expect(cd.pending.kind).toBe('approval')
+  })
+
+  it('get_check_output and get_task_output redact their text', async () => {
+    const leak = `token: ${SK} Bearer ${BEARER}`
+    const client = await connected(
+      answering({
+        'tasks-check-output': { status: 200, body: { taskId: 't1', check: 'test', total: 99, offset: 0, text: `fail\n${leak}` } },
+        'tasks-output': {
+          status: 200,
+          body: { taskId: 't1', dispatchId: 'd1', recorded: true, totalLines: 3, more: false, lines: ['a', leak, 'c'] }
+        }
+      }).link
+    )
+    const check = await client.callTool({ name: 'get_check_output', arguments: { taskId: 't1' } })
+    const out = await client.callTool({ name: 'get_task_output', arguments: { taskId: 't1' } })
+    for (const r of [check, out]) {
+      expect(textOf(r)).not.toContain(SK)
+      expect(textOf(r)).not.toContain(BEARER)
+    }
+    expect(check.structuredContent).toMatchObject({ taskId: 't1', check: 'test', total: 99, offset: 0 })
+    expect((check.structuredContent as { text: string }).text.startsWith('fail\n')).toBe(true)
+    const lines = (out.structuredContent as { lines: string[] }).lines
+    expect(lines).toHaveLength(3)
+    expect([lines[0], lines[2]]).toEqual(['a', 'c'])
+    expect(out.structuredContent).toMatchObject({ dispatchId: 'd1', recorded: true, totalLines: 3, more: false })
+  })
+
+  it('get_task_output after a restart answers recorded: false, not an error', async () => {
+    const body = { taskId: 't1', dispatchId: 'd1', recorded: false, totalLines: 0, more: false, lines: [] }
+    const r = await (await connected(answering({ 'tasks-output': { status: 200, body } }).link)).callTool({
+      name: 'get_task_output',
+      arguments: { taskId: 't1' }
+    })
+    expect(r.isError).toBeFalsy()
+    expect(r.structuredContent).toEqual(body)
+  })
+
+  it('a session tool refused by the setting carries the Host message and no structuredContent', async () => {
+    const error = 'sessions-list is off: turn on "Let MCP clients see and use sessions" in Astera Settings (CLI tab).'
+    const r = await (await connected(answering({ 'sessions-list': { status: 403, body: { error } } }).link)).callTool({
+      name: 'list_sessions',
+      arguments: {}
+    })
+    expect(r.isError).toBe(true)
+    expect(r.structuredContent).toBeUndefined()
+    expect(errorOf(r)).toMatchObject({ code: 'PERMISSION_DENIED', message: error })
   })
 })

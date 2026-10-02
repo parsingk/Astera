@@ -119,7 +119,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'mcp-serve': {
     summary: 'serve Astera to an MCP client over stdio',
     detail:
-      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves eighteen tools that create, plan, run, observe, answer, stop and resume Jobs. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
+      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves twenty-four tools that create, plan, run, observe, answer, stop and resume Jobs, and read and use sessions when Settings allows it. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
   },
   'mcp-status': {
     summary: 'would mcp serve work here: the Host, MCP access and the tool count',

@@ -33,6 +33,18 @@ describe('orderAndCut', () => {
     expect(list.map((r) => (r as { id: string }).id)).toEqual(['x0', 'x1', 'x2'])
   })
 
+  // A session carries no timestamp in its public shape, so the order is live ones first, then the
+  // Host's registry order (terminals, then chats, each in spawn order).
+  it('list_sessions puts live sessions first and otherwise keeps the Host order', () => {
+    const given = [
+      { id: 's1', alive: false },
+      { id: 's2', alive: true },
+      { id: 's3', alive: false },
+      { id: 's4', alive: true }
+    ]
+    expect(orderAndCut('list_sessions', given, 50).list.map((r) => (r as { id: string }).id)).toEqual(['s2', 's4', 's1', 's3'])
+  })
+
   it('list_tasks, list_projects and list_accounts keep the Host order', () => {
     const given = rows(3).reverse()
     for (const tool of ['list_tasks', 'list_projects', 'list_accounts'])
