@@ -1,7 +1,7 @@
 // The app's side of How It Works since the Host writes it (E1 §2, §4): a real store and pipeline over a
 // real understanding.json, with only the agent faked, so what reaches the file is what the app would
 // leave there.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -274,6 +274,43 @@ describe('createAppUnderstanding: the switch', () => {
     expect(m.store.get(root)?.records.find((r) => r.id === local.id)?.status).toBe('generating')
   })
 
+  it('the handover waits for the save of the generating record, so the Host finds it in the file', async () => {
+    const hold = deferred()
+    // The app's save of its generating record is held at its rename: set in memory, not on disk yet.
+    const renamed = deferred()
+    const landed = deferred()
+    const rename = fs.rename
+    const spy = vi.spyOn(fs, 'rename').mockImplementationOnce(async (...args: Parameters<typeof rename>) => {
+      renamed.resolve()
+      await landed.promise
+      return rename(...args)
+    })
+    const seen: Array<{ cmd: string; ids: string[] }> = []
+    try {
+      const m = await make(
+        {
+          orchCall: async (cmd) => {
+            seen.push({ cmd, ids: (await onDisk()).map((r) => r.id) })
+            return { status: 200, body: { id: 'x', status: 'generating' } }
+          }
+        },
+        { hold: hold.promise }
+      )
+      void m.u.onUnitClosed(root, unit())
+      await renamed.promise
+      const id = m.store.get(root)!.records[0].id
+      const greeting = m.greet(true)
+      await new Promise((r) => setTimeout(r, 30))
+      expect(seen).toEqual([])
+      landed.resolve()
+      await greeting
+      expect(seen).toEqual([{ cmd: 'understanding-regenerate', ids: [id] }])
+      hold.resolve()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('a unit queued behind the one in flight is handed to the Host as understanding-unit, not lost', async () => {
     const hold = deferred()
     const m = await make({}, { hold: hold.promise })
@@ -305,10 +342,19 @@ describe('createAppUnderstanding: the switch', () => {
 
   it('a unit already in the pipeline whose record is not saved yet is handed over as a unit', async () => {
     const m = await make()
+    // The pipeline's prepend is held in its refresh: the step has left the waiting list, no record is set.
+    const entered = deferred()
+    const release = deferred()
+    const refresh = m.store.refresh.bind(m.store)
+    m.store.refresh = async () => {
+      entered.resolve()
+      await release.promise
+      return refresh()
+    }
     const p = m.u.onUnitClosed(root, unit())
-    // A few turns: the step has left the waiting list for the pipeline, whose prepend still reads the file.
-    for (let i = 0; i < 6; i++) await Promise.resolve()
+    await entered.promise
     await m.greet(true)
+    release.resolve()
     await p
     await new Promise((r) => setTimeout(r, 30))
     expect(m.calls).toEqual([{ cmd: 'understanding-unit', args: { projectPath: root, unit: unit() } }])

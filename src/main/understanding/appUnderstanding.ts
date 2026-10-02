@@ -181,14 +181,20 @@ export function createAppUnderstanding(d: AppUnderstandingDeps): AppUnderstandin
   }
 
   /** Writer to reader, in the greeting's own turn. */
-  const yieldToHost = (): Promise<void> => {
+  const yieldToHost = async (): Promise<void> => {
     d.localStore.gate(true)
     mode = 'reader'
-    const sends: Array<Promise<void>> = d.localStore.ownGenerating().map((g) => handOver(g.projectPath, g.recordId))
+    const own = d.localStore.ownGenerating()
     // The pipeline took this step but has not started its record: the Host is handed the step instead.
-    if (inPipeline && d.localStore.started === inPipeline.started) sends.push(handStep(inPipeline.step))
-    for (const w of waiting.splice(0)) sends.push(handStep(w.step).then(w.done))
-    return Promise.all(sends).then(() => {})
+    const held = inPipeline && d.localStore.started === inPipeline.started ? inPipeline.step : null
+    const queued = waiting.splice(0)
+    // The saves queued before the gate closed land first: the Host looks a handed-over record up in the
+    // file, and would answer 404 for one still only in this app's memory.
+    await d.localStore.settled()
+    const sends: Array<Promise<void>> = own.map((g) => handOver(g.projectPath, g.recordId))
+    if (held) sends.push(handStep(held))
+    for (const w of queued) sends.push(handStep(w.step).then(w.done))
+    await Promise.all(sends)
   }
 
   return {

@@ -72,6 +72,11 @@ export class UnderstandingStore {
     return true
   }
 
+  /** Resolves once every save queued so far has landed (or failed). Never rejects. */
+  settled(): Promise<void> {
+    return this.queue.catch(() => {})
+  }
+
   get(projectPath: string): ProjectUnderstanding | undefined {
     return this.state.projects[projectPath]
   }
