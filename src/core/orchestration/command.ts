@@ -4399,7 +4399,9 @@ export async function handleCommand(
       try {
         changed = (await g.isClean(t.cwd)).changedCount
       } catch (err) {
-        return conflict(`Could not read the Run's worktree: ${err instanceof Error ? err.message : String(err)}`)
+        // isCleanWorktree's code prefix belongs to the worktree-remove path, and reads wrong here.
+        const why = (err instanceof Error ? err.message : String(err)).replace(/^GIT_REMOVE_FAILED: /, '')
+        return conflict(`Could not read the Run's worktree: ${why}`)
       }
       if (changed > 0) return conflict(`The Run's worktree has ${changed} uncommitted changes`)
       const base = baseArg ?? t.baseRef

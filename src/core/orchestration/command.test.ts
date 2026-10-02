@@ -8639,7 +8639,7 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       const { deps, asked } = await prSetup({ changed: new Error('GIT_REMOVE_FAILED: status check failed (not a git repository)') })
       expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
         status: 409,
-        body: { error: "Could not read the Run's worktree: GIT_REMOVE_FAILED: status check failed (not a git repository)" }
+        body: { error: "Could not read the Run's worktree: status check failed (not a git repository)" }
       })
       expect(asked.createPr).toEqual([])
     })
