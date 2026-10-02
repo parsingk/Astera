@@ -1397,6 +1397,24 @@ describe('the GitHub tools (MCP P2-B)', () => {
     expect(textOf(ci.r)).not.toContain(PAT)
   })
 
+  it("redacts a secret in a pull request's title, and leaves its url and branch as they are", async () => {
+    const { r } = await call(
+      'get_pr_status',
+      { projectId: 'p1', branch: 'u/a' },
+      {
+        'github-pr': {
+          status: 200,
+          body: { branch: 'u/a', pr: { number: 12, title: `Add a ${PAT}`, state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+        }
+      }
+    )
+    const p = r.structuredContent as { branch: string; pr: Record<string, unknown> }
+    expect(JSON.stringify(p)).not.toContain(PAT)
+    expect(p.pr.title).toBe('Add a [REDACTED]')
+    expect(p.pr.url).toBe('https://github.com/o/r/pull/12')
+    expect(p.branch).toBe('u/a')
+  })
+
   it("redacts a secret in the Host's error text: a gh stderr echoed in a refusal", async () => {
     const { r } = await call(
       'create_pr',
