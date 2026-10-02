@@ -193,6 +193,14 @@ export class UnderstandingPipeline {
     })
   }
 
+  /** Sets one record to `generating`, **outside the queue**: a caller that answers "generating" at once
+   *  (the Host's regenerate, E1 §5) makes the file say so before its answer, while regenerate's own fill
+   *  may wait behind another generation. Through patch, so it starts from the file. A record that is not
+   *  there is left alone. */
+  markGenerating(projectRoot: string, recordId: string): Promise<void> {
+    return this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))
+  }
+
   /** The agent round trip and everything that hangs on its answer. */
   private async fill(projectRoot: string, recordId: string, commits: string[]): Promise<void> {
     const ready = this.agentContext()

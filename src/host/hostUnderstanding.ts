@@ -272,6 +272,13 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
         d.log(`understanding: app-settings.json or accounts.json could not be read, record ${recordId} is not regenerated: ${message(err)}`)
         return { ok: false, status: 500, error: `the settings could not be read: ${message(err)}` }
       }
+      // The answer says `generating`: the file says so first, since the fill may be queued behind another
+      // generation. A write failure is logged, the fill still queued.
+      try {
+        await pipeline.markGenerating(root, recordId)
+      } catch (err) {
+        d.log(`understanding: record ${recordId} could not be marked generating: ${message(err)}`)
+      }
       void pipeline.regenerate(root, recordId)
       return { ok: true, id: recordId }
     }

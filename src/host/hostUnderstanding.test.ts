@@ -336,6 +336,32 @@ describe('createHostUnderstanding', () => {
     await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
   })
 
+  // Final review item 3: the answer says `generating`, so the file must say so by then, even when the
+  // fill waits in the queue behind another generation.
+  it('regenerate marks the record generating before it answers, while another generation is in progress', async () => {
+    await settings(ON)
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [hostRecord('r1')] } } }))
+    const agentIn = deferred()
+    const agentGo = deferred()
+    const { u } = make({
+      runAgent: async () => {
+        agentIn.resolve()
+        await agentGo.promise
+        return { ok: true, value: explanation }
+      }
+    })
+    await u.load()
+    try {
+      await u.onUnitClosed(project, unit())
+      await agentIn.promise
+      await expect(u.regenerate(project, 'r1')).resolves.toEqual({ ok: true, id: 'r1' })
+      expect((await recordsOnDisk(project)).find((r) => r.id === 'r1')?.status).toBe('generating')
+    } finally {
+      agentGo.resolve()
+    }
+    await vi.waitFor(async () => expect((await recordsOnDisk(project)).every((r) => r.status === 'ready')).toBe(true))
+  })
+
   // The app's late save lands after a pipeline save that declined regenerate's refresh (the write counter):
   // one more refresh reads it before the answer is a 404.
   it('regenerate refreshes once more when its refresh was declined, and finds a record an app saved meanwhile', async () => {
