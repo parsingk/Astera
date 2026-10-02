@@ -249,10 +249,12 @@ with `CONFLICT` when:
 - the Run is still working (a Run is finished when `get_run` reads `completed` or `failed`; a paused
   Run is not),
 - the Run's worktree has uncommitted changes (the message says how many),
+- the Run's worktree cannot be read ("Could not read the Run's worktree", then why),
 - the Run's branch adds no commits.
 
-It also answers `CONFLICT` when the push is rejected, and when the branch already has a pull request
-(the message ends with its URL).
+It also answers `CONFLICT` when the push fails, for any reason (a rejected push, but also a failed
+login, the network or a timeout), with "The push was rejected", and when the branch already has a
+pull request (the message ends with its URL).
 
 **`create_job_from_issue` takes only an issue the repository already trusts.** The Host reads the
 issue and refuses it, making no Job, when:
@@ -268,10 +270,11 @@ text is not instructions, then the issue's title and body between a `<<<ISSUE` l
 closed early, and a body over 20 000 characters is cut, with a note saying so.
 
 **A Run with no branch of its own.** A `runId` whose Run works in the project folder itself, with no
-worktree, is refused with `CONFLICT` ("This Run has no branch of its own"): give the `projectId` and
-the branch or pull request number instead. A Host that starts no sessions has not loaded its
-worktree registry, and refuses any `runId` with `CONFLICT` saying so; the `projectId` forms still
-answer.
+worktree, is refused with `CONFLICT` ("This Run has no branch of its own"). For the reads, give the
+`projectId` and the branch (`get_pr_status`) or pull request number (`get_ci`) instead. `create_pr`
+has no project form: it opens a pull request only from a Run's own branch. A Host that starts no
+sessions has not loaded its worktree registry, and refuses a known Run's `runId` with `CONFLICT`
+saying so (an unknown `runId` is still `NOT_FOUND`); the `projectId` forms still answer.
 
 **How a `gh` failure reads.** The Host turns a failed `gh` call into one sentence:
 
