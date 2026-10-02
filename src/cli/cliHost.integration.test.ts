@@ -1852,5 +1852,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     for (const e of after.events) expect(before.has(`${e.kind}:${e.sourceId}`), `${e.kind}:${e.sourceId}`).toBe(false)
     expect(after.events).toContainEqual(expect.objectContaining({ kind: 'gate-opened', sourceId: questionId }))
     expect(after.ending).toMatchObject({ runId, state: 'waiting', questionId })
+
+    // The seen from that answer and nothing new since: no events. The Run still waits on its question,
+    // so the ending comes back at once rather than at the window.
+    const last = await mcp.call('wait_for_run', { runId, seen: after.seen, waitSeconds: 1 })
+    expect(last.isError, last.content[0]?.text).toBeFalsy()
+    expect(last.structuredContent).toMatchObject({ runId, seen: after.seen, events: [], ending: { state: 'waiting', questionId } })
   })
 })

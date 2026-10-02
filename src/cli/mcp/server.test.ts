@@ -1691,7 +1691,82 @@ describe('wait_for_run (MCP P2-D)', () => {
     expect(d).toMatch(/ending/)
     expect(d).toMatch(/question/)
     expect(d).toMatch(/empty events and ending: null/)
+    expect(d).toMatch(/NOT_FOUND means the Run was deleted, so stop/)
     // get_run no longer tells the agent to poll it instead of waiting.
     expect(String(tools.find((t) => t.name === 'get_run')?.description)).toContain('wait_for_run')
+  })
+
+  it('a late row that sorts before an event already sent still reaches the same client: the server remembers what it sent', async () => {
+    const answers: Record<string, { status: number; body: unknown }> = {}
+    const { link } = answering(answers)
+    const client = await connected(link)
+    const wait = async (args: Record<string, unknown>) =>
+      (await client.callTool({ name: 'wait_for_run', arguments: args })).structuredContent as { seen: number; events: Array<{ sourceId: string }> }
+    // e2 is written after e1 and e3 were sent, with a time between theirs (a journal row served late).
+    answers['runs-follow'] = { status: 200, body: page({ count: 2, events: [event(1), event(3)] }) }
+    const first = await wait({ runId: 'r1' })
+    expect(first.events.map((e) => e.sourceId)).toEqual(['m1', 'm3'])
+    answers['runs-follow'] = { status: 200, body: page({ count: 3, events: [event(1), event(2), event(3)] }) }
+    const second = await wait({ runId: 'r1', seen: first.seen })
+    expect(second).toMatchObject({ seen: 3, events: [event(2)] })
+    // And the next new one after it, by the same memory.
+    answers['runs-follow'] = { status: 200, body: page({ count: 4, events: [event(1), event(2), event(3), event(4)] }) }
+    expect((await wait({ runId: 'r1', seen: 3 })).events).toEqual([event(4)])
+  })
+
+  it('a seen the server did not hand out falls back to the cut at seen, and the memory starts again from that answer', async () => {
+    const answers: Record<string, { status: number; body: unknown }> = {}
+    const client = await connected(answering(answers).link)
+    const wait = async (args: Record<string, unknown>) =>
+      (await client.callTool({ name: 'wait_for_run', arguments: args })).structuredContent as { seen: number; events: unknown[] }
+    // A seen from elsewhere (another session, a restarted server): the Host's order, cut at seen.
+    answers['runs-follow'] = { status: 200, body: page({ count: 3, events: [event(1), event(2), event(3)] }) }
+    expect((await wait({ runId: 'r1', seen: 2 })).events).toEqual([event(3)])
+    // That answer reset the memory to the whole timeline, so a late row after it is found.
+    answers['runs-follow'] = { status: 200, body: page({ count: 4, events: [event(1), event(2), event(0), event(3)] }) }
+    expect((await wait({ runId: 'r1', seen: 3 })).events).toEqual([event(0)])
+    // A seen that disagrees with the memory is the cut again.
+    expect((await wait({ runId: 'r1', seen: 1 })).events).toEqual([event(2), event(0), event(3)])
+  })
+
+  it('an empty answer leaves the memory as it was', async () => {
+    const answers: Record<string, { status: number; body: unknown }> = {}
+    const client = await connected(answering(answers).link)
+    const wait = async (args: Record<string, unknown>) =>
+      (await client.callTool({ name: 'wait_for_run', arguments: args })).structuredContent as { seen: number; events: unknown[] }
+    answers['runs-follow'] = { status: 200, body: page({ count: 2, events: [event(1), event(3)] }) }
+    await wait({ runId: 'r1' })
+    answers['runs-follow'] = { status: 200, body: page({ count: 2, events: [] }) }
+    expect((await wait({ runId: 'r1', seen: 2 })).events).toEqual([])
+    answers['runs-follow'] = { status: 200, body: page({ count: 3, events: [event(1), event(2), event(3)] }) }
+    expect((await wait({ runId: 'r1', seen: 2 })).events).toEqual([event(2)])
+  })
+
+  it('remembers the last 50 Runs only: an older one falls back to the cut', async () => {
+    const answers: Record<string, { status: number; body: unknown }> = {}
+    const client = await connected(answering(answers).link)
+    const wait = async (runId: string, seen?: number) =>
+      (await client.callTool({ name: 'wait_for_run', arguments: { runId, ...(seen === undefined ? {} : { seen }) } })).structuredContent as {
+        events: unknown[]
+      }
+    const two = (runId: string) => ({ status: 200, body: page({ runId, count: 2, events: [event(1), event(3)] }) })
+    const three = (runId: string) => ({ status: 200, body: page({ runId, count: 3, events: [event(1), event(2), event(3)] }) })
+    answers['runs-follow'] = two('r0')
+    await wait('r0')
+    answers['runs-follow'] = two('keep')
+    await wait('keep')
+    for (let i = 1; i <= 49; i++) {
+      answers['runs-follow'] = two(`r${i}`)
+      await wait(`r${i}`)
+      // 'keep' is used again each time, so it stays among the newest.
+      if (i === 25) {
+        answers['runs-follow'] = { status: 200, body: page({ runId: 'keep', count: 2, events: [] }) }
+        await wait('keep', 2)
+      }
+    }
+    answers['runs-follow'] = three('r0')
+    expect((await wait('r0', 2)).events).toEqual([event(3)])
+    answers['runs-follow'] = three('keep')
+    expect((await wait('keep', 2)).events).toEqual([event(2)])
   })
 })
