@@ -1,7 +1,8 @@
 // The Host's How It Works pipeline (E1 §2, §3): the core store and pipeline, behind the writer rule.
 // Real store file, real settings file, real validation; only the agent is fake (the runAgent seam).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
+import { promises as fsp } from 'node:fs'
 import os from 'node:os'
 import net from 'node:net'
 import path from 'node:path'
@@ -22,7 +23,8 @@ let project: string
 let worktree: string
 const file = (): string => path.join(dir, 'understanding.json')
 const settings = (o: Record<string, unknown>): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify(o))
-const onDisk = async (): Promise<StoreShape> => JSON.parse(await fs.readFile(file(), 'utf8')) as StoreShape
+// Read synchronously, so a spy on the promise API sees only the store's own reads.
+const onDisk = async (): Promise<StoreShape> => JSON.parse(readFileSync(file(), 'utf8')) as StoreShape
 const recordsOnDisk = async (root: string): Promise<WorkRecord[]> => {
   try {
     return (await onDisk()).projects[root]?.records ?? []
@@ -287,6 +289,91 @@ describe('createHostUnderstanding', () => {
     await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
     const runs = (await recordsOnDisk(project)).map((r) => (r.source.kind === 'job' ? r.source.runId : ''))
     expect(runs).toEqual(['run-3', 'app-run', 'run-1'])
+  })
+
+  /** What an older app does to the file while it is the writer: adds its own record on top. */
+  const appWrites = async (id: string): Promise<void> => {
+    const s = await onDisk()
+    const base = s.projects[project].records[0]
+    s.projects[project].records.unshift({ ...base, id, source: { kind: 'job', runId: id, jobName: 'j', taskIds: [] } })
+    await fs.writeFile(file(), JSON.stringify(s))
+  }
+  const runIds = async (): Promise<string[]> => (await recordsOnDisk(project)).map((r) => (r.source.kind === 'job' ? r.source.runId : ''))
+
+  // Review I1 (a): an app attached, wrote and left with no Host call in between.
+  it('keeps a record an app wrote while the Host made no call at all', async () => {
+    await settings(ON)
+    const { u } = make()
+    await u.load()
+    await u.onRunFinished(runInput())
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+    await appWrites('app-run')
+    await u.onRunFinished(runInput({ runId: 'run-2' }))
+    await vi.waitFor(async () => expect(await runIds()).toEqual(['run-2', 'app-run', 'run-1']))
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+    expect(await runIds()).toEqual(['run-2', 'app-run', 'run-1'])
+  })
+
+  // Review I1 (b): the app wrote during the Host's own agent round trip.
+  it('keeps a record an app wrote during the Host’s own generation', async () => {
+    await settings(ON)
+    let during: (() => Promise<void>) | null = null
+    const { u } = make({
+      runAgent: async () => {
+        if (during) await during()
+        return { ok: true, value: explanation }
+      }
+    })
+    await u.load()
+    await u.onRunFinished(runInput())
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+    during = () => appWrites('app-run')
+    await u.onRunFinished(runInput({ runId: 'run-2' }))
+    await vi.waitFor(async () => expect((await recordsOnDisk(project)).find((r) => r.source.kind === 'job' && r.source.runId === 'run-2')?.status).toBe('ready'))
+    expect(await runIds()).toEqual(['app-run', 'run-2', 'run-1'])
+    // The Host's own record, generating while the file was re-read, was not marked interrupted.
+    expect((await recordsOnDisk(project)).every((r) => r.reason !== 'INTERRUPTED')).toBe(true)
+  })
+
+  it('does not read understanding.json again when nothing outside changed it', async () => {
+    await settings(ON)
+    const { u } = make()
+    await u.load()
+    const real = fsp.readFile
+    const reads: string[] = []
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+      reads.push(String(args[0]))
+      return real(...args)
+    }) as typeof real)
+    try {
+      await u.onRunFinished(runInput())
+      await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+      reads.length = 0
+      await u.onRunFinished(runInput({ runId: 'run-2' }))
+      await vi.waitFor(async () => expect(await runIds()).toEqual(['run-2', 'run-1']))
+      await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+      expect(reads.filter((p) => p === file())).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('rides out a busy app-settings.json during the app’s save, and still records the Run', async () => {
+    await settings(ON)
+    const { u } = make()
+    await u.load()
+    const real = fsp.readFile
+    let busy = 1
+    const spy = vi.spyOn(fsp, 'readFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+      if (String(args[0]).endsWith('app-settings.json') && busy-- > 0) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+      return real(...args)
+    }) as typeof real)
+    try {
+      await u.onRunFinished(runInput())
+    } finally {
+      spy.mockRestore()
+    }
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
   })
 
   // The gate index.ts hands in, through the real server: an app that keeps the duty attaching between two

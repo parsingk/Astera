@@ -319,7 +319,9 @@ export class UnderstandingPipeline {
     }
   }
 
-  private prepend(projectRoot: string, record: WorkRecord): Promise<void> {
+  private async prepend(projectRoot: string, record: WorkRecord): Promise<void> {
+    // The file first: another process may have written it since (store.refresh).
+    await this.deps.store.refresh()
     const cur = this.deps.store.get(projectRoot)
     return this.write(projectRoot, { records: [record, ...(cur?.records ?? [])] })
   }
@@ -332,6 +334,9 @@ export class UnderstandingPipeline {
     recordId: string,
     f: (r: WorkRecord) => WorkRecord
   ): Promise<void> {
+    // The file, not only this process's memory of it: another process may have written it during the
+    // round trip (store.refresh).
+    await this.deps.store.refresh()
     const cur = this.deps.store.get(projectRoot)
     if (!cur || !cur.records.some((r) => r.id === recordId)) return
     await this.write(projectRoot, {

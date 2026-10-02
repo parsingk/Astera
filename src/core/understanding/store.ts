@@ -15,6 +15,9 @@ export class UnderstandingStore {
   private state: StoreShape = { projects: {} }
   /** Serialization queue for disk writes — the OrchestrationStore convention */
   private queue: Promise<void> = Promise.resolve()
+  /** The file as this store last loaded or saved it (mtime and size), or null when it has seen none.
+   *  refresh() compares the file with it to tell another process's write from its own. */
+  private seen: string | null = null
 
   constructor(private filePath: string) {}
 
@@ -31,8 +34,34 @@ export class UnderstandingStore {
     }
     if (!isValid(parsed)) return this.recover()
     this.state = parsed
+    this.seen = await this.stamp(this.filePath)
     this.unstick()
     return { recovered: false }
+  }
+
+  /** Reads the file again **only when another process wrote it** since this store last loaded or saved
+   *  it, and returns whether it did. Called before every write a computed value hangs on (pipeline.ts
+   *  prepend and patch): the Host and an older app can each be the writer in turn (E1 §2), and a write
+   *  computed from memory would erase what the other wrote meanwhile.
+   *
+   *  **Never unsticks.** A `generating` record in the file may be this process's own generation in
+   *  flight; only load, at start, may call it interrupted. It waits for this store's queued saves first,
+   *  so it never reads a file under its own pending write. A file that cannot be read or is not valid is
+   *  not adopted: what this store holds stays, as a write over a damaged file did before. */
+  async refresh(): Promise<boolean> {
+    await this.queue.catch(() => {})
+    const now = await this.stamp(this.filePath)
+    if (now === null || now === this.seen) return false
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
+    } catch {
+      return false
+    }
+    if (!isValid(parsed)) return false
+    this.state = parsed
+    this.seen = now
+    return true
   }
 
   get(projectPath: string): ProjectUnderstanding | undefined {
@@ -55,13 +84,26 @@ export class UnderstandingStore {
       const tmp = this.filePath + '.tmp'
       await fs.mkdir(path.dirname(this.filePath), { recursive: true })
       await fs.writeFile(tmp, snapshot, 'utf8')
+      // Stamped from the temp file: a rename keeps mtime and size, and reading the target after it
+      // could take another process's write that landed in between for this one's.
+      const stamp = await this.stamp(tmp)
       await fs.rename(tmp, this.filePath)
+      this.seen = stamp
     }
     // then(run, run) 의 두 인자가 같은 이유: 앞선 쓰기가 실패해도 다음 쓰기는 진행돼야 한다.
     // onRejected 가 없으면 한 번 거절된 큐가 이후의 모든 save 를 그대로 거절로 흘려보내고,
     // 그 시점부터 디스크가 얼어붙는다 — OrchestrationStore.save 의 주석이 경고하는 그 실패다.
     this.queue = this.queue.then(run, run)
     return this.queue
+  }
+
+  private async stamp(p: string): Promise<string | null> {
+    try {
+      const st = await fs.stat(p)
+      return `${st.mtimeMs}:${st.size}`
+    } catch {
+      return null
+    }
   }
 
   /** 통째로 되돌린다. 항목끼리 참조가 걸려 있어(feature ↔ explanation) 한 항목만 버리면 매달린

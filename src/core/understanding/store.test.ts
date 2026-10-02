@@ -120,4 +120,64 @@ describe('UnderstandingStore', () => {
     expect(b.get('C:/p')!.records[0].status).toBe('failed')
     expect(b.get('C:/p')!.records[0].reason).toBe('INTERRUPTED')
   })
+
+  // E1 Task 2 review I1: two processes may write this file one after the other (the Host and an older
+  // app), so a write starts from the file, not from memory. refresh() is that read, and only when the
+  // file is not the one this store last loaded or saved.
+  describe('refresh', () => {
+    const generating: ProjectUnderstanding = {
+      records: [
+        { id: 'r1', at: 'x', source: { kind: 'session', sessionId: 's', label: 'l' }, request: 'q',
+          changedFiles: [], git: { startHead: null, endHead: null }, status: 'generating' }
+      ]
+    }
+
+    it('does not reload after its own save, or with no file at all', async () => {
+      const s = new UnderstandingStore(file)
+      await s.load()
+      expect(await s.refresh()).toBe(false)
+      await s.set('C:/p', sample)
+      expect(await s.refresh()).toBe(false)
+      expect(s.get('C:/p')).toEqual(sample)
+    })
+
+    it('does not reload after its own load', async () => {
+      await new UnderstandingStore(file).set('C:/p', sample)
+      const s = new UnderstandingStore(file)
+      await s.load()
+      expect(await s.refresh()).toBe(false)
+    })
+
+    it('adopts a file another process wrote, without marking its generating records interrupted', async () => {
+      const a = new UnderstandingStore(file)
+      await a.load()
+      await a.set('C:/p', sample)
+      const other = new UnderstandingStore(file)
+      await other.load()
+      await other.set('C:/q', generating)
+      expect(await a.refresh()).toBe(true)
+      expect(a.get('C:/q')!.records[0].status).toBe('generating')
+      expect(a.get('C:/p')).toEqual(sample)
+    })
+
+    it('waits for its own queued save instead of reading the file under it', async () => {
+      const s = new UnderstandingStore(file)
+      await s.load()
+      void s.set('C:/p', generating)
+      expect(await s.refresh()).toBe(false)
+      expect(s.get('C:/p')).toEqual(generating)
+      const b = new UnderstandingStore(file)
+      await b.load()
+      expect(b.get('C:/p')).toBeDefined()
+    })
+
+    it('keeps what it holds when the file it would adopt is not valid', async () => {
+      const s = new UnderstandingStore(file)
+      await s.load()
+      await s.set('C:/p', sample)
+      await fs.writeFile(file, '{ broken', 'utf8')
+      expect(await s.refresh()).toBe(false)
+      expect(s.get('C:/p')).toEqual(sample)
+    })
+  })
 })

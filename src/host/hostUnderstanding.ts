@@ -3,7 +3,10 @@
 // open. **Only while this Host is the one writer**: every attached app yields `understanding`, or none is
 // attached (`!server.appsKeep(HOST_YIELD_UNDERSTANDING)`), read at every entry and again at every store
 // write, as the journal's gate is (hostJournal.ts). An app that keeps the duty writes the file itself, and
-// the Host then writes nothing.
+// the Host then writes nothing. **A generation in flight when the writer flips still runs its agent to the
+// end and then drops its result**: the record stays as the writer last saw it. And since the two can be
+// the writer in turn, every Host write starts from the file, not from memory (the pipeline's
+// store.refresh before each prepend and patch), so an app's records written meanwhile survive.
 //
 // What the app supplies from its own state, the Host reads here: the accounts per call, the generator
 // settings, the tracking toggle and the language from one read of app-settings.json per call (the app's own
@@ -19,7 +22,8 @@ import type { SessionWorkUnit } from '../core/workUnit/types'
 import { UnderstandingStore } from '../core/understanding/store'
 import { UnderstandingPipeline, type PipelineDeps, type RunRecordInput } from '../core/understanding/pipeline'
 import { readGeneratorSettings, type GeneratorSettings } from '../core/understanding/generatorSettings'
-import { readAppSettingsObject } from '../core/settings/settingsObject'
+import { settingsObjectOf } from '../core/settings/settingsObject'
+import { readFileRetrying } from '../core/renameRetry'
 import { repoPathOf } from '../core/worktrees/repo'
 import { isLang, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
@@ -43,7 +47,16 @@ const osLang = (): Lang => pickInitialLang(Intl.DateTimeFormat().resolvedOptions
  *  and the caller records nothing rather than guess (E1 error handling). The language follows checks.ts'
  *  lang(): the file's `lang` when it is one, the OS locale otherwise. */
 export async function readUnderstandingSettings(settingsPath: string): Promise<UnderstandingSettings> {
-  const o = await readAppSettingsObject(settingsPath)
+  let text: string | null
+  try {
+    // Retried while the app's rename-replace holds the file (EBUSY/EPERM on win32), as checks.ts' lang()
+    // reads it: a Run that finishes during a settings save is still recorded.
+    text = await readFileRetrying(settingsPath)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    text = null
+  }
+  const o = text === null ? null : settingsObjectOf(text)
   const lang = o?.lang
   return {
     generator: readGeneratorSettings(o?.generator),
@@ -126,16 +139,10 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     }
   }
 
-  /** Set whenever the gate finds an app keeping the duty: that app may write the file meanwhile, so the
-   *  next write this Host makes reads the file again first rather than writing back what it held. */
-  let stale = false
-  let reloading: Promise<void> = Promise.resolve()
-
   const store = new GatedStore(
     d.file,
     () => {
       if (isWriter()) return true
-      stale = true
       d.log('understanding: an attached app keeps How It Works now, a Host write is dropped')
       return false
     },
@@ -156,16 +163,9 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
       d.log(`understanding.json load failed: ${message(err)}`)
     }
   }
-  /** The file again, once, after a spell in which an app was the writer. */
-  const fresh = (): Promise<void> => {
-    if (stale) {
-      stale = false
-      reloading = loadStore()
-    }
-    return reloading
-  }
-
-  /** What the pipeline asks synchronously, as the last call read it. */
+  /** What the pipeline asks synchronously, as **the most recent call** read it: a generation queued
+   *  behind others runs with the settings and accounts of the newest call, not of the call that queued it
+   *  (the app's pipeline, too, reads them when the generation runs). */
   let current: { generator: GeneratorSettings; lang: Lang; accounts: Account[] } = { generator: {}, lang: osLang(), accounts: [] }
   /** Settings and accounts, read now; throws when either cannot be read. */
   const take = async (): Promise<UnderstandingSettings> => {
@@ -188,22 +188,13 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
   })
 
   const fold = (projectPath: string): string => repoPathOf(d.worktrees(), projectPath)
-  /** The entry gate: not the writer marks the file stale; the writer reads it again if it was. */
-  const enter = async (): Promise<boolean> => {
-    if (!isWriter()) {
-      stale = true
-      return false
-    }
-    await fresh()
-    return true
-  }
 
   return {
     load: loadStore,
     isWriter,
     onRunFinished: async (input) => {
       try {
-        if (!(await enter())) return
+        if (!isWriter()) return
         let s: UnderstandingSettings
         try {
           s = await take()
@@ -219,7 +210,7 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
       }
     },
     onUnitClosed: async (projectPath, unit) => {
-      if (!(await enter())) return { ok: false, reason: NOT_WRITER }
+      if (!isWriter()) return { ok: false, reason: NOT_WRITER }
       try {
         await take()
       } catch (err) {
@@ -230,8 +221,10 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
       return { ok: true }
     },
     regenerate: async (projectPath, recordId) => {
-      if (!(await enter())) return { ok: false, status: 409, error: NOT_WRITER }
+      if (!isWriter()) return { ok: false, status: 409, error: NOT_WRITER }
       const root = fold(projectPath)
+      // The record may be one an app wrote while it was the writer.
+      await store.refresh()
       if (!store.get(root)?.records.some((r) => r.id === recordId))
         return { ok: false, status: 404, error: `no How It Works record ${recordId} in ${root}` }
       try {
