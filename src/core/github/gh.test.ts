@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { classifyGhFailure, probeGh, type GhResult } from './gh'
+import { classifyGhFailure, ghFailureSentence, probeGh, type GhResult } from './gh'
 
 const result = (over: Partial<GhResult>): GhResult => ({
   ok: false,
@@ -85,5 +85,50 @@ describe('probeGh', () => {
   it('any other failure is error', async () => {
     const probe = await probeGh(async () => result({ stderr: 'boom' }))
     expect(probe).toEqual({ kind: 'error' })
+  })
+})
+
+describe('ghFailureSentence', () => {
+  it('ENOENT is not-installed, before any stderr is read', () => {
+    expect(ghFailureSentence(result({ spawnError: 'ENOENT', stderr: 'rate limit' }))).toEqual({
+      kind: 'not-installed',
+      message: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH"
+    })
+  })
+
+  it('auth names the command to run', () => {
+    expect(ghFailureSentence(result({ stderr: 'HTTP 401: Bad credentials (https://api.github.com/graphql)' }))).toEqual({
+      kind: 'auth',
+      message: 'gh is not logged in: run `gh auth login`'
+    })
+  })
+
+  it("every other kind is one sentence ending with gh's first stderr line", () => {
+    const sentence = (stderr: string, spawnError?: string) => ghFailureSentence(result({ stderr, spawnError }))
+    expect(sentence('HTTP 403: API rate limit exceeded\nsee docs')).toEqual({
+      kind: 'rate-limit',
+      message: 'GitHub rate limit reached: HTTP 403: API rate limit exceeded'
+    })
+    expect(sentence('gh: Not Found (HTTP 404)')).toEqual({
+      kind: 'not-found',
+      message: 'GitHub found no such repository, pull request, issue or run: gh: Not Found (HTTP 404)'
+    })
+    expect(sentence('no git remotes found')).toEqual({
+      kind: 'no-remote',
+      message: "This folder's git repository has no remote for gh to use"
+    })
+    expect(sentence('dial tcp: lookup api.github.com: no such host')).toEqual({
+      kind: 'network',
+      message: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host'
+    })
+    expect(sentence('', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER')).toEqual({
+      kind: 'truncated',
+      message: "gh's answer was too large and was cut off"
+    })
+    expect(sentence('\r\nunknown flag: --nope\r\nUsage: ...')).toEqual({
+      kind: 'other',
+      message: 'gh failed: unknown flag: --nope'
+    })
+    expect(sentence('')).toEqual({ kind: 'other', message: 'gh failed' })
   })
 })

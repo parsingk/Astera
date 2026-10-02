@@ -1,4 +1,4 @@
-import { classifyGhFailure, gh, type GhResult } from './gh'
+import { classifyGhFailure, defaultGhRunner, type GhRunner } from './gh'
 import { git, type GitResult } from '../worktrees/git'
 import { normalizeBaseForGh } from '../worktrees/push'
 import type { CommitSummary } from './fill'
@@ -49,7 +49,7 @@ const PUSH_TIMEOUT_MS = 180_000
 
 export interface PrCreateDeps {
   runGit?: (args: string[], cwd: string) => Promise<GitResult>
-  runGh?: (args: string[], cwd: string) => Promise<GhResult>
+  runGh?: GhRunner
   normalizeBase?: (repo: string, base: string) => Promise<string>
 }
 
@@ -61,7 +61,7 @@ export async function createPullRequest(
 ): Promise<PrCreateResult> {
   const runGit =
     deps.runGit ?? ((a: string[], cwd: string) => git(a, { cwd, timeoutMs: PUSH_TIMEOUT_MS }))
-  const runGh = deps.runGh ?? ((a: string[], cwd: string) => gh(a, { cwd }))
+  const runGh = deps.runGh ?? defaultGhRunner
   const normalize = deps.normalizeBase ?? normalizeBaseForGh
 
   if (req.needsPush) {

@@ -1,0 +1,37 @@
+{
+  "url": "https://api.github.com/repos/parsingk/Astera/issues/7",
+  "repository_url": "https://api.github.com/repos/parsingk/Astera",
+  "labels_url": "https://api.github.com/repos/parsingk/Astera/issues/7/labels{/name}",
+  "comments_url": "https://api.github.com/repos/parsingk/Astera/issues/7/comments",
+  "events_url": "https://api.github.com/repos/parsingk/Astera/issues/7/events",
+  "html_url": "https://github.com/parsingk/Astera/issues/7",
+  "id": 5647023004,
+  "node_id": "I_kwDOTuf5ss8AAAABUJa7nA",
+  "number": 7,
+  "title": "Bring the Contributing section of the Korean, Japanese and Spanish READMEs up to date",
+  "user": {
+    "login": "parsingk",
+    "type": "User"
+  },
+  "labels": [
+    {
+      "name": "documentation",
+      "color": "0075ca"
+    },
+    {
+      "name": "good first issue",
+      "color": "7057ff"
+    }
+  ],
+  "state": "open",
+  "locked": false,
+  "comments": 0,
+  "created_at": "2026-09-30T13:13:31Z",
+  "updated_at": "2026-09-30T13:13:31Z",
+  "closed_at": null,
+  "author_association": "OWNER",
+  "active_lock_reason": null,
+  "body": "The README comes in English (`README.md`, the source), Korean, Japanese and Spanish. The **Contributing** section of the English one now points new contributors at CONTRIBUTING, the issue forms and SECURITY.md. The other three still carry the older text, which only mentions `rolling.log`.\n\n**What to do**\n- Bring the Contributing section of `README.ko.md`, `README.ja.md` and `README.es.md` in line with `README.md`, in each language.\n- Keep the links as they are (`.github/CONTRIBUTING.md`, the issues form, `.github/SECURITY.md`).\n\nOne language per pull request is fine. Wording that reads naturally matters more than a word for word match.\n",
+  "timeline_url": "https://api.github.com/repos/parsingk/Astera/issues/7/timeline",
+  "state_reason": null
+}
