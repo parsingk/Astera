@@ -8613,7 +8613,7 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       const { deps, asked, gh } = await prSetup({}, [task('completed')], { worktree: WT, paused: true })
       expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
         status: 409,
-        body: { error: 'This Run is paused; resume it or stop it first' }
+        body: { error: 'This Run is paused; resume it first' }
       })
       expect(asked.createPr).toEqual([])
       expect(asked.isClean).toEqual([])

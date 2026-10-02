@@ -260,7 +260,7 @@ branch ahead of its upstream reaches GitHub before the pull request is opened fr
 pushes anything it is refused with `CONFLICT` when:
 
 - the Run is still working (a Run is finished when `get_run` reads `completed` or `failed`),
-- the Run is paused ("This Run is paused; resume it or stop it first"), whatever its Tasks say,
+- the Run is paused ("This Run is paused; resume it first"), whatever its Tasks say,
 - the Run's worktree has uncommitted changes (the message says how many),
 - the Run's worktree cannot be read ("Could not read the Run's worktree", then why),
 - the Run's branch adds no commits.

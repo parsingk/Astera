@@ -4393,7 +4393,7 @@ export async function handleCommand(
       // githubTarget answered for a Run, so the dep is there.
       const g = deps.github!
       const outcome = runView(s, t.run).outcome
-      if (outcome === 'paused') return conflict('This Run is paused; resume it or stop it first')
+      if (outcome === 'paused') return conflict('This Run is paused; resume it first')
       if (outcome !== 'completed' && outcome !== 'failed') return conflict('This Run is still working')
       let changed: number
       try {

@@ -2075,8 +2075,7 @@ describe('GitHub writes and request receipts (MCP P2-B)', () => {
           return { ok: true as const, url: `https://github.com/o/r/pull/${created.length}` }
         },
         readCommits: async () => [{ subject: 'Add a', body: '' }],
-        isClean: async () => ({ changedCount: 0 }),
-        pushState: async () => ({ hasUpstream: false, upstreamGone: false })
+        isClean: async () => ({ changedCount: 0 })
       }
     }
   }
