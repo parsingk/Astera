@@ -1217,7 +1217,9 @@ export interface CoreApi {
     pathRepairedAtStart(): Promise<boolean>
   }
   /** Whether `astera mcp serve` is registered with Claude Code and Codex, and registering it through
-   *  their CLIs (main/mcpClients.ts). Runs only when the person presses Register in Settings. */
+   *  their CLIs (main/mcpClients.ts). `status` runs on opening the CLI tab in Settings and only reads
+   *  (it finds the CLIs and asks `codex mcp get --json`); `register` runs only when the person presses
+   *  Register. */
   mcpClients: {
     status(): Promise<Record<McpClient, McpClientStatus>>
     register(client: McpClient): Promise<McpRegisterResult>
