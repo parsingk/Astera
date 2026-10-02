@@ -21,6 +21,7 @@ import {
   type OrchState
 } from './state'
 import { TaskValidator } from './exec/validator'
+import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
 import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
@@ -7937,6 +7938,70 @@ describe('handleCommand — tasks-get', () => {
     const deps = makeDeps(seeded())
     expect((await call(deps, 'tasks-get', { id: 'nope' }, '')).status).toBe(404)
     expect((await call(deps, 'tasks-get', {}, '')).status).toBe(400)
+  })
+})
+
+describe('handleCommand — tasks-check-output and tasks-output', () => {
+  const dispatch = (id: string, startedAt: string): OrchState['dispatches'][number] =>
+    ({ id, taskId: 't1', accountId: 'acc1', sessionId: 's', cwd: 'D:/p', specPath: 'x', startedAt, workerState: 'running' }) as unknown as OrchState['dispatches'][number]
+  const seeded = (over: Partial<OrchState> = {}, task: Record<string, unknown> = {}): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'failed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ...task }
+    ],
+    ...over
+  })
+  const failed = { checks: [{ configId: 'c1', name: 'build', status: 'failed', outputTail: 'abcdefghij' }] }
+
+  it('tasks-check-output: 404 unknown task, 409 no output, 200 slice, 400 out of bounds', async () => {
+    expect((await call(makeDeps(seeded()), 'tasks-check-output', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(makeDeps(seeded()), 'tasks-check-output', { id: 't1' }, '')).status).toBe(409)
+    const deps = makeDeps(seeded({}, failed))
+    const r = await call(deps, 'tasks-check-output', { id: 't1', offset: 2, limit: 3 }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ check: 'c1', total: 10, offset: 2, text: 'cde' })
+    expect((await call(deps, 'tasks-check-output', { id: 't1', limit: 4001 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-check-output', { id: 't1', limit: 0 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-check-output', { id: 't1', offset: -1 }, '')).status).toBe(400)
+  })
+
+  it('tasks-output: reads the latest Dispatch by startedAt, paged from the end', async () => {
+    const deps = makeDeps(seeded({ dispatches: [dispatch('d2', '2026-01-02'), dispatch('d1', '2026-01-01')] }))
+    const asked: unknown[] = []
+    deps.readWorker = async (a) => {
+      asked.push(a)
+      return ['l1','l2','l3','l4'].join(String.fromCharCode(10))
+    }
+    const r = await call(deps, 'tasks-output', { id: 't1', lines: 2 }, '')
+    expect(asked).toEqual([{ dispatchId: 'd2', limit: 100000 }])
+    expect(r).toEqual({
+      status: 200,
+      body: { taskId: 't1', dispatchId: 'd2', recorded: true, totalLines: 4, more: true, lines: ['l3', 'l4'] }
+    })
+    const older = await call(deps, 'tasks-output', { id: 't1', lines: 2, skipLines: 2 }, '')
+    expect(older.body).toMatchObject({ lines: ['l1', 'l2'], more: false })
+  })
+
+  it('tasks-output: untracked is recorded false, empty is recorded true, no Dispatch is 409', async () => {
+    const withD = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01')] }))
+    withD.readWorker = async () => TAIL_UNTRACKED
+    expect((await call(withD, 'tasks-output', { id: 't1' }, '')).body).toMatchObject({ recorded: false, lines: [] })
+    withD.readWorker = async () => TAIL_EMPTY
+    expect((await call(withD, 'tasks-output', { id: 't1' }, '')).body).toMatchObject({ recorded: true, totalLines: 0, lines: [] })
+    const none = makeDeps(seeded())
+    const r = await call(none, 'tasks-output', { id: 't1' }, '')
+    expect(r.status).toBe(409)
+    expect(r.body).toEqual({ error: 'no worker has run this task yet' })
+    expect((await call(none, 'tasks-output', { id: 'nope' }, '')).status).toBe(404)
+  })
+
+  it('tasks-output: lines 1..500', async () => {
+    const deps = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01')] }))
+    expect((await call(deps, 'tasks-output', { id: 't1', lines: 501 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-output', { id: 't1', lines: 0 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-output', { id: 't1', skipLines: -1 }, '')).status).toBe(400)
   })
 })
 

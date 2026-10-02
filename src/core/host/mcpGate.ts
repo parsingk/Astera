@@ -15,7 +15,9 @@ export const MCP_READ_COMMANDS = [
   'questions-list',
   'questions-get',
   'runs-completion',
-  'run-configs-list'
+  'run-configs-list',
+  'tasks-check-output',
+  'tasks-output'
 ] as const
 
 export const MCP_CONTROL_COMMANDS = [

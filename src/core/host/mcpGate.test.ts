@@ -23,6 +23,9 @@ describe('mcpRefusal', () => {
     expect(mcpRefusal('tasks-add', 'read', false)?.status).toBe(403)
     expect(mcpRefusal('run-configs-list', 'read', false)).toBeNull()
   })
+  it('tasks-check-output and tasks-output are reads: get_check_output and get_task_output', () => {
+    for (const cmd of ['tasks-check-output', 'tasks-output']) expect(mcpRefusal(cmd, 'read', false)).toBeNull()
+  })
   it('refuses everything else whatever the setting', () => {
     for (const sessions of [false, true])
       for (const cmd of ['worker-start', 'chats-answer', 'state-put', 'run-delete', 'task-create', 'run-configs', 'run-resume'])

@@ -270,6 +270,23 @@ const SESSION = {
     summary: 'the dispatches of one Task',
     flags: [req('task', '<taskId>', 'the Task to list them for')]
   },
+  'tasks-check-output': {
+    summary: "a failed check's captured output, sliced by character (the MCP server's get_check_output)",
+    flags: [
+      req('id', '<taskId>', 'the Task to read'),
+      { name: 'check', value: '<configId|name>', about: 'which check; the first with output when omitted' },
+      { name: 'offset', value: '<n>', about: 'characters to skip from the start (default 0)' },
+      { name: 'limit', value: '<n>', about: 'characters to return, 1 to 4000 (default 4000)' }
+    ]
+  },
+  'tasks-output': {
+    summary: "the latest worker's terminal tail for a Task, paged from the end (the MCP server's get_task_output)",
+    flags: [
+      req('id', '<taskId>', 'the Task to read'),
+      { name: 'skip-lines', value: '<n>', about: 'lines to skip back from the end (default 0)' },
+      { name: 'lines', value: '<n>', about: 'lines to return, 1 to 500 (default 200)' }
+    ]
+  },
   'runs-completion': {
     summary: "where each Task of a run stands in completion (the MCP server's get_completion)",
     flags: [req('id', '<runId>', 'the run to read')]

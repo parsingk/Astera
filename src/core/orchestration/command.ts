@@ -51,6 +51,8 @@ import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
 import { completionForRun } from './runCompletion'
 import { taskDetailOf } from './taskDetail'
+import { checkOutputSlice, tailWindow } from './taskOutput'
+import { TAIL_UNTRACKED, TAIL_EMPTY } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -591,6 +593,13 @@ export interface SessionCreate {
 
 type Reply = { status: number; body: unknown }
 const okBody = (body: unknown): Reply => ({ status: 200, body })
+/** An optional integer flag within [min, max]; the error text when it is not. */
+const boundedInt = (v: unknown, name: string, min: number, max: number, fallback: number): number | string => {
+  if (v === undefined) return fallback
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max)
+    return max === Number.MAX_SAFE_INTEGER ? `--${name} must be an integer >= ${min}` : `--${name} must be an integer from ${min} to ${max}`
+  return v
+}
 const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
 /** 지목한 것이 없다. **400 과 가르는 이유는 CLI 다** — 스크립트가 "인자를 잘못 줬다"(exit 2)와
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
@@ -2767,6 +2776,36 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const detail = taskDetailOf(s, id, await waitingForApprovalIn(deps, s.dispatches.filter((d) => d.taskId === id)))
       return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
+    }
+    case 'tasks-check-output': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const task = s.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      const offset = boundedInt(args.offset, 'offset', 0, Number.MAX_SAFE_INTEGER, 0)
+      const limit = boundedInt(args.limit, 'limit', 1, 4000, 4000)
+      if (typeof offset === 'string') return bad(offset)
+      if (typeof limit === 'string') return bad(limit)
+      const slice = checkOutputSlice(task, str(args.check) ?? undefined, offset, limit)
+      return 'error' in slice ? conflict(slice.error) : okBody(slice)
+    }
+    case 'tasks-output': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      if (!s.tasks.some((t) => t.id === id)) return notFound(`unknown task: ${id}`)
+      const skipLines = boundedInt(args.skipLines, 'skip-lines', 0, Number.MAX_SAFE_INTEGER, 0)
+      const lines = boundedInt(args.lines, 'lines', 1, 500, 200)
+      if (typeof skipLines === 'string') return bad(skipLines)
+      if (typeof lines === 'string') return bad(lines)
+      const latest = s.dispatches
+        .filter((d) => d.taskId === id)
+        .reduce<(typeof s.dispatches)[number] | undefined>((a, d) => (!a || d.startedAt > a.startedAt ? d : a), undefined)
+      if (!latest) return conflict('no worker has run this task yet')
+      const raw = await deps.readWorker({ dispatchId: latest.id, limit: 100000 })
+      if (raw === TAIL_UNTRACKED)
+        return okBody({ taskId: id, dispatchId: latest.id, recorded: false, totalLines: 0, more: false, lines: [] })
+      const window = tailWindow(raw === TAIL_EMPTY ? '' : raw, skipLines, lines)
+      return okBody({ taskId: id, dispatchId: latest.id, recorded: true, ...window })
     }
     case 'tasks-list': {
       let tasks = s.tasks
