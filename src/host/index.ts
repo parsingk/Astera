@@ -32,7 +32,7 @@ import { nodeProcSpawn } from './nodeProc'
 import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
 import { createHostUnderstanding } from './hostUnderstanding'
-import { createHostWorkUnits, readWorkUnitTracking, workUnitSessionsOf, type HostWorkUnits } from './hostWorkUnits'
+import { createHostWorkUnits, readWorkUnitTracking, wireSessionExits, workUnitSessionsOf, type HostWorkUnits } from './hostWorkUnits'
 import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
 import { readFileRetrying } from '../core/renameRetry'
 import { outcomeOf } from '../core/orchestration/running'
@@ -638,11 +638,7 @@ async function main(): Promise<void> {
     })
     const workUnits = hostWorkUnits
     spawner.onBusyChanged((sessionId, busy) => workUnits.onBusy(sessionId, busy))
-    // Every session pty's exit: the Host holds the pty, so an exit here is the session ending.
-    registry.onExit((ptyId) => {
-      const meta = registry.metaOf(ptyId)
-      if (meta?.kind === 'session') void workUnits.onSessionExit(meta.id)
-    })
+    wireSessionExits(registry, workUnits)
     await workUnits.start()
   }
 

@@ -8,6 +8,7 @@ import path from 'node:path'
 import {
   createHostWorkUnits,
   readWorkUnitTracking,
+  wireSessionExits,
   workUnitSessionsOf,
   type HostWorkUnitSession,
   type HostWorkUnitsDeps,
@@ -20,6 +21,7 @@ import type { SessionWorkUnit } from '../core/workUnit/types'
 import type { WorkUnitState } from '../core/workUnit/store'
 import type { Account } from '../core/types'
 import { OPERATION_GRACE_MS } from '../core/git/provenance'
+import { PtyRegistry, type RegistryPty } from './registry'
 
 let dir: string
 let project: string
@@ -664,6 +666,72 @@ describe('createHostWorkUnits', () => {
     // read from the fork's anchor, not from 0: the replayed conversation opens nothing and marks nothing
     const cursor = onDisk().projects[project].cursors.find((c) => c.sessionId === 's2')
     expect(cursor?.offset).toBe((await fs.stat(t2)).size)
+  })
+})
+
+// index.ts and the CLI rig wire every session pty's exit through this, as rolling.ts and slackSessions.ts
+// skip an exit whose session is still live in another pty.
+describe('wireSessionExits', () => {
+  const fakePty = (): RegistryPty & { exit(c: number): void } => {
+    let onExit: (e: { exitCode: number }) => void = () => {}
+    return {
+      pid: 1,
+      onData: () => {},
+      onExit: (cb) => {
+        onExit = cb
+      },
+      write: () => {},
+      resize: () => {},
+      kill: () => onExit({ exitCode: 1 }),
+      pause: () => {},
+      resume: () => {},
+      exit: (c) => onExit({ exitCode: c })
+    }
+  }
+  const setup = (): { registry: PtyRegistry; ptys: Map<string, ReturnType<typeof fakePty>>; open(ptyId: string, meta: Record<string, unknown>): void; exits: string[] } => {
+    const ptys = new Map<string, ReturnType<typeof fakePty>>()
+    let opening = ''
+    const registry = new PtyRegistry({
+      spawn: () => {
+        const p = fakePty()
+        ptys.set(opening, p)
+        return p
+      },
+      log: () => {}
+    })
+    const exits: string[] = []
+    wireSessionExits(registry, { onSessionExit: async (id) => void exits.push(id) })
+    const open = (ptyId: string, meta: Record<string, unknown>): void => {
+      opening = ptyId
+      const r = registry.open({ id: ptyId, file: 'x', args: [], opts: { cwd: os.tmpdir(), cols: 80, rows: 24, env: {} }, meta: meta as never })
+      if (!r.ok) throw new Error(r.error)
+    }
+    return { registry, ptys, open, exits }
+  }
+
+  it('hands the exit of a session pty to the work units', () => {
+    const t = setup()
+    t.open('p1', { kind: 'session', id: 's1', restore: {} })
+    t.ptys.get('p1')!.exit(0)
+    expect(t.exits).toEqual(['s1'])
+  })
+
+  it('skips the exit of the old pty of a respawn that keeps the session id, and takes that of the new one', () => {
+    const t = setup()
+    t.open('p1', { kind: 'session', id: 's1', restore: {} })
+    // the respawn opens the new pty before the old one's exit lands
+    t.open('p2', { kind: 'session', id: 's1', restore: {} })
+    t.ptys.get('p1')!.exit(1)
+    expect(t.exits).toEqual([])
+    t.ptys.get('p2')!.exit(0)
+    expect(t.exits).toEqual(['s1'])
+  })
+
+  it('ignores ptys that are not sessions', () => {
+    const t = setup()
+    t.open('p1', { kind: 'terminal', id: 't1', restore: {} })
+    t.ptys.get('p1')!.exit(0)
+    expect(t.exits).toEqual([])
   })
 })
 

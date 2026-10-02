@@ -71,7 +71,7 @@ import type { OrchServerDeps } from '../core/orchestration/command'
 import { issueObjective, parseIssue } from '../core/github/issue'
 import { readUnderstandingFile } from '../core/understanding/read'
 import { createHostUnderstanding } from '../host/hostUnderstanding'
-import { createHostWorkUnits, readWorkUnitTracking, workUnitSessionsOf, type HostWorkUnits } from '../host/hostWorkUnits'
+import { createHostWorkUnits, readWorkUnitTracking, wireSessionExits, workUnitSessionsOf, type HostWorkUnits } from '../host/hostWorkUnits'
 import { outcomeOf } from '../core/orchestration/running'
 import { readFileRetrying } from '../core/renameRetry'
 import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
@@ -669,10 +669,7 @@ async function hostRig(
   })
   workUnitsBox.units = units
   spawner.onBusyChanged((sessionId, busy) => units.onBusy(sessionId, busy))
-  registry.onExit((ptyId) => {
-    const meta = registry.metaOf(ptyId)
-    if (meta?.kind === 'session') void units.onSessionExit(meta.id)
-  })
+  wireSessionExits(registry, units)
   await units.start()
 
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })

@@ -39,6 +39,7 @@ import { settingsObjectOf } from '../core/settings/settingsObject'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { readFileRetrying } from '../core/renameRetry'
 import type { HostUnderstanding } from './hostUnderstanding'
+import type { PtyRegistry } from './registry'
 
 /** The two pushes this module makes (protocol.ts). */
 export type WorkUnitsPush = Extract<HostMessage, { t: 'work-units-state' } | { t: 'work-units-goal-ignored' }>
@@ -91,6 +92,21 @@ export async function readWorkUnitTracking(settingsPath: string): Promise<boolea
     throw new RepairNeeded('app-settings.json is not a valid settings file; open Astera to repair it', 'app-settings.json')
   }
   return o.workUnitTrackingEnabled === true
+}
+
+/** Every session pty's exit, handed to the work units: the Host holds the pty, so an exit here is the
+ *  session ending, unless the session is still live in another pty: a respawn that keeps the session id
+ *  opens the new pty before the old one's exit lands (rolling.ts's and slackSessions.ts's rule). Returns
+ *  the unsubscribe. */
+export function wireSessionExits(
+  registry: Pick<PtyRegistry, 'onExit' | 'metaOf' | 'sessionPty'>,
+  units: Pick<HostWorkUnits, 'onSessionExit'>
+): () => void {
+  return registry.onExit((ptyId) => {
+    const meta = registry.metaOf(ptyId)
+    if (meta?.kind !== 'session' || registry.sessionPty(meta.id) !== null) return
+    void units.onSessionExit(meta.id)
+  })
 }
 
 export interface HostWorkUnitsDeps {
