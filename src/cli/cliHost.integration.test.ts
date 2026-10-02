@@ -528,12 +528,13 @@ async function hostRig(
   await journal?.start()
 
   // How It Works (E1 §2, §3), built the way index.ts builds it: the Host writes understanding.json while
-  // every attached app yields `understanding`, with only the agent faked.
+  // every attached app yields `understanding`, not before its server listens, and reads accounts.json and
+  // app-settings.json itself; only the agent is faked. Told who writes may have changed once the server
+  // listens and whenever the apps change, as index.ts tells it.
   const hostUnderstanding = createHostUnderstanding({
     file: path.join(profileDir, 'understanding.json'),
     profileDir,
-    writer: () => !serverOf().appsKeep(HOST_YIELD_UNDERSTANDING),
-    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    writer: () => box.server !== null && !box.server.appsKeep(HOST_YIELD_UNDERSTANDING),
     descriptors: makeDescriptors(process.platform),
     worktrees: () => worktrees.list(),
     log,
@@ -617,10 +618,15 @@ async function hostRig(
     orch,
     features: hostFeatures({ spawns: true, slack: false }),
     ...wiring.serverHooks,
+    onAppsChanged: () => {
+      wiring.serverHooks.onAppsChanged()
+      void hostUnderstanding.writerMayHaveChanged()
+    },
     onAppGreeted: (send) => wiring.appGreeted(send),
     log: { write: log, close: () => {} }
   })
   box.server = server
+  void hostUnderstanding.writerMayHaveChanged()
 
   // Teardown in `leave()`'s order: the driver stops, the spawner retires, the server closes, the ptys
   // end, and the exits those ends start run out before the folders are removed. Run once: a test may
@@ -1974,6 +1980,29 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       )
       expect(a.calls).toBe(2)
       expect(rowsOf(await mcp.call('list_work_records', { projectId })).map((r) => r.id)).toEqual([row.id])
+    })
+
+    // E1 §2: a Host is not the writer before its server listens, so the interruption its load marked is
+    // saved by the post-listen writerMayHaveChanged, as index.ts calls it, with no Run or other write.
+    it('a record a dead Host left generating reads INTERRUPTED in the file shortly after the Host listens, with no other write', async () => {
+      const profileDir = await tempDir(PROFILE_PREFIX)
+      const projectPath = path.join(profileDir, 'a-project')
+      const left = {
+        id: 'left-generating',
+        at: '2026-10-01T00:00:00.000Z',
+        source: { kind: 'job', runId: 'r-dead', jobName: 'j', taskIds: [] },
+        request: 'the dead Host was writing this',
+        changedFiles: [],
+        git: { startHead: null, endHead: null },
+        status: 'generating'
+      }
+      const file = path.join(profileDir, 'understanding.json')
+      await fs.writeFile(file, JSON.stringify({ projects: { [projectPath]: { records: [left] } } }))
+      const h = await hostRig({ profileDir, repo: false })
+      expect(h.server.hasApp()).toBe(false)
+      await until(async () =>
+        expect((await readUnderstandingFile(file)).projects[projectPath]?.records).toEqual([{ ...left, status: 'failed', reason: 'INTERRUPTED' }])
+      )
     })
 
     it('an attached app that keeps How It Works (no understanding yield) stops the Host writing, and regenerate_work_record is CONFLICT', async () => {
