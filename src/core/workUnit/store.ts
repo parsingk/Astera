@@ -138,7 +138,13 @@ export class WorkUnitStore {
     try {
       parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+        // No file is an empty store, also for a store that held something: an app switching back to
+        // writer (E2 §6) must not start from what it held before a Host took the file over and removed it.
+        this.state = { projects: {} }
+        this.seen = null
+        return { recovered: false }
+      }
       return this.recover()
     }
     if (!isValid(parsed)) return this.recover()

@@ -811,7 +811,7 @@ export function registerIpc(
    *  limit is not a completion). History resume does not have — and must not pass — one; see
    *  `onSessionForked`'s own doc for why. */
   onWorkUnitForkReady?: (
-    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
+    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string, hostRoll?: boolean) => void
   ) => void,
   /** The desktop notification sink. It is built in index.ts (it needs the BrowserWindow for both
    *  focus and the click), but the renderer's "this session is on screen" push arrives as IPC, which
@@ -4768,8 +4768,8 @@ export function registerIpc(
   // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
   // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다. A roll this app made itself goes to a work-units
   // Host as work-units-fork, as a history resume does.
-  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId) =>
-    appWorkUnits.fork(sessionId, transcriptPath, oldSessionId)
+  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId, hostRoll) =>
+    appWorkUnits.fork(sessionId, transcriptPath, oldSessionId, hostRoll)
   )
 
   // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
@@ -6495,13 +6495,9 @@ export function registerIpc(
                   rolling?.unregister(info.id)
                   codexRolling?.unregister(info.id)
                 },
-                fork: (from) => {
-                  try {
-                    workUnitCollector.onSessionForked(info.id, undefined, from)
-                  } catch (err) {
-                    hostLog(`host: the Work Unit fork of adopted session ${info.id} failed: ${String(err)}`)
-                  }
-                },
+                // A Host roll: made locally in front of an older Host (held while a switch to writer
+                // loads), never sent back to a work-units Host, which re-keyed it itself. Never throws.
+                fork: (from) => appWorkUnits.fork(info.id, undefined, from, true),
                 rememberForkSeen: (from) => core.sessions.remember(info.id, { forkSeen: from })
               }
             )

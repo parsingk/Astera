@@ -133,7 +133,7 @@ let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promi
 // onto the new one (Important 3) — history resume never passes it (collector.ts's `onSessionForked`
 // doc explains why).
 let workUnitForkRef:
-  | ((newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void)
+  | ((newSessionId: string, transcriptPath?: string, oldSessionId?: string, hostRoll?: boolean) => void)
   | null = null
 
 /** The `resumeText` dep both rolling coordinators receive (RollingDeps/CodexRollingDeps). fix wave
@@ -797,11 +797,13 @@ app.whenReady().then(async () => {
     // kill → spawn → this publish with no await in between, so the killed session's real
     // (asynchronous) exit event is guaranteed to arrive after this notification. (A Host roll's exit
     // is held until this has run — hostRollView.) codex sessions create units too (a codex `/goal`, or
-    // the task stub), so a codex roll re-keys its open unit the same way.
+    // the task stub), so a codex roll re-keys its open unit the same way. **Whose roll it is goes along**
+    // (`!opts.orchestration` is a Host roll): a work-units Host re-keyed its own roll already, and the
+    // app sends it no second fork (appWorkUnits.fork).
     try {
       if (channel === 'session:rolled') {
         const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
-        workUnitForkRef?.(p.info.id, p.dest, p.oldSessionId)
+        workUnitForkRef?.(p.info.id, p.dest, p.oldSessionId, !opts.orchestration)
       }
     } catch {
       /* a Work Unit tap failure must not block rolling */

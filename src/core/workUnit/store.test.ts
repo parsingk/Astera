@@ -47,6 +47,15 @@ describe('WorkUnitStore', () => {
     expect(s.get('D:\\p')).toBeUndefined()
   })
 
+  it('a load that finds no file starts from empty, not from what this store held before (E2 §6 reader to writer)', async () => {
+    const s = new WorkUnitStore(file)
+    await s.set('proj', sample)
+    await fs.rm(file)
+    expect(await s.load()).toEqual({ recovered: false })
+    expect(s.get('proj')).toBeUndefined()
+    expect(s.projectPaths()).toEqual([])
+  })
+
   it('쓰고 다시 읽으면 같다', async () => {
     const a = new WorkUnitStore(file)
     await a.load()

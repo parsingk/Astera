@@ -80,8 +80,10 @@ export interface AppWorkUnits {
   complete(projectPath: string, id: string): Promise<{ recorded: boolean }>
   /** [취소]. */
   cancel(projectPath: string, id: string): Promise<void>
-  /** A fork only this app sees. Never throws. */
-  fork(newSessionId: string, transcriptPath?: string, oldSessionId?: string): void
+  /** A fork this app saw. `hostRoll`: a roll the Host made and pushed (rolled or adopted here), which a
+   *  work-units Host already re-keyed itself (its onRolled), so it is never sent back to it: a second
+   *  fork there would move its transcript anchor and skip lines. Never throws. */
+  fork(newSessionId: string, transcriptPath?: string, oldSessionId?: string, hostRoll?: boolean): void
   /** The toggle was saved as `enabled`. Never rejects. */
   trackingChanged(enabled: boolean): Promise<void>
   /** Every Host message: the two work-units pushes reach the renderer, anything else is ignored. */
@@ -92,6 +94,7 @@ interface Fork {
   newSessionId: string
   transcriptPath?: string
   oldSessionId?: string
+  hostRoll: boolean
 }
 
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -115,6 +118,10 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
   /** The last switch to writer: the load, then the start. A writer's calls wait for it. */
   let ready: Promise<void> = Promise.resolve()
   let starting = false
+  /** Counts the switches to writer: only the latest one starts the collector and ends `starting`, so a
+   *  quick reader, writer, reader, writer does not let an earlier switch's end release held forks while
+   *  the latest load is still pending. */
+  let switches = 0
   /** Forks made before the decision, delivered to whichever side it picks. */
   const held: Fork[] = []
   let toldUndecided = false
@@ -140,6 +147,7 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
       () => projectPath
     )
   const sendFork = (f: Fork): void => {
+    if (f.hostRoll) return
     const args: Record<string, unknown> = { newSessionId: f.newSessionId }
     if (f.transcriptPath !== undefined) args.transcriptPath = f.transcriptPath
     if (f.oldSessionId !== undefined) args.oldSessionId = f.oldSessionId
@@ -161,6 +169,7 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
     mode = 'writer'
     d.store.gate(false)
     starting = true
+    const mine = ++switches
     ready = (async () => {
       try {
         // Loaded at every switch, not once: what a Host wrote while this app only read is the start.
@@ -169,14 +178,15 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
       } catch (err) {
         d.log(`workUnits.json load failed: ${message(err)}`)
       }
-      // A greeting made this app a reader while the file loaded.
-      if (mode !== 'writer') return
+      // A greeting made this app a reader while the file loaded, or a later switch to writer took over.
+      if (mode !== 'writer' || mine !== switches) return
       try {
         if (d.tracking()) await d.collector.start()
       } catch (err) {
         d.log(`work unit collector start failed: ${message(err)}`)
       }
     })().finally(() => {
+      if (mine !== switches) return
       starting = false
       if (mode === 'writer') for (const f of held.splice(0)) localFork(f)
     })
@@ -209,7 +219,9 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
       if (mode !== 'undecided') return
       if (!noHost) {
         if (!toldUndecided)
-          d.log('work units: a Host answered the address but never greeted, so this app starts no collector until one does')
+          d.log(
+            'work units: no Host greeting reached this app (a Host answered the address but never greeted, or the Host wiring failed after it began connecting), so this app starts no collector until one does'
+          )
         toldUndecided = true
         return
       }
@@ -248,8 +260,8 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
       else r = (await call('work-units-cancel', { projectPath: await fileKey(projectPath), id })) as typeof r
       if (!r.ok) throw new Error(r.reason)
     },
-    fork: (newSessionId, transcriptPath, oldSessionId) => {
-      const f: Fork = { newSessionId, transcriptPath, oldSessionId }
+    fork: (newSessionId, transcriptPath, oldSessionId, hostRoll = false) => {
+      const f: Fork = { newSessionId, transcriptPath, oldSessionId, hostRoll }
       if (mode === 'reader') sendFork(f)
       else if (mode === 'writer' && !starting) localFork(f)
       else held.push(f)

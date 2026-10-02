@@ -132,6 +132,9 @@ describe('createAppWorkUnits: before the greeting decides', () => {
     await w.onStartupSettled(false)
     expect(w.mode()).toBe('undecided')
     expect(start).not.toHaveBeenCalled()
+    // Both causes of that answer are named: a peer that never greeted, or the Host wiring failing after it
+    // began connecting (startHostClient's outer catch, where onConnect may never have been registered).
+    expect(m.logs.filter((l) => l.includes('never greeted') && l.includes('Host wiring failed'))).toHaveLength(1)
   })
 })
 
@@ -253,6 +256,25 @@ describe('createAppWorkUnits: in front of a Host that announces work-units', () 
     expect(onDisk()).toBe(before)
   })
 
+  it("a Host roll's fork is not sent back to the Host (it re-keyed its own roll); an app roll's still is", async () => {
+    const m = rig()
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(true)
+    w.fork('host-new', transcript, 'host-old', true)
+    w.fork('app-new', transcript, 'app-old', false)
+    await vi.waitFor(() => expect(m.calls).toHaveLength(1))
+    // A Host roll held before the decision is dropped at it as well.
+    const late = rig()
+    const w2 = createAppWorkUnits(late.deps)
+    w2.fork('host-new', undefined, 'host-old', true)
+    await w2.onGreeting(true)
+    await Promise.resolve()
+    expect(late.calls).toEqual([])
+    expect(m.calls).toEqual([
+      { cmd: 'work-units-fork', args: { newSessionId: 'app-new', transcriptPath: transcript, oldSessionId: 'app-old' } }
+    ])
+  })
+
   it('a fork made before the decision is sent once the Host is the writer', async () => {
     const m = rig()
     const w = createAppWorkUnits(m.deps)
@@ -293,6 +315,52 @@ describe('createAppWorkUnits: writer (no Host, or an older Host)', () => {
     await w.trackingChanged(true)
     expect(start).toHaveBeenCalledTimes(1)
     expect(m.calls).toEqual([])
+  })
+
+  it("in front of an older Host, a Host roll's fork is still made locally", async () => {
+    const m = rig()
+    const fork = vi.spyOn(m.collector, 'onSessionForked')
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(false)
+    w.fork('host-new', undefined, 'host-old', true)
+    expect(fork).toHaveBeenCalledWith('host-new', undefined, 'host-old')
+    expect(m.calls).toEqual([])
+  })
+
+  it('switches in quick succession hold a fork until the latest switch to writer has started the collector', async () => {
+    const m = rig()
+    const gates: Array<() => void> = []
+    const realLoad = m.store.load.bind(m.store)
+    vi.spyOn(m.store, 'load').mockImplementation(async () => {
+      await new Promise<void>((r) => gates.push(r))
+      return realLoad()
+    })
+    const fork = vi.spyOn(m.collector, 'onSessionForked')
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(true)
+    void w.onGreeting(false) // first switch to writer: load pending
+    void w.onGreeting(true)
+    const second = w.onGreeting(false) // second switch to writer: load pending
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+    gates[0]() // the first switch ends while the second still loads
+    await new Promise((r) => setTimeout(r, 20))
+    w.fork('new-s', transcript)
+    expect(fork).not.toHaveBeenCalled()
+    gates[1]()
+    await second
+    expect(fork).toHaveBeenCalledWith('new-s', transcript, undefined)
+  })
+
+  it('reader to writer with the file gone starts from empty, not from what this app held as the writer before', async () => {
+    const m = rig()
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(false)
+    m.state.tracking = false
+    expect(m.collector.listOpen(root).map((t) => t.id)).toEqual(['wu-host'])
+    await w.onGreeting(true)
+    await fs.rm(file)
+    await w.onGreeting(false)
+    expect(await w.list(root)).toEqual([])
   })
 
   it('list, complete, cancel and fork use the app collector, with the same answers as today', async () => {
