@@ -46,6 +46,36 @@ export function saveMcpSessions(
   })
 }
 
+/** The saved GitHub-writes value into `set`, or a toast when it cannot be read; the box then stays at
+ *  its default (off). */
+export function loadMcpGithubWrite(
+  set: (v: boolean) => void,
+  t: (key: MessageKey, params?: MessageParams) => string
+): Promise<void> {
+  return window.api.settings.getMcpGithubWrite().then(set, (err) => {
+    toast.error(t('settings.mcp.githubWrite.loadFailed', { detail: err instanceof Error ? err.message : String(err) }))
+  })
+}
+
+/** GitHub writes change things outside this machine, so the box is live only at Read and control. */
+export function githubWriteDisabled(access: McpAccess): boolean {
+  return access !== 'control'
+}
+
+/** Shows `next` at once, saves it, and puts `prev` back with a toast when the save fails. */
+export function saveMcpGithubWrite(
+  next: boolean,
+  prev: boolean,
+  set: (v: boolean) => void,
+  t: (key: MessageKey, params?: MessageParams) => string
+): Promise<void> {
+  set(next)
+  return window.api.settings.setMcpGithubWrite(next).catch((err) => {
+    set(prev)
+    toast.error(t('settings.mcp.githubWrite.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+  })
+}
+
 /** A registration line onto the clipboard, or a toast when the clipboard refuses it. */
 export function copyLine(line: string, t: (key: MessageKey, params?: MessageParams) => string): Promise<void> {
   return navigator.clipboard.writeText(line).catch((err) => {
@@ -75,15 +105,17 @@ export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null 
   const registration = registrationFor(cliStatus, window.api.platform)
   const [access, setAccess] = useState<McpAccess>('control')
   const [sessions, setSessions] = useState(false)
+  const [githubWrite, setGithubWrite] = useState(false)
 
   useEffect(() => {
     void loadMcpAccess(setAccess, t)
     void loadMcpSessions(setSessions, t)
+    void loadMcpGithubWrite(setGithubWrite, t)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, as before; a language change must not re-read over a choice in flight
   }, [])
 
-  // Three groups as direct children of the tab's .settings-stack, so the stack's gap separates the
-  // access setting, the sessions setting and the registration lines like neighbouring features.
+  // Groups as direct children of the tab's .settings-stack, so the stack's gap separates the
+  // access setting, the sessions and GitHub settings and the registration lines like neighbouring features.
   return (
     <>
       <div className="settings-group">
@@ -121,6 +153,18 @@ export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null 
           />
         </label>
         <span className="settings-hint">{t('settings.mcp.sessions.hint')}</span>
+      </div>
+      <div className="settings-group">
+        <label className="settings-row">
+          <span>{t('settings.mcp.githubWrite.label')}</span>
+          <input
+            type="checkbox"
+            checked={githubWrite}
+            disabled={githubWriteDisabled(access)}
+            onChange={(e) => void saveMcpGithubWrite(e.target.checked, githubWrite, setGithubWrite, t)}
+          />
+        </label>
+        <span className="settings-hint">{t('settings.mcp.githubWrite.hint')}</span>
       </div>
       {registration !== null && (
         <div className="settings-group">

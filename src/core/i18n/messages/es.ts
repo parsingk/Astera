@@ -34,6 +34,11 @@ export const es: Catalog = {
     'Abarca todas las sesiones que tiene Astera, incluidas tus propias terminales. Verlas requiere al menos solo lectura; escribir en ellas e iniciarlas requiere lectura y control. Una sesión que inicia un cliente sigue «Ejecutar agentes sin comprobar permisos» (activado por defecto), así que puede ejecutar comandos sin preguntar.',
   'settings.mcp.sessions.saveFailed': 'No se pudo guardar el ajuste de sesiones MCP: {detail}',
   'settings.mcp.sessions.loadFailed': 'No se pudo leer el ajuste de sesiones MCP: {detail}',
+  'settings.mcp.githubWrite.label': 'Permitir que los clientes MCP actúen en GitHub',
+  'settings.mcp.githubWrite.hint':
+    'Crea pull requests en borrador, vuelve a ejecutar la CI que falló y convierte en Jobs las incidencias escritas por miembros del repositorio.',
+  'settings.mcp.githubWrite.saveFailed': 'No se pudo guardar el ajuste de escritura de GitHub en MCP: {detail}',
+  'settings.mcp.githubWrite.loadFailed': 'No se pudo leer el ajuste de escritura de GitHub en MCP: {detail}',
   // Modo de permisos del agente
   'settings.agentPermission.label': 'Ejecutar agentes sin comprobar permisos',
   'settings.agentPermission.hint':

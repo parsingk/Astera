@@ -179,6 +179,8 @@ const api = {
     setMcpAccess: invoke('settings.setMcpAccess'),
     getMcpSessions: invoke('settings.getMcpSessions'),
     setMcpSessions: invoke('settings.setMcpSessions'),
+    getMcpGithubWrite: invoke('settings.getMcpGithubWrite'),
+    setMcpGithubWrite: invoke('settings.setMcpGithubWrite'),
     getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
     setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),

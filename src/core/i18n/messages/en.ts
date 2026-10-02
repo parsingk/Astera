@@ -63,6 +63,11 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcp.sessions.hint': 'Covers every session Astera holds, your own terminals included. Seeing them needs Read only; typing into them and starting them need Read and control. A session a client starts follows "Run agents without permission checks" (on by default), so it can run commands without asking.',
   'settings.mcp.sessions.saveFailed': 'Could not save the MCP sessions setting: {detail}',
   'settings.mcp.sessions.loadFailed': 'Could not read the MCP sessions setting: {detail}',
+  'settings.mcp.githubWrite.label': 'Let MCP clients act on GitHub',
+  'settings.mcp.githubWrite.hint':
+    'Creates draft pull requests, reruns failed CI and turns issues written by repository members into Jobs.',
+  'settings.mcp.githubWrite.saveFailed': 'Could not save the MCP GitHub writes setting: {detail}',
+  'settings.mcp.githubWrite.loadFailed': 'Could not read the MCP GitHub writes setting: {detail}',
   // Agent permission mode
   'settings.agentPermission.label': 'Run agents without permission checks',
   'settings.agentPermission.hint':

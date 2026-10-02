@@ -4,7 +4,7 @@ import { CATALOGS, LANGS } from '../../../core/i18n'
 const errors: string[] = []
 vi.mock('../lib/toast', () => ({ toast: { error: (m: string) => void errors.push(m) } }))
 
-const { copyLine, loadMcpAccess, registrationFor, loadMcpSessions, sessionsDisabled, saveMcpSessions } = await import('./McpSettings')
+const { copyLine, loadMcpAccess, registrationFor, loadMcpSessions, sessionsDisabled, saveMcpSessions, loadMcpGithubWrite, githubWriteDisabled, saveMcpGithubWrite } = await import('./McpSettings')
 
 const t = (key: string, params?: Record<string, unknown>): string => (params ? `${key} ${JSON.stringify(params)}` : key)
 const withApi = (getMcpAccess: () => Promise<unknown>): void => {
@@ -155,5 +155,59 @@ describe('McpSettings sessions first read', () => {
     await loadMcpSessions(set, t)
     expect(set).not.toHaveBeenCalled()
     expect(errors).toEqual(['settings.mcp.sessions.loadFailed {"detail":"ipc gone"}'])
+  })
+})
+
+describe('McpSettings GitHub writes checkbox', () => {
+  beforeEach(() => void (errors.length = 0))
+  const withSettings = (settings: Record<string, unknown>): void => {
+    ;(globalThis as { window?: unknown }).window = { api: { settings } }
+  }
+
+  it('is enabled only while access is Read and control', () => {
+    expect(githubWriteDisabled('off')).toBe(true)
+    expect(githubWriteDisabled('read')).toBe(true)
+    expect(githubWriteDisabled('control')).toBe(false)
+  })
+
+  it('saves the new value and keeps it', async () => {
+    const set = vi.fn()
+    const setMcpGithubWrite = vi.fn(async () => {})
+    withSettings({ setMcpGithubWrite })
+    await saveMcpGithubWrite(true, false, set, t)
+    expect(setMcpGithubWrite).toHaveBeenCalledWith(true)
+    expect(set).toHaveBeenCalledWith(true)
+    expect(errors).toEqual([])
+  })
+
+  it('reverts and says so when the save fails', async () => {
+    const set = vi.fn()
+    withSettings({ setMcpGithubWrite: async () => { throw new Error('disk full') } })
+    await saveMcpGithubWrite(true, false, set, t)
+    expect(set.mock.calls).toEqual([[true], [false]])
+    expect(errors).toEqual(['settings.mcp.githubWrite.saveFailed {"detail":"disk full"}'])
+  })
+
+  it('shows the saved value', async () => {
+    withSettings({ getMcpGithubWrite: async () => true })
+    const set = vi.fn()
+    await loadMcpGithubWrite(set, t)
+    expect(set).toHaveBeenCalledWith(true)
+    expect(errors).toEqual([])
+  })
+
+  it('says so when the saved value cannot be read, instead of leaving the box silently unchecked', async () => {
+    withSettings({ getMcpGithubWrite: async () => { throw new Error('ipc gone') } })
+    const set = vi.fn()
+    await loadMcpGithubWrite(set, t)
+    expect(set).not.toHaveBeenCalled()
+    expect(errors).toEqual(['settings.mcp.githubWrite.loadFailed {"detail":"ipc gone"}'])
+  })
+
+  it('has its strings in all four languages', () => {
+    for (const lang of LANGS)
+      for (const key of ['settings.mcp.githubWrite.label', 'settings.mcp.githubWrite.hint', 'settings.mcp.githubWrite.saveFailed', 'settings.mcp.githubWrite.loadFailed'] as const)
+        expect(CATALOGS[lang].messages[key], `${lang} ${key}`).toBeTruthy()
+    expect(CATALOGS.en.messages['settings.mcp.githubWrite.label']).toBe('Let MCP clients act on GitHub')
   })
 })

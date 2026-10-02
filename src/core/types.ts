@@ -1254,6 +1254,9 @@ export interface CoreApi {
     // Whether an MCP client may see and use sessions at all (off by default).
     getMcpSessions(): Promise<boolean>
     setMcpSessions(v: boolean): Promise<void>
+    // Whether an MCP client may act on GitHub (off by default; needs access Read and control).
+    getMcpGithubWrite(): Promise<boolean>
+    setMcpGithubWrite(v: boolean): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses

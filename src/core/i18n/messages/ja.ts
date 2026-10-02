@@ -33,6 +33,11 @@ export const ja: Catalog = {
     'Astera が保持するすべてのセッションが対象で、自分で開いたターミナルも含まれます。閲覧には読み取り専用以上、入力と開始には読み取りと操作が必要です。クライアントが開始したセッションは「権限確認なしでエージェントを実行」(既定でオン)に従うため、確認なしでコマンドを実行できます。',
   'settings.mcp.sessions.saveFailed': 'MCP セッションの設定を保存できませんでした: {detail}',
   'settings.mcp.sessions.loadFailed': 'MCP セッションの設定を読み込めませんでした: {detail}',
+  'settings.mcp.githubWrite.label': 'MCP クライアントに GitHub での操作を許可する',
+  'settings.mcp.githubWrite.hint':
+    'ドラフトのプルリクエストを作成し、失敗した CI を再実行し、リポジトリのメンバーが書いた Issue を Job に変換します。',
+  'settings.mcp.githubWrite.saveFailed': 'MCP の GitHub 書き込み設定を保存できませんでした: {detail}',
+  'settings.mcp.githubWrite.loadFailed': 'MCP の GitHub 書き込み設定を読み込めませんでした: {detail}',
   // エージェント権限モード
   'settings.agentPermission.label': '権限確認なしでエージェントを実行',
   'settings.agentPermission.hint':

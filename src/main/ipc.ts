@@ -5633,6 +5633,14 @@ export function registerIpc(
     await core.appSettings.setMcpSessions(v)
   })
 
+  // Whether an MCP client may act on GitHub (MCP P2-B design). The Host reads the file on every MCP
+  // call (readMcpGithubWrite), so saving it is the whole effect.
+  ipcMain.handle('settings.getMcpGithubWrite', () => core.appSettings.getMcpGithubWrite())
+  ipcMain.handle('settings.setMcpGithubWrite', async (_e, v: unknown) => {
+    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_GITHUB_WRITE: ${String(v)}`)
+    await core.appSettings.setMcpGithubWrite(v)
+  })
+
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
   // settings.ts); this handler validates the value and starts the orchestration wiring the journal
   // hooks live in, the way the other toggles do, and opens or closes the recorder with the toggle.

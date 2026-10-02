@@ -67,6 +67,11 @@ export const ko = {
   'settings.mcp.sessions.hint': 'Astera 가 가진 모든 세션이 대상이며, 직접 연 터미널도 포함됩니다. 세션을 보려면 읽기 전용 이상이면 되고, 입력하거나 시작하려면 읽기와 제어가 필요합니다. 클라이언트가 시작한 세션은 "권한 확인 없이 에이전트 실행"(기본값 켜짐)을 따르므로, 묻지 않고 명령을 실행할 수 있습니다.',
   'settings.mcp.sessions.saveFailed': 'MCP 세션 설정을 저장하지 못했습니다: {detail}',
   'settings.mcp.sessions.loadFailed': 'MCP 세션 설정을 읽지 못했습니다: {detail}',
+  'settings.mcp.githubWrite.label': 'MCP 클라이언트가 GitHub 에서 작업하게 하기',
+  'settings.mcp.githubWrite.hint':
+    '초안 풀 리퀘스트를 만들고, 실패한 CI 를 다시 실행하고, 저장소 멤버가 작성한 이슈를 Job 으로 바꿉니다.',
+  'settings.mcp.githubWrite.saveFailed': 'MCP GitHub 쓰기 설정을 저장하지 못했습니다: {detail}',
+  'settings.mcp.githubWrite.loadFailed': 'MCP GitHub 쓰기 설정을 읽지 못했습니다: {detail}',
   // 에이전트 권한 모드
   'settings.agentPermission.label': '권한 확인 없이 에이전트 실행',
   'settings.agentPermission.hint':
