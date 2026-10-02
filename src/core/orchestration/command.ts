@@ -150,12 +150,16 @@ export interface HostSession {
 /** What `sessions read` shows: a terminal session's scrollback replayed into a terminal at the size
  *  the tab has (host/sessions.ts). `screen` is the visible rows, top first, with the blank rows under
  *  the last painted one dropped; `scrollback` is up to `--lines` rows just above it, oldest first.
- *  Each row is the text in its cells, trailing spaces trimmed. */
+ *  Each row is the text in its cells, trailing spaces trimmed. `screenWrapped` and `scrollbackWrapped`
+ *  say, row for row, whether that row continues the one above it (the terminal wrapped a line wider
+ *  than the tab); absent from a Host older than them. */
 export interface SessionScreen {
   cols: number
   rows: number
   screen: string[]
   scrollback: string[]
+  screenWrapped?: boolean[]
+  scrollbackWrapped?: boolean[]
 }
 
 /** What a turn sent to a chat session came to. The app refuses one while the session holds a card

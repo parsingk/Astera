@@ -335,8 +335,22 @@ describe('registrySessions — read renders the screen', () => {
       cols: 80,
       rows: 10,
       screen: ['Microsoft Windows', '(c) Microsoft Corporation.', '', 'D:\\repo>echo hi', 'hi', '', 'D:\\repo>'],
-      scrollback: []
+      scrollback: [],
+      screenWrapped: [false, false, false, false, false, false, false],
+      scrollbackWrapped: []
     })
+  })
+
+  // A row the terminal wrapped onto the next (a line wider than the tab) says so, so a reader can
+  // join the line again: a secret split over two rows is one secret (MCP P1 fix round 1).
+  it('marks each row that continues the one above it, in the screen and in the scrollback', async () => {
+    const { sessions, agent } = harness({ cols: 10, rows: 2 })
+    agent.emit('abcdefghijklmno\r\nshort\r\n0123456789ABCDEFGHIJxyz')
+    const r = await sessions.readSession('ses-1', 200)
+    expect([...r.scrollback, ...r.screen]).toEqual(['abcdefghij', 'klmno', 'short', '0123456789', 'ABCDEFGHIJ', 'xyz'])
+    expect([...(r.scrollbackWrapped ?? []), ...(r.screenWrapped ?? [])]).toEqual([false, true, false, false, true, true])
+    expect(r.screenWrapped).toHaveLength(r.screen.length)
+    expect(r.scrollbackWrapped).toHaveLength(r.scrollback.length)
   })
 
   // A TUI paints wherever it likes and overwrites what it painted.

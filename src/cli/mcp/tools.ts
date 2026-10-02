@@ -3,6 +3,7 @@
 // camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
 import { LIST_LIMIT } from './lists'
+import { SESSION_TEXT_CAP } from './sessionText'
 
 export const MCP_LIMITS = {
   objective: 20_000,
@@ -343,7 +344,7 @@ export const TOOLS: ToolDef[] = [
     title: 'Get a session',
     readOnly: true,
     cmd: 'sessions-read',
-    description: `What a session shows now. A terminal session gives its last rendered rows (screen, the visible rows, and scrollback, the rows above them); a chat session gives its last turns and, when it holds one open, the approval or question it waits on (pending). Anything in the text that looks like a secret is redacted. ${SESSIONS_READ}`,
+    description: `What a session shows now. A terminal session gives its last rendered rows (screen, the visible rows, and scrollback, the rows above them); a chat session gives its last turns and, when it holds one open, the approval or question it waits on (pending). Anything in the text that looks like a secret is redacted. One answer holds at most ${SESSION_TEXT_CAP} characters of text, the newest: over that, the oldest rows or turns are left out and truncated: true says so. ${SESSIONS_READ}`,
     inputSchema: {
       sessionId: id,
       lines: z
@@ -352,7 +353,9 @@ export const TOOLS: ToolDef[] = [
         .min(1)
         .max(MCP_LIMITS.sessionLines)
         .optional()
-        .describe(`A terminal session's rows, 1 to ${MCP_LIMITS.sessionLines} (default 100). Refused for a chat session.`),
+        .describe(
+          `A terminal session's rows of scrollback above the screen, 1 to ${MCP_LIMITS.sessionLines} (default 100); the visible screen rows always come on top of these. Refused for a chat session.`
+        ),
       turns: z
         .number()
         .int()

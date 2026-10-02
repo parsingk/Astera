@@ -888,8 +888,10 @@ into a terminal emulator at the tab's current size and returns what that termina
 `data.screen` is the visible rows, top first, with the empty rows below the last painted one left
 off, and `data.scrollback` is up to `--lines` rows (default 200, at most 10000) from just above the screen, oldest
 first. Each row is the text of its cells with trailing spaces trimmed; colours and other styling are
-not included. `data.cols` and `data.rows` are the size it was rendered at. `--human` prints the
-scrollback and then the screen, one row per line.
+not included. `data.cols` and `data.rows` are the size it was rendered at. `data.screenWrapped` and
+`data.scrollbackWrapped` hold one mark per row of `screen` and `scrollback`: `true` when that row
+continues the one above it, because the terminal wrapped a line wider than the tab; join them to get
+the line back. `--human` prints the scrollback and then the screen, one row per line.
 
 ```json
 {"ok":true,"data":{"id":"…","kind":"terminal","alive":true,"cols":100,"rows":30,

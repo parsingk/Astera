@@ -211,6 +211,10 @@ describe('publicFor', () => {
     expect(
       publicFor('sessions-read', { id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [], raw: 'x' })
     ).toEqual({ id: 's1', alive: true, cols: 80, rows: 24, screen: ['hi'], scrollback: [] })
+    // The wrap marks are public (MCP P1 fix round 1): a reader joins a wrapped line with them.
+    expect(
+      publicFor('sessions-read', { id: 's1', screen: ['a', 'b'], scrollback: [], screenWrapped: [false, true], scrollbackWrapped: [] })
+    ).toEqual({ id: 's1', screen: ['a', 'b'], scrollback: [], screenWrapped: [false, true], scrollbackWrapped: [] })
     // 대화 세션의 read — 턴 안과 카드 안도 같은 규칙으로 가린다. 한 겹 안이라고 새면 가림막이 아니다.
     expect(
       publicFor('sessions-read', {

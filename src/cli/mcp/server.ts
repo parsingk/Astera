@@ -17,6 +17,7 @@ import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
+import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
 import { TOOLS, convergenceRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
@@ -75,7 +76,25 @@ const OUTPUT_TEXT: Record<string, readonly string[]> = {
 const redactOutput = (tool: string, v: unknown): unknown => {
   const keys = OUTPUT_TEXT[tool]
   if (keys === undefined || v === null || typeof v !== 'object' || Array.isArray(v)) return v
-  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, keys.includes(k) ? redactAll(x) : x]))
+  const out: Record<string, unknown> = Object.fromEntries(
+    Object.entries(v).map(([k, x]) => [k, keys.includes(k) ? redactAll(x) : x])
+  )
+  // A terminal's rows are visual rows: a line wider than the tab wraps onto the next, a secret with
+  // it. The scrollback runs straight on into the screen, so the two are redacted as one list of rows,
+  // joined back into lines first (sessionText.ts).
+  const o = v as Record<string, unknown>
+  if (tool === 'get_session' && Array.isArray(o.screen) && Array.isArray(o.scrollback)) {
+    const scrollback = o.scrollback.map(String)
+    const screen = o.screen.map(String)
+    const marks =
+      Array.isArray(o.scrollbackWrapped) && Array.isArray(o.screenWrapped)
+        ? [...o.scrollbackWrapped, ...o.screenWrapped].map((m) => m === true)
+        : undefined
+    const rows = redactRows([...scrollback, ...screen], marks)
+    out.scrollback = rows.slice(0, scrollback.length)
+    out.screen = rows.slice(scrollback.length)
+  }
+  return out
 }
 
 const redact = (v: unknown): unknown =>
@@ -197,7 +216,7 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
     : null
   const count = cut === null ? '' : cut.total === undefined ? ` (${cut.list.length})` : ` (${cut.list.length} of ${cut.total})`
   // MCP structured content is an object: a list goes under its name, as in the CLI's `data`.
-  const data =
+  let data =
     cut === null
       ? dataFor(t.cmd, shaped)
       : {
@@ -205,8 +224,17 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
           ...(cut.truncated ? { truncated: true, total: cut.total } : {}),
           ...(cut.nextCursor !== undefined ? { nextCursor: cut.nextCursor } : {})
         }
+  // get_session holds at most SESSION_TEXT_CAP characters of text, the newest, cut after redaction.
+  let note = ''
+  if (t.name === 'get_session') {
+    const capped = capSession(data)
+    if (capped.truncated) {
+      data = { ...capped.data, truncated: true }
+      note = `, cut to its newest ${SESSION_TEXT_CAP} characters of text: ask for fewer lines or turns to read less at once`
+    }
+  }
   return {
-    content: textResult(`${t.title}${count}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
+    content: textResult(`${t.title}${count}${note}${r.replayed ? ', replayed from the first call with this requestId' : ''}.`, data),
     structuredContent: data
   }
 }

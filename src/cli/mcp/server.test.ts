@@ -791,6 +791,9 @@ describe('the session and output tools (MCP P1)', () => {
     expect(d('send_message')).toMatch(/returns as soon as the text is accepted/)
     expect(d('send_message')).toContain('get_session')
     expect(d('get_task_output')).toMatch(/only while the process that started the worker runs/)
+    expect(d('get_session')).toMatch(/at most 40000 characters.*truncated: true/)
+    const lines = tools.find((t) => t.name === 'get_session')?.inputSchema.properties?.lines as { description?: string }
+    expect(lines.description).toMatch(/scrollback.*the visible screen rows always come on top/)
   })
 
   it('sends each tool as its Host command with the keys its handler reads', async () => {
@@ -960,7 +963,19 @@ describe('the session and output tools (MCP P1)', () => {
 
   it('get_session redacts a token in every text field of a terminal and a chat read', async () => {
     const leak = `key ${SK} and Bearer ${BEARER}`
-    const terminal = { id: 's1', kind: 'terminal', alive: true, cols: 80, rows: 24, screen: ['ok', leak], scrollback: [leak, 'old'] }
+    // With wrap marks, as a current Host gives them. Without them a row that follows a token is
+    // redacted too, since it may be the token's wrapped end (sessionText.ts).
+    const terminal = {
+      id: 's1',
+      kind: 'terminal',
+      alive: true,
+      cols: 80,
+      rows: 24,
+      screen: ['ok', leak],
+      scrollback: [leak, 'old'],
+      screenWrapped: [false, false],
+      scrollbackWrapped: [false, false]
+    }
     const chat = {
       id: 's2',
       kind: 'chat',
@@ -994,6 +1009,48 @@ describe('the session and output tools (MCP P1)', () => {
     expect(cd.turns[1].text).toBe('fine')
     expect(cd.turns[1].tools[0]).toContain('Bash key ')
     expect(cd.pending.kind).toBe('approval')
+  })
+
+  // xterm rows are visual rows: a key printed on one line wider than the tab sits on two rows.
+  it('get_session redacts a key that wraps from the scrollback onto the screen, with and without wrap marks', async () => {
+    const line = `export ANTHROPIC_API_KEY=${SK}`
+    const [first, second] = [line.slice(0, 40), line.slice(40)]
+    for (const marks of [{ scrollbackWrapped: [false, false], screenWrapped: [true, false] }, {}]) {
+      const body = { id: 's1', kind: 'terminal', alive: true, cols: 40, rows: 24, scrollback: ['$ env', first], screen: [second, '$'], ...marks }
+      const r = await (await connected(answering({ 'sessions-read': { status: 200, body } }).link)).callTool({
+        name: 'get_session',
+        arguments: { sessionId: 's1', lines: 10 }
+      })
+      const d = r.structuredContent as { screen: string[]; scrollback: string[] }
+      expect(d.scrollback).toHaveLength(2)
+      expect(d.screen).toHaveLength(2)
+      const rows = [...d.scrollback, ...d.screen]
+      for (const piece of [SK.slice(3, 12), SK.slice(-10), second.slice(0, 8)]) expect(rows.join('|'), JSON.stringify(marks)).not.toContain(piece)
+      expect(textOf(r)).not.toContain(SK.slice(-10))
+      expect(d.scrollback[0]).toBe('$ env')
+      expect(d.screen[1]).toBe('$')
+    }
+  })
+
+  it('get_session over 40 000 characters keeps the newest rows and says to ask for fewer', async () => {
+    const scrollback = Array.from({ length: 60 }, (_, i) => `${i}`.padEnd(1000, '.'))
+    const body = { id: 's1', kind: 'terminal', alive: true, cols: 1000, rows: 24, scrollback, screen: ['$ prompt'] }
+    const r = await (await connected(answering({ 'sessions-read': { status: 200, body } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's1', lines: 500 }
+    })
+    const d = r.structuredContent as { screen: string[]; scrollback: string[]; truncated?: boolean }
+    expect(d.truncated).toBe(true)
+    expect(d.screen).toEqual(['$ prompt'])
+    expect(d.scrollback).toEqual(scrollback.slice(-39))
+    expect(textOf(r).split('\n')[0]).toMatch(/40000 characters.*fewer lines or turns/)
+    expect(JSON.parse(textOf(r).split('\n')[1])).toEqual(d)
+    // Under the cap: no truncated field at all.
+    const small = await (await connected(answering({ 'sessions-read': { status: 200, body: { ...body, scrollback: ['a'] } } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's1', lines: 5 }
+    })
+    expect('truncated' in (small.structuredContent as object)).toBe(false)
   })
 
   it('get_check_output and get_task_output redact their text', async () => {

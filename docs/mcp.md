@@ -169,7 +169,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `create_task` | Add a Task to a Job's plan (`jobId`: every Run started from then on copies it) or to one Run (`runId`); give exactly one. `spec` is the work in full (up to 50 000 characters), `title` a short name (up to 200), `deps` the Task ids it waits for, `validate` run configuration ids from `list_run_configs` that must pass, `review: true` asks for a review. Without `accountId` the Task runs on the Job's coordinator account. |
 | `list_run_configs` | The run configurations of a Job's project folder (`id`, `name`, `type`): the checks a Task can name in `create_task`'s `validate`. |
 | `list_sessions` | The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by `status` (`alive`, `ended`, or a terminal's `working`, `waiting` or `unknown`), `provider`, and `projectId`. Needs the session setting (below). |
-| `get_session` | What a session shows now: a terminal's last rendered rows (`screen`, `scrollback`; `lines` 1 to 500, 100 when not given), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). Needs the session setting. |
+| `get_session` | What a session shows now: a terminal's visible rows (`screen`, always all of them) and the rows above them (`scrollback`, `lines` 1 to 500, 100 when not given), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). One answer holds at most 40 000 characters of text, the newest; over that the oldest rows or turns are left out and `truncated: true` says so, so ask for fewer `lines` or `turns`. `screenWrapped` and `scrollbackWrapped` mark each row that continues the one above it. Needs the session setting. |
 | `send_message` | Type `text` (up to 50 000 characters) into a live session and press Enter; a chat session takes it as one turn. Returns as soon as the text is accepted, not when the session has answered: poll `get_session`. Needs the session setting and "Read and control". |
 | `create_session` | Start a terminal or chat session in a registered project's folder (`projectId`), on `accountId` or, without one, on `provider`'s default account (`claude` unless given). Needs the session setting and "Read and control". |
 | `get_check_output` | The output of a Task's failed check (`check`, or the first that failed): the last 4000 characters of its log, last round only. `offset` and `limit` (1 to 4000) page through them; `total` is how many there are. A Task with no failed check output is `CONFLICT`. |
@@ -249,8 +249,8 @@ restart forgets them.
 | Value | Allows |
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
-| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output` and `get_task_output` included. |
-| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`. This is the default. |
+| Read only | The list and get tools, `get_run`, `get_completion`, `list_run_configs`, `get_check_output` and `get_task_output` included; `list_sessions` and `get_session` only with the session setting on. |
+| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run` and `answer_question`, and, with the session setting on, `send_message` and `create_session`. This is the default. |
 
 **Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
 `create_session` also need **Let MCP clients see and use sessions** (Settings, CLI tab), which is off
@@ -280,7 +280,10 @@ a field with nothing left.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
   results, questions, answers, review issues and suggested fixes, failure summaries, error messages)
   is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
-- Session and output text is redacted the same way: every screen and scrollback row, every turn's
+- Session and output text is redacted the same way: every screen and scrollback row (a line the
+  terminal wrapped over several rows is joined and redacted as one line, so a key split across rows
+  is caught; from a Host too old to mark wrapped rows, each pair of adjacent rows is checked
+  together instead, which can redact a row that only follows a token), every turn's
   text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
   every line of `get_task_output`. `total` and `offset` of `get_check_output` count the log before
   redaction.
