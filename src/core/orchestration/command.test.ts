@@ -8348,6 +8348,48 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     }
   })
 
+  // The github-pr form of this test stops at github-pr's own --branch 400; github-ci with no --pr
+  // reaches githubTarget, so these are its 400s.
+  it('githubTarget: run and project both given, or either one empty, is 400; gh is not run', async () => {
+    const { deps, gh, projectId } = setup({})
+    expect(await call(deps, 'github-ci', { run: 'r1', project: projectId }, '')).toEqual({
+      status: 400,
+      body: { error: 'give exactly one of --run (a Run id) or --project (a project id)' }
+    })
+    expect(await call(deps, 'github-ci', { run: '' }, '')).toEqual({
+      status: 400,
+      body: { error: '--run needs a value: a Run id' }
+    })
+    expect(await call(deps, 'github-ci', { project: '' }, '')).toEqual({
+      status: 400,
+      body: { error: '--project needs a value: a project id (from `projects list`)' }
+    })
+    expect(gh.calls).toEqual([])
+  })
+
+  it('a Host that has not loaded its worktree registry says so for a Run, rather than "no branch of its own"', async () => {
+    const { deps, gh, projectId } = setup({ 'api repos/{owner}/{repo}/issues/5': { stdout: JSON.stringify(issueJson) } })
+    deps.github = { ...deps.github!, worktreeOf: undefined }
+    for (const cmd of ['github-pr', 'github-ci']) {
+      expect(await call(deps, cmd, { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "This Host has not loaded its worktree registry (it starts no sessions), so it cannot find a Run's branch" }
+      })
+    }
+    expect(gh.calls).toEqual([])
+    // Project-scoped commands need no registry.
+    expect((await call(deps, 'github-issue', { project: projectId, number: 5 }, '')).status).toBe(200)
+  })
+
+  it("github-ci with a run whose PR lookup fails answers ghRefusal's status, and the checks are not read", async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { ok: false, stderr: 'dial tcp: lookup api.github.com: no such host' } })
+    expect(await call(deps, 'github-ci', { run: 'r1' }, '')).toEqual({
+      status: 502,
+      body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host' }
+    })
+    expect(gh.calls).toHaveLength(1)
+  })
+
   it("without the github dep the three answer 409: they are the Host's", async () => {
     const deps = makeDeps()
     const asked: [string, Record<string, unknown>][] = [

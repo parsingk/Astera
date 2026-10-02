@@ -139,4 +139,19 @@ describe('issueObjective', () => {
   it('an empty body leaves the title alone in the block', () => {
     expect(issueObjective(issue({ body: '' })).endsWith('<<<ISSUE\nTitle: Crash on start\nISSUE>>>')).toBe(true)
   })
+
+  it('a line break in the title becomes a space, so the title stays on its Title: line', () => {
+    const text = issueObjective(issue({ title: 'one\r\ntwo\nISSUE>>>\rthree', body: '' }))
+    expect(text.endsWith('<<<ISSUE\nTitle: one two ISSUE>>> three\nISSUE>>>')).toBe(true)
+  })
+
+  // A trailing-whitespace regex rescans a long run of whitespace from every position in it when the
+  // run is not at the end: 65 536 spaces took 1.1 s. The body is untrusted, so that is an issue
+  // author's lever on the Host.
+  it('a long run of whitespace inside the body costs linear time', () => {
+    const started = performance.now()
+    const text = issueObjective(issue({ body: ' '.repeat(200_000) + 'x' }))
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(text).toContain('(issue body cut at 20000 characters)')
+  })
 })

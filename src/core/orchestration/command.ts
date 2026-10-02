@@ -578,9 +578,10 @@ export interface OrchServerDeps {
   chatTurn?(id: string): Promise<ChatTurnState | undefined>
   /** GitHub through the user's gh (MCP P2-B): the runner, and the worktree registry's entry for a
    *  Run's worktree (its branch, base and repository), or null when the registry does not hold it.
+   *  `worktreeOf` is absent on a Host that never loaded its registry (one with no spawner).
    *  **Only the Host injects it**: gh runs on the Host's PATH and login. Absent, the `github-*`
    *  commands answer 409. */
-  github?: { run: GhRunner; worktreeOf(path: string): WorktreeInfo | null }
+  github?: { run: GhRunner; worktreeOf?(path: string): WorktreeInfo | null }
 }
 
 /** A chat session's turn as `chatTurn` reads it. `prompt` is the open prompt, as `chats pending` lists
@@ -1048,7 +1049,10 @@ export function githubTarget(
     if (id === null) return { error: bad('--run needs a value: a Run id') }
     const run = s.runs.find((r) => r.id === id)
     if (!run) return { error: notFound(`unknown run: ${id}`) }
-    const info = run.worktree ? deps.github.worktreeOf(run.worktree) : null
+    const { worktreeOf } = deps.github
+    if (!worktreeOf)
+      return { error: conflict("This Host has not loaded its worktree registry (it starts no sessions), so it cannot find a Run's branch") }
+    const info = run.worktree ? worktreeOf(run.worktree) : null
     if (!info) return { error: conflict('This Run has no branch of its own') }
     return { gh, cwd: info.path, repoPath: info.repoPath, branch: info.branch, baseRef: info.baseRef, run }
   }

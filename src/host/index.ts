@@ -508,9 +508,9 @@ async function main(): Promise<void> {
       log: (m) => log.write(m)
     }),
     // The `github-*` reads (MCP P2-B): the user's gh on this Host's PATH, and a Run's branch from this
-    // Host's worktree registry. With no spawner the registry is never loaded, so no Run has a branch
-    // of its own here and only the project-scoped reads answer.
-    github: { run: defaultGhRunner, worktreeOf: (p) => worktrees.infoOf(p) },
+    // Host's worktree registry. With no spawner the registry is never loaded, so `worktreeOf` is left
+    // out and a Run-scoped command says so; the project-scoped ones still answer.
+    github: { run: defaultGhRunner, ...(spawner ? { worktreeOf: (p: string) => worktrees.infoOf(p) } : {}) },
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,
