@@ -4382,8 +4382,10 @@ export async function handleCommand(
       if (title === null) return bad('--title needs a value')
       if (args.body !== undefined && typeof args.body !== 'string') return bad('--body must be text')
       const body = args.body as string | undefined
-      if (args.draft !== undefined && typeof args.draft !== 'boolean') return bad('--draft must be true or false')
-      const draft = args.draft !== false
+      // A boolean from MCP, or the string parseArgs makes of `--draft false` on the command line.
+      if (args.draft !== undefined && ![true, false, 'true', 'false'].includes(args.draft as never))
+        return bad('--draft must be true or false')
+      const draft = args.draft !== false && args.draft !== 'false'
       const baseArg = args.base === undefined ? undefined : str(args.base)
       if (baseArg === null) return bad('--base needs a value: the branch to open the pull request against')
       const t = githubTarget(deps, s, args)
@@ -4421,7 +4423,7 @@ export async function handleCommand(
       // remote. `exists` keeps gh's own words, which end with the existing pull request's URL.
       if (made.kind === 'exists') return { status: 409, body: { error: made.detail.trim(), pushed: made.pushed } }
       if (made.kind === 'rejected') return { status: 409, body: { error: 'The push was rejected', pushed: made.pushed } }
-      const refused = ghRefusal({ ok: false, ...ghFailureSentence({ ok: false, stdout: '', stderr: made.detail }) })
+      const refused = ghRefusal({ ok: false, ...ghFailureSentence({ ok: false, stdout: '', stderr: made.detail, spawnError: made.spawnError }) })
       return { status: refused.status, body: { ...(refused.body as object), pushed: made.pushed } }
     }
     case 'github-ci-rerun': {

@@ -8661,6 +8661,28 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       })
     })
 
+    it('github-pr-create with gh not installed answers the not-installed sentence (409)', async () => {
+      const { deps } = await prSetup({
+        created: { ok: false, stage: 'create', kind: 'other', detail: '', pushed: true, spawnError: 'ENOENT' }
+      })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH", pushed: true }
+      })
+    })
+
+    // parseArgs keeps flag values as strings, so `--draft false` typed on the command line is 'false'.
+    it('github-pr-create takes draft as a boolean or the strings true and false; anything else is 400', async () => {
+      for (const [given, draft] of [[false, false], ['false', false], ['true', true], [true, true]] as const) {
+        const { deps, asked } = await prSetup()
+        const r = await call(deps, 'github-pr-create', { run: 'r1', draft: given }, '')
+        expect(r, String(given)).toEqual({ status: 200, body: { url: PR_URL, draft, pushed: true } })
+        expect(asked.createPr[0].draft, String(given)).toBe(draft)
+      }
+      const { deps } = await prSetup()
+      expect((await call(deps, 'github-pr-create', { run: 'r1', draft: 'no' }, '')).status).toBe(400)
+    })
+
     it('github-pr-create argument refusals (400): a project, an empty title or base, a draft that is not true or false', async () => {
       const { deps, asked, projectId } = await prSetup()
       for (const args of [

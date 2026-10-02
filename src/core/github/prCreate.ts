@@ -40,6 +40,9 @@ export type PrCreateResult =
       /** Whether the branch reached the remote. A create-stage failure leaves it pushed, and
        *  saying so is what stops someone undoing a push that was fine. */
       pushed: boolean
+      /** The gh spawn error of a create-stage failure, when there was one (ENOENT: gh is not installed).
+       *  stderr is empty then, so without it the failure reads as unclassified. */
+      spawnError?: string
     }
 
 /** `git push` is the one git call this function makes, and git()'s 30s default is far too short for
@@ -82,7 +85,14 @@ export async function createPullRequest(
   const kind: PrCreateFailureKind = /already exists/i.test(created.stderr)
     ? 'exists'
     : classifyGhFailure(created.stderr, created.spawnError)
-  return { ok: false, stage: 'create', kind, detail: created.stderr, pushed: req.needsPush }
+  return {
+    ok: false,
+    stage: 'create',
+    kind,
+    detail: created.stderr,
+    pushed: req.needsPush,
+    ...(created.spawnError ? { spawnError: created.spawnError } : {})
+  }
 }
 
 /** The commits this branch adds over its base, newest first — the order gh --fill uses. */
