@@ -7,25 +7,9 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { ProjectUnderstanding } from '../../core/understanding/types'
-
-/** projectPath → 그 프로젝트의 이해. orchestration.json 과 같은 갈래로, 프로젝트를 나누는 것은
- *  파일이 아니라 파일 안의 키다 */
-interface StoreShape {
-  projects: Record<string, ProjectUnderstanding>
-}
-
-const isObj = (v: unknown): v is Record<string, unknown> =>
-  v !== null && typeof v === 'object' && !Array.isArray(v)
-
-function isUnderstanding(v: unknown): v is ProjectUnderstanding {
-  if (!isObj(v)) return false
-  return Array.isArray(v.records)
-}
-
-function isValid(v: unknown): v is StoreShape {
-  if (!isObj(v) || !isObj(v.projects)) return false
-  return Object.values(v.projects).every(isUnderstanding)
-}
+// The shape guard is core's so the Host's read-only reader (core/understanding/read.ts) takes and
+// refuses exactly what this store does.
+import { isValid, type StoreShape } from '../../core/understanding/read'
 
 export class UnderstandingStore {
   private state: StoreShape = { projects: {} }
