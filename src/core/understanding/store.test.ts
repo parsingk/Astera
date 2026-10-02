@@ -109,6 +109,19 @@ describe('UnderstandingStore', () => {
     expect((await s.load()).recovered).toBe(true)
   })
 
+  it('rides out a rename refused while another process reads the file (EPERM on win32)', async () => {
+    const s = new UnderstandingStore(file)
+    await s.load()
+    const busy = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValueOnce(busy)
+    try {
+      await s.set('C:/p', sample)
+    } finally {
+      rename.mockRestore()
+    }
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ projects: { 'C:/p': sample } })
+  })
+
   it('쓰기가 한 번 실패해도 다음 쓰기는 진행된다 — 큐가 얼어붙지 않는다', async () => {
     // 부모 자리에 파일을 두면 mkdir 이 실패해 첫 쓰기가 거절된다
     const nested = path.join(dir, 'sub', 'understanding.json')

@@ -10,6 +10,7 @@ import type { ProjectUnderstanding } from './types'
 // The shape guard is core's so the Host's read-only reader (core/understanding/read.ts) takes and
 // refuses exactly what this store does.
 import { isValid, type StoreShape } from './read'
+import { renameRetrying } from '../renameRetry'
 
 export class UnderstandingStore {
   private state: StoreShape = { projects: {} }
@@ -104,7 +105,9 @@ export class UnderstandingStore {
       // Stamped from the temp file: a rename keeps mtime and size, and reading the target after it
       // could take another process's write that landed in between for this one's.
       const stamp = await this.stamp(tmp)
-      await fs.rename(tmp, this.filePath)
+      // Retried: on win32 a rename over a file another process is reading (the app's reader, an MCP
+      // read tool) is refused for the moment the handle is open.
+      await renameRetrying(tmp, this.filePath)
       this.seen = stamp
     }
     // then(run, run) 의 두 인자가 같은 이유: 앞선 쓰기가 실패해도 다음 쓰기는 진행돼야 한다.
