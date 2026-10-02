@@ -9,8 +9,8 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import type { ExternalGitChange } from '../../core/git/types'
-import type { SessionWorkUnit, TranscriptCursor } from '../../core/workUnit/types'
+import type { ExternalGitChange } from '../git/types'
+import type { SessionWorkUnit, TranscriptCursor } from './types'
 
 /** 설계 §9 의 ProjectGitSnapshot — "Astera 가 마지막으로 알던 git 상태"(EG §4).
  *

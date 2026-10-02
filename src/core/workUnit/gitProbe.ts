@@ -1,9 +1,9 @@
 // git 에게 지금 어디 있는지 묻는다 — 판정은 하지 않는다. 판정은 core/git/transition.ts 의 일이다.
-import { git } from '../../core/worktrees/git'
-import { parsePorcelainZ } from '../../core/git/status'
-import type { GitRef } from '../../core/git/types'
+import { git } from '../worktrees/git'
+import { parsePorcelainZ } from '../git/status'
+import type { GitRef } from '../git/types'
 import type { CollectorGit } from './collector'
-import { readRange, WATCH_ROUND_TIMEOUT_MS, type GitRun } from '../../core/git/range'
+import { readRange, WATCH_ROUND_TIMEOUT_MS, type GitRun } from '../git/range'
 
 /** 감시 고리(gitWatcher)에서 불린다 — 여기서 던지면 고리 전체가 멈춘다. 그래서 절대 던지지 않고,
  *  실패한 항목은 null 로 돌려준다.

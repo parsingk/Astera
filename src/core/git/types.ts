@@ -29,7 +29,7 @@ export interface ExternalGitChange {
    *  §6 이고, §38·§39 어디도 이것을 미루지 않는다).
    *
    *  **선택 필드인 이유는 `validation` 과 다르다.** 저장소의 타입 가드는 원소 모양을 보지 않으므로
-   *  (`main/workUnit/store.ts` 의 `isValid` 주석) 필수로 두어도 옛 파일은 그대로 읽힌다. 그러면
+   *  (`core/workUnit/store.ts` 의 `isValid` 주석) 필수로 두어도 옛 파일은 그대로 읽힌다. 그러면
    *  **읽힌 그 옛 기록이 이 필드를 가졌다고 타입이 거짓말을 한다** — 이 필드가 생기기 전에 쓰인
    *  `ExternalGitChange` 에는 이 값이 실제로 없다. */
   authors?: string[]
@@ -42,7 +42,7 @@ export interface ExternalGitChange {
 
 /** EG §26. HEAD 가 움직였을 때 **그 이동이 이 앱 안에서 벌어진 일임을 말해 주는 등록**이고, 끝나면
  *  endedAt 을 채운다. 두 종류가 들어온다 — Astera 자신이 git 을 건드리기 **직전에** 등록하는 것
- *  (`job-merge`)과, 세션의 에이전트가 한 턴을 도는 구간(`commit`, main/workUnit/collector.ts 의
+ *  (`job-merge`)과, 세션의 에이전트가 한 턴을 도는 구간(`commit`, core/workUnit/collector.ts 의
  *  `onSessionBusy`). 뒤쪽은 미리 등록할 수 없어서(에이전트의 커밋을 Astera 가 예고할 길이 없다)
  *  구간으로 대신 잡는다. */
 export interface PendingGitOperation {

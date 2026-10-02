@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { makeRepo, tempDir, gitSync } from '../../core/worktrees/testRepo'
-import { classifyTransition } from '../../core/git/transition'
+import { makeRepo, tempDir, gitSync } from '../worktrees/testRepo'
+import { classifyTransition } from '../git/transition'
 import { readGitRef, isAncestorOf, readChangedFiles } from './gitProbe'
-import type { GitRun } from '../../core/git/range'
-import { git, type GitResult } from '../../core/worktrees/git'
+import type { GitRun } from '../git/range'
+import { git, type GitResult } from '../worktrees/git'
 
 const run = (repo: string, args: string[]): void => {
   gitSync(repo, args)
