@@ -49,7 +49,19 @@ const FREE_TEXT = new Set([
   'workflow',
   'labels',
   'author',
-  'text'
+  'text',
+  // How It Works records (MCP P2-C): the person's request, verbatim, and every field of the agent's
+  // write-up. A Job's name and a session's label are a person's text too.
+  'request',
+  'reason',
+  'overview',
+  'userVisibleChanges',
+  'condition',
+  'role',
+  'label',
+  'sourceLabel',
+  'jobName',
+  'outcome'
 ])
 
 /** Every object in a `checks` array, at any depth, without its `outputTail`: raw validator output

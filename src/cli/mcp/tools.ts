@@ -1,4 +1,4 @@
-// The thirty MCP tools (MCP design §4, P1 design §4, P2-B design). Each is one Host command; `args` maps the
+// The thirty-two MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C). Each is one Host command; `args` maps the
 // tool's input to the command's arguments exactly as the CLI's parser would produce them: flag names
 // camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
@@ -29,6 +29,9 @@ const SESSIONS_WRITE = `It ${SESSIONS_SETTING}, and MCP access "Read and control
 const GITHUB_READ = 'Needs the GitHub CLI (gh) installed and logged in on the machine running the Astera Host.'
 const GITHUB_WRITE =
   'Needs "Let MCP clients act on GitHub" turned on in Astera Settings (CLI tab), off by default, MCP access "Read and control", and the GitHub CLI (gh) installed and logged in on the machine running the Astera Host.'
+/** What a How It Works tool's answer is, in its description (P2-C). */
+const WORK_RECORDS =
+  "How It Works records are write-ups of finished work that an agent wrote after the work closed, kept by the Astera app in its How It Works view. They may be out of date: the code may have changed since. Read only: no tool here refreshes or regenerates a write-up. request is the person's own words, verbatim; the rest is the agent's. Needs MCP access \"Read only\" or \"Read and control\"."
 const id = z.string().min(1).max(MCP_LIMITS.id)
 const requestId = z
   .string()
@@ -566,5 +569,24 @@ export const TOOLS: ToolDef[] = [
       requestId
     },
     args: (i) => ({ project: i.projectId, number: i.number, ...coordinatorArgs(i) })
+  },
+  // P2-C. The Host reads its profile's understanding.json; `project` is the project id, as for GitHub.
+  {
+    name: 'list_work_records',
+    title: 'List work records',
+    readOnly: true,
+    cmd: 'understanding-list',
+    description: `A project's How It Works records, newest first: id, at (when the work finished), title (null before the write-up has one), request, status (generating, ready, needs-review or failed), reason, source (a session or a Job Run), how many files changed, and the verification status. get_work_record has one in full. ${WORK_RECORDS}`,
+    inputSchema: { projectId: id, limit, cursor },
+    args: (i) => ({ project: i.projectId })
+  },
+  {
+    name: 'get_work_record',
+    title: 'Get a work record',
+    readOnly: true,
+    cmd: 'understanding-get',
+    description: `One How It Works record in full: request, source, changed files, git heads and commits, verification (validation on older records), Job tasks, status, reason, and the explanation (overview, user-visible changes, flow, decisions, implementation and evidence). ${WORK_RECORDS}`,
+    inputSchema: { projectId: id, recordId: id.describe('A record id from list_work_records.') },
+    args: (i) => ({ project: i.projectId, id: i.recordId })
   }
 ]
