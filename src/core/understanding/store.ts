@@ -82,6 +82,12 @@ export class UnderstandingStore {
     return this.queue.catch(() => {})
   }
 
+  /** The project keys as the file spells them, for a caller that matches a path the way the readers do
+   *  (read.ts recordsFor, isSamePath). */
+  projectKeys(): string[] {
+    return Object.keys(this.state.projects)
+  }
+
   get(projectPath: string): ProjectUnderstanding | undefined {
     return this.state.projects[projectPath]
   }

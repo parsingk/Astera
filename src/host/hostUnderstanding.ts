@@ -27,6 +27,7 @@ import { settingsObjectOf } from '../core/settings/settingsObject'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { readFileRetrying } from '../core/renameRetry'
 import { repoPathOf } from '../core/worktrees/repo'
+import { isSamePath } from '../core/files/tree'
 import { isLang, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 
@@ -95,6 +96,8 @@ export interface HostUnderstandingDeps {
   runAgent?: PipelineDeps['runAgent']
   /** Test seam: the clock of `generatedAt`. */
   now?(): string
+  /** Test seam: the platform whose path rule matches a project's key (isSamePath). */
+  platform?: string
 }
 
 export interface HostUnderstanding {
@@ -256,16 +259,20 @@ export function createHostUnderstanding(d: HostUnderstandingDeps): HostUnderstan
     },
     regenerate: async (projectPath, recordId) => {
       if (!isWriter()) return { ok: false, status: 409, error: NOT_WRITER }
-      const root = fold(projectPath)
+      const folded = fold(projectPath)
+      // The file's own spelling of the key, matched as the read tools match it (recordsFor): on win32 a
+      // project id's path can differ from the key in case or separators.
+      const keyOf = (): string => store.projectKeys().find((k) => isSamePath(k, folded, d.platform)) ?? folded
       // The record may be one an app wrote while it was the writer. Outside the pipeline's queue, so it
       // answers at once; refresh adopts no file over a write the pipeline made meanwhile.
-      const known = (): boolean => store.get(root)?.records.some((r) => r.id === recordId) === true
+      const known = (): boolean => store.get(keyOf())?.records.some((r) => r.id === recordId) === true
       await store.refresh()
       // Declined by such a write, the refresh read nothing, and an app's save may have landed after it:
       // once more before the answer is a 404.
       if (!known()) await store.refresh()
       if (!known())
-        return { ok: false, status: 404, error: `no How It Works record ${recordId} in ${root}` }
+        return { ok: false, status: 404, error: `no How It Works record ${recordId} in ${folded}` }
+      const root = keyOf()
       try {
         await take()
       } catch (err) {

@@ -362,6 +362,21 @@ describe('createHostUnderstanding', () => {
     await vi.waitFor(async () => expect((await recordsOnDisk(project)).every((r) => r.status === 'ready')).toBe(true))
   })
 
+  // Final review item 4: the read tools match a project's key with isSamePath, so regenerate does too. A
+  // case difference with forward slashes, on win32's rule, so the test runs on POSIX as well.
+  it('regenerate finds the record under a key spelt in another case, and writes under the file’s own key', async () => {
+    await settings(ON)
+    await fs.writeFile(file(), JSON.stringify({ projects: { [project]: { records: [hostRecord('r1')] } } }))
+    const { u, pushed } = make({ platform: 'win32' })
+    await u.load()
+    const spelt = project.toUpperCase().replace(/\\/g, '/')
+    expect(spelt).not.toBe(project)
+    await expect(u.regenerate(spelt, 'r1')).resolves.toEqual({ ok: true, id: 'r1' })
+    await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
+    expect(Object.keys((await onDisk()).projects)).toEqual([project])
+    expect(new Set(pushed)).toEqual(new Set([project]))
+  })
+
   // The app's late save lands after a pipeline save that declined regenerate's refresh (the write counter):
   // one more refresh reads it before the answer is a 404.
   it('regenerate refreshes once more when its refresh was declined, and finds a record an app saved meanwhile', async () => {
