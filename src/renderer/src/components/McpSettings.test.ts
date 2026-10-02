@@ -125,6 +125,12 @@ describe('McpSettings sessions checkbox', () => {
         expect(CATALOGS[lang].messages[key], `${lang} ${key}`).toBeTruthy()
     expect(CATALOGS.en.messages['settings.mcp.sessions.label']).toBe('Let MCP clients see and use sessions')
   })
+
+  // A session an MCP client starts follows that setting, on by default (P1 final review M2).
+  it('says in every language that started sessions follow the permission-check setting, by its own label', () => {
+    for (const lang of LANGS)
+      expect(CATALOGS[lang].messages['settings.mcp.sessions.hint'], lang).toContain(CATALOGS[lang].messages['settings.agentPermission.label'])
+  })
 })
 
 describe('McpSettings sessions first read', () => {

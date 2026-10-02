@@ -60,7 +60,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcp.saveFailed': 'Could not save MCP access: {detail}',
   'settings.mcp.loadFailed': 'Could not read MCP access: {detail}',
   'settings.mcp.sessions.label': 'Let MCP clients see and use sessions',
-  'settings.mcp.sessions.hint': 'Covers every session Astera holds, your own terminals included. Seeing them needs Read only; typing into them and starting them need Read and control.',
+  'settings.mcp.sessions.hint': 'Covers every session Astera holds, your own terminals included. Seeing them needs Read only; typing into them and starting them need Read and control. A session a client starts follows "Run agents without permission checks" (on by default), so it can run commands without asking.',
   'settings.mcp.sessions.saveFailed': 'Could not save the MCP sessions setting: {detail}',
   'settings.mcp.sessions.loadFailed': 'Could not read the MCP sessions setting: {detail}',
   // Agent permission mode
