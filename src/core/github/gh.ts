@@ -91,12 +91,19 @@ export type GhErrorKind = GhFailureKind | 'not-installed'
 /** A failed gh call as core answers it: the kind, and one sentence a person or an agent can act on. */
 export type GhFailed = { ok: false; kind: GhErrorKind; message: string }
 
+/** GraphQL's words for a pull request or issue that is not there (`gh pr checks 999`); REST says HTTP 404. */
+const GRAPHQL_MISSING = /could not resolve to an? (pullrequest|issue)\b/i
+
 /** One sentence for a failed gh call. Where gh's own words help, its first stderr line ends the
- *  sentence; not-installed, auth, no-remote and truncated say all there is to say without it. */
+ *  sentence; not-installed, auth, no-remote and truncated say all there is to say without it.
+ *
+ *  GraphQL's missing pull request or issue is not-found here and not in `classifyGhFailure`: the PR
+ *  badge coordinator sorts its failures with that one, and its buckets stay as they are. */
 export function ghFailureSentence(r: GhResult): { kind: GhErrorKind; message: string } {
   if (r.spawnError === 'ENOENT')
     return { kind: 'not-installed', message: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH" }
-  const kind = classifyGhFailure(r.stderr, r.spawnError)
+  const classified = classifyGhFailure(r.stderr, r.spawnError)
+  const kind = classified === 'other' && GRAPHQL_MISSING.test(r.stderr) ? 'not-found' : classified
   const first = r.stderr.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? ''
   const ending = (s: string): string => (first ? `${s}: ${first}` : s)
   switch (kind) {

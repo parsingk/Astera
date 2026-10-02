@@ -56,6 +56,7 @@ import { probeLinuxTools, realProbeDeps } from './workspace/linuxTools'
 import { workspaceSupported } from '../core/workspace/platform'
 import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
+import { defaultGhRunner } from '../core/github/gh'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -506,6 +507,10 @@ async function main(): Promise<void> {
       list: () => hostSessions.listSessions(),
       log: (m) => log.write(m)
     }),
+    // The `github-*` reads (MCP P2-B): the user's gh on this Host's PATH, and a Run's branch from this
+    // Host's worktree registry. With no spawner the registry is never loaded, so no Run has a branch
+    // of its own here and only the project-scoped reads answer.
+    github: { run: defaultGhRunner, worktreeOf: (p) => worktrees.infoOf(p) },
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,

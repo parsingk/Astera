@@ -548,6 +548,19 @@ describe('createHostWorktrees — the loop’s members', () => {
     expect(h.wt.isRegistered(other)).toBe(true)
     expect(h.wt.isRegistered(path.join(home, 'wt', 'nowhere'))).toBe(false)
   })
+  // MCP P2-B: the GitHub commands read a Run's branch, base and repository off its worktree's entry.
+  it('infoOf gives the entry of a folder by isSamePath, and null for one the registry does not hold', async () => {
+    const h = rig()
+    const a = await h.wt.fork({ repoPath: repo, name: 'a' })
+    const info = h.wt.infoOf(a)
+    expect(info).toMatchObject({ path: a, name: 'a' })
+    expect(isSamePath(info!.repoPath, repo)).toBe(true)
+    expect(info!.branch).toMatch(/a$/)
+    const other = process.platform === 'win32' ? a.toUpperCase().replaceAll('\\', '/') : a + path.sep
+    expect(isSamePath(other, a)).toBe(true)
+    expect(h.wt.infoOf(other)).toEqual(info)
+    expect(h.wt.infoOf(path.join(home, 'wt', 'nowhere'))).toBeNull()
+  })
   it('integrate sends the same git-op pair mergeWorktrees does, around a real merge', async () => {
     const sent: HostMessage[] = []
     const h = rig({ broadcast: (m) => sent.push(m) })

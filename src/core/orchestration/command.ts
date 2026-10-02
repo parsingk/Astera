@@ -95,7 +95,11 @@ import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
 import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
-import type { JobEvent, RunOutcome } from '../types'
+import type { JobEvent, RunOutcome, WorktreeInfo } from '../types'
+import type { GhFailed, GhRunner } from '../github/gh'
+import { failedLogTail, readPrChecks } from '../github/checks'
+import { prForBranch } from '../github/prs'
+import { readIssue } from '../github/issue'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -572,6 +576,11 @@ export interface OrchServerDeps {
    *  when it holds one, the app's otherwise), its last turn's error, and the prompt it is waiting on.
    *  `undefined` when nobody can say. */
   chatTurn?(id: string): Promise<ChatTurnState | undefined>
+  /** GitHub through the user's gh (MCP P2-B): the runner, and the worktree registry's entry for a
+   *  Run's worktree (its branch, base and repository), or null when the registry does not hold it.
+   *  **Only the Host injects it**: gh runs on the Host's PATH and login. Absent, the `github-*`
+   *  commands answer 409. */
+  github?: { run: GhRunner; worktreeOf(path: string): WorktreeInfo | null }
 }
 
 /** A chat session's turn as `chatTurn` reads it. `prompt` is the open prompt, as `chats pending` lists
@@ -1009,6 +1018,51 @@ function projectFilter(s: OrchState, given: unknown): { project: Project | undef
   if (p === null) return { error: bad('--project needs a value: a project folder (from `projects list`)') }
   const project = findProjectContaining(s, p)
   return project ? { project } : { error: notFound(`no project registered for: ${p}`) }
+}
+
+/** Where a `github-*` command runs gh. A Run's: its worktree, with the branch, base and repository its
+ *  registry entry holds. A project's: its registered root. `gh` is the Host's runner. */
+export type GithubTarget =
+  | { gh: GhRunner; cwd: string; repoPath: string; branch: string; baseRef: string; run: JobRun }
+  | { gh: GhRunner; cwd: string; project: Project }
+
+/**
+ * The `--run` or `--project` of a `github-*` command (MCP P2-B), exactly one of them.
+ *
+ * `--project` is the project's **id** (from `projects list`), unlike a list command's `--project`
+ * folder: the caller is the MCP server, which names projects by id. A Run's branch is its own only
+ * when it works in a worktree the registry still holds; a Run in the project folder, or one whose
+ * entry is gone, has none, and gh is never run for it.
+ */
+export function githubTarget(
+  deps: OrchServerDeps,
+  s: OrchState,
+  args: Record<string, unknown>
+): GithubTarget | { error: Reply } {
+  if (!deps.github) return { error: conflict('GitHub commands are answered by the Astera Host, and this caller is not one') }
+  const gh = deps.github.run
+  if ((args.run === undefined) === (args.project === undefined))
+    return { error: bad('give exactly one of --run (a Run id) or --project (a project id)') }
+  if (args.run !== undefined) {
+    const id = str(args.run)
+    if (id === null) return { error: bad('--run needs a value: a Run id') }
+    const run = s.runs.find((r) => r.id === id)
+    if (!run) return { error: notFound(`unknown run: ${id}`) }
+    const info = run.worktree ? deps.github.worktreeOf(run.worktree) : null
+    if (!info) return { error: conflict('This Run has no branch of its own') }
+    return { gh, cwd: info.path, repoPath: info.repoPath, branch: info.branch, baseRef: info.baseRef, run }
+  }
+  const id = str(args.project)
+  if (id === null) return { error: bad('--project needs a value: a project id (from `projects list`)') }
+  const project = findProject(s, id)
+  return project ? { gh, cwd: project.path, project } : { error: notFound(`unknown project: ${id}`) }
+}
+
+/** A failed gh call as a reply: not-found 404, something the person must fix (gh missing, not logged
+ *  in) 409, anything else 502, GitHub or gh having failed. The message is `ghFailureSentence`'s. */
+export function ghRefusal(f: GhFailed): Reply {
+  const status = f.kind === 'not-found' ? 404 : f.kind === 'not-installed' || f.kind === 'auth' ? 409 : 502
+  return { status, body: { error: f.message } }
 }
 
 const POLL_MS = 50
@@ -4242,6 +4296,60 @@ export async function handleCommand(
                 : `prompt ${id} is no longer open; nothing was answered`
         )
       return okBody({ sessionId: target.sessionId, id, decision, answered: true })
+    }
+    /**
+     * GitHub reads through the user's gh (MCP P2-B), answered by the Host only (`deps.github`). The
+     * repository is the Run's worktree or the project's root (`githubTarget`). A failing or pending
+     * check is an answer; a gh that failed is `ghRefusal`'s status.
+     */
+    case 'github-pr': {
+      if (args.run !== undefined && args.branch !== undefined)
+        return bad("--branch goes with --project; a Run's branch is its worktree's")
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      let branch: string
+      if ('branch' in t) branch = t.branch
+      else {
+        const given = str(args.branch)
+        if (given === null) return bad('--branch is required with --project: the head branch to look up')
+        branch = given
+      }
+      const found = await prForBranch(t.gh, t.cwd, branch)
+      return found.ok ? okBody({ branch, pr: found.pr }) : ghRefusal(found)
+    }
+    case 'github-ci': {
+      if (args.run !== undefined && args.pr !== undefined)
+        return bad("--pr goes with --project; a Run's pull request is its branch's")
+      const log = args.log === undefined ? undefined : posInt(args.log)
+      if (log === null) return bad('--log must be a CI run id (a positive integer, from a check\'s runId)')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      let pr: number
+      if ('branch' in t) {
+        const found = await prForBranch(t.gh, t.cwd, t.branch)
+        if (!found.ok) return ghRefusal(found)
+        if (!found.pr) return conflict("This Run's branch has no pull request")
+        pr = found.pr.number
+      } else {
+        const given = posInt(args.pr)
+        if (given === null) return bad('--pr is required with --project: a pull request number')
+        pr = given
+      }
+      const checks = await readPrChecks(t.gh, t.cwd, pr)
+      if (!checks.ok) return ghRefusal(checks)
+      if (log === undefined) return okBody({ pr, checks: checks.checks })
+      const tail = await failedLogTail(t.gh, t.cwd, log)
+      if (!tail.ok) return ghRefusal(tail)
+      return okBody({ pr, checks: checks.checks, log: { runId: log, text: tail.text, cut: tail.cut } })
+    }
+    case 'github-issue': {
+      if (args.run !== undefined) return bad('--run does not go with github-issue: give --project')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      const n = posInt(args.number)
+      if (n === null) return bad('--number is required: the issue number')
+      const read = await readIssue(t.gh, t.cwd, n)
+      return read.ok ? okBody(read.issue) : ghRefusal(read)
     }
     case 'reset': {
       const open = s.dispatches.filter((d) => !d.endedAt)

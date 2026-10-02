@@ -131,4 +131,17 @@ describe('ghFailureSentence', () => {
     })
     expect(sentence('')).toEqual({ kind: 'other', message: 'gh failed' })
   })
+
+  // Ruling 2: GraphQL names a missing pull request or issue in its own words, not HTTP 404. Not-found
+  // here and nowhere else: classifyGhFailure stays as it is, since the PR badges read it too.
+  it('GraphQL "Could not resolve to a PullRequest" or "an Issue" is not-found', () => {
+    const pr = 'GraphQL: Could not resolve to a PullRequest with the number of 999. (repository.pullRequest)'
+    const issue = 'GraphQL: Could not resolve to an Issue with the number of 999. (repository.issue)'
+    expect(ghFailureSentence(result({ stderr: pr }))).toEqual({
+      kind: 'not-found',
+      message: `GitHub found no such repository, pull request, issue or run: ${pr}`
+    })
+    expect(ghFailureSentence(result({ stderr: issue })).kind).toBe('not-found')
+    expect(classifyGhFailure(pr)).toBe('other')
+  })
 })

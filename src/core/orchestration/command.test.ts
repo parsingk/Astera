@@ -31,6 +31,7 @@ import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
 import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
+import type { GhResult } from '../github/gh'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -8262,5 +8263,184 @@ describe('a paused Run reads paused', () => {
   it('resumed, it reads running again', async () => {
     const { deps, runId } = await stoppedRun()
     expect((await call(deps, 'runs-resume', { id: runId })).body).toMatchObject({ outcome: 'running' })
+  })
+})
+
+// MCP P2-B: the three GitHub reads, answered by the Host over the user's gh. The runner here is a
+// fake keyed by argv; nothing in these tests runs a real gh.
+describe('handleCommand — github-pr, github-ci and github-issue', () => {
+  const WT = 'D:/wt/a'
+  const info = { id: 'w1', repoPath: 'D:/repo', path: WT, name: 'a', branch: 'u/a', baseRef: 'origin/main', createdAt: NOW }
+  const prRow = (over: Record<string, unknown> = {}) => ({
+    number: 12, title: 'Add a', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/12', headRefName: 'u/a', statusCheckRollup: [], ...over
+  })
+  const PR_LIST = 'pr list --head u/a --state all --limit 5 --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+  const CHECKS = (n: number) => `pr checks ${n} --json name,state,bucket,link,workflow,startedAt,completedAt`
+  const checkRow = {
+    name: 'build', state: 'FAILURE', bucket: 'fail', link: 'https://github.com/o/r/actions/runs/77/job/1',
+    workflow: 'CI', startedAt: '2026-10-01T00:00:00Z', completedAt: '2026-10-01T00:05:00Z'
+  }
+  const issueJson = {
+    number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: [{ name: 'bug' }], user: { login: 'pk' },
+    author_association: 'OWNER', html_url: 'https://github.com/o/r/issues/5'
+  }
+  /** A gh that answers by argv and records every call; an argv it was not given fails as gh would. */
+  const fakeGh = (answers: Record<string, Partial<GhResult>>) => {
+    const calls: { args: string[]; cwd: string }[] = []
+    const run = async (args: string[], cwd: string): Promise<GhResult> => {
+      calls.push({ args, cwd })
+      const a = answers[args.join(' ')]
+      return a
+        ? { ok: true, stdout: '', stderr: '', ...a }
+        : { ok: false, stdout: '', stderr: `unexpected gh call: ${args.join(' ')}`, exitCode: 1 }
+    }
+    return { run, calls }
+  }
+  const setup = (answers: Record<string, Partial<GhResult>>, run: Partial<JobRun> = { worktree: WT }) => {
+    const reg = ensureProject(emptyState(), { path: 'D:/repo', now: NOW })
+    const state: OrchState = {
+      ...reg.state,
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/repo', createdAt: NOW }],
+      runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...run } as JobRun]
+    }
+    const deps = makeDeps(state)
+    const gh = fakeGh(answers)
+    deps.github = { run: gh.run, worktreeOf: (p) => (p === WT ? info : null) }
+    return { deps, gh, projectId: reg.project.id, projectPath: reg.project.path }
+  }
+
+  it('github-pr with a run reads the PR of its worktree branch, in the worktree', async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { stdout: JSON.stringify([prRow()]) } })
+    const r = await call(deps, 'github-pr', { run: 'r1' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+    })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([WT])
+  })
+
+  it('github-pr with a project and a branch reads in the project root; no PR is pr: null', async () => {
+    const { deps, gh, projectId, projectPath } = setup({ [PR_LIST]: { stdout: '[]' } })
+    const r = await call(deps, 'github-pr', { project: projectId, branch: 'u/a' }, '')
+    expect(r).toEqual({ status: 200, body: { branch: 'u/a', pr: null } })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([projectPath])
+    expect((await call(deps, 'github-pr', { project: projectId }, '')).status).toBe(400)
+  })
+
+  it('run and project: exactly one of the two (400); an unknown one is 404; gh is not run', async () => {
+    const { deps, gh, projectId } = setup({})
+    expect((await call(deps, 'github-pr', {}, '')).status).toBe(400)
+    expect((await call(deps, 'github-pr', { run: 'r1', project: projectId, branch: 'b' }, '')).status).toBe(400)
+    expect((await call(deps, 'github-pr', { run: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'github-pr', { project: 'nope', branch: 'b' }, '')).status).toBe(404)
+    expect((await call(deps, 'github-issue', { project: 'nope', number: 5 }, '')).status).toBe(404)
+    expect(gh.calls).toEqual([])
+  })
+
+  it('a Run with no worktree, or one the registry no longer knows, has no branch of its own (409); gh is not run', async () => {
+    for (const run of [{}, { worktree: 'D:/wt/gone' }]) {
+      const { deps, gh } = setup({}, run)
+      for (const cmd of ['github-pr', 'github-ci']) {
+        const r = await call(deps, cmd, { run: 'r1' }, '')
+        expect(r).toEqual({ status: 409, body: { error: 'This Run has no branch of its own' } })
+      }
+      expect(gh.calls).toEqual([])
+    }
+  })
+
+  it("without the github dep the three answer 409: they are the Host's", async () => {
+    const deps = makeDeps()
+    const asked: [string, Record<string, unknown>][] = [
+      ['github-pr', { run: 'r1' }],
+      ['github-ci', { run: 'r1' }],
+      ['github-issue', { project: 'p1', number: 5 }]
+    ]
+    for (const [cmd, args] of asked) {
+      const r = await call(deps, cmd, args, '')
+      expect(r.status).toBe(409)
+      expect((r.body as { error: string }).error).toMatch(/answered by the Astera Host/)
+    }
+  })
+
+  it('github-ci with a run finds its PR, then reads the checks; a failing check is a result', async () => {
+    const { deps, gh } = setup({
+      [PR_LIST]: { stdout: JSON.stringify([prRow()]) },
+      [CHECKS(12)]: { ok: false, exitCode: 1, stdout: JSON.stringify([checkRow]) }
+    })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toEqual({ status: 200, body: { pr: 12, checks: [{ ...checkRow, runId: 77 }] } })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([WT, WT])
+  })
+
+  it("github-ci with a run whose branch has no PR is 409, and the checks are not read", async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { stdout: '[]' } })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toEqual({ status: 409, body: { error: "This Run's branch has no pull request" } })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  it('github-ci with a project, a pr and log returns the failed log tail', async () => {
+    const long = 'x'.repeat(9000) + '\nlast line'
+    const { deps, gh, projectId, projectPath } = setup({
+      [CHECKS(12)]: { stdout: JSON.stringify([checkRow]) },
+      'run view 77 --log-failed': { stdout: long }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 12, log: 77 }, '')
+    expect(r.status).toBe(200)
+    const body = r.body as { pr: number; checks: unknown[]; log: { runId: number; text: string; cut: boolean } }
+    expect(body.pr).toBe(12)
+    expect(body.checks).toHaveLength(1)
+    expect(body.log.runId).toBe(77)
+    expect(body.log.cut).toBe(true)
+    expect(body.log.text.endsWith('last line')).toBe(true)
+    expect(body.log.text.length).toBeLessThanOrEqual(8000)
+    expect(gh.calls.every((c) => c.cwd === projectPath)).toBe(true)
+    expect((await call(deps, 'github-ci', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'github-ci', { project: projectId, pr: 12, log: 0 }, '')).status).toBe(400)
+  })
+
+  it('github-issue reads one issue of the project', async () => {
+    const { deps, gh, projectId, projectPath } = setup({ 'api repos/{owner}/{repo}/issues/5': { stdout: JSON.stringify(issueJson) } })
+    const r = await call(deps, 'github-issue', { project: projectId, number: 5 }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: {
+        number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: ['bug'], author: 'pk',
+        authorAssociation: 'OWNER', url: 'https://github.com/o/r/issues/5', isPullRequest: false
+      }
+    })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([projectPath])
+    expect((await call(deps, 'github-issue', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'github-issue', { number: 5 }, '')).status).toBe(400)
+  })
+
+  it('gh failures: not installed and not logged in are 409, not found is 404, the rest 502', async () => {
+    const ask = async (a: Partial<GhResult>) => {
+      const { deps, projectId } = setup({ 'api repos/{owner}/{repo}/issues/5': { ok: false, ...a } })
+      return call(deps, 'github-issue', { project: projectId, number: 5 }, '')
+    }
+    expect(await ask({ spawnError: 'ENOENT' })).toEqual({
+      status: 409,
+      body: { error: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH" }
+    })
+    expect(await ask({ stderr: 'To get started with GitHub CLI, please run:  gh auth login' })).toEqual({
+      status: 409,
+      body: { error: 'gh is not logged in: run `gh auth login`' }
+    })
+    expect((await ask({ stderr: 'gh: Not Found (HTTP 404)' })).status).toBe(404)
+    expect(await ask({ stderr: 'dial tcp: lookup api.github.com: no such host' })).toEqual({
+      status: 502,
+      body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host' }
+    })
+  })
+
+  // Ruling 2: gh's GraphQL wording for a missing pull request or issue is a 404 from these commands too.
+  it('GraphQL "Could not resolve to a PullRequest" is 404', async () => {
+    const { deps, projectId } = setup({
+      [CHECKS(999)]: { ok: false, exitCode: 1, stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 999. (repository.pullRequest)' }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 999 }, '')
+    expect(r.status).toBe(404)
+    expect((r.body as { error: string }).error).toMatch(/Could not resolve to a PullRequest/)
   })
 })

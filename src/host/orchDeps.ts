@@ -414,7 +414,8 @@ const NOT_FORWARDED = [
   'coordinatorIdle',
   'dispatchTask',
   'createSession',
-  'journalTimeline'
+  'journalTimeline',
+  'github'
 ] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -539,7 +540,11 @@ const EFFECTFUL: Record<Classified, boolean> = {
   createSession: true,
   // NOT_FORWARDED as well (Host journal J7, P10): the Host's own journal read for `runs-follow`, never
   // the app's. A read of a file this Host holds; it leaves nothing outside the call.
-  journalTimeline: false
+  journalTimeline: false,
+  // NOT_FORWARDED as well (MCP P2-B): the Host's own gh runner and worktree registry, passed through
+  // whole, never the app's. Its callers today only read GitHub. **A command that acts through it must
+  // mark its own effect**: this flag is never read for a name outside `REMOTE`, so nothing marks it here.
+  github: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -646,6 +651,9 @@ export function hostOrchDeps(a: {
   /** The Host journal's rows for one Run's timeline (J7, P10), `hostJournal.timeline`. Absent (a Host
    *  with no journal): `runs-follow` shows the state's events only. */
   journalTimeline?(runId: string, state: OrchState): JobEvent[]
+  /** GitHub through the Host's gh (MCP P2-B): the runner and the Host's worktree registry. Absent: the
+   *  `github-*` commands answer 409, as a caller that is not the Host. */
+  github?: OrchServerDeps['github']
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -1136,6 +1144,7 @@ export function hostOrchDeps(a: {
     ...(a.dispatchTask ? { dispatchTask } : {}),
     ...(a.createSession ? { createSession } : {}),
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
+    ...(a.github ? { github: a.github } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),
