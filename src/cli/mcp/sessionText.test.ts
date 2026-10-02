@@ -39,6 +39,34 @@ describe('redactRows', () => {
     })
   }
 
+  // The Host trims each row's trailing spaces, so a wrap that falls on a space joins the word before
+  // it onto the key ("abcsk-ant-…"), and `\bsk-` no longer matches (fix round 2).
+  describe('a key that starts a wrapped row right after a trimmed space', () => {
+    // At 30 columns the key runs over two rows; at 50 it sits whole on the second row.
+    for (const cols of [30, 50]) {
+      const before = 'echo ' + 'x1'.repeat(cols).slice(0, cols - 6)
+      const rows = [before, ...wrap(KEY, cols)]
+      it(`at ${cols} columns, with wrap marks`, () => {
+        expect(before.length).toBe(cols - 1)
+        const out = redactRows(rows, rows.map((_, i) => i > 0), cols)
+        expect(out).toHaveLength(rows.length)
+        expect(leaks(out)).toEqual([])
+        expect(out[0]).toBe(before)
+      })
+      it(`at ${cols} columns, without wrap marks`, () => {
+        const out = redactRows(rows, undefined, cols)
+        expect(leaks(out)).toEqual([])
+        expect(out[0]).toBe(before)
+      })
+    }
+    for (const token of ['ghp_' + 'A1b2C3d4E5f6G7h8J9k0', 'AKIA' + 'Z9Y8X7W6V5U4T3S2']) {
+      it(`a ${token.slice(0, 4)} token too`, () => {
+        const rows = ['echo abc', token]
+        expect(redactRows(rows, [false, true], 9).join('|')).not.toContain(token.slice(4, 14))
+      })
+    }
+  })
+
   it('a bare sk- key split over two rows without wrap marks is redacted on both', () => {
     const rows = ['abc ' + KEY.slice(0, 20), KEY.slice(20) + ' tail']
     const out = redactRows(rows, undefined)

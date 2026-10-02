@@ -1032,6 +1032,19 @@ describe('the session and output tools (MCP P1)', () => {
     }
   })
 
+  it('get_session pads a row the Host trimmed at the width before joining, so a key after a wrapped space is caught', async () => {
+    // At 20 columns the key runs over two rows, so neither row alone holds it.
+    const before = 'echo ' + 'y'.repeat(14)
+    const body = { id: 's1', kind: 'terminal', alive: true, cols: 20, rows: 24, scrollback: [], screen: [before, SK.slice(0, 20), SK.slice(20)], screenWrapped: [false, true, true], scrollbackWrapped: [] }
+    const r = await (await connected(answering({ 'sessions-read': { status: 200, body } }).link)).callTool({
+      name: 'get_session',
+      arguments: { sessionId: 's1', lines: 10 }
+    })
+    const d = r.structuredContent as { screen: string[] }
+    expect(d.screen[0]).toBe(before)
+    expect(d.screen.join('|')).not.toContain(SK.slice(3, 20))
+  })
+
   it('get_session over 40 000 characters keeps the newest rows and says to ask for fewer', async () => {
     const scrollback = Array.from({ length: 60 }, (_, i) => `${i}`.padEnd(1000, '.'))
     const body = { id: 's1', kind: 'terminal', alive: true, cols: 1000, rows: 24, scrollback, screen: ['$ prompt'] }

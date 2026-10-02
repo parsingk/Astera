@@ -90,7 +90,7 @@ const redactOutput = (tool: string, v: unknown): unknown => {
       Array.isArray(o.scrollbackWrapped) && Array.isArray(o.screenWrapped)
         ? [...o.scrollbackWrapped, ...o.screenWrapped].map((m) => m === true)
         : undefined
-    const rows = redactRows([...scrollback, ...screen], marks)
+    const rows = redactRows([...scrollback, ...screen], marks, typeof o.cols === 'number' ? o.cols : undefined)
     out.scrollback = rows.slice(0, scrollback.length)
     out.screen = rows.slice(scrollback.length)
   }

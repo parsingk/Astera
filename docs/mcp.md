@@ -169,7 +169,7 @@ If the client cannot find `astera`, give `command` the full path of the installe
 | `create_task` | Add a Task to a Job's plan (`jobId`: every Run started from then on copies it) or to one Run (`runId`); give exactly one. `spec` is the work in full (up to 50 000 characters), `title` a short name (up to 200), `deps` the Task ids it waits for, `validate` run configuration ids from `list_run_configs` that must pass, `review: true` asks for a review. Without `accountId` the Task runs on the Job's coordinator account. |
 | `list_run_configs` | The run configurations of a Job's project folder (`id`, `name`, `type`): the checks a Task can name in `create_task`'s `validate`. |
 | `list_sessions` | The terminal and chat sessions Astera holds, live ones first: the person's own terminals included, and every worker and coordinator. Filter by `status` (`alive`, `ended`, or a terminal's `working`, `waiting` or `unknown`), `provider`, and `projectId`. Needs the session setting (below). |
-| `get_session` | What a session shows now: a terminal's visible rows (`screen`, always all of them) and the rows above them (`scrollback`, `lines` 1 to 500, 100 when not given), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). One answer holds at most 40 000 characters of text, the newest; over that the oldest rows or turns are left out and `truncated: true` says so, so ask for fewer `lines` or `turns`. `screenWrapped` and `scrollbackWrapped` mark each row that continues the one above it. Needs the session setting. |
+| `get_session` | What a session shows now: a terminal's visible rows (`screen`) and the rows above them (`scrollback`, `lines` 1 to 500, 100 when not given; `lines` sizes the scrollback only, and the screen comes on top of it), or a chat's last turns (`turns` 1 to 50, 20 when not given) and the approval or question it holds open (`pending`). One answer holds at most 40 000 characters of text, the newest; over that the oldest rows or turns are left out, the scrollback first and then the top rows of the screen, and `truncated: true` says so, so ask for fewer `lines` or `turns`. `screenWrapped` and `scrollbackWrapped` mark each row that continues the one above it. Needs the session setting. |
 | `send_message` | Type `text` (up to 50 000 characters) into a live session and press Enter; a chat session takes it as one turn. Returns as soon as the text is accepted, not when the session has answered: poll `get_session`. Needs the session setting and "Read and control". |
 | `create_session` | Start a terminal or chat session in a registered project's folder (`projectId`), on `accountId` or, without one, on `provider`'s default account (`claude` unless given). Needs the session setting and "Read and control". |
 | `get_check_output` | The output of a Task's failed check (`check`, or the first that failed): the last 4000 characters of its log, last round only. `offset` and `limit` (1 to 4000) page through them; `total` is how many there are. A Task with no failed check output is `CONFLICT`. |
@@ -280,15 +280,19 @@ a field with nothing left.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
   results, questions, answers, review issues and suggested fixes, failure summaries, error messages)
   is redacted of anything that looks like a secret; ids, paths and timestamps are left as they are.
-- Session and output text is redacted the same way: every screen and scrollback row (a line the
-  terminal wrapped over several rows is joined and redacted as one line, so a key split across rows
-  is caught; from a Host too old to mark wrapped rows, each pair of adjacent rows is checked
-  together instead, which can redact a row that only follows a token), every turn's
+- Session and output text is redacted the same way: every screen and scrollback row, every turn's
   text and tool lines and the pending summary of `get_session`, the `text` of `get_check_output` and
   every line of `get_task_output`. `total` and `offset` of `get_check_output` count the log before
   redaction.
-- Raw check output is not returned by the Job tools. `list_tasks` and `get_task` carry each check's status and exit
-  code without its log, and so does `get_completion`. The one exception is `get_completion`'s
+- A line the terminal wrapped over several rows is joined and redacted as one line, with the spaces
+  the Host trimmed at a row's end put back, so a key split across rows is caught; every row is also
+  redacted on its own. From a Host too old to mark wrapped rows, each pair of adjacent rows is
+  checked together instead, which can redact a row that only follows a token. When the rows returned
+  start in the middle of a line (the first row of `scrollback` continues one above it), the start of
+  that line, and the head of any secret on it, lies above what was returned, so only the visible
+  tail is checked on its own; ask for more `lines` to read the whole line.
+- Raw check output is not returned by the Job tools. `list_tasks` and `get_task` carry each check's
+  status and exit code without its log, and so does `get_completion`. The one exception is `get_completion`'s
   `failureSummary` and `lastFailure`: they carry each failed check's last output line, cut to 200
   characters and redacted like the rest of the free text. `failureSummary` is the same line
   `astera runs checks` prints, for the current round only; `lastFailure` is that line for the last round

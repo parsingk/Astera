@@ -895,7 +895,8 @@ the line back. `--human` prints the scrollback and then the screen, one row per 
 
 ```json
 {"ok":true,"data":{"id":"…","kind":"terminal","alive":true,"cols":100,"rows":30,
-  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"]}}
+  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"],
+  "screenWrapped":[false,false,false,false],"scrollbackWrapped":[false]}}
 ```
 
 The Host keeps about 256,000 characters of each session's output while it runs, so scrollback goes

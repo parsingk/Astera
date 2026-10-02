@@ -32,21 +32,35 @@ const commonSuffix = (a: string, b: string, max: number): number => {
  *   it starts on the first to where it ends on the second. A secret over three or more rows is
  *   caught only with the marks.
  */
-export function redactRows(rows: readonly string[], wrapped: readonly boolean[] | undefined): string[] {
+export function redactRows(rows: readonly string[], wrapped: readonly boolean[] | undefined, cols?: number): string[] {
+  // **The spaces the Host trimmed go back before a join** (fix round 2). A row is trimmed of its
+  // trailing spaces, so a wrap that fell on a space would join the word before it onto the next
+  // row ("abc" + "sk-ant-…" as "abcsk-ant-…"), and a token pattern anchored on a word boundary
+  // would no longer match. A row shorter than the width is padded back to it; one at the width (or
+  // with the width unknown) is joined as it is.
+  const padded = (r: string): string => (cols !== undefined && r.length < cols ? r.padEnd(cols, ' ') : r)
+  // And every row is redacted on its own as well, after whatever the join did: a no-op on a clean
+  // row, and the per-row protection a join can never take away.
+  return joinRedacted(rows, wrapped, padded).map(sanitize)
+}
+
+function joinRedacted(rows: readonly string[], wrapped: readonly boolean[] | undefined, padded: (r: string) => string): string[] {
   if (wrapped !== undefined && wrapped.length === rows.length) {
     const out: string[] = []
     for (let i = 0; i < rows.length; ) {
       let end = i + 1
       while (end < rows.length && wrapped[end]) end++
       const parts = rows.slice(i, end)
-      const line = parts.join('')
+      // Every row but the last of the line is padded back to the width it was wrapped at.
+      const widths = parts.map((p, k) => (k === parts.length - 1 ? p.length : padded(p).length))
+      const line = parts.map((p, k) => (k === parts.length - 1 ? p : padded(p))).join('')
       const clean = sanitize(line)
       if (clean === line) out.push(...parts)
       else {
         let at = 0
-        parts.forEach((p, k) => {
-          const take = k === parts.length - 1 ? clean.length - at : p.length
-          out.push(clean.slice(at, at + take))
+        parts.forEach((_, k) => {
+          const take = k === parts.length - 1 ? clean.length - at : widths[k]
+          out.push(clean.slice(at, at + take).trimEnd())
           at += take
         })
       }
@@ -58,13 +72,15 @@ export function redactRows(rows: readonly string[], wrapped: readonly boolean[] 
   const headEnd = rows.map(() => 0)
   const tailStart = rows.map((r) => r.length)
   for (let i = 0; i + 1 < rows.length; i++) {
-    const a = rows[i]
+    // Padded, so a row's end stays a word boundary whether or not the row wrapped. Only the
+    // pair's join sees the padding: the indices below are clamped to the row's own text.
+    const a = padded(rows[i])
     const b = rows[i + 1]
     const joined = sanitize(a + b)
     if (joined === sanitize(a) + sanitize(b)) continue
     const p = commonPrefix(a + b, joined)
     const e = a.length + b.length - commonSuffix(a + b, joined, Math.min(a.length + b.length - p, joined.length - p))
-    if (p < a.length) tailStart[i] = Math.min(tailStart[i], p)
+    if (p < rows[i].length) tailStart[i] = Math.min(tailStart[i], p)
     if (e > a.length) headEnd[i + 1] = Math.max(headEnd[i + 1], e - a.length)
   }
   return rows.map((r, i) => {
