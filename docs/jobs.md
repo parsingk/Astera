@@ -117,8 +117,10 @@ Host가 씁니다. 그래서 Astera 창을 닫아 둔 사이에 끝난 Run도 �
 Works에 보입니다. MCP의 `regenerate_work_record`로 설명을 다시 쓰게 할 때도 앱이 열려 있지 않아도
 됩니다.
 
-사람이 직접 연 세션의 작업은 아직 앱이 열려 있을 때만 기록됩니다. 세션의 작업이 끝난 것을 알아채는
-쪽이 앱이기 때문입니다.
+사람이 직접 연 세션의 작업도 Host가 기록합니다. Host가 돌리는 세션이면 앱을 닫아 둔 사이에 끝난
+작업도 기록되고, 그 세션의 `session-task-start`와 `session-task-complete`도 앱 없이 답을 받습니다.
+다만 세션을 기록할지는 여전히 How It Works 추적 설정이 정합니다. 추적이 꺼져 있으면 앱이 열려 있든
+아니든 세션의 작업은 기록되지 않습니다.
 
 Host가 How It Works를 쓰기 전 버전의 Astera 앱이 Host에 붙어 있는 동안에는 그 앱이 기록을 쓰고
 Host는 쓰지 않습니다. 그동안 `regenerate_work_record`는 `CONFLICT`로 거절되니, 앱을 업데이트하거나

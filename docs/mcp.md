@@ -396,9 +396,9 @@ answered by the Astera Host, which reads the records from `understanding.json` i
 every call.
 
 - **The Host writes the records.** A Job's Run is recorded by the Host when it finishes, whether or
-  not work unit tracking is on, so its record appears with the app closed. A record of a person's
-  own session is written only while the app is open, since the app is what notices the session's
-  work end. The two read tools follow MCP access like every other read, with no setting of their
+  not work unit tracking is on, so its record appears with the app closed. A person's own session
+  that the Host runs is tracked by the Host too, so its record also appears with the app closed;
+  sessions are tracked only while work unit tracking is on. The two read tools follow MCP access like every other read, with no setting of their
   own; `regenerate_work_record` needs "Read and control".
 - **`regenerate_work_record` answers at once.** It starts a new write-up in the background and
   overwrites the current one, as the app's regenerate button does. The answer is the record's `id`
