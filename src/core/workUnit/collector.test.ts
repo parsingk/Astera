@@ -22,15 +22,15 @@ import {
   type CollectorSession,
   GIT_COALESCE_MS
 } from './collector'
-import { OPERATION_GRACE_MS } from '../../core/git/provenance'
-import type { GitRef } from '../../core/git/types'
-import type { HostMergeRecord } from '../../core/git/hostMerges'
-import type { SessionWorkUnit } from '../../core/workUnit/types'
-import { foldsCaseHere } from '../../core/testPaths'
+import { OPERATION_GRACE_MS } from '../git/provenance'
+import type { GitRef } from '../git/types'
+import type { HostMergeRecord } from '../git/hostMerges'
+import type { SessionWorkUnit } from './types'
+import { foldsCaseHere } from '../testPaths'
 import { readGitRef, isAncestorOf, readChangedFiles, probeGit } from './gitProbe'
-import { readRange, type GitRun } from '../../core/git/range'
-import { git } from '../../core/worktrees/git'
-import { makeRepo, gitSync } from '../../core/worktrees/testRepo'
+import { readRange, type GitRun } from '../git/range'
+import { git } from '../worktrees/git'
+import { makeRepo, gitSync } from '../worktrees/testRepo'
 
 let dir: string
 let storeFile: string

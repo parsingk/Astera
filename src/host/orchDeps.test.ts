@@ -1373,3 +1373,105 @@ describe('hostOrchDeps and the Host journal (J7)', () => {
     expect(hostOrchDeps({ ...base(), act }).journalTimeline).toBeUndefined()
   })
 })
+
+describe('hostOrchDeps and the Host work units (E2 §5)', () => {
+  const units = (writer: boolean) => {
+    const box = { writer, tracking: true as boolean | Error }
+    return {
+      box,
+      w: {
+        isWriter: vi.fn(() => box.writer),
+        trackingEnabled: vi.fn(async () => {
+          if (box.tracking instanceof Error) throw box.tracking
+          return box.tracking
+        }),
+        sessionTasks: {
+          start: vi.fn(async (): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
+          complete: vi.fn(async (): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
+          cancel: vi.fn(async (): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' }))
+        }
+      }
+    }
+  }
+
+  it('while the Host is the writer, trackingEnabled and sessionTasks are its own, with no app attached', async () => {
+    const act = vi.fn()
+    const refused: string[] = []
+    const u = units(true)
+    const deps = hostOrchDeps(base({ act, hasApp: () => false, onAppRequired: (n) => refused.push(n), workUnits: u.w }))
+    expect(await deps.trackingEnabled?.()).toBe(true)
+    expect(await deps.sessionTasks?.start('ses1', 'Fix it')).toEqual({ ok: true, id: 'wu-1' })
+    expect(await deps.sessionTasks?.complete('ses1', { source: 'agent', checks: [], summary: 's' })).toEqual({ ok: true, id: 'wu-1' })
+    expect(await deps.sessionTasks?.cancel('ses1', 'why')).toEqual({ ok: true, id: 'wu-1' })
+    expect(u.w.sessionTasks.start).toHaveBeenCalledWith('ses1', 'Fix it')
+    expect(u.w.sessionTasks.complete).toHaveBeenCalledWith('ses1', { source: 'agent', checks: [], summary: 's' })
+    expect(u.w.sessionTasks.cancel).toHaveBeenCalledWith('ses1', 'why')
+    expect(act).not.toHaveBeenCalled()
+    expect(refused).toEqual([])
+  })
+
+  it('with an attached app that yields the duty, the Host answers and the app is never asked', async () => {
+    const act = vi.fn()
+    const u = units(true)
+    const deps = hostOrchDeps(base({ act, hasApp: () => true, workUnits: u.w }))
+    expect(await deps.trackingEnabled?.()).toBe(true)
+    expect(await deps.sessionTasks?.start('ses1', 'Fix it')).toEqual({ ok: true, id: 'wu-1' })
+    expect(await deps.sessionTasks?.complete('ses1', { source: 'agent' })).toEqual({ ok: true, id: 'wu-1' })
+    expect(await deps.sessionTasks?.cancel('ses1')).toEqual({ ok: true, id: 'wu-1' })
+    expect(act).not.toHaveBeenCalled()
+  })
+
+  it('the Host’s own declarations mark an effect once they acted, never over a refusal; trackingEnabled marks nothing', async () => {
+    let acted = 0
+    const u = units(true)
+    const deps = hostOrchDeps(base({ hasApp: () => false, onEffect: () => acted++, workUnits: u.w }))
+    await deps.trackingEnabled?.()
+    expect(acted).toBe(0)
+    await deps.sessionTasks?.start('ses1', 'Fix it')
+    expect(acted).toBe(1)
+    u.w.sessionTasks.cancel.mockResolvedValueOnce({ ok: false, reason: 'NO_ACTIVE_TASK' })
+    await deps.sessionTasks?.cancel('ses1')
+    expect(acted).toBe(1)
+    u.w.sessionTasks.complete.mockRejectedValueOnce(new Error('disk full'))
+    await expect(deps.sessionTasks?.complete('ses1', { source: 'agent' })).rejects.toThrow('disk full')
+    expect(acted).toBe(2)
+  })
+
+  it('while an attached app keeps the duty, both are forwarded as before and the Host’s are not asked', async () => {
+    const act = vi.fn(async (name: string) => (name === 'trackingEnabled' ? true : { ok: true, id: 'app-1' }))
+    const u = units(false)
+    const deps = hostOrchDeps(base({ act, workUnits: u.w }))
+    expect(await deps.trackingEnabled?.()).toBe(true)
+    expect(await deps.sessionTasks?.start('ses1', 'Fix it')).toEqual({ ok: true, id: 'app-1' })
+    expect(act.mock.calls.map((c) => c[0])).toEqual(['trackingEnabled', 'sessionTasks.start'])
+    expect(u.w.trackingEnabled).not.toHaveBeenCalled()
+    expect(u.w.sessionTasks.start).not.toHaveBeenCalled()
+  })
+
+  it('not the writer and no app to ask: refused as the app being required, never the Host’s collector', async () => {
+    const refused: string[] = []
+    const u = units(false)
+    const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired: (n) => refused.push(n), workUnits: u.w }))
+    await expect(deps.trackingEnabled!()).rejects.toThrow(/APP_REQUIRED/)
+    await expect(deps.sessionTasks!.start('ses1', 'Fix it')).rejects.toThrow(/APP_REQUIRED/)
+    expect(refused).toEqual(['trackingEnabled', 'sessionTasks.start'])
+    expect(u.w.sessionTasks.start).not.toHaveBeenCalled()
+  })
+
+  it('a settings file the Host cannot read is flagged with its file, as the app being required', async () => {
+    const flagged: unknown[] = []
+    const u = units(true)
+    u.box.tracking = new RepairNeeded('app-settings.json is not a valid settings file; open Astera to repair it', 'app-settings.json')
+    const deps = hostOrchDeps(base({ hasApp: () => false, onAppRequired: (n, _why, detail) => flagged.push([n, detail]), workUnits: u.w }))
+    await expect(deps.trackingEnabled!()).rejects.toThrow(/repair/)
+    expect(flagged).toEqual([['trackingEnabled', { repair: 'app-settings.json' }]])
+  })
+
+  it('without the Host’s work units, both are forwarded exactly as before', async () => {
+    const act = vi.fn(async (_name: string, _args: unknown[]) => true)
+    const deps = hostOrchDeps(base({ act, workUnits: null }))
+    expect(await deps.trackingEnabled?.()).toBe(true)
+    await deps.sessionTasks?.cancel('ses1')
+    expect(act.mock.calls.map((c) => c[0])).toEqual(['trackingEnabled', 'sessionTasks.cancel'])
+  })
+})

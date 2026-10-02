@@ -23,7 +23,7 @@ that work and its end, and writes it up for someone who does not read code. **Yo
    ```
    If this reports that it interrupted an earlier task, tell the person — that one is waiting for
    them on the How It Works screen. If it fails instead (`unknown session: …` is a real answer
-   right after opening a new tab — the app has not caught up to this session yet), tell the person
+   right after opening a new tab — Astera has not caught up to this session yet), tell the person
    and try the command once more rather than continuing as if a task had started.
 3. Do the work. It may take many turns and many messages from them; **it is all one task.** Do not
    start another one partway through.

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -45,6 +45,15 @@ describe('WorkUnitStore', () => {
     const s = new WorkUnitStore(file)
     expect((await s.load()).recovered).toBe(false)
     expect(s.get('D:\\p')).toBeUndefined()
+  })
+
+  it('a load that finds no file starts from empty, not from what this store held before (E2 §6 reader to writer)', async () => {
+    const s = new WorkUnitStore(file)
+    await s.set('proj', sample)
+    await fs.rm(file)
+    expect(await s.load()).toEqual({ recovered: false })
+    expect(s.get('proj')).toBeUndefined()
+    expect(s.projectPaths()).toEqual([])
   })
 
   it('쓰고 다시 읽으면 같다', async () => {
@@ -200,5 +209,139 @@ describe('WorkUnitStore', () => {
     const s = new WorkUnitStore(file)
     await s.load()
     expect(s.get('D:\\p')!.units[0].objective).toBe('옛 제목')
+  })
+
+  // E2 §3: the Host and an older app can each hold a store over this file, so a save goes through a
+  // temp file of this process's own (E1's UnderstandingStore rule).
+  it('saves through a temp file of its own, named for its pid, and leaves only the target behind', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    const write = vi.spyOn(fs, 'writeFile')
+    const rename = vi.spyOn(fs, 'rename')
+    let written: string[] = []
+    let renamed: string[] = []
+    try {
+      await s.set('D:\\p', sample)
+      written = write.mock.calls.map((c) => String(c[0]))
+      renamed = rename.mock.calls.map((c) => `${String(c[0])} -> ${String(c[1])}`)
+    } finally {
+      write.mockRestore()
+      rename.mockRestore()
+    }
+    const tmp = `${file}.${process.pid}.tmp`
+    expect(written).toEqual([tmp])
+    expect(renamed).toEqual([`${tmp} -> ${file}`])
+    expect(await fs.readdir(dir)).toEqual(['workUnits.json'])
+  })
+
+  it('rides out a rename refused while another process reads the file (EPERM on win32)', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    const busy = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValueOnce(busy)
+    try {
+      await s.set('D:\\p', sample)
+    } finally {
+      rename.mockRestore()
+    }
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ projects: { 'D:\\p': sample } })
+  })
+
+  it('removes its own temp file when the rename fails for good', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    const busy = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    const rename = vi.spyOn(fs, 'rename').mockRejectedValue(busy)
+    try {
+      await expect(s.set('D:\\p', sample)).rejects.toThrow('EPERM')
+    } finally {
+      rename.mockRestore()
+    }
+    expect(await fs.readdir(dir)).toEqual([])
+  })
+
+  it('settled resolves once the saves queued so far have landed, and never rejects', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    void s.set('D:\\p', sample)
+    await s.settled()
+    expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ projects: { 'D:\\p': sample } })
+  })
+
+  // E2 §3: refresh before a write, against what another process wrote meanwhile (E1's refresh).
+  describe('refresh', () => {
+    const empty: WorkUnitState = { units: [], cursors: [], externalGitChanges: [] }
+
+    it('does not reload after its own save, its own load, or with no file at all', async () => {
+      const s = new WorkUnitStore(file)
+      await s.load()
+      expect(await s.refresh()).toBe(false)
+      await s.set('D:\\p', sample)
+      expect(await s.refresh()).toBe(false)
+      const b = new WorkUnitStore(file)
+      await b.load()
+      expect(await b.refresh()).toBe(false)
+    })
+
+    it('adopts a file another process wrote', async () => {
+      const a = new WorkUnitStore(file)
+      await a.load()
+      await a.set('D:\\p', sample)
+      const other = new WorkUnitStore(file)
+      await other.load()
+      await other.set('D:\\q', empty)
+      expect(await a.refresh()).toBe(true)
+      expect(a.get('D:\\q')).toEqual(empty)
+      expect(a.get('D:\\p')).toEqual(sample)
+    })
+
+    it('waits for its own queued save instead of reading the file under it', async () => {
+      const s = new WorkUnitStore(file)
+      await s.load()
+      void s.set('D:\\p', sample)
+      expect(await s.refresh()).toBe(false)
+      expect(s.get('D:\\p')).toEqual(sample)
+    })
+
+    it('keeps what it holds when the file it would adopt is not valid', async () => {
+      const s = new WorkUnitStore(file)
+      await s.load()
+      await s.set('D:\\p', sample)
+      await fs.writeFile(file, '{ broken', 'utf8')
+      expect(await s.refresh()).toBe(false)
+      expect(s.get('D:\\p')).toEqual(sample)
+    })
+
+    it('does not adopt the file over a set made while it was reading', async () => {
+      const s = new WorkUnitStore(file)
+      await s.load()
+      await s.set('D:\\p', sample)
+      const other = new WorkUnitStore(file)
+      await other.load()
+      await other.set('D:\\q', empty)
+      const real = fs.readFile.bind(fs)
+      let reading: () => void = () => {}
+      const started = new Promise<void>((r) => (reading = r))
+      let release: () => void = () => {}
+      const gate = new Promise<void>((r) => (release = r))
+      const spy = vi.spyOn(fs, 'readFile').mockImplementationOnce((async (...args: Parameters<typeof fs.readFile>) => {
+        const text = await real(...args)
+        reading()
+        await gate
+        return text
+      }) as typeof fs.readFile)
+      let refreshed: boolean
+      try {
+        const p = s.refresh()
+        await started
+        void s.set('D:\\r', empty)
+        release()
+        refreshed = await p
+      } finally {
+        spy.mockRestore()
+      }
+      expect(refreshed).toBe(false)
+      expect(s.get('D:\\r')).toEqual(empty)
+    })
   })
 })

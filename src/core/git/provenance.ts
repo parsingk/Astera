@@ -21,7 +21,7 @@ const ms = (iso: string | undefined): number | null => {
 
 /**
  * **`ops` 에는 두 종류가 들어온다.** Astera 자신이 돌린 git 동작(`job-merge`)과, 세션의 에이전트가
- * 한 턴을 돌던 구간(`commit`, main/workUnit/collector.ts 의 `onSessionBusy`) — 둘 다 "이 이동은 이
+ * 한 턴을 돌던 구간(`commit`, core/workUnit/collector.ts 의 `onSessionBusy`) — 둘 다 "이 이동은 이
  * 앱 안에서 벌어진 일이다"라는 같은 뜻이라 이 함수는 그 구분을 하지 않는다. 유예도 같다: 뒤쪽에서도
  * `.git` 이벤트가 구간이 닫힌 뒤에 도착하는 순서 역전이 그대로 일어난다.
  *

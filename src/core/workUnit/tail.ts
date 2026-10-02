@@ -10,7 +10,7 @@
 //
 // 트랜스크립트는 추가 전용이라 이미 읽은 부분은 바뀌지 않는다. 그래서 오프셋을 들고 뒤만 읽는다.
 import { promises as fs } from 'node:fs'
-import type { TranscriptCursor } from '../../core/workUnit/types'
+import type { TranscriptCursor } from './types'
 
 export interface TailResult {
   /** 이번에 새로 읽은 **온전한** 줄들. 개행으로 끝나지 않은 마지막 조각은 들어 있지 않다 */

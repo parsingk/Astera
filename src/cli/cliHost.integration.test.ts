@@ -44,7 +44,7 @@ import { hookEventsDirIn, hookEventsFileIn } from '../core/hooks/sessionState'
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { defaultCwdProbe } from '../core/sessions/pathProbe'
 import { WorkerTails } from '../core/orchestration/exec/tail'
-import { makeRepo, tempDir } from '../core/worktrees/testRepo'
+import { gitSync, makeRepo, tempDir } from '../core/worktrees/testRepo'
 import { readDispatchGate } from '../core/host/driver'
 import {
   HOST_PROTOCOL,
@@ -54,6 +54,7 @@ import {
   HOST_YIELD_ROLLING,
   HOST_YIELD_SLACK,
   HOST_YIELD_UNDERSTANDING,
+  HOST_YIELD_WORK_UNITS,
   HOST_YIELD_WORKTREES,
   type ClientMessage,
   type HostMessage
@@ -70,6 +71,10 @@ import type { OrchServerDeps } from '../core/orchestration/command'
 import { issueObjective, parseIssue } from '../core/github/issue'
 import { readUnderstandingFile } from '../core/understanding/read'
 import { createHostUnderstanding } from '../host/hostUnderstanding'
+import { createHostWorkUnits, readWorkUnitTracking, wireSessionExits, workUnitSessionsOf, type HostWorkUnits } from '../host/hostWorkUnits'
+import { outcomeOf } from '../core/orchestration/running'
+import { readFileRetrying } from '../core/renameRetry'
+import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
 import type { PipelineDeps } from '../core/understanding/pipeline'
 import { makeDescriptors } from '../core/providers/descriptor'
 
@@ -296,6 +301,10 @@ interface Rig {
    *  resolves once every generation and save it queued has landed. Together, a test's signal that a write
    *  that did not happen is not merely late. */
   understanding: { runsHandled(): number; settled(): Promise<void> }
+  /** Session work units (E2): the statusline capture the spawner holds for a session (Claude's names
+   *  its transcript), a busy edge as the spawner's BusyScanner reports it, and a promise that resolves
+   *  once every start, stop, edge and save queued so far has landed. */
+  workUnits: { statusLine(sessionId: string, payload: unknown): void; busy(sessionId: string, busy: boolean): void; settled(): Promise<void> }
 }
 
 async function hostRig(
@@ -400,6 +409,8 @@ async function hostRig(
   const box: { orch: HostOrch | null; server: HostServer | null } = { orch: null, server: null }
   const orchOf = (): HostOrch => box.orch!
   const serverOf = (): HostServer => box.server!
+  /** The Host's work units, built after the orch (their in-Run test reads its state), as in index.ts. */
+  const workUnitsBox: { units: HostWorkUnits | null } = { units: null }
 
   const worktrees = createHostWorktrees({
     profileDir,
@@ -407,7 +418,11 @@ async function hostRig(
     ptys: registry,
     procs,
     getState: () => orchOf().state(),
-    broadcast: (m) => serverOf().broadcast(m),
+    // E2 §4: a merge the Host runs is its own git operation for its work units, as index.ts taps it.
+    broadcast: (m) => {
+      if (m.t === 'git-op') workUnitsBox.units?.onGitOp(m)
+      serverOf().broadcast(m)
+    },
     log,
     app: { hasApp: () => serverOf().hasApp(), act: (name, args) => serverOf().act(name, args), lastAppPid: () => serverOf().lastAppPid() },
     closeTimeoutMs: 500,
@@ -464,6 +479,10 @@ async function hostRig(
     mergeWorktrees: (runCwd, paths) => worktrees.mergeWorktrees(runCwd, paths),
     removeWorktrees: (paths) => worktrees.removeWorktrees(paths)
   }
+  // What the real spawner holds per session and reports, set by a test here: the statusline capture and
+  // the busy edges.
+  const statusLines = new Map<string, unknown>()
+  const busyListeners: Array<(sessionId: string, busy: boolean) => void> = []
   const spawner = {
     ...local,
     inFlight: () => 0,
@@ -480,9 +499,12 @@ async function hostRig(
     rollSpawn: () => {
       throw new Error('not in this rig')
     },
-    statusLinePayload: async () => null,
+    statusLinePayload: async (id) => statusLines.get(id) ?? null,
     onSpawned: () => {},
     onRolloutLocated: () => {},
+    onBusyChanged: (cb) => {
+      busyListeners.push(cb)
+    },
     retarget: () => {},
     // `sessions create`'s terminal start: a pty opened under the note the Host spawner writes, and
     // nothing run in it.
@@ -603,6 +625,8 @@ async function hostRig(
         }
       }
     },
+    // Session work units (E2 §5), asked per call as index.ts asks them.
+    workUnits: () => workUnitsBox.units,
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -619,6 +643,34 @@ async function hostRig(
     log,
     deferMs: 10
   })
+
+  // Session work units (E2 §3, §4), built the way index.ts builds them: the real collector, store,
+  // transcript and git-dir watchers over the registry's session ptys, writing workUnits.json while every
+  // attached app yields `work-units`, and handing closed units to How It Works. Only the spawner's
+  // statusline captures and busy edges are the rig's (above).
+  const units = createHostWorkUnits({
+    file: path.join(profileDir, 'workUnits.json'),
+    writer: () => box.server !== null && !box.server.appsKeep(HOST_YIELD_WORK_UNITS),
+    sessions: () => workUnitSessionsOf(registry.list()),
+    accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying),
+    descriptors: makeDescriptors(process.platform),
+    statusLinePayload: (id) => spawner.statusLinePayload(id),
+    tracking: () => readWorkUnitTracking(path.join(profileDir, 'app-settings.json')),
+    inRun: (sessionId) => {
+      if (!orch.loaded()) return false
+      const st = orch.state()
+      if (st.dispatches.some((x) => x.sessionId === sessionId)) return true
+      return st.runs.some((r) => r.coordinatorSessionId === sessionId && outcomeOf(st, r.id) === 'running')
+    },
+    hostMerges: () => readHostMerges(hostMergesPathIn(profileDir)),
+    understanding: hostUnderstanding,
+    push: (m) => serverOf().broadcast(m),
+    log
+  })
+  workUnitsBox.units = units
+  spawner.onBusyChanged((sessionId, busy) => units.onBusy(sessionId, busy))
+  wireSessionExits(registry, units)
+  await units.start()
 
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
   const server = await startHostServer({
@@ -637,12 +689,17 @@ async function hostRig(
     onAppsChanged: () => {
       wiring.serverHooks.onAppsChanged()
       void hostUnderstanding.writerMayHaveChanged()
+      void units.writerMayHaveChanged()
     },
-    onAppGreeted: (send) => wiring.appGreeted(send),
+    onAppGreeted: (send) => {
+      wiring.appGreeted(send)
+      void units.reload()
+    },
     log: { write: log, close: () => {} }
   })
   box.server = server
   void hostUnderstanding.writerMayHaveChanged()
+  void units.writerMayHaveChanged()
 
   // Teardown in `leave()`'s order: the driver stops, the spawner retires, the server closes, the ptys
   // end, and the exits those ends start run out before the folders are removed. Run once: a test may
@@ -652,6 +709,7 @@ async function hostRig(
   cleanups.push(stop)
   const teardown = async (): Promise<void> => {
     wiring.dispose()
+    units.dispose()
     await spawner.closeAndSettle()
     await server.close().catch(() => {})
     const live = registry.list().filter((e) => e.alive && e.meta?.kind === 'session').length
@@ -692,7 +750,14 @@ async function hostRig(
       }
     },
     hooks,
-    understanding: { runsHandled: () => runsHandled, settled: () => hostUnderstanding.settled() }
+    understanding: { runsHandled: () => runsHandled, settled: () => hostUnderstanding.settled() },
+    workUnits: {
+      statusLine: (sessionId, payload) => void statusLines.set(sessionId, payload),
+      busy: (sessionId, busy) => {
+        for (const cb of busyListeners) cb(sessionId, busy)
+      },
+      settled: () => units.settled()
+    }
   }
 }
 
@@ -2020,6 +2085,78 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await until(async () =>
         expect((await readUnderstandingFile(file)).projects[projectPath]?.records).toEqual([{ ...left, status: 'failed', reason: 'INTERRUPTED' }])
       )
+    })
+
+    // E2 §4, §5: a session the Host runs declares its work through the CLI with no app attached; the Host's
+    // own watchers see its transcript and its commit, and the closed unit becomes a How It Works record.
+    it('with no app attached, a Host session declares its work through the CLI, and the closed unit is one record', async () => {
+      const { a, runAgent } = fakeAgent()
+      const h = await hostRig({ runAgent })
+      await turnOn(h)
+      expect(h.server.hasApp()).toBe(false)
+
+      // A Claude session in the repo: its pty in the Host's registry under the note an app writes, and the
+      // statusline capture that names its transcript.
+      const sessionId = 'ses_mine'
+      const transcript = path.join(h.profileDir, 'transcripts', `${sessionId}.jsonl`)
+      await fs.mkdir(path.dirname(transcript), { recursive: true })
+      await fs.writeFile(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: 'say hello in f.txt' } }) + '\n')
+      h.workUnits.statusLine(sessionId, { session_id: 'claude-mine', transcript_path: transcript })
+      h.openSession(sessionId, { title: 'mine', accountId: h.accountId, cwd: h.repo })
+      const asSession = { ...h.env, ASTERA_SESSION: sessionId }
+
+      const objective = 'Say hello in f.txt'
+      const started = okData(await astera(['session-task-start', '--objective', objective], asSession), 'session-task-start')
+      const unitsFile = path.join(h.profileDir, 'workUnits.json')
+      type StoredUnit = { id: string; status: string; sawWrite?: boolean; git: { observedChangedFiles: string[] } }
+      type Stored = { units: StoredUnit[]; externalGitChanges: unknown[]; gitSnapshot?: { head: string | null } }
+      const project = async (): Promise<Stored | undefined> =>
+        (JSON.parse(await fs.readFile(unitsFile, 'utf8')) as { projects: Record<string, Stored> }).projects[h.repo]
+      const unit = async (): Promise<StoredUnit | undefined> => (await project())?.units.find((u) => u.id === started.id)
+      await until(async () => expect(await unit()).toMatchObject({ status: 'active' }))
+
+      // The agent works while busy: it edits f.txt (its transcript records the Edit), stages it and
+      // commits. The Host's own watchers see each step, before any declaration runs a round: the
+      // transcript watcher the Edit, the git-dir watcher the staged file (its round reads git status)
+      // and then the new HEAD.
+      h.workUnits.busy(sessionId, true)
+      await h.workUnits.settled()
+      await fs.writeFile(path.join(h.repo, 'f.txt'), 'hello', 'utf8')
+      const edit = { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Edit', input: {} }] } }
+      await fs.appendFile(transcript, JSON.stringify(edit) + '\n')
+      await until(async () => expect(await unit()).toMatchObject({ sawWrite: true }))
+      gitSync(h.repo, ['add', 'f.txt'])
+      await until(async () => expect(await unit()).toMatchObject({ git: { observedChangedFiles: ['f.txt'] } }))
+      gitSync(h.repo, ['commit', '-m', 'say hello'])
+      const head = gitSync(h.repo, ['rev-parse', 'HEAD']).trim()
+      await until(async () => expect((await project())?.gitSnapshot?.head).toBe(head))
+      // The session's own commit, made while it was busy: not a change from outside.
+      expect((await project())?.externalGitChanges).toEqual([])
+      h.workUnits.busy(sessionId, false)
+
+      const done = okData(
+        await astera(['session-task-complete', '--check', 'tests=passed', '--summary', 'f.txt says hello'], asSession),
+        'session-task-complete'
+      )
+      expect(done.id).toBe(started.id)
+      // The closed unit, in workUnits.json: completed by the agent, ending on the session's commit.
+      await until(async () =>
+        expect(await unit()).toMatchObject({ status: 'completed', completion: { source: 'agent' }, git: { endHead: head, observedChangedFiles: ['f.txt'] } })
+      )
+
+      // One record, written by the Host with the agent's write-up.
+      const understandingFile = path.join(h.profileDir, 'understanding.json')
+      const records = async () => Object.values((await readUnderstandingFile(understandingFile)).projects).flatMap((p) => p.records)
+      await until(async () => expect((await records()).map((r) => r.status)).toEqual(['ready']))
+      const [record] = await records()
+      expect(record).toMatchObject({
+        source: { kind: 'session', sessionId },
+        request: objective,
+        changedFiles: ['f.txt'],
+        verification: { status: 'verified', checks: [{ name: 'tests', status: 'passed' }], summary: 'f.txt says hello' },
+        explanation: { overview: 'the first write-up' }
+      })
+      expect(a.calls).toBe(1)
     })
 
     it('an attached app that keeps How It Works (no understanding yield) stops the Host writing, and regenerate_work_record is CONFLICT', async () => {

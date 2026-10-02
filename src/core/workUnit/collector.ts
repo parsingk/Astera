@@ -31,17 +31,17 @@
 // a queued rename ahead of the `onSessionExit` that would otherwise interrupt it.)
 import { promises as fs, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import type { ExternalGitChange, GitRef, PendingGitOperation } from '../../core/git/types'
-import { classifyTransition } from '../../core/git/transition'
-import { isAsteraOperation, OPERATION_GRACE_MS } from '../../core/git/provenance'
-import { explainedByHostMerges, type HostMergeRecord } from '../../core/git/hostMerges'
-import { comparablePath, isSamePath } from '../../core/files/tree'
-import type { SessionCheck, SessionWorkUnit } from '../../core/workUnit/types'
-import type { OpenSessionTask } from '../../core/types'
-import { isOpen } from '../../core/workUnit/status'
-import { hasWriteEvidence } from '../../core/workUnit/humanRequest'
-import { goalSignalOf, type GoalSignal } from '../../core/workUnit/goalSignal'
-import { startedTask, completedTask, cancelledTask, interruptedTask } from '../../core/workUnit/lifecycle'
+import type { ExternalGitChange, GitRef, PendingGitOperation } from '../git/types'
+import { classifyTransition } from '../git/transition'
+import { isAsteraOperation, OPERATION_GRACE_MS } from '../git/provenance'
+import { explainedByHostMerges, type HostMergeRecord } from '../git/hostMerges'
+import { comparablePath, isSamePath } from '../files/tree'
+import type { SessionCheck, SessionWorkUnit } from './types'
+import type { OpenSessionTask } from '../types'
+import { isOpen } from './status'
+import { hasWriteEvidence } from './humanRequest'
+import { goalSignalOf, type GoalSignal } from './goalSignal'
+import { startedTask, completedTask, cancelledTask, interruptedTask } from './lifecycle'
 import { readNewLines } from './tail'
 import type { ProjectGitSnapshot, WorkUnitState, WorkUnitStore } from './store'
 
@@ -586,20 +586,7 @@ export class WorkUnitCollector {
    *  (active, interrupted — UnderstandingView.tsx) and a single sort before the split is enough:
    *  filtering by status preserves relative order, so each section comes out newest-first too. */
   listOpen(projectPath: string): OpenSessionTask[] {
-    const state = this.deps.store.get(projectPath)
-    if (!state) return []
-    return state.units
-      .filter((u) => u.status === 'active' || u.status === 'interrupted')
-      .map((u) => ({
-        id: u.id,
-        objective: u.objective,
-        status: u.status as 'active' | 'interrupted',
-        startedAt: u.startedAt,
-        endedAt: u.endedAt,
-        reason: u.reason,
-        sessionId: u.sessionId
-      }))
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    return openTasksOf(this.deps.store.get(projectPath))
   }
 
   // ── Astera 자신의 git 동작 등록 (EG §26) ───────────────────────────────
@@ -1859,4 +1846,22 @@ function groupByProject(sessions: readonly CollectorSession[]): Map<string, Coll
     else out.set(s.projectPath, [s])
   }
   return out
+}
+
+/** One project's open-task rows, newest first (listOpen's contract). Shared with the app that reads the
+ *  file a Host writes (appWorkUnits.ts), so both modes show the same rows. */
+export function openTasksOf(state: WorkUnitState | undefined): OpenSessionTask[] {
+  if (!state) return []
+  return state.units
+    .filter((u) => u.status === 'active' || u.status === 'interrupted')
+    .map((u) => ({
+      id: u.id,
+      objective: u.objective,
+      status: u.status as 'active' | 'interrupted',
+      startedAt: u.startedAt,
+      endedAt: u.endedAt,
+      reason: u.reason,
+      sessionId: u.sessionId
+    }))
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
 }

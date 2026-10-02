@@ -8,9 +8,9 @@
 //      기존 파일을 다음 쓰기가 덮어쓴다.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
-import type { ExternalGitChange } from '../../core/git/types'
-import type { SessionWorkUnit, TranscriptCursor } from '../../core/workUnit/types'
+import { readFileRetrying, renameRetrying } from '../renameRetry'
+import type { ExternalGitChange } from '../git/types'
+import type { SessionWorkUnit, TranscriptCursor } from './types'
 
 /** 설계 §9 의 ProjectGitSnapshot — "Astera 가 마지막으로 알던 git 상태"(EG §4).
  *
@@ -53,7 +53,7 @@ export interface WorkUnitState {
  *  written and read back verbatim (ipc.ts's `sessionTasks.list` handler explains why folding here
  *  would be wrong: it would ask the *other* store's key of *this* one, which holds nothing under
  *  it). Confusing the two key spaces is exactly what Task 5's Critical bug was. */
-interface StoreShape {
+export interface StoreShape {
   projects: Record<string, WorkUnitState>
 }
 
@@ -82,37 +82,109 @@ function isValid(v: unknown): v is StoreShape {
   return isObj(v) && isObj(v.projects) && Object.values(v.projects).every(isState)
 }
 
+
+/** Statuses from before the boundary was declared. `completed-candidate` meant "the agent stopped and
+ *  something changed" — nobody confirmed it, so it goes in front of the person. `abandoned` meant
+ *  "closed with nothing observed", which nothing downstream ever read. */
+function migrate(parsed: StoreShape): void {
+  for (const state of Object.values(parsed.projects)) {
+    state.units = state.units.filter((u) => (u.status as string) !== 'abandoned')
+    for (const u of state.units) {
+      if ((u.status as string) === 'completed-candidate') {
+        u.status = 'interrupted'
+        u.reason = 'INTERRUPTED_BY_APP_UPGRADE'
+      }
+      const legacy = u as unknown as { title?: string }
+      if (!u.objective && legacy.title) u.objective = legacy.title
+    }
+  }
+}
+
+/** workUnits.json as it is on disk, read-only: for an app that reads the file a Host writes (E2 §6).
+ *  Retried through a writer's rename-replace (EBUSY/EPERM on win32). No file is an empty store; a file
+ *  that cannot be read or is not valid throws, and nothing is backed up or written. The legacy
+ *  statuses are migrated in the copy read, as load() migrates them. */
+export async function readWorkUnitsFile(filePath: string): Promise<StoreShape> {
+  let text: string
+  try {
+    text = await readFileRetrying(filePath)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { projects: {} }
+    throw e
+  }
+  const parsed: unknown = JSON.parse(text)
+  if (!isValid(parsed)) throw new Error('workUnits.json is not a valid work unit store')
+  migrate(parsed)
+  return parsed
+}
+
 export class WorkUnitStore {
   private state: StoreShape = { projects: {} }
   private queue: Promise<void> = Promise.resolve()
+  /** The file as this store last loaded or saved it (mtime and size), or null when it has seen none.
+   *  refresh() compares the file with it to tell another process's write from its own. */
+  private seen: string | null = null
+  /** Counts set. refresh() adopts the file only when none ran while it was reading: a write made
+   *  meanwhile is newer than the file it read, and may not have reached the disk yet. */
+  private writes = 0
 
   constructor(private filePath: string) {}
 
   async load(): Promise<{ recovered: boolean }> {
     let parsed: unknown
+    // Stamped before the read: taken after, a write landing between the two would be taken for the
+    // file this store read, and refresh() would never adopt it.
+    const stamp = await this.stamp(this.filePath)
     try {
       parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+        // No file is an empty store, also for a store that held something: an app switching back to
+        // writer (E2 §6) must not start from what it held before a Host took the file over and removed it.
+        this.state = { projects: {} }
+        this.seen = null
+        return { recovered: false }
+      }
       return this.recover()
     }
     if (!isValid(parsed)) return this.recover()
-    // Statuses from before the boundary was declared. `completed-candidate` meant "the agent
-    // stopped and something changed" — nobody confirmed it, so it goes in front of the person.
-    // `abandoned` meant "closed with nothing observed", which nothing downstream ever read.
-    for (const state of Object.values(parsed.projects)) {
-      state.units = state.units.filter((u) => (u.status as string) !== 'abandoned')
-      for (const u of state.units) {
-        if ((u.status as string) === 'completed-candidate') {
-          u.status = 'interrupted'
-          u.reason = 'INTERRUPTED_BY_APP_UPGRADE'
-        }
-        const legacy = u as unknown as { title?: string }
-        if (!u.objective && legacy.title) u.objective = legacy.title
-      }
-    }
+    migrate(parsed)
     this.state = parsed
+    this.seen = stamp
     return { recovered: false }
+  }
+
+  /** Reads the file again **only when another process wrote it** since this store last loaded or saved
+   *  it, and returns whether it did (E2 §3, the rule E1 gave UnderstandingStore). The Host's store calls
+   *  it before every write (hostWorkUnits.ts): the Host and an older app can each be the writer in
+   *  turn, and a write computed from memory alone would erase the other projects that one wrote
+   *  meanwhile. An app that is the only writer never sees a file it did not write, so this never
+   *  adopts anything there.
+   *
+   *  It waits for this store's queued saves first, so it never reads a file under its own pending
+   *  write. A file that cannot be read or is not valid is not adopted. **Not over a newer write**: a
+   *  set made after this refresh began is kept, and the file it read is not adopted. */
+  async refresh(): Promise<boolean> {
+    const writes = this.writes
+    await this.queue.catch(() => {})
+    const now = await this.stamp(this.filePath)
+    if (now === null || now === this.seen) return false
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
+    } catch {
+      return false
+    }
+    if (!isValid(parsed) || this.writes !== writes) return false
+    migrate(parsed)
+    this.state = parsed
+    this.seen = now
+    return true
+  }
+
+  /** Resolves once every save queued so far has landed (or failed). Never rejects. */
+  settled(): Promise<void> {
+    return this.queue.catch(() => {})
   }
 
   /** copyFile 을 쓰는 이유: 내용을 읽지 못해서 온 경우(권한 오류)에도 원본을 물려 둘 수 있다 */
@@ -135,6 +207,7 @@ export class WorkUnitStore {
 
   set(projectPath: string, value: WorkUnitState): Promise<void> {
     this.state.projects[projectPath] = value
+    this.writes += 1
     return this.save()
   }
 
@@ -142,14 +215,35 @@ export class WorkUnitStore {
     const snapshot = JSON.stringify(this.state, null, 2)
     const run = async (): Promise<void> => {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-      // tmp 이름에 randomUUID 를 붙이는 것은 OrchestrationStore.writeNow 와 같다 —
-      // 두 프로세스가 같은 tmp 를 밟지 않게 한다
-      const tmp = `${this.filePath}.${randomUUID()}.tmp`
+      // Its own temp file (E2 §3, as UnderstandingStore's): the Host and an app can both hold a store
+      // over this file, and one process must never rename the other's half-written snapshot into
+      // place. Named for the pid, so a save that died leaves one file that the next save overwrites.
+      const tmp = `${this.filePath}.${process.pid}.tmp`
       await fs.writeFile(tmp, snapshot, 'utf8')
-      await fs.rename(tmp, this.filePath)
+      // Stamped from the temp file: a rename keeps mtime and size, and reading the target after it
+      // could take another process's write that landed in between for this one's.
+      const stamp = await this.stamp(tmp)
+      // Retried: on win32 a rename over a file another process is reading (the app's reader) is
+      // refused for the moment the handle is open.
+      try {
+        await renameRetrying(tmp, this.filePath)
+      } catch (err) {
+        await fs.rm(tmp, { force: true }).catch(() => {})
+        throw err
+      }
+      this.seen = stamp
     }
     // then(run, run) 의 두 인자가 같은 이유는 이 파일 머리주석의 1번이다
     this.queue = this.queue.then(run, run)
     return this.queue
+  }
+
+  private async stamp(p: string): Promise<string | null> {
+    try {
+      const st = await fs.stat(p)
+      return `${st.mtimeMs}:${st.size}`
+    } catch {
+      return null
+    }
   }
 }

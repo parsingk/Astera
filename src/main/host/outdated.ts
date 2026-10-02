@@ -18,7 +18,8 @@ import {
   HOST_FEATURE_CHAT_TAKEOVER,
   HOST_FEATURE_SLACK_OWNER,
   HOST_FEATURE_JOURNAL,
-  HOST_FEATURE_UNDERSTANDING
+  HOST_FEATURE_UNDERSTANDING,
+  HOST_FEATURE_WORK_UNITS
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -164,4 +165,14 @@ export function hostSpeaksRollJournal(status: { connected: boolean; features: re
  *  older Host is never asked, and its answer is unknown. */
 export function hostSpeaksCoordinatorIdle(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_COORDINATOR_IDLE)
+}
+
+/** The connected Host detects session work units and writes workUnits.json (E2 §3). Read by
+ *  hostSpeaksJournal's rule, at each greeting; appWorkUnits keeps that answer until the next one. */
+export function hostSpeaksWorkUnits(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_WORK_UNITS)
 }

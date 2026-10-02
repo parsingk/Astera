@@ -4016,3 +4016,164 @@ describe('understanding-unit and understanding-regenerate (E1 §4, §5)', () => 
     })
   })
 })
+
+describe('session work units in the Host (E2 §5)', () => {
+  const app: OrchCaller = { role: 'app', toOthers: () => {} }
+  const cli: OrchCaller = { role: 'cli', toOthers: () => {} }
+  const mcp: OrchCaller = { role: 'mcp', toOthers: () => {} }
+  const duty = () => {
+    const box = { writer: true, tracking: true, running: true }
+    const w = {
+      isWriter: vi.fn(() => box.writer),
+      isRunning: vi.fn(() => box.running),
+      trackingEnabled: vi.fn(async () => box.tracking),
+      reload: vi.fn(async () => {}),
+      fork: vi.fn((_n: string, _t?: string, _o?: string) => {}),
+      sessionTasks: {
+        start: vi.fn(async (_s: string, _o: string): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
+        complete: vi.fn(async (): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
+        cancel: vi.fn(async (): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
+        completeById: vi.fn(async (): Promise<{ ok: true; recorded: boolean } | { ok: false; reason: string }> => ({ ok: true, recorded: true })),
+        cancelById: vi.fn(async (): Promise<{ ok: true } | { ok: false; reason: string }> => ({ ok: true }))
+      }
+    }
+    return { box, w, workUnits: () => w }
+  }
+
+  describe('session-task-* from an agent session', () => {
+    it('with no app attached, start, complete and cancel are answered by the Host and reach its units', async () => {
+      const d = duty()
+      const act = vi.fn(async () => ({}))
+      const orch = orchOver({ act, hasApp: () => false, workUnits: d.workUnits })
+      const start = await orch.call({ cmd: 'session-task-start', args: { objective: 'Fix it' }, sessionId: 'ses1', from: cli })
+      expect(start).toEqual({ status: 200, body: { id: 'wu-1' } })
+      const done = await orch.call({ cmd: 'session-task-complete', args: { check: ['tests=passed'], summary: 'done' }, sessionId: 'ses1', from: cli })
+      expect(done).toEqual({ status: 200, body: { id: 'wu-1' } })
+      const cancel = await orch.call({ cmd: 'session-task-cancel', args: { reason: 'no' }, sessionId: 'ses1', from: cli })
+      expect(cancel).toEqual({ status: 200, body: { id: 'wu-1' } })
+      expect(d.w.sessionTasks.start).toHaveBeenCalledWith('ses1', 'Fix it')
+      expect(d.w.sessionTasks.complete).toHaveBeenCalledWith('ses1', { source: 'agent', checks: [{ name: 'tests', status: 'passed' }], summary: 'done' })
+      expect(d.w.sessionTasks.cancel).toHaveBeenCalledWith('ses1', 'no')
+      expect(act).not.toHaveBeenCalled()
+    })
+    it('tracking off on the Host answers 409 before the units are asked', async () => {
+      const d = duty()
+      d.box.tracking = false
+      const r = await orchOver({ hasApp: () => false, workUnits: d.workUnits }).call({ cmd: 'session-task-start', args: { objective: 'x' }, sessionId: 'ses1', from: cli })
+      expect(r).toEqual({ status: 409, body: { error: 'work unit tracking is off' } })
+      expect(d.w.sessionTasks.start).not.toHaveBeenCalled()
+    })
+    it('a Run coordinator is still refused, and the units are not asked', async () => {
+      await seed()
+      const file = path.join(dir, 'orchestration.json')
+      const st = JSON.parse(await fs.readFile(file, 'utf8')) as OrchState
+      await fs.writeFile(file, JSON.stringify({ ...st, runs: st.runs.map((r) => ({ ...r, coordinatorSessionId: 'ses_c' })) }), 'utf8')
+      const d = duty()
+      const orch = orchOver({ hasApp: () => false, aliveSessionIds: () => new Set(['ses_c']), workUnits: d.workUnits })
+      const r = await orch.call({ cmd: 'session-task-start', args: { objective: 'x' }, sessionId: 'ses_c', from: cli })
+      expect(r.status).toBe(403)
+      expect(d.w.sessionTasks.start).not.toHaveBeenCalled()
+    })
+    it('with an attached app that keeps the duty, they are forwarded as before', async () => {
+      const d = duty()
+      d.box.writer = false
+      const act = vi.fn(async (name: string) => (name === 'trackingEnabled' ? true : { ok: true, id: 'app-1' }))
+      const r = await orchOver({ act, workUnits: d.workUnits }).call({ cmd: 'session-task-start', args: { objective: 'x' }, sessionId: 'ses1', from: cli })
+      expect(r).toEqual({ status: 200, body: { id: 'app-1' } })
+      expect(act.mock.calls.map((c) => c[0])).toEqual(['trackingEnabled', 'sessionTasks.start'])
+      expect(d.w.sessionTasks.start).not.toHaveBeenCalled()
+    })
+    it('a start the Host made keeps a receipt, so a retried id replays instead of starting again', async () => {
+      const d = duty()
+      const orch = orchOver({ hasApp: () => false, workUnits: d.workUnits })
+      const call = { cmd: 'session-task-start', args: { objective: 'x' }, sessionId: 'ses1', from: cli, request: 'req-1' }
+      expect((await orch.call(call)).status).toBe(200)
+      const again = await orch.call(call)
+      expect(again).toMatchObject({ status: 200, replayed: true })
+      expect(d.w.sessionTasks.start).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('the app’s work-units-* calls', () => {
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['work-units-fork', { newSessionId: 'ses2', transcriptPath: 'D:/t.jsonl', oldSessionId: 'ses1' }],
+      ['work-units-reload', {}],
+      ['work-units-complete', { projectPath: 'D:/p', id: 'wu-1' }],
+      ['work-units-cancel', { projectPath: 'D:/p', id: 'wu-1' }]
+    ]
+    it('are the app’s alone: 403 for the CLI, an MCP client and an unknown caller', async () => {
+      await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+      const d = duty()
+      const orch = orchOver({ workUnits: d.workUnits })
+      for (const [cmd, args] of calls)
+        for (const from of [cli, mcp, undefined]) expect((await orch.call({ cmd, args, sessionId: '', from })).status).toBe(403)
+      expect(d.w.fork).not.toHaveBeenCalled()
+      expect(d.w.reload).not.toHaveBeenCalled()
+    })
+    it('501 on a Host without the duty', async () => {
+      for (const [cmd, args] of calls) {
+        expect((await orchOver().call({ cmd, args, sessionId: '', from: app })).status).toBe(501)
+        expect((await orchOver({ workUnits: () => null }).call({ cmd, args, sessionId: '', from: app })).status).toBe(501)
+      }
+    })
+    it('409 when this Host is not the writer, and nothing is asked of the units', async () => {
+      const d = duty()
+      d.box.writer = false
+      const orch = orchOver({ workUnits: d.workUnits })
+      for (const [cmd, args] of calls) expect((await orch.call({ cmd, args, sessionId: '', from: app })).status).toBe(409)
+      expect(d.w.fork).not.toHaveBeenCalled()
+      expect(d.w.reload).not.toHaveBeenCalled()
+      expect(d.w.sessionTasks.completeById).not.toHaveBeenCalled()
+      expect(d.w.sessionTasks.cancelById).not.toHaveBeenCalled()
+    })
+    it('400 with a request id, or without the arguments each takes', async () => {
+      const d = duty()
+      const orch = orchOver({ workUnits: d.workUnits })
+      for (const [cmd, args] of calls) expect((await orch.call({ cmd, args, sessionId: '', from: app, request: 'r1' })).status).toBe(400)
+      const bad: Array<[string, Record<string, unknown>]> = [
+        ['work-units-fork', {}],
+        ['work-units-fork', { newSessionId: '' }],
+        ['work-units-fork', { newSessionId: 'ses2', transcriptPath: 3 }],
+        ['work-units-fork', { newSessionId: 'ses2', oldSessionId: '' }],
+        ['work-units-complete', { id: 'wu-1' }],
+        ['work-units-complete', { projectPath: 'D:/p' }],
+        ['work-units-cancel', { projectPath: '', id: 'wu-1' }]
+      ]
+      for (const [cmd, args] of bad) expect((await orch.call({ cmd, args, sessionId: '', from: app })).status).toBe(400)
+      expect(d.w.fork).not.toHaveBeenCalled()
+      expect(d.w.reload).not.toHaveBeenCalled()
+      expect(d.w.sessionTasks.completeById).not.toHaveBeenCalled()
+      expect(d.w.sessionTasks.cancelById).not.toHaveBeenCalled()
+    })
+    it('work-units-fork hands the fork to the units and says whether the collector runs', async () => {
+      const d = duty()
+      const orch = orchOver({ workUnits: d.workUnits })
+      expect(await orch.call({ cmd: 'work-units-fork', args: calls[0][1], sessionId: '', from: app })).toEqual({ status: 200, body: { forked: true } })
+      expect(d.w.fork).toHaveBeenCalledWith('ses2', 'D:/t.jsonl', 'ses1')
+      d.box.running = false
+      expect(await orch.call({ cmd: 'work-units-fork', args: { newSessionId: 'ses3' }, sessionId: '', from: app })).toEqual({ status: 200, body: { forked: false } })
+      expect(d.w.fork).toHaveBeenLastCalledWith('ses3', undefined, undefined)
+    })
+    it('work-units-reload re-reads the toggle and answers whether the collector now runs', async () => {
+      const d = duty()
+      d.w.reload.mockImplementationOnce(async () => {
+        d.box.running = false
+      })
+      expect(await orchOver({ workUnits: d.workUnits }).call({ cmd: 'work-units-reload', args: {}, sessionId: '', from: app })).toEqual({
+        status: 200,
+        body: { reloaded: true, running: false }
+      })
+      expect(d.w.reload).toHaveBeenCalledTimes(1)
+    })
+    it('work-units-complete and -cancel answer the collector’s own result, refusals included', async () => {
+      const d = duty()
+      const orch = orchOver({ workUnits: d.workUnits })
+      expect(await orch.call({ cmd: 'work-units-complete', args: calls[2][1], sessionId: '', from: app })).toEqual({ status: 200, body: { ok: true, recorded: true } })
+      expect(d.w.sessionTasks.completeById).toHaveBeenCalledWith('D:/p', 'wu-1')
+      d.w.sessionTasks.completeById.mockResolvedValueOnce({ ok: false, reason: 'unknown task: wu-1' })
+      expect(await orch.call({ cmd: 'work-units-complete', args: calls[2][1], sessionId: '', from: app })).toEqual({ status: 200, body: { ok: false, reason: 'unknown task: wu-1' } })
+      expect(await orch.call({ cmd: 'work-units-cancel', args: calls[3][1], sessionId: '', from: app })).toEqual({ status: 200, body: { ok: true } })
+      expect(d.w.sessionTasks.cancelById).toHaveBeenCalledWith('D:/p', 'wu-1')
+    })
+  })
+})

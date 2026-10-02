@@ -2,7 +2,7 @@
 import { git, type GitResult } from '../worktrees/git'
 
 /** A call made inside the watch loop (gitWatcher) must not hang. readRange here and the round
- *  functions in main/workUnit/gitProbe.ts all run inside the same round (gitRound), so they all use
+ *  functions in core/workUnit/gitProbe.ts all run inside the same round (gitRound), so they all use
  *  this value. With the adapter's default (30 s), one stuck git would hold the collector's serial
  *  queue that long. The same value as ipc.ts's git.status. */
 export const WATCH_ROUND_TIMEOUT_MS = 5_000
