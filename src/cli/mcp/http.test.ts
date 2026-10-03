@@ -75,14 +75,14 @@ async function connect(url: URL, token: string | null, name = 'test-client') {
 
 /** A raw request, so the Host header and the body can be anything. */
 function raw(port: number, a: { method?: string; path?: string; headers?: Record<string, string>; body?: string | Buffer }) {
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+  return new Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
     const req = http.request(
       { host: '127.0.0.1', port, method: a.method ?? 'POST', path: a.path ?? '/mcp', headers: a.headers ?? {} },
       (res) => {
         let body = ''
         res.setEncoding('utf8')
         res.on('data', (c: string) => (body += c))
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }))
       }
     )
     req.on('error', reject)
@@ -190,6 +190,55 @@ describe('serveMcpHttp', () => {
     const a = await connect(s.url, TOKEN, 'alpha')
     await a.client.callTool({ name: 'list_projects', arguments: {} })
     await expect.poll(() => s.links[0].closed, { timeout: 5000 }).toBe(true)
+  })
+
+  it('closes every open session, its GET stream included, once a request shows the token changed', async () => {
+    const s = await start()
+    const auth = { ...JSON_HEADERS, authorization: `Bearer ${TOKEN}` }
+    const sid = String((await raw(s.port, { headers: auth, body: INIT })).headers['mcp-session-id'])
+    // The standalone GET stream an MCP client keeps open for server messages.
+    const stream = await new Promise<{ ended: Promise<void> }>((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port: s.port, method: 'GET', path: '/mcp', headers: { accept: 'text/event-stream', authorization: `Bearer ${TOKEN}`, 'mcp-session-id': sid } },
+        (res) => {
+          expect(res.statusCode).toBe(200)
+          res.resume()
+          resolve({ ended: new Promise<void>((done) => res.on('close', () => done())) })
+        }
+      )
+      req.on('error', reject)
+      req.end()
+    })
+    const tmp = `${s.tokenFile}.tmp`
+    await fs.writeFile(tmp, `${OTHER}\n`)
+    await fs.rename(tmp, s.tokenFile)
+    // The next request (here a client with the new token) is when the process reads the new token.
+    await connect(s.url, OTHER, 'after')
+    await stream.ended
+    expect(s.links[0].closed).toBe(true)
+    expect(s.links[1].closed).toBe(false)
+    const gone = await raw(s.port, { method: 'GET', headers: { accept: 'text/event-stream', authorization: `Bearer ${OTHER}`, 'mcp-session-id': sid } })
+    expect(gone.status).toBe(404)
+  })
+
+  it('answers 503 to an initialize past 64 open sessions, concurrent ones included, and opens one again after a close', async () => {
+    const s = await start()
+    const auth = { ...JSON_HEADERS, authorization: `Bearer ${TOKEN}` }
+    const answers = await Promise.all(Array.from({ length: 70 }, () => raw(s.port, { headers: auth, body: INIT })))
+    expect(answers.filter((r) => r.status === 200)).toHaveLength(64)
+    const busy = answers.filter((r) => r.status !== 200)
+    expect(busy).toHaveLength(6)
+    for (const r of busy) {
+      expect(r.status).toBe(503)
+      expect(JSON.parse(r.body)).toMatchObject({ error: { message: expect.stringContaining('64') } })
+    }
+    await expect(connect(s.url, TOKEN)).rejects.toThrow()
+    expect(s.links.filter((l) => !l.closed)).toHaveLength(64)
+    // A session closed by its client makes room for one more.
+    const sid = String(answers.find((r) => r.status === 200)!.headers['mcp-session-id'])
+    expect((await raw(s.port, { method: 'DELETE', headers: { authorization: `Bearer ${TOKEN}`, 'mcp-session-id': sid } })).status).toBe(200)
+    expect((await raw(s.port, { headers: auth, body: INIT })).status).toBe(200)
+    expect((await raw(s.port, { headers: auth, body: INIT })).status).toBe(503)
   })
 
   it('answers 413 to a body over 4 MB, declared or streamed, and closes the connection; 404 off /mcp', async () => {

@@ -18,6 +18,8 @@ import { createMcpServer, openMcpHostLink } from './server'
 const BODY_CAP = 4 * 1024 * 1024
 /** A session unseen this long is closed (MCP HTTP design §1). */
 const IDLE_MS = 30 * 60_000
+/** Open sessions one process keeps; an initialize past it is answered 503. Each holds a server and a Host link. */
+const MAX_SESSIONS = 64
 
 type Session = { transport: StreamableHTTPServerTransport; server: McpServer; lastSeen: number }
 
@@ -129,13 +131,26 @@ export async function serveMcpHttp(a: {
         startsHost: false
       }))
   let allowed = new Set<string>()
+  /** Initializes past the cap check whose session is not in `sessions` yet, so concurrent ones count. */
+  let opening = 0
+  /** The token the open sessions were opened under. */
+  let sessionsToken: string | null = null
 
   const openSession = async (req: http.IncomingMessage, res: http.ServerResponse, body: unknown, remote: string | undefined): Promise<void> => {
+    let counted = true
+    opening++
+    const settle = (): void => {
+      if (counted) opening--
+      counted = false
+    }
     const link = makeLink({ client: () => server.server.getClientVersion(), remote })
     const server = createMcpServer({ link, version: a.version, log, debug })
     const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (id) => void sessions.set(id, { transport, server, lastSeen: Date.now() })
+      onsessioninitialized: (id) => {
+        settle()
+        sessions.set(id, { transport, server, lastSeen: Date.now() })
+      }
     })
     // The server's hook fires on every close: DELETE, the idle sweep, shutdown, a broken transport.
     server.server.onclose = () => {
@@ -146,8 +161,12 @@ export async function serveMcpHttp(a: {
         log(`closing a session's Host link failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
-    await server.connect(transport)
-    await transport.handleRequest(req, res, body)
+    try {
+      await server.connect(transport)
+      await transport.handleRequest(req, res, body)
+    } finally {
+      settle()
+    }
     // An initialize the transport refused (a bad Accept header, say) made no session: nothing keeps it.
     if (transport.sessionId === undefined || !sessions.has(transport.sessionId)) await server.close()
   }
@@ -160,6 +179,14 @@ export async function serveMcpHttp(a: {
       token = await reader.current()
     } catch (err) {
       log(`the token file cannot be read: ${(err as NodeJS.ErrnoException).code ?? 'error'}`)
+    }
+    // A new token (or none: a missing or unreadable file) ends every session opened under the old one, an
+    // open GET stream included, since such a stream sends no request that would be refused.
+    if (token !== sessionsToken) {
+      if (sessions.size > 0) log(`the token changed: closing ${sessions.size} open session(s)`)
+      for (const s of [...sessions.values()])
+        s.server.close().catch((err: unknown) => log(`closing a session failed: ${err instanceof Error ? err.message : String(err)}`))
+      sessionsToken = token
     }
     const given = bearerOf(req.headers.authorization)
     if (token === null || given === null || !tokenMatches(given, token)) {
@@ -195,7 +222,13 @@ export async function serveMcpHttp(a: {
       s.lastSeen = Date.now()
       return s.transport.handleRequest(req, res, body)
     }
-    if (req.method === 'POST' && isInitializeRequest(body)) return openSession(req, res, body, remote)
+    if (req.method === 'POST' && isInitializeRequest(body)) {
+      if (sessions.size + opening >= MAX_SESSIONS) {
+        log(`503: refused a new session from ${remote ?? 'an unknown address'}, ${MAX_SESSIONS} are open`)
+        return sendJson(res, 503, rpcError(-32000, `Too many open sessions (${MAX_SESSIONS}); close one first`))
+      }
+      return openSession(req, res, body, remote)
+    }
     return sendJson(res, 400, rpcError(-32000, 'Bad Request: no session; send initialize first'))
   }
 
