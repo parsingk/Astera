@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { emptyState, type OrchState } from '../orchestration/state'
-import { actorFromJson, actorOf, commitStamp, isJournalActor, mcpClientOf } from './actor'
+import { actorFromJson, actorOf, commitStamp, isJournalActor, mcpClientOf, mcpRemoteOf } from './actor'
 
 describe('the journal actor (J4)', () => {
   it('reads the four surfaces, with or without a session', () => {
@@ -112,5 +112,33 @@ describe('the MCP client on the actor', () => {
     expect(isJournalActor({ surface: 'mcp', client: { name: 'a\nb' } })).toBe(false)
     expect(isJournalActor({ surface: 'mcp', client: { name: 'x', version: '' } })).toBe(false)
     expect(isJournalActor({ surface: 'cli', client: { name: 'x' } })).toBe(false)
+  })
+})
+
+// MCP HTTP design §5: the address an MCP call came from over HTTP, stored as given (no lookups), on mcp only.
+describe('the remote address on the actor', () => {
+  it('actorOf puts the remote beside the client on an mcp actor only', () => {
+    const client = { name: 'claude-code' }
+    expect(actorOf({ sessionId: '', role: 'mcp', client, remote: '192.168.0.7', state: null })).toEqual({ surface: 'mcp', client, remote: '192.168.0.7' })
+    expect(actorOf({ sessionId: '', role: 'mcp', remote: '::ffff:127.0.0.1', state: null })).toEqual({ surface: 'mcp', remote: '::ffff:127.0.0.1' })
+    expect(actorOf({ sessionId: '', role: 'mcp', remote: 'fe80::1%eth0', state: null })).toEqual({ surface: 'mcp', remote: 'fe80::1%eth0' })
+    expect(actorOf({ sessionId: '', role: 'cli', remote: '192.168.0.7', state: null })).toEqual({ surface: 'cli' })
+    expect(actorOf({ sessionId: '', role: 'app', remote: '192.168.0.7', state: null })).toEqual({ surface: 'desktop' })
+  })
+  it('keeps only address characters, cut to 64, and drops one with nothing left', () => {
+    expect(mcpRemoteOf('10.0.0.1\n<x>')).toBe('10.0.0.1x')
+    expect(mcpRemoteOf('a'.repeat(100))).toBe('a'.repeat(64))
+    for (const junk of [undefined, null, 7, '', ' \n', {}]) expect(mcpRemoteOf(junk)).toBeUndefined()
+  })
+  it('round-trips through actor JSON, and is dropped where it cannot be read', () => {
+    const actor = actorOf({ sessionId: '', role: 'mcp', client: { name: 'c' }, remote: '10.0.0.2', state: null })
+    expect(isJournalActor(actor)).toBe(true)
+    expect(actorFromJson(JSON.stringify(actor))).toEqual({ surface: 'mcp', client: { name: 'c' }, remote: '10.0.0.2' })
+    expect(actorFromJson('{"surface":"mcp","remote":7}')).toEqual({ surface: 'mcp' })
+    expect(actorFromJson('{"surface":"cli","remote":"10.0.0.2"}')).toEqual({ surface: 'cli' })
+    expect(isJournalActor({ surface: 'mcp', remote: '10.0.0.2' })).toBe(true)
+    expect(isJournalActor({ surface: 'mcp', remote: 7 })).toBe(false)
+    expect(isJournalActor({ surface: 'mcp', remote: 'a\nb' })).toBe(false)
+    expect(isJournalActor({ surface: 'cli', remote: '10.0.0.2' })).toBe(false)
   })
 })

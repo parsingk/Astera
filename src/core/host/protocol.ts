@@ -160,6 +160,18 @@ export const HOST_FEATURE_WORK_UNITS = 'work-units'
  *  sends none of the three calls to a Host without it. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_WORKSPACE = 'workspace'
 
+/** The MCP HTTP entrance as the Host runs it (MCP HTTP design §3): answered by the app-only orch-call
+ *  `mcp-http-status` (and `mcp-http-reload`, after it re-read the setting) and pushed as `mcp-http-state` on
+ *  every change. `url` only while `running`; `error` only while `failed`. `lan` and `port` are the setting
+ *  being applied. */
+export interface McpHttpState {
+  state: 'off' | 'starting' | 'running' | 'failed'
+  url?: string
+  error?: string
+  lan: boolean
+  port: number
+}
+
 /** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
  *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
  *  a reader folds a chain onto its live id. A `state` entry carries the roll state and its fields. */
@@ -529,6 +541,9 @@ export type HostMessage =
   /** The Host just wrote workUnits.json for this project (E2 §4), the raw session cwd it stores under. The
    *  app forwards it to its renderer as `sessionTasks:changed`, which reads again. An older app ignores it. */
   | { t: 'work-units-state'; root: string }
+  /** The MCP HTTP entrance's state changed (MCP HTTP design §3; host/mcpHttp.ts): the same value the app-only
+   *  `mcp-http-status` answers. An older app ignores it. */
+  | { t: 'mcp-http-state'; state: McpHttpState }
   /** A goal a session declared opened nothing, because a unit was already open there (the collector's
    *  onGoalIgnored): the app shows the notice its renderer shows today. An older app ignores it. */
   | { t: 'work-units-goal-ignored'; projectPath: string; objective: string; blockingUnitId: string }

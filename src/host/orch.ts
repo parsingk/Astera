@@ -32,6 +32,7 @@ import type { HostRolling } from './rolling'
 import type { HostChats } from './hostChats'
 import type { RollJournal } from './rollJournal'
 import type { HostSlackWiring } from './slackWiring'
+import type { McpHttpSupervisor } from './mcpHttp'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
 import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
@@ -448,6 +449,9 @@ export function createHostOrch(a: {
   /** The Host's Slack (Slack in the Host, P17), for the app's `slack-reload` call. Absent exactly when
    *  this Host does not own Slack (no spawner or no SDK): the call then answers 501. */
   slack?: Pick<HostSlackWiring, 'reload' | 'active'>
+  /** The MCP HTTP entrance's supervisor (mcpHttp.ts, MCP HTTP design §3), for the app's `mcp-http-reload` and
+   *  `mcp-http-status`. Absent: both answer 501. */
+  mcpHttp?: Pick<McpHttpSupervisor, 'reload' | 'status'>
   /** R7: the live session a pty note says was rolled from this one, or null. */
   rolledInto?(sessionId: string): { id: string; accountId: string } | null
   /** R7: rekeys through the Host's roll tap instead of closing. */
@@ -1431,6 +1435,8 @@ export function createHostOrch(a: {
             cmd === 'roll-force' ||
             cmd === 'roll-journal' ||
             cmd === 'slack-reload' ||
+            cmd === 'mcp-http-reload' ||
+            cmd === 'mcp-http-status' ||
             cmd === 'journal-append' ||
             cmd === 'journal-reload' ||
             cmd === 'understanding-unit' ||
@@ -1522,6 +1528,14 @@ export function createHostOrch(a: {
           if (!a.slack) return { status: 501, body: { error: 'this Host does not own Slack' } }
           await a.slack.reload()
           return { status: 200, body: { reloaded: true, active: a.slack.active() } }
+        }
+        // **Beside slack-reload, for its reason (MCP HTTP design §3).** The settings screen, after it wrote
+        // `mcpHttp`, has the Host read it again, and asks the entrance's state. Both answer the state.
+        if (cmd === 'mcp-http-reload' || cmd === 'mcp-http-status') {
+          if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
+          if (!a.mcpHttp) return { status: 501, body: { error: 'this Host does not run the MCP HTTP entrance' } }
+          if (cmd === 'mcp-http-reload') await a.mcpHttp.reload()
+          return { status: 200, body: a.mcpHttp.status() }
         }
         // **Beside slack-reload, for its reason (Host journal J3, P7).** The app's reconciler rows and its
         // settings changes. Never a command layer command, never a receipt.
@@ -1620,7 +1634,7 @@ export function createHostOrch(a: {
         await ready()
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
-        const actor = actorOf({ sessionId, role: from?.role, client: from?.client, state: store.get() })
+        const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, state: store.get() })
         const r = await handleCommand(depsFor(marks, actor), { sessionId, role: from?.role }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields

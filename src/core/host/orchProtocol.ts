@@ -92,6 +92,9 @@ export interface OrchCaller {
   /** The MCP client an `mcp` socket's hello named, already cleaned (MCP spec §29). Only on role
    *  `mcp`, and only when the hello named one. */
   client?: { name: string; version?: string }
+  /** The HTTP caller's address an `mcp` socket's hello named, already cleaned (MCP HTTP design §5). Only
+   *  on role `mcp`, and only over HTTP. */
+  remote?: string
   /** Pushes a message to every greeted socket **except this one**. What `state-put` answers with: the
    *  state came from this client, so sending it back would be an echo — and the app that pushed it
    *  would then write its own state back over itself. */
