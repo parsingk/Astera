@@ -1591,8 +1591,9 @@ export class WorkUnitCollector {
    *  an outside change, and an untrusted session (codex) gets no subtraction of outside changes at all,
    *  since its own commits are recorded among them. A busy session's own pull is never recorded either.
    *
-   *  Asks git only when some unit went through a forward move. `known` is the range gitRound already read for an outside change (null: git did not
-   *  answer it); otherwise one `git diff`. No answer adds nothing. */
+   *  Asks git only when some unit went through a forward move. `known` is the range gitRound already
+   *  read for an outside change (null: git did not answer it); otherwise one `git diff`. No answer adds
+   *  nothing. */
   private async noteIncoming(
     projectPath: string,
     repo: string,
