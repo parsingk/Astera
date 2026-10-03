@@ -1445,6 +1445,14 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
           remote: '127.0.0.1'
         })
       )
+      // The same gate as stdio: with read only access, a control tool is refused to the HTTP caller too.
+      await setMcpAccess(h, 'read')
+      const denied = (await client.callTool({
+        name: 'create_job',
+        arguments: { projectId, objective: 'not over http', coordinatorAccountId: h.accountId, requestId: 'h-3' }
+      })) as ToolResult
+      expect(denied.isError).toBe(true)
+      expect(errorOf(denied)).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('Read only') })
       await client.close()
 
       // Off: the app saves the setting and asks the Host to read it again. The entrance stops, the
