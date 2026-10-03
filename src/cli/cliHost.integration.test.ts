@@ -2094,14 +2094,26 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     const changed = await pending
     expect(Date.now() - t0).toBeLessThan(9_000)
     expect(changed.isError, changed.content[0]?.text).toBeFalsy()
-    const after = changed.structuredContent as Page
-    const questionId = h.state().gates.find((g) => g.runId === runId && g.status === 'open')?.id
+    // The exit is two commits on the Host (the "ended without reporting" message, then the question), and a
+    // call answers at the first new event: on a slow machine the question comes in a later answer. Follow
+    // with the returned seen until the ending says a person is needed, as an agent would.
+    let after = changed.structuredContent as Page
+    const collected = [...after.events]
     expect(after.seen).toBeGreaterThan(all.seen)
     expect(after.events).toHaveLength(after.seen - all.seen)
+    for (let i = 0; after.ending === null && i < 5; i++) {
+      const next = await mcp.call('wait_for_run', { runId, seen: after.seen, waitSeconds: 5 })
+      expect(next.isError, next.content[0]?.text).toBeFalsy()
+      const page = next.structuredContent as Page
+      expect(page.events).toHaveLength(page.seen - after.seen)
+      collected.push(...page.events)
+      after = page
+    }
+    const questionId = h.state().gates.find((g) => g.runId === runId && g.status === 'open')?.id
     // Only what the first answer did not have.
     const before = new Set(all.events.map((e) => `${e.kind}:${e.sourceId}`))
-    for (const e of after.events) expect(before.has(`${e.kind}:${e.sourceId}`), `${e.kind}:${e.sourceId}`).toBe(false)
-    expect(after.events).toContainEqual(expect.objectContaining({ kind: 'gate-opened', sourceId: questionId }))
+    for (const e of collected) expect(before.has(`${e.kind}:${e.sourceId}`), `${e.kind}:${e.sourceId}`).toBe(false)
+    expect(collected).toContainEqual(expect.objectContaining({ kind: 'gate-opened', sourceId: questionId }))
     expect(after.ending).toMatchObject({ runId, state: 'waiting', questionId })
 
     // The seen from that answer and nothing new since: no events. The Run still waits on its question,
