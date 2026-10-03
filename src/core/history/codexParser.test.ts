@@ -167,6 +167,27 @@ describe('parseCodexTail', () => {
     ])
     expect((await parseCodexTail(p)).lastUserTitle).toBe('/goal own4.txt 를 만들어 커밋')
   })
+
+  // What codex 0.160 actually records for `/goal <objective>`: no user message, only the goal event
+  // (and its own continuation note). The objective is the person's words, so it is the title.
+  it('takes the goal objective when no message of the person is in the tail', async () => {
+    const goal = (objective: string): string =>
+      JSON.stringify({
+        timestamp: '2026-10-03T12:28:20.000Z',
+        type: 'event_msg',
+        payload: { type: 'thread_goal_updated', goal: { threadId: 't', objective, status: 'active' } }
+      })
+    const p = await write('goal-only.jsonl', [
+      metaLine,
+      goal('Create own4.txt and commit it'),
+      user('<codex_internal_context source="goal">\nContinue working toward the active thread goal.'),
+      agent('done'),
+      goal('Create own5.txt and commit it'),
+      user('<codex_internal_context source="goal">\nContinue working toward the active thread goal.'),
+      agent('done')
+    ])
+    expect((await parseCodexTail(p)).lastUserTitle).toBe('Create own5.txt and commit it')
+  })
 })
 
 describe('parseCodexPreview', () => {

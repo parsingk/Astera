@@ -251,12 +251,20 @@ export async function parseCodexTail(
     lines = lines.filter((l) => l.trim().length > 0)
 
     let lastUserTitle: string | null = null
+    // codex records `/goal <objective>` as a goal event and no user message (0.160, measured
+    // 2026-10-03), so a session driven only by goals has no message of the person's at all. The newest
+    // objective is their words too, and stands in when no message is found.
+    let goalTitle: string | null = null
     let awaitingReply = false
     let roleResolved = false
 
     for (let i = lines.length - 1; i >= 0; i--) {
       const obj = parseLine(lines[i])
       if (!obj) continue
+      if (goalTitle === null) {
+        const objective = goalObjectiveOf(obj)
+        if (objective) goalTitle = toTitle(objective)
+      }
       const msg = eventMessage(obj)
       if (!msg) continue
 
@@ -276,10 +284,19 @@ export async function parseCodexTail(
       if (lastUserTitle !== null && roleResolved) break // early exit
     }
 
-    return { lastUserTitle, awaitingReply }
+    return { lastUserTitle: lastUserTitle ?? goalTitle, awaitingReply }
   } catch {
     return empty
   }
+}
+
+/** The objective of a codex `thread_goal_updated` event, or null for any other record. */
+function goalObjectiveOf(obj: Record<string, unknown>): string | null {
+  if (obj.type !== 'event_msg') return null
+  const p = obj.payload as { type?: unknown; goal?: { objective?: unknown } } | undefined
+  if (!p || p.type !== 'thread_goal_updated') return null
+  const o = p.goal?.objective
+  return typeof o === 'string' && o.trim() !== '' ? o : null
 }
 
 /** 미리보기용 파싱 — parseTranscriptPreview(parser.ts)와 **같은 규칙이어야 한다.** 두 provider 의
