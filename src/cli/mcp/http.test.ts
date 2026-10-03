@@ -6,7 +6,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { allowedHosts, hostsWithoutPort, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
+import { allowedHosts, hostsWithoutPort, offeredHosts, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
 import { reachableUrls } from '../../core/mcp/httpUrls'
 import type { HostLink } from './hostLink'
 
@@ -347,6 +347,56 @@ describe('hostsWithoutPort', () => {
     const interfaces = { eth0: [{ address: '192.168.1.5' }, { address: 'fe80::2%eth0' }], ts: [{ address: '100.90.1.2' }] }
     const allowed = allowedHosts(7871, '0.0.0.0', ['Box.Ts.Net', 'proxy:9000', 'box:7871'], interfaces)
     expect(hostsWithoutPort(allowed, 7871).sort()).toEqual(['100.90.1.2', '127.0.0.1', '192.168.1.5', 'box', 'box.ts.net', 'fe80::2', 'localhost', 'proxy:9000'].sort())
+  })
+})
+
+describe('offeredHosts', () => {
+  // The adapters seen on a Windows machine with Hyper-V and WSL (2026-10-03): only the physical one reaches
+  // other devices, and the virtual one listed first became the settings screen's default URL.
+  const windows = {
+    'vEthernet (Default Switch)': [{ address: '172.20.176.1' }],
+    '이더넷 3': [{ address: '192.168.0.235' }],
+    'vEthernet (WSL (Hyper-V firewall))': [{ address: '172.30.128.1' }],
+    'Loopback Pseudo-Interface 1': [{ address: '::1' }, { address: '127.0.0.1' }]
+  }
+
+  it('leaves out the addresses of virtual adapters, so only the physical LAN address becomes a URL', () => {
+    const offered = offeredHosts(7871, '0.0.0.0', [], windows)
+    expect(offered.sort()).toEqual(['127.0.0.1', '192.168.0.235', 'localhost'])
+    expect(reachableUrls(offered, 7871, []).map((u) => u.url)).toEqual(['http://192.168.0.235:7871/mcp'])
+  })
+
+  it('keeps the virtual adapters in the Host/Origin allow-list: a VM on this machine may still use them', () => {
+    const allowed = allowedHosts(7871, '0.0.0.0', [], windows)
+    expect(allowed.has('172.20.176.1:7871')).toBe(true)
+    expect(allowed.has('172.30.128.1:7871')).toBe(true)
+  })
+
+  it('knows the Linux and macOS names of docker, libvirt, VirtualBox and VMware adapters, in any case', () => {
+    const unix = {
+      docker0: [{ address: '172.17.0.1' }],
+      'br-3f2a9c1d0e7b': [{ address: '172.18.0.1' }],
+      veth1a2b3c4: [{ address: '172.17.0.5' }],
+      virbr0: [{ address: '192.168.122.1' }],
+      vmnet8: [{ address: '192.168.56.1' }],
+      vboxnet0: [{ address: '192.168.57.1' }],
+      'VirtualBox Host-Only Network': [{ address: '192.168.58.1' }],
+      'VMware Network Adapter VMnet1': [{ address: '192.168.59.1' }],
+      eth0: [{ address: '10.0.0.7' }],
+      en0: [{ address: '192.168.1.20' }]
+    }
+    expect(offeredHosts(7871, '0.0.0.0', [], unix).sort()).toEqual(['10.0.0.7', '127.0.0.1', '192.168.1.20', 'localhost'])
+  })
+
+  it('keeps an address a person typed, and one a physical adapter also has', () => {
+    const shared = { 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }], eth0: [{ address: '172.20.176.1' }] }
+    expect(offeredHosts(7871, '0.0.0.0', [], shared)).toContain('172.20.176.1')
+    expect(offeredHosts(7871, '0.0.0.0', ['172.30.128.1'], windows)).toContain('172.30.128.1')
+  })
+
+  it('offers no LAN URL when every adapter is virtual', () => {
+    const offered = offeredHosts(7871, '0.0.0.0', [], { 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }] })
+    expect(reachableUrls(offered, 7871, [])).toEqual([])
   })
 })
 

@@ -1,5 +1,5 @@
-// The URLs another device can use to reach the MCP HTTP entrance, from the hosts the running process says it
-// answers to (its ready line, cli/mcp/http.ts), so the settings screen shows only what works.
+// The URLs another device can use to reach the MCP HTTP entrance, from the hosts the running process offers
+// (its ready line, cli/mcp/http.ts, which leaves out virtual adapters), so the settings screen shows only what works.
 
 export type McpHttpUrlKind = 'lan' | 'tailscale' | 'name'
 export type McpHttpUrl = { url: string; kind: McpHttpUrlKind }

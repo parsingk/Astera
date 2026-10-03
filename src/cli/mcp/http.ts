@@ -52,6 +52,26 @@ export function hostsWithoutPort(allowed: Iterable<string>, port: number): strin
   return [...allowed].map((h) => (h.endsWith(suffix) ? h.slice(0, -suffix.length).replace(/^\[(.*)\]$/, '$1') : h))
 }
 
+/** Adapter names of virtual networks on this machine, matched anywhere in the name, case-insensitive: Hyper-V
+ *  and WSL on Windows (`vEthernet (Default Switch)`, `vEthernet (WSL (Hyper-V firewall))`), docker (`docker0`,
+ *  `br-<hex>`, `veth<hex>`), libvirt (`virbr0`), VirtualBox (`VirtualBox Host-Only Network`, `vboxnet0`), VMware
+ *  (`VMware Network Adapter VMnet1`, `vmnet8`) and Windows' `Loopback Pseudo-Interface`. Other devices cannot
+ *  reach their addresses. */
+const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|default switch|docker|virtualbox|vboxnet|vmware|vmnet|virbr|veth|br-|loopback/i
+
+/** The hosts the ready line offers (the settings screen's URLs): hostsWithoutPort of allowedHosts, without the
+ *  addresses only virtual adapters have. Those stay in allowedHosts, as a VM on this machine may use them; an
+ *  address a person typed, or one a physical adapter also has, is kept. */
+export function offeredHosts(
+  port: number,
+  bind: string,
+  hosts: string[],
+  interfaces: Record<string, Array<{ address: string }> | undefined> = os.networkInterfaces()
+): string[] {
+  const physical = Object.fromEntries(Object.entries(interfaces).filter(([name]) => !VIRTUAL_ADAPTER.test(name)))
+  return hostsWithoutPort(allowedHosts(port, bind, hosts, physical), port)
+}
+
 /** `host:port` of an Origin header, with the scheme's default port spelled out; null when it is not a URL
  *  (`null` included). */
 function originHost(origin: string): string | null {
@@ -138,6 +158,7 @@ export async function serveMcpHttp(a: {
         startsHost: false
       }))
   let allowed = new Set<string>()
+  let offered: string[] = []
   /** Initializes past the cap check whose session is not in `sessions` yet, so concurrent ones count. */
   let opening = 0
   /** The token the open sessions were opened under. */
@@ -254,7 +275,9 @@ export async function serveMcpHttp(a: {
     })
   })
   const port = (httpServer.address() as { port: number }).port
-  allowed = allowedHosts(port, a.bind, a.hosts)
+  const interfaces = os.networkInterfaces()
+  allowed = allowedHosts(port, a.bind, a.hosts, interfaces)
+  offered = offeredHosts(port, a.bind, a.hosts, interfaces)
 
   const sweep = setInterval(() => {
     const now = Date.now()
@@ -268,7 +291,7 @@ export async function serveMcpHttp(a: {
 
   return {
     address: () => ({ port }),
-    addresses: () => hostsWithoutPort(allowed, port),
+    addresses: () => offered,
     async close() {
       clearInterval(sweep)
       await Promise.allSettled([...sessions.values()].map((s) => s.server.close()))
@@ -279,8 +302,8 @@ export async function serveMcpHttp(a: {
   }
 }
 
-/** The ready line: the port it listens on and the hosts it answers to (the Host makes the settings screen's
- *  URLs from them, core/mcp/httpUrls.ts). */
+/** The ready line: the port it listens on and the hosts it offers, those it answers to less virtual adapters'
+ *  (offeredHosts; the Host makes the settings screen's URLs from them, core/mcp/httpUrls.ts). */
 export function readyLineOf(served: { address(): { port: number }; addresses(): string[] }): { ready: true; port: number; addresses: string[] } {
   return { ready: true, port: served.address().port, addresses: served.addresses() }
 }
