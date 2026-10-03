@@ -105,7 +105,7 @@ import { readGitFacts } from './recovery/git'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles } from '../core/workUnit/gitProbe'
-import { readRange, readRangeFiles } from '../core/git/range'
+import { readRange, readRangeFiles, readHeadSteps } from '../core/git/range'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -4701,7 +4701,7 @@ export function registerIpc(
   const workUnitCollector: WorkUnitCollector = new WorkUnitCollector({
     store: workUnits,
     listSessions: workUnitSessions,
-    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange, rangeFiles: readRangeFiles },
+    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange, rangeFiles: readRangeFiles, headSteps: readHeadSteps },
     now: () => Date.now(),
     pendingGitOps: () => workUnitCollector.getPendingGitOps(),
     hostMerges: () => readHostMerges(hostMergesPathIn(app.getPath('userData'))),

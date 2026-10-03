@@ -60,6 +60,12 @@ export interface SessionWorkUnit {
      *  this says whether its window closed on "unknown". An empty `observedChangedFiles` then means
      *  "could not check", not "nothing changed", and completing keeps a unit with write evidence. */
     observationUnknown?: true
+    /** Files brought in by **incoming** HEAD moves this unit went through: a Job or Host merge, or a
+     *  move whose reflog steps are all something other than a commit (a pull, a merge, a reset), as
+     *  opposed to the session's own commit (collector.ts's noteIncoming). Taken away from the files
+     *  committed inside the window when the unit closes (committedFiles), whatever the session's busy
+     *  signal. Absent until such a move happens, and for units stored before the field. */
+    incomingFiles?: string[]
   }
 
   /** External git changes met during the work (EG §27). "Met", not "made". */

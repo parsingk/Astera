@@ -42,7 +42,22 @@ export function isAsteraOperation(
   graceMs: number = OPERATION_GRACE_MS,
   samePath: (a: string, b: string) => boolean = (a, b) => a === b
 ): boolean {
-  return ops.some((o) => {
+  return asteraOperationsAt(projectPath, atMs, ops, graceMs, samePath).length > 0
+}
+
+/** The registrations that explain a HEAD move at `atMs`, under exactly `isAsteraOperation`'s rule
+ *  (which is this list being non-empty). For a caller that also needs to know **which kind** explained
+ *  it: a busy-window `commit` only says the session was working, while any other kind (`job-merge`,
+ *  `checkout`, `other`) is Astera itself moving HEAD, i.e. content brought in rather than the session's
+ *  own commit (core/workUnit/collector.ts's gitRound). */
+export function asteraOperationsAt(
+  projectPath: string,
+  atMs: number,
+  ops: readonly PendingGitOperation[],
+  graceMs: number = OPERATION_GRACE_MS,
+  samePath: (a: string, b: string) => boolean = (a, b) => a === b
+): PendingGitOperation[] {
+  return ops.filter((o) => {
     if (!samePath(o.projectPath, projectPath)) return false
     const started = ms(o.startedAt)
     if (started === null || started > atMs) return false

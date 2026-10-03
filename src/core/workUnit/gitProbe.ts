@@ -3,7 +3,7 @@ import { git } from '../worktrees/git'
 import { parsePorcelainZ } from '../git/status'
 import type { GitRef } from '../git/types'
 import type { CollectorGit } from './collector'
-import { readRange, readRangeFiles, WATCH_ROUND_TIMEOUT_MS, type GitRun } from '../git/range'
+import { readRange, readRangeFiles, readHeadSteps, WATCH_ROUND_TIMEOUT_MS, type GitRun } from '../git/range'
 
 /** 감시 고리(gitWatcher)에서 불린다 — 여기서 던지면 고리 전체가 멈춘다. 그래서 절대 던지지 않고,
  *  실패한 항목은 null 로 돌려준다.
@@ -98,14 +98,15 @@ export async function readChangedFiles(repoPath: string, run: GitRun = git): Pro
   return null // 저장소인데 status 가 실패했거나, git 이 답하지 못했다 — 모른다
 }
 
-/** 수집기(`CollectorGit`)가 쓰는 git 다섯 가지를 한 runner 위에 묶는다. ipc.ts 는 함수 넷을 그대로
- *  넘기고(기본 runner), 테스트는 세는 runner 를 넣어 이것을 쓴다. */
+/** Binds the six git reads the collector uses (`CollectorGit`) to one runner. ipc.ts passes the same
+ *  functions directly (default runner); tests pass a counting runner through this. */
 export function probeGit(run: GitRun = git): CollectorGit {
   return {
     readRef: (repoPath) => readGitRef(repoPath, run),
     isAncestor: (repoPath, before, after) => isAncestorOf(repoPath, before, after, run),
     changedFiles: (repoPath) => readChangedFiles(repoPath, run),
     readRange: (repoPath, before, after) => readRange(repoPath, before, after, run),
-    rangeFiles: (repoPath, before, after) => readRangeFiles(repoPath, before, after, run)
+    rangeFiles: (repoPath, before, after) => readRangeFiles(repoPath, before, after, run),
+    headSteps: (repoPath, before, after) => readHeadSteps(repoPath, before, after, run)
   }
 }

@@ -28,9 +28,9 @@ import type { HostMergeRecord } from '../git/hostMerges'
 import type { SessionWorkUnit } from './types'
 import { foldsCaseHere } from '../testPaths'
 import { readGitRef, isAncestorOf, readChangedFiles, probeGit } from './gitProbe'
-import { readRange, readRangeFiles, type GitRun } from '../git/range'
+import { readRange, readRangeFiles, readHeadSteps, type GitRun } from '../git/range'
 import { git } from '../worktrees/git'
-import { makeRepo, gitSync } from '../worktrees/testRepo'
+import { makeRepo, gitSync, addOrigin, tempDir } from '../worktrees/testRepo'
 
 let dir: string
 let storeFile: string
@@ -96,7 +96,8 @@ function makeFake(): Fake {
       isAncestor: async () => fake.git.ancestor,
       changedFiles: async () => fake.git.files,
       readRange: async () => fake.git.range,
-      rangeFiles: async () => fake.git.range?.changedFiles ?? null
+      rangeFiles: async () => fake.git.range?.changedFiles ?? null,
+      headSteps: async () => null
     },
     sessions: [],
     clock: Date.parse('2026-08-30T09:00:00.000Z')
@@ -375,7 +376,8 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
       isAncestor: isAncestorOf,
       changedFiles: readChangedFiles,
       readRange,
-      rangeFiles: readRangeFiles
+      rangeFiles: readRangeFiles,
+      headSteps: readHeadSteps
     }
     const { collector, store, closed } = await makeCollector(fake, storeFile, undefined, { git: real })
     await collector.start()
@@ -1203,6 +1205,24 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     collector.onGitChanged()
     await collector.flush()
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+  })
+  it('a Host merge an open unit went through puts its files on the unit as incoming', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const records: HostMergeRecord[] = []
+    const { collector, store } = await makeCollector(fake, storeFile, undefined, { hostMerges: async () => records })
+    await collector.start()
+    collector.onGitChanged()
+    await collector.flush()
+    await collector.startTask('s1', 'work')
+    records.push({ id: 'm1', projectPath, headBefore: 'c0', headAfter: 'c1', startedAt: new Date(fake.clock + 1_000).toISOString(), endedAt: new Date(fake.clock + 2_000).toISOString() })
+    fake.clock += OPERATION_GRACE_MS * 10
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    fake.git.range = { commits: ['c1'], changedFiles: ['m.txt'] }
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+    expect(store.get(projectPath)!.units[0].git.incomingFiles).toEqual(['m.txt'])
   })
   it('a move the records do not explain is still recorded (the control)', async () => {
     const fake = makeFake()
@@ -2719,7 +2739,7 @@ describe('WorkUnitCollector — 회차 하나가 띄우는 git 수 (진짜 저�
     expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['n.txt'])
   })
 
-  it('같은 브랜치의 바깥 커밋이면 git 7번 (전에는 10번) — 기록은 그대로다', async () => {
+  it('같은 브랜치의 바깥 커밋이면 git 8번 (전에는 10번) — 기록은 그대로다', async () => {
     const { repo, calls, collector, store } = await setup(true)
     const before = gitSync(repo, ['rev-parse', 'HEAD']).trim()
     await fs.writeFile(path.join(repo, 'g.txt'), 'y', 'utf8')
@@ -2728,7 +2748,10 @@ describe('WorkUnitCollector — 회차 하나가 띄우는 git 수 (진짜 저�
     const after = gitSync(repo, ['rev-parse', 'HEAD']).trim()
     collector.onGitChanged()
     await collector.flush()
-    expect(calls).toHaveLength(7)
+    // 7 for the round itself, plus one HEAD reflog read: the open unit went through this move, so
+    // noteIncoming asks whether it was a commit (it was, so nothing more is read)
+    expect(calls).toHaveLength(8)
+    expect(calls.filter((a) => a.includes('-g'))).toHaveLength(1)
 
     const state = store.get(repo)!
     expect(state.externalGitChanges).toHaveLength(1)
@@ -2742,6 +2765,16 @@ describe('WorkUnitCollector — 회차 하나가 띄우는 git 수 (진짜 저�
     expect(change.rangeUnknown).toBeUndefined()
     expect(state.units[0].git.endHead).toBe(after)
     expect(state.units[0].encounteredExternalGitChangeIds).toEqual([change.id])
+  })
+
+  it('a moved HEAD with no open unit reads no reflog', async () => {
+    const { repo, calls, collector } = await setup(false)
+    await fs.writeFile(path.join(repo, 'g.txt'), 'y', 'utf8')
+    gitSync(repo, ['add', 'g.txt'])
+    gitSync(repo, ['commit', '-m', 'second'])
+    collector.onGitChanged()
+    await collector.flush()
+    expect(calls.filter((a) => a.includes('-g'))).toHaveLength(0)
   })
 })
 
@@ -3042,6 +3075,116 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
   // recorded as an outside change: subtracting would take away the session's own work.
   it('does not subtract for a session whose busy signal is not trusted', async () => {
     const { repo, collector, store } = await pullInsideWindow(false)
+    await collector.completeTask('s1', { source: 'agent' })
+    expect([...store.get(repo)!.units[0].git.observedChangedFiles].sort()).toEqual(['c.txt', 'p.txt'])
+  })
+
+  // ── Incoming moves: HEAD moves that brought content in rather than being the session's commit ──
+
+  /** A bare origin for `repo` and a second clone of it, where "someone else" commits and pushes. */
+  async function upstream(repo: string): Promise<{ push: (name: string) => Promise<void> }> {
+    const bare = await addOrigin(repo)
+    const other = await tempDir('astera-wu-upstream-')
+    gitSync(other, ['clone', '-q', bare, '.'])
+    gitSync(other, ['config', 'user.email', 'o@o.com'])
+    gitSync(other, ['config', 'user.name', 'Other'])
+    return {
+      push: async (name) => {
+        await commitFile(other, name)
+        gitSync(other, ['push', '-q', 'origin', 'main'])
+      }
+    }
+  }
+  const pull = (repo: string): void => {
+    gitSync(repo, ['pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main'])
+  }
+  const round = async (collector: WorkUnitCollector): Promise<void> => {
+    collector.onGitChanged()
+    await collector.flush()
+  }
+  /** A unit opened on `repo` by session s1, after a baseline round. */
+  async function openUnit(trusted: boolean) {
+    const made = await setupWithFake()
+    const { repo, collector, fake } = made
+    fake.sessions = [session({ projectPath: repo, idleSignalTrusted: trusted })]
+    const up = await upstream(repo)
+    await round(collector) // baseline snapshot
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    return { ...made, up }
+  }
+
+  it('an untrusted session: its own commit counts, a real pull inside the window does not', async () => {
+    const { repo, collector, store, up } = await openUnit(false)
+    await commitFile(repo, 'c.txt')
+    await round(collector)
+    await up.push('p.txt')
+    pull(repo)
+    await round(collector)
+
+    await collector.completeTask('s1', { source: 'agent' })
+    const u = store.get(repo)!.units[0]
+    expect(u.git.observedChangedFiles).toEqual(['c.txt'])
+    // The pull is still recorded as an outside change, exactly as before
+    expect(store.get(repo)!.externalGitChanges.map((c) => c.changedFiles)).toEqual([['c.txt'], ['p.txt']])
+  })
+
+  it('an untrusted session: its own commit -a with no pull is still counted', async () => {
+    const { repo, collector, store, closed } = await openUnit(false)
+    await fs.writeFile(path.join(repo, 'f.txt'), 'changed', 'utf8')
+    gitSync(repo, ['commit', '-q', '-am', 'edit f'])
+    await round(collector)
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['f.txt'])
+    expect(closed).toHaveLength(1)
+  })
+
+  it('a job merge inside a trusted unit window is not counted; the session commit is', async () => {
+    const { repo, collector, store, fake } = await openUnit(true)
+    gitSync(repo, ['branch', 'feature'])
+    gitSync(repo, ['checkout', '-q', 'feature'])
+    await commitFile(repo, 'j.txt')
+    gitSync(repo, ['checkout', '-q', 'main'])
+    await round(collector)
+    collector.onSessionBusy('s1', repo, true)
+    await commitFile(repo, 'c.txt')
+    await round(collector)
+    await collector.onSessionIdle('s1')
+    fake.clock += OPERATION_GRACE_MS + 1_000
+
+    const op = collector.beginGitOperation('job-merge', repo)
+    gitSync(repo, ['merge', '-q', '--no-ff', '--no-edit', 'feature'])
+    collector.endGitOperation(op)
+    await round(collector)
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+    expect(store.get(repo)!.externalGitChanges).toEqual([])
+  })
+
+  it('a trusted session that pulls during its own busy turn does not count the pulled files', async () => {
+    const { repo, collector, store, up } = await openUnit(true)
+    collector.onSessionBusy('s1', repo, true)
+    await commitFile(repo, 'c.txt')
+    await round(collector)
+    await up.push('p.txt')
+    pull(repo)
+    await round(collector)
+    await collector.onSessionIdle('s1')
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+    expect(store.get(repo)!.externalGitChanges).toEqual([])
+  })
+
+  it('an own commit and a pull landing in one round are both counted (mixed steps keep the old count)', async () => {
+    const { repo, collector, store, up } = await openUnit(false)
+    await up.push('p.txt')
+    await commitFile(repo, 'c.txt')
+    pull(repo)
+    await round(collector)
+
     await collector.completeTask('s1', { source: 'agent' })
     expect([...store.get(repo)!.units[0].git.observedChangedFiles].sort()).toEqual(['c.txt', 'p.txt'])
   })

@@ -60,7 +60,8 @@ function rig(over: Partial<AppWorkUnitsDeps> = {}): Rig {
     isAncestor: async () => true,
     changedFiles: async () => [],
     readRange: async () => ({ commits: [], changedFiles: [] }),
-    rangeFiles: async () => []
+    rangeFiles: async () => [],
+    headSteps: async () => null
   } as unknown as CollectorGit
   const collector = new WorkUnitCollector({ store, listSessions: async () => sessions, git, now: () => Date.now() })
   const calls: Rig['calls'] = []
