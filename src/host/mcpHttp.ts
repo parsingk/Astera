@@ -46,8 +46,10 @@ export interface McpHttpSpawnOptions {
 
 export interface McpHttpSupervisor {
   /** Reads the setting again and applies it: starts, restarts with the new arguments, or stops. A setting
-   *  that cannot be read keeps what runs. Calls run one at a time. Never rejects. */
-  reload(): Promise<void>
+   *  that cannot be read keeps what runs. Calls run one at a time. Never rejects. `retry` is a person's
+   *  `mcp-http-reload`: a failed entrance with the same setting is tried again at once and the backoff starts
+   *  over. Without it (start, an app greeting) a failed entrance keeps its wait. */
+  reload(o?: { retry?: boolean }): Promise<void>
   status(): McpHttpState
   /** The Host leaves: stops the child and every pending restart, and nothing starts after it. Never rejects. */
   stop(): Promise<void>
@@ -191,20 +193,21 @@ export function createMcpHttpSupervisor(d: {
         errorLine = { code: o.error, message: typeof o.message === 'string' ? o.message : '' }
       }
     }
-    let buffered = ''
-    proc.stdout?.setEncoding('utf8')
-    proc.stdout?.on('data', (c: string) => {
-      buffered += c
-      for (let i = buffered.indexOf('\n'); i >= 0; i = buffered.indexOf('\n')) {
-        const line = buffered.slice(0, i).trim()
-        buffered = buffered.slice(i + 1)
-        if (line !== '') onLine(line)
-      }
-    })
-    proc.stderr?.setEncoding('utf8')
-    proc.stderr?.on('data', (c: string) => {
-      for (const line of c.split('\n')) if (line.trim() !== '') out(line.trimEnd())
-    })
+    /** Whole lines out of a stream's chunks: a chunk can end mid-line. */
+    const lines = (stream: NodeJS.ReadableStream | null, each: (line: string) => void): void => {
+      let buffered = ''
+      stream?.setEncoding('utf8')
+      stream?.on('data', (c: string) => {
+        buffered += c
+        for (let i = buffered.indexOf('\n'); i >= 0; i = buffered.indexOf('\n')) {
+          const line = buffered.slice(0, i).trim()
+          buffered = buffered.slice(i + 1)
+          if (line !== '') each(line)
+        }
+      })
+    }
+    lines(proc.stdout, onLine)
+    lines(proc.stderr, out)
     // A pipe that closes under a write emits 'error' on that stream alone, which unheard would end the Host.
     proc.stdin?.on('error', (err) => d.log(`mcp http: stdin: ${String(err)}`))
     proc.stdout?.on('error', (err) => d.log(`mcp http: stdout: ${String(err)}`))
@@ -272,7 +275,7 @@ export function createMcpHttpSupervisor(d: {
   }
 
   return {
-    reload: () =>
+    reload: (o) =>
       serial(async () => {
         if (left) return
         let s: McpHttpSettings
@@ -291,8 +294,8 @@ export function createMcpHttpSupervisor(d: {
           applied = null
           return set({ state: 'failed', error: NO_CLI_PATHS, lan: s.lan, port: s.port })
         }
-        // A failed entrance with the same setting is tried again now: the person asked.
-        if (applied && sameArgs(applied, s) && state.state !== 'failed') return
+        // The same setting: nothing to do, unless the entrance failed and a person asked to try again now.
+        if (applied && sameArgs(applied, s) && !(o?.retry === true && state.state === 'failed')) return
         await stopChild()
         applied = s
         failures = 0

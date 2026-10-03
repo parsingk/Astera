@@ -27,9 +27,9 @@ const STAT_TRIES = 5
 
 const freshToken = (): string => randomBytes(32).toString('base64url')
 
-/** The token on disk, created (atomically) when the file is missing or empty. Two concurrent calls on a
- *  missing file would both write and the later one wins: the app (on enable) and the Host (before it starts
- *  the entrance, host/mcpHttp.ts) both call it, so a reader shows what is on disk after, not this answer. */
+/** The token on disk, created (atomically) when the file is missing or empty. Only the Host calls it, before
+ *  it starts the entrance (host/mcpHttp.ts), one start at a time; the app only reads the file or calls
+ *  `newToken`. Two concurrent calls on a missing file would both write and the later one would win. */
 export async function ensureToken(profileDir: string): Promise<string> {
   const existing = await readTokenFile(tokenPath(profileDir))
   if (existing) return existing

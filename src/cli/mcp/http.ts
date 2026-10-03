@@ -282,6 +282,7 @@ export async function runMcpHttp(a: {
     served = await serveMcpHttp({ ...args, version: a.version, env: a.env, platform: a.platform, home: a.home, log })
   } catch (err) {
     const e = err as NodeJS.ErrnoException
+    // The Host copies this line into host.log and the app's state (host/mcpHttp.ts): never put a secret in it.
     line({ error: e.code ?? 'LISTEN_FAILED', message: e.message })
     return 1
   }

@@ -1530,11 +1530,12 @@ export function createHostOrch(a: {
           return { status: 200, body: { reloaded: true, active: a.slack.active() } }
         }
         // **Beside slack-reload, for its reason (MCP HTTP design §3).** The settings screen, after it wrote
-        // `mcpHttp`, has the Host read it again, and asks the entrance's state. Both answer the state.
+        // `mcpHttp`, has the Host read it again, and asks the entrance's state. Both answer the state. A reload
+        // is a person's action, so a failed entrance is tried again at once (`retry`).
         if (cmd === 'mcp-http-reload' || cmd === 'mcp-http-status') {
           if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
           if (!a.mcpHttp) return { status: 501, body: { error: 'this Host does not run the MCP HTTP entrance' } }
-          if (cmd === 'mcp-http-reload') await a.mcpHttp.reload()
+          if (cmd === 'mcp-http-reload') await a.mcpHttp.reload({ retry: true })
           return { status: 200, body: a.mcpHttp.status() }
         }
         // **Beside slack-reload, for its reason (Host journal J3, P7).** The app's reconciler rows and its

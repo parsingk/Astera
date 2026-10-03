@@ -7,6 +7,7 @@ import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { createHostOrch } from './orch'
+import { hostFeatures } from './features'
 import { HOST_PROTOCOL, HOST_YIELD_ORCH_STATE_LATEST, ORCH_STATE_PUSH_MS, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { emptyState } from '../core/orchestration/state'
 import { versionOnlyOrchCall, AppUnreachable } from '../core/host/orchProtocol'
@@ -685,6 +686,13 @@ describe('startHostServer', () => {
     const h = await server({ features: ['spawn'] })
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
     expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'mcp', 'spawn'])
+  })
+  // MCP HTTP §3 (Ruling 2): the hello of a Host built as index.ts builds it tells the app it answers mcp-http-*.
+  // One Host per test (one address); features.test.ts covers the spawner half.
+  it('announces mcp-http in the hello of a Host without a spawner', async () => {
+    const h = await server({ features: hostFeatures({ spawns: false }) })
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }])
+    expect((reply as { features: string[] }).features).toContain('mcp-http')
   })
   it('tells onMessage which client sent it, by role and a per-connection number', async () => {
     const seen: Array<{ t: string; role: string; socket: number }> = []

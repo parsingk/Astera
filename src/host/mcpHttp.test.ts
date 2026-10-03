@@ -103,7 +103,7 @@ afterEach(() => {
 })
 
 const rig = (
-  o: { settings?: McpHttpSettings; cli?: typeof CLI | null; endsOnStdin?: boolean; settingsThrow?: boolean } = {}
+  o: { settings?: McpHttpSettings; cli?: typeof CLI | null; endsOnStdin?: boolean; settingsThrow?: boolean; firstSpawnThrows?: boolean } = {}
 ): {
   sup: ReturnType<typeof createMcpHttpSupervisor>
   children: FakeChild[]
@@ -120,6 +120,7 @@ const rig = (
   const output: string[] = []
   const logs: string[] = []
   const clock = fakeClock()
+  let spawned = 0
   const sup = createMcpHttpSupervisor({
     settings: async () => {
       if (o.settingsThrow) throw new Error('unreadable')
@@ -130,6 +131,7 @@ const rig = (
     hostAddress: '//./pipe/astera-host-test',
     env: { PATH: '/bin', ELECTRON_RUN_AS_NODE: '1', ASTERA_HOST_CLI_EXEC: '/app/astera' },
     spawn: (exec, args, opts) => {
+      if (o.firstSpawnThrows && spawned++ === 0) throw new Error('spawn EACCES')
       const c = new FakeChild(exec, args, opts as FakeChild['opts'], o.endsOnStdin ?? true)
       children.push(c)
       return c
@@ -307,14 +309,51 @@ describe('the MCP HTTP supervisor', () => {
     expect(r.sup.status()).toEqual({ state: 'running', url: 'http://127.0.0.1:9100/mcp', lan: true, port: 9100 })
   })
 
-  it('retries at once on a reload while failed with the same settings, cancelling the wait', async () => {
+  it('retries at once on a person’s reload while failed with the same settings, cancelling the wait', async () => {
+    const r = rig()
+    await r.sup.reload()
+    r.last().fail('EADDRINUSE', 'in use')
+    await settle()
+    await r.sup.reload({ retry: true })
+    expect(r.children).toHaveLength(2)
+    expect(r.clock.pending()).toEqual([])
+  })
+
+  it('a plain reload (an app greeting) while failed keeps the 30 s cadence and the backoff', async () => {
     const r = rig()
     await r.sup.reload()
     r.last().fail('EADDRINUSE', 'in use')
     await settle()
     await r.sup.reload()
-    expect(r.children).toHaveLength(2)
-    expect(r.clock.pending()).toEqual([])
+    expect(r.children).toHaveLength(1)
+    expect(r.clock.pending()).toEqual([MCP_HTTP_RETRY_MS])
+    const crash = rig()
+    await crash.sup.reload()
+    crash.last().exit(1)
+    await settle()
+    await crash.clock.advance(1000)
+    await vi.waitFor(() => expect(crash.children).toHaveLength(2))
+    crash.last().exit(1)
+    await settle()
+    await crash.sup.reload()
+    expect(crash.clock.pending()).toEqual([2000])
+    // A person's retry starts over: the next unexpected end waits 1 s again.
+    await crash.sup.reload({ retry: true })
+    expect(crash.children).toHaveLength(3)
+    crash.last().exit(1)
+    await settle()
+    expect(crash.clock.pending()).toEqual([1000])
+  })
+
+  it('keeps a stderr line whole across chunks', async () => {
+    const r = rig()
+    await r.sup.reload()
+    r.last().stderr.write('astera mcp http: listen')
+    r.last().stderr.write(`ing on 127.0.0.1:7871${'\n'}second`)
+    r.last().stderr.write(` line${'\n'}`)
+    await settle()
+    expect(r.output).toContain('astera mcp http: listening on 127.0.0.1:7871')
+    expect(r.output).toContain('second line')
   })
 
   it('reports failed without CLI paths, and spawns nothing', async () => {
@@ -334,34 +373,13 @@ describe('the MCP HTTP supervisor', () => {
   })
 
   it('a spawn that throws is failed and retried with the backoff', async () => {
-    const r = rig()
-    let first = true
-    const sup = createMcpHttpSupervisor({
-      settings: async () => on(),
-      cli: CLI,
-      profileDir,
-      hostAddress: 'addr',
-      env: {},
-      spawn: (exec, args, opts) => {
-        if (first) {
-          first = false
-          throw new Error('spawn EACCES')
-        }
-        const c = new FakeChild(exec, args, opts as FakeChild['opts'], true)
-        r.children.push(c)
-        return c
-      },
-      now: r.clock.now,
-      setTimer: r.clock.setTimer,
-      push: () => {},
-      output: { write: () => {} },
-      log: () => {}
-    })
-    await sup.reload()
-    expect(sup.status()).toMatchObject({ state: 'failed', error: 'could not start the HTTP entrance: Error: spawn EACCES' })
+    const r = rig({ firstSpawnThrows: true })
+    await r.sup.reload()
+    expect(r.sup.status()).toMatchObject({ state: 'failed', error: 'could not start the HTTP entrance: Error: spawn EACCES' })
+    expect(r.clock.pending()).toEqual([1000])
     await r.clock.advance(1000)
     await vi.waitFor(() => expect(r.children).toHaveLength(1))
-    await sup.stop()
+    await r.sup.stop()
   })
 
   it('stop ends the child and cancels a pending restart, and nothing starts after it', async () => {

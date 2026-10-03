@@ -160,6 +160,12 @@ export const HOST_FEATURE_WORK_UNITS = 'work-units'
  *  sends none of the three calls to a Host without it. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_WORKSPACE = 'workspace'
 
+/** The Host supervises the MCP HTTP entrance (MCP HTTP design §3): it answers the app-only orch-calls
+ *  `mcp-http-reload` and `mcp-http-status` and pushes `mcp-http-state`. Announced by every Host: one without
+ *  the CLI paths answers its state as failed. An app sends neither call to a Host without it. Additive, so
+ *  HOST_PROTOCOL stays 4. */
+export const HOST_FEATURE_MCP_HTTP = 'mcp-http'
+
 /** The MCP HTTP entrance as the Host runs it (MCP HTTP design §3): answered by the app-only orch-call
  *  `mcp-http-status` (and `mcp-http-reload`, after it re-read the setting) and pushed as `mcp-http-state` on
  *  every change. `url` only while `running`; `error` only while `failed`. `lan` and `port` are the setting

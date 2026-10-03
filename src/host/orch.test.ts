@@ -2819,13 +2819,15 @@ describe('Host-local spawn (S2)', () => {
   })
   it('answers mcp-http-reload and mcp-http-status for the app only, and 501 without a supervisor (MCP HTTP §3)', async () => {
     const state = { state: 'running' as const, url: 'http://127.0.0.1:7871/mcp', lan: false, port: 7871 }
-    const mcpHttp = { reload: vi.fn(async () => {}), status: () => state }
+    const mcpHttp = { reload: vi.fn(async (_o?: { retry?: boolean }) => {}), status: () => state }
     const orch = orchOver({ mcpHttp })
     const app = { role: 'app' as const, toOthers: () => {} }
     const cli = { role: 'cli' as const, toOthers: () => {} }
     const mcp = { role: 'mcp' as const, toOthers: () => {} }
     expect(await orch.call({ cmd: 'mcp-http-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: state })
     expect(mcpHttp.reload).toHaveBeenCalledTimes(1)
+    // A person's action: a failed entrance is tried again at once.
+    expect(mcpHttp.reload).toHaveBeenLastCalledWith({ retry: true })
     expect(await orch.call({ cmd: 'mcp-http-status', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: state })
     for (const cmd of ['mcp-http-reload', 'mcp-http-status']) {
       expect((await orch.call({ cmd, args: {}, sessionId: '', from: cli })).status).toBe(403)
