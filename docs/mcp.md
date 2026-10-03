@@ -15,7 +15,9 @@ running when the MCP client disconnects.
   the Astera Host, on that Host's `PATH`, and logged in (`gh auth login`). The Host runs `gh` as you,
   in the project's folder, so `gh` finds the repository from that folder's git remote.
 
-The server speaks MCP over stdio, so you do not run it yourself. The client launches it.
+The server speaks MCP over stdio, so you do not run it yourself. The client launches it. For an
+agent on another device, the Host can also serve the same tools over HTTP: see
+[MCP over HTTP](#mcp-over-http).
 
 ## Connect a client
 
@@ -515,6 +517,7 @@ a field with nothing left.
 
 - The server talks to the client over stdio. It opens no network port. The GitHub tools reach
   GitHub only through `gh`, which the Host runs on the same machine with your login.
+  [MCP over HTTP](#mcp-over-http), off by default, is the one entrance that listens on a port.
 - It reaches the Host only from the same OS account, and the Host proves itself with its key before
   the server sends anything.
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
@@ -551,6 +554,122 @@ a field with nothing left.
   characters and redacted like the rest of the free text. `failureSummary` is the same line
   `astera runs checks` prints, for the current round only; `lastFailure` is that line for the last round
   of failed checks (a rejected review is not kept there), and stays after the recheck passes.
+
+## MCP over HTTP
+
+An agent on another device, or a client that speaks MCP only over HTTP, can use this computer's
+Astera through an HTTP entrance the Host runs. It offers the same 34 tools as `astera mcp serve`,
+under the same [MCP access](#mcp-access) settings, with the same redaction, and the Job Journal
+records its calls as surface `mcp` like any other client.
+
+**Turning it on.** In **Settings, CLI tab, MCP over HTTP**, turn the switch on. The Host then starts
+`astera mcp http` as its own child process (you do not run it yourself) and the state line says
+`running`. The port is 7871 unless you change it in the **Port** field. The **URL** is then:
+
+```text
+http://127.0.0.1:7871/mcp
+```
+
+The section needs an Astera Host that knows the entrance. With no Host answering, or an older one,
+it says so and its controls stay disabled.
+
+**The token.** Every request carries `Authorization: Bearer <token>`. The Host makes the token the
+first time the entrance starts and keeps it in the profile, in the file `mcp-http-token`. The
+**Token** field shows only its last four characters: **Show** reveals it and **Copy** copies it.
+**New token** replaces it: the old one fails from the next request on, so every client that used it
+has to be set up again. The entrance needs no restart for that. The token is never written to a log
+and no tool returns it.
+
+**The client lines.** Under the URL the section shows a line for each client. **Copy** puts the real
+token in the copied line; the lines on screen show it masked. Copy a line only to where the client
+reads it, since the token is in it.
+
+Claude Code:
+
+```bash
+claude mcp add -s user --transport http astera http://127.0.0.1:7871/mcp --header "Authorization: Bearer <token>"
+```
+
+Claude Code keeps the header, token included, in its own configuration (`~/.claude.json` at user
+scope).
+
+OpenAI Codex CLI:
+
+```bash
+codex mcp add astera --url http://127.0.0.1:7871/mcp --bearer-token-env-var ASTERA_MCP_TOKEN
+```
+
+Codex keeps no token in its configuration. It reads the token from the `ASTERA_MCP_TOKEN`
+environment variable each time it connects, so set that variable to the token in the environment
+Codex runs in.
+
+Cursor, in `.cursor/mcp.json` or `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "astera": {
+      "url": "http://127.0.0.1:7871/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+There is no Register button for HTTP. Paste the line yourself.
+
+**Other devices.** On its own the entrance listens on `127.0.0.1` only, so only programs on this
+computer reach it. **Allow other devices on this network** makes it listen on every network
+interface of this computer. The **URL** field then also lists a URL for each of this computer's
+network addresses and each extra host name (for example `http://192.168.0.7:7871/mcp`); a device
+uses one it can reach.
+
+The connection is plain HTTP, not HTTPS. **The token travels unencrypted on the network**, so anyone
+who can watch the traffic on that network can read it and use it. Turn this on only on a network you
+trust, and prefer a private network such as [Tailscale](https://tailscale.com/), which encrypts the
+traffic between your devices: there the device uses this computer's Tailscale address (a `100.x.y.z`
+address) in the URL. Astera serves no public internet endpoint; do not forward the port from your
+router.
+
+**Host names.** The entrance answers only requests addressed to a name it knows, which keeps a web
+page in a browser from reaching it under another name. It knows `127.0.0.1` and `localhost` at its
+port, and, while other devices are allowed, this computer's own addresses as they were when the
+entrance started and the names in **Extra allowed host names**. A device that reaches this computer
+by a name, such as a Tailscale MagicDNS name or a name in its hosts file, needs that name in the
+field. An address this computer gets after the entrance started, such as Tailscale connecting later,
+is known after the switch is turned off and on again. The typed names count only while other devices
+are allowed.
+
+**What 401 and 403 mean.**
+
+- `401 Unauthorized`: the request carried no token or a wrong one. A client set up before a
+  **New token** sees this until it gets the new token. Every refused token is logged with the
+  address it came from, never with the token.
+- `403 Forbidden`: the token was right, but the request named a host the entrance does not know
+  (see Host names), or came from a web page on another site. Add the name the device uses to
+  **Extra allowed host names**, with other devices allowed.
+
+A request that gets through still meets MCP access: a tool it does not allow answers
+`PERMISSION_DENIED`, as over stdio.
+
+**The entrance lives with the Host.** It runs while the Host runs and the switch is on: the Host
+starts it, restarts it if it exits (after 1, 2 and 5 seconds, then every 30 seconds), and stops it
+when the switch goes off, when the port, the network switch or (with that switch on) the host names
+change (then it starts again with the new ones), and when the Host leaves. The HTTP entrance never
+starts a Host. While Astera is open its Host stays. With Astera closed, `astera host start` starts
+one, but a Host with no client connected and no work leaves a minute after its last client
+([The Host](cli.md#the-host)), and the entrance stops with it. A client that has made a call holds
+a connection to the Host until its MCP session ends, which it does when the client disconnects or
+after 30 minutes without a request. A port another program holds puts the state line at `failed`
+with the reason, and the Host tries again every 30 seconds; choose another port. The entrance's own
+log is `<profile>/host/mcp-http.log`.
+
+**A stop cuts the calls in flight.** When the entrance stops (the switch goes off, a setting changes,
+the Host leaves), it closes every MCP session at once, and a tool call still running is cut without
+an answer. This differs from `astera mcp serve` over stdio, which lets calls in flight finish for up
+to 10 seconds before it exits. A cut call may still have happened in the Host: read again with a
+`get_` tool, or retry with the same `requestId`. The client has to connect again once the entrance
+is back.
 
 ## Troubleshooting
 

@@ -1016,7 +1016,7 @@ export async function main(): Promise<void> {
   const argv = process.argv.slice(2)
   // **`mcp http` answers before usage and the parser** (MCP HTTP design §1): the Host starts it and
   // reads its stdout, one JSON line, so no envelope or usage text may reach it. It is not in the public
-  // command table either; docs/mcp.md documents it.
+  // command table either; docs/mcp.md ("MCP over HTTP") says the Host runs it and a person does not.
   if (argv[0] === 'mcp' && argv[1] === 'http') {
     const code = await runMcpHttp({ argv: argv.slice(2), env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
     await new Promise((r) => process.stdout.write('', () => r(undefined)))
