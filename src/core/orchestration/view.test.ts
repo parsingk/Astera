@@ -216,7 +216,7 @@ describe('snapshotFor', () => {
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs).toEqual([
       {
         // 줄의 id 는 계획의 것이고, fireOrdinal 은 그 줄이 보여 주는 회차의 번호다
-        id: 'job_r1', fireOrdinal: 1, objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
+        id: 'job_r1', fireOrdinal: 1, foldedRunId: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
         concurrency: undefined, sharesProjectFolder: false,
         tasks: [
           { id: 't1', title: 'task t1', status: 'completed', sessionId: undefined, gateQuestion: undefined, openGates: 0 },
@@ -659,6 +659,21 @@ describe('snapshotFor — 이 Run 이 쓴 워크트리', () => {
     const byId = new Map(snap.runs.map((r) => [r.id, r]))
     expect(byId.get('job_r1')!.worktrees).toEqual([wtPath])
     expect('worktrees' in byId.get('job_r2')!).toBe(false)
+  })
+
+  // The Job row's id is the Job's, but its worktrees are its one Run's: the detail window's merge button
+  // has to name that Run, as run-merge knows Run ids only (it answered "unknown run: job_…").
+  it('a Job row that shows its one Run names that Run; a nested Job row and its Run rows do not', () => {
+    const single = snapshotFor(withRuns([run('r1', absPath('proj'))]), absPath('proj'), anySession, noWorktrees, noFires, allExist)
+    expect(single.runs[0].id).toBe('job_r1')
+    expect(single.runs[0].foldedRunId).toBe('r1')
+
+    const nested = snapshotFor(
+      withRuns([scheduled('tmpl', absPath('proj')), child('kid', absPath('proj'), 'tmpl')]),
+      absPath('proj'), anySession, noWorktrees, noFires, allExist
+    )
+    expect('foldedRunId' in nested.runs[0]).toBe(false)
+    expect(nested.runs[0].children!.every((k) => !('foldedRunId' in k))).toBe(true)
   })
 
   // **이 테스트가 실제 결함을 고정한다.** Dispatch 의 cwd 는 워크트리를 지운 뒤에도 상태에 남으므로

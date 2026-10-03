@@ -296,6 +296,8 @@ export function snapshotFor(
       // 빈 배열은 싣지 않는다 — sameSnapshot 의 문자열을 이유 없이 늘리고, "워크트리를 안 썼다" 와
       // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRow.children 과 같은 판단)
       ...(worktreesOf.length > 0 ? { worktrees: worktreesOf } : {}),
+      // A Job row folded onto its one Run: name the Run, for run-merge (JobRow.foldedRunId)
+      ...(asJob && run !== undefined ? { foldedRunId: run.id } : {}),
       // 예약은 계획의 것이라 Job 줄에만 싣는다 — 회차 줄에 실으면 화면이 그 회차를 또 하나의
       // 예약으로 읽는다
       ...(run === undefined && job.schedule ? { schedule: job.schedule } : {}),

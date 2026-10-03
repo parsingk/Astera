@@ -659,6 +659,10 @@ export interface JobRow {
    *  경로들을 히스토리 숨김 목록에 넣는다. 비어 있으면 그 Run 은 프로젝트 폴더에서만 일했다
    *  (동시 실행 1 의 배치 규칙). */
   worktrees?: string[]
+  /** The Run id of a Job row that shows its one Run (not nested): the row's id is the Job's, but its
+   *  progress and `worktrees` are that Run's. run-merge knows Run ids only, so the detail window's merge
+   *  button sends this. Absent on a nested Job row and on a Run row (whose id is already the Run's). */
+  foldedRunId?: string
   /** 사용자가 아직 '실행' 을 누르지 않았다 — Run 이 들고 있는 값을 그대로 옮긴 것이다.
    *  상세 창의 실행 버튼과 사이드바의 표시가 이 값으로 판단한다. */
   pendingStart?: boolean
