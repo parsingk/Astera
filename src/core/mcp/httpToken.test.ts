@@ -55,7 +55,16 @@ describe('createTokenReader', () => {
     await fs.rm(tokenPath(dir))
     expect(await reader.current()).toBeNull()
   })
-  it('re-reads only when the mtime or size changed', async () => {
+  it('sees an in-place rewrite of a different size', async () => {
+    const dir = await dirOf()
+    const p = tokenPath(dir)
+    await fs.writeFile(p, 'AAAA'.concat(String.fromCharCode(10)))
+    const reader = createTokenReader(p)
+    expect(await reader.current()).toBe('AAAA')
+    await fs.writeFile(p, 'CCCCC\n')
+    expect(await reader.current()).toBe('CCCCC')
+  })
+  it('sees a same-size replacement that keeps the same mtime (a rename lands a new inode)', async () => {
     const dir = await dirOf()
     const p = tokenPath(dir)
     const when = new Date('2026-01-01T00:00:00.000Z')
@@ -63,13 +72,22 @@ describe('createTokenReader', () => {
     await fs.utimes(p, when, when)
     const reader = createTokenReader(p)
     expect(await reader.current()).toBe('AAAA')
-    // Same size, same mtime: the content change is not seen, which proves the file was not re-read.
-    await fs.writeFile(p, 'BBBB\n')
-    await fs.utimes(p, when, when)
-    expect(await reader.current()).toBe('AAAA')
-    // A different size is seen.
-    await fs.writeFile(p, 'CCCCC\n')
-    expect(await reader.current()).toBe('CCCCC')
+    for (const next of ['BBBB', 'CCCC']) {
+      await fs.writeFile(`${p}.tmp`, `${next}\n`)
+      await fs.utimes(`${p}.tmp`, when, when)
+      await fs.rename(`${p}.tmp`, p)
+      expect(await reader.current()).toBe(next)
+    }
+  })
+  it('two quick rotations are both seen', async () => {
+    const dir = await dirOf()
+    const reader = createTokenReader(tokenPath(dir))
+    await ensureToken(dir)
+    await reader.current()
+    const t2 = await newToken(dir)
+    expect(await reader.current()).toBe(t2)
+    const t3 = await newToken(dir)
+    expect(await reader.current()).toBe(t3)
   })
   it('an empty file is null', async () => {
     const dir = await dirOf()
@@ -82,6 +100,7 @@ describe('tokenMatches', () => {
   it('is false on a length mismatch and on a different token of the same length', () => {
     expect(tokenMatches('abc', 'abcd')).toBe(false)
     expect(tokenMatches('', 'abc')).toBe(false)
+    expect(tokenMatches('', '')).toBe(false)
     expect(tokenMatches('abd', 'abc')).toBe(false)
     expect(tokenMatches('abc', 'abc')).toBe(true)
   })

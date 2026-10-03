@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { RepairNeeded } from './repairNeeded'
 import { mcpHttpOf, readMcpHttp } from './mcpHttp'
 
 const OFF = { enabled: false, port: 7871, lan: false, hosts: [] }
@@ -42,6 +43,6 @@ describe('readMcpHttp', () => {
     expect(got).toEqual({ enabled: true, port: 9000, lan: true, hosts: ['h'] })
   })
   it('an unreadable settings file refuses: it throws rather than answering off', async () => {
-    await expect(readMcpHttp(await file('{not json'))).rejects.toThrow()
+    await expect(readMcpHttp(await file('{not json'))).rejects.toBeInstanceOf(RepairNeeded)
   })
 })
