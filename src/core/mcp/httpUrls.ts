@@ -23,9 +23,10 @@ function ipv4(host: string): number[] | null {
   return b.every((x) => x <= 255) ? b : null
 }
 
-/** The kind of an address, or null to leave it out. Only private ranges are kept: other devices are allowed
- *  for a private network (the switch's warning says so), so a public address, loopback and link-local are not
- *  offered. A non-IP host is offered only when the person typed it. */
+/** The kind of an address, or null to leave it out. Only private IPv4 ranges are kept: other devices are
+ *  allowed for a private network (the switch's warning says so), so a public address, loopback and link-local
+ *  are not offered. IPv6 is left out because the entrance listens on IPv4 only (bind 0.0.0.0). A non-IP host
+ *  is offered only when the person typed it. */
 function kindOf(host: string, typed: ReadonlySet<string>): McpHttpUrlKind | null {
   const b = ipv4(host)
   if (b) {
@@ -33,12 +34,7 @@ function kindOf(host: string, typed: ReadonlySet<string>): McpHttpUrlKind | null
     if (b[0] === 10 || (b[0] === 172 && b[1] >= 16 && b[1] <= 31) || (b[0] === 192 && b[1] === 168)) return 'lan'
     return null
   }
-  if (host.includes(':')) {
-    // A unique local address (fd00::/8): the first group's high byte is fd.
-    const first = host.split(':')[0]
-    return first.length === 4 && first.startsWith('fd') ? 'lan' : null
-  }
-  if (host === 'localhost' || !typed.has(host)) return null
+  if (host.includes(':') || host === 'localhost' || !typed.has(host)) return null
   return 'name'
 }
 
@@ -51,7 +47,7 @@ export function reachableUrls(addresses: string[], port: number, typedHosts: str
     const { host, port: own } = split(a)
     const kind = kindOf(host, typed)
     if (!kind) continue
-    const url = `http://${host.includes(':') ? `[${host}]` : host}:${own ?? port}/mcp`
+    const url = `http://${host}:${own ?? port}/mcp`
     if (!found.some((f) => f.url === url)) found.push({ url, kind })
   }
   return ORDER.flatMap((k) => found.filter((f) => f.kind === k))

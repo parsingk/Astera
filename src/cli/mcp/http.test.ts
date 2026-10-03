@@ -6,7 +6,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { allowedHosts, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
+import { allowedHosts, hostsWithoutPort, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
 import { reachableUrls } from '../../core/mcp/httpUrls'
 import type { HostLink } from './hostLink'
 
@@ -28,7 +28,7 @@ afterEach(async () => {
 })
 
 async function start(
-  extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean; bind?: string; interfaces?: Record<string, Array<{ address: string }>> } = {}
+  extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean } = {}
 ) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-http-'))
   const tokenFile = path.join(dir, 'mcp-http-token')
@@ -37,7 +37,7 @@ async function start(
   const links: Made[] = []
   served = await serveMcpHttp({
     port: 0,
-    bind: extra.bind ?? '127.0.0.1',
+    bind: '127.0.0.1',
     hosts: extra.hosts ?? [],
     tokenFile,
     version: '1.4.1',
@@ -46,7 +46,6 @@ async function start(
     home: '/nonexistent',
     log: (m) => logs.push(m),
     ...(extra.idleMs !== undefined ? { idleMs: extra.idleMs } : {}),
-    ...(extra.interfaces !== undefined ? { interfaces: extra.interfaces } : {}),
     link: ({ client, remote }) => {
       const made: Made = { client, remote, calls: [], closed: false }
       links.push(made)
@@ -305,7 +304,7 @@ describe('serveMcpHttp', () => {
   })
 
   it('says in its ready line, on one line, the hosts it answers to: only loopback when bound to 127.0.0.1', async () => {
-    const s = await start({ hosts: ['box'], interfaces: { eth0: [{ address: '192.168.1.5' }] } })
+    const s = await start({ hosts: ['box'] })
     const line = JSON.stringify(readyLineOf(served!))
     expect(line).not.toContain(String.fromCharCode(10))
     const ready = JSON.parse(line) as { ready: boolean; port: number; addresses: string[] }
@@ -313,18 +312,6 @@ describe('serveMcpHttp', () => {
     expect(ready.port).toBe(s.port)
     expect(ready.addresses.sort()).toEqual(['127.0.0.1', 'box', 'localhost'])
     expect(reachableUrls(ready.addresses, ready.port, [])).toEqual([])
-  })
-
-  it('names this machine’s addresses in the ready line when bound beyond 127.0.0.1, a typed port kept and IPv6 unbracketed', async () => {
-    // 127.0.0.2 is still loopback, so nothing is opened to the network, but it is not the 127.0.0.1 bind.
-    const s = await start({
-      bind: '127.0.0.2',
-      hosts: ['Box.Ts.Net', 'proxy:9000'],
-      interfaces: { eth0: [{ address: '192.168.1.5' }, { address: 'fe80::2%eth0' }], ts: [{ address: '100.90.1.2' }, { address: 'fd7a::1' }] }
-    })
-    const ready = readyLineOf(served!)
-    expect(ready.port).toBe(s.port)
-    expect([...ready.addresses].sort()).toEqual(['100.90.1.2', '127.0.0.1', '192.168.1.5', 'box.ts.net', 'fd7a::1', 'fe80::2', 'localhost', 'proxy:9000'].sort())
   })
 
   it('rejects with EADDRINUSE when the port is taken', async () => {
@@ -352,6 +339,14 @@ describe('allowedHosts', () => {
       ['127.0.0.1:7871', 'localhost:7871', 'box.tail.net:7871', 'box:9000', '[fe80::1]:7871', '192.168.1.5:7871', '[fe80::2]:7871', '[::1]:7871'].sort()
     )
     expect([...allowedHosts(7871, '127.0.0.1', [], interfaces)].sort()).toEqual(['127.0.0.1:7871', 'localhost:7871'])
+  })
+})
+
+describe('hostsWithoutPort', () => {
+  it('gives the allowed hosts of an every-interface bind without this port, a typed port kept and IPv6 unbracketed', () => {
+    const interfaces = { eth0: [{ address: '192.168.1.5' }, { address: 'fe80::2%eth0' }], ts: [{ address: '100.90.1.2' }] }
+    const allowed = allowedHosts(7871, '0.0.0.0', ['Box.Ts.Net', 'proxy:9000', 'box:7871'], interfaces)
+    expect(hostsWithoutPort(allowed, 7871).sort()).toEqual(['100.90.1.2', '127.0.0.1', '192.168.1.5', 'box', 'box.ts.net', 'fe80::2', 'localhost', 'proxy:9000'].sort())
   })
 })
 

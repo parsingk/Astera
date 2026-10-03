@@ -45,6 +45,13 @@ export function allowedHosts(
   return out
 }
 
+/** allowedHosts without `:<port>` (IPv6 unbracketed): the hosts the ready line names. A port that differs is
+ *  one a person typed, and stays. */
+export function hostsWithoutPort(allowed: Iterable<string>, port: number): string[] {
+  const suffix = `:${port}`
+  return [...allowed].map((h) => (h.endsWith(suffix) ? h.slice(0, -suffix.length).replace(/^\[(.*)\]$/, '$1') : h))
+}
+
 /** `host:port` of an Origin header, with the scheme's default port spelled out; null when it is not a URL
  *  (`null` included). */
 function originHost(origin: string): string | null {
@@ -111,8 +118,6 @@ export async function serveMcpHttp(a: {
   link?: (s: { client(): McpClient | undefined; remote: string | undefined }) => HostLink
   /** Test injection for the idle close. */
   idleMs?: number
-  /** Test injection for this machine's addresses (allowedHosts). */
-  interfaces?: Record<string, Array<{ address: string }> | undefined>
 }): Promise<{ close(): Promise<void>; address(): { port: number }; addresses(): string[] }> {
   const { log } = a
   const idleMs = a.idleMs ?? IDLE_MS
@@ -249,7 +254,7 @@ export async function serveMcpHttp(a: {
     })
   })
   const port = (httpServer.address() as { port: number }).port
-  allowed = allowedHosts(port, a.bind, a.hosts, a.interfaces)
+  allowed = allowedHosts(port, a.bind, a.hosts)
 
   const sweep = setInterval(() => {
     const now = Date.now()
@@ -263,9 +268,7 @@ export async function serveMcpHttp(a: {
 
   return {
     address: () => ({ port }),
-    // The allowed hosts without this port (IPv6 unbracketed); a port that differs is one a person typed, kept.
-    addresses: () =>
-      [...allowed].map((h) => (h.endsWith(`:${port}`) ? h.slice(0, -`:${port}`.length).replace(/^\[(.*)\]$/, '$1') : h)),
+    addresses: () => hostsWithoutPort(allowed, port),
     async close() {
       clearInterval(sweep)
       await Promise.allSettled([...sessions.values()].map((s) => s.server.close()))

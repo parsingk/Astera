@@ -18,8 +18,8 @@ describe('reachableUrls', () => {
     expect(reachableUrls(out, 7871, [])).toEqual([])
   })
 
-  it('keeps an IPv6 ULA (fd00::/8) as lan, bracketed', () => {
-    expect(reachableUrls(['fd7a:115c:a1e0::1', 'fd::1'], 7871, [])).toEqual([{ url: 'http://[fd7a:115c:a1e0::1]:7871/mcp', kind: 'lan' }])
+  it('leaves out every IPv6 address, a unique local one and a typed one included: the entrance listens on IPv4 only', () => {
+    expect(reachableUrls(['fd7a:115c:a1e0::1', 'fd00::1', '[fd00::2]:9000'], 7871, ['fd00::1', '[fd00::2]:9000'])).toEqual([])
   })
 
   it('orders lan, tailscale, name, each in the order given, without repeats', () => {
