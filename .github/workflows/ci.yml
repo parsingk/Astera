@@ -57,6 +57,19 @@ jobs:
 
       - run: npm run build
 
+      # MCP over HTTP against a real Host (docs/mcp.md). The test spawns the built `astera mcp http`
+      # (out/main/cli.js), so `npm test` above, which runs before the build, skips it. It runs here by name,
+      # and the step reads vitest's JSON report and fails unless that one test passed: a skip is a red step.
+      - name: MCP over HTTP against a real Host
+        timeout-minutes: 10
+        shell: bash
+        env:
+          IT_FILE: src/cli/cliHost.integration.test.ts
+          IT_NAME: 'over HTTP: the Host runs the entrance'
+        run: |
+          npx vitest run "$IT_FILE" -t "$IT_NAME" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/mcp-http.json"
+          node -e 'const r = require(process.argv[1]); const name = process.argv[2]; const hits = r.testResults.flatMap((f) => f.assertionResults).filter((t) => t.fullName.includes(name)); if (hits.length !== 1 || hits[0].status !== "passed") { console.error(`expected the test "${name}" to pass, got ${hits.map((t) => t.status).join(", ") || "no such test"}`); process.exit(1) }' "$RUNNER_TEMP/mcp-http.json" "$IT_NAME"
+
       # The agent app workspace against a real display (docs/agent-workspace-isolation.md). The unit
       # tests above drive every desk with fakes; these two start Xvfb or a background app for real.
       # They are gated on ASTERA_DESKTOP_E2E=1, so `npm test` collects and skips them. A run that skips

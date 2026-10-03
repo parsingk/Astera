@@ -1394,9 +1394,13 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
 
   // MCP over HTTP (MCP HTTP F1 §Tests): the Host spawns this build's real `astera mcp http` (out/main/cli.js
   // run by Electron as node, as an installed Host runs it), and an HTTP client reaches the same Host
-  // through it. Needs `npm run build` first: CI runs the tests before the build, so there it is skipped.
+  // through it. Needs `npm run build` first: `npm test` in CI runs before the build and skips it, so CI runs
+  // it again by name after the build and fails unless it passed (.github/workflows/ci.yml). A local run
+  // without the build says so on the console rather than skipping in silence.
   const cliBundle = fileURLToPath(new URL('../../out/main/cli.js', import.meta.url))
-  it.runIf(existsSync(cliBundle))(
+  const cliBuilt = existsSync(cliBundle)
+  if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
+  it.runIf(cliBuilt)(
     'over HTTP: the Host runs the entrance, a client with the token lists 34 tools and acts, the journal names its address, and off stops it',
     async () => {
       const cli: HostCliPaths = {
