@@ -111,7 +111,9 @@ export async function serveMcpHttp(a: {
   link?: (s: { client(): McpClient | undefined; remote: string | undefined }) => HostLink
   /** Test injection for the idle close. */
   idleMs?: number
-}): Promise<{ close(): Promise<void>; address(): { port: number } }> {
+  /** Test injection for this machine's addresses (allowedHosts). */
+  interfaces?: Record<string, Array<{ address: string }> | undefined>
+}): Promise<{ close(): Promise<void>; address(): { port: number }; addresses(): string[] }> {
   const { log } = a
   const idleMs = a.idleMs ?? IDLE_MS
   const reader = createTokenReader(a.tokenFile)
@@ -247,7 +249,7 @@ export async function serveMcpHttp(a: {
     })
   })
   const port = (httpServer.address() as { port: number }).port
-  allowed = allowedHosts(port, a.bind, a.hosts)
+  allowed = allowedHosts(port, a.bind, a.hosts, a.interfaces)
 
   const sweep = setInterval(() => {
     const now = Date.now()
@@ -261,6 +263,9 @@ export async function serveMcpHttp(a: {
 
   return {
     address: () => ({ port }),
+    // The allowed hosts without this port (IPv6 unbracketed); a port that differs is one a person typed, kept.
+    addresses: () =>
+      [...allowed].map((h) => (h.endsWith(`:${port}`) ? h.slice(0, -`:${port}`.length).replace(/^\[(.*)\]$/, '$1') : h)),
     async close() {
       clearInterval(sweep)
       await Promise.allSettled([...sessions.values()].map((s) => s.server.close()))
@@ -269,6 +274,12 @@ export async function serveMcpHttp(a: {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
     }
   }
+}
+
+/** The ready line: the port it listens on and the hosts it answers to (the Host makes the settings screen's
+ *  URLs from them, core/mcp/httpUrls.ts). */
+export function readyLineOf(served: { address(): { port: number }; addresses(): string[] }): { ready: true; port: number; addresses: string[] } {
+  return { ready: true, port: served.address().port, addresses: served.addresses() }
 }
 
 export type McpHttpArgs = { port: number; bind: string; tokenFile: string; hosts: string[] }
@@ -293,7 +304,7 @@ export function parseMcpHttpArgs(argv: readonly string[]): McpHttpArgs | { error
   return { port, bind: values['--bind'], tokenFile: values['--token-file'], hosts }
 }
 
-/** The CLI side: the stdout protocol the Host reads (one JSON line: `{"ready":true,"port":n}` once
+/** The CLI side: the stdout protocol the Host reads (one JSON line: `{"ready":true,"port":n,"addresses":[...]}` once
  *  listening, or `{"error":code,"message":text}` before a failing exit), and the ends that close it:
  *  SIGTERM, SIGINT, or the end of stdin (the Host that started it went). Resolves the exit code. */
 export async function runMcpHttp(a: {
@@ -319,7 +330,7 @@ export async function runMcpHttp(a: {
     line({ error: e.code ?? 'LISTEN_FAILED', message: e.message })
     return 1
   }
-  line({ ready: true, port: served.address().port })
+  line(readyLineOf(served))
   log(`listening on ${args.bind}:${served.address().port}`)
   await new Promise<void>((resolve) => {
     process.once('SIGTERM', resolve)
