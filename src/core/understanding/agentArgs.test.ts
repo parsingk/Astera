@@ -25,6 +25,12 @@ describe('claude — 쓰기를 막는 세 겹', () => {
     expect(args).toContain('--strict-mcp-config')
   })
 
+  // A write-up is Astera's own one-shot run, not a conversation: saved, it showed in History under the
+  // project with the write-up prompt as its title.
+  it('leaves no session file behind', () => {
+    expect(args).toContain('--no-session-persistence')
+  })
+
   it('모델과 노력은 고른 때만 실린다', () => {
     expect(agentArgs({ provider: 'claude' }).join(' ')).not.toContain('--model')
     expect(pairs(agentArgs({ provider: 'claude', model: 'opus', effort: 'low' }))).toEqual(
