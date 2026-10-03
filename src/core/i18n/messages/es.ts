@@ -48,7 +48,7 @@ export const es: Catalog = {
   'settings.mcp.githubWrite.saveFailed': 'No se pudo guardar el ajuste de escritura de GitHub en MCP: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'No se pudo leer el ajuste de escritura de GitHub en MCP: {detail}',
   'settings.mcpHttp.title': 'MCP por HTTP',
-  'settings.mcpHttp.hint': 'Permite que los agentes de otros dispositivos usen el Astera de este equipo por MCP. El acceso y los ajustes de arriba se aplican igual que con astera mcp serve. Cada solicitud necesita el token.',
+  'settings.mcpHttp.hint': 'Permite que los agentes que hablan MCP por HTTP usen este Astera, en este equipo o, con el interruptor de abajo, en otros dispositivos. El acceso y los ajustes de arriba se aplican igual que con astera mcp serve. Cada solicitud necesita el token.',
   'settings.mcpHttp.port': 'Puerto',
   'settings.mcpHttp.portInvalid': 'El puerto debe ser un número entero de 1 a 65535.',
   'settings.mcpHttp.lan': 'Permitir otros dispositivos de esta red',

@@ -47,7 +47,7 @@ export const ja: Catalog = {
   'settings.mcp.githubWrite.saveFailed': 'MCP の GitHub 書き込み設定を保存できませんでした: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'MCP の GitHub 書き込み設定を読み込めませんでした: {detail}',
   'settings.mcpHttp.title': 'HTTP 経由の MCP',
-  'settings.mcpHttp.hint': '他のデバイスのエージェントが、このコンピューターの Astera を MCP で使えるようにします。アクセス範囲と上の設定は astera mcp serve と同じです。すべてのリクエストにトークンが必要です。',
+  'settings.mcpHttp.hint': 'HTTP 経由で MCP を使うエージェントが、この Astera を使えるようにします。このコンピューターから、または下のスイッチで他のデバイスからも使えます。アクセス範囲と上の設定は astera mcp serve と同じです。すべてのリクエストにトークンが必要です。',
   'settings.mcpHttp.port': 'ポート',
   'settings.mcpHttp.portInvalid': 'ポートは 1 から 65535 までの整数にしてください。',
   'settings.mcpHttp.lan': 'このネットワークの他のデバイスを許可する',

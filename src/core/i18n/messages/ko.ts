@@ -81,7 +81,7 @@ export const ko = {
   'settings.mcp.githubWrite.saveFailed': 'MCP GitHub 쓰기 설정을 저장하지 못했습니다: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'MCP GitHub 쓰기 설정을 읽지 못했습니다: {detail}',
   'settings.mcpHttp.title': 'HTTP 로 MCP 제공',
-  'settings.mcpHttp.hint': '다른 기기의 에이전트가 이 컴퓨터의 Astera 를 MCP 로 쓰게 합니다. 접근 범위와 위의 설정은 astera mcp serve 와 같습니다. 모든 요청에 토큰이 필요합니다.',
+  'settings.mcpHttp.hint': 'HTTP 로 MCP 를 쓰는 에이전트가 이 Astera 를 쓰게 합니다. 이 컴퓨터에서, 또는 아래 스위치를 켜면 다른 기기에서도 쓸 수 있습니다. 접근 범위와 위의 설정은 astera mcp serve 와 같습니다. 모든 요청에 토큰이 필요합니다.',
   'settings.mcpHttp.port': '포트',
   'settings.mcpHttp.portInvalid': '포트는 1 부터 65535 까지의 정수여야 합니다.',
   'settings.mcpHttp.lan': '이 네트워크의 다른 기기 허용',

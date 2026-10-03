@@ -77,7 +77,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcp.githubWrite.saveFailed': 'Could not save the MCP GitHub writes setting: {detail}',
   'settings.mcp.githubWrite.loadFailed': 'Could not read the MCP GitHub writes setting: {detail}',
   'settings.mcpHttp.title': 'MCP over HTTP',
-  'settings.mcpHttp.hint': "Lets agents on other devices use this computer's Astera through MCP. Access and the settings above apply as for astera mcp serve. Every request needs the token.",
+  'settings.mcpHttp.hint': 'Lets agents that speak MCP over HTTP use this Astera, on this computer, or on other devices with the switch below. Access and the settings above apply as for astera mcp serve. Every request needs the token.',
   'settings.mcpHttp.port': 'Port',
   'settings.mcpHttp.portInvalid': 'The port must be a whole number from 1 to 65535.',
   'settings.mcpHttp.lan': 'Allow other devices on this network',
