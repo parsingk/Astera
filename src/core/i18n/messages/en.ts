@@ -89,7 +89,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.mcpHttp.kind.lan': 'Local network',
   'settings.mcpHttp.kind.tailscale': 'Tailscale',
   'settings.mcpHttp.kind.name': 'Name you added',
-  'settings.mcpHttp.othersHint': "If this computer's address changed after the entrance started, turn it off and on again.",
+  'settings.mcpHttp.othersHint': "If this computer's address changed after HTTP serving started, turn MCP over HTTP off and on again.",
   'settings.mcpHttp.othersNone': 'No local network address found.',
   'settings.mcpHttp.lineAddress': 'Address in the lines',
   'settings.mcpHttp.token': 'Token',

@@ -93,7 +93,7 @@ export const ko = {
   'settings.mcpHttp.kind.lan': '로컬 네트워크',
   'settings.mcpHttp.kind.tailscale': 'Tailscale',
   'settings.mcpHttp.kind.name': '직접 추가한 이름',
-  'settings.mcpHttp.othersHint': 'HTTP 제공이 시작된 뒤 이 컴퓨터의 주소가 바뀌었다면 껐다가 다시 켜세요.',
+  'settings.mcpHttp.othersHint': 'HTTP 제공이 시작된 뒤 이 컴퓨터의 주소가 바뀌었다면 "HTTP 로 MCP 제공" 을 껐다가 다시 켜세요.',
   'settings.mcpHttp.othersNone': '로컬 네트워크 주소를 찾지 못했습니다.',
   'settings.mcpHttp.lineAddress': '줄에 넣을 주소',
   'settings.mcpHttp.token': '토큰',

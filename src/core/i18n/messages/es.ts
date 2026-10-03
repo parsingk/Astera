@@ -60,7 +60,7 @@ export const es: Catalog = {
   'settings.mcpHttp.kind.lan': 'Red local',
   'settings.mcpHttp.kind.tailscale': 'Tailscale',
   'settings.mcpHttp.kind.name': 'Nombre que añadiste',
-  'settings.mcpHttp.othersHint': 'Si la dirección de este equipo cambió después de que empezara el servicio HTTP, desactívalo y vuelve a activarlo.',
+  'settings.mcpHttp.othersHint': 'Si la dirección de este equipo cambió después de que empezara el servicio HTTP, desactiva MCP por HTTP y vuelve a activarlo.',
   'settings.mcpHttp.othersNone': 'No se encontró ninguna dirección de red local.',
   'settings.mcpHttp.lineAddress': 'Dirección en las líneas',
   'settings.mcpHttp.token': 'Token',

@@ -59,7 +59,7 @@ export const ja: Catalog = {
   'settings.mcpHttp.kind.lan': 'ローカルネットワーク',
   'settings.mcpHttp.kind.tailscale': 'Tailscale',
   'settings.mcpHttp.kind.name': '追加した名前',
-  'settings.mcpHttp.othersHint': 'HTTP での提供が始まった後にこのコンピューターのアドレスが変わった場合は、一度オフにしてからオンに戻してください。',
+  'settings.mcpHttp.othersHint': 'HTTP での提供が始まった後にこのコンピューターのアドレスが変わった場合は、「HTTP 経由の MCP」を一度オフにしてからオンに戻してください。',
   'settings.mcpHttp.othersNone': 'ローカルネットワークのアドレスが見つかりません。',
   'settings.mcpHttp.lineAddress': '行に入れるアドレス',
   'settings.mcpHttp.token': 'トークン',
