@@ -3,9 +3,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { promises as fs } from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { parseMcpHttpArgs, serveMcpHttp } from './http'
+import { allowedHosts, parseMcpHttpArgs, serveMcpHttp } from './http'
 import type { HostLink } from './hostLink'
 
 const TOKEN = 'tok-' + 'A'.repeat(40)
@@ -25,7 +26,7 @@ afterEach(async () => {
   dir = ''
 })
 
-async function start(extra: { idleMs?: number; hosts?: string[] } = {}) {
+async function start(extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean } = {}) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-http-'))
   const tokenFile = path.join(dir, 'mcp-http-token')
   await fs.writeFile(tokenFile, `${TOKEN}\n`)
@@ -50,7 +51,10 @@ async function start(extra: { idleMs?: number; hosts?: string[] } = {}) {
           made.calls.push(cmd)
           return { status: 200, body: [] }
         },
-        close: () => void (made.closed = true)
+        close: () => {
+          made.closed = true
+          if (extra.closeThrows) throw new Error('link close failed')
+        }
       }
       return link
     }
@@ -84,6 +88,23 @@ function raw(port: number, a: { method?: string; path?: string; headers?: Record
     req.on('error', reject)
     if (a.body !== undefined) req.write(a.body)
     req.end()
+  })
+}
+
+const CRLF = String.fromCharCode(13, 10)
+
+/** A request written on a bare socket (its head lines, then the body): the reply as text once the server closes the connection. A
+ *  server that kept the connection open would leave this pending and the test would time out. */
+function closedAfter(port: number, head: string[], body = ''): Promise<string> {
+  return new Promise((resolve) => {
+    const sock = net.connect(port, '127.0.0.1')
+    let got = ''
+    sock.setEncoding('utf8')
+    sock.on('data', (c: string) => (got += c))
+    // The server may cut the connection while the body is still being written.
+    sock.on('error', () => {})
+    sock.on('close', () => resolve(got))
+    sock.write([...head, '', body].join(CRLF))
   })
 }
 
@@ -171,14 +192,63 @@ describe('serveMcpHttp', () => {
     await expect.poll(() => s.links[0].closed, { timeout: 5000 }).toBe(true)
   })
 
-  it('answers 413 to a body over 4 MB and 404 off /mcp', async () => {
+  it('answers 413 to a body over 4 MB, declared or streamed, and closes the connection; 404 off /mcp', async () => {
     const s = await start()
+    const head = (more: string) => [
+      'POST /mcp HTTP/1.1',
+      `Host: 127.0.0.1:${s.port}`,
+      `Authorization: Bearer ${TOKEN}`,
+      'Content-Type: application/json',
+      more
+    ]
+    // Declared: answered from the header, while the body is still to come.
+    const declared = await closedAfter(s.port, head(`Content-Length: ${4 * 1024 * 1024 + 1}`), '{')
+    expect(declared).toMatch(/^HTTP\/1\.1 413/)
+    expect(declared.toLowerCase()).toContain('connection: close')
+    // Streamed (chunked) past the cap.
+    const chunk = 'x'.repeat(4 * 1024 * 1024 + 1)
+    const streamed = await closedAfter(s.port, head('Transfer-Encoding: chunked'), [chunk.length.toString(16), chunk, ''].join(CRLF))
+    expect(streamed).toMatch(/^HTTP\/1\.1 413/)
     const auth = { ...JSON_HEADERS, authorization: `Bearer ${TOKEN}` }
-    const big = Buffer.alloc(4 * 1024 * 1024 + 1, 0x20)
-    expect((await raw(s.port, { headers: auth, body: big })).status).toBe(413)
     expect((await raw(s.port, { headers: auth, path: '/other', body: INIT })).status).toBe(404)
     // Auth comes first: off /mcp without a token is still 401.
     expect((await raw(s.port, { headers: JSON_HEADERS, path: '/other', body: INIT })).status).toBe(401)
+  })
+
+  it('closes the connection after a 401 and a 403, without waiting for the body', async () => {
+    const s = await start()
+    const noToken = await closedAfter(s.port, ['POST /mcp HTTP/1.1', `Host: 127.0.0.1:${s.port}`, 'Content-Length: 1000000'], '{')
+    expect(noToken).toMatch(/^HTTP\/1\.1 401/)
+    expect(noToken.toLowerCase()).toContain('connection: close')
+    const foreign = await closedAfter(
+      s.port,
+      ['POST /mcp HTTP/1.1', 'Host: evil.example', `Authorization: Bearer ${TOKEN}`, 'Content-Length: 1000000'],
+      '{'
+    )
+    expect(foreign).toMatch(/^HTTP\/1\.1 403/)
+    expect(foreign.toLowerCase()).toContain('connection: close')
+  })
+
+  it('answers 401 to GET, DELETE and OPTIONS without a token, and to a POST naming an unknown session', async () => {
+    const s = await start()
+    for (const method of ['GET', 'DELETE', 'OPTIONS'])
+      expect((await raw(s.port, { method, headers: { accept: 'text/event-stream' } })).status).toBe(401)
+    const unknown = await raw(s.port, { headers: { ...JSON_HEADERS, 'mcp-session-id': 'no-such-session' }, body: INIT })
+    expect(unknown.status).toBe(401)
+  })
+
+  it('survives a link whose close throws, from DELETE and from the idle sweep', async () => {
+    const s = await start({ idleMs: 50, closeThrows: true })
+    const a = await connect(s.url, TOKEN, 'alpha')
+    await a.client.callTool({ name: 'list_projects', arguments: {} })
+    await expect.poll(() => s.links[0].closed, { timeout: 5000 }).toBe(true)
+    const b = await connect(s.url, TOKEN, 'beta')
+    await b.transport.terminateSession().catch(() => {})
+    expect(s.links[1].closed).toBe(true)
+    // Still serving.
+    const c = await connect(s.url, TOKEN, 'gamma')
+    expect((await c.client.listTools()).tools).toHaveLength(34)
+    expect(s.logs.some((l) => l.includes('link close failed'))).toBe(true)
   })
 
   it('rejects with EADDRINUSE when the port is taken', async () => {
@@ -195,6 +265,17 @@ describe('serveMcpHttp', () => {
       log: () => {}
     })
     await expect(second).rejects.toMatchObject({ code: 'EADDRINUSE' })
+  })
+})
+
+describe('allowedHosts', () => {
+  it('adds the port to bare names, keeps a given host:port, brackets IPv6, and adds interfaces only beyond loopback', () => {
+    const interfaces = { eth0: [{ address: '192.168.1.5' }, { address: 'fe80::2%eth0' }], lo: [{ address: '::1' }] }
+    const lan = allowedHosts(7871, '0.0.0.0', ['Box.Tail.Net', 'box:9000', 'fe80::1', ' '], interfaces)
+    expect([...lan].sort()).toEqual(
+      ['127.0.0.1:7871', 'localhost:7871', 'box.tail.net:7871', 'box:9000', '[fe80::1]:7871', '192.168.1.5:7871', '[fe80::2]:7871', '[::1]:7871'].sort()
+    )
+    expect([...allowedHosts(7871, '127.0.0.1', [], interfaces)].sort()).toEqual(['127.0.0.1:7871', 'localhost:7871'])
   })
 })
 

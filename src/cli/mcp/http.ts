@@ -24,7 +24,12 @@ type Session = { transport: StreamableHTTPServerTransport; server: McpServer; la
 /** The Host header values this process answers to: `127.0.0.1:<port>`, `localhost:<port>`, the hosts it
  *  was given (with `:<port>` added when they name none), and, when bound beyond loopback, this machine's
  *  own addresses as they are at start. Lower case. */
-function allowedHosts(port: number, bind: string, hosts: string[]): Set<string> {
+export function allowedHosts(
+  port: number,
+  bind: string,
+  hosts: string[],
+  interfaces: Record<string, Array<{ address: string }> | undefined> = os.networkInterfaces()
+): Set<string> {
   const withPort = (h: string): string => {
     const v = h.trim().toLowerCase()
     if (/^\[.*\]:\d+$/.test(v) || /^[^:]+:\d+$/.test(v)) return v
@@ -33,7 +38,7 @@ function allowedHosts(port: number, bind: string, hosts: string[]): Set<string> 
   const out = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
   for (const h of hosts) if (h.trim()) out.add(withPort(h))
   if (bind !== '127.0.0.1' && bind !== 'localhost')
-    for (const list of Object.values(os.networkInterfaces()))
+    for (const list of Object.values(interfaces))
       for (const n of list ?? []) out.add(withPort(n.address.split('%')[0]))
   return out
 }
@@ -56,19 +61,35 @@ const sendJson = (res: http.ServerResponse, status: number, body: unknown, heade
   res.end(JSON.stringify(body))
 }
 
+/** How long a refused connection stays open after its answer is written, for the answer to leave. */
+const REFUSE_GRACE_MS = 100
+
+/** A refusal (401, 403, 413) that does not wait for the body: `connection: close`, and the socket destroyed
+ *  shortly after the answer is written, so a peer without the token cannot hold a connection open by
+ *  streaming bytes. */
+const refuse = (req: http.IncomingMessage, res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void => {
+  res.on('finish', () => setTimeout(() => req.socket.destroy(), REFUSE_GRACE_MS).unref())
+  sendJson(res, status, body, { connection: 'close', ...headers })
+}
+
 const rpcError = (code: number, message: string) => ({ jsonrpc: '2.0', error: { code, message }, id: null })
 
-/** The whole body, or 'tooLarge' once it passes the cap; past the cap the rest is read and dropped, so
- *  the client gets the 413 instead of a reset connection. */
+/** The whole body, or 'tooLarge' as soon as it is declared or read past the cap; the rest is not read
+ *  (the 413 closes the connection). */
 function readBody(req: http.IncomingMessage): Promise<string | 'tooLarge'> {
+  if (Number(req.headers['content-length'] ?? 0) > BODY_CAP) return Promise.resolve('tooLarge')
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0
-    req.on('data', (c: Buffer) => {
+    const onData = (c: Buffer): void => {
       size += c.length
-      if (size <= BODY_CAP) chunks.push(c)
-    })
-    req.on('end', () => resolve(size > BODY_CAP ? 'tooLarge' : Buffer.concat(chunks).toString('utf8')))
+      if (size <= BODY_CAP) return void chunks.push(c)
+      req.off('data', onData)
+      req.pause()
+      resolve('tooLarge')
+    }
+    req.on('data', onData)
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
     req.on('error', reject)
   })
 }
@@ -119,7 +140,11 @@ export async function serveMcpHttp(a: {
     // The server's hook fires on every close: DELETE, the idle sweep, shutdown, a broken transport.
     server.server.onclose = () => {
       if (transport.sessionId !== undefined) sessions.delete(transport.sessionId)
-      link.close()
+      try {
+        link.close()
+      } catch (err) {
+        log(`closing a session's Host link failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
     await server.connect(transport)
     await transport.handleRequest(req, res, body)
@@ -139,8 +164,7 @@ export async function serveMcpHttp(a: {
     const given = bearerOf(req.headers.authorization)
     if (token === null || given === null || !tokenMatches(given, token)) {
       log(`401: refused a request from ${remote ?? 'an unknown address'} without a valid token`)
-      req.resume()
-      return sendJson(res, 401, {}, { 'www-authenticate': 'Bearer' })
+      return refuse(req, res, 401, {}, { 'www-authenticate': 'Bearer' })
     }
     // Checked here rather than by the transport's DNS-rebinding options: those run only once a session's
     // transport exists, and an initialize would build its server and link before being refused.
@@ -148,8 +172,7 @@ export async function serveMcpHttp(a: {
     const origin = req.headers.origin
     if (!allowed.has(host) || (origin !== undefined && !allowed.has(originHost(origin) ?? ''))) {
       log(`403: refused a request from ${remote ?? 'an unknown address'} for host ${JSON.stringify(req.headers.host ?? '')}${origin !== undefined ? ` and origin ${JSON.stringify(origin)}` : ''}`)
-      req.resume()
-      return sendJson(res, 403, rpcError(-32000, 'Forbidden: host or origin not allowed'))
+      return refuse(req, res, 403, rpcError(-32000, 'Forbidden: host or origin not allowed'))
     }
     if (new URL(req.url ?? '/', 'http://x').pathname !== '/mcp') {
       req.resume()
@@ -158,7 +181,7 @@ export async function serveMcpHttp(a: {
     let body: unknown
     if (req.method === 'POST') {
       const text = await readBody(req)
-      if (text === 'tooLarge') return sendJson(res, 413, rpcError(-32000, 'Request body over 4 MB'))
+      if (text === 'tooLarge') return refuse(req, res, 413, rpcError(-32000, 'Request body over 4 MB'))
       try {
         body = JSON.parse(text)
       } catch {
@@ -198,7 +221,7 @@ export async function serveMcpHttp(a: {
     for (const [id, s] of sessions)
       if (now - s.lastSeen > idleMs) {
         log(`closing session ${id.slice(0, 8)}, idle for ${Math.round((now - s.lastSeen) / 60_000)} min`)
-        void s.server.close()
+        s.server.close().catch((err: unknown) => log(`closing an idle session failed: ${err instanceof Error ? err.message : String(err)}`))
       }
   }, Math.min(60_000, idleMs))
   sweep.unref()
@@ -207,7 +230,7 @@ export async function serveMcpHttp(a: {
     address: () => ({ port }),
     async close() {
       clearInterval(sweep)
-      await Promise.all([...sessions.values()].map((s) => s.server.close()))
+      await Promise.allSettled([...sessions.values()].map((s) => s.server.close()))
       // An open SSE stream would hold the server open; nothing is left to answer on it.
       httpServer.closeAllConnections()
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
