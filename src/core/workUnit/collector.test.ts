@@ -3178,6 +3178,28 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
     expect(store.get(repo)!.externalGitChanges).toEqual([])
   })
 
+  // A backward reset brings nothing in: its diff is the files of the commit being undone, the session's
+  // own. Each step in its own round, so the reset is a reflog-only move with no commit step. The status
+  // look in the reset round would add the staged file to observedChangedFiles and hide a loss there, so
+  // this asserts on incomingFiles, which is what committedFiles takes away at close.
+  for (const trusted of [false, true]) {
+    it(`commit, reset --soft HEAD~1, commit again (${trusted ? 'trusted' : 'untrusted'}): the file is not incoming`, async () => {
+      const { repo, collector, store } = await openUnit(trusted)
+      if (trusted) collector.onSessionBusy('s1', repo, true)
+      await commitFile(repo, 'b.txt')
+      await round(collector)
+      gitSync(repo, ['reset', '-q', '--soft', 'HEAD~1'])
+      await round(collector)
+      gitSync(repo, ['commit', '-q', '-m', 'b again'])
+      await round(collector)
+      if (trusted) await collector.onSessionIdle('s1')
+
+      expect(store.get(repo)!.units[0].git.incomingFiles).toBeUndefined()
+      await collector.completeTask('s1', { source: 'agent' })
+      expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['b.txt'])
+    })
+  }
+
   it('an own commit and a pull landing in one round are both counted (mixed steps keep the old count)', async () => {
     const { repo, collector, store, up } = await openUnit(false)
     await up.push('p.txt')

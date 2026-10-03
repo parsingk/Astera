@@ -1432,15 +1432,13 @@ export class WorkUnitCollector {
     // 띄워 얻은 답이 버려진다 — 이 파일 위의 "git 은 방아쇠가 있었을 때만 묻는다"와 같은 규칙이다.
     // 안 물을 때 넘기는 null 은 이미 "git 이 답하지 못했다"의 값이라 그 갈래들은 그것을 읽지 않는다.
     const needsAncestry = before.branch === after.branch && before.head !== after.head
-    const type = classifyTransition(
-      before,
-      after,
-      needsAncestry
-        ? await reads.get(`ancestor\0${repo}\0${before.head}\0${after.head}`, () =>
-            this.deps.git.isAncestor(projectPath, before.head, after.head)
-          )
-        : null
-    )
+    // Kept for noteIncoming too: a reflog-only incoming move must go forward (null when not asked).
+    const ancestry = needsAncestry
+      ? await reads.get(`ancestor\0${repo}\0${before.head}\0${after.head}`, () =>
+          this.deps.git.isAncestor(projectPath, before.head, after.head)
+        )
+      : null
+    const type = classifyTransition(before, after, ancestry)
     // 작업 트리는 전이가 없어도 바뀌어 있을 수 있다 (`git add` 가 index 만 건드린 경우).
     // **열린 Unit 이 없으면 묻지 않는다** — observe 는 열린 Unit 에만 적으므로(목록도 모름 표지도)
     // 그때 status 의 답은 어디에도 닿지 않는다. 묻는 경우에도 한 회차에 한 번이다(reads).
@@ -1508,7 +1506,7 @@ export class WorkUnitCollector {
       })
       // A Host merge brought content in: incoming without asking the reflog.
       if (recorded) {
-        await this.noteIncoming(projectPath, repo, encountered, before.head, after.head, true, undefined, reads)
+        await this.noteIncoming(projectPath, repo, encountered, before.head, after.head, true, ancestry, undefined, reads)
         return true
       }
       // **돌려받은 둘은 믿을 수 있는 정도가 다르고, 그래서 버리는 것도 한쪽뿐이다.**
@@ -1550,13 +1548,13 @@ export class WorkUnitCollector {
       // 그 집합이다
       for (const u of encountered) u.encounteredExternalGitChangeIds.push(change.id)
       // A pull is still an outside change, as above; it is also incoming. The range just read is reused.
-      await this.noteIncoming(projectPath, repo, encountered, from, to, false, read, reads)
+      await this.noteIncoming(projectPath, repo, encountered, from, to, false, ancestry, read, reads)
       return true
     }
     // Astera's own operation (anything but a busy window) brought content in; a busy window leaves it to
     // the reflog (noteIncoming).
     const byAstera = explaining.some((o) => o.kind !== 'commit')
-    await this.noteIncoming(projectPath, repo, encountered, before.head, after.head, byAstera, undefined, reads)
+    await this.noteIncoming(projectPath, repo, encountered, before.head, after.head, byAstera, ancestry, undefined, reads)
     return true
   }
 
@@ -1565,11 +1563,16 @@ export class WorkUnitCollector {
    *  `git.incomingFiles`, which committedFiles takes away when the unit closes.
    *
    *  `byAstera`: Astera's own operation (a Job merge, a checkout it ran) or a Host merge record explained
-   *  the move — incoming without asking anything. Otherwise the HEAD reflog decides: incoming when there
-   *  is at least one step and **no** step is a session commit (isSessionCommitStep). A pull, a merge, a
-   *  reset, a rebase: incoming. Mixed steps (an own commit and a pull in one round) are not — counting
-   *  a pulled file too many beats taking the session's own commit away. A reflog that does not describe
-   *  the move (null) is not either: the count stays what it was before this existed.
+   *  the move — incoming without asking anything. Otherwise the move must first go **forward**
+   *  (`forward`: `before` is an ancestor of `after`, the answer gitRound already read for the transition
+   *  type; null when it was not asked, e.g. a branch switch, or git did not answer): a backward reset or
+   *  a rebase brings nothing in, and its diff would be the files of the session's own undone commit
+   *  (commit, `reset --soft HEAD~1`, commit again). Not forward or unknown: not incoming. Then the HEAD
+   *  reflog decides: incoming when there is at least one step and **no** step is a session commit
+   *  (isSessionCommitStep) — a pull, a merge, a fast-forward. Mixed steps (an own commit and a pull in
+   *  one round) are not — counting a pulled file too many beats taking the session's own commit away.
+   *  A reflog that does not describe the move (null) is not either: the count stays what it was before
+   *  this existed.
    *
    *  This is what reaches the two moves the outside-change subtraction cannot: an Astera merge is never
    *  an outside change, and an untrusted session (codex) gets no subtraction of outside changes at all,
@@ -1584,11 +1587,13 @@ export class WorkUnitCollector {
     from: string | null,
     to: string | null,
     byAstera: boolean,
+    forward: boolean | null,
     known: { changedFiles: string[] } | null | undefined,
     reads: RoundReads
   ): Promise<void> {
     if (encountered.length === 0 || !from || !to || from === to) return
     if (!byAstera) {
+      if (forward !== true) return
       const steps = await reads.get(`steps\0${repo}\0${from}\0${to}`, () =>
         this.deps.git.headSteps(projectPath, from, to)
       )
@@ -1844,7 +1849,7 @@ export class WorkUnitCollector {
    *  would be unrelated files). **null: git did not answer** (the ancestry question or the diff).
    *
    *  **Incoming files are taken away, for every session** (`git.incomingFiles`, noteIncoming): what a
-   *  Job or Host merge, a pull, or any other move that was not a commit brought in during the window.
+   *  Job or Host merge, a pull, or any other forward move that was not a commit brought in during the window.
    *  The reflog, not the busy signal, said those moves were not the session's commits, so this holds
    *  for an untrusted session too.
    *
