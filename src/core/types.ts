@@ -52,7 +52,7 @@ export type { ConvTurn } from './history/convTypes'
 // the renderer typecheck every Node global, which is the guard this note stands to protect.
 import type { CheckResult, GateKind, MessageType, Outcome, RepairReason, TaskStatus } from './orchestration/types'
 import type { CompletionDetail } from './orchestration/completion'
-import type { WorkspaceEvent, WorkspaceSummary } from './host/protocol'
+import type { McpHttpState, WorkspaceEvent, WorkspaceSummary } from './host/protocol'
 export type { CompletionDetail, CompletionCheckDetail } from './orchestration/completion'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
@@ -831,6 +831,9 @@ export interface CoreEvents {
    *  `open: false` when its desktop is gone, or the latest frame. `workspace.list` answers the live ones
    *  for a window that mounts later. */
   'workspace:event': WorkspaceEvent
+  /** The MCP HTTP entrance changed, as the Host pushed it, or the connection to that Host came or went.
+   *  `mcpHttp.status` answers the same value for a window that mounts later. */
+  'mcpHttp:state': McpHttpView
 
   /** How It Works 의 저장 파일이 바뀌었다. **실린 값은 프로젝트 키이고, 받는 쪽은 그것을 쓰지
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
@@ -903,6 +906,21 @@ export interface McpClientStatus {
   detail?: string
 }
 export type McpRegisterResult = { ok: true } | { ok: false; message: string }
+
+/** The MCP over HTTP setting in app-settings.json (MCP HTTP design §2), narrowed by core/settings/mcpHttp.ts. */
+export interface McpHttpSettings {
+  enabled: boolean
+  port: number
+  /** Bind 0.0.0.0 instead of 127.0.0.1. */
+  lan: boolean
+  /** Extra host names the entrance accepts besides localhost. */
+  hosts: string[]
+}
+
+/** The MCP HTTP entrance as the settings screen sees it (MCP HTTP design §4). `host: false` when no Host
+ *  that runs it is connected (none, or an older one without `mcp-http`); `state: null` until that Host
+ *  answered `mcp-http-status`. */
+export type McpHttpView = { host: false } | { host: true; state: McpHttpState | null }
 
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
@@ -1224,6 +1242,15 @@ export interface CoreApi {
     status(): Promise<Record<McpClient, McpClientStatus>>
     register(client: McpClient): Promise<McpRegisterResult>
   }
+  /** The MCP HTTP entrance (MCP HTTP design §4): its state, this machine's addresses for the URLs other
+   *  devices use, and the token file. `token` only reads it (null while the Host has not made it yet);
+   *  `newToken` replaces it and answers the new one. */
+  mcpHttp: {
+    status(): Promise<McpHttpView>
+    addresses(): Promise<string[]>
+    token(): Promise<string | null>
+    newToken(): Promise<string>
+  }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
     getLang(): Promise<LangPreference>
@@ -1276,6 +1303,9 @@ export interface CoreApi {
     // Whether an MCP client may act on GitHub (off by default; needs access Read and control).
     getMcpGithubWrite(): Promise<boolean>
     setMcpGithubWrite(v: boolean): Promise<void>
+    // MCP over HTTP (off by default). Saving also asks the Host to apply it (mcp-http-reload).
+    getMcpHttp(): Promise<McpHttpSettings>
+    setMcpHttp(v: McpHttpSettings): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses

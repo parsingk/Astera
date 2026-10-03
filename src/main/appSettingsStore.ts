@@ -23,6 +23,7 @@ import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
 import { mcpAccessOf } from '../core/settings/mcpAccess'
 import { mcpSessionsOf } from '../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../core/settings/mcpGithubWrite'
+import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 
 /** The three settings that gate Astera's agent skills when the file does not say otherwise — a
@@ -124,6 +125,8 @@ export class AppSettingsStore {
   /** Whether an MCP client may act on GitHub: push, open pull requests, rerun CI, make Jobs from
    *  issues (MCP P2-B design). Off by default; only true is written. */
   private mcpGithubWrite = false
+  /** MCP over HTTP (MCP HTTP design §2). Off by default; written only while a field differs from its default. */
+  private mcpHttp: McpHttpSettings = mcpHttpOf(undefined)
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
   /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
@@ -201,6 +204,8 @@ export class AppSettingsStore {
       this.mcpSessions = mcpSessionsOf((parsed as { mcpSessions?: unknown }).mcpSessions)
       // Likewise the Host's readMcpGithubWrite: only an explicit true turns it on.
       this.mcpGithubWrite = mcpGithubWriteOf((parsed as { mcpGithubWrite?: unknown }).mcpGithubWrite)
+      // The same function the Host's readMcpHttp uses, so the two cannot differ.
+      this.mcpHttp = mcpHttpOf((parsed as { mcpHttp?: unknown }).mcpHttp)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -251,6 +256,7 @@ export class AppSettingsStore {
         this.mcpAccess = 'control'
         this.mcpSessions = false
         this.mcpGithubWrite = false
+        this.mcpHttp = mcpHttpOf(undefined)
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         this.defaultSessionKind = 'terminal'
@@ -286,6 +292,7 @@ export class AppSettingsStore {
       this.mcpAccess = 'off'
       this.mcpSessions = false
       this.mcpGithubWrite = false
+      this.mcpHttp = mcpHttpOf(undefined)
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.defaultSessionKind = 'terminal'
@@ -442,6 +449,16 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getMcpHttp(): McpHttpSettings {
+    return { ...this.mcpHttp, hosts: [...this.mcpHttp.hosts] }
+  }
+
+  /** The Host reads the file on `mcp-http-reload`, which ipc.ts sends after this save. */
+  async setMcpHttp(v: McpHttpSettings): Promise<void> {
+    this.mcpHttp = { ...v, hosts: [...v.hosts] }
+    await this.persist()
+  }
+
   getGithubPolling(): boolean {
     return this.githubPolling
   }
@@ -580,6 +597,7 @@ export class AppSettingsStore {
       mcpAccess?: McpAccess
       mcpSessions?: true
       mcpGithubWrite?: true
+      mcpHttp?: McpHttpSettings
       terminalFont?: TerminalFont
       theme?: ThemeId
       defaultSessionKind?: SessionKind
@@ -617,6 +635,8 @@ export class AppSettingsStore {
     if (this.mcpAccess !== 'control') data.mcpAccess = this.mcpAccess
     if (this.mcpSessions) data.mcpSessions = true
     if (this.mcpGithubWrite) data.mcpGithubWrite = true
+    const h = this.mcpHttp
+    if (h.enabled || h.lan || h.port !== MCP_HTTP_DEFAULT_PORT || h.hosts.length > 0) data.mcpHttp = h
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)

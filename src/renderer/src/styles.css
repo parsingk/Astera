@@ -1106,6 +1106,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .mcp-register-client { flex: none; min-width: 84px; padding-top: 6px; font-size: 12px; color: var(--text-dim); }
 /* "Registered", where the Register button would be once Astera is registered with that client. */
 .mcp-register-state { flex: none; padding: 6px 2px; font-size: 12px; color: var(--text-dim); }
+/* MCP over HTTP (McpSettings): the network warning in the app's warning colour, the port field kept short. */
+.mcp-http-warning { color: var(--warn); }
+.mcp-http-port { width: 90px; min-width: 0; }
 
 /* ---------- 에이전트 탭: 재개 방식 카드 ---------- */
 /* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이

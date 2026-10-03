@@ -1,14 +1,9 @@
 // The MCP over HTTP setting from app-settings.json, read by the Host to supervise the HTTP entrance (MCP HTTP F1 design §2).
+import type { McpHttpSettings } from '../types'
 import { readAppSettingsObject } from './settingsObject'
 
-export interface McpHttpSettings {
-  enabled: boolean
-  port: number
-  /** Bind 0.0.0.0 instead of 127.0.0.1. */
-  lan: boolean
-  /** Extra host names the entrance accepts besides localhost. */
-  hosts: string[]
-}
+// The type lives in core/types.ts so the renderer can name it, as McpAccess does.
+export type { McpHttpSettings }
 
 export const MCP_HTTP_DEFAULT_PORT = 7871
 

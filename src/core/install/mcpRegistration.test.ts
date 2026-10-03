@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mcpRegistrationLines, mcpServerFor, shimPathFor } from './mcpRegistration'
+import { mcpRegistrationLines, mcpServerFor, shimPathFor, mcpHttpRegistrationLines, mcpHttpUrls } from './mcpRegistration'
 import { shuttleNames } from '../orchestration/exec/shuttle'
 
 const WIN_SPACE = 'C:\\Users\\Jane Doe\\AppData\\Local\\astera\\bin\\astera.cmd'
@@ -66,5 +66,42 @@ describe('shimPathFor', () => {
   it.each(['win32', 'darwin', 'linux'] as const)('names the file shuttle.ts writes first on %s', (platform) => {
     const p = shimPathFor({ platform, dir: platform === 'win32' ? 'C:\\b' : '/b' })
     expect(p.split(/[\\/]/).at(-1)).toBe(shuttleNames(platform)[0])
+  })
+})
+
+// The HTTP forms (MCP HTTP design §4), checked against `claude mcp add --help` 2.1.288 and
+// `codex mcp add --help` 0.160.0; Cursor's is its mcp.json `url` + `headers` entry.
+describe('mcpHttpRegistrationLines', () => {
+  it('writes each client line with the URL and the token it is given', () => {
+    expect(mcpHttpRegistrationLines({ url: 'http://127.0.0.1:7871/mcp', token: 'TOK' })).toEqual([
+      { client: 'Claude Code', line: 'claude mcp add --transport http astera http://127.0.0.1:7871/mcp --header "Authorization: Bearer TOK"' },
+      { client: 'Codex', line: 'codex mcp add astera --url http://127.0.0.1:7871/mcp --bearer-token-env-var ASTERA_MCP_TOKEN' },
+      { client: 'Cursor', line: '{"mcpServers":{"astera":{"url":"http://127.0.0.1:7871/mcp","headers":{"Authorization":"Bearer TOK"}}}}' }
+    ])
+  })
+})
+
+describe('mcpHttpUrls', () => {
+  const running = { state: 'running' as const, url: 'http://127.0.0.1:7871/mcp', lan: false, port: 7871 }
+
+  it('is nothing until the entrance runs', () => {
+    expect(mcpHttpUrls({ state: { state: 'starting', lan: true, port: 7871 }, hosts: ['a'], addresses: ['10.0.0.2'] })).toEqual([])
+    expect(mcpHttpUrls({ state: null, hosts: [], addresses: [] })).toEqual([])
+  })
+
+  it('is the local address alone while other devices are not allowed', () => {
+    expect(mcpHttpUrls({ state: running, hosts: ['box'], addresses: ['10.0.0.2'] })).toEqual(['http://127.0.0.1:7871/mcp'])
+  })
+
+  it('adds the typed host names and this machine’s addresses when they are, without repeats', () => {
+    expect(
+      mcpHttpUrls({ state: { ...running, lan: true }, hosts: ['box.ts.net', 'other:9000', 'box.ts.net'], addresses: ['10.0.0.2', 'fe80::1'] })
+    ).toEqual([
+      'http://127.0.0.1:7871/mcp',
+      'http://box.ts.net:7871/mcp',
+      'http://other:9000/mcp',
+      'http://10.0.0.2:7871/mcp',
+      'http://[fe80::1]:7871/mcp'
+    ])
   })
 })

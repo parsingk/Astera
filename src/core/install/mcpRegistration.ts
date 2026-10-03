@@ -68,3 +68,39 @@ export function mcpRegistrationLines(a: { platform: string; shimPath: string }):
     { client: 'Cursor', line: JSON.stringify({ mcpServers: { astera: server } }) }
   ]
 }
+
+/**
+ * The lines that register the MCP HTTP entrance (MCP HTTP design §4), copy only. Checked against the
+ * installed CLIs' help on 2026-10-03: `claude mcp add --help` (2.1.288) gives `--transport http <name>
+ * <url> --header "..."`; `codex mcp add --help` (0.160.0) gives `--url` and `--bearer-token-env-var`
+ * (no header flag), so its line names a variable the person sets to the token. Cursor has no CLI here;
+ * its line is the mcp.json entry with `url` and `headers`. The token is base64url, so it needs no quoting.
+ */
+export function mcpHttpRegistrationLines(a: { url: string; token: string }): McpRegistrationLine[] {
+  return [
+    { client: 'Claude Code', line: `claude mcp add --transport http astera ${a.url} --header "Authorization: Bearer ${a.token}"` },
+    { client: 'Codex', line: `codex mcp add astera --url ${a.url} --bearer-token-env-var ASTERA_MCP_TOKEN` },
+    { client: 'Cursor', line: JSON.stringify({ mcpServers: { astera: { url: a.url, headers: { Authorization: `Bearer ${a.token}` } } } }) }
+  ]
+}
+
+/** The URLs the running entrance answers at: the local one, and, while other devices are allowed, one per
+ *  typed host name (its own port kept) and per address of this machine. The Host gives only the local
+ *  form (`McpHttpState.url`); these are the names it also allows (cli/mcp/http.ts allowedHosts). */
+export function mcpHttpUrls(a: {
+  state: { state: string; url?: string; lan: boolean; port: number } | null
+  hosts: string[]
+  addresses: string[]
+}): string[] {
+  const s = a.state
+  if (s?.state !== 'running' || !s.url) return []
+  const out = [s.url]
+  if (!s.lan) return out
+  const at = (h: string): string =>
+    /^\[.*\]:\d+$/.test(h) || /^[^:]+:\d+$/.test(h) ? h : h.includes(':') && !h.startsWith('[') ? `[${h}]:${s.port}` : `${h}:${s.port}`
+  for (const h of [...a.hosts, ...a.addresses]) {
+    const url = `http://${at(h.trim())}/mcp`
+    if (h.trim() && !out.includes(url)) out.push(url)
+  }
+  return out
+}

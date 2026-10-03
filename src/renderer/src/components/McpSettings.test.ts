@@ -295,3 +295,98 @@ describe('McpSettings Register buttons', () => {
         expect(CATALOGS[lang].messages[key], `${lang} ${key}`).toBeTruthy()
   })
 })
+
+describe('MCP over HTTP', async () => {
+  const { mcpHttpLocked, mcpHttpHostsDisabled, maskToken, parsePort, parseHosts, mcpHttpStateLine, saveMcpHttp, loadMcpHttp, readMcpHttpToken, makeNewMcpHttpToken, mcpHttpShownLines } = await import('./McpSettings')
+  const DEFAULTS = { enabled: false, port: 7871, lan: false, hosts: [] as string[] }
+  const running = { state: 'running' as const, url: 'http://127.0.0.1:7871/mcp', lan: false, port: 7871 }
+  beforeEach(() => void (errors.length = 0))
+  const withApi = (api: Record<string, unknown>): void => {
+    ;(globalThis as { window?: unknown }).window = { api }
+  }
+
+  it('locks every control without a Host that runs the entrance, and the host names while other devices are off', () => {
+    expect(mcpHttpLocked({ host: false })).toBe(true)
+    expect(mcpHttpLocked({ host: true, state: null })).toBe(false)
+    expect(mcpHttpHostsDisabled({ host: false }, { ...DEFAULTS, lan: true })).toBe(true)
+    expect(mcpHttpHostsDisabled({ host: true, state: running }, DEFAULTS)).toBe(true)
+    expect(mcpHttpHostsDisabled({ host: true, state: running }, { ...DEFAULTS, lan: true })).toBe(false)
+  })
+
+  it('masks the token down to its last four characters, so a new one shows', () => {
+    expect(maskToken(null)).toBe('')
+    expect(maskToken('abcdefghijklmnop')).toBe('••••••••mnop')
+    expect(maskToken('abcdefghijklWXYZ')).not.toBe(maskToken('abcdefghijklmnop'))
+  })
+
+  it('reads a port only when it is a whole number from 1 to 65535', () => {
+    expect(parsePort('7871')).toBe(7871)
+    expect(parsePort(' 80 ')).toBe(80)
+    for (const s of ['', '0', '65536', '7.5', 'abc', '-1', '1e3']) expect(parsePort(s), s).toBeNull()
+  })
+
+  it('splits the host names on commas and spaces, without empties or repeats', () => {
+    expect(parseHosts(' box.ts.net, ,other  box.ts.net\n10.0.0.2')).toEqual(['box.ts.net', 'other', '10.0.0.2'])
+    expect(parseHosts('')).toEqual([])
+  })
+
+  it('says what the state is, and that an older Host cannot do this', () => {
+    expect(mcpHttpStateLine({ host: false })).toEqual({ key: 'settings.mcpHttp.needsHost' })
+    expect(mcpHttpStateLine({ host: true, state: null })).toBeNull()
+    expect(mcpHttpStateLine({ host: true, state: { state: 'off', lan: false, port: 7871 } })).toEqual({ key: 'settings.mcpHttp.state.off' })
+    expect(mcpHttpStateLine({ host: true, state: running })).toEqual({ key: 'settings.mcpHttp.state.running' })
+    expect(mcpHttpStateLine({ host: true, state: { state: 'failed', error: 'EADDRINUSE: busy', lan: false, port: 7871 } })).toEqual({
+      key: 'settings.mcpHttp.state.failed',
+      params: { detail: 'EADDRINUSE: busy' }
+    })
+  })
+
+  it('shows the lines with the masked token until it is revealed, and copies them with the real one', () => {
+    const shown = mcpHttpShownLines('http://127.0.0.1:7871/mcp', 'abcdefghijklmnop', false)
+    expect(shown.map((l) => l.line).join('\n')).not.toContain('abcdefghijklmnop')
+    expect(shown[0].line).toContain('Bearer ••••••••mnop')
+    expect(shown[0].copy).toContain('Bearer abcdefghijklmnop')
+    expect(mcpHttpShownLines('http://127.0.0.1:7871/mcp', 'abcdefghijklmnop', true)[0].line).toContain('Bearer abcdefghijklmnop')
+  })
+
+  it('saves the whole setting, and puts the previous one back with a toast when the save fails', async () => {
+    const setMcpHttp = vi.fn(async () => {})
+    withApi({ settings: { setMcpHttp } })
+    const set = vi.fn()
+    await saveMcpHttp({ ...DEFAULTS, enabled: true }, DEFAULTS, set, t)
+    expect(setMcpHttp).toHaveBeenCalledWith({ ...DEFAULTS, enabled: true })
+    expect(set.mock.calls).toEqual([[{ ...DEFAULTS, enabled: true }]])
+    withApi({ settings: { setMcpHttp: async () => Promise.reject(new Error('disk full')) } })
+    set.mockClear()
+    await saveMcpHttp({ ...DEFAULTS, enabled: true }, DEFAULTS, set, t)
+    expect(set.mock.calls).toEqual([[{ ...DEFAULTS, enabled: true }], [DEFAULTS]])
+    expect(errors).toEqual(['settings.mcpHttp.saveFailed {"detail":"disk full"}'])
+  })
+
+  it('reads the setting, or says it could not', async () => {
+    withApi({ settings: { getMcpHttp: async () => ({ ...DEFAULTS, port: 9000 }) } })
+    const set = vi.fn()
+    await loadMcpHttp(set, t)
+    expect(set).toHaveBeenCalledWith({ ...DEFAULTS, port: 9000 })
+    withApi({ settings: { getMcpHttp: async () => Promise.reject(new Error('ipc gone')) } })
+    await loadMcpHttp(set, t)
+    expect(errors).toEqual(['settings.mcpHttp.loadFailed {"detail":"ipc gone"}'])
+  })
+
+  it('reads the token and makes a new one through main, with a toast when either fails', async () => {
+    withApi({ mcpHttp: { token: async () => 'tok', newToken: async () => 'tok2' } })
+    expect(await readMcpHttpToken(t)).toBe('tok')
+    expect(await makeNewMcpHttpToken(t)).toBe('tok2')
+    withApi({ mcpHttp: { token: async () => Promise.reject(new Error('EPERM')), newToken: async () => Promise.reject(new Error('EPERM')) } })
+    expect(await readMcpHttpToken(t)).toBeNull()
+    expect(await makeNewMcpHttpToken(t)).toBeNull()
+    expect(errors).toEqual(['settings.mcpHttp.tokenFailed {"detail":"EPERM"}', 'settings.mcpHttp.newTokenFailed {"detail":"EPERM"}'])
+  })
+
+  it('has its strings in all four languages', async () => {
+    const { ko } = await import('../../../core/i18n/messages/ko')
+    const keys = Object.keys(ko).filter((k) => k.startsWith('settings.mcpHttp.'))
+    expect(keys.length).toBeGreaterThan(10)
+    for (const lang of LANGS) for (const k of keys) expect(CATALOGS[lang].messages[k as keyof typeof ko], `${lang}:${k}`).toBeTruthy()
+  })
+})

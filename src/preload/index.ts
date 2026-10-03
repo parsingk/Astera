@@ -53,6 +53,7 @@ const EVENT_CHANNELS = [
   'orch:host',
   'host:driver',
   'workspace:event',
+  'mcpHttp:state',
   'understanding:changed',
   'sessionTasks:changed',
   'sessionTasks:goalIgnored',
@@ -159,6 +160,12 @@ const api = {
     status: invoke('mcpClients.status'),
     register: invoke('mcpClients.register')
   },
+  mcpHttp: {
+    status: invoke('mcpHttp.status'),
+    addresses: invoke('mcpHttp.addresses'),
+    token: invoke('mcpHttp.token'),
+    newToken: invoke('mcpHttp.newToken')
+  },
   settings: {
     getLang: invoke('settings.getLang'),
     setLang: invoke('settings.setLang'),
@@ -185,6 +192,8 @@ const api = {
     setMcpSessions: invoke('settings.setMcpSessions'),
     getMcpGithubWrite: invoke('settings.getMcpGithubWrite'),
     setMcpGithubWrite: invoke('settings.setMcpGithubWrite'),
+    getMcpHttp: invoke('settings.getMcpHttp'),
+    setMcpHttp: invoke('settings.setMcpHttp'),
     getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
     setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),
