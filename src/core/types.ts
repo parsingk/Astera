@@ -1243,13 +1243,11 @@ export interface CoreApi {
     status(): Promise<Record<McpClient, McpClientStatus>>
     register(client: McpClient): Promise<McpRegisterResult>
   }
-  /** The MCP HTTP entrance (MCP HTTP design §4): its state, this machine's addresses for the URLs other
-   *  devices use, and the token file. `token` only reads it (null while the Host has not made it yet), for a
-   *  Show or a Copy; `tokenHint` is its last four characters for the masked display; `newToken` replaces it
-   *  and answers the new one's hint. */
+  /** The MCP HTTP entrance (MCP HTTP design §4): its state (with the URLs other devices use) and the token
+   *  file. `token` only reads it (null while the Host has not made it yet), for a Show or a Copy; `tokenHint`
+   *  is its last four characters for the masked display; `newToken` replaces it and answers the new one's hint. */
   mcpHttp: {
     status(): Promise<McpHttpView>
-    addresses(): Promise<string[]>
     token(): Promise<string | null>
     tokenHint(): Promise<string | null>
     newToken(): Promise<string>

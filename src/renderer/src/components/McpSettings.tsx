@@ -3,11 +3,11 @@ import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { CliInstallStatus, McpAccess, McpClient, McpClientStatus, McpHttpSettings, McpHttpView } from '../../../core/types'
 import {
   mcpHttpRegistrationLines,
-  mcpHttpUrls,
   mcpRegistrationLines,
   shimPathFor,
   type McpRegistrationLine
 } from '../../../core/install/mcpRegistration'
+import type { McpHttpUrl } from '../../../core/mcp/httpUrls'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { Select } from './Select'
@@ -226,6 +226,26 @@ export function mcpHttpStateLine(view: McpHttpView): { key: MessageKey; params?:
   return { key: `settings.mcpHttp.state.${s.state}` }
 }
 
+/** The URLs other devices can use (the Host's list from the running process), while they are allowed and it runs;
+ *  null when there is nothing to show, a child that named no addresses included. */
+export function mcpHttpOthers(view: McpHttpView): McpHttpUrl[] | null {
+  const s = view.host ? view.state : null
+  return s?.state === 'running' && s.lan && s.urls ? s.urls : null
+}
+
+/** The URLs the client lines can use: the listed ones first, then 127.0.0.1; 127.0.0.1 alone while other
+ *  devices are off; nothing until the entrance runs. */
+export function mcpHttpLineChoices(view: McpHttpView): string[] {
+  const s = view.host ? view.state : null
+  if (s?.state !== 'running' || !s.url) return []
+  return [...(mcpHttpOthers(view) ?? []).map((u) => u.url), s.url]
+}
+
+/** The URL the lines use: the one chosen while it is still offered, else the first. */
+export function mcpHttpLineUrl(choices: string[], chosen: string | null): string | undefined {
+  return chosen !== null && choices.includes(chosen) ? chosen : choices[0]
+}
+
 /** The HTTP registration lines as shown: the token masked from its hint, or the token itself while it is shown. */
 export function mcpHttpShownLines(url: string, hint: string, shownToken: string | null): McpRegistrationLine[] {
   return mcpHttpRegistrationLines({ url, token: shownToken ?? maskToken(hint) })
@@ -407,12 +427,12 @@ function McpHttpSection(): React.JSX.Element | null {
   const { t } = useI18n()
   const [http, setHttpOnly] = useState<McpHttpSettings | null>(null)
   const [view, setView] = useState<McpHttpView | null>(null)
-  const [addresses, setAddresses] = useState<string[]>([])
   const [hint, setHint] = useState<string | null>(null)
   const [shownToken, setShownToken] = useState<string | null>(null)
   const [portText, setPortText] = useState('')
   const [hostsText, setHostsText] = useState('')
-  const [urlIndex, setUrlIndex] = useState(0)
+  /** The URL picked for the client lines, kept while this screen is open (no setting). */
+  const [chosenUrl, setChosenUrl] = useState<string | null>(null)
   /** The setting and the two text fields together, so a failed save that puts the previous setting back
    *  puts its port and names back in the fields too. */
   const setHttp = (v: McpHttpSettings): void => {
@@ -426,7 +446,6 @@ function McpHttpSection(): React.JSX.Element | null {
     void loadMcpHttp(setHttp, t)
     const off = window.api.on('mcpHttp:state', setView)
     void window.api.mcpHttp.status().then(setView, () => setView({ host: false, reason: 'none' }))
-    void window.api.mcpHttp.addresses().then(setAddresses, () => setAddresses([]))
     return off
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, as the settings above
   }, [])
@@ -445,9 +464,10 @@ function McpHttpSection(): React.JSX.Element | null {
   const locked = view === null || mcpHttpLocked(shown)
   const stateLine = view === null ? null : mcpHttpStateLine(shown)
   const save = (next: McpHttpSettings): void => void saveMcpHttp(next, http, setHttp, t)
-  const urls = mcpHttpUrls({ state: shown.host ? shown.state : null, hosts: http.hosts, addresses })
-  const urlAt = Math.min(urlIndex, urls.length - 1)
-  const url = urls[urlAt]
+  const local = shown.host && shown.state?.state === 'running' ? shown.state.url : undefined
+  const others = mcpHttpOthers(shown)
+  const choices = mcpHttpLineChoices(shown)
+  const url = mcpHttpLineUrl(choices, chosenUrl)
 
   const commitPort = (): void => {
     const port = parsePort(portText)
@@ -505,21 +525,26 @@ function McpHttpSection(): React.JSX.Element | null {
         />
       </label>
       <span className="settings-hint">{t('settings.mcpHttp.hostsHint')}</span>
-      {url !== undefined && (
+      {local !== undefined && (
         <div className="cli-path-hint">
           <span className="mcp-register-client">{t('settings.mcpHttp.url')}</span>
-          {urls.length > 1 ? (
-            <Select
-              items={urls.map((u, i) => ({ value: String(i), label: u }))}
-              value={String(urlAt)}
-              onChange={(v) => setUrlIndex(Number(v))}
-              ariaLabel={t('settings.mcpHttp.url')}
-            />
-          ) : (
-            <code className="mcp-http-url">{url}</code>
-          )}
-          <button onClick={() => void copyLine(url, t)}>{t('settings.cli.copy')}</button>
+          <code className="mcp-http-url">{local}</code>
+          <button onClick={() => void copyLine(local, t)}>{t('settings.cli.copy')}</button>
         </div>
+      )}
+      {others !== null && (
+        <>
+          <span className="settings-hint">{t('settings.mcpHttp.others')}</span>
+          {others.length === 0 && <span className="settings-hint mcp-http-others-none">{t('settings.mcpHttp.othersNone')}</span>}
+          {others.map((u) => (
+            <div key={u.url} className="cli-path-hint mcp-http-other">
+              <span className="mcp-register-client">{t(`settings.mcpHttp.kind.${u.kind}`)}</span>
+              <code>{u.url}</code>
+              <button onClick={() => void copyLine(u.url, t)}>{t('settings.cli.copy')}</button>
+            </div>
+          ))}
+          <span className="settings-hint">{t('settings.mcpHttp.othersHint')}</span>
+        </>
       )}
       {!locked && (
         <div className="cli-path-hint">
@@ -560,6 +585,17 @@ function McpHttpSection(): React.JSX.Element | null {
       {url !== undefined && hint && (
         <>
           <span className="settings-hint">{t('settings.mcpHttp.lines')}</span>
+          {choices.length > 1 && (
+            <div className="cli-path-hint">
+              <span className="mcp-register-client">{t('settings.mcpHttp.lineAddress')}</span>
+              <Select
+                items={choices.map((u) => ({ value: u, label: u }))}
+                value={url}
+                onChange={setChosenUrl}
+                ariaLabel={t('settings.mcpHttp.lineAddress')}
+              />
+            </div>
+          )}
           {mcpHttpShownLines(url, hint, shownToken).map(({ client, line }) => (
             <div key={client} className="cli-path-hint mcp-http-line">
               <span className="mcp-register-client">{client}</span>
