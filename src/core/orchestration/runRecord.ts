@@ -6,6 +6,8 @@
 // writes it once.
 import { outcomeOf } from './view'
 import { jobOf, type OrchState } from './state'
+import { runRootOf } from './integrate'
+import { isSamePath } from '../files/tree'
 import type { RunRecordInput } from '../understanding/pipeline'
 
 export function justFinished(
@@ -35,6 +37,8 @@ export function runRecordInputOf(state: OrchState, runId: string): (RunRecordInp
   const job = jobOf(state, run)
   if (!job) return null
   const tasks = state.tasks.filter((t) => t.runId === runId)
+  // The Run's own worktree, where its changes are until someone merges them (RunRecordInput.workDir).
+  const root = runRootOf(run, job)
   return {
     projectPath: job.cwd,
     runId,
@@ -44,6 +48,7 @@ export function runRecordInputOf(state: OrchState, runId: string): (RunRecordInp
     taskIds: tasks.map((t) => t.id),
     tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
     changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
-    validation: { status: outcomeOf(state, runId) === 'completed' ? 'passed' : 'failed' }
+    validation: { status: outcomeOf(state, runId) === 'completed' ? 'passed' : 'failed' },
+    ...(root !== '' && !isSamePath(root, job.cwd) ? { workDir: root } : {})
   }
 }

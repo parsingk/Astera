@@ -66,6 +66,9 @@ export interface RunRecordInput {
    *  need the git snapshot comparison a session's unit relies on. */
   changedFiles: string[]
   validation?: { status: 'passed' | 'failed' | 'unknown'; summary?: string }
+  /** The folder the work happened in, when it is not the project root — the Run's own worktree, whose
+   *  changes are not in the project folder until someone merges them. Stored on the record (WorkRecord.workDir). */
+  workDir?: string
 }
 
 export class UnderstandingPipeline {
@@ -171,6 +174,7 @@ export class UnderstandingPipeline {
             }
           : undefined,
         jobTasks: input.tasks,
+        ...(input.workDir !== undefined ? { workDir: input.workDir } : {}),
         status: 'generating'
       }
       await this.prepend(projectRoot, record)
@@ -218,9 +222,11 @@ export class UnderstandingPipeline {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: ready.reason }))
       return
     }
+    // Where the work is: the agent runs there and its evidence is checked there (baseOf).
+    const base = await baseOf(projectRoot, cur)
     const run = await (this.deps.runAgent ?? runAgent)({
       ...ready.ctx,
-      cwd: projectRoot,
+      cwd: base,
       prompt: buildRecordPrompt({
         request: cur.request,
         changedFiles: cur.changedFiles,
@@ -234,7 +240,7 @@ export class UnderstandingPipeline {
         // measurement. Job records carry none of this; their outcome is the validation above.
         checks: cur.source.kind === 'session' ? cur.verification?.checks : undefined,
         resultSummary: cur.source.kind === 'session' ? cur.verification?.summary : undefined,
-        projectRoot,
+        projectRoot: base,
         lang: this.deps.lang()
       }),
       log: this.deps.log
@@ -243,7 +249,7 @@ export class UnderstandingPipeline {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: run.reason }))
       return
     }
-    const v = await this.validate(projectRoot, run.value)
+    const v = await this.validate(base, run.value)
     if (!v.ok) {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: v.reason }))
       return
@@ -332,7 +338,7 @@ export class UnderstandingPipeline {
   private async commitsOf(projectRoot: string, r: WorkRecord): Promise<string[]> {
     if (!this.deps.readCommits) return []
     try {
-      return await this.deps.readCommits(projectRoot, r.git.startHead, r.git.endHead)
+      return await this.deps.readCommits(await baseOf(projectRoot, r), r.git.startHead, r.git.endHead)
     } catch {
       return [] // failing to read commits is not a reason to fail the record
     }
@@ -362,6 +368,19 @@ export class UnderstandingPipeline {
       records: cur.records.map((r) => (r.id === recordId ? f(r) : r))
     })
   }
+}
+
+/** The folder a record's write-up reads: its `workDir` (a Run's own worktree) while that folder still
+ *  exists, otherwise the project root, as for every record before that field. Once the worktree is
+ *  merged and removed, its changes are in the project root, so a regenerate then reads there. */
+async function baseOf(projectRoot: string, r: Pick<WorkRecord, 'workDir'>): Promise<string> {
+  if (r.workDir === undefined) return projectRoot
+  try {
+    if ((await fs.stat(r.workDir)).isDirectory()) return r.workDir
+  } catch {
+    // gone: fall back below
+  }
+  return projectRoot
 }
 
 /** 저장소 **안의** 경로인가 — fs 없이, 경로만으로.

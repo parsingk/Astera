@@ -113,6 +113,10 @@ export interface WorkRecord {
   verification?: { status: Verification; checks?: SessionCheck[]; summary?: string }
   /** Job only: the tasks this run carried, for the agent's material */
   jobTasks?: { title: string; outcome: string }[]
+  /** The folder the work happened in, when it is not the project root: a Run's own worktree. The
+   *  write-up reads there while the folder exists (pipeline.ts's baseOf); the record itself stays keyed
+   *  by the project root. Absent on records written before this field and on every session record. */
+  workDir?: string
   status: RecordStatus
   /** Why it needs review, or why the write-up failed. Shown on the row. */
   reason?: string

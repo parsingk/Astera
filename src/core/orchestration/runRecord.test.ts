@@ -96,6 +96,21 @@ describe('runRecordInputOf', () => {
     expect(runRecordInputOf(failed, runId)?.validation).toEqual({ status: 'failed' })
   })
 
+  it('a Run with its own worktree gives that folder as workDir', () => {
+    const { s, runId } = finished()
+    const withWt = { ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p/.wt/r1' } : r)) } as OrchState
+    const input = runRecordInputOf(withWt, runId)!
+    expect(input.workDir).toBe('D:/p/.wt/r1')
+    expect(input.projectPath).toBe('D:/p')
+  })
+
+  it('a Run without a worktree, or one whose worktree is the project folder, has no workDir', () => {
+    const { s, runId } = finished()
+    expect(runRecordInputOf(s, runId)).not.toHaveProperty('workDir')
+    const same = { ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p' } : r)) } as OrchState
+    expect(runRecordInputOf(same, runId)).not.toHaveProperty('workDir')
+  })
+
   it('no Run, or a Run with no Job, builds nothing', () => {
     const { s, runId } = finished()
     expect(runRecordInputOf(s, 'nope')).toBeNull()
