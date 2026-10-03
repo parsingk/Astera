@@ -106,3 +106,49 @@ export async function readRangeFiles(
   if (!diff.ok) return null
   return diff.stdout.split('\0').filter((t) => t !== '')
 }
+
+/** How far back `readHeadSteps` walks the HEAD reflog. One gitRound covers what happened since the
+ *  last round (a few hundred ms of git activity, usually one step), so 50 steps is far beyond a real
+ *  round; past it the answer is "unknown", never a guess. */
+const HEAD_STEPS_CAP = 50
+
+/** The HEAD reflog subjects (`%gs`, e.g. `commit: fix x`, `pull: Fast-forward`, `merge o: Merge made by
+ *  the 'ort' strategy.`) of the steps that moved HEAD from `before` to `after`, newest first. For the
+ *  work-unit collector's question "did this move bring content in, or was it the session's own commit"
+ *  (collector.ts's noteIncoming).
+ *
+ *  One `git log -g` over HEAD. Each record is `<hash> <subject>`, NUL-terminated (`-z`): the hash is
+ *  the entry's new position and never contains a space, so the first space splits the two whatever the
+ *  subject holds. An entry's old position is the next (older) entry's hash, so the walk takes subjects
+ *  until the next entry is `before`. The HEAD reflog is per worktree (a linked worktree keeps its own
+ *  under its gitdir), and `git log -g HEAD` run in that worktree reads that one.
+ *
+ *  **null when the reflog does not describe this move**: the newest entry is not `after` (HEAD moved on
+ *  again, or the reflog is off), `before` is not within the cap, or git did not answer. Never throws. */
+export async function readHeadSteps(
+  repoPath: string,
+  before: string,
+  after: string,
+  run: GitRun = git
+): Promise<string[] | null> {
+  const r = await run(['log', '-g', '-z', '--format=%H %gs', '-n', String(HEAD_STEPS_CAP + 1), 'HEAD'], {
+    cwd: repoPath,
+    timeoutMs: WATCH_ROUND_TIMEOUT_MS,
+    trim: false
+  })
+  if (!r.ok) return null
+  const entries = r.stdout
+    .split('\0')
+    .filter((t) => t !== '')
+    .map((t) => {
+      const space = t.indexOf(' ')
+      return space < 0 ? { hash: t, subject: '' } : { hash: t.slice(0, space), subject: t.slice(space + 1) }
+    })
+  if (entries[0]?.hash !== after) return null
+  const steps: string[] = []
+  for (let i = 0; i + 1 < entries.length; i++) {
+    steps.push(entries[i].subject)
+    if (entries[i + 1].hash === before) return steps
+  }
+  return null
+}
