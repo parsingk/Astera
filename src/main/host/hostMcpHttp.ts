@@ -16,15 +16,29 @@ export interface HostMcpHttpView {
 }
 
 const STATES = new Set(['off', 'starting', 'running', 'failed'])
+const URL_KINDS = new Set(['lan', 'tailscale', 'name'])
+
+/** The readable entries of a state's `urls`, or undefined when it carries no list. */
+function urlsOf(v: unknown): McpHttpState['urls'] {
+  if (!Array.isArray(v)) return undefined
+  return v.flatMap((u: unknown) => {
+    const o = typeof u === 'object' && u !== null ? (u as Record<string, unknown>) : {}
+    return typeof o.url === 'string' && typeof o.kind === 'string' && URL_KINDS.has(o.kind)
+      ? [{ url: o.url, kind: o.kind as NonNullable<McpHttpState['urls']>[number]['kind'] }]
+      : []
+  })
+}
 
 /** The state a push or an answer carries, with only the fields it may have, or null. */
 function stateOf(v: unknown): McpHttpState | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
   const o = v as Record<string, unknown>
   if (typeof o.state !== 'string' || !STATES.has(o.state) || typeof o.lan !== 'boolean' || typeof o.port !== 'number') return null
+  const urls = urlsOf(o.urls)
   return {
     state: o.state as McpHttpState['state'],
     ...(typeof o.url === 'string' ? { url: o.url } : {}),
+    ...(urls ? { urls } : {}),
     ...(typeof o.error === 'string' ? { error: o.error } : {}),
     lan: o.lan,
     port: o.port

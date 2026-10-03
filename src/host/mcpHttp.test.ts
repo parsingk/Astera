@@ -36,8 +36,8 @@ class FakeChild extends EventEmitter implements McpHttpChild {
     this.exit(null)
     return true
   }
-  ready(port: number): void {
-    this.stdout.write(`${JSON.stringify({ ready: true, port })}\n`)
+  ready(port: number, addresses?: string[]): void {
+    this.stdout.write(`${JSON.stringify({ ready: true, port, ...(addresses ? { addresses } : {}) })}\n`)
   }
   fail(code: string, message: string, exitCode = 1): void {
     this.stdout.write(`${JSON.stringify({ error: code, message })}\n`)
@@ -193,6 +193,64 @@ describe('the MCP HTTP supervisor', () => {
     await r.sup.reload()
     expect(r.children).toHaveLength(1)
     expect(r.pushes).toHaveLength(2)
+  })
+
+  it('lists the URLs other devices can use from the ready line while they are allowed, with the typed names', async () => {
+    const r = rig({ settings: on({ lan: true, hosts: ['box.ts.net'] }) })
+    await r.sup.reload()
+    r.last().ready(7871, ['127.0.0.1', 'localhost', 'box.ts.net', '100.90.1.2', '192.168.1.5', 'fe80::2'])
+    await settle()
+    expect(r.sup.status()).toEqual({
+      state: 'running',
+      url: 'http://127.0.0.1:7871/mcp',
+      urls: [
+        { url: 'http://192.168.1.5:7871/mcp', kind: 'lan' },
+        { url: 'http://100.90.1.2:7871/mcp', kind: 'tailscale' },
+        { url: 'http://box.ts.net:7871/mcp', kind: 'name' }
+      ],
+      lan: true,
+      port: 7871
+    })
+  })
+
+  it('lists no URLs while other devices are not allowed, even when the ready line names addresses', async () => {
+    const r = rig({ settings: on({ lan: false, hosts: ['box'] }) })
+    await r.sup.reload()
+    r.last().ready(7871, ['127.0.0.1', 'localhost', '192.168.1.5'])
+    await settle()
+    expect(r.sup.status()).toEqual({ state: 'running', url: 'http://127.0.0.1:7871/mcp', lan: false, port: 7871 })
+  })
+
+  it('lists no URLs from an older child whose ready line names no addresses, nor from a malformed list', async () => {
+    const r = rig({ settings: on({ lan: true }) })
+    await r.sup.reload()
+    r.last().ready(7871)
+    await settle()
+    expect(r.sup.status()).toEqual({ state: 'running', url: 'http://127.0.0.1:7871/mcp', lan: true, port: 7871 })
+    const bad = rig({ settings: on({ lan: true }) })
+    await bad.sup.reload()
+    bad.last().stdout.write(`${JSON.stringify({ ready: true, port: 7871, addresses: ['192.168.1.5', 7] })}\n`)
+    await settle()
+    expect(bad.sup.status()).toEqual({ state: 'running', url: 'http://127.0.0.1:7871/mcp', lan: true, port: 7871 })
+  })
+
+  it('pushes again when only the URLs changed, and not for the same URLs', async () => {
+    const r = rig({ settings: on({ lan: true }) })
+    await r.sup.reload()
+    r.last().ready(7871, ['192.168.1.5'])
+    await settle()
+    expect(r.pushes).toHaveLength(2)
+    // The same child's line again (not something a child does, but the compare is what is under test).
+    r.last().ready(7871, ['192.168.1.5'])
+    await settle()
+    expect(r.pushes).toHaveLength(2)
+    r.last().ready(7871, ['192.168.1.5', '10.0.0.2'])
+    await settle()
+    expect(r.pushes).toHaveLength(3)
+    expect(r.pushes[2].urls).toEqual([
+      { url: 'http://192.168.1.5:7871/mcp', kind: 'lan' },
+      { url: 'http://10.0.0.2:7871/mcp', kind: 'lan' }
+    ])
   })
 
   it('writes the child output to its own log, not the Host log', async () => {

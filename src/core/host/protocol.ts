@@ -7,6 +7,7 @@
 import type { OrchState } from '../orchestration/state'
 import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
 import type { SlackForwardedEvent } from '../slack/forwarded'
+import type { McpHttpUrl } from '../mcp/httpUrls'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
  *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
@@ -173,6 +174,9 @@ export const HOST_FEATURE_MCP_HTTP = 'mcp-http'
 export interface McpHttpState {
   state: 'off' | 'starting' | 'running' | 'failed'
   url?: string
+  /** While other devices are allowed and it runs: the URLs they can use, from the hosts the running process
+   *  answers to (core/mcp/httpUrls.ts). Absent otherwise, and from a process that did not say. */
+  urls?: McpHttpUrl[]
   error?: string
   lan: boolean
   port: number

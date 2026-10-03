@@ -5691,13 +5691,6 @@ export function registerIpc(
     await hostMcpHttpView?.reload()
   })
   ipcMain.handle('mcpHttp.status', () => hostMcpHttpView?.current() ?? { host: false, reason: 'none' })
-  // This machine's IPv4 addresses, for the URLs other devices use while network access is on.
-  ipcMain.handle('mcpHttp.addresses', () =>
-    Object.values(os.networkInterfaces())
-      .flatMap((list) => list ?? [])
-      .filter((n) => n.family === 'IPv4' && !n.internal)
-      .map((n) => n.address)
-  )
   // Ruling 3: only the Host creates the token (ensureToken before it starts the entrance); the app reads
   // the file, and writes it only on "New token". No reload follows a new token: the HTTP process re-reads
   // the file whenever its stamp changes, at the next request, so the old token stops working there.

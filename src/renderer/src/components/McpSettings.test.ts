@@ -312,7 +312,10 @@ describe('MCP over HTTP', async () => {
     makeNewMcpHttpToken,
     mcpHttpShownLines,
     copyMcpHttpLine,
-    copyMcpHttpToken
+    copyMcpHttpToken,
+    mcpHttpOthers,
+    mcpHttpLineChoices,
+    mcpHttpLineUrl
   } = await import('./McpSettings')
   const DEFAULTS = { enabled: false, port: 7871, lan: false, hosts: [] as string[] }
   const running = { state: 'running' as const, url: 'http://127.0.0.1:7871/mcp', lan: false, port: 7871 }
@@ -376,6 +379,41 @@ describe('MCP over HTTP', async () => {
     expect(masked[0].line).toContain('Bearer ••••••••mnop')
     expect(masked.map((l) => l.line).join('\n')).not.toContain(TOKEN)
     expect(mcpHttpShownLines(URL, 'mnop', TOKEN)[0].line).toContain(`Bearer ${TOKEN}`)
+  })
+
+  const lanUrls = [
+    { url: 'http://192.168.1.5:7871/mcp', kind: 'lan' as const },
+    { url: 'http://100.90.1.2:7871/mcp', kind: 'tailscale' as const }
+  ]
+  const lanOn = { host: true as const, state: { ...running, lan: true, urls: lanUrls } }
+
+  it('lists the addresses other devices can use only while they are allowed and the entrance runs', () => {
+    expect(mcpHttpOthers(lanOn)).toEqual(lanUrls)
+    expect(mcpHttpOthers({ host: true, state: { ...running, lan: true, urls: [] } })).toEqual([])
+    expect(mcpHttpOthers({ host: true, state: running })).toBeNull()
+    expect(mcpHttpOthers({ host: true, state: { state: 'starting', lan: true, port: 7871 } })).toBeNull()
+    expect(mcpHttpOthers({ host: false, reason: 'none' })).toBeNull()
+    // A child that named no addresses: nothing is known, which is not the same as none found.
+    expect(mcpHttpOthers({ host: true, state: { ...running, lan: true } })).toBeNull()
+  })
+
+  it('offers the listed URLs first and 127.0.0.1 last for the client lines, and 127.0.0.1 alone while other devices are off', () => {
+    expect(mcpHttpLineChoices(lanOn)).toEqual([...lanUrls.map((u) => u.url), URL])
+    expect(mcpHttpLineChoices({ host: true, state: { ...running, lan: true, urls: [] } })).toEqual([URL])
+    expect(mcpHttpLineChoices({ host: true, state: { ...running, urls: lanUrls } })).toEqual([URL])
+    expect(mcpHttpLineChoices({ host: true, state: { state: 'off', lan: true, port: 7871 } })).toEqual([])
+  })
+
+  it('the lines use the chosen URL, the first listed one by default, and the default again once the choice is gone', () => {
+    const choices = mcpHttpLineChoices(lanOn)
+    expect(mcpHttpLineUrl(choices, null)).toBe('http://192.168.1.5:7871/mcp')
+    expect(mcpHttpLineUrl(choices, URL)).toBe(URL)
+    expect(mcpHttpLineUrl(choices, 'http://100.90.1.2:7871/mcp')).toBe('http://100.90.1.2:7871/mcp')
+    expect(mcpHttpLineUrl(choices, 'http://10.9.9.9:7871/mcp')).toBe('http://192.168.1.5:7871/mcp')
+    expect(mcpHttpLineUrl(mcpHttpLineChoices({ host: true, state: running }), 'http://192.168.1.5:7871/mcp')).toBe(URL)
+    expect(mcpHttpLineUrl([], null)).toBeUndefined()
+    const chosen = mcpHttpLineUrl(choices, 'http://100.90.1.2:7871/mcp')!
+    expect(mcpHttpShownLines(chosen, 'mnop', null).map((l) => l.line).join(' ')).not.toContain('127.0.0.1')
   })
 
   it('a line is copied with the token read for that copy alone', async () => {

@@ -6,7 +6,8 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { allowedHosts, parseMcpHttpArgs, serveMcpHttp } from './http'
+import { allowedHosts, hostsWithoutPort, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
+import { reachableUrls } from '../../core/mcp/httpUrls'
 import type { HostLink } from './hostLink'
 
 const TOKEN = 'tok-' + 'A'.repeat(40)
@@ -26,7 +27,9 @@ afterEach(async () => {
   dir = ''
 })
 
-async function start(extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean } = {}) {
+async function start(
+  extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean } = {}
+) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-http-'))
   const tokenFile = path.join(dir, 'mcp-http-token')
   await fs.writeFile(tokenFile, `${TOKEN}\n`)
@@ -300,6 +303,17 @@ describe('serveMcpHttp', () => {
     expect(s.logs.some((l) => l.includes('link close failed'))).toBe(true)
   })
 
+  it('says in its ready line, on one line, the hosts it answers to: only loopback when bound to 127.0.0.1', async () => {
+    const s = await start({ hosts: ['box'] })
+    const line = JSON.stringify(readyLineOf(served!))
+    expect(line).not.toContain(String.fromCharCode(10))
+    const ready = JSON.parse(line) as { ready: boolean; port: number; addresses: string[] }
+    expect(ready.ready).toBe(true)
+    expect(ready.port).toBe(s.port)
+    expect(ready.addresses.sort()).toEqual(['127.0.0.1', 'box', 'localhost'])
+    expect(reachableUrls(ready.addresses, ready.port, [])).toEqual([])
+  })
+
   it('rejects with EADDRINUSE when the port is taken', async () => {
     const s = await start()
     const second = serveMcpHttp({
@@ -325,6 +339,14 @@ describe('allowedHosts', () => {
       ['127.0.0.1:7871', 'localhost:7871', 'box.tail.net:7871', 'box:9000', '[fe80::1]:7871', '192.168.1.5:7871', '[fe80::2]:7871', '[::1]:7871'].sort()
     )
     expect([...allowedHosts(7871, '127.0.0.1', [], interfaces)].sort()).toEqual(['127.0.0.1:7871', 'localhost:7871'])
+  })
+})
+
+describe('hostsWithoutPort', () => {
+  it('gives the allowed hosts of an every-interface bind without this port, a typed port kept and IPv6 unbracketed', () => {
+    const interfaces = { eth0: [{ address: '192.168.1.5' }, { address: 'fe80::2%eth0' }], ts: [{ address: '100.90.1.2' }] }
+    const allowed = allowedHosts(7871, '0.0.0.0', ['Box.Ts.Net', 'proxy:9000', 'box:7871'], interfaces)
+    expect(hostsWithoutPort(allowed, 7871).sort()).toEqual(['100.90.1.2', '127.0.0.1', '192.168.1.5', 'box', 'box.ts.net', 'fe80::2', 'localhost', 'proxy:9000'].sort())
   })
 })
 

@@ -1,7 +1,7 @@
 // The Host starts, watches and stops the MCP HTTP entrance (MCP HTTP F1 design §3): `astera mcp http`, a
 // child process of this Host, run through this build's CLI the way a worker's shuttle runs it.
 //
-// The child's whole protocol is one JSON line on stdout (`{"ready":true,"port":n}` once listening, or
+// The child's whole protocol is one JSON line on stdout (`{"ready":true,"port":n,"addresses":[...]}` once listening, or
 // `{"error":code,"message":text}` before a failing exit) and its stdin: it leaves when its stdin ends, so a
 // stop ends stdin first and kills only after a grace. A Host that dies ends that pipe too, so the
 // entrance never outlives it. Its output goes to its own log beside host.log, never into host.log.
@@ -10,6 +10,7 @@ import path from 'node:path'
 import type { McpHttpState } from '../core/host/protocol'
 import { hostWorkerBaseEnv, type HostCliPaths } from '../core/host/spawn'
 import { ensureToken, tokenPath } from '../core/mcp/httpToken'
+import { reachableUrls } from '../core/mcp/httpUrls'
 import { MCP_HTTP_DEFAULT_PORT, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { openHostLog } from './log'
 
@@ -106,7 +107,15 @@ export function createMcpHttpSupervisor(d: {
   let queue: Promise<void> = Promise.resolve()
 
   const set = (next: McpHttpState): void => {
-    if (next.state === state.state && next.url === state.url && next.error === state.error && next.lan === state.lan && next.port === state.port) return
+    if (
+      next.state === state.state &&
+      next.url === state.url &&
+      JSON.stringify(next.urls) === JSON.stringify(state.urls) &&
+      next.error === state.error &&
+      next.lan === state.lan &&
+      next.port === state.port
+    )
+      return
     state = next
     try {
       d.push(next)
@@ -123,8 +132,9 @@ export function createMcpHttpSupervisor(d: {
   }
 
   /** Hosts are passed only with other devices allowed: they widen who may call, which is the LAN's question. */
+  const hostsFor = (s: McpHttpSettings): string[] => (s.lan ? s.hosts.map((h) => h.trim()).filter((h) => h !== '' && !h.includes(',')) : [])
   const argsFor = (s: McpHttpSettings): string[] => {
-    const hosts = s.lan ? s.hosts.map((h) => h.trim()).filter((h) => h !== '' && !h.includes(',')) : []
+    const hosts = hostsFor(s)
     return [
       ...['mcp', 'http', '--port', String(s.port), '--bind', s.lan ? '0.0.0.0' : '127.0.0.1', '--token-file', tokenPath(d.profileDir)],
       ...(hosts.length > 0 ? ['--hosts', hosts.join(',')] : [])
@@ -188,7 +198,10 @@ export function createMcpHttpSupervisor(d: {
         if (r.ended || r.stopping) return
         r.readyAt = now()
         d.log(`mcp http: listening on port ${o.port} (pid ${proc.pid ?? '?'})`)
-        set({ state: 'running', url: `http://127.0.0.1:${o.port}/mcp`, lan: s.lan, port: s.port })
+        // The URLs other devices can use, only while they are allowed and only from a child that named its hosts.
+        const addresses = Array.isArray(o.addresses) && o.addresses.every((x) => typeof x === 'string') ? (o.addresses as string[]) : null
+        const urls = s.lan && addresses ? reachableUrls(addresses, o.port, hostsFor(s)) : null
+        set({ state: 'running', url: `http://127.0.0.1:${o.port}/mcp`, ...(urls ? { urls } : {}), lan: s.lan, port: s.port })
       } else if (typeof o.error === 'string') {
         errorLine = { code: o.error, message: typeof o.message === 'string' ? o.message : '' }
       }
