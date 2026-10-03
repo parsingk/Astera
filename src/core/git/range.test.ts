@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { makeRepo, tempDir, gitSync } from '../worktrees/testRepo'
-import { readRange } from './range'
+import { readRange, readRangeFiles } from './range'
 
 
 const run = (repo: string, args: string[]): void => {
@@ -112,5 +112,21 @@ describe('readRange', () => {
     expect(range.authors).toEqual(['Alice A', 'Bob  B'])
     // 이 구간을 연 커밋의 author('Test User', makeRepo 가 심었다)는 before 자신이라 범위 밖이다
     expect(range.authors).not.toContain('Test User')
+  })
+})
+
+describe('readRangeFiles', () => {
+  it('gives the files of the range, unquoted, and null when git cannot answer', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+    await fs.mkdir(path.join(repo, 'has space'), { recursive: true })
+    await fs.writeFile(path.join(repo, 'has space', '한글.txt'), 'z', 'utf8')
+    run(repo, ['add', '-A'])
+    run(repo, ['commit', '-m', 'second'])
+    const after = headHash(repo)
+
+    await expect(readRangeFiles(repo, before, after)).resolves.toEqual(['has space/한글.txt'])
+    await expect(readRangeFiles(repo, after, after)).resolves.toEqual([])
+    await expect(readRangeFiles(repo, MISSING_HASH, after)).resolves.toBeNull()
   })
 })

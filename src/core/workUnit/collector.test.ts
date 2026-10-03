@@ -28,7 +28,7 @@ import type { HostMergeRecord } from '../git/hostMerges'
 import type { SessionWorkUnit } from './types'
 import { foldsCaseHere } from '../testPaths'
 import { readGitRef, isAncestorOf, readChangedFiles, probeGit } from './gitProbe'
-import { readRange, type GitRun } from '../git/range'
+import { readRange, readRangeFiles, type GitRun } from '../git/range'
 import { git } from '../worktrees/git'
 import { makeRepo, gitSync } from '../worktrees/testRepo'
 
@@ -95,7 +95,8 @@ function makeFake(): Fake {
       readRef: async () => fake.git.ref,
       isAncestor: async () => fake.git.ancestor,
       changedFiles: async () => fake.git.files,
-      readRange: async () => fake.git.range
+      readRange: async () => fake.git.range,
+      rangeFiles: async () => fake.git.range?.changedFiles ?? null
     },
     sessions: [],
     clock: Date.parse('2026-08-30T09:00:00.000Z')
@@ -369,7 +370,13 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
   it('in a project that is not a git repository, a completed task with write evidence is dropped and starts no write-up', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
-    const real: CollectorGit = { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange }
+    const real: CollectorGit = {
+      readRef: readGitRef,
+      isAncestor: isAncestorOf,
+      changedFiles: readChangedFiles,
+      readRange,
+      rangeFiles: readRangeFiles
+    }
     const { collector, store, closed } = await makeCollector(fake, storeFile, undefined, { git: real })
     await collector.start()
 
@@ -2948,5 +2955,119 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
 
     await collector.completeTask('s1', { source: 'agent' })
     expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+  })
+
+  it('a branch switched inside the window does not count the unrelated diff', async () => {
+    const { repo, collector, store, closed } = await setup()
+    gitSync(repo, ['branch', 'other'])
+    gitSync(repo, ['checkout', '-q', 'other'])
+    await commitFile(repo, 'x.txt')
+    gitSync(repo, ['checkout', '-q', 'main'])
+    await commitFile(repo, 'm.txt')
+    await collector.startTask('s1', 'look around')
+    await wroteNow(collector)
+    gitSync(repo, ['checkout', '-q', 'other'])
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units).toHaveLength(0)
+    expect(closed).toHaveLength(0)
+  })
+
+  it('an ancestry question git does not answer leaves observationUnknown and keeps the unit', async () => {
+    let broken = false
+    const run: GitRun = (args, opts) =>
+      broken && args.includes('merge-base')
+        ? Promise.resolve({ ok: false, stdout: '', stderr: 'timed out', timedOut: true as const })
+        : git(args, opts)
+    const { repo, collector, store, closed } = await setup(run)
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    broken = true
+
+    await collector.completeTask('s1', { source: 'agent' })
+    const u = store.get(repo)!.units[0]
+    expect(u.git.observationUnknown).toBe(true)
+    expect(u.git.observedChangedFiles).toEqual([])
+    expect(closed).toHaveLength(1)
+  })
+
+  it('reads the committed files with one git diff, not the four spawns of readRange', async () => {
+    const calls: string[][] = []
+    const run: GitRun = (args, opts) => {
+      calls.push(args)
+      return git(args, opts)
+    }
+    const { repo, collector } = await setup(run)
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    calls.length = 0
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(calls.filter((a) => a.includes('diff'))).toHaveLength(1)
+    expect(calls.filter((a) => a.includes('log'))).toHaveLength(0)
+  })
+
+  // A pull recorded as an outside change inside the window is not the session's edit. The session's
+  // own commit is made while it is busy, so it is an Astera operation and never an outside change.
+  async function pullInsideWindow(trusted: boolean) {
+    const made = await setupWithFake()
+    const { repo, collector, fake } = made
+    fake.sessions = [session({ projectPath: repo, idleSignalTrusted: trusted })]
+    collector.onGitChanged() // baseline snapshot
+    await collector.flush()
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    collector.onSessionBusy('s1', repo, trusted)
+    await commitFile(repo, 'c.txt')
+    collector.onGitChanged()
+    await collector.flush()
+    await collector.onSessionIdle('s1')
+    fake.clock += OPERATION_GRACE_MS + 1_000
+    await commitFile(repo, 'p.txt') // someone else's commit, pulled in
+    collector.onGitChanged()
+    await collector.flush()
+    return made
+  }
+
+  it('subtracts the files of an outside change the unit went through (a pull)', async () => {
+    const { repo, collector, store } = await pullInsideWindow(true)
+    expect(store.get(repo)!.externalGitChanges.map((c) => c.changedFiles)).toEqual([['p.txt']])
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+  })
+
+  // An untrusted busy signal (codex) opens no registration, so the session's own commit is itself
+  // recorded as an outside change: subtracting would take away the session's own work.
+  it('does not subtract for a session whose busy signal is not trusted', async () => {
+    const { repo, collector, store } = await pullInsideWindow(false)
+    await collector.completeTask('s1', { source: 'agent' })
+    expect([...store.get(repo)!.units[0].git.observedChangedFiles].sort()).toEqual(['c.txt', 'p.txt'])
+  })
+
+  it('an app restart interrupt counts what was committed up to the endHead the collector saw', async () => {
+    const { repo, collector, store, fake } = await setupWithFake()
+    collector.onGitChanged()
+    await collector.flush()
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    collector.onGitChanged() // a round advances endHead
+    await collector.flush()
+    await collector.stop().catch(() => undefined)
+    // stop() interrupts too; put the unit back as the app would have left it when killed
+    const st = store.get(repo)!
+    st.units[0] = { ...st.units[0], status: 'active', git: { ...st.units[0].git, observedChangedFiles: [] } }
+    delete (st.units[0] as { endedAt?: string }).endedAt
+    await store.set(repo, st)
+    await commitFile(repo, 'later.txt') // after the collector last looked: not counted
+
+    fake.sessions = []
+    const second = await makeCollector(fake, storeFile, undefined, { git: probeGit(git) })
+    await second.collector.start()
+    const u = second.store.get(repo)!.units[0]
+    expect(u.status).toBe('interrupted')
+    expect(u.git.observedChangedFiles).toEqual(['c.txt'])
   })
 })

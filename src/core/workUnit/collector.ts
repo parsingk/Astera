@@ -69,12 +69,12 @@ export interface CollectorSession {
   projectPath: string
   /** 아직 모르면 null — 그 세션은 이번 회차에서 건너뛴다 */
   transcriptPath: string | null
-  /** `ProviderDescriptor.busyTitleReliable` — false for codex. **Not read anywhere in this file
-   *  today.** Idle no longer closes or interrupts a unit at all under this declared boundary —
-   *  `onSessionIdle` only closes the busy-git-operation registration (`endBusyOperation`), regardless
-   *  of this flag. ipc.ts still computes and passes it per session because the same descriptor value
-   *  also drives `busySignalTrusted` (`onSessionBusy`'s own parameter, which *is* read); this field
-   *  is carried alongside it rather than singled out at the call site. */
+  /** `ProviderDescriptor.busyTitleReliable` — false for codex. Idle no longer closes or interrupts a
+   *  unit at all under this declared boundary — `onSessionIdle` only closes the busy-git-operation
+   *  registration (`endBusyOperation`), regardless of this flag. **Read in one place**: since it is the
+   *  same descriptor value as `busySignalTrusted` (`onSessionBusy`'s own parameter), it says whether
+   *  this session's own commits were registered rather than recorded as outside changes, which
+   *  `committedFiles` needs before it subtracts those changes' files. */
   idleSignalTrusted: boolean
 }
 
@@ -100,6 +100,10 @@ export interface CollectorGit {
     before: string,
     after: string
   ): Promise<{ commits: string[]; changedFiles: string[]; authors?: string[] } | null>
+  /** Only the files changed between before and after (range.ts's readRangeFiles: one `git diff`,
+   *  where readRange spawns four). For the look at the commits inside a unit's window (observeLive).
+   *  **null is "git did not answer"**, as for readRange. */
+  rangeFiles(repoPath: string, before: string, after: string): Promise<string[] | null>
 }
 
 export interface CollectorDeps {
@@ -1151,6 +1155,7 @@ export class WorkUnitCollector {
       let anyInterrupted = false
       for (const u of state.units) {
         if (u.status !== 'active' || this.known.has(u.sessionId)) continue
+        await this.observeAtRestart(state, u)
         state.units[state.units.indexOf(u)] = interruptedTask(u, {
           at,
           reason: 'INTERRUPTED_BY_APP_RESTART'
@@ -1179,6 +1184,7 @@ export class WorkUnitCollector {
       let dirty = false
       for (const u of state.units) {
         if (u.status !== 'active') continue
+        await this.observeAtRestart(state, u)
         state.units[state.units.indexOf(u)] = interruptedTask(u, {
           at: orphanedAt,
           reason: 'INTERRUPTED_BY_APP_RESTART'
@@ -1758,26 +1764,92 @@ export class WorkUnitCollector {
       return undefined
     }
     let moved = false
-    // One range read per distinct start: units opened at the same HEAD share it.
-    const ranges = new Map<string, string[] | null>()
+    const reads = new Map<string, Promise<string[] | null | undefined>>()
     for (const u of started) {
       const start = u.git.startHead as string
       if (start === head) continue
       moved = true
-      if (!ranges.has(start)) {
-        let range: { changedFiles: string[] } | null = null
-        try {
-          range = await this.deps.git.readRange(projectPath, start, head)
-        } catch (e) {
-          this.log(`range failed ${projectPath}: ${String(e)}`)
-        }
-        if (range === null) this.log(`range unknown ${projectPath} ${start}..${head}: git did not answer`)
-        ranges.set(start, range === null ? null : range.changedFiles)
-      }
-      this.observe(state, projectPath, ranges.get(start) ?? null, u)
+      const files = await this.committedFiles(state, projectPath, u, start, head, reads)
+      // Not an ancestor: the range is not this window's work, and nothing is added (or concluded).
+      if (files === undefined) continue
+      this.observe(state, projectPath, files, u)
       if (tree === null) this.observe(state, projectPath, null, u)
     }
     return moved ? head : undefined
+  }
+
+  /** The files committed inside one unit's window, `start..end`, for observeLive and the restart
+   *  interrupts in `seed`. **undefined: not this window's work, count nothing** — `start` is not an
+   *  ancestor of `end` (a branch switch, a reset, a rebase inside the window: the two trees' diff
+   *  would be unrelated files). **null: git did not answer** (the ancestry question or the diff).
+   *
+   *  **Outside changes the unit went through are taken away** (its `encounteredExternalGitChangeIds`:
+   *  a pull, anything gitRound recorded as not this app's): those are not the session's edits, and
+   *  counting too little is this file's preferred direction (observe). Best effort — a job merge or a
+   *  Host merge is an Astera operation, never recorded as an outside change, so its files stay.
+   *  **Only for a session whose busy signal is trusted** (`idleSignalTrusted`, the same descriptor
+   *  value): an untrusted one (codex) opens no busy registration (onSessionBusy), so its own commits
+   *  are recorded as outside changes too, and subtracting would take away the session's own work.
+   *  A session no longer known (exited, or orphaned at restart) is not subtracted for either.
+   *
+   *  `reads` shares the git answers between units that opened at the same HEAD. */
+  private async committedFiles(
+    state: WorkUnitState,
+    projectPath: string,
+    unit: SessionWorkUnit,
+    start: string,
+    end: string,
+    reads: Map<string, Promise<string[] | null | undefined>>
+  ): Promise<string[] | null | undefined> {
+    const key = `${start}\0${end}`
+    let read = reads.get(key)
+    if (read === undefined) {
+      read = (async () => {
+        let ancestor: boolean | null = null
+        try {
+          ancestor = await this.deps.git.isAncestor(projectPath, start, end)
+        } catch (e) {
+          this.log(`ancestry failed ${projectPath}: ${String(e)}`)
+        }
+        if (ancestor === false) return undefined
+        let files: string[] | null = null
+        if (ancestor === true) {
+          try {
+            files = await this.deps.git.rangeFiles(projectPath, start, end)
+          } catch (e) {
+            this.log(`range failed ${projectPath}: ${String(e)}`)
+          }
+        }
+        if (files === null) this.log(`range unknown ${projectPath} ${start}..${end}: git did not answer`)
+        return files
+      })()
+      reads.set(key, read)
+    }
+    const files = await read
+    if (!files || this.known.get(unit.sessionId)?.idleSignalTrusted !== true) return files
+    const seen = new Set(unit.encounteredExternalGitChangeIds)
+    const outside = new Set(
+      state.externalGitChanges.filter((c) => seen.has(c.id)).flatMap((c) => c.changedFiles)
+    )
+    return files.filter((f) => !outside.has(f))
+  }
+
+  /** The restart interrupts in `seed` (INTERRUPTED_BY_APP_RESTART). **No live look** — the window ended
+   *  at some unknown point while the app was off — so only `startHead..endHead`: the endHead gitRound
+   *  advanced, i.e. only the commits this collector saw inside the window. Anything else (no endHead,
+   *  not moved, not an ancestor, git did not answer) leaves the unit as it was. A range answer does
+   *  not clear an `observationUnknown` the unit already carries: there was no working-tree look. */
+  private async observeAtRestart(state: WorkUnitState, unit: SessionWorkUnit): Promise<void> {
+    // The unit's own path, not the store key it was found under: `observe` matches units by it.
+    const projectPath = unit.projectPath
+    const start = unit.git.startHead
+    const end = unit.git.endHead
+    if (!start || !end || start === end) return
+    const files = await this.committedFiles(state, projectPath, unit, start, end, new Map())
+    if (!files) return
+    const unknown = unit.git.observationUnknown === true
+    this.observe(state, projectPath, files, unit)
+    if (unknown) this.observe(state, projectPath, null, unit)
   }
 
   /** The working tree's changed files, or **null when git could not answer** (an error, a timeout, an

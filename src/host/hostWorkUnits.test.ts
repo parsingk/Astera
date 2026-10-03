@@ -89,7 +89,8 @@ function rig(over: Partial<HostWorkUnitsDeps> = {}): Rig {
     readRef: async () => git.ref,
     isAncestor: async () => true,
     changedFiles: async () => git.files,
-    readRange: async () => ({ commits: [], changedFiles: [] })
+    readRange: async () => ({ commits: [], changedFiles: [] }),
+    rangeFiles: async () => []
   }
   let transcripts: FakeWatcher | null = null
   let gitDirs: FakeWatcher | null = null
