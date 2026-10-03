@@ -164,6 +164,7 @@ const api = {
     status: invoke('mcpHttp.status'),
     addresses: invoke('mcpHttp.addresses'),
     token: invoke('mcpHttp.token'),
+    tokenHint: invoke('mcpHttp.tokenHint'),
     newToken: invoke('mcpHttp.newToken')
   },
   settings: {

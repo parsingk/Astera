@@ -191,10 +191,10 @@ export function mcpHttpHostsDisabled(view: McpHttpView, http: McpHttpSettings): 
   return mcpHttpLocked(view) || !http.lan
 }
 
-/** The token with all but its last four characters hidden, so a new token shows as a change without the
- *  token being on screen. */
-export function maskToken(token: string | null): string {
-  return token ? `${'•'.repeat(8)}${token.slice(-4)}` : ''
+/** The masked token: eight dots and the hint main gives (its last four characters), so a new token shows as
+ *  a change while the window holds no token. */
+export function maskToken(hint: string | null): string {
+  return hint ? `${'•'.repeat(8)}${hint}` : ''
 }
 
 /** A port typed into the field: a whole number from 1 to 65535, else null. */
@@ -211,29 +211,28 @@ export function parseHosts(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).filter(Boolean))]
 }
 
-/** The line under the switch: that the current Host is needed, or the entrance's state (with the Host's
- *  error when it failed); nothing until the Host answered. */
+/** The port and host-name fields' text for a setting: at load, and when a failed save puts the previous one back. */
+export function mcpHttpFieldsOf(v: McpHttpSettings): { port: string; hosts: string } {
+  return { port: String(v.port), hosts: v.hosts.join(', ') }
+}
+
+/** The line under the switch: that the Host is needed (not connected or not answering, or an older one), or
+ *  the entrance's state (with the Host's error when it failed); nothing until the Host answered. */
 export function mcpHttpStateLine(view: McpHttpView): { key: MessageKey; params?: MessageParams } | null {
-  if (!view.host) return { key: 'settings.mcpHttp.needsHost' }
+  if (!view.host) return { key: `settings.mcpHttp.needsHost.${view.reason}` }
   const s = view.state
   if (!s) return null
   if (s.state === 'failed') return { key: 'settings.mcpHttp.state.failed', params: { detail: s.error ?? '' } }
   return { key: `settings.mcpHttp.state.${s.state}` }
 }
 
-/** The HTTP registration lines as shown (the token masked until it is revealed) and as copied (always the
- *  real token). */
-export function mcpHttpShownLines(
-  url: string,
-  token: string,
-  revealed: boolean
-): Array<McpRegistrationLine & { copy: string }> {
-  const real = mcpHttpRegistrationLines({ url, token })
-  const shown = revealed ? real : mcpHttpRegistrationLines({ url, token: maskToken(token) })
-  return real.map((r, i) => ({ client: r.client, line: shown[i].line, copy: r.line }))
+/** The HTTP registration lines as shown: the token masked from its hint, or the token itself while it is shown. */
+export function mcpHttpShownLines(url: string, hint: string, shownToken: string | null): McpRegistrationLine[] {
+  return mcpHttpRegistrationLines({ url, token: shownToken ?? maskToken(hint) })
 }
 
-/** The token file's content through main, or null (with a toast when the read failed). */
+/** The token file's content through main, or null (with a toast when the read failed). Asked for by a Show
+ *  or a Copy only. */
 export function readMcpHttpToken(t: (key: MessageKey, params?: MessageParams) => string): Promise<string | null> {
   return window.api.mcpHttp.token().catch((err) => {
     toast.error(t('settings.mcpHttp.tokenFailed', { detail: err instanceof Error ? err.message : String(err) }))
@@ -241,7 +240,34 @@ export function readMcpHttpToken(t: (key: MessageKey, params?: MessageParams) =>
   })
 }
 
-/** Replaces the token through main and answers the new one, or null with a toast. */
+/** The token's last four characters through main, or null when there is no token file yet (or, with a toast,
+ *  when it could not be read). */
+export function readMcpHttpTokenHint(t: (key: MessageKey, params?: MessageParams) => string): Promise<string | null> {
+  return window.api.mcpHttp.tokenHint().catch((err) => {
+    toast.error(t('settings.mcpHttp.tokenFailed', { detail: err instanceof Error ? err.message : String(err) }))
+    return null
+  })
+}
+
+/** One client's line onto the clipboard with the real token, read for this copy and not kept. Nothing is copied
+ *  without a token file. */
+export async function copyMcpHttpLine(
+  client: McpRegistrationLine['client'],
+  url: string,
+  t: (key: MessageKey, params?: MessageParams) => string
+): Promise<void> {
+  const token = await readMcpHttpToken(t)
+  const line = token ? mcpHttpRegistrationLines({ url, token }).find((l) => l.client === client)?.line : undefined
+  if (line) await copyLine(line, t)
+}
+
+/** The token onto the clipboard, read for this copy and not kept. */
+export async function copyMcpHttpToken(t: (key: MessageKey, params?: MessageParams) => string): Promise<void> {
+  const token = await readMcpHttpToken(t)
+  if (token) await copyLine(token, t)
+}
+
+/** Replaces the token through main and answers the new one's hint, or null with a toast. */
 export function makeNewMcpHttpToken(t: (key: MessageKey, params?: MessageParams) => string): Promise<string | null> {
   return window.api.mcpHttp.newToken().catch((err) => {
     toast.error(t('settings.mcpHttp.newTokenFailed', { detail: err instanceof Error ? err.message : String(err) }))
@@ -375,40 +401,46 @@ export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null 
 /** MCP over HTTP (MCP HTTP design §4): the switch, the port, other devices with the host names they may
  *  use, and once the Host runs the entrance its URL, the token and the client lines. Every change is
  *  saved at once (the port and the names when the field is left) and main then sends `mcp-http-reload`;
- *  the state comes back on 'mcpHttp:state'. */
+ *  the state comes back on 'mcpHttp:state'. The window keeps only the token's last four characters; the
+ *  token itself is read for a Show (and dropped on Hide) or for one Copy. */
 function McpHttpSection(): React.JSX.Element | null {
   const { t } = useI18n()
-  const [http, setHttp] = useState<McpHttpSettings | null>(null)
+  const [http, setHttpOnly] = useState<McpHttpSettings | null>(null)
   const [view, setView] = useState<McpHttpView | null>(null)
   const [addresses, setAddresses] = useState<string[]>([])
-  const [token, setToken] = useState<string | null>(null)
-  const [revealed, setRevealed] = useState(false)
+  const [hint, setHint] = useState<string | null>(null)
+  const [shownToken, setShownToken] = useState<string | null>(null)
   const [portText, setPortText] = useState('')
   const [hostsText, setHostsText] = useState('')
   const [urlIndex, setUrlIndex] = useState(0)
+  /** The setting and the two text fields together, so a failed save that puts the previous setting back
+   *  puts its port and names back in the fields too. */
+  const setHttp = (v: McpHttpSettings): void => {
+    setHttpOnly(v)
+    const f = mcpHttpFieldsOf(v)
+    setPortText(f.port)
+    setHostsText(f.hosts)
+  }
 
   useEffect(() => {
-    void loadMcpHttp((v) => {
-      setHttp(v)
-      setPortText(String(v.port))
-      setHostsText(v.hosts.join(', '))
-    }, t)
+    void loadMcpHttp(setHttp, t)
     const off = window.api.on('mcpHttp:state', setView)
-    void window.api.mcpHttp.status().then(setView, () => setView({ host: false }))
+    void window.api.mcpHttp.status().then(setView, () => setView({ host: false, reason: 'none' }))
     void window.api.mcpHttp.addresses().then(setAddresses, () => setAddresses([]))
     return off
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, as the settings above
   }, [])
 
-  // The Host makes the token before it starts the entrance (Ruling 3), so it is read once that runs.
-  const running = view?.host === true && view.state?.state === 'running'
+  // The Host makes the token before it first starts the entrance (Ruling 3), so the hint is read again
+  // whenever the state changes; a file left from before shows its hint while the entrance is off.
+  const stateName = view?.host === true ? (view.state?.state ?? null) : null
   useEffect(() => {
-    if (running) void readMcpHttpToken(t).then(setToken)
+    void readMcpHttpTokenHint(t).then(setHint)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the state, not the language
-  }, [running])
+  }, [stateName])
 
   if (!http) return null
-  const shown: McpHttpView = view ?? { host: false }
+  const shown: McpHttpView = view ?? { host: false, reason: 'none' }
   // Locked until the Host's answer is in too, so nothing is saved toward a Host that may not apply it.
   const locked = view === null || mcpHttpLocked(shown)
   const stateLine = view === null ? null : mcpHttpStateLine(shown)
@@ -416,13 +448,6 @@ function McpHttpSection(): React.JSX.Element | null {
   const urls = mcpHttpUrls({ state: shown.host ? shown.state : null, hosts: http.hosts, addresses })
   const urlAt = Math.min(urlIndex, urls.length - 1)
   const url = urls[urlAt]
-  /** The token for a reveal or a copy: the one read, or read now. */
-  const tokenNow = async (): Promise<string | null> => {
-    if (token) return token
-    const v = await readMcpHttpToken(t)
-    setToken(v)
-    return v
-  }
 
   const commitPort = (): void => {
     const port = parsePort(portText)
@@ -499,24 +524,18 @@ function McpHttpSection(): React.JSX.Element | null {
       {!locked && (
         <div className="cli-path-hint">
           <span className="mcp-register-client">{t('settings.mcpHttp.token')}</span>
-          <code className="mcp-http-token">{token ? (revealed ? token : maskToken(token)) : t('settings.mcpHttp.tokenPending')}</code>
+          <code className="mcp-http-token">{shownToken ?? (hint ? maskToken(hint) : t('settings.mcpHttp.tokenPending'))}</code>
           <button
             className="mcp-http-reveal"
+            disabled={hint === null && shownToken === null}
             onClick={() => {
-              if (revealed) setRevealed(false)
-              else void tokenNow().then((v) => setRevealed(v !== null))
+              if (shownToken !== null) setShownToken(null)
+              else void readMcpHttpToken(t).then(setShownToken)
             }}
           >
-            {t(revealed ? 'settings.mcpHttp.hide' : 'settings.mcpHttp.reveal')}
+            {t(shownToken !== null ? 'settings.mcpHttp.hide' : 'settings.mcpHttp.reveal')}
           </button>
-          <button
-            className="mcp-http-copy-token"
-            onClick={() =>
-              void tokenNow().then((v) => {
-                if (v) void copyLine(v, t)
-              })
-            }
-          >
+          <button className="mcp-http-copy-token" disabled={hint === null} onClick={() => void copyMcpHttpToken(t)}>
             {t('settings.cli.copy')}
           </button>
           {/* No reload follows: the HTTP process re-reads the token file when its stamp changes, at the
@@ -528,7 +547,8 @@ function McpHttpSection(): React.JSX.Element | null {
             onClick={() =>
               void makeNewMcpHttpToken(t).then((v) => {
                 if (!v) return
-                setToken(v)
+                setHint(v)
+                setShownToken(null)
                 toast.success(t('settings.mcpHttp.newTokenDone'))
               })
             }
@@ -537,14 +557,14 @@ function McpHttpSection(): React.JSX.Element | null {
           </button>
         </div>
       )}
-      {url !== undefined && token && (
+      {url !== undefined && hint && (
         <>
           <span className="settings-hint">{t('settings.mcpHttp.lines')}</span>
-          {mcpHttpShownLines(url, token, revealed).map(({ client, line, copy }) => (
+          {mcpHttpShownLines(url, hint, shownToken).map(({ client, line }) => (
             <div key={client} className="cli-path-hint mcp-http-line">
               <span className="mcp-register-client">{client}</span>
               <code>{line}</code>
-              <button onClick={() => void copyLine(copy, t)}>{t('settings.cli.copy')}</button>
+              <button onClick={() => void copyMcpHttpLine(client, url, t)}>{t('settings.cli.copy')}</button>
             </div>
           ))}
           <span className="settings-hint">{t('settings.mcpHttp.codexNote')}</span>

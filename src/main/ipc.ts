@@ -45,7 +45,7 @@ import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWorkspace'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
-import { mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
+import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
@@ -5685,10 +5685,12 @@ export function registerIpc(
       next.hosts.length !== o.hosts.length
     )
       throw new Error(`INVALID_MCP_HTTP: ${JSON.stringify(v)}`)
+    const hostsProblem = mcpHttpHostsProblem(next.hosts)
+    if (hostsProblem) throw new Error(`INVALID_MCP_HTTP: ${hostsProblem}`)
     await core.appSettings.setMcpHttp(next)
     await hostMcpHttpView?.reload()
   })
-  ipcMain.handle('mcpHttp.status', () => hostMcpHttpView?.current() ?? { host: false })
+  ipcMain.handle('mcpHttp.status', () => hostMcpHttpView?.current() ?? { host: false, reason: 'none' })
   // This machine's IPv4 addresses, for the URLs other devices use while network access is on.
   ipcMain.handle('mcpHttp.addresses', () =>
     Object.values(os.networkInterfaces())
@@ -5700,8 +5702,12 @@ export function registerIpc(
   // the file, and writes it only on "New token". No reload follows a new token: the HTTP process re-reads
   // the file whenever its stamp changes, at the next request, so the old token stops working there.
   const mcpHttpToken = createTokenReader(tokenPath(app.getPath('userData')))
+  // The window holds only the last four characters for the masked display; the token itself is asked for
+  // by a Show or a Copy and dropped again there.
+  const hintOf = (token: string | null): string | null => (token ? token.slice(-4) : null)
   ipcMain.handle('mcpHttp.token', () => mcpHttpToken.current())
-  ipcMain.handle('mcpHttp.newToken', () => newToken(app.getPath('userData')))
+  ipcMain.handle('mcpHttp.tokenHint', async () => hintOf(await mcpHttpToken.current()))
+  ipcMain.handle('mcpHttp.newToken', async () => hintOf(await newToken(app.getPath('userData'))))
 
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
   // settings.ts); this handler validates the value and starts the orchestration wiring the journal

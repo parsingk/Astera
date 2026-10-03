@@ -49,12 +49,12 @@ describe('createHostMcpHttpView', () => {
     expect(changed).toEqual([{ host: true, state: running }])
   })
 
-  it('an older Host (or none) is asked nothing and reads as no Host for this', async () => {
+  it('an older Host is asked nothing and reads as older', async () => {
     const { view, changed, call } = rig({ features: ['workspace'] })
     await view.connected()
     expect(call).not.toHaveBeenCalled()
-    expect(changed).toEqual([{ host: false }])
-    expect(await view.reload()).toEqual({ host: false })
+    expect(changed).toEqual([{ host: false, reason: 'older' }])
+    expect(await view.reload()).toEqual({ host: false, reason: 'older' })
     expect(call).not.toHaveBeenCalled()
   })
 
@@ -64,8 +64,8 @@ describe('createHostMcpHttpView', () => {
     status.connected = false
     view.status()
     view.status()
-    expect(changed).toEqual([{ host: true, state: running }, { host: false }])
-    expect(view.current()).toEqual({ host: false })
+    expect(changed).toEqual([{ host: true, state: running }, { host: false, reason: 'none' }])
+    expect(view.current()).toEqual({ host: false, reason: 'none' })
   })
 
   it('reload sends mcp-http-reload and takes its answer', async () => {

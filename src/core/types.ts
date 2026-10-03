@@ -918,9 +918,10 @@ export interface McpHttpSettings {
 }
 
 /** The MCP HTTP entrance as the settings screen sees it (MCP HTTP design §4). `host: false` when no Host
- *  that runs it is connected (none, or an older one without `mcp-http`); `state: null` until that Host
- *  answered `mcp-http-status`. */
-export type McpHttpView = { host: false } | { host: true; state: McpHttpState | null }
+ *  that runs it can be asked: `reason: 'none'` while no Host is connected or the one there is not answering,
+ *  `'older'` when a connected Host did not announce `mcp-http`. `state: null` until that Host answered
+ *  `mcp-http-status`. */
+export type McpHttpView = { host: false; reason: 'none' | 'older' } | { host: true; state: McpHttpState | null }
 
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
@@ -1243,12 +1244,14 @@ export interface CoreApi {
     register(client: McpClient): Promise<McpRegisterResult>
   }
   /** The MCP HTTP entrance (MCP HTTP design §4): its state, this machine's addresses for the URLs other
-   *  devices use, and the token file. `token` only reads it (null while the Host has not made it yet);
-   *  `newToken` replaces it and answers the new one. */
+   *  devices use, and the token file. `token` only reads it (null while the Host has not made it yet), for a
+   *  Show or a Copy; `tokenHint` is its last four characters for the masked display; `newToken` replaces it
+   *  and answers the new one's hint. */
   mcpHttp: {
     status(): Promise<McpHttpView>
     addresses(): Promise<string[]>
     token(): Promise<string | null>
+    tokenHint(): Promise<string | null>
     newToken(): Promise<string>
   }
   settings: {

@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { RepairNeeded } from './repairNeeded'
-import { mcpHttpOf, readMcpHttp } from './mcpHttp'
+import { mcpHttpHostsProblem, mcpHttpOf, readMcpHttp } from './mcpHttp'
 
 const OFF = { enabled: false, port: 7871, lan: false, hosts: [] }
 
@@ -44,5 +44,19 @@ describe('readMcpHttp', () => {
   })
   it('an unreadable settings file refuses: it throws rather than answering off', async () => {
     await expect(readMcpHttp(await file('{not json'))).rejects.toBeInstanceOf(RepairNeeded)
+  })
+})
+
+describe('mcpHttpHostsProblem', () => {
+  it('accepts names the Host keeps, and an empty list', () => {
+    expect(mcpHttpHostsProblem([])).toBeNull()
+    expect(mcpHttpHostsProblem(['box.tailnet.ts.net', '10.0.0.2', 'other:9000'])).toBeNull()
+    expect(mcpHttpHostsProblem(['a'.repeat(253)])).toBeNull()
+  })
+
+  it('refuses what the Host would drop or could not split', () => {
+    for (const bad of [[''], ['  '], ['a,b'], ['a b'], ['a\tb'], ['a'.repeat(254)]]) expect(mcpHttpHostsProblem(bad), JSON.stringify(bad)).not.toBeNull()
+    expect(mcpHttpHostsProblem(Array.from({ length: 20 }, (_, i) => `h${i}`))).toBeNull()
+    expect(mcpHttpHostsProblem(Array.from({ length: 21 }, (_, i) => `h${i}`))).not.toBeNull()
   })
 })

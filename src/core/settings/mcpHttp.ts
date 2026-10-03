@@ -27,3 +27,17 @@ export async function readMcpHttp(filePath: string): Promise<McpHttpSettings> {
   const parsed = await readAppSettingsObject(filePath)
   return mcpHttpOf(parsed?.mcpHttp)
 }
+
+/** Why a list of extra host names cannot be saved, or null. The Host passes them as one `--hosts a,b`
+ *  argument and the HTTP process trims and drops empties, so a name may hold no comma or white space; 253 is
+ *  the longest DNS name, and 20 names are far more than anyone types. main's `settings.setMcpHttp` refuses
+ *  what this names, so the file never holds a name the Host would drop. */
+export function mcpHttpHostsProblem(hosts: string[]): string | null {
+  if (hosts.length > 20) return 'more than 20 host names'
+  for (const h of hosts) {
+    if (h.trim() === '') return 'an empty host name'
+    if (/[\s,]/.test(h)) return `a host name with a comma or a space: ${JSON.stringify(h)}`
+    if (h.length > 253) return 'a host name longer than 253 characters'
+  }
+  return null
+}

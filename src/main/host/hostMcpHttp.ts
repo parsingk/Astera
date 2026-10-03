@@ -48,7 +48,17 @@ export function createHostMcpHttpView(d: {
       return false
     }
   }
-  const current = (): McpHttpView => (has() ? { host: true, state } : { host: false })
+  const current = (): McpHttpView => {
+    if (has()) return { host: true, state }
+    // connected: false also covers a Host that stopped answering (markUnresponsive), which is not an older one.
+    let connected = false
+    try {
+      connected = d.status().connected
+    } catch {
+      // read as not connected
+    }
+    return { host: false, reason: connected ? 'older' : 'none' }
+  }
   const tell = (): void => {
     const v = current()
     const key = JSON.stringify(v)
