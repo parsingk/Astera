@@ -80,6 +80,7 @@ interface Fake {
     files: string[] | null
     ancestor: boolean | null
     range: { commits: string[]; changedFiles: string[]; authors?: string[] } | null
+    steps: string[] | null
   }
   sessions: CollectorSession[]
   clock: number
@@ -92,12 +93,13 @@ function makeFake(): Fake {
       files: [],
       ancestor: true,
       range: { commits: [], changedFiles: [] },
+      steps: null,
       readRef: async () => fake.git.ref,
       isAncestor: async () => fake.git.ancestor,
       changedFiles: async () => fake.git.files,
       readRange: async () => fake.git.range,
       rangeFiles: async () => fake.git.range?.changedFiles ?? null,
-      headSteps: async () => null
+      headSteps: async () => fake.git.steps
     },
     sessions: [],
     clock: Date.parse('2026-08-30T09:00:00.000Z')
@@ -1219,6 +1221,7 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     fake.clock += OPERATION_GRACE_MS * 10
     fake.git.ref = { branch: 'main', head: 'c1' }
     fake.git.range = { commits: ['c1'], changedFiles: ['m.txt'] }
+    fake.git.steps = ["merge feature: Merge made by the 'ort' strategy."]
     collector.onGitChanged()
     await collector.flush()
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
@@ -2837,11 +2840,11 @@ describe('WorkUnitCollector — 줄인 읽기에서도 모름은 모름이다', 
 // An agent that edits and commits in one step (`git commit -am`) leaves nothing uncommitted for a
 // working-tree read to see. The completion paths also read startHead..HEAD, so that unit is kept.
 describe('WorkUnitCollector — work committed inside the unit is observed at completion', () => {
-  async function setupWithFake(run: GitRun = git) {
+  async function setupWithFake(run: GitRun = git, extra: Partial<CollectorDeps> = {}) {
     const repo = await makeRepo('astera-wu-committed-')
     const fake = makeFake()
     fake.sessions = [session({ projectPath: repo })]
-    const made = await makeCollector(fake, storeFile, undefined, { git: probeGit(run) })
+    const made = await makeCollector(fake, storeFile, undefined, { git: probeGit(run), ...extra })
     await made.collector.start()
     return { repo, fake, ...made }
   }
@@ -3103,8 +3106,8 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
     await collector.flush()
   }
   /** A unit opened on `repo` by session s1, after a baseline round. */
-  async function openUnit(trusted: boolean) {
-    const made = await setupWithFake()
+  async function openUnit(trusted: boolean, extra: Partial<CollectorDeps> = {}) {
+    const made = await setupWithFake(git, extra)
     const { repo, collector, fake } = made
     fake.sessions = [session({ projectPath: repo, idleSignalTrusted: trusted })]
     const up = await upstream(repo)
@@ -3199,6 +3202,135 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
       expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['b.txt'])
     })
   }
+
+  /** A branch `feature` holding j.txt, made before the window's own work; HEAD back on main. */
+  const featureBranch = async (repo: string, collector: WorkUnitCollector): Promise<void> => {
+    gitSync(repo, ['branch', 'feature'])
+    gitSync(repo, ['checkout', '-q', 'feature'])
+    await commitFile(repo, 'j.txt')
+    gitSync(repo, ['checkout', '-q', 'main'])
+    await round(collector)
+  }
+  /** The unit's incoming files before it closes, and its observed files after (undefined: dropped). */
+  const result = async (repo: string, collector: WorkUnitCollector, store: WorkUnitStore) => {
+    const incoming = store.get(repo)!.units[0].git.incomingFiles
+    await collector.completeTask('s1', { source: 'agent' })
+    const observed = store.get(repo)!.units[0]?.git.observedChangedFiles
+    return { incoming, observed: observed && [...observed].sort() }
+  }
+
+  // An Astera operation explains moves by time, not by heads: a busy commit landing in the same round as
+  // a job merge, or within the job merge's grace, must not become incoming.
+  it('a busy commit in the same round as a job merge is not incoming (mixed steps)', async () => {
+    const { repo, collector, store } = await openUnit(true)
+    await featureBranch(repo, collector)
+    collector.onSessionBusy('s1', repo, true)
+    const op = collector.beginGitOperation('job-merge', repo)
+    await commitFile(repo, 'c.txt')
+    gitSync(repo, ['merge', '-q', '--no-ff', '--no-edit', 'feature'])
+    collector.endGitOperation(op)
+    await round(collector)
+    await collector.onSessionIdle('s1')
+    expect(await result(repo, collector, store)).toEqual({ incoming: undefined, observed: ['c.txt', 'j.txt'] })
+  })
+
+  it('a busy commit in the round after a job merge, inside its grace, is not incoming', async () => {
+    const { repo, collector, store } = await openUnit(true)
+    await featureBranch(repo, collector)
+    const op = collector.beginGitOperation('job-merge', repo)
+    gitSync(repo, ['merge', '-q', '--no-ff', '--no-edit', 'feature'])
+    collector.endGitOperation(op)
+    await round(collector)
+    collector.onSessionBusy('s1', repo, true)
+    await commitFile(repo, 'c.txt')
+    await round(collector)
+    await collector.onSessionIdle('s1')
+    expect(await result(repo, collector, store)).toEqual({ incoming: ['j.txt'], observed: ['c.txt'] })
+  })
+
+  it('a job merge that fast-forwards (merge --no-edit) is still incoming', async () => {
+    const { repo, collector, store } = await openUnit(true)
+    await featureBranch(repo, collector)
+    const op = collector.beginGitOperation('job-merge', repo)
+    gitSync(repo, ['merge', '-q', '--no-edit', 'feature'])
+    collector.endGitOperation(op)
+    await round(collector)
+    expect(store.get(repo)!.units[0].git.incomingFiles).toEqual(['j.txt'])
+  })
+
+  it('an open Host merge record does not make the session commit incoming; the Host merge itself is', async () => {
+    const records: HostMergeRecord[] = []
+    const { repo, collector, store, fake } = await openUnit(false, { hostMerges: async () => records })
+    await featureBranch(repo, collector)
+    records.push({ id: 'h1', projectPath: repo, headBefore: gitSync(repo, ['rev-parse', 'HEAD']), startedAt: new Date(fake.clock).toISOString() })
+    await commitFile(repo, 'c.txt')
+    await round(collector)
+    gitSync(repo, ['merge', '-q', '--no-ff', '--no-edit', 'feature'])
+    await round(collector)
+    expect(store.get(repo)!.externalGitChanges).toEqual([])
+    expect(await result(repo, collector, store)).toEqual({ incoming: ['j.txt'], observed: ['c.txt'] })
+  })
+
+  // The reflog cannot tell someone else's commits merged in from the session's own merged back, so only
+  // pull steps count as incoming on the reflog alone.
+  for (const trusted of [false, true]) {
+    it(`the session merging its own branch back is not incoming (${trusted ? 'trusted' : 'untrusted'})`, async () => {
+      const { repo, collector, store } = await openUnit(trusted)
+      if (trusted) collector.onSessionBusy('s1', repo, true)
+      gitSync(repo, ['checkout', '-q', '-b', 'fix'])
+      await round(collector)
+      await commitFile(repo, 'b.txt')
+      await round(collector)
+      gitSync(repo, ['checkout', '-q', 'main'])
+      await round(collector)
+      gitSync(repo, ['merge', '-q', '--ff-only', 'fix'])
+      await round(collector)
+      if (trusted) await collector.onSessionIdle('s1')
+      expect(await result(repo, collector, store)).toEqual({ incoming: undefined, observed: ['b.txt'] })
+    })
+  }
+
+  it('a forward reset that redoes the session commit is not incoming', async () => {
+    const { repo, collector, store } = await openUnit(false)
+    await commitFile(repo, 'b.txt')
+    await round(collector)
+    gitSync(repo, ['reset', '-q', '--hard', 'HEAD~1'])
+    await round(collector)
+    gitSync(repo, ['reset', '-q', '--hard', 'HEAD@{1}'])
+    await round(collector)
+    expect(await result(repo, collector, store)).toEqual({ incoming: undefined, observed: ['b.txt'] })
+  })
+
+  it('cherry-picking the session own commit from another branch is not incoming', async () => {
+    const { repo, collector, store } = await openUnit(false)
+    gitSync(repo, ['checkout', '-q', '-b', 'side'])
+    await round(collector)
+    await commitFile(repo, 'b.txt')
+    await round(collector)
+    gitSync(repo, ['checkout', '-q', 'main'])
+    await round(collector)
+    gitSync(repo, ['cherry-pick', 'side'])
+    await round(collector)
+    expect(await result(repo, collector, store)).toEqual({ incoming: undefined, observed: ['b.txt'] })
+  })
+
+  it('a real fast-forward pull from a second clone is incoming', async () => {
+    const { repo, collector, store, up } = await openUnit(false)
+    await up.push('p.txt')
+    pull(repo)
+    await round(collector)
+    expect(store.get(repo)!.units[0].git.incomingFiles).toEqual(['p.txt'])
+  })
+
+  it('a real non-fast-forward pull (merge) from a second clone is incoming', async () => {
+    const { repo, collector, store, up } = await openUnit(false)
+    await commitFile(repo, 'c.txt')
+    await round(collector)
+    await up.push('p.txt')
+    pull(repo)
+    await round(collector)
+    expect(await result(repo, collector, store)).toEqual({ incoming: ['p.txt'], observed: ['c.txt'] })
+  })
 
   it('an own commit and a pull landing in one round are both counted (mixed steps keep the old count)', async () => {
     const { repo, collector, store, up } = await openUnit(false)

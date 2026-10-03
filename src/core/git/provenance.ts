@@ -33,7 +33,9 @@ const ms = (iso: string | undefined): number | null => {
  * 와 `D:` 로 갈리는 경우가 그것이다). 그 저장소들은 전부 `isSamePath`(core/files/tree.ts)로
  * 비교하지만, 이 파일은 node: 를 끌고 오지 않는다는 규약이 있어 그 함수를 직접 부르지 못한다 —
  * 그래서 비교 자체를 주입받는다. 기본값은 엄격한 `===`(이 파일의 나머지 테스트가 기대하는 그대로)
- * 이고, 실제 배선(collector.ts)은 `isSamePath` 를 넘긴다.
+ * 이고, 실제 배선(collector.ts)은 `isSamePath` 를 넘긴다. (The collector now calls `asteraOperationsAt`
+ * below, which applies this same rule and takes the same `samePath`; this function is that list being
+ * non-empty.)
  */
 export function isAsteraOperation(
   projectPath: string,

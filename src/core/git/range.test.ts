@@ -146,6 +146,37 @@ describe('readHeadSteps', () => {
     await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['commit: add b.txt', 'commit: add a.txt'])
   })
 
+  it('a subject with spaces, colons and non-ASCII text comes back whole', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+    await fs.writeFile(path.join(repo, 'k.txt'), 'k', 'utf8')
+    run(repo, ['add', 'k.txt'])
+    run(repo, ['commit', '-m', '한글 fix: x y'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['commit: 한글 fix: x y'])
+  })
+
+  it('the pull subjects git writes carry the pull arguments', async () => {
+    const repo = await makeRepo()
+    const bare = await addOrigin(repo)
+    const other = await tempDir('astera-range-clone-')
+    run(other, ['clone', '-q', bare, '.'])
+    run(other, ['config', 'user.email', 't@t.com'])
+    run(other, ['config', 'user.name', 'Other'])
+    await commit(other, 'p.txt')
+    run(other, ['push', '-q', 'origin', 'main'])
+    const before = headHash(repo)
+    run(repo, ['pull', '-q', '--ff-only', 'origin', 'main'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['pull -q --ff-only origin main: Fast-forward'])
+    await commit(other, 'q.txt')
+    run(other, ['push', '-q', 'origin', 'main'])
+    await commit(repo, 'r.txt')
+    const mid = headHash(repo)
+    run(repo, ['-c', 'user.name=T', 'pull', '-q', '--rebase', 'origin', 'main'])
+    const steps = (await readHeadSteps(repo, mid, headHash(repo)))!
+    expect(steps[0]).toBe('pull -q --rebase origin main (finish): returning to refs/heads/main')
+    expect(steps.every((x) => x.startsWith('pull '))).toBe(true)
+  })
+
   it('a fast-forward merge is one merge step, and the checkouts before it are not walked', async () => {
     const repo = await makeRepo()
     run(repo, ['branch', 'o'])

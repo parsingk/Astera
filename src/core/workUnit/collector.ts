@@ -129,7 +129,8 @@ export interface CollectorDeps {
    *  있게 하기 위해서다. 넘기지 않으면(`undefined`) 빈 목록으로 본다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
   /** The Host's own record of the merges it made (Task 3, `src/core/git/hostMerges.ts`). Read only
-   *  when a HEAD move needs explaining and `isAsteraOperation` already said no — that covers a merge
+   *  when a HEAD move needs explaining and no registration explains it (`asteraOperationsAt`, the
+   *  `isAsteraOperation` rule, found none) — that covers a merge
    *  the Host made while this app was closed (no registration was ever opened for it here) and one it
    *  made while the app attached mid-merge (`git-op begin` was missed). Not passed means no records,
    *  and then a Host merge this app did not see is recorded as an outside change, same as before this
@@ -680,7 +681,8 @@ export class WorkUnitCollector {
    *
    *  **`PendingGitOperation` 으로 만들어 같은 목록에 넣는다.** `kind` 의 `'commit'` 은 이 브랜치
    *  내내 아무도 만들지 않는 값이었다 — 그 이름이 있던 이유가 이것이다. 판정도 유예도
-   *  `isAsteraOperation` 하나를 그대로 쓴다: 바쁜 구간은 "아직 도는 중"(endedAt 없음)이고, 끝난
+   *  `isAsteraOperation` 의 규칙 하나를 그대로 쓴다(gitRound 는 같은 규칙의 `asteraOperationsAt` 을
+   *  부른다): 바쁜 구간은 "아직 도는 중"(endedAt 없음)이고, 끝난
    *  구간은 `OPERATION_GRACE_MS` 만큼 더 그 세션의 것이다. 유예가 같은 폭인 이유도 같다 —
    *  감시자의 awaitWriteFinish 와 이 파일의 디바운스 때문에 `.git` 회차는 busy → false 보다 **뒤에**
    *  오고, 그 순서 역전이 유예 없이는 전부 오판된다.
@@ -1470,13 +1472,15 @@ export class WorkUnitCollector {
     // **This list holds two kinds** — operations Astera ran itself (`job-merge` and the like) and the
     // windows a session was busy (`commit`, onSessionBusy). Either one keeps the move out of the outside
     // changes ("this move happened inside this app"). They differ for the unit's count: Astera's own
-    // operation brought content in, a busy window only says the session was working (noteIncoming).
+    // operation may have brought content in, a busy window only says the session was working
+    // (noteIncoming, which reads the reflog in both cases).
     const explaining = asteraOperationsAt(projectPath, this.deps.now(), this.ops(), OPERATION_GRACE_MS, isSamePath)
     if (explaining.length === 0) {
       // **세 번째 설명, 이 앱이 전혀 열지 않은 등록.** Host 가 앱이 닫혀 있는 동안 병합했거나, 병합
       // 도중에 앱이 붙어 `git-op begin` 을 놓쳤다면 위 등록 목록에는 아무 것도 없다 — Host 는 자기
       // 병합을 host/merges.json 에 따로 적어 두고(Task 3), 여기서는 그 기록이 이 이동을 설명하는지만
-      // 묻는다(explainedByHostMerges, hostMerges.ts). **isAsteraOperation 이 아니라고 한 뒤에만 읽는다**
+      // 묻는다(explainedByHostMerges, hostMerges.ts). **등록이 아무것도 설명하지 않은 뒤에만 읽는다
+      // (asteraOperationsAt 이 빈 목록)**
       // — 등록만으로 이미 설명되는 회차(대부분)는 파일을 열지 않는다. **던지면 기록이 없는 것으로
       // 본다(fix round 1, review m2)** — 그때까지 이미 옮겨 둔 스냅샷·endHead 를 되돌리지 않으므로,
       // 여기서 그냥 던지면 이 라운드가 중단돼 이 변경이 다음 라운드에서도 다시는 보이지 않는다(그때는
@@ -1504,7 +1508,7 @@ export class WorkUnitCollector {
         sinceMs: snapshot?.capturedAt !== undefined ? Date.parse(snapshot.capturedAt) : Infinity,
         samePath: isSamePath
       })
-      // A Host merge brought content in: incoming without asking the reflog.
+      // A Host merge may have brought content in; the reflog still decides (noteIncoming).
       if (recorded) {
         await this.noteIncoming(projectPath, repo, encountered, before.head, after.head, true, ancestry, undefined, reads)
         return true
@@ -1547,12 +1551,12 @@ export class WorkUnitCollector {
       // "겪었다"이지 "만들었다"가 아니다 (EG §27). 그리고 **겪은 Unit 에만** 담는다 — 위에서 가른
       // 그 집합이다
       for (const u of encountered) u.encounteredExternalGitChangeIds.push(change.id)
-      // A pull is still an outside change, as above; it is also incoming. The range just read is reused.
+      // A pull is still an outside change, as above; it may also be incoming. The range just read is reused.
       await this.noteIncoming(projectPath, repo, encountered, from, to, false, ancestry, read, reads)
       return true
     }
-    // Astera's own operation (anything but a busy window) brought content in; a busy window leaves it to
-    // the reflog (noteIncoming).
+    // Astera's own operation (anything but a busy window) may have brought content in; a busy window
+    // alone is treated like no explanation (noteIncoming).
     const byAstera = explaining.some((o) => o.kind !== 'commit')
     await this.noteIncoming(projectPath, repo, encountered, before.head, after.head, byAstera, ancestry, undefined, reads)
     return true
@@ -1562,24 +1566,32 @@ export class WorkUnitCollector {
    *  go on each unit that went through it (`encountered`, as gitRound computed it) as
    *  `git.incomingFiles`, which committedFiles takes away when the unit closes.
    *
+   *  The HEAD reflog steps of the move are read in every case; a reflog that does not describe the move
+   *  (null) means not incoming, and the count stays what it was before this existed.
+   *
    *  `byAstera`: Astera's own operation (a Job merge, a checkout it ran) or a Host merge record explained
-   *  the move — incoming without asking anything. Otherwise the move must first go **forward**
+   *  the move. Incoming unless a step is a session commit (isSessionCommitStep). Registrations explain by
+   *  time, not by heads (a Job merge for OPERATION_GRACE_MS after it ends, an open Host record for any
+   *  move of the folder), so a session commit landing in the same round, or inside that window, must not
+   *  be taken for the merge. Astera merges with `git merge --no-edit` (integrateGit.ts), so a real Job
+   *  merge writes a `merge ...:` step and stays incoming.
+   *
+   *  Otherwise (no explanation, or only a busy window): incoming only when the move goes **forward**
    *  (`forward`: `before` is an ancestor of `after`, the answer gitRound already read for the transition
-   *  type; null when it was not asked, e.g. a branch switch, or git did not answer): a backward reset or
-   *  a rebase brings nothing in, and its diff would be the files of the session's own undone commit
-   *  (commit, `reset --soft HEAD~1`, commit again). Not forward or unknown: not incoming. Then the HEAD
-   *  reflog decides: incoming when there is at least one step and **no** step is a session commit
-   *  (isSessionCommitStep) — a pull, a merge, a fast-forward. Mixed steps (an own commit and a pull in
-   *  one round) are not — counting a pulled file too many beats taking the session's own commit away.
-   *  A reflog that does not describe the move (null) is not either: the count stays what it was before
-   *  this existed.
+   *  type; null when it was not asked, e.g. a branch switch, or git did not answer) **and** every step is
+   *  a pull (isPullStep). A backward reset or a rebase brings nothing in: its diff would be the files of
+   *  the session's own undone commit. A `merge`, `reset`, `cherry-pick` step cannot tell someone else's
+   *  commits from the session's own (merging its own branch back, redoing an undone commit), so those stay
+   *  counted. Mixed steps (an own commit and a pull in one round) are not incoming either — counting a
+   *  pulled file too many beats taking the session's own commit away.
    *
    *  This is what reaches the two moves the outside-change subtraction cannot: an Astera merge is never
    *  an outside change, and an untrusted session (codex) gets no subtraction of outside changes at all,
    *  since its own commits are recorded among them. A busy session's own pull is never recorded either.
    *
-   *  Asks git only when some unit went through the move. `known` is the range gitRound already read for
-   *  an outside change (null: git did not answer it); otherwise one `git diff`. No answer adds nothing. */
+   *  Asks git only when some unit went through the move (and, without an Astera explanation, it went
+   *  forward). `known` is the range gitRound already read for an outside change (null: git did not
+   *  answer it); otherwise one `git diff`. No answer adds nothing. */
   private async noteIncoming(
     projectPath: string,
     repo: string,
@@ -1592,13 +1604,12 @@ export class WorkUnitCollector {
     reads: RoundReads
   ): Promise<void> {
     if (encountered.length === 0 || !from || !to || from === to) return
-    if (!byAstera) {
-      if (forward !== true) return
-      const steps = await reads.get(`steps\0${repo}\0${from}\0${to}`, () =>
-        this.deps.git.headSteps(projectPath, from, to)
-      )
-      if (!steps || steps.length === 0 || steps.some(isSessionCommitStep)) return
-    }
+    if (!byAstera && forward !== true) return
+    const steps = await reads.get(`steps\0${repo}\0${from}\0${to}`, () =>
+      this.deps.git.headSteps(projectPath, from, to)
+    )
+    if (!steps || steps.length === 0) return
+    if (byAstera ? steps.some(isSessionCommitStep) : !steps.every(isPullStep)) return
     const files =
       known !== undefined
         ? (known?.changedFiles ?? null)
@@ -1849,9 +1860,8 @@ export class WorkUnitCollector {
    *  would be unrelated files). **null: git did not answer** (the ancestry question or the diff).
    *
    *  **Incoming files are taken away, for every session** (`git.incomingFiles`, noteIncoming): what a
-   *  Job or Host merge, a pull, or any other forward move that was not a commit brought in during the window.
-   *  The reflog, not the busy signal, said those moves were not the session's commits, so this holds
-   *  for an untrusted session too.
+   *  Job or Host merge or a pull brought in during the window. The reflog, not the busy signal, said
+   *  those moves were not the session's commits, so this holds for an untrusted session too.
    *
    *  **Outside changes the unit went through are taken away too** (its `encounteredExternalGitChangeIds`:
    *  a pull, anything gitRound recorded as not this app's): those are not the session's edits, and
@@ -1859,7 +1869,8 @@ export class WorkUnitCollector {
    *  **Only for a session whose busy signal is trusted** (`idleSignalTrusted`, the same descriptor
    *  value): an untrusted one (codex) opens no busy registration (onSessionBusy), so its own commits
    *  are recorded as outside changes too, and subtracting would take away the session's own work.
-   *  A session no longer known (exited, or orphaned at restart) is not subtracted for either.
+   *  A session no longer known (exited, or orphaned at restart) is not subtracted for outside changes
+   *  either; its incoming files still are.
    *
    *  `reads` shares the git answers between units that opened at the same HEAD. */
   private async committedFiles(
@@ -2030,12 +2041,22 @@ export class WorkUnitCollector {
 }
 
 /** A HEAD reflog step that is the session's own commit: `git commit` writes `commit: <subject>`, and
- *  `commit (initial):`, `commit (amend):`, `commit (merge):` for its three special cases. Every other
- *  step (`pull: ...`, `merge x: ...`, `rebase (finish): ...`, `reset: ...`, `checkout: ...`,
- *  `cherry-pick: ...`) moved HEAD some other way (noteIncoming). */
+ *  `commit (initial):`, `commit (amend):`, `commit (merge):` for its three special cases. A move an
+ *  Astera operation explains is not incoming when any of its steps is one of these (noteIncoming). */
 const SESSION_COMMIT_STEP = /^commit(?: \((?:initial|amend|merge)\))?: /
 function isSessionCommitStep(subject: string): boolean {
   return SESSION_COMMIT_STEP.test(subject)
+}
+
+/** A HEAD reflog step written by `git pull`. Its subject starts with `pull` and the arguments it was
+ *  given, then a colon (measured, git 2.45.1, range.test.ts): `pull: Fast-forward`,
+ *  `pull -q --ff-only origin main: Fast-forward`, `pull --no-rebase: Merge made by the 'ort' strategy.`,
+ *  `pull --rebase origin main (start|pick|finish): ...`. The only step that counts as incoming on the
+ *  reflog alone: `merge`, `reset`, `cherry-pick`, `rebase` and `checkout` steps cannot tell someone
+ *  else's commits from the session's own (merging its own branch back, redoing an undone commit). */
+const PULL_STEP = /^pull[ :]/
+function isPullStep(subject: string): boolean {
+  return PULL_STEP.test(subject)
 }
 
 /** 한 회차 안에서만 사는 읽기 기억. 같은 열쇠의 읽기는 처음 한 번만 돌고, 뒤에 부른 쪽은 그
