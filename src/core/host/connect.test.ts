@@ -113,6 +113,20 @@ describe('connectHost', () => {
     expect(seen).toEqual([undefined, { name: 'claude-code', version: '1.2.3' }, { name: 'ab' }, undefined])
   })
 
+  it('carries the remote address it was given in the hello, and none when it was given none', async () => {
+    const seen: unknown[] = []
+    const address = await listen((sock, nonce, h) => {
+      seen.push((h as { remote?: unknown }).remote)
+      sock.write(hello(nonce))
+    })
+    for (const remote of [undefined, '192.168.0.7']) {
+      const conn = await connectHost({ address, profileDir: PROFILE, app: 'test', role: 'mcp', timeoutMs: 2000, log: () => {}, ...(remote ? { remote } : {}) })
+      if ('error' in conn) throw new Error(conn.error)
+      conn.close()
+    }
+    expect(seen).toEqual([undefined, '192.168.0.7'])
+  })
+
   it('hello 에 nonce 를 싣는다', async () => {
     let seen = ''
     const address = await listen((sock, nonce) => {

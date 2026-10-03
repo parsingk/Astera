@@ -17,7 +17,9 @@
 // own (so every address is its own), every wait is a bounded `vi.waitFor`, and the budgets are wide.
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs, existsSync } from 'node:fs'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
@@ -77,6 +79,12 @@ import { readFileRetrying } from '../core/renameRetry'
 import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
 import type { PipelineDeps } from '../core/understanding/pipeline'
 import { makeDescriptors } from '../core/providers/descriptor'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { createMcpHttpSupervisor, type McpHttpSupervisor } from '../host/mcpHttp'
+import { readMcpHttp } from '../core/settings/mcpHttp'
+import { tokenPath } from '../core/mcp/httpToken'
+import { freePort } from '../host/workspace/native'
+import type { HostCliPaths } from '../core/host/spawn'
 
 /** Every wait is bounded: long enough for real git on a loaded Windows runner, short enough to fail. */
 const WAIT = { timeout: 25_000, interval: 25 }
@@ -305,6 +313,9 @@ interface Rig {
    *  its transcript), a busy edge as the spawner's BusyScanner reports it, and a promise that resolves
    *  once every start, stop, edge and save queued so far has landed. */
   workUnits: { statusLine(sessionId: string, payload: unknown): void; busy(sessionId: string, busy: boolean): void; settled(): Promise<void> }
+  /** The MCP HTTP entrance (MCP HTTP F1 §3) when the rig was given `mcpHttp`: its supervisor, built as
+   *  index.ts builds it, and every real `astera mcp http` process it spawned, in order. Null otherwise. */
+  mcpHttp: { supervisor: McpHttpSupervisor; children: ChildProcess[] } | null
 }
 
 async function hostRig(
@@ -316,6 +327,9 @@ async function hostRig(
     github?: OrchServerDeps['github']
     /** The How It Works agent round trip. Absent, the rig runs none: a record fails with NO_AGENT_IN_RIG. */
     runAgent?: PipelineDeps['runAgent']
+    /** The MCP HTTP entrance turned on at this port, run by this build's CLI (`cli`): the Host spawns
+     *  the real `astera mcp http` process. Absent, the Host has no supervisor (the calls answer 501). */
+    mcpHttp?: { port: number; cli: HostCliPaths }
   } = {}
 ): Promise<Rig> {
   const profileDir = o.profileDir ?? (await tempDir(PROFILE_PREFIX))
@@ -330,7 +344,11 @@ async function hostRig(
   // `continuity` turns Job Continuity on, so the Host keeps the Job Journal (Host journal J1).
   await fs.writeFile(
     path.join(profileDir, 'app-settings.json'),
-    JSON.stringify(o.continuity ? { orchAlwaysOnMigrated: true, jobContinuityEnabled: true } : { orchAlwaysOnMigrated: true })
+    JSON.stringify({
+      orchAlwaysOnMigrated: true,
+      ...(o.continuity ? { jobContinuityEnabled: true } : {}),
+      ...(o.mcpHttp ? { mcpHttp: { enabled: true, port: o.mcpHttp.port } } : {})
+    })
   )
   await fs.writeFile(path.join(profileDir, 'worktrees.json'), JSON.stringify({ root: path.join(home, 'wt'), items: [] }))
   const accountId = 'acc_claude_0'
@@ -576,6 +594,28 @@ async function hostRig(
     accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'))
   })
 
+  // The MCP HTTP entrance, built the way index.ts builds it, over a real spawn of this build's CLI. Its
+  // child's environment is this process's without what picks a Host or an agent, so the child can reach
+  // only the rig's Host (the supervisor names its address). The child's output joins the rig's logs.
+  const mcpHttpChildren: ChildProcess[] = []
+  const mcpHttp = o.mcpHttp
+    ? createMcpHttpSupervisor({
+        settings: () => readMcpHttp(path.join(profileDir, 'app-settings.json')),
+        cli: o.mcpHttp.cli,
+        profileDir,
+        hostAddress: hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).address,
+        env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ASTERA_|CLAUDE_|CODEX_)/i.test(k))),
+        spawn: (exec, args, opts) => {
+          const child = spawn(exec, args, opts)
+          mcpHttpChildren.push(child)
+          return child
+        },
+        push: (state) => serverOf().broadcast({ t: 'mcp-http-state', state }),
+        output: { write: (m) => log(`mcp-http.log: ${m}`) },
+        log
+      })
+    : null
+
   /** Exits the Host has handed to the command layer, counted so the teardown can wait them out. */
   let exitsHandled = 0
   /** Finished Runs the Host has handed How It Works, counted once it handled each. */
@@ -627,6 +667,7 @@ async function hostRig(
     },
     // Session work units (E2 §5), asked per call as index.ts asks them.
     workUnits: () => workUnitsBox.units,
+    ...(mcpHttp ? { mcpHttp } : {}),
     ...wiring.orchHooks
   })
   box.orch = orch
@@ -694,12 +735,14 @@ async function hostRig(
     onAppGreeted: (send) => {
       wiring.appGreeted(send)
       void units.reload()
+      void mcpHttp?.reload()
     },
     log: { write: log, close: () => {} }
   })
   box.server = server
   void hostUnderstanding.writerMayHaveChanged()
   void units.writerMayHaveChanged()
+  void mcpHttp?.reload()
 
   // Teardown in `leave()`'s order: the driver stops, the spawner retires, the server closes, the ptys
   // end, and the exits those ends start run out before the folders are removed. Run once: a test may
@@ -708,6 +751,10 @@ async function hostRig(
   const stop = (): Promise<void> => (stopping ??= teardown())
   cleanups.push(stop)
   const teardown = async (): Promise<void> => {
+    // The entrance first, as leave() stops it: its stdin ends and it exits. A child that has not exited
+    // by then (the supervisor gave up waiting) is killed, so no test leaves one running.
+    await mcpHttp?.stop()
+    for (const c of mcpHttpChildren) if (c.exitCode === null && c.signalCode === null) c.kill()
     wiring.dispose()
     units.dispose()
     await spawner.closeAndSettle()
@@ -757,7 +804,8 @@ async function hostRig(
         for (const cb of busyListeners) cb(sessionId, busy)
       },
       settled: () => units.settled()
-    }
+    },
+    mcpHttp: mcpHttp ? { supervisor: mcpHttp, children: mcpHttpChildren } : null
   }
 }
 
@@ -1283,12 +1331,12 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   /** A rig whose state already holds one registered project, a git repo of its own: what an app that
    *  opened that folder once leaves behind (projects are only registered by the app). */
   async function projectRig(
-    o: { continuity?: boolean; github?: OrchServerDeps['github']; runAgent?: PipelineDeps['runAgent'] } = {}
+    o: { continuity?: boolean; github?: OrchServerDeps['github']; runAgent?: PipelineDeps['runAgent']; mcpHttp?: { port: number; cli: HostCliPaths } } = {}
   ): Promise<{ h: Rig; projectId: string; projectPath: string }> {
     const projectPath = await makeRepo('astera-mcp-int-project-')
     cleanups.push(() => rmrf(projectPath))
     const seed = ensureProject(emptyState(), { path: projectPath, now: '2026-10-01T00:00:00.000Z' })
-    const h = await hostRig({ repo: false, seed: seed.state, continuity: o.continuity, github: o.github, runAgent: o.runAgent })
+    const h = await hostRig({ repo: false, seed: seed.state, continuity: o.continuity, github: o.github, runAgent: o.runAgent, mcpHttp: o.mcpHttp })
     return { h, projectId: seed.project.id, projectPath }
   }
 
@@ -1343,6 +1391,93 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({ surface: 'mcp', client: { name: 'it', version: '0' } })
     )
   })
+
+  // MCP over HTTP (MCP HTTP F1 §Tests): the Host spawns this build's real `astera mcp http` (out/main/cli.js
+  // run by Electron as node, as an installed Host runs it), and an HTTP client reaches the same Host
+  // through it. Needs `npm run build` first: `npm test` in CI runs before the build and skips it, so CI runs
+  // it again by name after the build and fails unless it passed (.github/workflows/ci.yml). A local run
+  // without the build says so on the console rather than skipping in silence.
+  const cliBundle = fileURLToPath(new URL('../../out/main/cli.js', import.meta.url))
+  const cliBuilt = existsSync(cliBundle)
+  if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
+  it.runIf(cliBuilt)(
+    'over HTTP: the Host runs the entrance, a client with the token lists 34 tools and acts, the journal names its address, and off stops it',
+    async () => {
+      const cli: HostCliPaths = {
+        exec: createRequire(import.meta.url)('electron') as string,
+        entry: cliBundle,
+        skills: fileURLToPath(new URL('../../resources/skills', import.meta.url))
+      }
+      // The setting's port must be 1..65535, so the ephemeral port is taken from the system first.
+      const { h, projectId, projectPath } = await projectRig({ continuity: true, mcpHttp: { port: await freePort(), cli } })
+      const entrance = h.mcpHttp!
+      // Running once the child printed its ready line; the URL is the port it really listens on.
+      await until(() => expect(entrance.supervisor.status().state).toBe('running'))
+      const status = entrance.supervisor.status()
+      expect(entrance.children).toHaveLength(1)
+      const url = new URL(status.url!)
+      expect(url.hostname).toBe('127.0.0.1')
+      expect(url.pathname).toBe('/mcp')
+      // The Host made the token file before the spawn; a client reads it as a person copies it.
+      const token = (await fs.readFile(tokenPath(h.profileDir), 'utf8')).trim()
+
+      // Without the token: 401, and nothing reaches the Host.
+      const refused = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+      expect(refused.status).toBe(401)
+
+      const client = new Client({ name: 'it-http', version: '1' })
+      await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
+      cleanups.push(() => client.close())
+      expect((await client.listTools()).tools).toHaveLength(34)
+      const projects = (await client.callTool({ name: 'list_projects', arguments: {} })) as ToolResult
+      expect(projects.isError).toBeFalsy()
+      expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })
+
+      // A control call: the journal row names the client and where it called from.
+      const created = (await client.callTool({
+        name: 'create_job',
+        arguments: { projectId, objective: 'over http', coordinatorAccountId: h.accountId, requestId: 'h-1' }
+      })) as ToolResult
+      expect(created.isError, created.content[0]?.text).toBeFalsy()
+      const ran = (await client.callTool({ name: 'run_job', arguments: { jobId: (created.structuredContent as { id: string }).id, requestId: 'h-2' } })) as ToolResult
+      expect(ran.isError, ran.content[0]?.text).toBeFalsy()
+      const runId = (ran.structuredContent as { id: string }).id
+      await until(() =>
+        expect(h.journalRows(runId).find((e) => e.type === 'JOB_RUN_STARTED')?.actor).toEqual({
+          surface: 'mcp',
+          client: { name: 'it-http', version: '1' },
+          remote: '127.0.0.1'
+        })
+      )
+      // The same gate as stdio: with read only access, a control tool is refused to the HTTP caller too.
+      await setMcpAccess(h, 'read')
+      const denied = (await client.callTool({
+        name: 'create_job',
+        arguments: { projectId, objective: 'not over http', coordinatorAccountId: h.accountId, requestId: 'h-3' }
+      })) as ToolResult
+      expect(denied.isError).toBe(true)
+      expect(errorOf(denied)).toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('Read only') })
+      await client.close()
+
+      // Off: the app saves the setting and asks the Host to read it again. The entrance stops, the
+      // state says off to every app, and the port no longer answers.
+      const file = path.join(h.profileDir, 'app-settings.json')
+      const settings = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
+      await fs.writeFile(file, JSON.stringify({ ...settings, mcpHttp: { enabled: false, port: status.port } }))
+      const app = await rawClient(h.address, appHello, appAnswers(h.accountId))
+      cleanups.push(() => app.close())
+      const reloaded = await app.call('mcp-http-reload', {})
+      expect(reloaded).toEqual({ status: 200, body: { state: 'off', lan: false, port: status.port } })
+      const child = entrance.children[0]
+      await until(() => expect(child.exitCode !== null || child.signalCode !== null).toBe(true))
+      expect(entrance.children).toHaveLength(1)
+      await until(() => expect(app.got.filter((m) => m.t === 'mcp-http-state').at(-1)).toMatchObject({ state: { state: 'off' } }))
+      await expect(fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: '{}' })).rejects.toThrow()
+      // The token is never written to a log line.
+      expect(h.logs.filter((l) => l.includes(token))).toEqual([])
+      expect(h.logs.some((l) => l.startsWith('mcp-http.log: '))).toBe(true)
+    }
+  )
 
   it('create_job with convergence makes a Job that carries the policy', async () => {
     const { h, projectId } = await projectRig()

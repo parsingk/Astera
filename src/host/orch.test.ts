@@ -2817,6 +2817,27 @@ describe('Host-local spawn (S2)', () => {
     expect((await orchOver().call({ cmd: 'slack-reload', args: {}, sessionId: '', from: app })).status).toBe(501)
     expect(slack.reload).toHaveBeenCalledTimes(1)
   })
+  it('answers mcp-http-reload and mcp-http-status for the app only, and 501 without a supervisor (MCP HTTP §3)', async () => {
+    const state = { state: 'running' as const, url: 'http://127.0.0.1:7871/mcp', lan: false, port: 7871 }
+    const mcpHttp = { reload: vi.fn(async (_o?: { retry?: boolean }) => {}), status: () => state }
+    const orch = orchOver({ mcpHttp })
+    const app = { role: 'app' as const, toOthers: () => {} }
+    const cli = { role: 'cli' as const, toOthers: () => {} }
+    const mcp = { role: 'mcp' as const, toOthers: () => {} }
+    expect(await orch.call({ cmd: 'mcp-http-reload', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: state })
+    expect(mcpHttp.reload).toHaveBeenCalledTimes(1)
+    // A person's action: a failed entrance is tried again at once.
+    expect(mcpHttp.reload).toHaveBeenLastCalledWith({ retry: true })
+    expect(await orch.call({ cmd: 'mcp-http-status', args: {}, sessionId: '', from: app })).toEqual({ status: 200, body: state })
+    for (const cmd of ['mcp-http-reload', 'mcp-http-status']) {
+      expect((await orch.call({ cmd, args: {}, sessionId: '', from: cli })).status).toBe(403)
+      expect((await orch.call({ cmd, args: {}, sessionId: '', from: mcp })).status).toBe(403)
+      expect((await orch.call({ cmd, args: {}, sessionId: '' })).status).toBe(403)
+      expect((await orch.call({ cmd, args: {}, sessionId: '', from: app, request: 'q1' })).status).toBe(400)
+      expect((await orchOver().call({ cmd, args: {}, sessionId: '', from: app })).status).toBe(501)
+    }
+    expect(mcpHttp.reload).toHaveBeenCalledTimes(1)
+  })
   // Review M2 of Task 9: a worker whose pty is app-local is the app's to kill. With no app the stop is
   // refused, and the Dispatch is not marked stopped over a worker that is still running.
   it('forwards the stop of a worker the Host does not hold, and refuses it honestly with no app', async () => {
@@ -3545,6 +3566,24 @@ describe('the Host journal at the commit points (Host journal Task 5)', () => {
     expect(f.committed.map((c) => c.actor)).toEqual([
       { surface: 'cli', sessionId: 'astera:host' },
       { surface: 'cli', sessionId: 'astera:app' }
+    ])
+  })
+
+  // MCP HTTP design §5: an MCP call that came over HTTP is journaled with the caller's address beside its client.
+  it('an MCP caller over HTTP is journaled with its remote address, and one over stdio without', async () => {
+    await seed()
+    await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
+    const f = fake()
+    const orch = orchOver({ journal: f.journal })
+    await orch.ready()
+    const runId = orch.state().runs[0].id
+    const http: OrchCaller = { role: 'mcp', client: { name: 'claude-code', version: '1.2.3' }, remote: '192.168.0.7', toOthers: () => {} }
+    const stdio: OrchCaller = { role: 'mcp', client: { name: 'claude-code' }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: '', from: http })).status).toBe(200)
+    expect((await orch.call({ cmd: 'runs-resume', args: { id: runId }, sessionId: '', from: stdio })).status).toBe(200)
+    expect(f.committed.map((c) => c.actor)).toEqual([
+      { surface: 'mcp', client: { name: 'claude-code', version: '1.2.3' }, remote: '192.168.0.7' },
+      { surface: 'mcp', client: { name: 'claude-code' } }
     ])
   })
 

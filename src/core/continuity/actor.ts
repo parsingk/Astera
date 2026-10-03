@@ -17,6 +17,9 @@ export interface JournalActor {
   sessionId?: string
   /** Only on surface `mcp`, and only when the client named itself. */
   client?: McpClient
+  /** Only on surface `mcp`, and only when the call came over HTTP: the caller's address as the HTTP
+   *  process saw it (MCP HTTP design §5). Stored as given; nothing is looked up. */
+  remote?: string
 }
 
 const SURFACES: ReadonlySet<string> = new Set<JournalSurface>(['desktop', 'cli', 'agent', 'host', 'mcp'])
@@ -39,11 +42,24 @@ export function mcpClientOf(v: unknown): McpClient | undefined {
   return version === '' ? { name } : { name, version }
 }
 
+const REMOTE_MAX = 64
+
+/** An HTTP caller's address as Astera keeps it. Untrusted input (it arrives in a hello): only ASCII
+ *  letters, digits, `.`, `:`, `%`, `_` and `-` are kept (IPv4, IPv6 and a zone id), cut to 64
+ *  characters; nothing left is undefined. */
+export function mcpRemoteOf(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined
+  const kept = v.replace(/[^A-Za-z0-9.:%_-]/g, '').slice(0, REMOTE_MAX)
+  return kept === '' ? undefined : kept
+}
+
 export function isJournalActor(v: unknown): v is JournalActor {
   if (typeof v !== 'object' || v === null) return false
   const o = v as Record<string, unknown>
   if (typeof o.surface !== 'string' || !SURFACES.has(o.surface)) return false
   if (o.sessionId !== undefined && typeof o.sessionId !== 'string') return false
+  // A remote only on mcp, and only one already in its kept form.
+  if (o.remote !== undefined && (o.surface !== 'mcp' || mcpRemoteOf(o.remote) !== o.remote)) return false
   // A client only on mcp, and only one already in its kept form.
   if (o.client === undefined) return true
   // Field by field: the order the keys were written in says nothing.
@@ -53,7 +69,7 @@ export function isJournalActor(v: unknown): v is JournalActor {
 }
 
 /** `actor_json` as read: null for a v2 row, or for a value this build cannot read (P4). A `client`
- *  this build cannot read is dropped and the rest of the actor still reads. */
+ *  or a `remote` this build cannot read is dropped and the rest of the actor still reads. */
 export function actorFromJson(text: string | null | undefined): JournalActor | null {
   if (text === null || text === undefined) return null
   let v: unknown
@@ -63,13 +79,15 @@ export function actorFromJson(text: string | null | undefined): JournalActor | n
     return null
   }
   if (typeof v !== 'object' || v === null) return null
-  const { client: raw, ...rest } = v as Record<string, unknown>
+  const { client: raw, remote: rawRemote, ...rest } = v as Record<string, unknown>
   if (!isJournalActor(rest)) return null
   const client = rest.surface === 'mcp' ? mcpClientOf(raw) : undefined
+  const remote = rest.surface === 'mcp' ? mcpRemoteOf(rawRemote) : undefined
   return {
     surface: rest.surface,
     ...(rest.sessionId === undefined ? {} : { sessionId: rest.sessionId }),
-    ...(client === undefined ? {} : { client })
+    ...(client === undefined ? {} : { client }),
+    ...(remote === undefined ? {} : { remote })
   }
 }
 
@@ -92,6 +110,8 @@ export function actorOf(a: {
   role?: 'app' | 'cli' | 'mcp'
   /** The MCP client its connection's hello named; read only for role `mcp`. */
   client?: McpClient
+  /** The HTTP caller's address its connection's hello named; read only for role `mcp`. */
+  remote?: string
   state: OrchState | null
 }): JournalActor {
   if (a.role === 'app') return DESKTOP_ACTOR
@@ -99,7 +119,8 @@ export function actorOf(a: {
   // session it sends is not one Astera started (MCP design M1).
   if (a.role === 'mcp') {
     const client = mcpClientOf(a.client)
-    return client === undefined ? { surface: 'mcp' } : { surface: 'mcp', client }
+    const remote = mcpRemoteOf(a.remote)
+    return { surface: 'mcp', ...(client === undefined ? {} : { client }), ...(remote === undefined ? {} : { remote }) }
   }
   if (a.sessionId === '') return { surface: 'cli' }
   if (a.sessionId === HOST_CALLER || a.sessionId === APP_CALLER) return { surface: 'cli', sessionId: a.sessionId }

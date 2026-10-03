@@ -7,6 +7,7 @@ import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { createHostOrch } from './orch'
+import { hostFeatures } from './features'
 import { HOST_PROTOCOL, HOST_YIELD_ORCH_STATE_LATEST, ORCH_STATE_PUSH_MS, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { emptyState } from '../core/orchestration/state'
 import { versionOnlyOrchCall, AppUnreachable } from '../core/host/orchProtocol'
@@ -653,10 +654,45 @@ describe('startHostServer', () => {
     expect(clients).toEqual([{ name: 'claude-codex', version: '1.2.3' }, undefined, undefined])
   })
 
+  // MCP HTTP design §5: the HTTP caller's address an mcp hello carries reaches the command layer, cleaned,
+  // and only from an mcp socket.
+  it("hands an mcp hello's remote to the command layer, and no remote from a cli hello or a stdio mcp hello", async () => {
+    const remotes: unknown[] = []
+    const base = versionOnlyOrchCall({ version: '9.9.9' })
+    const h = await start({
+      orch: {
+        ...base,
+        call: async (c) => {
+          remotes.push(c.from?.remote)
+          return base.call(c)
+        }
+      }
+    })
+    const call = async (extra: Record<string, unknown>, id: string): Promise<void> => {
+      const sock = await h.connectSilent()
+      const chan = messageChannel(sock)
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...extra } as ClientMessage)
+      await chan.next()
+      chan.send({ t: 'orch-call', call: id, cmd: 'version', args: {} })
+      await chan.next()
+    }
+    await call({ role: 'mcp', client: { name: 'c' }, remote: '192.168.0.7\n' }, 'c1')
+    await call({ role: 'mcp', client: { name: 'c' } }, 'c2')
+    await call({ role: 'cli', remote: '192.168.0.7' }, 'c3')
+    expect(remotes).toEqual(['192.168.0.7', undefined, undefined])
+  })
+
   it('announces the extra features it was given, after the built-in ones', async () => {
     const h = await server({ features: ['spawn'] })
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
     expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'mcp', 'spawn'])
+  })
+  // MCP HTTP §3 (Ruling 2): the hello of a Host built as index.ts builds it tells the app it answers mcp-http-*.
+  // One Host per test (one address); features.test.ts covers the spawner half.
+  it('announces mcp-http in the hello of a Host without a spawner', async () => {
+    const h = await server({ features: hostFeatures({ spawns: false }) })
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }])
+    expect((reply as { features: string[] }).features).toContain('mcp-http')
   })
   it('tells onMessage which client sent it, by role and a per-connection number', async () => {
     const seen: Array<{ t: string; role: string; socket: number }> = []

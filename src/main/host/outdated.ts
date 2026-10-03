@@ -19,7 +19,8 @@ import {
   HOST_FEATURE_SLACK_OWNER,
   HOST_FEATURE_JOURNAL,
   HOST_FEATURE_UNDERSTANDING,
-  HOST_FEATURE_WORK_UNITS
+  HOST_FEATURE_WORK_UNITS,
+  HOST_FEATURE_MCP_HTTP
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -175,4 +176,11 @@ export function hostSpeaksWorkUnits(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_WORK_UNITS)
+}
+
+/** The connected Host supervises the MCP HTTP entrance and answers the app-only `mcp-http-status` and
+ *  `mcp-http-reload` (MCP HTTP design §3). **Connected only**, as for the roll journal: the settings
+ *  screen needs the answers. An older Host is asked nothing, and the screen says it needs the current one. */
+export function hostSpeaksMcpHttp(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_MCP_HTTP)
 }

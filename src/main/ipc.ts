@@ -44,6 +44,9 @@ import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWorkspace'
+import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
+import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
+import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, installHostRollExit, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
@@ -1058,6 +1061,8 @@ export function registerIpc(
   /** Who drives Jobs, as the Host last said it (limits L3). Null until `startHostClient` builds it. */
   let hostDriverView: HostDriverView | null = null
   let hostWorkspaceView: HostWorkspaceView | null = null
+  /** The MCP HTTP entrance as the Host says it (MCP HTTP design §4). Null until `startHostClient` builds it. */
+  let hostMcpHttpView: HostMcpHttpView | null = null
   /** Takes back the one pty a Host roll respawned into (`takeSessionsBack` with its id). Null until
    *  `startHostClient` has built the sweep queue, and then for good: nothing is pushed before then. */
   let takeBackRolledPty: ((ptyId: string) => Promise<unknown>) | null = null
@@ -5664,6 +5669,46 @@ export function registerIpc(
     await core.appSettings.setMcpGithubWrite(v)
   })
 
+  // MCP over HTTP (MCP HTTP design §4). Saving is followed by `mcp-http-reload`, which makes the Host
+  // read the file again and apply it; the answer and the later pushes reach the window on
+  // 'mcpHttp:state'. A Host that is not there (or too old) reads the file at its next app greeting.
+  ipcMain.handle('settings.getMcpHttp', () => core.appSettings.getMcpHttp())
+  ipcMain.handle('settings.setMcpHttp', async (_e, v: unknown) => {
+    // mcpHttpOf narrows; a value it changes was not a valid setting.
+    const next = mcpHttpOf(v)
+    const o = (v ?? {}) as Partial<McpHttpSettings>
+    if (
+      next.enabled !== o.enabled ||
+      next.lan !== o.lan ||
+      next.port !== o.port ||
+      !Array.isArray(o.hosts) ||
+      next.hosts.length !== o.hosts.length
+    )
+      throw new Error(`INVALID_MCP_HTTP: ${JSON.stringify(v)}`)
+    const hostsProblem = mcpHttpHostsProblem(next.hosts)
+    if (hostsProblem) throw new Error(`INVALID_MCP_HTTP: ${hostsProblem}`)
+    await core.appSettings.setMcpHttp(next)
+    await hostMcpHttpView?.reload()
+  })
+  ipcMain.handle('mcpHttp.status', () => hostMcpHttpView?.current() ?? { host: false, reason: 'none' })
+  // This machine's IPv4 addresses, for the URLs other devices use while network access is on.
+  ipcMain.handle('mcpHttp.addresses', () =>
+    Object.values(os.networkInterfaces())
+      .flatMap((list) => list ?? [])
+      .filter((n) => n.family === 'IPv4' && !n.internal)
+      .map((n) => n.address)
+  )
+  // Ruling 3: only the Host creates the token (ensureToken before it starts the entrance); the app reads
+  // the file, and writes it only on "New token". No reload follows a new token: the HTTP process re-reads
+  // the file whenever its stamp changes, at the next request, so the old token stops working there.
+  const mcpHttpToken = createTokenReader(tokenPath(app.getPath('userData')))
+  // The window holds only the last four characters for the masked display; the token itself is asked for
+  // by a Show or a Copy and dropped again there.
+  const hintOf = (token: string | null): string | null => (token ? token.slice(-4) : null)
+  ipcMain.handle('mcpHttp.token', () => mcpHttpToken.current())
+  ipcMain.handle('mcpHttp.tokenHint', async () => hintOf(await mcpHttpToken.current()))
+  ipcMain.handle('mcpHttp.newToken', async () => hintOf(await newToken(app.getPath('userData'))))
+
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
   // settings.ts); this handler validates the value and starts the orchestration wiring the journal
   // hooks live in, the way the other toggles do, and opens or closes the recorder with the toggle.
@@ -5949,6 +5994,20 @@ export function registerIpc(
     client.onMessage((m) => workspaceView.pushed(m))
     client.onConnect(() => void workspaceView.connected())
     client.onStatusChange((s) => workspaceView.status(s))
+
+    // MCP over HTTP (design §4): a Host that announced `mcp-http` pushes its entrance state to every
+    // greeted client; after each handshake the view asks for it, and a dropped connection reads as no
+    // Host. None of these callbacks throws (hostMcpHttp.ts).
+    const mcpHttpView = createHostMcpHttpView({
+      status: () => client.status(),
+      call: orchCall,
+      changed: (v) => send('mcpHttp:state', v),
+      log: hostLog
+    })
+    hostMcpHttpView = mcpHttpView
+    client.onMessage((m) => mcpHttpView.pushed(m))
+    client.onConnect(() => void mcpHttpView.connected())
+    client.onStatusChange(() => mcpHttpView.status())
 
     // S6 D4: the block records this app's coordinators found go to a Host that speaks `blocks`, whole
     // after each handshake, and the Host's come back as `blocks` pushes. Sends nothing to an older Host.

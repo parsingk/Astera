@@ -54,7 +54,7 @@ import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 import { previewShotsDir } from '../core/preview/shotsDir'
-import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
+import { hostCliPaths, hostWorkerBaseEnv, type HostCliPaths } from '../core/host/spawn'
 import { readAgentAppEnabled } from '../core/settings/agentAppEnabled'
 import { DISPOSE_CAP_MS, createWorkspaceManager, disposeWithin } from './workspace/manager'
 import { createLaunchResolver } from './workspace/launch'
@@ -67,6 +67,8 @@ import { defaultGhRunner } from '../core/github/gh'
 import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { isCleanWorktree } from '../core/worktrees/git'
+import { createMcpHttpSupervisor } from './mcpHttp'
+import { readMcpHttp } from '../core/settings/mcpHttp'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -206,6 +208,9 @@ async function main(): Promise<void> {
     rollingWiring?.dispose()
     // The work units' watchers and their sync timer stop with them. Never throws.
     hostWorkUnits?.dispose()
+    // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
+    // a Host that exits before the kill's grace still ends that pipe. Never rejects.
+    void mcpHttp.stop()
     // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
@@ -510,6 +515,22 @@ async function main(): Promise<void> {
   registry.onExit(watchSessionEnds(registry))
   procs.onExit(watchSessionEnds(procs))
 
+  // The MCP HTTP entrance (MCP HTTP design §3): started, watched and stopped here by the `mcpHttp` setting,
+  // read at start (below, once the server listens), at each app greeting and on `mcp-http-reload`. Its
+  // state goes to the apps as `mcp-http-state`. `server` is assigned below; `push` runs only after a read.
+  const mcpHttp = createMcpHttpSupervisor({
+    settings: () => readMcpHttp(path.join(profileDir, 'app-settings.json')),
+    cli: ((): HostCliPaths | null => {
+      const p = hostCliPaths(process.env, existsSync)
+      return 'missing' in p ? null : p
+    })(),
+    profileDir,
+    hostAddress: addr.address,
+    env: process.env,
+    push: (state) => server.broadcast({ t: 'mcp-http-state', state }),
+    log: (m) => log.write(m)
+  })
+
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -595,7 +616,9 @@ async function main(): Promise<void> {
     // `unregisterRolling` only forwards to the app and a rolled-from exit closes as before.
     ...(rollingWiring?.orchHooks ?? {}),
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
-    slack: slackWiring ?? undefined
+    slack: slackWiring ?? undefined,
+    // `mcp-http-reload` and `mcp-http-status` (MCP HTTP §3).
+    mcpHttp
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -729,6 +752,8 @@ async function main(): Promise<void> {
         void hostJournal.appGreeted(() => (orch.loaded() ? orch.state() : null))
         // E2: and the work units read the tracking setting again, for a work-units-reload that never arrived.
         void hostWorkUnits?.reload()
+        // MCP HTTP §3: and the entrance reads its setting again, for an mcp-http-reload that never arrived.
+        void mcpHttp.reload()
       },
       log
     })
@@ -756,6 +781,8 @@ async function main(): Promise<void> {
   void hostUnderstanding.writerMayHaveChanged()
   // And the work units (E2 §3).
   void hostWorkUnits?.writerMayHaveChanged()
+  // And the MCP HTTP entrance, once this Host is the one that serves the profile (MCP HTTP §3).
+  void mcpHttp.reload()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

@@ -994,3 +994,51 @@ describe('mcpGithubWrite', () => {
     expect(store.getMcpGithubWrite()).toBe(false)
   })
 })
+
+describe('mcpHttp', () => {
+  const DEFAULTS = { enabled: false, port: 7871, lan: false, hosts: [] }
+
+  it('defaults to off and is not written while every field is at its default', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpHttp()).toEqual(DEFAULTS)
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpHttp')
+    await store.setMcpHttp({ ...DEFAULTS, enabled: true })
+    await store.setMcpHttp(DEFAULTS)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpHttp')
+  })
+
+  it('keeps every field across a reload, in the shape the Host reads', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const v = { enabled: true, port: 9000, lan: true, hosts: ['box.tailnet.ts.net'] }
+    await a.setMcpHttp(v)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpHttp).toEqual(v)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getMcpHttp()).toEqual(v)
+  })
+
+  it('a port written by hand that is not one reads as the default, and only true turns a switch on', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpHttp: { enabled: 'yes', port: 70000, lan: 1, hosts: ['a', 3] } }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpHttp()).toEqual({ ...DEFAULTS, hosts: ['a'] })
+  })
+
+  it('a recovered profile reads off', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpHttp()).toEqual(DEFAULTS)
+  })
+
+  it('a value handed out cannot change the store', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setMcpHttp({ ...DEFAULTS, hosts: ['a'] })
+    store.getMcpHttp().hosts.push('b')
+    expect(store.getMcpHttp().hosts).toEqual(['a'])
+  })
+})
