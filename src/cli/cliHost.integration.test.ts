@@ -2129,9 +2129,13 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await until(async () => expect(await unit()).toMatchObject({ git: { observedChangedFiles: ['f.txt'] } }))
       gitSync(h.repo, ['commit', '-m', 'say hello'])
       const head = gitSync(h.repo, ['rev-parse', 'HEAD']).trim()
-      await until(async () => expect((await project())?.gitSnapshot?.head).toBe(head))
-      // The session's own commit, made while it was busy: not a change from outside.
-      expect((await project())?.externalGitChanges).toEqual([])
+      // The session's own commit, made while it was busy: not a change from outside. Both read from the
+      // one file that holds the new head, so the answer is that of the round that wrote it.
+      await until(async () => {
+        const p = await project()
+        expect(p?.gitSnapshot?.head).toBe(head)
+        expect(p?.externalGitChanges).toEqual([])
+      })
       h.workUnits.busy(sessionId, false)
 
       const done = okData(
