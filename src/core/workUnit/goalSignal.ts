@@ -39,6 +39,25 @@ const objectiveOf = (v: unknown): string | null =>
  * overwhelming majority of records and for every goal state that is neither a start nor an end.
  *
  * Measured 2026-09-01 (spec §3) — Claude Code 2.1.252, codex-cli 0.151.0.
+ *
+ * Measured 2026-10-03 — codex-cli 0.160.0. The start still arrives as `thread_goal_updated` with
+ * `active`, but no `thread_goal_updated` with `complete` is written any more. The model ends the goal
+ * by calling `update_goal` from its `exec` tool, and the new state is recorded only in that call's
+ * output:
+ *
+ *   response_item / custom_tool_call         name: "exec", input: the script
+ *                                            `text(await tools.update_goal({status:"complete"}));`
+ *   response_item / custom_tool_call_output  same call_id, output: [
+ *     { type: "input_text", text: <"Script completed", wall time, "Output:" on three lines> },
+ *     { type: "input_text", text: '{"goal":{"threadId":…,"objective":…,"status":"complete",…},…}' } ]
+ *
+ * The output is read on its own, without the call that produced it. The goal object in it is a field
+ * codex wrote, the same object `thread_goal_updated` carries; the call's `input` is a script, and
+ * picking `update_goal` out of it would be interpreting text, which this module does not do. Pairing
+ * the two would also need state across records, and the collector's rounds can split a call from its
+ * output. What a lone output risks is another script printing the goal (`get_goal` after the goal
+ * completed): that is an end for a goal that already ended, and the collector ignores an end with no
+ * goal unit open.
  */
 export function goalSignalOf(record: Record<string, unknown>): GoalSignal | null {
   // claude — a `goal_status` attachment. `sentinel` marks the moment the goal was set; `met` the
@@ -69,6 +88,27 @@ export function goalSignalOf(record: Record<string, unknown>): GoalSignal | null
     if (g.status === 'active') {
       const objective = objectiveOf(g.objective)
       return objective === null ? null : { kind: 'start', objective, declared: false }
+    }
+    return null
+  }
+
+  // codex 0.160 — the goal's end, from the output of the model's `update_goal` call (see above). Only
+  // a whole `input_text` item that parses as exactly `{ goal: { status: 'complete', objective } }`
+  // counts; the goal JSON quoted inside other text is a message and is not read.
+  if (record.type === 'response_item') {
+    const p = record.payload
+    if (!isObj(p) || p.type !== 'custom_tool_call_output' || !Array.isArray(p.output)) return null
+    for (const item of p.output) {
+      if (!isObj(item) || item.type !== 'input_text' || typeof item.text !== 'string') continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(item.text)
+      } catch {
+        continue
+      }
+      if (!isObj(parsed) || !isObj(parsed.goal)) continue
+      const g = parsed.goal
+      if (g.status === 'complete' && objectiveOf(g.objective) !== null) return { kind: 'end' }
     }
     return null
   }

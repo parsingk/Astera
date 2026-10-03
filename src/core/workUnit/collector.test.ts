@@ -74,6 +74,39 @@ const codexGoal = (status: string, objective = 'rpg 게임을 만들어줘'): st
     }
   }) + '\n'
 
+/** codex-cli 0.160's goal end, trimmed from a real rollout: the model's `exec` call to `update_goal`,
+ *  then that call's output, one `input_text` item of which is the goal as JSON. */
+const codex160UpdateGoalComplete = (objective = 'rpg 게임을 만들어줘'): string =>
+  JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      status: 'completed',
+      call_id: 'call_yVigquLYV9PzHNxLz5CLt93X',
+      name: 'exec',
+      input: 'text(await tools.update_goal({status:"complete"}));\n'
+    }
+  }) +
+  '\n' +
+  JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call_output',
+      call_id: 'call_yVigquLYV9PzHNxLz5CLt93X',
+      output: [
+        { type: 'input_text', text: 'Script completed\nWall time 1.1 seconds\nOutput:\n' },
+        {
+          type: 'input_text',
+          text: JSON.stringify({
+            goal: { threadId: '01a10166-d6cb-7523-9833-91b3fa9301d4', objective, status: 'complete', tokensUsed: 29776 },
+            remainingTokens: null
+          })
+        }
+      ]
+    }
+  }) +
+  '\n'
+
 interface Fake {
   git: CollectorGit & {
     ref: GitRef
@@ -2021,6 +2054,31 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     await collector.flush()
 
     const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].completion?.source).toBe('agent')
+    expect(closed).toHaveLength(1)
+  })
+
+  // codex-cli 0.160.0 (measured 2026-10-03) writes no `thread_goal_updated` for the end. The model's
+  // `exec` call to `update_goal` and that call's output are the only record of it; before this was
+  // read the unit stayed open until the person pressed [complete].
+  it('codex 0.160 의 update_goal 결과로 Unit 이 스스로 완료로 닫힌다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/game.ts']
+    await fs.appendFile(transcript, codex160UpdateGoalComplete(), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
     expect(state.units[0].status).toBe('completed')
     expect(state.units[0].completion?.source).toBe('agent')
     expect(closed).toHaveLength(1)
