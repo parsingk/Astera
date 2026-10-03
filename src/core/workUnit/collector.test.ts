@@ -2793,3 +2793,97 @@ describe('WorkUnitCollector — 줄인 읽기에서도 모름은 모름이다', 
     expect(store.get(other)!.units.find((u) => u.sessionId === 's2')!.git.observationUnknown).toBe(true)
   })
 })
+
+// An agent that edits and commits in one step (`git commit -am`) leaves nothing uncommitted for a
+// working-tree read to see. The completion paths also read startHead..HEAD, so that unit is kept.
+describe('WorkUnitCollector — work committed inside the unit is observed at completion', () => {
+  async function setup(run: GitRun = git) {
+    const repo = await makeRepo('astera-wu-committed-')
+    const fake = makeFake()
+    fake.sessions = [session({ projectPath: repo })]
+    const made = await makeCollector(fake, storeFile, undefined, { git: probeGit(run) })
+    await made.collector.start()
+    return { repo, ...made }
+  }
+  const commitFile = (repo: string, name: string): Promise<void> =>
+    fs.writeFile(path.join(repo, name), name, 'utf8').then(() => {
+      gitSync(repo, ['add', name])
+      gitSync(repo, ['commit', '-m', `add ${name}`])
+    })
+  const wroteNow = async (collector: WorkUnitCollector): Promise<void> => {
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+  }
+
+  it('a file edited and committed with no round in between is kept, with that file observed', async () => {
+    const { repo, collector, store, closed } = await setup()
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    const head = gitSync(repo, ['rev-parse', 'HEAD'])
+
+    const r = await collector.completeTask('s1', { source: 'agent' })
+    expect(r.ok).toBe(true)
+    const units = store.get(repo)!.units
+    expect(units).toHaveLength(1)
+    expect(units[0].status).toBe('completed')
+    expect(units[0].git.observedChangedFiles).toEqual(['c.txt'])
+    expect(closed).toHaveLength(1)
+    expect(closed[0].git.endHead).toBe(head)
+  })
+
+  it('completeTaskById sees the committed file too', async () => {
+    const { repo, collector, store, closed } = await setup()
+    const started = await collector.startTask('s1', 'add c')
+    if (!started.ok) throw new Error('unexpected')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+
+    const r = await collector.completeTaskById(repo, started.id)
+    expect(r).toEqual({ ok: true, recorded: true })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+    expect(closed).toHaveLength(1)
+  })
+
+  it('a unit with no commit and no change is still dropped', async () => {
+    const { repo, collector, store, closed } = await setup()
+    await collector.startTask('s1', 'nothing')
+    await wroteNow(collector)
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units).toHaveLength(0)
+    expect(closed).toHaveLength(0)
+  })
+
+  it('a range read that fails leaves observationUnknown set and keeps a unit with write evidence', async () => {
+    let broken = false
+    const run: GitRun = (args, opts) =>
+      broken && args.includes('diff')
+        ? Promise.resolve({ ok: false, stdout: '', stderr: 'timed out', timedOut: true as const })
+        : git(args, opts)
+    const { repo, collector, store, closed } = await setup(run)
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    broken = true
+
+    await collector.completeTask('s1', { source: 'agent' })
+    const units = store.get(repo)!.units
+    expect(units).toHaveLength(1)
+    expect(units[0].status).toBe('completed')
+    expect(units[0].git.observationUnknown).toBe(true)
+    expect(closed).toHaveLength(1)
+  })
+
+  it('a commit made before the unit started is not counted', async () => {
+    const { repo, collector, store } = await setup()
+    await commitFile(repo, 'before.txt')
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+
+    await collector.completeTask('s1', { source: 'agent' })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+  })
+})
