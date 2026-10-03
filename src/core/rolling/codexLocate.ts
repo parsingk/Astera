@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
-import { isExecRollout, parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codexParser'
+import { isChildThreadRollout, isExecRollout, parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codexParser'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
@@ -156,6 +156,9 @@ export async function findRollout(opts: {
     // session that is looking for its file, so without this they win the "newest wins" contest below
     // (see isExecRollout). A session is never spawned through exec, so no real candidate is lost.
     if (isExecRollout(meta)) continue
+    // A child thread codex opens for the session (see isChildThreadRollout) is newer too, and repeats
+    // the session's own id, so neither the contest below nor `sessionId` would turn it away.
+    if (isChildThreadRollout(meta)) continue
     // if session_meta has no session_id, fall back to the uuid in the filename (mirrors buildEntry in history/strategies/codex.ts)
     const sessionId = meta.sessionId ?? file.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) continue

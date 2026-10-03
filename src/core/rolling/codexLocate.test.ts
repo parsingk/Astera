@@ -382,6 +382,54 @@ describe('exec rollout 은 세션의 파일이 아니다', () => {
   })
 })
 
+// codex-cli 0.160.0, measured 2026-10-03: about a minute into a session codex opened a child thread
+// (a "guardian" subagent) with its own rollout in the same folder and the same cwd. Its session_meta
+// names the main thread as `parent_thread_id` and even repeats the main thread's id as `session_id`,
+// so neither the cwd nor the id tells it apart. Being newer, it won "newest wins" and the session's
+// transcript switched to it; the second `/goal`, written to the main file, was never read.
+describe('child thread rollout 은 세션의 파일이 아니다', () => {
+  const CWD = 'D:\\work\\p'
+  const MAIN = '01a10166-d6cb-7523-9833-91b3fa9301d4'
+  const CHILD = '01a10166-d9bd-7bc3-b7c0-b1c419c4a738'
+
+  /** The child thread's session_meta as 0.160 writes it, trimmed. */
+  async function makeChild(): Promise<string> {
+    const dir = path.join(home, 'sessions', '2026', '07', '09')
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, `rollout-2026-07-09T00-00-01-${CHILD}.jsonl`)
+    const meta = {
+      type: 'session_meta',
+      payload: {
+        session_id: MAIN,
+        id: CHILD,
+        parent_thread_id: MAIN,
+        cwd: CWD,
+        originator: 'codex-tui',
+        cli_version: '0.160.0',
+        source: { subagent: { other: 'guardian' } }
+      }
+    }
+    await fs.writeFile(file, JSON.stringify(meta) + '\n', 'utf8')
+    return file
+  }
+
+  it('더 최근이어도 child thread 파일은 고르지 않는다', async () => {
+    const main = await makeRollout({ y: '2026', m: '07', d: '09', uuid: MAIN, cwd: CWD, mtimeMs: NOW - 3_000, source: 'vscode' })
+    await gap()
+    await makeChild()
+    const r = await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW })
+    expect(r).toEqual({ path: main, sessionId: MAIN })
+    // the id-matched search a chat session uses: the child repeats the main id as its session_id
+    const byId = await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW, sessionId: MAIN })
+    expect(byId).toEqual({ path: main, sessionId: MAIN })
+  })
+
+  it('후보가 child thread 뿐이면 아무것도 찾지 못한다', async () => {
+    await makeChild()
+    expect(await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW })).toBeNull()
+  })
+})
+
 // 한계 L5 (2026-09-26). 넘겨받은 restore 는 백지 재개가 spawn 된 시각(locateSince)부터 찾는데, 그
 // 인계가 며칠 뒤에 일어나면 오늘·어제 폴더에는 그 rollout 이 없다. 찾는 날짜 폴더는 locateSince 의
 // 날짜에서 앞으로 간다. birthtime 은 조작할 수 없으므로 파일을 실제 오늘 폴더에 만들고, since 를 그

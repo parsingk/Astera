@@ -28,6 +28,11 @@ interface CodexMeta {
    *  and a null is never treated as exec: losing a real session costs far more than showing an extra
    *  row. */
   source: string | null
+  /** The thread this rollout is a child of, from `session_meta.parent_thread_id`. Measured
+   *  2026-10-03 on codex-cli 0.160.0: codex opens child threads of its own (a "guardian" subagent)
+   *  with their own rollout in the same folder and cwd, and their `session_id` repeats the parent's
+   *  id. null on a rollout a session writes for itself, and on a codex that predates the field. */
+  parentThreadId: string | null
 }
 
 /** 대화 메시지 하나를 rollout 한 줄에서 뽑는다. 그 줄이 메시지가 아니면 null(방어적 파싱).
@@ -125,7 +130,7 @@ function parseLine(raw: string): Record<string, unknown> | null {
 /** Extracts session_meta (sessionId, cwd) and the first user title within the leading maxLines
  *  (mirrors parseTranscriptMeta in parser.ts) */
 export async function referenceParseCodexMeta(filePath: string, maxLines = 40): Promise<CodexMeta> {
-  const meta: CodexMeta = { sessionId: null, cwd: null, title: null, source: null }
+  const meta: CodexMeta = { sessionId: null, cwd: null, title: null, source: null, parentThreadId: null }
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream })
   let n = 0
@@ -142,6 +147,8 @@ export async function referenceParseCodexMeta(filePath: string, maxLines = 40): 
           if (meta.sessionId === null && typeof pr.id === 'string') meta.sessionId = pr.id
           if (meta.cwd === null && typeof pr.cwd === 'string') meta.cwd = pr.cwd
           if (meta.source === null && typeof pr.source === 'string') meta.source = pr.source
+          if (meta.parentThreadId === null && typeof pr.parent_thread_id === 'string')
+            meta.parentThreadId = pr.parent_thread_id
         }
         continue
       }

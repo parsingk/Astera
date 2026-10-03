@@ -50,6 +50,11 @@ export interface CodexMeta {
    *  and a null is never treated as exec: losing a real session costs far more than showing an extra
    *  row. */
   source: string | null
+  /** The thread this rollout is a child of, from `session_meta.parent_thread_id`. Measured
+   *  2026-10-03 on codex-cli 0.160.0: codex opens child threads of its own (a "guardian" subagent)
+   *  with their own rollout in the same folder and cwd, and their `session_id` repeats the parent's
+   *  id. null on a rollout a session writes for itself, and on a codex that predates the field. */
+  parentThreadId: string | null
 }
 
 /** 대화 메시지 하나를 rollout 한 줄에서 뽑는다. 그 줄이 메시지가 아니면 null(방어적 파싱).
@@ -156,12 +161,24 @@ export function isExecRollout(meta: CodexMeta): boolean {
   return meta.source === 'exec'
 }
 
+/** Is this rollout a child thread codex opened for a session, rather than a session's own?
+ *
+ *  Measured 2026-10-03 on codex-cli 0.160.0: about a minute into a session codex opened a child
+ *  thread (a "guardian" subagent) whose rollout sits in the same folder with the same cwd, and whose
+ *  `session_id` repeats the main thread's id. Being newer, it won the rollout-to-session match
+ *  (rolling/codexLocate.ts), the session's transcript moved onto it, and everything the main thread
+ *  wrote afterwards (a second `/goal` among it) was never read. Only an explicit `parent_thread_id`
+ *  counts, for the reason isExecRollout gives. */
+export function isChildThreadRollout(meta: CodexMeta): boolean {
+  return meta.parentThreadId !== null
+}
+
 export async function parseCodexMeta(
   filePath: string,
   maxLines = 40,
   opts?: Pick<TranscriptWindowOptions, 'headBytes' | 'maxHeadBytes' | 'open'>
 ): Promise<CodexMeta> {
-  const meta: CodexMeta = { sessionId: null, cwd: null, title: null, source: null }
+  const meta: CodexMeta = { sessionId: null, cwd: null, title: null, source: null, parentThreadId: null }
   const src = await (opts?.open ?? openTranscriptSource)(filePath)
   let n = 0
   try {
@@ -185,6 +202,8 @@ export async function parseCodexMeta(
               if (meta.sessionId === null && typeof pr.id === 'string') meta.sessionId = pr.id
               if (meta.cwd === null && typeof pr.cwd === 'string') meta.cwd = pr.cwd
               if (meta.source === null && typeof pr.source === 'string') meta.source = pr.source
+              if (meta.parentThreadId === null && typeof pr.parent_thread_id === 'string')
+                meta.parentThreadId = pr.parent_thread_id
             }
             continue
           }
