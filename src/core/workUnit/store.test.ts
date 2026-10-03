@@ -355,6 +355,8 @@ describe('WorkUnitStore', () => {
       }
       expect(refreshed).toBe(false)
       expect(s.get('D:\\r')).toEqual(empty)
+      // The set above is not awaited: its save must land before afterEach removes the folder under it.
+      await s.settled()
     })
   })
 })
