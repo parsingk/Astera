@@ -127,6 +127,9 @@ export class WorkUnitStore {
   /** Counts set. refresh() adopts the file only when none ran while it was reading: a write made
    *  meanwhile is newer than the file it read, and may not have reached the disk yet. */
   private writes = 0
+  /** Set by markStale: memory holds a change that never reached the file, so the next refresh reads the
+   *  file whatever its stamp says. */
+  private stale = false
 
   constructor(private filePath: string) {}
 
@@ -143,6 +146,7 @@ export class WorkUnitStore {
         // writer (E2 §6) must not start from what it held before a Host took the file over and removed it.
         this.state = { projects: {} }
         this.seen = null
+        this.stale = false
         return { recovered: false }
       }
       return this.recover()
@@ -151,6 +155,7 @@ export class WorkUnitStore {
     migrate(parsed)
     this.state = parsed
     this.seen = stamp
+    this.stale = false
     return { recovered: false }
   }
 
@@ -163,12 +168,23 @@ export class WorkUnitStore {
    *
    *  It waits for this store's queued saves first, so it never reads a file under its own pending
    *  write. A file that cannot be read or is not valid is not adopted. **Not over a newer write**: a
-   *  set made after this refresh began is kept, and the file it read is not adopted. */
+   *  set made after this refresh began is kept, and the file it read is not adopted.
+   *
+   *  **A file that is gone empties memory** when this store had seen one or holds a stale change, as
+   *  load() does on ENOENT: another writer removed it, and this store's next write must not put back
+   *  the projects it held before. */
   async refresh(): Promise<boolean> {
     const writes = this.writes
     await this.queue.catch(() => {})
     const now = await this.stamp(this.filePath)
-    if (now === null || now === this.seen) return false
+    if (now === null) {
+      if ((this.seen === null && !this.stale) || this.writes !== writes) return false
+      this.state = { projects: {} }
+      this.seen = null
+      this.stale = false
+      return true
+    }
+    if (now === this.seen && !this.stale) return false
     let parsed: unknown
     try {
       parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
@@ -179,7 +195,15 @@ export class WorkUnitStore {
     migrate(parsed)
     this.state = parsed
     this.seen = now
+    this.stale = false
     return true
+  }
+
+  /** A write was dropped or failed after its change was made in memory (the collector changes the object
+   *  get() returned, then sets it): the next refresh reads the file even when its stamp is the one this
+   *  store last saw, so the change is discarded rather than taken for the file's. */
+  protected markStale(): void {
+    this.stale = true
   }
 
   /** Resolves once every save queued so far has landed (or failed). Never rejects. */
