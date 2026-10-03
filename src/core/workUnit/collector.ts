@@ -1473,7 +1473,7 @@ export class WorkUnitCollector {
     // windows a session was busy (`commit`, onSessionBusy). Either one keeps the move out of the outside
     // changes ("this move happened inside this app"). They differ for the unit's count: Astera's own
     // operation may have brought content in, a busy window only says the session was working
-    // (noteIncoming, which reads the reflog in both cases).
+    // (noteIncoming, which reads the reflog for a forward move either way).
     const explaining = asteraOperationsAt(projectPath, this.deps.now(), this.ops(), OPERATION_GRACE_MS, isSamePath)
     if (explaining.length === 0) {
       // **세 번째 설명, 이 앱이 전혀 열지 않은 등록.** Host 가 앱이 닫혀 있는 동안 병합했거나, 병합
@@ -1566,31 +1566,32 @@ export class WorkUnitCollector {
    *  go on each unit that went through it (`encountered`, as gitRound computed it) as
    *  `git.incomingFiles`, which committedFiles takes away when the unit closes.
    *
-   *  The HEAD reflog steps of the move are read in every case; a reflog that does not describe the move
-   *  (null) means not incoming, and the count stays what it was before this existed.
+   *  Every incoming move goes **forward** first (`forward`: `before` is an ancestor of `after`, the answer
+   *  gitRound already read for the transition type; null when it was not asked, e.g. a branch switch, or
+   *  git did not answer, and then not incoming). A backward reset or a rebase brings nothing in: its diff
+   *  would be the files of the session's own undone commit. For a forward move the HEAD reflog steps are
+   *  read; a reflog that does not describe the move (null) means not incoming, the count before this
+   *  existed. Mixed steps are never incoming — counting a file too many beats taking the session's own
+   *  commit away.
    *
    *  `byAstera`: Astera's own operation (a Job merge, a checkout it ran) or a Host merge record explained
-   *  the move. Incoming unless a step is a session commit (isSessionCommitStep). Registrations explain by
-   *  time, not by heads (a Job merge for OPERATION_GRACE_MS after it ends, an open Host record for any
-   *  move of the folder), so a session commit landing in the same round, or inside that window, must not
-   *  be taken for the merge. Astera merges with `git merge --no-edit` (integrateGit.ts), so a real Job
-   *  merge writes a `merge ...:` step and stays incoming.
+   *  the move. Incoming only when every step is a merge (isMergeStep): Astera merges with
+   *  `git merge --no-edit` (integrateGit.ts). Registrations explain by time, not by heads (a Job merge for
+   *  OPERATION_GRACE_MS after it ends, an open Host record for any move of the folder), so a session
+   *  commit, reset or cherry-pick landing in the same round or inside that window must not be taken for
+   *  the merge. **Known limit:** the session merging its own branch back inside that window also writes a
+   *  `merge <ref>:` step, so it is taken for Astera's merge and its files are subtracted; telling them
+   *  apart would need the registration to carry the merged ref.
    *
-   *  Otherwise (no explanation, or only a busy window): incoming only when the move goes **forward**
-   *  (`forward`: `before` is an ancestor of `after`, the answer gitRound already read for the transition
-   *  type; null when it was not asked, e.g. a branch switch, or git did not answer) **and** every step is
-   *  a pull (isPullStep). A backward reset or a rebase brings nothing in: its diff would be the files of
-   *  the session's own undone commit. A `merge`, `reset`, `cherry-pick` step cannot tell someone else's
-   *  commits from the session's own (merging its own branch back, redoing an undone commit), so those stay
-   *  counted. Mixed steps (an own commit and a pull in one round) are not incoming either — counting a
-   *  pulled file too many beats taking the session's own commit away.
+   *  Otherwise (no explanation, or only a busy window): incoming only when every step is a pull
+   *  (isPullStep). A `merge`, `reset`, `cherry-pick` step cannot tell someone else's commits from the
+   *  session's own (merging its own branch back, redoing an undone commit), so those stay counted.
    *
    *  This is what reaches the two moves the outside-change subtraction cannot: an Astera merge is never
    *  an outside change, and an untrusted session (codex) gets no subtraction of outside changes at all,
    *  since its own commits are recorded among them. A busy session's own pull is never recorded either.
    *
-   *  Asks git only when some unit went through the move (and, without an Astera explanation, it went
-   *  forward). `known` is the range gitRound already read for an outside change (null: git did not
+   *  Asks git only when some unit went through a forward move. `known` is the range gitRound already read for an outside change (null: git did not
    *  answer it); otherwise one `git diff`. No answer adds nothing. */
   private async noteIncoming(
     projectPath: string,
@@ -1604,12 +1605,12 @@ export class WorkUnitCollector {
     reads: RoundReads
   ): Promise<void> {
     if (encountered.length === 0 || !from || !to || from === to) return
-    if (!byAstera && forward !== true) return
+    if (forward !== true) return
     const steps = await reads.get(`steps\0${repo}\0${from}\0${to}`, () =>
       this.deps.git.headSteps(projectPath, from, to)
     )
     if (!steps || steps.length === 0) return
-    if (byAstera ? steps.some(isSessionCommitStep) : !steps.every(isPullStep)) return
+    if (!steps.every(byAstera ? isMergeStep : isPullStep)) return
     const files =
       known !== undefined
         ? (known?.changedFiles ?? null)
@@ -2040,12 +2041,13 @@ export class WorkUnitCollector {
   }
 }
 
-/** A HEAD reflog step that is the session's own commit: `git commit` writes `commit: <subject>`, and
- *  `commit (initial):`, `commit (amend):`, `commit (merge):` for its three special cases. A move an
- *  Astera operation explains is not incoming when any of its steps is one of these (noteIncoming). */
-const SESSION_COMMIT_STEP = /^commit(?: \((?:initial|amend|merge)\))?: /
-function isSessionCommitStep(subject: string): boolean {
-  return SESSION_COMMIT_STEP.test(subject)
+/** A HEAD reflog step written by `git merge <ref>`: `merge <ref>: Fast-forward` or
+ *  `merge <ref>: Merge made by the 'ort' strategy.` (measured, git 2.45.1, range.test.ts). Astera's own
+ *  merges (Job and Host) run `git merge --no-edit <ref>` (integrateGit.ts), so a move an Astera operation
+ *  explains is incoming only when every step is one of these (noteIncoming). */
+const MERGE_STEP = /^merge /
+function isMergeStep(subject: string): boolean {
+  return MERGE_STEP.test(subject)
 }
 
 /** A HEAD reflog step written by `git pull`. Its subject starts with `pull` and the arguments it was

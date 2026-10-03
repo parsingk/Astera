@@ -188,6 +188,27 @@ describe('readHeadSteps', () => {
     await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['merge o: Fast-forward'])
   })
 
+  it('merge --no-edit writes a merge step, both fast-forward and a merge commit', async () => {
+    const repo = await makeRepo()
+    run(repo, ['branch', 'f1'])
+    run(repo, ['checkout', '-q', 'f1'])
+    await commit(repo, 'f1.txt')
+    run(repo, ['checkout', '-q', 'main'])
+    let before = headHash(repo)
+    run(repo, ['merge', '-q', '--no-edit', 'f1'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['merge f1: Fast-forward'])
+
+    run(repo, ['checkout', '-q', '-b', 'f2'])
+    await commit(repo, 'f2.txt')
+    run(repo, ['checkout', '-q', 'main'])
+    await commit(repo, 'm.txt')
+    before = headHash(repo)
+    run(repo, ['merge', '-q', '--no-edit', 'f2'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual([
+      "merge f2: Merge made by the 'ort' strategy."
+    ])
+  })
+
   it('a pull that merges is one pull step', async () => {
     const repo = await makeRepo()
     const bare = await addOrigin(repo)

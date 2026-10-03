@@ -3248,6 +3248,28 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
     expect(await result(repo, collector, store)).toEqual({ incoming: ['j.txt'], observed: ['c.txt'] })
   })
 
+  // A job merge explains every move for its grace, by time. A backward reset of the session's own commit
+  // inside that window is not a merge step and does not go forward, so it must not become incoming.
+  for (const trusted of [false, true]) {
+    it(`a reset back and redo inside a job merge grace is not incoming (${trusted ? 'trusted' : 'untrusted'})`, async () => {
+      const { repo, collector, store } = await openUnit(trusted)
+      await featureBranch(repo, collector)
+      const op = collector.beginGitOperation('job-merge', repo)
+      gitSync(repo, ['merge', '-q', '--no-ff', '--no-edit', 'feature'])
+      collector.endGitOperation(op)
+      await round(collector)
+      if (trusted) collector.onSessionBusy('s1', repo, true)
+      await commitFile(repo, 'b.txt')
+      await round(collector)
+      gitSync(repo, ['reset', '-q', '--hard', 'HEAD~1'])
+      await round(collector)
+      gitSync(repo, ['reset', '-q', '--hard', 'HEAD@{1}'])
+      await round(collector)
+      if (trusted) await collector.onSessionIdle('s1')
+      expect(await result(repo, collector, store)).toEqual({ incoming: ['j.txt'], observed: ['b.txt'] })
+    })
+  }
+
   it('a job merge that fast-forwards (merge --no-edit) is still incoming', async () => {
     const { repo, collector, store } = await openUnit(true)
     await featureBranch(repo, collector)
