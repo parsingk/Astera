@@ -93,13 +93,16 @@ export function goalSignalOf(record: Record<string, unknown>): GoalSignal | null
   }
 
   // codex 0.160 — the goal's end, from the output of the model's `update_goal` call (see above). Only
-  // a whole `input_text` item that parses as exactly `{ goal: { status: 'complete', objective } }`
-  // counts; the goal JSON quoted inside other text is a message and is not read.
+  // a whole `input_text` item that parses as exactly `{ goal: { status: 'complete', objective,
+  // threadId } }` counts; the goal JSON quoted inside other text is a message and is not read.
   if (record.type === 'response_item') {
     const p = record.payload
     if (!isObj(p) || p.type !== 'custom_tool_call_output' || !Array.isArray(p.output)) return null
     for (const item of p.output) {
       if (!isObj(item) || item.type !== 'input_text' || typeof item.text !== 'string') continue
+      // Every tool output passes through here, so text that cannot be the goal object is turned
+      // away before it is parsed. codex writes the object compact, with `goal` as its first key.
+      if (!item.text.trim().startsWith('{"goal"')) continue
       let parsed: unknown
       try {
         parsed = JSON.parse(item.text)
@@ -108,7 +111,8 @@ export function goalSignalOf(record: Record<string, unknown>): GoalSignal | null
       }
       if (!isObj(parsed) || !isObj(parsed.goal)) continue
       const g = parsed.goal
-      if (g.status === 'complete' && objectiveOf(g.objective) !== null) return { kind: 'end' }
+      if (g.status === 'complete' && objectiveOf(g.objective) !== null && typeof g.threadId === 'string' && g.threadId !== '')
+        return { kind: 'end' }
     }
     return null
   }

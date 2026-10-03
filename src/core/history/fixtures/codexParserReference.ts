@@ -28,10 +28,11 @@ interface CodexMeta {
    *  and a null is never treated as exec: losing a real session costs far more than showing an extra
    *  row. */
   source: string | null
-  /** The thread this rollout is a child of, from `session_meta.parent_thread_id`. Measured
-   *  2026-10-03 on codex-cli 0.160.0: codex opens child threads of its own (a "guardian" subagent)
-   *  with their own rollout in the same folder and cwd, and their `session_id` repeats the parent's
-   *  id. null on a rollout a session writes for itself, and on a codex that predates the field. */
+  /** The thread this rollout is a child of, from `session_meta.parent_thread_id`. codex writes it on
+   *  the rollout of a child thread it opens itself (a "guardian" subagent, for one) from codex-cli
+   *  0.142.5 onward, and never on a session's own rollout (a scan of 316 local sessions, 2026-10-03).
+   *  A child's rollout sits in the same folder with the same cwd, and its `session_id` repeats the
+   *  parent's id (measured on 0.160.0). null on a session's own rollout and before 0.142.5. */
   parentThreadId: string | null
 }
 

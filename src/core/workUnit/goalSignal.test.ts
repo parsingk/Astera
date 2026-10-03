@@ -146,6 +146,18 @@ describe('goalSignalOf — codex 0.160 의 update_goal 결과', () => {
     for (const text of cases) expect(goalSignalOf(codex160Output([codex160Header, text])), text).toBeNull()
   })
 
+  it('threadId 가 없는 목표는 끝이 아니다', () => {
+    const withThread = (threadId: unknown) => {
+      const g: Record<string, unknown> = { ...codex160Goal('complete') }
+      if (threadId === undefined) delete g.threadId
+      else g.threadId = threadId
+      return codex160Output([codex160Header, codex160GoalJson(g)])
+    }
+    expect(goalSignalOf(withThread(undefined))).toBeNull()
+    expect(goalSignalOf(withThread(''))).toBeNull()
+    expect(goalSignalOf(withThread(7))).toBeNull()
+  })
+
   it('다른 도구의 결과 모양이면 읽지 않는다', () => {
     const json = codex160GoalJson(codex160Goal('complete'))
     // a function call's output carries a plain string, not input_text items
