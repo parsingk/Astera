@@ -23,12 +23,15 @@ const agentReply = vi.hoisted(() => ({
   during: null as null | (() => Promise<void>),
   /** The prompt handed to the last call — lets a test check what material reached the agent
    *  without re-deriving buildRecordPrompt's own logic. */
-  lastPrompt: null as string | null
+  lastPrompt: null as string | null,
+  /** The folder the last call ran in. */
+  lastCwd: null as string | null
 }))
 vi.mock('./agent', () => ({
-  runAgent: async (a: { prompt: string }): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
+  runAgent: async (a: { prompt: string; cwd: string }): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
     agentReply.calls += 1
     agentReply.lastPrompt = a.prompt
+    agentReply.lastCwd = a.cwd
     if (agentReply.during) await agentReply.during()
     return agentReply.fail ? { ok: false, reason: agentReply.fail } : { ok: true, value: agentReply.value }
   }
@@ -113,6 +116,7 @@ beforeEach(async () => {
   agentReply.calls = 0
   agentReply.during = null
   agentReply.lastPrompt = null
+  agentReply.lastCwd = null
 })
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
@@ -348,6 +352,66 @@ describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
     const r = store.get(projectRoot)!.records[0]
     expect(r.status).toBe('failed')
     expect(r.reason).toBe('NO_GENERATOR_ACCOUNT')
+  })
+})
+
+// A Run's changes live in its worktree until someone merges them, so the write-up has to look there.
+describe('onRunFinished — a Run with its own worktree', () => {
+  let workDir: string
+  beforeEach(async () => {
+    workDir = path.join(dir, 'worktree')
+    await fs.mkdir(path.join(workDir, 'src'), { recursive: true })
+    await fs.writeFile(path.join(workDir, 'src', 'math.js'), 'export function subtract() {}', 'utf8')
+  })
+  const inWorktree = (): Record<string, unknown> =>
+    explanation({
+      flow: [{ id: 's', label: 'subtract', type: 'start', next: [], evidencePaths: ['src/math.js'] }],
+      implementation: [{ role: 'subtract', path: 'src/math.js' }],
+      evidencePaths: ['src/math.js']
+    })
+
+  it('the record carries workDir, stays keyed by the project root, and the agent runs in the worktree', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = inWorktree()
+    await pipeline.onRunFinished(projectRoot, runInput({ workDir, changedFiles: ['src/math.js'] }))
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.workDir).toBe(workDir)
+    expect(agentReply.lastCwd).toBe(workDir)
+    expect(agentReply.lastPrompt).toContain(workDir)
+  })
+
+  it('validation accepts an implementation path that exists only in the worktree', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = inWorktree()
+    await pipeline.onRunFinished(projectRoot, runInput({ workDir, changedFiles: ['src/math.js'] }))
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.status).toBe('ready')
+    expect(r.explanation?.implementation.map((i) => i.path)).toEqual(['src/math.js'])
+  })
+
+  it('regenerate after the worktree folder was removed falls back to the project root', async () => {
+    const logs: string[] = []
+    const { store, pipeline } = await make(undefined, { log: (m) => logs.push(m) })
+    agentReply.value = inWorktree()
+    await pipeline.onRunFinished(projectRoot, runInput({ workDir, changedFiles: ['src/math.js'] }))
+    const id = store.get(projectRoot)!.records[0].id
+    await fs.rm(workDir, { recursive: true, force: true })
+
+    agentReply.value = explanation()
+    await pipeline.regenerate(projectRoot, id)
+    expect(agentReply.lastCwd).toBe(projectRoot)
+    expect(store.get(projectRoot)!.records[0].status).toBe('ready')
+    expect(logs.filter((m) => m.includes(workDir))).toHaveLength(1)
+  })
+
+  it('a Run without a worktree behaves as today', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onRunFinished(projectRoot, runInput())
+    const r = store.get(projectRoot)!.records[0]
+    expect('workDir' in r).toBe(false)
+    expect(agentReply.lastCwd).toBe(projectRoot)
+    expect(r.status).toBe('ready')
   })
 })
 

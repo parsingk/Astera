@@ -69,12 +69,12 @@ export interface CollectorSession {
   projectPath: string
   /** 아직 모르면 null — 그 세션은 이번 회차에서 건너뛴다 */
   transcriptPath: string | null
-  /** `ProviderDescriptor.busyTitleReliable` — false for codex. **Not read anywhere in this file
-   *  today.** Idle no longer closes or interrupts a unit at all under this declared boundary —
-   *  `onSessionIdle` only closes the busy-git-operation registration (`endBusyOperation`), regardless
-   *  of this flag. ipc.ts still computes and passes it per session because the same descriptor value
-   *  also drives `busySignalTrusted` (`onSessionBusy`'s own parameter, which *is* read); this field
-   *  is carried alongside it rather than singled out at the call site. */
+  /** `ProviderDescriptor.busyTitleReliable` — false for codex. Idle no longer closes or interrupts a
+   *  unit at all under this declared boundary — `onSessionIdle` only closes the busy-git-operation
+   *  registration (`endBusyOperation`), regardless of this flag. **Read in one place**: since it is the
+   *  same descriptor value as `busySignalTrusted` (`onSessionBusy`'s own parameter), it says whether
+   *  this session's own commits were registered rather than recorded as outside changes, which
+   *  `committedFiles` needs before it subtracts those changes' files. */
   idleSignalTrusted: boolean
 }
 
@@ -100,6 +100,10 @@ export interface CollectorGit {
     before: string,
     after: string
   ): Promise<{ commits: string[]; changedFiles: string[]; authors?: string[] } | null>
+  /** Only the files changed between before and after (range.ts's readRangeFiles: one `git diff`,
+   *  where readRange spawns four). For the look at the commits inside a unit's window (observeLive).
+   *  **null is "git did not answer"**, as for readRange. */
+  rangeFiles(repoPath: string, before: string, after: string): Promise<string[] | null>
 }
 
 export interface CollectorDeps {
@@ -435,7 +439,7 @@ export class WorkUnitCollector {
     if (open) {
       // A live look before the transition — see observe's own doc for why all three interrupt
       // paths (this one, onSessionExit, closeAll) take one at exactly this moment.
-      this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+      await this.observeLive(state, s.projectPath, [open])
       const i = state.units.indexOf(open)
       state.units[i] = interruptedTask(open, { at, reason: 'INTERRUPTED_BY_NEW_TASK' })
       interruptedId = open.id
@@ -492,8 +496,8 @@ export class WorkUnitCollector {
     const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
     if (!open) return { ok: false as const, reason: 'NO_ACTIVE_TASK' }
     // The live read sets or clears `observationUnknown` on this open unit (observe), which finish reads.
-    this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
-    this.finish(state, open, completedTask(open, { ...input, at: this.nowIso() }), s.projectPath)
+    const head = await this.observeLive(state, s.projectPath, [open])
+    this.finish(state, open, completedTask(open, { ...input, at: this.nowIso() }), s.projectPath, head)
     await this.persist(s.projectPath, state)
     this.deps.onTasksChanged?.(s.projectPath)
     return { ok: true as const, id: open.id }
@@ -525,12 +529,13 @@ export class WorkUnitCollector {
       // Only an open (active) unit takes this live read into its window — see observe, which also
       // sets or clears its `observationUnknown`. An interrupted unit keeps the flag its window closed
       // on; finish reads it either way.
-      if (this.running) this.observe(state, projectPath, await this.changedFiles(projectPath))
+      const head = this.running ? await this.observeLive(state, projectPath, [u]) : undefined
       const recorded = this.finish(
         state,
         u,
         completedTask(u, { source: 'user', at: this.nowIso() }),
-        projectPath
+        projectPath,
+        head
       )
       await this.persist(projectPath, state)
       this.deps.onTasksChanged?.(projectPath)
@@ -853,7 +858,7 @@ export class WorkUnitCollector {
       let dirty = await this.tail(state, s)
       const open = state.units.filter((u) => u.sessionId === sessionId && u.status === 'active')
       if (open.length > 0) {
-        this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+        await this.observeLive(state, s.projectPath, open)
         const at = this.nowIso()
         for (const u of open)
           state.units[state.units.indexOf(u)] = interruptedTask(u, {
@@ -1150,6 +1155,7 @@ export class WorkUnitCollector {
       let anyInterrupted = false
       for (const u of state.units) {
         if (u.status !== 'active' || this.known.has(u.sessionId)) continue
+        await this.observeAtRestart(state, u)
         state.units[state.units.indexOf(u)] = interruptedTask(u, {
           at,
           reason: 'INTERRUPTED_BY_APP_RESTART'
@@ -1178,6 +1184,7 @@ export class WorkUnitCollector {
       let dirty = false
       for (const u of state.units) {
         if (u.status !== 'active') continue
+        await this.observeAtRestart(state, u)
         state.units[state.units.indexOf(u)] = interruptedTask(u, {
           at: orphanedAt,
           reason: 'INTERRUPTED_BY_APP_RESTART'
@@ -1564,7 +1571,7 @@ export class WorkUnitCollector {
       }
       const open = state.units.filter((u) => u.status === 'active')
       if (open.length > 0) {
-        this.observe(state, projectPath, await this.changedFiles(projectPath))
+        await this.observeLive(state, projectPath, open)
         const at = this.nowIso()
         for (const u of open)
           state.units[state.units.indexOf(u)] = interruptedTask(u, {
@@ -1611,10 +1618,11 @@ export class WorkUnitCollector {
    *      read-only shell command still passes this guard on its own; sawWrite answers "did *this*
    *      session touch anything", not "did anything change".
    *    - `next.git.observedChangedFiles.length === 0` — nothing changed in the working tree during
-   *      this unit's window, full stop. Spec §12: *"A `completed` record with no changed files is
-   *      still not recorded. The person may have started a record and then only talked."* This is
-   *      the guard that actually enforces that sentence — `sawWrite` alone does not, because a run of
-   *      `Bash`/`PowerShell` that changed nothing still sets it.
+   *      this unit's window, and nothing was committed in it (observeLive), full stop. Spec §12:
+   *      *"A `completed` record with no changed files is still not recorded. The person may have
+   *      started a record and then only talked."* This is the guard that actually enforces that
+   *      sentence — `sawWrite` alone does not, because a run of `Bash`/`PowerShell` that changed
+   *      nothing still sets it.
    *  Neither subsumes the other: a session can satisfy one and fail the other, and both must hold
    *  for a completion to be worth keeping.
    *
@@ -1631,7 +1639,10 @@ export class WorkUnitCollector {
     state: WorkUnitState,
     unit: SessionWorkUnit,
     next: SessionWorkUnit,
-    projectPath: string
+    projectPath: string,
+    /** HEAD as the completion read it just now (observeLive), when it moved since the unit
+     *  started. Otherwise the cached ref, as before. */
+    freshHead?: string
   ): boolean {
     const i = state.units.indexOf(unit)
     // observationUnknown: the last look at this unit's window got no answer from git — then an empty
@@ -1644,7 +1655,7 @@ export class WorkUnitCollector {
     }
     if (i >= 0) state.units[i] = next
     if (next.status !== 'completed') return true
-    const head = this.lastRef.get(projectPath)?.head
+    const head = freshHead ?? this.lastRef.get(projectPath)?.head
     if (head !== undefined) next.git.endHead = head
     // **Called and not awaited.** The write-up runs an agent for tens of seconds; waiting would
     // delay this round's save. The pipeline's own queue keeps the order.
@@ -1662,20 +1673,27 @@ export class WorkUnitCollector {
    *  Interpreter, not this method.
    *
    *  **Called with a live read right before every interrupt.** `onSessionExit`, `closeAll`, and
-   *  `startTask`'s new-task branch all call `changedFiles()` and hand it to `observe` in the same
-   *  breath as the `interruptedTask` transition that follows. That ordering is load-bearing, not a
+   *  `startTask`'s new-task branch all take that read (with the unit's commits, observeLive) in the
+   *  same breath as the `interruptedTask` transition that follows. That ordering is load-bearing, not a
    *  style choice: `isOpen` excludes everything but `active`, so once a unit is interrupted this
    *  method never touches it again — whatever `observedChangedFiles` holds at that exact moment is
    *  what a later 완료 (`finish`, Critical 1's second guard) judges the unit by. A fourth path that
    *  interrupts a unit without this same live look first can freeze it holding zero observed files
    *  despite real, already-made edits sitting right there in the working tree. */
-  private observe(state: WorkUnitState, projectPath: string, files: string[] | null): boolean {
+  private observe(
+    state: WorkUnitState,
+    projectPath: string,
+    files: string[] | null,
+    /** Only this unit, not every open unit — for a read that belongs to one unit's own window
+     *  (observeLive's startHead..HEAD). */
+    only?: SessionWorkUnit
+  ): boolean {
     let changed = false
     // Each read decides `observationUnknown` for every open unit: null (git did not answer) sets it,
     // any answer clears it. Nothing is added on null — and nothing is concluded either: finish reads
     // the flag, so an interrupt that happens on a null read leaves the unit marked "could not check".
     for (const u of state.units) {
-      if (u.projectPath !== projectPath || !isOpen(u.status)) continue
+      if (u.projectPath !== projectPath || !isOpen(u.status) || (only && u !== only)) continue
       if (files === null && u.git.observationUnknown !== true) {
         u.git.observationUnknown = true
         changed = true
@@ -1686,7 +1704,7 @@ export class WorkUnitCollector {
     }
     if (files === null || files.length === 0) return changed
     for (const u of state.units) {
-      if (u.projectPath !== projectPath || !isOpen(u.status)) continue
+      if (u.projectPath !== projectPath || !isOpen(u.status) || (only && u !== only)) continue
       // 열릴 때 이미 더러웠던 파일은 이 Unit 의 관찰이 아니다. 기준선에 있던 파일이 이 구간에
       // **또** 바뀌었어도 가려낼 방법이 없어(status 는 경로만 준다) 세지 않는다 — 덜 세는 쪽이
       // 낫다: 더 세면 질문 Unit 이 completed 로 확정되고, 덜 세면 다음 신호가 다시 기회를 준다
@@ -1700,6 +1718,138 @@ export class WorkUnitCollector {
       }
     }
     return changed
+  }
+
+  /** The live look taken right before an open unit leaves `active`: completion (`finish`) and every
+   *  live interrupt (`startTask`'s new-task branch, `onSessionExit`, `closeAll`). The working tree for
+   *  every open unit in the project, as before, and then, for each of `units`, the commits made inside
+   *  its window.
+   *
+   *  **Why the commits too.** An agent that edits and commits in one step (`git commit -am`) leaves
+   *  nothing uncommitted by the time any working-tree read looks, and `gitRound` does not add a
+   *  range's files to units either, so such a unit reached `finish` with no observed files and was
+   *  dropped as "nothing changed". When HEAD has moved since a unit's `startHead`, the files of
+   *  `startHead..HEAD` go through `observe` like a working-tree read (the baseline rule still
+   *  applies), for that unit only: the range is measured from its own start. **The interrupts take
+   *  it too** because an interrupted unit's observation is frozen there (see observe): a unit that
+   *  committed and was then interrupted would otherwise be dropped when someone completes it later.
+   *
+   *  **Same meaning as the working-tree files: changed during the window, not by this unit.** A
+   *  commit another session made in that window counts too, exactly as its uncommitted edits would.
+   *  A commit made before the unit started is outside the range and is not counted.
+   *
+   *  No answer from git (the ref read or the range read) sets `observationUnknown`, as a null
+   *  working-tree read does; a range answer never clears a flag the working-tree read just set.
+   *  A unit that is not open (already interrupted) takes nothing: its window is closed.
+   *
+   *  Returns the HEAD it read when that moved, for `finish` to stamp as `endHead` (the cached ref can
+   *  still be the start). */
+  private async observeLive(
+    state: WorkUnitState,
+    projectPath: string,
+    units: SessionWorkUnit[]
+  ): Promise<string | undefined> {
+    const tree = await this.changedFiles(projectPath)
+    this.observe(state, projectPath, tree)
+    const started = units.filter((u) => isOpen(u.status) && u.git.startHead !== null)
+    if (started.length === 0) return undefined
+    let head: string | null = null
+    try {
+      head = (await this.deps.git.readRef(projectPath)).head
+    } catch (e) {
+      this.log(`git ref failed ${projectPath}: ${String(e)}`)
+    }
+    if (head === null) {
+      for (const u of started) this.observe(state, projectPath, null, u)
+      return undefined
+    }
+    let moved = false
+    const reads = new Map<string, Promise<string[] | null | undefined>>()
+    for (const u of started) {
+      const start = u.git.startHead as string
+      if (start === head) continue
+      moved = true
+      const files = await this.committedFiles(state, projectPath, u, start, head, reads)
+      // Not an ancestor: the range is not this window's work, and nothing is added (or concluded).
+      if (files === undefined) continue
+      this.observe(state, projectPath, files, u)
+      if (tree === null) this.observe(state, projectPath, null, u)
+    }
+    return moved ? head : undefined
+  }
+
+  /** The files committed inside one unit's window, `start..end`, for observeLive and the restart
+   *  interrupts in `seed`. **undefined: not this window's work, count nothing** — `start` is not an
+   *  ancestor of `end` (a branch switch, a reset, a rebase inside the window: the two trees' diff
+   *  would be unrelated files). **null: git did not answer** (the ancestry question or the diff).
+   *
+   *  **Outside changes the unit went through are taken away** (its `encounteredExternalGitChangeIds`:
+   *  a pull, anything gitRound recorded as not this app's): those are not the session's edits, and
+   *  counting too little is this file's preferred direction (observe). Best effort — a job merge or a
+   *  Host merge is an Astera operation, never recorded as an outside change, so its files stay.
+   *  **Only for a session whose busy signal is trusted** (`idleSignalTrusted`, the same descriptor
+   *  value): an untrusted one (codex) opens no busy registration (onSessionBusy), so its own commits
+   *  are recorded as outside changes too, and subtracting would take away the session's own work.
+   *  A session no longer known (exited, or orphaned at restart) is not subtracted for either.
+   *
+   *  `reads` shares the git answers between units that opened at the same HEAD. */
+  private async committedFiles(
+    state: WorkUnitState,
+    projectPath: string,
+    unit: SessionWorkUnit,
+    start: string,
+    end: string,
+    reads: Map<string, Promise<string[] | null | undefined>>
+  ): Promise<string[] | null | undefined> {
+    const key = `${start}\0${end}`
+    let read = reads.get(key)
+    if (read === undefined) {
+      read = (async () => {
+        let ancestor: boolean | null = null
+        try {
+          ancestor = await this.deps.git.isAncestor(projectPath, start, end)
+        } catch (e) {
+          this.log(`ancestry failed ${projectPath}: ${String(e)}`)
+        }
+        if (ancestor === false) return undefined
+        let files: string[] | null = null
+        if (ancestor === true) {
+          try {
+            files = await this.deps.git.rangeFiles(projectPath, start, end)
+          } catch (e) {
+            this.log(`range failed ${projectPath}: ${String(e)}`)
+          }
+        }
+        if (files === null) this.log(`range unknown ${projectPath} ${start}..${end}: git did not answer`)
+        return files
+      })()
+      reads.set(key, read)
+    }
+    const files = await read
+    if (!files || this.known.get(unit.sessionId)?.idleSignalTrusted !== true) return files
+    const seen = new Set(unit.encounteredExternalGitChangeIds)
+    const outside = new Set(
+      state.externalGitChanges.filter((c) => seen.has(c.id)).flatMap((c) => c.changedFiles)
+    )
+    return files.filter((f) => !outside.has(f))
+  }
+
+  /** The restart interrupts in `seed` (INTERRUPTED_BY_APP_RESTART). **No live look** — the window ended
+   *  at some unknown point while the app was off — so only `startHead..endHead`: the endHead gitRound
+   *  advanced, i.e. only the commits this collector saw inside the window. Anything else (no endHead,
+   *  not moved, not an ancestor, git did not answer) leaves the unit as it was. A range answer does
+   *  not clear an `observationUnknown` the unit already carries: there was no working-tree look. */
+  private async observeAtRestart(state: WorkUnitState, unit: SessionWorkUnit): Promise<void> {
+    // The unit's own path, not the store key it was found under: `observe` matches units by it.
+    const projectPath = unit.projectPath
+    const start = unit.git.startHead
+    const end = unit.git.endHead
+    if (!start || !end || start === end) return
+    const files = await this.committedFiles(state, projectPath, unit, start, end, new Map())
+    if (!files) return
+    const unknown = unit.git.observationUnknown === true
+    this.observe(state, projectPath, files, unit)
+    if (unknown) this.observe(state, projectPath, null, unit)
   }
 
   /** The working tree's changed files, or **null when git could not answer** (an error, a timeout, an

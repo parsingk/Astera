@@ -87,3 +87,22 @@ export async function readRange(
     subjects: subj.ok ? split(subj.stdout) : []
   }
 }
+
+/** Only the files changed between before and after: one `git diff --name-only`, where `readRange` spawns
+ *  four. For a caller that needs nothing but the file list (the work-unit collector's look at the commits
+ *  inside a unit's window, collector.ts's observeLive). Same quoting and NUL splitting as readRange's
+ *  file query; **null when git could not answer**, never [] for a failure. Never throws. */
+export async function readRangeFiles(
+  repoPath: string,
+  before: string,
+  after: string,
+  run: GitRun = git
+): Promise<string[] | null> {
+  const diff = await run(['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', `${before}..${after}`], {
+    cwd: repoPath,
+    timeoutMs: WATCH_ROUND_TIMEOUT_MS,
+    trim: false
+  })
+  if (!diff.ok) return null
+  return diff.stdout.split('\0').filter((t) => t !== '')
+}

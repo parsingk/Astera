@@ -6,6 +6,9 @@
 // writes it once.
 import { outcomeOf } from './view'
 import { jobOf, type OrchState } from './state'
+import type { Job, JobRun, Task } from './types'
+import { runRootOf } from './integrate'
+import { isSamePath } from '../files/tree'
 import type { RunRecordInput } from '../understanding/pipeline'
 
 export function justFinished(
@@ -35,6 +38,8 @@ export function runRecordInputOf(state: OrchState, runId: string): (RunRecordInp
   const job = jobOf(state, run)
   if (!job) return null
   const tasks = state.tasks.filter((t) => t.runId === runId)
+  // Where the Run's changes are until someone merges them (RunRecordInput.workDir): workFolderOf.
+  const root = workFolderOf(state, run, job, tasks)
   return {
     projectPath: job.cwd,
     runId,
@@ -44,6 +49,23 @@ export function runRecordInputOf(state: OrchState, runId: string): (RunRecordInp
     taskIds: tasks.map((t) => t.id),
     tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
     changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
-    validation: { status: outcomeOf(state, runId) === 'completed' ? 'passed' : 'failed' }
+    validation: { status: outcomeOf(state, runId) === 'completed' ? 'passed' : 'failed' },
+    ...(root !== '' && !isSamePath(root, job.cwd) ? { workDir: root } : {})
   }
+}
+
+/** The folder a finished Run's work is in. Usually its run root (runRootOf: the Run worktree, or the
+ *  project folder). **A parallel Run can leave that root empty**: its tasks ran in Task worktrees and,
+ *  with no join point, no integration task ever folded them back (integrate.ts's runWorktrees, and
+ *  command.ts's run-merge, which merges those folders for the same reason). So: if every finished
+ *  dispatch of the Run shares one cwd that is not the run root, that folder; otherwise the run root.
+ *  An open dispatch does not count — it has not finished its work. */
+function workFolderOf(state: OrchState, run: JobRun, job: Job, tasks: Task[]): string {
+  const root = runRootOf(run, job)
+  const taskIds = new Set(tasks.map((t) => t.id))
+  const cwds = state.dispatches.filter((d) => taskIds.has(d.taskId) && d.endedAt !== undefined).map((d) => d.cwd)
+  if (cwds.length === 0) return root
+  const only = cwds[0]
+  if (!cwds.every((c) => isSamePath(c, only)) || isSamePath(only, root)) return root
+  return only
 }
