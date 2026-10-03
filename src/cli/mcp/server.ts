@@ -13,6 +13,7 @@ import {
   type CliErrorCode
 } from '../../core/orchestration/cliOutput'
 import type { JobEvent } from '../../core/types'
+import type { McpClient } from '../../core/continuity/actor'
 import { eventKey } from '../../core/orchestration/cliFollow'
 import { publicEvent, publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
@@ -436,6 +437,39 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
   return server
 }
 
+/** The Host link of one MCP client, as `role: 'mcp'`. It opens at the first tool call, after
+ *  initialize, so the hello names the client that initialize named (MCP spec §29); connectHost cleans
+ *  it before it is sent. stdio starts a Host when none answers (M4); the HTTP process does not, its
+ *  Host is its parent (MCP HTTP design §1), and passes the caller's address as `remote`. */
+export function openMcpHostLink(a: {
+  env: NodeJS.ProcessEnv
+  platform: NodeJS.Platform
+  home: string
+  version: string
+  log(m: string): void
+  client(): McpClient | undefined
+  remote?: string
+  startsHost: boolean
+}): HostLink {
+  const target = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
+  return openHostLink({
+    connect: () =>
+      connectHost({
+        address: target.address,
+        profileDir: target.profileDir,
+        app: a.version,
+        role: 'mcp',
+        client: a.client(),
+        ...(a.remote !== undefined ? { remote: a.remote } : {}),
+        log: a.log
+      }),
+    startHost: async () =>
+      a.startsHost &&
+      (await runHostCommand({ cmd: 'host-start', env: a.env, platform: a.platform, home: a.home, noKeepalive: true })).ok,
+    log: a.log
+  })
+}
+
 /** How long the end of stdin waits for calls still in flight. */
 const DRAIN_CAP_MS = 10_000
 
@@ -453,25 +487,9 @@ export async function serveMcp(a: {
 }): Promise<void> {
   const log = (m: string): void => void process.stderr.write(`astera mcp: ${m}\n`)
   const stdin = a.stdin ?? process.stdin
-  const target = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
   const inner =
     a.link ??
-    openHostLink({
-      // The link opens at the first tool call, after initialize, so the hello names the client that
-      // initialize named (MCP spec §29); connectHost cleans it before it is sent.
-      connect: () =>
-        connectHost({
-          address: target.address,
-          profileDir: target.profileDir,
-          app: a.version,
-          role: 'mcp',
-          client: server.server.getClientVersion(),
-          log
-        }),
-      startHost: async () =>
-        (await runHostCommand({ cmd: 'host-start', env: a.env, platform: a.platform, home: a.home, noKeepalive: true })).ok,
-      log
-    })
+    openMcpHostLink({ env: a.env, platform: a.platform, home: a.home, version: a.version, log, client: () => server.server.getClientVersion(), startsHost: true })
 
   // **Calls in flight are counted so the end of stdin does not cut them off.** A client may write its
   // last request and close stdin at once (a pipe does), and closing the server aborts every handler

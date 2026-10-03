@@ -1,0 +1,276 @@
+// `astera mcp http` (MCP HTTP design §1): the same MCP server as `astera mcp serve`, over the SDK's
+// Streamable HTTP transport at http://<bind>:<port>/mcp, behind a bearer token and an allowed-hosts check.
+// One MCP session (the transport's session id) gets its own server and its own Host link, as one stdio
+// process does. The Host starts this process and reads its stdout: one JSON line when it listens, or
+// one when it could not, and nothing else. Every diagnostic goes to stderr; the token never does.
+import { randomUUID } from 'node:crypto'
+import http from 'node:http'
+import os from 'node:os'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
+import type { McpClient } from '../../core/continuity/actor'
+import { createTokenReader, tokenMatches } from '../../core/mcp/httpToken'
+import type { HostLink } from './hostLink'
+import { createMcpServer, openMcpHostLink } from './server'
+
+/** Body cap (MCP HTTP design §1). */
+const BODY_CAP = 4 * 1024 * 1024
+/** A session unseen this long is closed (MCP HTTP design §1). */
+const IDLE_MS = 30 * 60_000
+
+type Session = { transport: StreamableHTTPServerTransport; server: McpServer; lastSeen: number }
+
+/** The Host header values this process answers to: `127.0.0.1:<port>`, `localhost:<port>`, the hosts it
+ *  was given (with `:<port>` added when they name none), and, when bound beyond loopback, this machine's
+ *  own addresses as they are at start. Lower case. */
+function allowedHosts(port: number, bind: string, hosts: string[]): Set<string> {
+  const withPort = (h: string): string => {
+    const v = h.trim().toLowerCase()
+    if (/^\[.*\]:\d+$/.test(v) || /^[^:]+:\d+$/.test(v)) return v
+    return v.includes(':') && !v.startsWith('[') ? `[${v}]:${port}` : `${v}:${port}`
+  }
+  const out = new Set([`127.0.0.1:${port}`, `localhost:${port}`])
+  for (const h of hosts) if (h.trim()) out.add(withPort(h))
+  if (bind !== '127.0.0.1' && bind !== 'localhost')
+    for (const list of Object.values(os.networkInterfaces()))
+      for (const n of list ?? []) out.add(withPort(n.address.split('%')[0]))
+  return out
+}
+
+/** `host:port` of an Origin header, with the scheme's default port spelled out; null when it is not a URL
+ *  (`null` included). */
+function originHost(origin: string): string | null {
+  try {
+    const u = new URL(origin)
+    return `${u.hostname.toLowerCase()}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`
+  } catch {
+    return null
+  }
+}
+
+const bearerOf = (h: string | undefined): string | null => /^Bearer\s+(\S+)\s*$/i.exec(h ?? '')?.[1] ?? null
+
+const sendJson = (res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void => {
+  res.writeHead(status, { 'content-type': 'application/json', ...headers })
+  res.end(JSON.stringify(body))
+}
+
+const rpcError = (code: number, message: string) => ({ jsonrpc: '2.0', error: { code, message }, id: null })
+
+/** The whole body, or 'tooLarge' once it passes the cap; past the cap the rest is read and dropped, so
+ *  the client gets the 413 instead of a reset connection. */
+function readBody(req: http.IncomingMessage): Promise<string | 'tooLarge'> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size <= BODY_CAP) chunks.push(c)
+    })
+    req.on('end', () => resolve(size > BODY_CAP ? 'tooLarge' : Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+export async function serveMcpHttp(a: {
+  port: number
+  bind: string
+  hosts: string[]
+  tokenFile: string
+  version: string
+  env: NodeJS.ProcessEnv
+  platform: NodeJS.Platform
+  home: string
+  log(m: string): void
+  /** Test injection; without it each session opens the real link to this profile's Host. `client` is
+   *  read when the link opens, after initialize, like stdio's. */
+  link?: (s: { client(): McpClient | undefined; remote: string | undefined }) => HostLink
+  /** Test injection for the idle close. */
+  idleMs?: number
+}): Promise<{ close(): Promise<void>; address(): { port: number } }> {
+  const { log } = a
+  const idleMs = a.idleMs ?? IDLE_MS
+  const reader = createTokenReader(a.tokenFile)
+  const sessions = new Map<string, Session>()
+  const debug = a.env.ASTERA_MCP_LOG_LEVEL === 'debug'
+  const makeLink =
+    a.link ??
+    ((s: { client(): McpClient | undefined; remote: string | undefined }) =>
+      openMcpHostLink({
+        env: a.env,
+        platform: a.platform,
+        home: a.home,
+        version: a.version,
+        log,
+        client: s.client,
+        ...(s.remote !== undefined ? { remote: s.remote } : {}),
+        startsHost: false
+      }))
+  let allowed = new Set<string>()
+
+  const openSession = async (req: http.IncomingMessage, res: http.ServerResponse, body: unknown, remote: string | undefined): Promise<void> => {
+    const link = makeLink({ client: () => server.server.getClientVersion(), remote })
+    const server = createMcpServer({ link, version: a.version, log, debug })
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (id) => void sessions.set(id, { transport, server, lastSeen: Date.now() })
+    })
+    // The server's hook fires on every close: DELETE, the idle sweep, shutdown, a broken transport.
+    server.server.onclose = () => {
+      if (transport.sessionId !== undefined) sessions.delete(transport.sessionId)
+      link.close()
+    }
+    await server.connect(transport)
+    await transport.handleRequest(req, res, body)
+    // An initialize the transport refused (a bad Accept header, say) made no session: nothing keeps it.
+    if (transport.sessionId === undefined || !sessions.has(transport.sessionId)) await server.close()
+  }
+
+  const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    const remote = req.socket.remoteAddress?.replace(/^::ffff:/, '')
+    // **The token comes before anything else**, the path included. Only the address is logged.
+    let token: string | null = null
+    try {
+      token = await reader.current()
+    } catch (err) {
+      log(`the token file cannot be read: ${(err as NodeJS.ErrnoException).code ?? 'error'}`)
+    }
+    const given = bearerOf(req.headers.authorization)
+    if (token === null || given === null || !tokenMatches(given, token)) {
+      log(`401: refused a request from ${remote ?? 'an unknown address'} without a valid token`)
+      req.resume()
+      return sendJson(res, 401, {}, { 'www-authenticate': 'Bearer' })
+    }
+    // Checked here rather than by the transport's DNS-rebinding options: those run only once a session's
+    // transport exists, and an initialize would build its server and link before being refused.
+    const host = (req.headers.host ?? '').toLowerCase()
+    const origin = req.headers.origin
+    if (!allowed.has(host) || (origin !== undefined && !allowed.has(originHost(origin) ?? ''))) {
+      log(`403: refused a request from ${remote ?? 'an unknown address'} for host ${JSON.stringify(req.headers.host ?? '')}${origin !== undefined ? ` and origin ${JSON.stringify(origin)}` : ''}`)
+      req.resume()
+      return sendJson(res, 403, rpcError(-32000, 'Forbidden: host or origin not allowed'))
+    }
+    if (new URL(req.url ?? '/', 'http://x').pathname !== '/mcp') {
+      req.resume()
+      return sendJson(res, 404, {})
+    }
+    let body: unknown
+    if (req.method === 'POST') {
+      const text = await readBody(req)
+      if (text === 'tooLarge') return sendJson(res, 413, rpcError(-32000, 'Request body over 4 MB'))
+      try {
+        body = JSON.parse(text)
+      } catch {
+        return sendJson(res, 400, rpcError(-32700, 'Parse error: Invalid JSON'))
+      }
+    }
+    const sid = req.headers['mcp-session-id']
+    if (typeof sid === 'string') {
+      const s = sessions.get(sid)
+      if (!s) return sendJson(res, 404, rpcError(-32001, 'Session not found'))
+      s.lastSeen = Date.now()
+      return s.transport.handleRequest(req, res, body)
+    }
+    if (req.method === 'POST' && isInitializeRequest(body)) return openSession(req, res, body, remote)
+    return sendJson(res, 400, rpcError(-32000, 'Bad Request: no session; send initialize first'))
+  }
+
+  const httpServer = http.createServer((req, res) => {
+    handle(req, res).catch((err: unknown) => {
+      log(`a request failed: ${err instanceof Error ? err.message : String(err)}`)
+      if (!res.headersSent) sendJson(res, 500, rpcError(-32603, 'Internal error'))
+      else res.end()
+    })
+  })
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject)
+    httpServer.listen(a.port, a.bind, () => {
+      httpServer.off('error', reject)
+      resolve()
+    })
+  })
+  const port = (httpServer.address() as { port: number }).port
+  allowed = allowedHosts(port, a.bind, a.hosts)
+
+  const sweep = setInterval(() => {
+    const now = Date.now()
+    for (const [id, s] of sessions)
+      if (now - s.lastSeen > idleMs) {
+        log(`closing session ${id.slice(0, 8)}, idle for ${Math.round((now - s.lastSeen) / 60_000)} min`)
+        void s.server.close()
+      }
+  }, Math.min(60_000, idleMs))
+  sweep.unref()
+
+  return {
+    address: () => ({ port }),
+    async close() {
+      clearInterval(sweep)
+      await Promise.all([...sessions.values()].map((s) => s.server.close()))
+      // An open SSE stream would hold the server open; nothing is left to answer on it.
+      httpServer.closeAllConnections()
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    }
+  }
+}
+
+export type McpHttpArgs = { port: number; bind: string; tokenFile: string; hosts: string[] }
+
+/** `--port <n> --bind <addr> --token-file <path> [--hosts a,b]`. Port 0 asks for any free port; the
+ *  ready line says which. */
+export function parseMcpHttpArgs(argv: readonly string[]): McpHttpArgs | { error: string } {
+  const values: Record<string, string> = {}
+  for (let i = 0; i < argv.length; i += 2) {
+    const flag = argv[i]
+    if (!['--port', '--bind', '--token-file', '--hosts'].includes(flag)) return { error: `unknown argument: ${flag}` }
+    const v = argv[i + 1]
+    if (v === undefined) return { error: `${flag} needs a value` }
+    values[flag] = v
+  }
+  const port = Number(values['--port'])
+  if (values['--port'] === undefined || !Number.isInteger(port) || port < 0 || port > 65535)
+    return { error: '--port must be an integer from 0 to 65535' }
+  if (!values['--bind']) return { error: '--bind is required' }
+  if (!values['--token-file']) return { error: '--token-file is required' }
+  const hosts = (values['--hosts'] ?? '').split(',').map((h) => h.trim()).filter(Boolean)
+  return { port, bind: values['--bind'], tokenFile: values['--token-file'], hosts }
+}
+
+/** The CLI side: the stdout protocol the Host reads (one JSON line: `{"ready":true,"port":n}` once
+ *  listening, or `{"error":code,"message":text}` before a failing exit), and the ends that close it:
+ *  SIGTERM, SIGINT, or the end of stdin (the Host that started it went). Resolves the exit code. */
+export async function runMcpHttp(a: {
+  argv: readonly string[]
+  env: NodeJS.ProcessEnv
+  platform: NodeJS.Platform
+  home: string
+  version: string
+}): Promise<number> {
+  const line = (v: unknown): void => void process.stdout.write(`${JSON.stringify(v)}\n`)
+  const log = (m: string): void => void process.stderr.write(`astera mcp http: ${m}\n`)
+  const args = parseMcpHttpArgs(a.argv)
+  if ('error' in args) {
+    line({ error: 'INVALID_ARGUMENTS', message: args.error })
+    return 2
+  }
+  let served: Awaited<ReturnType<typeof serveMcpHttp>>
+  try {
+    served = await serveMcpHttp({ ...args, version: a.version, env: a.env, platform: a.platform, home: a.home, log })
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException
+    line({ error: e.code ?? 'LISTEN_FAILED', message: e.message })
+    return 1
+  }
+  line({ ready: true, port: served.address().port })
+  log(`listening on ${args.bind}:${served.address().port}`)
+  await new Promise<void>((resolve) => {
+    process.once('SIGTERM', resolve)
+    process.once('SIGINT', resolve)
+    process.stdin.once('end', resolve)
+    process.stdin.once('close', resolve)
+    process.stdin.resume()
+  })
+  await served.close()
+  return 0
+}

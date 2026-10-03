@@ -34,6 +34,9 @@ export async function connectHost(a: {
   /** The MCP client an `mcp` connection serves (MCP spec §29). Cleaned before it is sent, and left out
    *  when nothing is left of it. */
   client?: McpClient
+  /** The network address an `mcp` connection serves over HTTP (MCP HTTP design §5), stored by the Host as
+   *  given. Left out for stdio. */
+  remote?: string
   timeoutMs?: number
   /** Where a malformed line or a handler that threw gets reported. Every other real caller of
    *  `createLineReader` in this repo — `main/host/client.ts`'s `attach()`, `host/server.ts`'s
@@ -115,7 +118,7 @@ export async function connectHost(a: {
     const client = mcpClientOf(a.client)
     socket.on('connect', () =>
       socket.write(
-        encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: a.role ?? 'cli', nonce, ...(client ? { client } : {}) })
+        encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: a.app, role: a.role ?? 'cli', nonce, ...(client ? { client } : {}), ...(a.remote ? { remote: a.remote } : {}) })
       )
     )
   })

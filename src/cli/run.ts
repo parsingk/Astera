@@ -20,6 +20,7 @@ import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTO
 import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
+import { runMcpHttp } from './mcp/http'
 import { mcpStatus } from './mcp/status'
 import {
   CLI_PROTOCOL,
@@ -1013,6 +1014,14 @@ export async function main(): Promise<void> {
   // id appended (`retryCommandLine`), and a second read of the same array would be a second chance
   // for the two to disagree.
   const argv = process.argv.slice(2)
+  // **`mcp http` answers before usage and the parser** (MCP HTTP design §1): the Host starts it and
+  // reads its stdout, one JSON line, so no envelope or usage text may reach it. It is not in the public
+  // command table either; docs/mcp.md documents it.
+  if (argv[0] === 'mcp' && argv[1] === 'http') {
+    const code = await runMcpHttp({ argv: argv.slice(2), env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(code)
+  }
   const help = usageFor(argv, sessionUsage)
   if (help !== null) {
     if ('error' in help) {

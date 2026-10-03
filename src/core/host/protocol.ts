@@ -338,7 +338,10 @@ export type ClientMessage =
    *  **`client`** is the MCP client an `mcp` socket serves, as its MCP `initialize` named itself (MCP
    *  spec §29). The Host keeps it per socket and journals it on that socket's rows, cleaned again on
    *  arrival (core/continuity/actor.ts `mcpClientOf`), and ignores it from any other role. Additive, so
-   *  HOST_PROTOCOL stays 4. */
+   *  HOST_PROTOCOL stays 4.
+   *
+   *  **`remote`** is the network address of the caller an `mcp` socket serves when it came over HTTP
+   *  (`astera mcp http`, MCP HTTP design §5); absent over stdio. Additive, so HOST_PROTOCOL stays 4. */
   | {
       t: 'hello'
       protocol: number
@@ -348,6 +351,7 @@ export type ClientMessage =
       pid?: number
       nonce?: string
       client?: { name: string; version?: string }
+      remote?: string
     }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
