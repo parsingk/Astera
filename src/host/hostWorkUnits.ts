@@ -162,8 +162,8 @@ export interface HostWorkUnits {
   /** The collector's declarations and the screen's reads, by session and by id. `start`, `complete` and
    *  `cancel` run one collector round first, so a session that appeared since the last round is known.
    *  `completeById` and `cancelById` work with the collector stopped too: they read the file first then.
-   *  `completeById` answers `recorded: true` only when the close was saved and handed to How It Works, and
-   *  NOT_RECORDED when the gate dropped the save. */
+   *  `complete` and `completeById` answer NOT_RECORDED when the gate dropped the save of the close, so
+   *  `recorded: true` means the close was saved and handed to How It Works. */
   sessionTasks: {
     start: C['startTask']
     complete: C['completeTask']
@@ -194,10 +194,10 @@ export interface HostWorkUnits {
   dispose(): void
 }
 
-/** completeById's answer when the unit's close was not saved, so nothing was recorded: the gate dropped
- *  the save (an app keeps the duty now, or this Host is leaving). The task is still open in the file. (A
- *  save that fails answers the collector's own failure.) Not
- *  `recorded: false`, which the app shows as "nothing to record": this one must read as a failure. */
+/** The answer of `complete` and `completeById` when the unit's close was not saved, so nothing was
+ *  recorded: the gate dropped the save (an app keeps the duty now, or this Host is leaving). The task is
+ *  still open in the file. A save that fails answers the collector's own failure. Not `recorded: false`,
+ *  which the app shows as "nothing to record": this one must read as a failure. */
 export const NOT_RECORDED =
   'not recorded: this Host stopped writing workUnits.json before the close was saved, the task is still open'
 
@@ -300,8 +300,20 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
    *  from here on it persists nothing and watches nothing. The collector is not stopped: that would
    *  interrupt every open unit, which is the next Host's start to do. */
   let disposed = false
-  /** The unit a by-id complete is closing, and whether its close was handed over (completeById's answer). */
-  let awaiting: { id: string; handed: boolean } | null = null
+  /** The completes in flight, each told when a close it is waiting for was dropped (their answer). */
+  const watches = new Set<{ matches: (unit: SessionWorkUnit) => boolean; dropped: boolean }>()
+  const watching = async <T>(
+    matches: (unit: SessionWorkUnit) => boolean,
+    act: () => Promise<T>
+  ): Promise<[T, boolean]> => {
+    const w = { matches, dropped: false }
+    watches.add(w)
+    try {
+      return [await act(), w.dropped]
+    } finally {
+      watches.delete(w)
+    }
+  }
 
   const store = new GatedWorkUnitStore(
     d.file,
@@ -316,9 +328,9 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
     (root, unit, saved) => {
       if (!saved) {
         log(`a closed unit of ${root} is not recorded: its save did not land`)
+        for (const w of watches) if (w.matches(unit)) w.dropped = true
         return
       }
-      if (awaiting?.id === unit.id) awaiting.handed = true
       void d.understanding.onUnitClosed(root, unit).then(
         (r) => {
           if (!r.ok) log(`a closed unit of ${root} is not recorded: ${r.reason ?? 'refused'}`)
@@ -456,6 +468,12 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
         running = true
         await collector.start()
         startSync()
+      } else if (want && running && store.isStale()) {
+        // A write was dropped while the collector kept running: the writer went off and back on before
+        // this apply ran. Memory still holds the dropped change and the next save would write it back,
+        // unrecorded, so the file is read again first.
+        const loaded = await store.load()
+        if (loaded.recovered) log('workUnits.json could not be read or parsed, kept the .bak and started empty')
       } else if (!want && running) {
         running = false
         stopSync()
@@ -537,9 +555,14 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
         await caughtUp()
         return collector.startTask(sessionId, objective)
       },
+      // The agent is told when its close was dropped, as completeById tells the screen.
       complete: async (sessionId, input) => {
         await caughtUp()
-        return collector.completeTask(sessionId, input)
+        const [r, dropped] = await watching(
+          (u) => u.sessionId === sessionId,
+          () => collector.completeTask(sessionId, input)
+        )
+        return r.ok && dropped ? { ok: false as const, reason: NOT_RECORDED } : r
       },
       cancel: async (sessionId, reason) => {
         await caughtUp()
@@ -548,14 +571,11 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       // `recorded` only when the close was handed over: a close the gate dropped answers NOT_RECORDED.
       completeById: (projectPath, id) =>
         byId(async () => {
-          const watch = { id, handed: false }
-          awaiting = watch
-          try {
-            const r = await collector.completeTaskById(projectPath, id)
-            return r.ok && r.recorded && !watch.handed ? { ok: false as const, reason: NOT_RECORDED } : r
-          } finally {
-            awaiting = null
-          }
+          const [r, dropped] = await watching(
+            (u) => u.id === id,
+            () => collector.completeTaskById(projectPath, id)
+          )
+          return r.ok && dropped ? { ok: false as const, reason: NOT_RECORDED } : r
         }),
       cancelById: (projectPath, id) => byId(() => collector.cancelTaskById(projectPath, id)),
       list: (projectPath) => collector.listOpen(projectPath)

@@ -206,6 +206,11 @@ export class WorkUnitStore {
     this.stale = true
   }
 
+  /** Whether memory holds a change the file never got (markStale), not yet read over. */
+  isStale(): boolean {
+    return this.stale
+  }
+
   /** Resolves once every save queued so far has landed (or failed). Never rejects. */
   settled(): Promise<void> {
     return this.queue.catch(() => {})

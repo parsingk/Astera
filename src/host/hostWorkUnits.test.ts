@@ -411,10 +411,32 @@ describe('createHostWorkUnits', () => {
       const hw = createHostWorkUnits(r.deps)
       await closeOne(r, hw)
       r.state.writer = false
-      expect((await hw.sessionTasks.complete('s1', { source: 'agent' })).ok).toBe(true)
+      // The agent is told: it would otherwise take its work for recorded.
+      expect(await hw.sessionTasks.complete('s1', { source: 'agent' })).toEqual({ ok: false, reason: NOT_RECORDED })
       await hw.settled()
       expect(r.closed).toEqual([])
       expect(onDisk().projects[project].units[0].status).toBe('active')
+    })
+
+    // The writer went off and back on before the queued apply ran, so the collector never stopped: its
+    // memory still holds the dropped close, and the next declaration's save must not write it back.
+    it('a close dropped while the collector kept running is not written back by a later declaration', async () => {
+      const r = rig()
+      const hw = createHostWorkUnits(r.deps)
+      await closeOne(r, hw)
+      await hw.flush()
+      r.state.writer = false
+      await hw.sessionTasks.complete('s1', { source: 'agent' })
+      r.state.writer = true
+      await hw.writerMayHaveChanged()
+      expect(hw.isRunning()).toBe(true)
+      expect((await hw.sessionTasks.start('s1', 'Next')).ok).toBe(true)
+      await hw.settled()
+      expect(r.closed).toEqual([])
+      expect(onDisk().projects[project].units.map((u) => [u.objective, u.status])).toEqual([
+        ['Fix it', 'interrupted'],
+        ['Next', 'active']
+      ])
     })
 
     it('after dispose', async () => {
@@ -445,7 +467,7 @@ describe('createHostWorkUnits', () => {
       await closeOne(r, hw)
       await hw.flush()
       flipDuringRefresh(r)
-      expect((await hw.sessionTasks.complete('s1', { source: 'agent' })).ok).toBe(true)
+      expect(await hw.sessionTasks.complete('s1', { source: 'agent' })).toEqual({ ok: false, reason: NOT_RECORDED })
       await hw.settled()
       expect(r.closed).toEqual([])
       expect(onDisk().projects[project].units[0].status).toBe('active')
