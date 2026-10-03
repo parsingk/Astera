@@ -2797,14 +2797,15 @@ describe('WorkUnitCollector — 줄인 읽기에서도 모름은 모름이다', 
 // An agent that edits and commits in one step (`git commit -am`) leaves nothing uncommitted for a
 // working-tree read to see. The completion paths also read startHead..HEAD, so that unit is kept.
 describe('WorkUnitCollector — work committed inside the unit is observed at completion', () => {
-  async function setup(run: GitRun = git) {
+  async function setupWithFake(run: GitRun = git) {
     const repo = await makeRepo('astera-wu-committed-')
     const fake = makeFake()
     fake.sessions = [session({ projectPath: repo })]
     const made = await makeCollector(fake, storeFile, undefined, { git: probeGit(run) })
     await made.collector.start()
-    return { repo, ...made }
+    return { repo, fake, ...made }
   }
+  const setup = setupWithFake
   const commitFile = (repo: string, name: string): Promise<void> =>
     fs.writeFile(path.join(repo, name), name, 'utf8').then(() => {
       gitSync(repo, ['add', name])
@@ -2873,6 +2874,68 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
     expect(units).toHaveLength(1)
     expect(units[0].status).toBe('completed')
     expect(units[0].git.observationUnknown).toBe(true)
+    expect(closed).toHaveLength(1)
+  })
+
+  it('a unit edited and committed, then its session exits, is kept with the file when completed by id', async () => {
+    const { repo, collector, store, closed, fake } = await setupWithFake()
+    const started = await collector.startTask('s1', 'add c')
+    if (!started.ok) throw new Error('unexpected')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    fake.sessions = []
+    await collector.onSessionExit('s1')
+    expect(store.get(repo)!.units[0].status).toBe('interrupted')
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+
+    const r = await collector.completeTaskById(repo, started.id)
+    expect(r).toEqual({ ok: true, recorded: true })
+    expect(store.get(repo)!.units[0].git.observedChangedFiles).toEqual(['c.txt'])
+    expect(closed).toHaveLength(1)
+  })
+
+  it('a unit interrupted by a new task carries the file it committed', async () => {
+    const { repo, collector, store } = await setup()
+    const first = await collector.startTask('s1', 'add c')
+    if (!first.ok) throw new Error('unexpected')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    await collector.startTask('s1', 'next')
+    const u = store.get(repo)!.units.find((x) => x.id === first.id)!
+    expect(u.status).toBe('interrupted')
+    expect(u.git.observedChangedFiles).toEqual(['c.txt'])
+  })
+
+  it('a unit interrupted by turning tracking off carries the file it committed', async () => {
+    const { repo, collector, store } = await setup()
+    await collector.startTask('s1', 'add c')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    await collector.stop()
+    const u = store.get(repo)!.units[0]
+    expect(u.status).toBe('interrupted')
+    expect(u.git.observedChangedFiles).toEqual(['c.txt'])
+  })
+
+  it('a range read that fails at the interrupt leaves observationUnknown, and completing keeps the unit', async () => {
+    let broken = false
+    const run: GitRun = (args, opts) =>
+      broken && args.includes('diff')
+        ? Promise.resolve({ ok: false, stdout: '', stderr: 'timed out', timedOut: true as const })
+        : git(args, opts)
+    const { repo, collector, store, closed, fake } = await setupWithFake(run)
+    const started = await collector.startTask('s1', 'add c')
+    if (!started.ok) throw new Error('unexpected')
+    await wroteNow(collector)
+    await commitFile(repo, 'c.txt')
+    broken = true
+    fake.sessions = []
+    await collector.onSessionExit('s1')
+    expect(store.get(repo)!.units[0].git.observationUnknown).toBe(true)
+    broken = false
+
+    const r = await collector.completeTaskById(repo, started.id)
+    expect(r).toEqual({ ok: true, recorded: true })
     expect(closed).toHaveLength(1)
   })
 
