@@ -37,7 +37,9 @@ const INJECTED_PART_PREFIXES = [
   '<environment_context>',
   '<user_instructions>',
   '<recommended_plugins>',
-  '# AGENTS.md instructions'
+  '# AGENTS.md instructions',
+  // codex 0.160's note to itself each time it resumes work on a `/goal` (measured 2026-10-03)
+  '<codex_internal_context'
 ]
 
 const isInjectedPart = (text: string): boolean =>

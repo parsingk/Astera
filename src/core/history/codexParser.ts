@@ -131,7 +131,10 @@ const CODEX_WRAPPER_PREFIXES = [
   // `response_item` 을 읽기 시작하면서 드러난 것(실측 2026-08-29): 사용자 롤 첫 메시지가 프로젝트의
   // AGENTS.md 를 통째로 실은 10KB 짜리 주입이다. 사람이 쓴 요청이 아니고, 그대로 두면 히스토리
   // 제목이 그 문서의 첫 줄이 된다.
-  '# AGENTS.md instructions'
+  '# AGENTS.md instructions',
+  // codex 0.160 writes this each time it resumes work on a `/goal` (measured 2026-10-03): codex telling
+  // itself to continue, recorded as a user message. Left in, it became the session's history title.
+  '<codex_internal_context'
 ]
 
 function isRealCodexUserText(text: string): boolean {

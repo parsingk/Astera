@@ -129,6 +129,16 @@ describe('reduceCodexRollout — the preamble codex writes for itself', () => {
     expect(turns.map(textOf)).toEqual(['빌드 좀 봐줘'])
   })
 
+  // codex 0.160 writes this each time it resumes work on a `/goal` (measured 2026-10-03): codex
+  // talking to itself, not something the person said.
+  it('drops the goal continuation codex writes as a user message', () => {
+    const turns = reduceCodexRollout([
+      userRecord('/goal own4.txt 를 만들어 커밋'),
+      userRecord('<codex_internal_context source="goal">\nContinue working toward the active thread goal.')
+    ])
+    expect(turns.map(textOf)).toEqual(['/goal own4.txt 를 만들어 커밋'])
+  })
+
   // The other way round is worse than a leak: a message that happens to sit beside a preamble part
   // would vanish, and nothing on screen would say a word had been lost.
   it('keeps a record that has even one part a person wrote', () => {

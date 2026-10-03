@@ -155,6 +155,18 @@ describe('parseCodexTail', () => {
     const p = await write('e.jsonl', [metaLine, agent('a'), user('마지막 질문')])
     expect(await parseCodexTail(p)).toEqual({ lastUserTitle: '마지막 질문', awaitingReply: false })
   })
+
+  // codex 0.160 writes this as a user message each time it resumes work on a `/goal` (measured
+  // 2026-10-03). The person's own words are the `/goal` line before it, not this.
+  it('skips the goal continuation codex writes as a user message', async () => {
+    const p = await write('goal.jsonl', [
+      metaLine,
+      user('/goal own4.txt 를 만들어 커밋'),
+      user('<codex_internal_context source="goal">\nContinue working toward the active thread goal.'),
+      agent('done')
+    ])
+    expect((await parseCodexTail(p)).lastUserTitle).toBe('/goal own4.txt 를 만들어 커밋')
+  })
 })
 
 describe('parseCodexPreview', () => {
