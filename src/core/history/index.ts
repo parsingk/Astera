@@ -281,7 +281,8 @@ export class HistoryIndex {
       if (projectPath && forProject) {
         // codex: the rollout index names the project's files, so the other projects' are not parsed
         const entries = await forProject(account, projectPath, this.io)
-        for (const e of entries) this.entryById.set(e.id, e)
+        // A hidden entry (a codex child thread) shares its parent's id: it must not stand in for it here.
+        for (const e of entries) if (!e.hidden) this.entryById.set(e.id, e)
         all.push(...entries)
         continue
       }
@@ -301,9 +302,10 @@ export class HistoryIndex {
     entries: HistoryEntry[]
     total: number
   }> {
-    const all = dedupeBySessionId(groupForks(await this.rawEntries(req?.accountId, req?.projectPath))).sort(
-      byUpdatedDesc
-    )
+    // Hidden entries are files to delete, not rows (HistoryEntry.hidden): left out before the merge, so a
+    // child thread never wins its parent's session id.
+    const shown = (await this.rawEntries(req?.accountId, req?.projectPath)).filter((e) => !e.hidden)
+    const all = dedupeBySessionId(groupForks(shown)).sort(byUpdatedDesc)
     const offset = req?.offset ?? 0
     const limit = req?.limit ?? 50
     return { entries: all.slice(offset, offset + limit), total: all.length }

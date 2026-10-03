@@ -184,8 +184,8 @@ describe('codex expansion through the rollout index', () => {
   })
 
   // A child thread (a sub-agent codex starts, measured on 0.160) writes its own rollout with the same cwd
-  // and the parent's id in `parent_thread_id`. It is not a conversation to resume, so it is left out the
-  // way an exec rollout is: no row, and not among the project's deletion targets.
+  // and the parent's id in `parent_thread_id`. It is not a conversation to resume, so it is no row of the
+  // list; but it holds part of that conversation, so deleting the project's history takes it too.
   const writeChild = async (acc: Account, n: number, parent: number): Promise<string> => {
     const dir = path.join(acc.configDir, 'sessions', '2026', '07', '09')
     const file = path.join(dir, nameOf(n))
@@ -198,13 +198,35 @@ describe('codex expansion through the rollout index', () => {
     return file
   }
 
-  it('a child thread rollout is neither a row nor a deletion target, and the parent keeps its row', async () => {
+  it('a child thread rollout is no row, the parent keeps its row, and deleting the history takes both', async () => {
     const cx = codexAccount('cx')
     const parent = await writeRollout(cx, 0, ALPHA)
-    await writeChild(cx, 1, 0)
+    const child = await writeChild(cx, 1, 0)
     index = new HistoryIndex(() => [cx])
     expect((await index.page({ projectPath: ALPHA })).entries.map((e) => e.title)).toEqual(['질문 0'])
-    expect((await index.deletionTargets(ALPHA)).files).toEqual([parent])
+    expect([...(await index.deletionTargets(ALPHA)).files].sort()).toEqual([parent, child].sort())
+  })
+
+  it('after a restart the memoized child row is still hidden and still a deletion target, without a parse', async () => {
+    const cx = codexAccount('cx')
+    const parent = await writeRollout(cx, 0, ALPHA)
+    const child = await writeChild(cx, 1, 0)
+    const store = path.join(tmp, 'session-cwd.json')
+    const cache = new SessionCwdCache(store)
+    await cache.load()
+    index = new HistoryIndex(() => [cx], undefined, cache)
+    await index.page({ projectPath: ALPHA })
+    await index.stop()
+    await cache.flush()
+
+    heads.clear()
+    tails.clear()
+    const reloaded = new SessionCwdCache(store)
+    await reloaded.load()
+    index = new HistoryIndex(() => [cx], undefined, reloaded)
+    expect((await index.page({ projectPath: ALPHA })).entries.map((e) => e.title)).toEqual(['질문 0'])
+    expect([...(await index.deletionTargets(ALPHA)).files].sort()).toEqual([parent, child].sort())
+    expect(sum(heads)).toBe(0)
   })
 
   it('a child thread row an older build cached is built again and dropped', async () => {

@@ -233,6 +233,9 @@ export interface HistoryEntry {
   filePath: string
   awaitingReply: boolean // true when the last meaningful message was the assistant's — drives the unread-reply marker (green dot)
   rootUuid: string | null // the key that identifies a resume fork (the same conversation)
+  /** A file of the project's history that is not a row of the list: a codex child thread (a sub-agent's
+   *  rollout, which repeats its parent's session id). page() leaves it out; deletionTargets() keeps it. */
+  hidden?: true
 }
 
 export interface TranscriptMessage {
