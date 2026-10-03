@@ -42,6 +42,19 @@ describe('createHostMcpHttpView', () => {
     expect(view.current()).toEqual({ host: true, state: running })
   })
 
+  it('keeps the URLs other devices can use, and only the entries it can read', () => {
+    const { view } = rig()
+    const urls = [
+      { url: 'http://192.168.1.5:7871/mcp', kind: 'lan' },
+      { url: 'http://100.90.1.2:7871/mcp', kind: 'tailscale' },
+      { url: 'http://box:7871/mcp', kind: 'name' }
+    ]
+    view.pushed({ t: 'mcp-http-state', state: { ...running, lan: true, urls: [...urls, { url: 'http://x/mcp', kind: 'other' }, { url: 7, kind: 'lan' }, 'y'] } } as never)
+    expect(view.current()).toEqual({ host: true, state: { ...running, lan: true, urls } })
+    view.pushed({ t: 'mcp-http-state', state: { ...running, lan: true, urls: 'no' } } as never)
+    expect(view.current()).toEqual({ host: true, state: { ...running, lan: true } })
+  })
+
   it('asks for the state after each handshake with a Host that has it', async () => {
     const { view, changed, call } = rig()
     await view.connected()
