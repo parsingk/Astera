@@ -519,7 +519,9 @@ a field with nothing left.
   GitHub only through `gh`, which the Host runs on the same machine with your login.
   [MCP over HTTP](#mcp-over-http), off by default, is the one entrance that listens on a port.
 - It reaches the Host only from the same OS account, and the Host proves itself with its key before
-  the server sends anything.
+  the server sends anything. The HTTP entrance reaches the Host the same way, but that does not limit
+  who reaches the entrance: every OS account on this computer can, and the token is its only check
+  (see [MCP over HTTP](#mcp-over-http)).
 - Credentials and tokens are never returned by a tool. Free text in results (objectives, specs,
   results, questions, answers, review issues and suggested fixes, failure summaries, error messages,
   and the summaries and Task titles of the events `wait_for_run` returns) is redacted of anything
@@ -577,8 +579,16 @@ it says so and its controls stay disabled.
 first time the entrance starts and keeps it in the profile, in the file `mcp-http-token`. The
 **Token** field shows only its last four characters: **Show** reveals it and **Copy** copies it.
 **New token** replaces it: the old one fails from the next request on, so every client that used it
-has to be set up again. The entrance needs no restart for that. The token is never written to a log
-and no tool returns it.
+has to be set up again. That first request also closes every open MCP session, so a client still
+connected with the old token is cut off then. The entrance needs no restart for that. The token is
+never written to a log and no tool returns it.
+
+**Who can reach it.** `127.0.0.1` is not private to your OS account. Every OS account on this
+computer can reach `127.0.0.1:<port>`, and the token is the only check. Do not turn the entrance on
+on a shared or multi-user computer. While the entrance is down (the switch is off, the Host left, or
+it is restarting), the clients you set up keep sending the token to that port, so another program on
+this computer that takes the port first could collect it. If that may have happened, use
+**New token**.
 
 **The client lines.** Under the URL the section shows a line for each client. **Copy** puts the real
 token in the copied line; the lines on screen show it masked. Copy a line only to where the client
@@ -618,11 +628,17 @@ Cursor, in `.cursor/mcp.json` or `~/.cursor/mcp.json`:
 
 There is no Register button for HTTP. Paste the line yourself.
 
-**Other devices.** On its own the entrance listens on `127.0.0.1` only, so only programs on this
-computer reach it. **Allow other devices on this network** makes it listen on every network
-interface of this computer. The **URL** field then also lists a URL for each of this computer's
-network addresses and each extra host name (for example `http://192.168.0.7:7871/mcp`); a device
-uses one it can reach.
+**Other devices.** On its own the entrance listens on `127.0.0.1` only, so it is reachable only
+from this computer (by every OS account on it, as above). **Allow other devices on this network**
+makes it listen on every network interface of this computer. The **URL** field then also lists a
+URL for each of this computer's network addresses and each extra host name (for example
+`http://192.168.0.7:7871/mcp`); a device uses one it can reach.
+
+On Windows, Windows Defender Firewall asks once, when the entrance first listens on the network after
+**Allow other devices** is turned on, whether Astera may accept connections. If you decline, devices
+on the network cannot connect and Astera shows no error: the state line still says `running`. To
+change the answer later, open Windows Security, **Firewall & network protection**, **Allow an app
+through firewall**.
 
 The connection is plain HTTP, not HTTPS. **The token travels unencrypted on the network**, so anyone
 who can watch the traffic on that network can read it and use it. Turn this on only on a network you
@@ -640,14 +656,17 @@ field. An address this computer gets after the entrance started, such as Tailsca
 is known after the switch is turned off and on again. The typed names count only while other devices
 are allowed.
 
-**What 401 and 403 mean.**
+**What 401, 403 and 503 mean.**
 
 - `401 Unauthorized`: the request carried no token or a wrong one. A client set up before a
-  **New token** sees this until it gets the new token. Every refused token is logged with the
-  address it came from, never with the token.
+  **New token** sees this until it gets the new token. Every request gets it too while the token
+  file is missing, empty or cannot be read (an unreadable one is named in the entrance's log).
+  Every refused token is logged with the address it came from, never with the token.
 - `403 Forbidden`: the token was right, but the request named a host the entrance does not know
   (see Host names), or came from a web page on another site. Add the name the device uses to
   **Extra allowed host names**, with other devices allowed.
+- `503 Service Unavailable`: the entrance already holds 64 open MCP sessions, the most it keeps. A
+  new client connects once another disconnects or a session ends after 30 minutes without a request.
 
 A request that gets through still meets MCP access: a tool it does not allow answers
 `PERMISSION_DENIED`, as over stdio.
