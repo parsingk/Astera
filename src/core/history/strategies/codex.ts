@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Account, HistoryEntry, ProjectSummary } from '../../types'
 import {
+  isChildThreadRollout,
   isExecRollout,
   parseCodexMeta,
   parseCodexPreview,
@@ -28,13 +29,13 @@ async function rolloutFiles(account: Account, io: HistoryIo): Promise<{ files: M
   return { files, complete: status.complete }
 }
 
-/** The cwd the index keeps for one rollout. An exec rollout reports none, which is the same thing the
- *  list already says about a file it does not recognise — "no cwd = not a project", the rule
- *  buildEntry applies too. That keeps the exclusion in one shape rather than adding a second kind of
- *  skip. */
+/** The cwd the index keeps for one rollout. An exec rollout or a child thread reports none, which is the
+ *  same thing the list already says about a file it does not recognise — "no cwd = not a project", the
+ *  rule buildEntry applies too. That keeps the exclusion in one shape rather than adding a second kind
+ *  of skip; like an exec rollout, a child thread is then not among a project's deletion targets. */
 async function headCwd(filePath: string): Promise<string | null> {
   const m = await parseCodexMeta(filePath)
-  return isExecRollout(m) ? null : m.cwd
+  return isExecRollout(m) || isChildThreadRollout(m) ? null : m.cwd
 }
 
 /** Every rollout with the cwd the index knows for it — parsing only the heads it does not know, and
@@ -139,6 +140,10 @@ export const codexHistoryStrategy: HistoryStrategy = {
     // This app's own explanation runs are not the user's conversations — they should not appear in a
     // list of sessions to resume (see isExecRollout).
     if (isExecRollout(meta)) return null
+    // A child thread (a sub-agent codex starts) is not a conversation to resume either, and it repeats
+    // its parent's session id, so as a row it would stand in for the parent's. headCwd drops it the
+    // same way; this check catches a file whose cwd an older build memoized.
+    if (isChildThreadRollout(meta)) return null
     const sessionId = meta.sessionId ?? filePath.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) return null
     let mtime = mtimeMs

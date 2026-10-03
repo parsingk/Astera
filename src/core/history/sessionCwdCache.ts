@@ -41,8 +41,8 @@ type RowEntry = [number, number, string, number, string, string, 0 | 1]
 type Entry = CwdEntry | RowEntry
 
 /** Bumped whenever what buildEntry derives from a rollout changes, so rows of an older build are
- *  rebuilt rather than trusted. */
-export const ROW_VERSION = 1
+ *  rebuilt rather than trusted. 2: a codex child thread rollout is no longer a row. */
+export const ROW_VERSION = 2
 
 /** What a codex project expansion shows for one rollout, besides its path and mtime. */
 export interface RolloutRow {
