@@ -6,6 +6,7 @@ import { promises as fs, existsSync, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  NOT_RECORDED,
   createHostWorkUnits,
   readWorkUnitTracking,
   wireSessionExits,
@@ -18,7 +19,7 @@ import { makeDescriptors } from '../core/providers/descriptor'
 import type { CollectorGit } from '../core/workUnit/collector'
 import type { GitRef } from '../core/git/types'
 import type { SessionWorkUnit } from '../core/workUnit/types'
-import type { WorkUnitState } from '../core/workUnit/store'
+import { WorkUnitStore, type WorkUnitState } from '../core/workUnit/store'
 import type { Account } from '../core/types'
 import { OPERATION_GRACE_MS } from '../core/git/provenance'
 import { PtyRegistry, type RegistryPty } from './registry'
@@ -145,6 +146,7 @@ beforeEach(async () => {
   await fs.writeFile(t2, '')
 })
 afterEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(dir, { recursive: true, force: true })
 })
 
@@ -362,6 +364,23 @@ describe('createHostWorkUnits', () => {
       expect(onDisk().projects[project].units).toEqual([expect.objectContaining({ id: 'wu-2', status: 'completed' })])
     })
 
+    // The collector closes the unit in the object the store holds, then the gate drops its save: the
+    // file still says interrupted, and the next call must read that, not the dropped close.
+    it('a complete the gate dropped is not kept in memory: the next call reads the file', async () => {
+      const r = rig()
+      r.state.tracking = false
+      await seed(interrupted('wu-1'))
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      r.state.writer = false
+      await hw.sessionTasks.completeById(project, 'wu-1')
+      r.state.writer = true
+      expect(await hw.sessionTasks.cancelById(project, 'wu-1')).toEqual({ ok: true })
+      await hw.settled()
+      expect(onDisk().projects[project].units).toEqual([expect.objectContaining({ id: 'wu-1', status: 'cancelled' })])
+      expect(r.closed).toEqual([])
+    })
+
     it('writes nothing while an attached app keeps the duty', async () => {
       const r = rig()
       r.state.tracking = false
@@ -403,7 +422,42 @@ describe('createHostWorkUnits', () => {
       const hw = createHostWorkUnits(r.deps)
       const id = await closeOne(r, hw)
       hw.dispose()
-      expect((await hw.sessionTasks.completeById(project, id)).ok).toBe(true)
+      expect(await hw.sessionTasks.completeById(project, id)).toEqual({ ok: false, reason: NOT_RECORDED })
+      await hw.settled()
+      expect(r.closed).toEqual([])
+      expect(onDisk().projects[project].units[0].status).toBe('active')
+    })
+
+    // The gate looks twice, before and after the refresh that reads the file: the writer can change
+    // in between, and the hand-off must follow the save that actually landed, not the first look.
+    const flipDuringRefresh = (r: Rig): void => {
+      const real = WorkUnitStore.prototype.refresh
+      vi.spyOn(WorkUnitStore.prototype, 'refresh').mockImplementation(async function (this: WorkUnitStore) {
+        const adopted = await real.call(this)
+        r.state.writer = false
+        return adopted
+      })
+    }
+
+    it('when the writer changes during the refresh before the save', async () => {
+      const r = rig()
+      const hw = createHostWorkUnits(r.deps)
+      await closeOne(r, hw)
+      await hw.flush()
+      flipDuringRefresh(r)
+      expect((await hw.sessionTasks.complete('s1', { source: 'agent' })).ok).toBe(true)
+      await hw.settled()
+      expect(r.closed).toEqual([])
+      expect(onDisk().projects[project].units[0].status).toBe('active')
+    })
+
+    it('a by-id complete answers that nothing was recorded, not recorded: true', async () => {
+      const r = rig()
+      const hw = createHostWorkUnits(r.deps)
+      const id = await closeOne(r, hw)
+      await hw.flush()
+      flipDuringRefresh(r)
+      expect(await hw.sessionTasks.completeById(project, id)).toEqual({ ok: false, reason: NOT_RECORDED })
       await hw.settled()
       expect(r.closed).toEqual([])
       expect(onDisk().projects[project].units[0].status).toBe('active')

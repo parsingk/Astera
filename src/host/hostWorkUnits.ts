@@ -18,7 +18,8 @@
 // - the in-Run test over the Host's orchestration state, and the Host's merge records;
 // - tracking: `workUnitTrackingEnabled` in app-settings.json, read at start, at `reload` and at each app
 //   greeting; the collector starts and stops with it, as the app's toggle does.
-// A closed unit goes straight to the Host's How It Works pipeline (hostUnderstanding.onUnitClosed).
+// A closed unit goes to the Host's How It Works pipeline (hostUnderstanding.onUnitClosed) once the save
+// that closes it landed in the file.
 //
 // Imports nothing from electron, src/main or src/renderer (importFence.test.ts).
 import type { Account, Provider } from '../core/types'
@@ -29,6 +30,7 @@ import { providerOf } from '../core/providers/meta'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { WorkUnitCollector, type CollectorGit, type CollectorSession } from '../core/workUnit/collector'
 import { WorkUnitStore, type WorkUnitState } from '../core/workUnit/store'
+import type { SessionWorkUnit } from '../core/workUnit/types'
 import { probeGit } from '../core/workUnit/gitProbe'
 import { createHostGitOps } from '../core/workUnit/hostGitOps'
 import { createTranscriptWatcher, type TranscriptWatcher } from '../core/workUnit/watch/transcriptWatcher'
@@ -159,7 +161,9 @@ export interface HostWorkUnits {
   trackingEnabled(): Promise<boolean>
   /** The collector's declarations and the screen's reads, by session and by id. `start`, `complete` and
    *  `cancel` run one collector round first, so a session that appeared since the last round is known.
-   *  `completeById` and `cancelById` work with the collector stopped too: they read the file first then. */
+   *  `completeById` and `cancelById` work with the collector stopped too: they read the file first then.
+   *  `completeById` answers `recorded: true` only when the close was saved and handed to How It Works, and
+   *  NOT_RECORDED when the gate dropped the save. */
   sessionTasks: {
     start: C['startTask']
     complete: C['completeTask']
@@ -190,9 +194,22 @@ export interface HostWorkUnits {
   dispose(): void
 }
 
+/** completeById's answer when the unit's close was not saved, so nothing was recorded: the gate dropped
+ *  the save (an app keeps the duty now, or this Host is leaving). The task is still open in the file. (A
+ *  save that fails answers the collector's own failure.) Not
+ *  `recorded: false`, which the app shows as "nothing to record": this one must read as a failure. */
+export const NOT_RECORDED =
+  'not recorded: this Host stopped writing workUnits.json before the close was saved, the task is still open'
+
 /** The core store with the writer gate at every write, the refresh before it, and the push after it. A
  *  write while an app keeps the duty is dropped whole (the file and the push), as E1's GatedStore. The
- *  gate is asked again after the refresh: unlike E1's trySet, there is an await between the two.
+ *  gate is asked again after the refresh: unlike E1's trySet, there is an await between the two. A
+ *  dropped write marks the store stale: the collector already made its change in the object it got, and
+ *  the next refresh reads the file over it.
+ *
+ *  **A closed unit is handed over by the save that closes it** (`closed`): the collector reports it
+ *  before that save, which the gate may still drop, and a record of a unit the file holds open would be
+ *  recorded again by the next close. Handed over once the write landed; dropped with a dropped write.
  *
  *  **The push follows the units, not every write** (ruling 3): a round that only moved a cursor writes
  *  the file and has nothing new for the screen, and a session writing would otherwise push about once a
@@ -201,13 +218,22 @@ class GatedWorkUnitStore extends WorkUnitStore {
   constructor(
     filePath: string,
     private readonly may: () => boolean,
-    private readonly wrote: (root: string) => void
+    private readonly wrote: (root: string) => void,
+    /** A closed unit whose save landed (`saved`), or was dropped with it. */
+    private readonly settle: (root: string, unit: SessionWorkUnit, saved: boolean) => void
   ) {
     super(filePath)
   }
 
   /** root -> its units as serialized at the last push. */
   private pushed = new Map<string, string>()
+  /** root -> the units closed since its last write, waiting for the write that saves them. */
+  private closing = new Map<string, SessionWorkUnit[]>()
+
+  /** The collector's onUnitClosed: held until the next write of that root lands. */
+  closed(root: string, unit: SessionWorkUnit): void {
+    this.closing.set(root, [...(this.closing.get(root) ?? []), unit])
+  }
 
   /** A load starts over: the file may be another writer's, so the next write of each root pushes. */
   override async load(): Promise<{ recovered: boolean }> {
@@ -216,15 +242,31 @@ class GatedWorkUnitStore extends WorkUnitStore {
   }
 
   override async set(projectPath: string, value: WorkUnitState): Promise<void> {
-    if (!this.may()) return
+    const closing = this.closing.get(projectPath) ?? []
+    this.closing.delete(projectPath)
+    if (!this.may()) return this.dropped(projectPath, closing)
     // From the file, not from memory: an older app may have written it since this store last read it.
     await this.refresh()
-    if (!this.may()) return
-    await super.set(projectPath, value)
+    if (!this.may()) return this.dropped(projectPath, closing)
+    try {
+      await super.set(projectPath, value)
+    } catch (err) {
+      // Not saved either: memory no longer matches the file, as with a dropped write.
+      this.dropped(projectPath, closing)
+      throw err
+    }
+    for (const unit of closing) this.settle(projectPath, unit, true)
     const units = JSON.stringify(value.units)
     if (this.pushed.get(projectPath) === units) return
     this.pushed.set(projectPath, units)
     this.wrote(projectPath)
+  }
+
+  /** A write that did not land: memory is re-read from the file at the next refresh, and the units it
+   *  closed are not handed over. */
+  private dropped(projectPath: string, closing: readonly SessionWorkUnit[]): void {
+    this.markStale()
+    for (const unit of closing) this.settle(projectPath, unit, false)
   }
 }
 
@@ -258,6 +300,8 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
    *  from here on it persists nothing and watches nothing. The collector is not stopped: that would
    *  interrupt every open unit, which is the next Host's start to do. */
   let disposed = false
+  /** The unit a by-id complete is closing, and whether its close was handed over (completeById's answer). */
+  let awaiting: { id: string; handed: boolean } | null = null
 
   const store = new GatedWorkUnitStore(
     d.file,
@@ -267,7 +311,21 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       log('an attached app keeps the work units now, a Host write is dropped')
       return false
     },
-    (root) => push({ t: 'work-units-state', root })
+    (root) => push({ t: 'work-units-state', root }),
+    // Not awaited, as the app's: the write-up runs an agent.
+    (root, unit, saved) => {
+      if (!saved) {
+        log(`a closed unit of ${root} is not recorded: its save did not land`)
+        return
+      }
+      if (awaiting?.id === unit.id) awaiting.handed = true
+      void d.understanding.onUnitClosed(root, unit).then(
+        (r) => {
+          if (!r.ok) log(`a closed unit of ${root} is not recorded: ${r.reason ?? 'refused'}`)
+        },
+        (err) => log(`a closed unit of ${root} could not be recorded: ${message(err)}`)
+      )
+    }
   )
 
   const gitDirOf = d.gitDir ?? gitDir
@@ -359,21 +417,10 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       return async () => gitDirs.unwatch(projectPath)
     },
     inRun: (sessionId) => d.inRun(sessionId),
-    // Called inside the collector's chain and not awaited, as the app's: the write-up runs an agent.
-    // Handed over before the collector's save of the closed unit, and that save goes through the gate: a
-    // Host that stopped writing here would record a unit the file still holds open.
-    onUnitClosed: (projectPath, unit) => {
-      if (disposed || !isWriter()) {
-        log(`a closed unit of ${projectPath} is not recorded: this Host does not write workUnits.json now`)
-        return
-      }
-      void d.understanding.onUnitClosed(projectPath, unit).then(
-        (r) => {
-          if (!r.ok) log(`a closed unit of ${projectPath} is not recorded: ${r.reason ?? 'refused'}`)
-        },
-        (err) => log(`a closed unit of ${projectPath} could not be recorded: ${message(err)}`)
-      )
-    },
+    // Reported before the collector's save of the closed unit, and that save goes through the gate: held
+    // by the store and handed over only once it landed, so a unit the file still holds open is never
+    // recorded.
+    onUnitClosed: (projectPath, unit) => store.closed(projectPath, unit),
     // Synchronous and never throwing: it runs inside the collector's chain (its applyGoalSignal).
     onGoalIgnored: ({ projectPath, objective, blockingUnitId }) =>
       push({ t: 'work-units-goal-ignored', projectPath, objective, blockingUnitId }),
@@ -498,7 +545,18 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
         await caughtUp()
         return collector.cancelTask(sessionId, reason)
       },
-      completeById: (projectPath, id) => byId(() => collector.completeTaskById(projectPath, id)),
+      // `recorded` only when the close was handed over: a close the gate dropped answers NOT_RECORDED.
+      completeById: (projectPath, id) =>
+        byId(async () => {
+          const watch = { id, handed: false }
+          awaiting = watch
+          try {
+            const r = await collector.completeTaskById(projectPath, id)
+            return r.ok && r.recorded && !watch.handed ? { ok: false as const, reason: NOT_RECORDED } : r
+          } finally {
+            awaiting = null
+          }
+        }),
       cancelById: (projectPath, id) => byId(() => collector.cancelTaskById(projectPath, id)),
       list: (projectPath) => collector.listOpen(projectPath)
     },

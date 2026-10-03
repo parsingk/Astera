@@ -180,6 +180,11 @@ describe('createAppWorkUnits: in front of a Host that announces work-units', () 
     expect(await w.complete(root, 'wu-host')).toEqual({ recorded: true })
     m.state.reply = async () => ({ status: 200, body: { ok: false, reason: 'something else' } })
     await expect(w.complete(root, 'wu-host')).rejects.toThrow('something else')
+    // The Host's save of the close was dropped (hostWorkUnits.ts NOT_RECORDED): a failure the person sees,
+    // not the "nothing to record" of `recorded: false`.
+    const notRecorded = 'not recorded: this Host stopped writing workUnits.json before the close was saved, the task is still open'
+    m.state.reply = async () => ({ status: 200, body: { ok: false, reason: notRecorded } })
+    await expect(w.complete(root, 'wu-host')).rejects.toThrow(notRecorded)
     m.state.reply = async () => ({ status: 409, body: { error: 'not the work units writer' } })
     await expect(w.complete(root, 'wu-host')).rejects.toThrow('not the work units writer')
   })
