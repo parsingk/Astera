@@ -390,7 +390,8 @@ describe('onRunFinished — a Run with its own worktree', () => {
   })
 
   it('regenerate after the worktree folder was removed falls back to the project root', async () => {
-    const { store, pipeline } = await make()
+    const logs: string[] = []
+    const { store, pipeline } = await make(undefined, { log: (m) => logs.push(m) })
     agentReply.value = inWorktree()
     await pipeline.onRunFinished(projectRoot, runInput({ workDir, changedFiles: ['src/math.js'] }))
     const id = store.get(projectRoot)!.records[0].id
@@ -400,6 +401,7 @@ describe('onRunFinished — a Run with its own worktree', () => {
     await pipeline.regenerate(projectRoot, id)
     expect(agentReply.lastCwd).toBe(projectRoot)
     expect(store.get(projectRoot)!.records[0].status).toBe('ready')
+    expect(logs.filter((m) => m.includes(workDir))).toHaveLength(1)
   })
 
   it('a Run without a worktree behaves as today', async () => {

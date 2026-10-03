@@ -223,7 +223,7 @@ export class UnderstandingPipeline {
       return
     }
     // Where the work is: the agent runs there and its evidence is checked there (baseOf).
-    const base = await baseOf(projectRoot, cur)
+    const base = await baseOf(projectRoot, cur, this.deps.log)
     const run = await (this.deps.runAgent ?? runAgent)({
       ...ready.ctx,
       cwd: base,
@@ -338,7 +338,7 @@ export class UnderstandingPipeline {
   private async commitsOf(projectRoot: string, r: WorkRecord): Promise<string[]> {
     if (!this.deps.readCommits) return []
     try {
-      return await this.deps.readCommits(await baseOf(projectRoot, r), r.git.startHead, r.git.endHead)
+      return await this.deps.readCommits(await baseOf(projectRoot, r, this.deps.log), r.git.startHead, r.git.endHead)
     } catch {
       return [] // failing to read commits is not a reason to fail the record
     }
@@ -373,13 +373,18 @@ export class UnderstandingPipeline {
 /** The folder a record's write-up reads: its `workDir` (a Run's own worktree) while that folder still
  *  exists, otherwise the project root, as for every record before that field. Once the worktree is
  *  merged and removed, its changes are in the project root, so a regenerate then reads there. */
-async function baseOf(projectRoot: string, r: Pick<WorkRecord, 'workDir'>): Promise<string> {
+async function baseOf(
+  projectRoot: string,
+  r: Pick<WorkRecord, 'workDir'>,
+  log?: (m: string) => void
+): Promise<string> {
   if (r.workDir === undefined) return projectRoot
   try {
     if ((await fs.stat(r.workDir)).isDirectory()) return r.workDir
   } catch {
     // gone: fall back below
   }
+  log?.(`understanding: work folder ${r.workDir} is gone, reading ${projectRoot} instead`)
   return projectRoot
 }
 

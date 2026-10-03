@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { justFinished, runRecordInputOf } from './runRecord'
+import { foldsCaseHere } from '../testPaths'
 import { createJob, createTask, emptyState, jobOf, startJobRun, type OrchState } from './state'
 
 const state = (tasks: { runId: string; status: string; consecutiveFailures?: number }[]): OrchState =>
@@ -109,6 +110,38 @@ describe('runRecordInputOf', () => {
     expect(runRecordInputOf(s, runId)).not.toHaveProperty('workDir')
     const same = { ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p' } : r)) } as OrchState
     expect(runRecordInputOf(same, runId)).not.toHaveProperty('workDir')
+  })
+
+  // A parallel Run: its tasks ran in Task worktrees, and the Run worktree holds no work.
+  const withDispatches = (s: OrchState, runId: string, cwds: (string | null)[]): OrchState => {
+    const tasks = s.tasks.filter((t) => t.runId === runId)
+    const dispatches = cwds.map((cwd, i) => ({
+      id: `d${i}`,
+      taskId: tasks[i % tasks.length].id,
+      cwd: cwd ?? 'D:/p/.wt/open',
+      startedAt: '2026-10-02T10:00:00.000Z',
+      ...(cwd !== null ? { endedAt: '2026-10-02T10:30:00.000Z' } : {})
+    }))
+    return {
+      ...s,
+      runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p/.wt/r1' } : r)),
+      dispatches
+    } as unknown as OrchState
+  }
+
+  it('when every finished dispatch ran in one other folder, that folder is workDir', () => {
+    const { s, runId } = finished()
+    // the open dispatch (null: not finished) does not count
+    const st = withDispatches(s, runId, ['D:/p/.wt/t1', 'd:/P/.wt/T1', null])
+    const expected = foldsCaseHere ? 'D:/p/.wt/t1' : 'D:/p/.wt/r1'
+    expect(runRecordInputOf(st, runId)?.workDir).toBe(expected)
+    expect(runRecordInputOf(withDispatches(s, runId, ['D:/p/.wt/t1', 'D:/p/.wt/t1']), runId)?.workDir).toBe('D:/p/.wt/t1')
+  })
+
+  it('when finished dispatches ran in different folders, or there are none, the run root is workDir', () => {
+    const { s, runId } = finished()
+    expect(runRecordInputOf(withDispatches(s, runId, ['D:/p/.wt/t1', 'D:/p/.wt/t2']), runId)?.workDir).toBe('D:/p/.wt/r1')
+    expect(runRecordInputOf(withDispatches(s, runId, []), runId)?.workDir).toBe('D:/p/.wt/r1')
   })
 
   it('no Run, or a Run with no Job, builds nothing', () => {
