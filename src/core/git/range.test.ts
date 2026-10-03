@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { makeRepo, tempDir, gitSync } from '../worktrees/testRepo'
-import { readRange, readRangeFiles } from './range'
+import { makeRepo, tempDir, gitSync, addOrigin } from '../worktrees/testRepo'
+import { readRange, readRangeFiles, readHeadSteps } from './range'
 
 
 const run = (repo: string, args: string[]): void => {
@@ -128,5 +128,138 @@ describe('readRangeFiles', () => {
     await expect(readRangeFiles(repo, before, after)).resolves.toEqual(['has space/한글.txt'])
     await expect(readRangeFiles(repo, after, after)).resolves.toEqual([])
     await expect(readRangeFiles(repo, MISSING_HASH, after)).resolves.toBeNull()
+  })
+})
+
+describe('readHeadSteps', () => {
+  const commit = async (repo: string, name: string): Promise<void> => {
+    await fs.writeFile(path.join(repo, name), name, 'utf8')
+    run(repo, ['add', name])
+    run(repo, ['commit', '-m', `add ${name}`])
+  }
+
+  it('plain commits: one step each, newest first', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+    await commit(repo, 'a.txt')
+    await commit(repo, 'b.txt')
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['commit: add b.txt', 'commit: add a.txt'])
+  })
+
+  it('a subject with spaces, colons and non-ASCII text comes back whole', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+    await fs.writeFile(path.join(repo, 'k.txt'), 'k', 'utf8')
+    run(repo, ['add', 'k.txt'])
+    run(repo, ['commit', '-m', '한글 fix: x y'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['commit: 한글 fix: x y'])
+  })
+
+  it('the pull subjects git writes carry the pull arguments', async () => {
+    const repo = await makeRepo()
+    const bare = await addOrigin(repo)
+    const other = await tempDir('astera-range-clone-')
+    run(other, ['clone', '-q', bare, '.'])
+    run(other, ['config', 'user.email', 't@t.com'])
+    run(other, ['config', 'user.name', 'Other'])
+    await commit(other, 'p.txt')
+    run(other, ['push', '-q', 'origin', 'main'])
+    const before = headHash(repo)
+    run(repo, ['pull', '-q', '--ff-only', 'origin', 'main'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['pull -q --ff-only origin main: Fast-forward'])
+    await commit(other, 'q.txt')
+    run(other, ['push', '-q', 'origin', 'main'])
+    await commit(repo, 'r.txt')
+    const mid = headHash(repo)
+    run(repo, ['-c', 'user.name=T', 'pull', '-q', '--rebase', 'origin', 'main'])
+    const steps = (await readHeadSteps(repo, mid, headHash(repo)))!
+    expect(steps[0]).toBe('pull -q --rebase origin main (finish): returning to refs/heads/main')
+    expect(steps.every((x) => x.startsWith('pull '))).toBe(true)
+  })
+
+  it('a fast-forward merge is one merge step, and the checkouts before it are not walked', async () => {
+    const repo = await makeRepo()
+    run(repo, ['branch', 'o'])
+    run(repo, ['checkout', '-q', 'o'])
+    await commit(repo, 'o.txt')
+    run(repo, ['checkout', '-q', 'main'])
+    const before = headHash(repo)
+    run(repo, ['merge', '-q', '--ff-only', 'o'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['merge o: Fast-forward'])
+  })
+
+  it('merge --no-edit writes a merge step, both fast-forward and a merge commit', async () => {
+    const repo = await makeRepo()
+    run(repo, ['branch', 'f1'])
+    run(repo, ['checkout', '-q', 'f1'])
+    await commit(repo, 'f1.txt')
+    run(repo, ['checkout', '-q', 'main'])
+    let before = headHash(repo)
+    run(repo, ['merge', '-q', '--no-edit', 'f1'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual(['merge f1: Fast-forward'])
+
+    run(repo, ['checkout', '-q', '-b', 'f2'])
+    await commit(repo, 'f2.txt')
+    run(repo, ['checkout', '-q', 'main'])
+    await commit(repo, 'm.txt')
+    before = headHash(repo)
+    run(repo, ['merge', '-q', '--no-edit', 'f2'])
+    await expect(readHeadSteps(repo, before, headHash(repo))).resolves.toEqual([
+      "merge f2: Merge made by the 'ort' strategy."
+    ])
+  })
+
+  it('a pull that merges is one pull step', async () => {
+    const repo = await makeRepo()
+    const bare = await addOrigin(repo)
+    const other = await tempDir('astera-range-clone-')
+    run(other, ['clone', '-q', bare, '.'])
+    run(other, ['config', 'user.email', 't@t.com'])
+    run(other, ['config', 'user.name', 'Other'])
+    await commit(other, 'p.txt')
+    run(other, ['push', '-q', 'origin', 'main'])
+    await commit(repo, 'c.txt')
+    const before = headHash(repo)
+    run(repo, ['pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main'])
+    const steps = (await readHeadSteps(repo, before, headHash(repo)))!
+    expect(steps).toHaveLength(1)
+    expect(steps[0]).toMatch(/^pull/)
+  })
+
+  it('a reset is one reset step', async () => {
+    const repo = await makeRepo()
+    const start = headHash(repo)
+    await commit(repo, 'a.txt')
+    const before = headHash(repo)
+    run(repo, ['reset', '-q', '--hard', start])
+    const steps = (await readHeadSteps(repo, before, start))!
+    expect(steps).toHaveLength(1)
+    expect(steps[0]).toMatch(/^reset: /)
+  })
+
+  it('reads the HEAD reflog of a linked worktree, not the main one', async () => {
+    const repo = await makeRepo()
+    const wt = path.join(await tempDir('astera-range-wt-'), 'wt')
+    run(repo, ['worktree', 'add', '-q', '-b', 'side', wt])
+    const before = headHash(wt)
+    await commit(wt, 'w.txt')
+    await expect(readHeadSteps(wt, before, headHash(wt))).resolves.toEqual(['commit: add w.txt'])
+    // The main worktree's HEAD did not move, so it has no step from before to the side commit
+    await expect(readHeadSteps(repo, before, headHash(wt))).resolves.toBeNull()
+  })
+
+  it('null when the reflog does not reach before, or does not start at after', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+    await commit(repo, 'a.txt')
+    const after = headHash(repo)
+    await expect(readHeadSteps(repo, MISSING_HASH, after)).resolves.toBeNull()
+    await commit(repo, 'b.txt') // HEAD moved on: the newest entry is no longer after
+    await expect(readHeadSteps(repo, before, after)).resolves.toBeNull()
+  })
+
+  it('null when git cannot answer (not a repository)', async () => {
+    const plain = await tempDir('astera-range-plain-')
+    await expect(readHeadSteps(plain, MISSING_HASH, MISSING_HASH)).resolves.toBeNull()
   })
 })
