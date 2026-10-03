@@ -13,10 +13,17 @@ import { isPlaceholderSessionId } from '../core/orchestration/types'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
+import { mcpRefusal } from '../core/host/mcpGate'
+import { readMcpAccess } from '../core/settings/mcpAccess'
+import { readMcpSessions } from '../core/settings/mcpSessions'
+import { readMcpGithubWrite } from '../core/settings/mcpGithubWrite'
 import { HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
 import { readAccountsFile } from '../core/accounts/accountsFile'
+import { isLoggedIn } from '../core/accounts/loginCheck'
+import { makeDescriptors } from '../core/providers/descriptor'
+import type { Account } from '../core/types'
 import { readRunConfigsFile } from '../core/run/runConfigsFile'
 import type { HostChecks } from './checks'
 import type { HostSessions } from './sessions'
@@ -25,8 +32,14 @@ import type { HostRolling } from './rolling'
 import type { HostChats } from './hostChats'
 import type { RollJournal } from './rollJournal'
 import type { HostSlackWiring } from './slackWiring'
+import type { McpHttpSupervisor } from './mcpHttp'
 import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
+import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
+import type { HostWorkUnits } from './hostWorkUnits'
+import { findProject } from '../core/orchestration/projects'
+import type { SessionWorkUnit } from '../core/workUnit/types'
+import { justFinished, runRecordInputOf } from '../core/orchestration/runRecord'
 import type { WorkspaceManager } from './workspace/manager'
 import { DESKTOP_ACTOR, HOST_ACTOR, actorOf, type JournalActor } from '../core/continuity/actor'
 import { parseJournalOps } from '../core/continuity/journalOps'
@@ -212,6 +225,26 @@ export function receiptsToEvict(
   return gone
 }
 
+/** Whether `understanding-unit`'s unit has the fields the pipeline reads before its own guard: the app's
+ *  collector sends a whole SessionWorkUnit, so this only turns away a call that is not one. */
+const isUnitShaped = (u: unknown): u is SessionWorkUnit => {
+  if (typeof u !== 'object' || u === null || Array.isArray(u)) return false
+  const o = u as Record<string, unknown>
+  return typeof o.id === 'string' && typeof o.sessionId === 'string' && typeof o.status === 'string' && typeof o.git === 'object' && o.git !== null
+}
+
+/** The app's calls into the Host's session work units (E2 §5), answered above the receipt line. */
+const WORK_UNITS_CALLS: ReadonlySet<string> = new Set([
+  'work-units-fork',
+  'work-units-reload',
+  'work-units-complete',
+  'work-units-cancel',
+  'work-units-git-op'
+])
+
+/** `work-units-*`'s 409: an attached app keeps the duty, and its collector holds the units. */
+export const NOT_WORK_UNITS_WRITER = 'an attached Astera app is tracking session work units; ask it'
+
 /** A reply body as a bag of fields, for the two predicates below. Anything that is not an object
  *  reads as empty, which makes every question asked of it answer "no". */
 const bodyOf = (reply: Reply): Record<string, unknown> =>
@@ -290,6 +323,16 @@ export const OBSERVED: Record<string, ObservedReplay> = {
       return typeof turn === 'object' && turn !== null && (turn as { state?: unknown }).state === 'timeout'
     },
     afresh: (args) => ({ ...args, resumeWait: true })
+  },
+  /**
+   * `runs resume` waits for a stopped coordinator's slot to empty **before** it commits anything
+   * (review fix round 1, I2 of the MCP planning work). A wait that runs out is a 409 that committed
+   * nothing, which leaves no receipt, so a retry runs afresh. A reply that did commit is a fact (the
+   * Run resumed, with or without a new coordinator), never a stopwatch reading: replayed verbatim.
+   */
+  'runs-resume': {
+    stale: () => false,
+    afresh: (args) => args
   }
 }
 
@@ -341,6 +384,9 @@ export interface HostOrch extends OrchCall {
 
 export function createHostOrch(a: {
   profileDir: string
+  /** The login rule `accounts-list` and `--coordinator-provider` mark each provider's default by, with
+   *  no app attached. Defaults to the one rule (loginCheck.ts, C8) the Host's checks and spawner use. */
+  isLoggedIn?(account: Account): Promise<boolean>
   /** The Host's own version (`ASTERA_HOST_VERSION`) — what `status` and `version` answer with. */
   version: string
   now(): string
@@ -409,6 +455,9 @@ export function createHostOrch(a: {
   /** The Host's Slack (Slack in the Host, P17), for the app's `slack-reload` call. Absent exactly when
    *  this Host does not own Slack (no spawner or no SDK): the call then answers 501. */
   slack?: Pick<HostSlackWiring, 'reload' | 'active'>
+  /** The MCP HTTP entrance's supervisor (mcpHttp.ts, MCP HTTP design §3), for the app's `mcp-http-reload` and
+   *  `mcp-http-status`. Absent: both answer 501. */
+  mcpHttp?: Pick<McpHttpSupervisor, 'reload' | 'status'>
   /** R7: the live session a pty note says was rolled from this one, or null. */
   rolledInto?(sessionId: string): { id: string; accountId: string } | null
   /** R7: rekeys through the Host's roll tap instead of closing. */
@@ -435,15 +484,39 @@ export function createHostOrch(a: {
   /** `sessions create` (sessionCreate.ts), passed through to `hostOrchDeps`. Absent: the command
    *  answers 409. */
   createSession?: OrchServerDeps['createSession']
+  /** GitHub through the Host's gh (MCP P2-B), passed through to `hostOrchDeps`. Absent: the `github-*`
+   *  commands answer 409. */
+  github?: OrchServerDeps['github']
+  /** How It Works records (MCP P2-C), passed through to `hostOrchDeps`. Absent: the `understanding-*`
+   *  commands answer 409. */
+  readUnderstanding?: OrchServerDeps['readUnderstanding']
   /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
    *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
   journal?: Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> | null
+  /** How It Works in the Host (hostUnderstanding.ts, E1 §3, §4): handed every Run a commit finishes, and
+   *  the app's `understanding-unit` and the app's and MCP's `understanding-regenerate`. Absent: this Host
+   *  records no Run, and both calls answer 501. */
+  understanding?: Pick<HostUnderstanding, 'onRunFinished' | 'onUnitClosed' | 'regenerate' | 'isWriter'> | null
   /** The agent app workspace (agent workspace design): `app-js` below the receipt line (plan ruling
    *  P2), and the app only `workspace-list`, `workspace-stop` and `workspace-close` above it. Absent: all
    *  four answer 501. */
   workspaces?: Pick<WorkspaceManager, 'run' | 'stop' | 'close' | 'list'>
+  /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
+   *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
+   *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
+   *  duty): the session-task commands are forwarded as before and the five answer 501. `sessionTasks.list` is not
+   *  here on purpose: it answers from the collector's memory, which is stale while the collector is stopped,
+   *  so a reader app reads workUnits.json itself (E2 §6) and the Host serves no list. */
+  workUnits?():
+    | (Pick<HostWorkUnits, 'isWriter' | 'isRunning' | 'trackingEnabled' | 'fork' | 'reload' | 'gitOpBegin' | 'gitOpEnd'> & {
+        sessionTasks: Omit<HostWorkUnits['sessionTasks'], 'list'>
+      })
+    | null
 }): HostOrch {
   const store = new OrchestrationStore(path.join(a.profileDir, 'orchestration.json'))
+  // Built at the first ask: only a call that marks the default needs the descriptors.
+  let descriptors: ReturnType<typeof makeDescriptors> | undefined
+  const loggedIn = a.isLoggedIn ?? ((x: Account) => isLoggedIn(x, (descriptors ??= makeDescriptors(process.platform))))
 
   /** The journal, isolated (R3): hostJournal.ts never throws, and a journal that does anyway must not
    *  turn a landed commit into a failed command. */
@@ -452,6 +525,31 @@ export function createHostOrch(a: {
       fn()
     } catch (err) {
       a.log(`continuity: ${what} failed on the Host: ${String(err)}`)
+    }
+  }
+
+  /** E1 §3: a Run this commit finished, caught as an edge (runRecord.ts), is handed to How It Works so
+   *  a Run that finishes with no Astera window open still gets its record. **Fire and forget**: the
+   *  commit has already landed, and nothing the record does, a throw included, may turn it into a failed
+   *  command. Whether to record (writer, settings) is hostUnderstanding's to judge and log. */
+  const recordFinishedRuns = (prev: OrchState, next: OrchState): void => {
+    const understanding = a.understanding
+    if (!understanding) return
+    const failed = (runId: string, err: unknown): void => a.log(`understanding: recording run ${runId} failed on the Host: ${String(err)}`)
+    let finished: ReturnType<typeof justFinished>
+    try {
+      finished = justFinished(prev, next)
+    } catch (err) {
+      a.log(`understanding: could not tell which Runs this commit finished: ${String(err)}`)
+      return
+    }
+    for (const { runId } of finished) {
+      try {
+        const input = runRecordInputOf(next, runId)
+        if (input) void understanding.onRunFinished(input).catch((err) => failed(runId, err))
+      } catch (err) {
+        failed(runId, err)
+      }
     }
   }
 
@@ -597,6 +695,7 @@ export function createHostOrch(a: {
         // J1: journaled after the commit landed (the spec's accepted crash window), with who made it (J4,
         // P5) and its version under this Host's life as the key (J6, P1).
         journalSafely('recording a commit', () => a.journal?.committed({ prev, next, version: committed, actor }))
+        recordFinishedRuns(prev, next)
         kickDriver()
       },
       now: a.now,
@@ -609,7 +708,8 @@ export function createHostOrch(a: {
       hasApp: a.hasApp,
       log: a.log,
       // 앱이 없을 때 계정 목록은 앱이 쓴 파일이 답한다(orchDeps 의 LOCAL_WHEN_ABSENT). 읽기만 한다.
-      readAccounts: (provider) => readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider),
+      readAccounts: (provider, opts) =>
+        readAccountsFile(path.join(a.profileDir, 'accounts.json'), provider, opts?.withDefault ? loggedIn : undefined),
       // 실행 구성도 같다 — 앱이 쓴 run-configs.json 과 계획의 폴더를 읽기만 한다(CLI phase D).
       readRunConfigs: (projectPath) => readRunConfigsFile(path.join(a.profileDir, 'run-configs.json'), projectPath),
       sessions: a.sessions,
@@ -621,6 +721,9 @@ export function createHostOrch(a: {
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),
       ...(a.createSession ? { createSession: a.createSession } : {}),
+      ...(a.github ? { github: a.github } : {}),
+      ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+      workUnits: a.workUnits?.() ?? null,
       ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {
         marks.effects += 1
@@ -798,8 +901,11 @@ export function createHostOrch(a: {
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state, version: committed })
     // P15: a put that stood in for the load has no base to diff against.
-    if (hadState) journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: state, version: committed, actor: DESKTOP_ACTOR }))
-    else a.log('state-put: taken before this Host held a state, so it is not journaled as a diff from nothing')
+    // Not recorded either without one: every Run the put carries would read as just finished.
+    if (hadState) {
+      journalSafely('recording a state-put', () => a.journal?.committed({ prev, next: state, version: committed, actor: DESKTOP_ACTOR }))
+      recordFinishedRuns(prev, state)
+    } else a.log('state-put: taken before this Host held a state, so it is not journaled as a diff from nothing')
     // An accepted whole state is a commit like any other (R5): the app may have just added the work
     // the driver is to place. A refused one above changed nothing, so it kicks nothing.
     kickDriver()
@@ -1094,6 +1200,87 @@ export function createHostOrch(a: {
     return r
   }
 
+  /** `understanding-regenerate` (E1 §4, §5): one command for both its callers, and the role decides
+   *  which argument names the project. The app sends its `projectPath`; an MCP client sends a project
+   *  id (`project`), resolved here to the project's root, as `understanding-list` resolves it. */
+  const understandingRegenerate = async (args: Record<string, unknown>, from: OrchCaller | undefined, marks: CallMarks): Promise<Reply> => {
+    const role = from?.role
+    if (role !== 'app' && role !== 'mcp')
+      return { status: 403, body: { error: 'understanding-regenerate is for the app and MCP clients' } }
+    if (!a.understanding) return { status: 501, body: { error: 'this Host does not write How It Works records' } }
+    const recordId = args.recordId
+    if (typeof recordId !== 'string' || recordId === '')
+      return { status: 400, body: { error: 'understanding-regenerate needs a recordId' } }
+    let projectPath: string
+    if (role === 'app') {
+      const given = args.projectPath
+      if (typeof given !== 'string' || given === '') return { status: 400, body: { error: 'understanding-regenerate needs a projectPath' } }
+      projectPath = given
+    } else {
+      const projectId = args.project
+      if (typeof projectId !== 'string' || projectId === '')
+        return { status: 400, body: { error: 'understanding-regenerate needs a project id' } }
+      await ready()
+      const project = findProject(store.get(), projectId)
+      if (!project) return { status: 404, body: { error: `unknown project: ${projectId}` } }
+      projectPath = project.path
+    }
+    if (!a.understanding.isWriter()) return { status: 409, body: { error: NOT_WRITER } }
+    const r = await a.understanding.regenerate(projectPath, recordId)
+    if (!r.ok) return { status: r.status, body: { error: r.error } }
+    marks.effects += 1
+    return { status: 200, body: { id: r.id, status: 'generating' } }
+  }
+
+  /** The app's five `work-units-*` calls (E2 §5): 403 for any other caller, 501 without the duty, 400 for
+   *  missing arguments, 409 while an attached app keeps the duty. `-complete` and `-cancel` answer the
+   *  collector's own result as it is, a refusal included (`unknown task: <id>`, `task is <status>`): which
+   *  of those the renderer's button reads as done is the app's mapping (ipc.ts), not the Host's.
+   *  `-git-op` registers a Job merge the app runs itself on this collector, which watches HEAD (the
+   *  app's appWorkUnits): its begin is refused 409 as the others are, **its end never is**, since an op
+   *  this Host opened and never closed would explain every later HEAD move of that folder. */
+  const workUnitsCall = async (cmd: string, args: Record<string, unknown>, from: OrchCaller | undefined): Promise<Reply> => {
+    if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
+    const units = a.workUnits?.() ?? null
+    if (!units) return { status: 501, body: { error: 'this Host does not track session work units' } }
+    const optional = (v: unknown): v is string | undefined => v === undefined || (typeof v === 'string' && v !== '')
+    if (cmd === 'work-units-fork') {
+      const { newSessionId, transcriptPath, oldSessionId } = args
+      if (typeof newSessionId !== 'string' || newSessionId === '' || !optional(transcriptPath) || !optional(oldSessionId))
+        return { status: 400, body: { error: 'work-units-fork needs a newSessionId, and takes a transcriptPath and an oldSessionId' } }
+      if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+      units.fork(newSessionId, transcriptPath, oldSessionId)
+      // A collector that is not running ignores a fork (tracking off): said, so the app need not guess.
+      return { status: 200, body: { forked: units.isRunning() } }
+    }
+    if (cmd === 'work-units-git-op') {
+      const { phase, kind, cwd, op } = args
+      if (phase === 'end') {
+        if (typeof op !== 'string' || op === '') return { status: 400, body: { error: 'work-units-git-op end needs an op' } }
+        return { status: 200, body: { ended: units.gitOpEnd(op) } }
+      }
+      if (phase !== 'begin' || kind !== 'job-merge' || typeof cwd !== 'string' || cwd === '')
+        return { status: 400, body: { error: "work-units-git-op needs a phase of 'begin' with a kind of 'job-merge' and a cwd, or 'end' with an op" } }
+      if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+      // By the calling socket, so its close ends what it began (hostWorkUnits' clientGone).
+      return { status: 200, body: { op: units.gitOpBegin(kind, cwd, from.socket) } }
+    }
+    if (cmd === 'work-units-reload') {
+      if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+      await units.reload()
+      return { status: 200, body: { reloaded: true, running: units.isRunning() } }
+    }
+    const { projectPath, id } = args
+    if (typeof projectPath !== 'string' || projectPath === '' || typeof id !== 'string' || id === '')
+      return { status: 400, body: { error: `${cmd} needs a projectPath and an id` } }
+    if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+    const r =
+      cmd === 'work-units-complete'
+        ? await units.sessionTasks.completeById(projectPath, id)
+        : await units.sessionTasks.cancelById(projectPath, id)
+    return { status: 200, body: r }
+  }
+
   /**
    * **The answer to "did my call land?"** (request receipts design §6). Three states, and 200 for all
    * three: not finding a receipt is an answer, not a failure. Notably it is not a 404 — `NOT_FOUND`
@@ -1240,6 +1427,20 @@ export function createHostOrch(a: {
        *  observed replay resumes the question the receipt names rather than asking a new one. */
       let runArgs = args
       try {
+        // **MCP callers pass the allowlist first** (MCP design §2), before receipts and before the
+        // app-only commands, so a refused call leaves no receipt and reaches nothing. Read per call, as
+        // `app js` reads its toggle: the app may change it while the Host runs. A settings file that
+        // cannot be read refuses (readMcpAccess throws; the catch below answers 500 with its message).
+        if (from?.role === 'mcp') {
+          const settingsFile = path.join(a.profileDir, 'app-settings.json')
+          const refused = mcpRefusal(
+            cmd,
+            await readMcpAccess(settingsFile),
+            await readMcpSessions(settingsFile),
+            await readMcpGithubWrite(settingsFile)
+          )
+          if (refused) return refused
+        }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
         // line below, so a `request` sent with one would be accepted and silently ignored — which is
         // precisely the fault §3 is built on: Orca's `check --peek` takes `--retry-request` and drops
@@ -1255,8 +1456,12 @@ export function createHostOrch(a: {
             cmd === 'roll-force' ||
             cmd === 'roll-journal' ||
             cmd === 'slack-reload' ||
+            cmd === 'mcp-http-reload' ||
+            cmd === 'mcp-http-status' ||
             cmd === 'journal-append' ||
             cmd === 'journal-reload' ||
+            cmd === 'understanding-unit' ||
+            WORK_UNITS_CALLS.has(cmd) ||
             cmd === 'coordinator-idle' ||
             cmd === 'workspace-list' ||
             cmd === 'workspace-stop' ||
@@ -1345,6 +1550,15 @@ export function createHostOrch(a: {
           await a.slack.reload()
           return { status: 200, body: { reloaded: true, active: a.slack.active() } }
         }
+        // **Beside slack-reload, for its reason (MCP HTTP design §3).** The settings screen, after it wrote
+        // `mcpHttp`, has the Host read it again, and asks the entrance's state. Both answer the state. A reload
+        // is a person's action, so a failed entrance is tried again at once (`retry`).
+        if (cmd === 'mcp-http-reload' || cmd === 'mcp-http-status') {
+          if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
+          if (!a.mcpHttp) return { status: 501, body: { error: 'this Host does not run the MCP HTTP entrance' } }
+          if (cmd === 'mcp-http-reload') await a.mcpHttp.reload({ retry: true })
+          return { status: 200, body: a.mcpHttp.status() }
+        }
         // **Beside slack-reload, for its reason (Host journal J3, P7).** The app's reconciler rows and its
         // settings changes. Never a command layer command, never a receipt.
         if (cmd === 'journal-append' || cmd === 'journal-reload') {
@@ -1358,6 +1572,23 @@ export function createHostOrch(a: {
           if ('error' in parsed) return { status: 400, body: { error: parsed.error } }
           return a.journal.append(parsed.ops)
         }
+        // **Beside journal-append, for its reason (E1 §4).** A session unit the app's collector closed, sent
+        // while this Host writes How It Works. Never a command layer command, never a receipt.
+        if (cmd === 'understanding-unit') {
+          if (from?.role !== 'app') return { status: 403, body: { error: 'understanding-unit is the app’s to send' } }
+          if (!a.understanding) return { status: 501, body: { error: 'this Host does not write How It Works records' } }
+          const projectPath = args.projectPath
+          if (typeof projectPath !== 'string' || projectPath === '' || !isUnitShaped(args.unit))
+            return { status: 400, body: { error: 'understanding-unit needs a projectPath and a unit' } }
+          if (!a.understanding.isWriter()) return { status: 409, body: { error: NOT_WRITER } }
+          const r = await a.understanding.onUnitClosed(projectPath, args.unit)
+          if (r.ok) return { status: 200, body: { accepted: true } }
+          return { status: r.reason === NOT_WRITER ? 409 : 500, body: { error: r.reason ?? 'the unit was not recorded' } }
+        }
+        // **Beside understanding-unit, for its reason (E2 §5).** What only the app sees of session work units:
+        // a history-resume fork, the tracking toggle, the renderer's two buttons, and the Job merges the app
+        // runs itself. Never a command layer command, never a receipt.
+        if (WORK_UNITS_CALLS.has(cmd)) return await workUnitsCall(cmd, args, from)
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and
         // its two buttons. Never a command layer command, never a receipt.
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close') {
@@ -1395,6 +1626,13 @@ export function createHostOrch(a: {
           const answered = await appJs(args, sessionId, marks)
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
+        // **Answered by the Host, below the receipt line for app-js' reason** (E1 §5): MCP puts a request id
+        // on every regenerate_work_record. A generation started marks one effect, so a retried id replays
+        // the answer instead of starting a second one; a refusal marks nothing and leaves no receipt.
+        if (cmd === 'understanding-regenerate') {
+          const answered = await understandingRegenerate(args, from, marks)
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
         // **Answered by the Host, like the two above — but on *this* side of the receipt line.**
         //
         // Beside them in every other respect: nobody's `case` in `handleCommand` runs, and a Host too
@@ -1418,8 +1656,8 @@ export function createHostOrch(a: {
         await ready()
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
-        const actor = actorOf({ sessionId, role: from?.role, state: store.get() })
-        const r = await handleCommand(depsFor(marks, actor), { sessionId }, cmd, runArgs)
+        const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, state: store.get() })
+        const r = await handleCommand(depsFor(marks, actor), { sessionId, role: from?.role }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields
         // exist only on a Host that drives, and their absence tells a script this one does not.

@@ -9,7 +9,7 @@ import {
   hostStopResult,
   hostStartTargets,
   otherProtocolHost,
-  preparedRuntimeEntry,
+  preparedRuntime,
   runHostCommand,
   startHostNotice
 } from './host'
@@ -558,11 +558,33 @@ describe('hostStartTargets', () => {
       execPath: 'C:/app/electron.exe',
       profileDir: 'C:/profile',
       version: '1.3.25',
-      runtimeEntry: 'C:/local/astera/host-runtime/node-24/builds/1.3.25/host.js'
+      runtime: {
+        entryPath: 'C:/local/astera/host-runtime/node-24/builds/1.3.25/host.js',
+        exePath: 'C:/local/astera/host-runtime/node-24/astera-host.exe'
+      }
     })
     expect(t.candidates[0]).toBe('C:/local/astera/host-runtime/node-24/builds/1.3.25/host.js')
     expect(t.candidates[1]).toBe('C:/app/out/main/host.js')
     expect(t.logPath).toBe('C:/profile/host/host.log')
+  })
+
+  // The runtime exists so a Host that outlives the app does not run from Astera.exe and lock the
+  // install folder against the next update (scripts/host-runtime.mjs). The app spawns the runtime's
+  // host.js with astera-host.exe; a CLI that spawned it with its own Astera.exe kept that lock.
+  it("runs the runtime's host.js with the runtime's own executable, and the one beside cli.js with its own", () => {
+    const runtime = {
+      entryPath: 'C:/local/astera/host-runtime/node-24/builds/1.3.25/host.js',
+      exePath: 'C:/local/astera/host-runtime/node-24/astera-host.exe'
+    }
+    const t = hostStartTargets({
+      cliEntry: 'C:/app/out/main/cli.js',
+      execPath: 'C:/app/Astera.exe',
+      profileDir: 'C:/profile',
+      version: '1.3.25',
+      runtime
+    })
+    expect(t.execPathFor(runtime.entryPath)).toBe(runtime.exePath)
+    expect(t.execPathFor('C:/app/out/main/host.js')).toBe('C:/app/Astera.exe')
   })
 
   it('런타임이 없으면 CLI 옆의 host.js 하나다', () => {
@@ -584,11 +606,11 @@ describe('hostStartTargets', () => {
   })
 })
 
-describe('preparedRuntimeEntry', () => {
+describe('preparedRuntime', () => {
   // `resourcesPath`/`readFile` are parameters precisely so this — the branch every packaged install
   // actually takes — does not need a real packaged build to test.
-  it('준비된 runtime.json 을 읽어 그 build 의 entryPath 를 낸다', () => {
-    const entry = preparedRuntimeEntry({
+  it('준비된 runtime.json 을 읽어 그 build 의 entryPath 와 Host 실행 파일을 낸다', () => {
+    const runtime = preparedRuntime({
       profileDir: 'C:\\Users\\x\\AppData\\Roaming\\astera',
       platform: 'win32',
       env: { LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local' },
@@ -600,17 +622,16 @@ describe('preparedRuntimeEntry', () => {
     })
     // CLI_VERSION falls back to '0.0.0' under vitest — __ASTERA_VERSION__ is a vite `define`, not set
     // for the test runner (host.ts's own comment on CLI_VERSION says the same).
-    expect(entry).toBe(
-      hostRuntimePaths({
-        base: 'C:\\Users\\x\\AppData\\Local\\astera\\host-runtime',
-        nodeVersion: '24.15.0',
-        appVersion: '0.0.0'
-      }).entryPath
-    )
+    const paths = hostRuntimePaths({
+      base: 'C:\\Users\\x\\AppData\\Local\\astera\\host-runtime',
+      nodeVersion: '24.15.0',
+      appVersion: '0.0.0'
+    })
+    expect(runtime).toEqual({ entryPath: paths.entryPath, exePath: paths.exePath })
   })
 
   it('runtime.json 이 없으면(개발) undefined 다 — host start 를 실패시키지 않는다', () => {
-    const entry = preparedRuntimeEntry({
+    const entry = preparedRuntime({
       profileDir: 'C:\\Users\\x\\AppData\\Roaming\\astera',
       platform: 'win32',
       env: { LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local' },
@@ -624,7 +645,7 @@ describe('preparedRuntimeEntry', () => {
 
   it('resourcesPath 가 없으면(진짜 Electron 프로세스가 아니면) 읽어 보지도 않고 undefined 다', () => {
     let readAttempted = false
-    const entry = preparedRuntimeEntry({
+    const entry = preparedRuntime({
       profileDir: 'C:\\Users\\x\\AppData\\Roaming\\astera',
       platform: 'win32',
       env: {},
@@ -640,7 +661,7 @@ describe('preparedRuntimeEntry', () => {
 
   it('win32 가 아니면 읽어 보지도 않고 undefined 다', () => {
     let readAttempted = false
-    const entry = preparedRuntimeEntry({
+    const entry = preparedRuntime({
       profileDir: '/home/x/.config/astera',
       platform: 'linux',
       env: {},

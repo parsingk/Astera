@@ -29,8 +29,15 @@ import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
 import { createProcHolders, procHeldBy } from './procHolders'
 import { nodeProcSpawn } from './nodeProc'
-import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORK_UNITS, HOST_YIELD_WORKSPACE, HOST_YIELD_WORKTREES } from '../core/host/protocol'
 import { createHostJournal } from './hostJournal'
+import { createHostUnderstanding } from './hostUnderstanding'
+import { createHostWorkUnits, readWorkUnitTracking, wireSessionExits, workUnitSessionsOf, type HostWorkUnits } from './hostWorkUnits'
+import { readHostMerges, hostMergesPathIn } from '../core/git/hostMerges'
+import { readFileRetrying } from '../core/renameRetry'
+import { outcomeOf } from '../core/orchestration/running'
+import { makeDescriptors } from '../core/providers/descriptor'
+import { readRange } from '../core/git/range'
 import { createHostOrch } from './orch'
 import { composeHostDriving } from './drivingWiring'
 import { composeHostRolling } from './rollingWiring'
@@ -47,7 +54,7 @@ import { readAccountEntries } from '../core/accounts/accountsFile'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import { announceChatProc, createHostSessionStarter } from './sessionCreate'
 import { previewShotsDir } from '../core/preview/shotsDir'
-import { hostCliPaths, hostWorkerBaseEnv } from '../core/host/spawn'
+import { hostCliPaths, hostWorkerBaseEnv, type HostCliPaths } from '../core/host/spawn'
 import { readAgentAppEnabled } from '../core/settings/agentAppEnabled'
 import { DISPOSE_CAP_MS, createWorkspaceManager, disposeWithin } from './workspace/manager'
 import { createLaunchResolver } from './workspace/launch'
@@ -56,6 +63,12 @@ import { probeLinuxTools, realProbeDeps } from './workspace/linuxTools'
 import { workspaceSupported } from '../core/workspace/platform'
 import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
+import { defaultGhRunner } from '../core/github/gh'
+import { readUnderstandingFile } from '../core/understanding/read'
+import { createPullRequest, readCommits } from '../core/github/prCreate'
+import { isCleanWorktree } from '../core/worktrees/git'
+import { createMcpHttpSupervisor } from './mcpHttp'
+import { readMcpHttp } from '../core/settings/mcpHttp'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -136,7 +149,9 @@ async function main(): Promise<void> {
       conhostReaper.spawned()
       return spawned
     },
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    // A repeat kill's escalation (registry.ts `kill`): never a second ConPTY kill.
+    killTree: (pid) => killTree(pid)
   })
   // Leftovers Task 5 (S3-2): the console hosts node-pty leaves behind on win32, one per pty that ended
   // by itself, reaped once no pty is live (conhostReaper.ts). A no-op elsewhere. Its closures only run
@@ -191,6 +206,11 @@ async function main(): Promise<void> {
     // from here on, and every chain is quieted. No roll waits: `killAll` below ends every session, a roll
     // in flight included, and the spawner refuses new respawns from `closeAndSettle` on. Never throws.
     rollingWiring?.dispose()
+    // The work units' watchers and their sync timer stop with them. Never throws.
+    hostWorkUnits?.dispose()
+    // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
+    // a Host that exits before the kill's grace still ends that pipe. Never rejects.
+    void mcpHttp.stop()
     // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
@@ -252,6 +272,10 @@ async function main(): Promise<void> {
   // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
 
+  /** Session work units (E2 §4): built below, once `orch` exists, and only with a spawner. Declared here
+   *  because the worktrees' `git-op` and the rolling's events reach it, and both are built first. */
+  let hostWorkUnits: HostWorkUnits | null = null
+
   // The Host's own worktree registry (Host S3 §3.1, §3.3, §3.4): forks, merges and removes Job
   // worktrees over its own registry, whether or not an app is attached. Construction reads and writes
   // nothing, so building it unconditionally keeps S2's "constructed, not loaded" rule — at start its
@@ -266,7 +290,12 @@ async function main(): Promise<void> {
     ptys: registry,
     procs,
     getState: () => orch.state(),
-    broadcast: (m) => server.broadcast(m),
+    // E2 §4: a merge this Host runs is its own git operation for its work units too, registered before
+    // the merge starts (the `begin` is told right before `git merge`).
+    broadcast: (m) => {
+      if (m.t === 'git-op') hostWorkUnits?.onGitOp(m)
+      server.broadcast(m)
+    },
     log: (m) => log.write(m),
     app: { hasApp: () => server.hasApp(), act: (name, args) => server.act(name, args), lastAppPid: () => server.lastAppPid() }
   })
@@ -281,6 +310,26 @@ async function main(): Promise<void> {
     log: (m) => log.write(m)
   })
   await hostJournal.start()
+
+  // How It Works (E1 §2, §3): this Host writes understanding.json while every attached app yields it, or
+  // none is attached, read per write. Loaded at start whether or not it writes now, so a record a dead
+  // Host left `generating` reads as interrupted; **not the writer before the server listens** (a Host that
+  // loses the bind race must write nothing), so that interruption is saved once it does, below, or when
+  // the apps change. `orch` hands it every Run a commit finishes.
+  const hostUnderstanding = createHostUnderstanding({
+    file: path.join(profileDir, 'understanding.json'),
+    profileDir,
+    writer: () => server !== undefined && !server.appsKeep(HOST_YIELD_UNDERSTANDING),
+    // accounts.json and app-settings.json: hostUnderstanding reads both per call, retried.
+    descriptors: makeDescriptors(process.platform),
+    // The Host's own registry; empty without a spawner, which never loads it, and then no key folds.
+    worktrees: () => worktrees.list(),
+    // The app's reader for the same material (ipc.ts): no range, or one git could not read, gives none.
+    readCommits: async (root, from, to) => (from && to ? ((await readRange(root, from, to))?.subjects ?? []) : []),
+    log: (m) => log.write(m),
+    push: (root) => server.broadcast({ t: 'understanding-state', root })
+  })
+  await hostUnderstanding.load()
 
   // The Host's own spawn path (Host S2 design §2.1): orchestration workers and coordinators started in
   // this registry, so a coordinator's worker-start works with no Astera window open. Null when the
@@ -365,7 +414,12 @@ async function main(): Promise<void> {
           nowIso: () => new Date().toISOString(),
           // Slack in the Host Task 6: the Host's own rolls and every hook event are its Slack's sources.
           // Read at the call: the Slack composition is built below, and each tap isolates itself.
-          onRollEvent: (e) => slackWiring?.onRollEvent(e),
+          // E2 §4: and its work units, first, so the open unit is re-keyed before the old pty's exit lands.
+          onRollEvent: (e) => {
+            if (e.t === 'session-rolled')
+              hostWorkUnits?.onRolled({ oldSessionId: e.oldSessionId, newSessionId: e.info.id, transcriptPath: e.dest, kind: e.info.kind })
+            slackWiring?.onRollEvent(e)
+          },
           hookTap: (sid, p) => slackWiring?.onHookEvent(sid, p)
         })
       : null
@@ -461,6 +515,22 @@ async function main(): Promise<void> {
   registry.onExit(watchSessionEnds(registry))
   procs.onExit(watchSessionEnds(procs))
 
+  // The MCP HTTP entrance (MCP HTTP design §3): started, watched and stopped here by the `mcpHttp` setting,
+  // read at start (below, once the server listens), at each app greeting and on `mcp-http-reload`. Its
+  // state goes to the apps as `mcp-http-state`. `server` is assigned below; `push` runs only after a read.
+  const mcpHttp = createMcpHttpSupervisor({
+    settings: () => readMcpHttp(path.join(profileDir, 'app-settings.json')),
+    cli: ((): HostCliPaths | null => {
+      const p = hostCliPaths(process.env, existsSync)
+      return 'missing' in p ? null : p
+    })(),
+    profileDir,
+    hostAddress: addr.address,
+    env: process.env,
+    push: (state) => server.broadcast({ t: 'mcp-http-state', state }),
+    log: (m) => log.write(m)
+  })
+
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -504,9 +574,28 @@ async function main(): Promise<void> {
       list: () => hostSessions.listSessions(),
       log: (m) => log.write(m)
     }),
+    // The `github-*` commands (MCP P2-B): the user's gh on this Host's PATH, and a Run's branch from this
+    // Host's worktree registry. With no spawner the registry is never loaded, so `worktreeOf` is left
+    // out and a Run-scoped command says so; the project-scoped ones still answer.
+    github: {
+      run: defaultGhRunner,
+      ...(spawner ? { worktreeOf: (p: string) => worktrees.infoOf(p) } : {}),
+      // github-pr-create: the app's own create PR path (push, then gh pr create), over the Run's worktree.
+      createPr: (req) => createPullRequest(req),
+      readCommits: (wt, base) => readCommits(wt, base),
+      isClean: (wt) => isCleanWorktree(wt)
+    },
+    // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
+    // call and never written, so a record the app wrote is there while the app is closed.
+    readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,
+    // How It Works (E1 §3): every Run a commit finishes, recorded here while this Host is the writer.
+    understanding: hostUnderstanding,
+    // Session work units (E2 §5): built below, after this orch, since their in-Run test reads its state;
+    // asked per call. Null without a spawner, and then the session-task commands only forward.
+    workUnits: () => hostWorkUnits,
     // The spec sweep goes with the spawner (§2.7): a Host that spawns writes specs and announces
     // `spawn`, and the app then leaves the sweep to this load. One that does not leaves it to the app.
     specsDir: spawner ? path.join(profileDir, 'orch', 'specs') : undefined,
@@ -527,7 +616,9 @@ async function main(): Promise<void> {
     // `unregisterRolling` only forwards to the app and a rolled-from exit closes as before.
     ...(rollingWiring?.orchHooks ?? {}),
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
-    slack: slackWiring ?? undefined
+    slack: slackWiring ?? undefined,
+    // `mcp-http-reload` and `mcp-http-status` (MCP HTTP §3).
+    mcpHttp
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -542,6 +633,38 @@ async function main(): Promise<void> {
         log: (m) => log.write(m)
       })
     : null
+  // Session work units (E2 §3, §4): the collector over this Host's own sessions, writing workUnits.json while
+  // no attached app keeps the duty, read per write. **Only with a spawner**, as the duty is announced: a
+  // Host that cannot start sessions has none to watch. Tracking is read now; the collector starts once the
+  // server listens and this Host is the writer, and its start interrupts the units of sessions not alive.
+  if (spawner) {
+    hostWorkUnits = createHostWorkUnits({
+      file: path.join(profileDir, 'workUnits.json'),
+      writer: () => server !== undefined && !server.appsKeep(HOST_YIELD_WORK_UNITS),
+      sessions: () => workUnitSessionsOf(registry.list()),
+      accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json'), readFileRetrying),
+      descriptors: makeDescriptors(process.platform),
+      statusLinePayload: (id) => spawner.statusLinePayload(id),
+      tracking: () => readWorkUnitTracking(path.join(profileDir, 'app-settings.json')),
+      // The command layer's isWorker || isRunCoordinator, as the app's inRun asks it (ipc.ts). Before the
+      // state is loaded nothing is known, and nothing is skipped.
+      inRun: (sessionId) => {
+        if (!orch.loaded()) return false
+        const st = orch.state()
+        if (st.dispatches.some((x) => x.sessionId === sessionId)) return true
+        return st.runs.some((r) => r.coordinatorSessionId === sessionId && outcomeOf(st, r.id) === 'running')
+      },
+      hostMerges: () => readHostMerges(hostMergesPathIn(profileDir)),
+      understanding: hostUnderstanding,
+      push: (m) => server.broadcast(m),
+      log: (m) => log.write(m)
+    })
+    const workUnits = hostWorkUnits
+    spawner.onBusyChanged((sessionId, busy) => workUnits.onBusy(sessionId, busy))
+    wireSessionExits(registry, workUnits)
+    await workUnits.start()
+  }
+
   // Protocol 4: the proof every client checks before it hands this Host anything (core/host/hostKey.ts).
   // Made before the bind, so no client can meet this Host before its key exists. A Host that cannot
   // make one would be refused by every client, so it does not serve at all.
@@ -590,6 +713,8 @@ async function main(): Promise<void> {
       onClientGone: (from) => {
         exits?.appGone(from.socket)
         procHolders.appGone(from.socket)
+        // E2: a Job merge the app registered with work-units-git-op and never ended is ended now.
+        hostWorkUnits?.clientGone(from.socket)
       },
       // **Both halves are real now** (ruling F57). The Host owns the state, so it can answer the
       // question `docs/cli.md` already promises `astera host stop` answers: how many Runs have work
@@ -614,6 +739,10 @@ async function main(): Promise<void> {
         rollingWiring?.onAppsChanged()
         // P4: an app that keeps Slack attaching closes the Host's socket; the last one leaving opens it.
         slackWiring?.onAppsChanged()
+        // E1: an app that kept How It Works leaving makes this Host the writer.
+        void hostUnderstanding.writerMayHaveChanged()
+        // E2: the same for the work units: the collector starts or stops with it.
+        void hostWorkUnits?.writerMayHaveChanged()
       },
       // S6 D4: a newly greeted app gets the Host's whole block registry once, after its hello. Limits L3:
       // and who drives, so its Jobs sidebar can say why a parked Host starts nothing. Each isolates itself.
@@ -623,6 +752,10 @@ async function main(): Promise<void> {
         rollingWiring?.appGreeted(send)
         wiring?.appGreeted(send)
         void hostJournal.appGreeted(() => (orch.loaded() ? orch.state() : null))
+        // E2: and the work units read the tracking setting again, for a work-units-reload that never arrived.
+        void hostWorkUnits?.reload()
+        // MCP HTTP §3: and the entrance reads its setting again, for an mcp-http-reload that never arrived.
+        void mcpHttp.reload()
       },
       log
     })
@@ -646,6 +779,12 @@ async function main(): Promise<void> {
 
   // The Host's Slack starts once the server exists: who keeps Slack is the server's to say.
   slackWiring?.start()
+  // And How It Works: with no app attached yet this Host is the writer now (E1 §2).
+  void hostUnderstanding.writerMayHaveChanged()
+  // And the work units (E2 §3).
+  void hostWorkUnits?.writerMayHaveChanged()
+  // And the MCP HTTP entrance, once this Host is the one that serves the profile (MCP HTTP §3).
+  void mcpHttp.reload()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

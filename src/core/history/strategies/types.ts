@@ -12,6 +12,8 @@ export interface IndexedRow {
   sessionId: string
   title: string
   awaitingReply: boolean
+  /** HistoryEntry.hidden: kept for the delete, left out of the list. */
+  hidden?: boolean
 }
 
 /** HistoryIndex exposing its own helpers narrowly.

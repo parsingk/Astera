@@ -132,6 +132,27 @@ describe('PtyRegistry', () => {
     expect(r.lastWrite('p1')).toBe(2000)
   })
 
+  // 2026-10-02: a finished Run's sessions end once nobody has typed into them for a while
+  // (dispatchLoop.ts, FINISHED_RUN_GRACE_MS). The Host's own writes (a nudge, a spawn's or a roll's
+  // prompt) are input to the pty but not a person's, so only a write marked `person` moves this.
+  it('only a write marked as a person’s moves lastPersonWrite, and terminal reports never do', () => {
+    const esc = String.fromCharCode(27)
+    let clock = 1000
+    const r = new PtyRegistry({ spawn: () => fakePty(), log: () => {}, now: () => clock })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.write('p1', 'nudge\r')
+    expect(r.lastWrite('p1')).toBe(1000)
+    expect(r.lastPersonWrite('p1')).toBe(null)
+    clock = 2000
+    r.write('p1', 'x', { person: true })
+    expect(r.lastPersonWrite('p1')).toBe(2000)
+    clock = 3000
+    r.write('p1', `${esc}[I`, { person: true })
+    r.write('p1', 'prompt\r')
+    expect(r.lastPersonWrite('p1')).toBe(2000)
+    expect(r.lastPersonWrite('nope')).toBe(null)
+  })
+
   // A message for a session that has gone is ordinary, not exceptional: the app may have sent it
   // before it learned the pty exited.
   it('ignores every command for an id it does not have', () => {
@@ -325,6 +346,97 @@ describe('PtyRegistry', () => {
     r.open({ id: 'p2', file: 'x', args: [], opts, meta: meta() })
     r.killAll()
     expect([a.killed, b.killed]).toEqual([true, true])
+  })
+
+  // Measured on win32 (2026-10-01): node-pty 1.1.0's ConPTY kill calls ClosePseudoConsole on the same
+  // handle every time it is called, and a second call on a pty still alive ended the Host with
+  // STATUS_HEAP_CORRUPTION (0xC0000374), no log line, and every session it held with it. `runs stop`
+  // reached it: its stop marks the slot pending, and the driving loop resent the stop 12 ms later.
+  it('sends a live pty one kill, however often it is asked, and logs the repeats', () => {
+    const p = fakePty()
+    let kills = 0
+    p.kill = () => { kills += 1 }
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    h.r.kill('p1')
+    h.r.kill('p1')
+    h.r.killAll()
+    expect(kills).toBe(1)
+    expect(h.logs.some((m) => m.includes('p1') && m.includes('already'))).toBe(true)
+  })
+
+  // A repeat means the one kill has not ended it. The process tree is ended instead (taskkill /T /F on
+  // win32), which never touches the ConPTY handle; once, and never another pty kill.
+  it('a repeat kill on a live pty ends its process tree once, and never sends the pty kill again', async () => {
+    const p = fakePty(4321)
+    let kills = 0
+    p.kill = () => { kills += 1 }
+    const trees: number[] = []
+    const logs: string[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: (m) => logs.push(m), killTree: async (pid) => { trees.push(pid) } })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.kill('p1')
+    expect(trees).toEqual([])
+    r.kill('p1')
+    r.kill('p1')
+    await Promise.resolve()
+    expect(kills).toBe(1)
+    expect(trees).toEqual([4321])
+    expect(logs.some((m) => m.includes('p1') && m.includes('4321') && m.includes('process tree'))).toBe(true)
+  })
+
+  it('a tree kill that fails is logged, not thrown', async () => {
+    const p = fakePty(4321)
+    const logs: string[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: (m) => logs.push(m), killTree: async () => { throw new Error('access denied') } })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.kill('p1')
+    expect(() => r.kill('p1')).not.toThrow()
+    await new Promise((res) => setTimeout(res, 0))
+    expect(logs.some((m) => m.includes('p1') && m.includes('access denied'))).toBe(true)
+  })
+
+  it('a repeat kill on a pty that has exited does nothing', () => {
+    const p = fakePty(4321)
+    const trees: number[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: () => {}, killTree: async (pid) => { trees.push(pid) } })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.kill('p1')
+    p.exit(1)
+    r.kill('p1')
+    expect(trees).toEqual([])
+  })
+
+  it('killAll kills a fresh pty exactly once and leaves one already sent its kill alone', () => {
+    const a = fakePty(1)
+    const b = fakePty(2)
+    const kills = { a: 0, b: 0 }
+    a.kill = () => { kills.a += 1 }
+    b.kill = () => { kills.b += 1 }
+    const trees: number[] = []
+    const made = [a, b]
+    let i = 0
+    const r = new PtyRegistry({ spawn: () => made[i++], log: () => {}, killTree: async (pid) => { trees.push(pid) } })
+    r.open({ id: 'p1', file: 'x', args: [], opts, meta: meta() })
+    r.open({ id: 'p2', file: 'x', args: [], opts, meta: meta() })
+    r.kill('p1')
+    r.killAll()
+    expect(kills).toEqual({ a: 1, b: 1 })
+    expect(trees).toEqual([])
+  })
+
+  it('a kill that threw is not sent again either', () => {
+    const p = fakePty()
+    let kills = 0
+    p.kill = () => {
+      kills += 1
+      throw new Error('AttachConsole failed')
+    }
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(() => h.r.kill('p1')).toThrow('AttachConsole failed')
+    h.r.kill('p1')
+    expect(kills).toBe(1)
   })
 
   it('the default scrollback is the one the design fixed', () => {

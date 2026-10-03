@@ -39,11 +39,14 @@ import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { createHostProcFactory } from './host/procFactory'
 import { APP_CALLER } from '../core/host/driver'
-import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover } from './host/outdated'
+import { hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksChatTakeover, hostSpeaksUnderstanding, hostSpeaksWorkUnits } from './host/outdated'
 import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWorkspace'
+import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
+import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
+import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
 import { createHostRollView, installHostRollExit, orchHoldsSession, hostForced, announcesAdopted } from './host/hostRollView'
@@ -52,24 +55,27 @@ import { applyAdoptRolling } from './host/adoptRolling'
 import { chatAdoptPlan, hostCarryOnIsOurs, hostStartingDefers } from './chatAdopt'
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION } from './host/worktreeRoute'
-import { createHostGitOps } from './host/hostGitOps'
+import { createHostGitOps } from '../core/workUnit/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
 import { HOST_PROTOCOL, HOST_ACT_PATH_IN_USE, HOST_ACT_SLACK_ANSWER, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
+import { isOnlyTerminalReports } from '../core/terminal/reports'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
-import { orchAccountOf } from '../core/accounts/accountsFile'
+import { orchAccountsFor } from '../core/accounts/accountsFile'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
 import { installCommandFor } from '../core/install/cliInstall'
 import { locateCli } from './cliLocate'
+import { mcpClientsStatus, registerMcpClientNow } from './mcpClients'
+import { mcpServerFor, shimPathFor } from '../core/install/mcpRegistration'
 import { prependToPath } from '../core/sessions/manager'
 import { listClaudeModels, listCodexModels } from './models/discover'
-import { UnderstandingPipeline } from './understanding/pipeline'
+import { UnderstandingPipeline } from '../core/understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { OrchLoadResult } from '../core/orchestration/store'
@@ -85,18 +91,21 @@ import {
 import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
-import { UnderstandingStore } from './understanding/store'
-import { WorkUnitStore } from './workUnit/store'
+import { readUnderstandingFile } from '../core/understanding/read'
+import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
+import { AppUnderstandingStore, createAppUnderstanding } from './understanding/appUnderstanding'
+import { AppWorkUnitStore, createAppWorkUnits } from './workUnit/appWorkUnits'
 import { promptWriteEventOf } from '../core/continuity/promptWrite'
 import { readGitSummary } from '../core/orchestration/exec/gitSummary'
 import { RecoveryReconciler } from './recovery/reconciler'
 import { executeRecovery } from './recovery/execute'
 import { readGitFacts } from './recovery/git'
 import type { Handoff } from '../core/handoff/types'
-import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
-import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
+import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
+import { readGitRef, isAncestorOf, readChangedFiles } from '../core/workUnit/gitProbe'
+import { readRange, readRangeFiles, readHeadSteps } from '../core/git/range'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -132,7 +141,8 @@ import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
 import { ensureProject } from '../core/orchestration/projects'
-import { jobOf, resolveRunId } from '../core/orchestration/state'
+import { resolveRunId } from '../core/orchestration/state'
+import { runRecordInputOf } from '../core/orchestration/runRecord'
 import type { CliInstallStatus, WorktreeInfo } from '../core/types'
 
 /** 이 프로젝트의 것인 id 전부 — Job 과 그 회차. **한 집합으로 묻는 이유**는 명령이 둘 중 무엇이든
@@ -162,7 +172,7 @@ import {
   type AppImageLaunch
 } from '../core/orchestration/exec/shuttle'
 import { appImageLaunchFor, binDirFor, isOnPath, pathHintFor } from '../core/orchestration/cliInstall'
-import { addToUserPath, removeFromUserPath, userPathHas } from './userPath'
+import { addToUserPath, removeFromUserPath, takeOffUserPathIfItBreaks, userPathStatus } from './userPath'
 import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import {
@@ -240,7 +250,7 @@ import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
-import { createPullRequest, readCommits } from './prCreate'
+import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { fillFromCommits } from '../core/github/fill'
 
 /** startOrchestration 이 배선에게 돌려주는 손잡이. index.ts 가 이것을 들고 있는다.
@@ -804,7 +814,7 @@ export function registerIpc(
    *  limit is not a completion). History resume does not have — and must not pass — one; see
    *  `onSessionForked`'s own doc for why. */
   onWorkUnitForkReady?: (
-    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
+    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string, hostRoll?: boolean) => void
   ) => void,
   /** The desktop notification sink. It is built in index.ts (it needs the BrowserWindow for both
    *  focus and the click), but the renderer's "this session is on screen" push arrives as IPC, which
@@ -1051,6 +1061,8 @@ export function registerIpc(
   /** Who drives Jobs, as the Host last said it (limits L3). Null until `startHostClient` builds it. */
   let hostDriverView: HostDriverView | null = null
   let hostWorkspaceView: HostWorkspaceView | null = null
+  /** The MCP HTTP entrance as the Host says it (MCP HTTP design §4). Null until `startHostClient` builds it. */
+  let hostMcpHttpView: HostMcpHttpView | null = null
   /** Takes back the one pty a Host roll respawned into (`takeSessionsBack` with its id). Null until
    *  `startHostClient` has built the sweep queue, and then for good: nothing is pushed before then. */
   let takeBackRolledPty: ((ptyId: string) => Promise<unknown>) | null = null
@@ -1536,6 +1548,12 @@ export function registerIpc(
   // forwarded and the mirror moved (S6 §3.4, withHostRollHold), so the renderer replaces the old tab
   // rather than closing it, and the app's orchestration tap finds the Dispatch already rekeyed.
   // installHostRollExit sets this one held handler as both core.sessions.onExit and core.chat.onExit (S6-20).
+  /** When a person last typed into each session in this app's tabs (the renderer's `sessions.write`,
+   *  terminal reports left out), by session id. A finished Run's sessions end once nobody has typed into
+   *  them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS); the app's own writes (a nudge, a prompt)
+   *  go through core.sessions.write directly and are not here. An entry goes with its session's exit
+   *  (below), except a lost-sight one: that session is still running in the Host. */
+  const personInputAt = new Map<string, number>()
   installHostRollExit(hostRollView, [core.sessions, core.chat], (e: { sessionId: string; exitCode: number }): void => {
     adoptedNative.delete(e.sessionId)
     hostOwned.delete(e.sessionId)
@@ -1552,6 +1570,7 @@ export function registerIpc(
     scheduler?.handleExit(e) // clean up the schedule entry
     forgetAttentionOnExit(attention, e.sessionId, e.exitCode) // drop the Map entry (its own doc above)
     forgetAttentionOnExit(pendingPrompt, e.sessionId, e.exitCode) // same guard: a lost-sight exit keeps the capture
+    forgetAttentionOnExit({ forget: (id) => personInputAt.delete(id) }, e.sessionId, e.exitCode) // same guard
     closeConversationOnExit(conversationSessions, e.sessionId, e.exitCode) // stop the follow (its own doc above)
     // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
     // interrupted, not completed; it waits on the How It Works screen until the person closes it.
@@ -2125,7 +2144,8 @@ export function registerIpc(
     // is that old session's id, but even if its task is still sitting `interrupted`, this resume
     // gives no grounds to revive it as `active`: the person never called `/astera-task` again.
     // `onSessionForked`'s doc records this decision and why (Important 3).
-    if (resumeTranscriptDest !== undefined) workUnitCollector.onSessionForked(info.id, resumeTranscriptDest)
+    // In front of a Host that writes work units, the fork goes to it as work-units-fork (appWorkUnits).
+    if (resumeTranscriptDest !== undefined) appWorkUnits.fork(info.id, resumeTranscriptDest)
     // Route to the per-provider coordinator — a mix is already blocked by the guard above, so the primary account's provider decides
     if ((opts.rollAccountIds?.length ?? 0) >= 1) {
       // The rolling coordinators are separate per-provider implementations and are deliberately not
@@ -2958,9 +2978,11 @@ export function registerIpc(
     /** The three things integrateWorktrees needs from the app (core/orchestration/exec/integrateGit.ts). */
     const gitCtx: IntegrateContext = {
       log: orchLog,
+      // Through appWorkUnits: in front of a work-units Host the merge is registered on the Host's
+      // collector (`work-units-git-op`), which is the one watching HEAD; otherwise on this app's.
       gitOp: {
-        begin: (k, cwd) => workUnitCollector.beginGitOperation(k, cwd),
-        end: (id) => workUnitCollector.endGitOperation(id)
+        begin: (k, cwd) => appWorkUnits.gitOpBegin(k, cwd),
+        end: (id) => appWorkUnits.gitOpEnd(id)
       },
       reap: reapWorktree
     }
@@ -2992,6 +3014,7 @@ export function registerIpc(
           .some((x) => x.id === id && x.status === 'exited' && x.exitCode !== undefined && x.exitCode !== PTY_LOST_SIGHT_EXIT_CODE),
       sessionBusy: (id) => busyState.get(id) ?? null,
       typeInto: (id, text) => core.sessions.write(id, text),
+      lastPersonInputAt: (id) => personInputAt.get(id) ?? null,
       // 앱에서 "운전해도 되는가" 는 서버가 서 있고, dispatch 를 알리는 Host 가 몰지 않는가다(§4.2, N8).
       // 슬롯마다 다시 묻으므로, 한 바퀴 도중에 그런 Host 가 붙으면 그 자리에서 멈춘다.
       mayStart: () => orch !== null && !hostDrives(),
@@ -3018,23 +3041,13 @@ export function registerIpc(
       checkpoint: (events, next) => appJournal.checkpoint(events, next),
       push: pushOrchState,
       // Assembling the record needs the project key and the understanding pipeline, so it stays on
-      // this side; which Runs finished is the hook's judgement (justFinished).
-      onRunFinished: ({ runId, outcome, state }) => {
-        const run = state.runs.find((r) => r.id === runId)
-        if (!run) return
-        const tasks = state.tasks.filter((t) => t.runId === runId)
-        const finishedJob = jobOf(state, run)
-        if (!finishedJob) return
-        void understandingPipeline.onRunFinished(understandingKeyOf(finishedJob.cwd), {
-          runId,
-          jobName: finishedJob.objective.slice(0, 60),
-          objective: finishedJob.objective,
-          at: new Date().toISOString(),
-          taskIds: tasks.map((t) => t.id),
-          tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
-          changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
-          validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
-        })
+      // this side; which Runs finished is the hook's judgement (justFinished), and the record's fields
+      // are core's (runRecordInputOf), shared with the Host's commits. In front of a Host that writes
+      // How It Works, appUnderstanding records nothing: the Host records the Run at its own commit.
+      onRunFinished: ({ runId, state }) => {
+        const built = runRecordInputOf(state, runId)
+        if (!built) return
+        void appUnderstanding.onRunFinished({ ...built, projectPath: understandingKeyOf(built.projectPath) })
       },
       previous: () => prevOrchState,
       remember: (next) => {
@@ -3166,12 +3179,14 @@ export function registerIpc(
         rolling?.unregister(sessionId)
         codexRolling?.unregister(sessionId)
       },
-      listAccounts: (provider) =>
-        core.accounts
-          .list()
-          .filter((a) => provider === undefined || providerOf(a) === provider)
-          // 같은 투영을 Host 가 accounts.json 을 읽을 때도 쓴다(accountsFile.ts) — 두 답이 갈라지지 않게.
-          .map(orchAccountOf),
+      // The Host answers from accounts.json through the same function (accountsFile.ts), so the two
+      // answers cannot drift apart. `withDefault` marks each provider's default by the registry's login check.
+      listAccounts: (provider, opts) =>
+        orchAccountsFor(
+          core.accounts.list(),
+          provider,
+          opts?.withDefault ? (a) => core.accounts.loginStatus(a.id) : undefined
+        ),
       // limit is a line count (200 by default). The tail is returned as-is even after the session has
       // died — worker-release does not clear output. Why untracked, empty, and non-empty tails get three
       // different messages is explained in tail.ts (an empty string reads as "the worker did nothing").
@@ -3759,7 +3774,8 @@ export function registerIpc(
             (id) => {
               const d = store.get().dispatches.find((x) => x.id === id)
               return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
-            }
+            },
+            (id) => store.get().dispatches.find((x) => x.id === id)?.endedAt !== undefined
           )
         })
       },
@@ -3817,7 +3833,10 @@ export function registerIpc(
   // Host to reach, and every session it starts is given the CLI. The toggles that used to be the
   // other four reasons to come here now only decide which commands are answered.
   if (orchWiring) void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
-  ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
+  ipcMain.on('sessions.write', (_e, id, data) => {
+    if (typeof data === 'string' && !isOnlyTerminalReports(data)) personInputAt.set(id, Date.now())
+    core.sessions.write(id, data)
+  })
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
   ipcMain.handle('sessions.kill', (_e, id) => {
@@ -4537,9 +4556,9 @@ export function registerIpc(
   // orchestration — a project's stored explanation must be readable even on a start where the server
   // failed. So it is constructed here, unconditionally, at the same scope as assertAllowedPath
   // (needed by the handler below) rather than beside OrchestrationStore.
-  const understanding = new UnderstandingStore(
-    path.join(app.getPath('userData'), 'understanding.json')
-  )
+  const understandingFile = path.join(app.getPath('userData'), 'understanding.json')
+  // Write-gated: closed the moment a greeting says the Host writes How It Works (appUnderstanding below).
+  const understanding = new AppUnderstandingStore(understandingFile)
   // registerIpc is synchronous, so this cannot be awaited here — the handler below awaits it instead,
   // which keeps the handler itself registered on every startup while still never serving before load
   // has actually finished.
@@ -4566,7 +4585,7 @@ export function registerIpc(
     await assertAllowedPath(projectPath)
     await understandingLoaded
     // undefined 가 아니라 null 로 넘긴다 — structured clone 에서 undefined 는 구별되는 값으로 살아남지 않는다
-    return understanding.get(understandingKeyOf(projectPath)) ?? null
+    return appUnderstanding.get(understandingKeyOf(projectPath))
   })
 
   /** 작업 단위가 닫히면 그것을 설명으로 옮기는 층. **수집기와 따로 세운다** — 수집기는 하류가
@@ -4599,12 +4618,28 @@ export function registerIpc(
     log: orchLog
   })
 
+  /** The last greeting's answer: whether that Host writes How It Works (E1 §2). null before any greeting.
+   *  Set at every handshake (hostClient.onConnect below) and kept across a dropped socket, as appJournal
+   *  keeps its own (P8). */
+  let hostWritesUnderstanding: boolean | null = null
+  /** Who writes understanding.json: this app's store and pipeline above, or, in front of a Host that
+   *  announces `understanding`, the Host, which this app then reads and hands its units and regenerates. */
+  const appUnderstanding = createAppUnderstanding({
+    localStore: understanding,
+    localPipeline: understandingPipeline,
+    hostAnnounces: () => hostWritesUnderstanding,
+    orchCall: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
+    readFile: () => readUnderstandingFile(understandingFile),
+    notify: (root) => send('understanding:changed', root),
+    log: orchLog
+  })
+
   ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, recordId: string) => {
     await assertAllowedPath(projectPath)
     if (typeof recordId !== 'string' || recordId === '')
       throw new Error(`INVALID_RECORD_ID: ${String(recordId)}`)
     await understandingLoaded
-    void understandingPipeline.regenerate(understandingKeyOf(projectPath), recordId)
+    await appUnderstanding.regenerate(understandingKeyOf(projectPath), recordId)
   })
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
@@ -4615,16 +4650,10 @@ export function registerIpc(
   // watcher) can call it on a default install, and it is start() that the work unit toggle gates.
   // Those trigger sites appear earlier in this function than this declaration and close over it;
   // registerIpc is synchronous, so none of them can run before this line has executed.
-  const workUnits = new WorkUnitStore(path.join(app.getPath('userData'), 'workUnits.json'))
-  // Same shape and the same two reasons as understandingLoaded above: registerIpc is synchronous so
-  // this cannot be awaited here, and the .catch keeps one failed load from rejecting every later await.
-  const workUnitsLoaded = workUnits
-    .load()
-    .then((loaded) => {
-      if (loaded.recovered)
-        orchLog('failed to read or parse workUnits.json — kept the .bak and started from an empty state')
-    })
-    .catch((e) => orchLog(`workUnits.json load failed: ${String(e)}`))
+  // Write-gated, closed until this app is the writer, and loaded only then (appWorkUnits below): in
+  // front of a Host that announces `work-units` the Host writes the file and this app only reads it.
+  const workUnitsFile = path.join(app.getPath('userData'), 'workUnits.json')
+  const workUnits = new AppWorkUnitStore(workUnitsFile)
 
   /** 수집기가 이번에 볼 세션들. **수집기는 세션을 스스로 찾지 않는다** — 어느 세션이 어느 파일을
    *  쓰는지는 이 파일만 아는 일이고(tabResumeTextFor 가 같은 값을 같은 방식으로 얻는다), 그것을
@@ -4674,7 +4703,7 @@ export function registerIpc(
   const workUnitCollector: WorkUnitCollector = new WorkUnitCollector({
     store: workUnits,
     listSessions: workUnitSessions,
-    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange },
+    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange, rangeFiles: readRangeFiles, headSteps: readHeadSteps },
     now: () => Date.now(),
     pendingGitOps: () => workUnitCollector.getPendingGitOps(),
     hostMerges: () => readHostMerges(hostMergesPathIn(app.getPath('userData'))),
@@ -4698,7 +4727,7 @@ export function registerIpc(
     // reason as understandingKeyOf's own comment (a worktree session's "project" is the origin repo,
     // not the worktree).
     onUnitClosed: (projectPath, unit) => {
-      void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
+      void appUnderstanding.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
     // The open-task section's redraw trigger. **Not folded** — same reason as the sessionTasks.*
     // handlers just below (their own comment has the full story): workUnits.json is keyed by the raw
@@ -4723,18 +4752,31 @@ export function registerIpc(
       send('sessionTasks:goalIgnored', { projectPath, blockingUnitId }),
     log: orchLog
   })
-  // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
-  // 뒤늦게 끝난 load() 가 통째로 덮어쓴다.
-  void workUnitsLoaded
-    .then(() =>
-      core.appSettings.getWorkUnitTrackingEnabled() ? workUnitCollector.start() : undefined
-    )
-    .catch((e) => orchLog(`work unit collector start failed: ${String(e)}`))
+  /** Who writes workUnits.json (E2 §3, §6): this app's store and collector above, or, in front of a Host
+   *  that announces `work-units`, the Host, which this app then reads and hands its presses, forks and
+   *  toggle. **The collector starts only once that is decided** (a greeting, or the startup chain settling
+   *  with no Host): started earlier, its seed would interrupt every unit a Host session opened. The load
+   *  waits for the decision too, and the start for the load (토글이 꺼져 있으면 시작하지 않는다), so a
+   *  late load never overwrites what the collector wrote. */
+  const appWorkUnits = createAppWorkUnits({
+    store: workUnits,
+    collector: workUnitCollector,
+    tracking: () => core.appSettings.getWorkUnitTrackingEnabled(),
+    orchCall: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
+    readFile: () => readWorkUnitsFile(workUnitsFile),
+    notify: (root) => send('sessionTasks:changed', root),
+    goalIgnored: (info) => send('sessionTasks:goalIgnored', info),
+    log: orchLog
+  })
+  // Settles on every path out of the startup chain; null is the one where no Host ever answered. A
+  // greeting before it has decided already, and this does nothing then.
+  void hostSessionsTakenBack.then((taken) => appWorkUnits.onStartupSettled(taken === null))
   // 이어받기 알림을 배선에 넘긴다. **토글과 무관하게 항상 넘긴다** — `onTabResumeReady` 와
   // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
-  // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다.
-  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId) =>
-    workUnitCollector.onSessionForked(sessionId, transcriptPath, oldSessionId)
+  // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다. A roll this app made itself goes to a work-units
+  // Host as work-units-fork, as a history resume does.
+  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId, hostRoll) =>
+    appWorkUnits.fork(sessionId, transcriptPath, oldSessionId, hostRoll)
   )
 
   // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
@@ -4753,31 +4795,22 @@ export function registerIpc(
   // (via the fold above) shows up under the origin repo no matter which tab produced it. That
   // asymmetry is real and already exists for work-unit state generally; it is parked for a later
   // plan (docs/2026-08-30-understanding-generation-conformance.md), not something to fix here.
+  //
+  // In front of a work-units Host the list is read from the file it writes and the presses go to it
+  // (appWorkUnits). The row can already be gone by the time a [완료] lands — the goal-ignored toast's
+  // own [완료] action (App.tsx) does not auto-dismiss, so it can outlive the row it names — and that is
+  // answered as success in both modes (appWorkUnits' `completed` has the full reasoning).
   ipcMain.handle('sessionTasks.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
-    return workUnitCollector.listOpen(projectPath)
+    return appWorkUnits.list(projectPath)
   })
   ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
-    const r = await workUnitCollector.completeTaskById(projectPath, id)
-    if (!r.ok) {
-      // The row can already be gone by the time this lands — newly reachable since the
-      // goal-ignored toast's own [완료] action (App.tsx) does not auto-dismiss, so it can outlive
-      // the row it names if the person closes it some other way first, or a goal's own end signal
-      // already did. Both of collector.ts's own reasons for `!ok` here (`unknown task: …` — the row
-      // was dropped entirely, `finish`'s empty-drop; `task is …` — it closed under some other
-      // status) mean the same thing from this click's point of view: what the button wanted, the
-      // row gone, is already true. Treated as success, not a failure the person has to read.
-      if (r.reason === `unknown task: ${id}` || r.reason.startsWith('task is '))
-        return { recorded: true }
-      throw new Error(r.reason)
-    }
-    return { recorded: r.recorded }
+    return appWorkUnits.complete(projectPath, id)
   })
   ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
-    const r = await workUnitCollector.cancelTaskById(projectPath, id)
-    if (!r.ok) throw new Error(r.reason)
+    await appWorkUnits.cancel(projectPath, id)
   })
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
@@ -5352,20 +5385,27 @@ export function registerIpc(
   const cliStatus = async (): Promise<CliInstallStatus> => {
     const dir = cliBinDir()
     let onPath = isOnPath({ dir, pathVar: process.env.PATH ?? '', platform: process.platform })
+    let userPathTooLong = false
     // win32: this app's own PATH was read once when it started, so a folder put on the user Path since
-    // (by Install, or by the person) is asked of the registry, which is what the next shell reads.
-    if (!onPath && process.platform === 'win32') {
-      onPath = await userPathHas({ dir, env: process.env }).catch((err: unknown) => {
+    // (by Install, or by the person) is asked of the registry, which is what the next shell reads. It is
+    // asked even when this app's PATH has the folder: a user Path too long for Windows reaches no new shell.
+    if (process.platform === 'win32') {
+      const user = await userPathStatus({ dir, env: process.env }).catch((err: unknown) => {
         orchLog(`the user Path could not be read: ${String(err)}`)
-        return false
+        return null
       })
+      if (user) {
+        userPathTooLong = !user.fits
+        onPath = (onPath || user.has) && user.fits
+      }
     }
     return {
       dir,
       installed: shuttleNames().every((n) => existsSync(path.join(dir, n))),
       onPath,
       hint: pathHintFor({ dir, platform: process.platform }),
-      ...(process.platform === 'win32' ? { canEditUserPath: true as const } : {})
+      ...(process.platform === 'win32' ? { canEditUserPath: true as const } : {}),
+      ...(userPathTooLong ? { userPathTooLong: true as const } : {})
     }
   }
 
@@ -5461,6 +5501,34 @@ export function registerIpc(
           orchLog(`public astera shuttle sync failed: ${err instanceof Error ? err.message : String(err)}`)
       )
   }
+  // win32: 1.4.1 put the folder on the user Path without checking its length, and a Path pushed past
+  // the limit is given to no new shell, every other tool on it gone too. With the command installed, the
+  // entry comes off again when it is what does that (takeOffUserPathIfItBreaks); the renderer says so once.
+  const pathRepair: Promise<boolean> =
+    app.isPackaged && process.platform === 'win32' && shuttleNames().every((n) => existsSync(path.join(cliBinDir(), n)))
+      ? takeOffUserPathIfItBreaks({ dir: cliBinDir(), env: process.env }).then(
+          (r) => {
+            if (r === 'removed') orchLog(`${cliBinDir()} was taken off the user Path: with it the Path was too long for new shells`)
+            return r === 'removed'
+          },
+          (err: unknown) => {
+            orchLog(`the user Path could not be checked at start: ${err instanceof Error ? err.message : String(err)}`)
+            return false
+          }
+        )
+      : Promise.resolve(false)
+  ipcMain.handle('cli.pathRepairedAtStart', () => pathRepair)
+
+  // The Register buttons beside the MCP registration lines (main/mcpClients.ts). The argv is the one
+  // the copied lines and the Cursor entry carry, for the shim in the install folder. Nothing here runs
+  // unless the person presses Register; reading the status never starts the server.
+  const mcpServer = () =>
+    mcpServerFor({ platform: process.platform, shimPath: shimPathFor({ platform: process.platform, dir: cliBinDir() }) })
+  ipcMain.handle('mcpClients.status', () => mcpClientsStatus(mcpServer(), app.getPath('home')))
+  ipcMain.handle('mcpClients.register', (_e, client: unknown) => {
+    if (client !== 'claude' && client !== 'codex') throw new Error(`INVALID_MCP_CLIENT: ${String(client)}`)
+    return registerMcpClientNow(client, mcpServer(), app.getPath('home'))
+  })
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
   // sent is validated before being written to disk. Registered unconditionally here (not inside
@@ -5474,9 +5542,10 @@ export function registerIpc(
       throw new Error(`INVALID_WORK_UNIT_TRACKING_ENABLED: ${String(enabled)}`)
     await core.appSettings.setWorkUnitTrackingEnabled(enabled)
     // 켜면 **그 순간의 파일 끝**을 커서로 잡고(이전 커서는 버린다), 끄면 열려 있던 Unit 을 그 자리에서
-    // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
-    await workUnitsLoaded
-    await workUnitCollector.onEnabledChanged(enabled)
+    // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다
+    // (appWorkUnits). In front of a work-units Host this sends work-units-reload instead, and before the
+    // writer is decided it does nothing: the decision reads the saved toggle.
+    await appWorkUnits.trackingChanged(enabled)
     // **A retry, not the reason the server exists.** It comes up at app start on its own; this only
     // covers a start where that failed, so turning the toggle on gets a second chance rather than
     // nothing. Turning it off does not close the server — see the startOrch comment.
@@ -5577,6 +5646,63 @@ export function registerIpc(
     if (mode !== 'yolo' && mode !== 'manual') throw new Error(`INVALID_AGENT_PERMISSION_MODE: ${String(mode)}`)
     await core.appSettings.setAgentPermissionMode(mode)
   })
+
+  // MCP access (MCP design M5). The Host reads the file on every MCP call (readMcpAccess), so saving it
+  // is the whole effect.
+  ipcMain.handle('settings.getMcpAccess', () => core.appSettings.getMcpAccess())
+  ipcMain.handle('settings.setMcpAccess', async (_e, v: unknown) => {
+    if (v !== 'off' && v !== 'read' && v !== 'control') throw new Error(`INVALID_MCP_ACCESS: ${String(v)}`)
+    await core.appSettings.setMcpAccess(v)
+  })
+
+  // Whether an MCP client may see and use sessions (MCP P1 design §5). The Host reads the file on
+  // every MCP call (readMcpSessions), so saving it is the whole effect.
+  ipcMain.handle('settings.getMcpSessions', () => core.appSettings.getMcpSessions())
+  ipcMain.handle('settings.setMcpSessions', async (_e, v: unknown) => {
+    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_SESSIONS: ${String(v)}`)
+    await core.appSettings.setMcpSessions(v)
+  })
+
+  // Whether an MCP client may act on GitHub (MCP P2-B design). The Host reads the file on every MCP
+  // call (readMcpGithubWrite), so saving it is the whole effect.
+  ipcMain.handle('settings.getMcpGithubWrite', () => core.appSettings.getMcpGithubWrite())
+  ipcMain.handle('settings.setMcpGithubWrite', async (_e, v: unknown) => {
+    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_GITHUB_WRITE: ${String(v)}`)
+    await core.appSettings.setMcpGithubWrite(v)
+  })
+
+  // MCP over HTTP (MCP HTTP design §4). Saving is followed by `mcp-http-reload`, which makes the Host
+  // read the file again and apply it; the answer and the later pushes reach the window on
+  // 'mcpHttp:state'. A Host that is not there (or too old) reads the file at its next app greeting.
+  ipcMain.handle('settings.getMcpHttp', () => core.appSettings.getMcpHttp())
+  ipcMain.handle('settings.setMcpHttp', async (_e, v: unknown) => {
+    // mcpHttpOf narrows; a value it changes was not a valid setting.
+    const next = mcpHttpOf(v)
+    const o = (v ?? {}) as Partial<McpHttpSettings>
+    if (
+      next.enabled !== o.enabled ||
+      next.lan !== o.lan ||
+      next.port !== o.port ||
+      !Array.isArray(o.hosts) ||
+      next.hosts.length !== o.hosts.length
+    )
+      throw new Error(`INVALID_MCP_HTTP: ${JSON.stringify(v)}`)
+    const hostsProblem = mcpHttpHostsProblem(next.hosts)
+    if (hostsProblem) throw new Error(`INVALID_MCP_HTTP: ${hostsProblem}`)
+    await core.appSettings.setMcpHttp(next)
+    await hostMcpHttpView?.reload()
+  })
+  ipcMain.handle('mcpHttp.status', () => hostMcpHttpView?.current() ?? { host: false, reason: 'none' })
+  // Ruling 3: only the Host creates the token (ensureToken before it starts the entrance); the app reads
+  // the file, and writes it only on "New token". No reload follows a new token: the HTTP process re-reads
+  // the file whenever its stamp changes, at the next request, so the old token stops working there.
+  const mcpHttpToken = createTokenReader(tokenPath(app.getPath('userData')))
+  // The window holds only the last four characters for the masked display; the token itself is asked for
+  // by a Show or a Copy and dropped again there.
+  const hintOf = (token: string | null): string | null => (token ? token.slice(-4) : null)
+  ipcMain.handle('mcpHttp.token', () => mcpHttpToken.current())
+  ipcMain.handle('mcpHttp.tokenHint', async () => hintOf(await mcpHttpToken.current()))
+  ipcMain.handle('mcpHttp.newToken', async () => hintOf(await newToken(app.getPath('userData'))))
 
   // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
   // settings.ts); this handler validates the value and starts the orchestration wiring the journal
@@ -5863,6 +5989,20 @@ export function registerIpc(
     client.onMessage((m) => workspaceView.pushed(m))
     client.onConnect(() => void workspaceView.connected())
     client.onStatusChange((s) => workspaceView.status(s))
+
+    // MCP over HTTP (design §4): a Host that announced `mcp-http` pushes its entrance state to every
+    // greeted client; after each handshake the view asks for it, and a dropped connection reads as no
+    // Host. None of these callbacks throws (hostMcpHttp.ts).
+    const mcpHttpView = createHostMcpHttpView({
+      status: () => client.status(),
+      call: orchCall,
+      changed: (v) => send('mcpHttp:state', v),
+      log: hostLog
+    })
+    hostMcpHttpView = mcpHttpView
+    client.onMessage((m) => mcpHttpView.pushed(m))
+    client.onConnect(() => void mcpHttpView.connected())
+    client.onStatusChange(() => mcpHttpView.status())
 
     // S6 D4: the block records this app's coordinators found go to a Host that speaks `blocks`, whole
     // after each handshake, and the Host's come back as `blocks` pushes. Sends nothing to an older Host.
@@ -6256,6 +6396,12 @@ export function registerIpc(
         hostLog(`host: a worktrees-state or git-op push could not be applied: ${String(err)}`)
       }
     })
+    // E1 §4: the Host wrote understanding.json, so the window reads it again. onHostPush never throws.
+    client.onMessage((m) => {
+      if (m.t === 'understanding-state') appUnderstanding.onHostPush(m.root)
+    })
+    // E2 §6: the Host wrote workUnits.json, or ignored a /goal. onHostPush never throws.
+    client.onMessage((m) => appWorkUnits.onHostPush(m))
 
     /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
      *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
@@ -6403,13 +6549,9 @@ export function registerIpc(
                   rolling?.unregister(info.id)
                   codexRolling?.unregister(info.id)
                 },
-                fork: (from) => {
-                  try {
-                    workUnitCollector.onSessionForked(info.id, undefined, from)
-                  } catch (err) {
-                    hostLog(`host: the Work Unit fork of adopted session ${info.id} failed: ${String(err)}`)
-                  }
-                },
+                // A Host roll: made locally in front of an older Host (held while a switch to writer
+                // loads), never sent back to a work-units Host, which re-keyed it itself. Never throws.
+                fork: (from) => appWorkUnits.fork(info.id, undefined, from, true),
                 rememberForkSeen: (from) => core.sessions.remember(info.id, { forkSeen: from })
               }
             )
@@ -6785,6 +6927,13 @@ export function registerIpc(
       // sends one. Idempotent, and cheap.
       remirrorOrchState?.()
       appJournal.greeted()
+      // How It Works follows this greeting (E1 §2): the answer is kept until the next one, and a switch
+      // to the Host closes this app's store at once and hands the Host what it was writing.
+      hostWritesUnderstanding = hostSpeaksUnderstanding(hostClient?.status() ?? { connected: false, features: [] })
+      void appUnderstanding.onGreeting(hostWritesUnderstanding)
+      // Session work units follow it too (E2 §3): a work-units Host makes this app a reader at once, an
+      // older one makes it the writer, which loads the file the Host wrote and only then starts.
+      void appWorkUnits.onGreeting(hostSpeaksWorkUnits(hostClient?.status() ?? { connected: false, features: [] }))
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its

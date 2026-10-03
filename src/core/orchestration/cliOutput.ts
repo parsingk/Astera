@@ -76,6 +76,24 @@ export interface CliError {
   details?: Record<string, unknown>
 }
 
+/** The ids a refusal names, as `details` for the envelope, or nothing: `requestId` (the 409 for a
+ *  request already in flight), `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
+ *  D), `repair` (the profile file a 409 says only the app can repair, Host S2) and `retry` (a 409
+ *  from a Host that is leaving, which the same command retried once a Host is up clears) and `runId` (a
+ *  later `jobs run` whose coordinator did not start: the run it left behind, host S4+S5 Task 15; and the
+ *  Run a `check --ack` of no such batch was checked against, for its `check --run <runId>` step). Undefined
+ *  rather than an empty object so a failure that names none prints `details: {}` exactly as it did before.
+ *  Here rather than in run.ts because `astera mcp serve` builds the same details (cli/mcp/server.ts). */
+export function refusalDetailsOf(body: unknown): Record<string, unknown> | undefined {
+  if (body === null || typeof body !== 'object') return undefined
+  const out: Record<string, unknown> = {}
+  for (const key of ['requestId', 'jobId', 'repair', 'retry', 'runId'] as const) {
+    const id = (body as Record<string, unknown>)[key]
+    if (typeof id === 'string' && id !== '') out[key] = id
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 /**
  * 배열을 이름 있는 칸에 담는다.
  *
@@ -96,6 +114,7 @@ const LIST_FIELD: Record<string, string> = {
   'accounts-list': 'accounts',
   'run-configs-list': 'runConfigs',
   'sessions-list': 'sessions',
+  'understanding-list': 'records',
   // 아래 셋은 공개 표면이 아니지만 코디네이터가 읽는다. "약속 밖" 은 무엇을 돌려줄지
   // 고칠 수 있다는 뜻이지, 읽는 쪽에게 일부러 불친절해도 된다는 뜻이 아니다 — 세을 한 이름으로
   // 묶으면 가이드가 그 자리마다 "어떤 items 인가" 를 다시 설명해야 한다.
@@ -334,7 +353,11 @@ const STEPS: Record<
           ? typeof details.runId === 'string' && typeof details.jobId === 'string'
             ? ['astera host status', `astera run-start --run ${details.runId}`]
             : [...(typeof details.retryCommand === 'string' ? [details.retryCommand] : []), 'astera host status']
-          : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
+          : // `runs stop` on a finished Run (the only refusal of it that carries `runId`): its coordinator
+            // ends on its own after the grace, so read the Run; end the coordinator now if it must go.
+            cmd === 'runs-stop' && typeof details.runId === 'string'
+            ? ['astera runs get --id <runId>', 'astera run-coordinator-stop --run <runId>']
+            : [cmd?.startsWith('host-') === true ? 'astera host status' : 'astera status'],
   // 시한을 넘긴 것과 Host 가 살아서 답하지 않는 것이 같은 코드다(run.ts 의 SILENT_HOST_CODE).
   // 둘을 가르는 명령이 이것이다 — 앞의 경우에는 답하고 뒤의 경우에는 답하지 않는다(docs/cli.md).
   //

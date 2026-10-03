@@ -7,6 +7,7 @@
 import type { OrchState } from '../orchestration/state'
 import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
 import type { SlackForwardedEvent } from '../slack/forwarded'
+import type { McpHttpUrl } from '../mcp/httpUrls'
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
  *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
@@ -60,6 +61,11 @@ export const HOST_FEATURE_ORCH = 'orch'
  *  exactly as it did before receipts existed. We refuse to break a promise we made, and we never
  *  refuse over one we did not. */
 export const HOST_FEATURE_REQUESTS = 'requests'
+
+/** The Host tells an MCP caller apart (MCP design M1): it records its rows as surface `mcp` and admits
+ *  its commands only through the `mcpAccess` allowlist (core/host/mcpGate.ts). A Host without it reads
+ *  `role: 'mcp'` as a CLI and gates nothing, so `astera mcp serve` refuses to serve against one. */
+export const HOST_FEATURE_MCP = 'mcp'
 
 /** The Host spawns orchestration sessions itself: `worker-start`, `worker-stop`, `worker-release`,
  *  `worker-read` and a coordinator's start are carried out in its own pty registry when no app can
@@ -136,11 +142,45 @@ export const HOST_FEATURE_SLACK_OWNER = 'slack-owner'
  *  `journal-reload`. Announced by every Host (plan ruling P6). */
 export const HOST_FEATURE_JOURNAL = 'journal'
 
+/** The Host writes How It Works records (understanding.json) itself (E1 §2, §3): a finished Run's record at
+ *  its commits, a closed session unit and a regenerate the app hands it, and it pushes
+ *  `understanding-state` after every write. Announced by every Host, as `journal`: every Host commits.
+ *  Additive, so HOST_PROTOCOL stays 4. */
+export const HOST_FEATURE_UNDERSTANDING = 'understanding'
+
+/** The Host detects session work units itself (E2 §3, §4): it runs the work unit collector over the
+ *  sessions in its registry, writes workUnits.json while no attached app keeps the duty
+ *  (HOST_YIELD_WORK_UNITS), hands closed units to its How It Works records, and pushes
+ *  `work-units-state` after every write and `work-units-goal-ignored` for the notice. Announced only with
+ *  `spawn`: a Host that cannot start sessions has none to watch. Additive, so HOST_PROTOCOL stays 4. */
+export const HOST_FEATURE_WORK_UNITS = 'work-units'
+
 /** The Host runs agent app workspaces (agent workspace design): it answers `app-js` and the app only
  *  orch-calls `workspace-list`, `workspace-stop` and `workspace-close`, and pushes `workspace` to the
  *  apps that yield `workspace`. Announced by a win32, linux or darwin Host (workspaceSupported). An app
  *  sends none of the three calls to a Host without it. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_WORKSPACE = 'workspace'
+
+/** The Host supervises the MCP HTTP entrance (MCP HTTP design §3): it answers the app-only orch-calls
+ *  `mcp-http-reload` and `mcp-http-status` and pushes `mcp-http-state`. Announced by every Host: one without
+ *  the CLI paths answers its state as failed. An app sends neither call to a Host without it. Additive, so
+ *  HOST_PROTOCOL stays 4. */
+export const HOST_FEATURE_MCP_HTTP = 'mcp-http'
+
+/** The MCP HTTP entrance as the Host runs it (MCP HTTP design §3): answered by the app-only orch-call
+ *  `mcp-http-status` (and `mcp-http-reload`, after it re-read the setting) and pushed as `mcp-http-state` on
+ *  every change. `url` only while `running`; `error` only while `failed`. `lan` and `port` are the setting
+ *  being applied. */
+export interface McpHttpState {
+  state: 'off' | 'starting' | 'running' | 'failed'
+  url?: string
+  /** While other devices are allowed and it runs: the URLs they can use, from the hosts the running process
+   *  answers to (core/mcp/httpUrls.ts). Absent otherwise, and from a process that did not say. */
+  urls?: McpHttpUrl[]
+  error?: string
+  lan: boolean
+  port: number
+}
 
 /** One entry of the roll journal (D5). `seq` rises across the Host's restarts; `at` is ISO. A `rolled`
  *  entry names the new session in `sessionId` and the one it rolled from in `oldSessionId`, which is how
@@ -192,6 +232,14 @@ export const HOST_YIELD_SLACK = 'slack'
 /** `hello.yields` value: this app writes no journal row while its Host announces `journal`; it reads the
  *  file read-only and sends its reconciler's rows through `journal-append` (J2, J3). */
 export const HOST_YIELD_JOURNAL = 'journal'
+/** `hello.yields` value: this app writes no How It Works record while its Host announces `understanding`; it
+ *  reads understanding.json read-only and hands its closed session units and its regenerates to the Host
+ *  (E1 §2). An app that keeps the duty keeps writing, and the Host then writes nothing. */
+export const HOST_YIELD_UNDERSTANDING = 'understanding'
+/** `hello.yields` value: this app runs no work unit collector while its Host announces `work-units`; it
+ *  reads workUnits.json read-only and forwards a person's button presses and its history-resume forks to
+ *  the Host (E2 §3, §6). An app that keeps the duty runs its own collector, and the Host writes nothing. */
+export const HOST_YIELD_WORK_UNITS = 'work-units'
 /** `hello.yields` value: this app shows the Host's agent app workspaces in a mirror tab, so the Host
  *  may push `workspace` to it and captures frames only while one such app is attached. An older app
  *  sends none and is pushed nothing. */
@@ -307,8 +355,26 @@ export type ClientMessage =
    *  before. Additive, so HOST_PROTOCOL stays 3.
    *
    *  **`nonce`** (protocol 4): the Host answers it with `proof` (core/host/hostKey.ts), and the client
-   *  sends nothing more until that proof checks out. */
-  | { t: 'hello'; protocol: number; app: string; role?: 'app' | 'cli'; yields?: string[]; pid?: number; nonce?: string }
+   *  sends nothing more until that proof checks out.
+   *
+   *  **`client`** is the MCP client an `mcp` socket serves, as its MCP `initialize` named itself (MCP
+   *  spec §29). The Host keeps it per socket and journals it on that socket's rows, cleaned again on
+   *  arrival (core/continuity/actor.ts `mcpClientOf`), and ignores it from any other role. Additive, so
+   *  HOST_PROTOCOL stays 4.
+   *
+   *  **`remote`** is the network address of the caller an `mcp` socket serves when it came over HTTP
+   *  (`astera mcp http`, MCP HTTP design §5); absent over stdio. Additive, so HOST_PROTOCOL stays 4. */
+  | {
+      t: 'hello'
+      protocol: number
+      app: string
+      role?: 'app' | 'cli' | 'mcp'
+      yields?: string[]
+      pid?: number
+      nonce?: string
+      client?: { name: string; version?: string }
+      remote?: string
+    }
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2.
    *
@@ -478,6 +544,19 @@ export type HostMessage =
    *  counter per Host life, shared with the `worktree-*` replies, reset by the receiver at each
    *  handshake's `worktree-list` fill, and a lower value than the last applied is ignored. */
   | ({ t: 'worktrees-state' } & WorktreesSnapshot)
+  /** The Host just wrote How It Works records for this project root (E1 §4), the folded key it stores under.
+   *  The app forwards it to its renderer as `understanding:changed`, which reads again rather than compares.
+   *  An older app ignores it. */
+  | { t: 'understanding-state'; root: string }
+  /** The Host just wrote workUnits.json for this project (E2 §4), the raw session cwd it stores under. The
+   *  app forwards it to its renderer as `sessionTasks:changed`, which reads again. An older app ignores it. */
+  | { t: 'work-units-state'; root: string }
+  /** The MCP HTTP entrance's state changed (MCP HTTP design §3; host/mcpHttp.ts): the same value the app-only
+   *  `mcp-http-status` answers. An older app ignores it. */
+  | { t: 'mcp-http-state'; state: McpHttpState }
+  /** A goal a session declared opened nothing, because a unit was already open there (the collector's
+   *  onGoalIgnored): the app shows the notice its renderer shows today. An older app ignores it. */
+  | { t: 'work-units-goal-ignored'; projectPath: string; objective: string; blockingUnitId: string }
   | { t: 'proc-spawned'; id: string; pid: number }
   | { t: 'proc-failed'; id: string; error: string }
   /** One stdout line, live. `seq` counts from 1 per process and is never reused; a client that has

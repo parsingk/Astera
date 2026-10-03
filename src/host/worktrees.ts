@@ -79,11 +79,17 @@ export interface HostWorktrees {
   /** Whether the registry lists this folder, by `isSamePath` — from memory, as the app's loop asks
    *  `core.worktrees.list()`. */
   isRegistered(p: string): boolean
+  /** The registry's entry for this folder, by `isSamePath`, from memory, or null — the GitHub
+   *  commands' `worktreeOf` (MCP P2-B): a Run's branch, base and repository. */
+  infoOf(p: string): WorktreeInfo | null
   /** The paths the registry holds, from memory — the Host path guard's third list (B5). */
   paths(): string[]
   /** The repositories the registry's worktrees were forked from, from memory — `resolveProjectRoot`'s
    *  first candidate list, as the app's is `core.worktrees.list().map((w) => w.repoPath)`. */
   repoPaths(): string[]
+  /** The registry's entries, from memory: the How It Works key folding (repoPathOf), as the app's is over
+   *  `core.worktrees.list()`. */
+  list(): WorktreeInfo[]
   /** R8, the app's tags. */
   isPathInUse(p: string): string | null
   /** The four internal orch-calls, app only (R1). */
@@ -382,8 +388,10 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     },
     reap,
     isRegistered: (p) => registry.list().some((w) => isSamePath(w.path, p)),
+    infoOf: (p) => registry.list().find((w) => isSamePath(w.path, p)) ?? null,
     paths: () => registry.list().map((w) => w.path),
     repoPaths: () => registry.list().map((w) => w.repoPath),
+    list: () => registry.list(),
     isPathInUse,
     call: async (cmd, args, from) => {
       const handle = calls[cmd]

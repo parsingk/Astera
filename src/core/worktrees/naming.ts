@@ -2,7 +2,12 @@ import path from 'node:path'
 
 export const MAX_SUFFIX_ATTEMPTS = 20
 
-/** Keeps Unicode letters, digits and ._- ; everything else becomes -, .. collapses to ., leading and trailing .- are trimmed */
+/** git refuses a ref component that ends in `.lock` ("Regenerate yarn.lock" would be such a branch). The
+ *  replacement keeps the length and does not match its own output, so slugify stays idempotent. */
+const LOCK_END = /\.(lock)$/i
+
+/** Keeps Unicode letters, digits and ._- ; everything else becomes -, .. collapses to ., leading and
+ *  trailing .- are trimmed, and a trailing .lock becomes -lock */
 export function slugify(input: string): string {
   const s = input
     .trim()
@@ -10,8 +15,31 @@ export function slugify(input: string): string {
     .replace(/-+/g, '-')
     .replace(/\.{2,}/g, '.')
     .replace(/^[.-]+|[.-]+$/g, '')
+    .replace(LOCK_END, '-$1')
   if (!s) throw new Error('INVALID_NAME: the name contains no usable characters')
   return s
+}
+
+/** The longest name derived from free text (a Job's objective, a Task's title, a worker name an agent
+ *  writes). The name becomes both the worktree folder and the branch `<git user>/<name>`; unbounded,
+ *  a paragraph-long objective broke the ref file's path on Windows (MAX_PATH) and, past about 250
+ *  characters, a single path component on every OS. */
+export const MAX_NAME_LENGTH = 40
+
+/** slugify, then cut to MAX_NAME_LENGTH: at the last - before the cap when that - is in the second
+ *  half (so `a-<300 letters>` is not cut down to `a`), else at the cap itself; a trailing . or - is
+ *  trimmed and a trailing .lock the cut exposed becomes -lock, as in slugify. Throws as slugify does
+ *  when the input has no usable characters. */
+export function boundedSlug(input: string): string {
+  const s = slugify(input)
+  if (s.length <= MAX_NAME_LENGTH) return s
+  // One character past the cap, so a word that ends exactly at the cap is kept whole
+  const head = s.slice(0, MAX_NAME_LENGTH + 1)
+  const cut = head.lastIndexOf('-')
+  // Never empty: slugify left no leading . or -, so the first character survives the trim
+  return (cut >= MAX_NAME_LENGTH / 2 ? head.slice(0, cut) : s.slice(0, MAX_NAME_LENGTH))
+    .replace(/[.-]+$/, '')
+    .replace(LOCK_END, '-$1')
 }
 
 // Automatic naming — short, neutral words. Collisions are resolved by the candidateName suffix.
@@ -35,7 +63,7 @@ export function autoName(random: () => number = Math.random): string {
  *  orchestration in the dependency order and must not point back up at it. */
 export function nameForTask(task: { id: string; title: string }): string {
   try {
-    return slugify(task.title)
+    return boundedSlug(task.title)
   } catch {
     return task.id
   }
@@ -51,7 +79,7 @@ export function nameForTask(task: { id: string; title: string }): string {
  *  orchestration 아래에 있고 위를 가리켜서는 안 된다(nameForTask 와 같은 이유). */
 export function nameForRun(run: { id: string; objective: string }): string {
   try {
-    return slugify(run.objective)
+    return boundedSlug(run.objective)
   } catch {
     return run.id
   }

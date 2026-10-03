@@ -8,23 +8,28 @@
 // quoting of it can go wrong. Afterwards WM_SETTINGCHANGE tells Explorer, so a shell opened from it next
 // sees the change; a shell already open keeps the Path it started with.
 //
+// **A Path too long is not written.** Past a length Windows gives no new shell the user Path at all
+// (cliInstall.ts userPathFits), so adding our entry there would take every other tool on it away too.
+//
 // Windows PowerShell is started by its absolute path, never by name: a bare name is looked up in the
 // working directory first (core/sessions/windowsExecutable.ts).
 import { execFile } from 'node:child_process'
 import path from 'node:path'
-import { userPathWith, userPathWithout } from '../core/orchestration/cliInstall'
+import { userPathFits, userPathWith, userPathWithout } from '../core/orchestration/cliInstall'
 
 /** Runs one PowerShell script and resolves with what it printed. Injectable for tests. */
 export type RunPowerShell = (script: string) => Promise<string>
 
-export const runWindowsPowerShell: RunPowerShell = (script) =>
+/** `timeoutMs` is for the test that runs these scripts for real in a full test run, where starting
+ *  PowerShell alone can take most of the default. */
+export const runWindowsPowerShell = (script: string, timeoutMs = 15_000): Promise<string> =>
   new Promise((resolve, reject) => {
     const exe = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
     const encoded = Buffer.from(script, 'utf16le').toString('base64')
     execFile(
       exe,
       ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      { timeout: 15_000, windowsHide: true, encoding: 'utf8' },
+      { timeout: timeoutMs, windowsHide: true, encoding: 'utf8' },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     )
   })
@@ -39,7 +44,10 @@ const readScript = (key: string): string => [
   `$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('${key}')`,
   `$v = if ($k) { $k.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } else { $null }`,
   `$kind = if ($v -eq $null) { 'None' } else { $k.GetValueKind('Path').ToString() }`,
-  `[Console]::Out.Write((@{ kind = $kind; value = [string]$v } | ConvertTo-Json -Compress))`
+  // The system Path, for the length both make together (userPathFits)
+  `$m = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')`,
+  `$mv = if ($m) { $m.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } else { '' }`,
+  `[Console]::Out.Write((@{ kind = $kind; value = [string]$v; machine = [string]$mv } | ConvertTo-Json -Compress))`
 ].join('\n')
 
 /** The script that writes `value` as the user Path with `kind`, then tells Explorer. */
@@ -58,34 +66,69 @@ export function writeUserPathScript(value: string, kind: 'String' | 'ExpandStrin
   ].join('\n')
 }
 
-async function readUserPath(run: RunPowerShell, key: string): Promise<{ kind: Kind; value: string }> {
-  const parsed = JSON.parse((await run(readScript(key))).trim()) as { kind?: unknown; value?: unknown }
+async function readUserPath(run: RunPowerShell, key: string): Promise<{ kind: Kind; value: string; machine: string }> {
+  const parsed = JSON.parse((await run(readScript(key))).trim()) as { kind?: unknown; value?: unknown; machine?: unknown }
   const kind: Kind = parsed.kind === 'String' || parsed.kind === 'ExpandString' ? parsed.kind : 'None'
-  return { kind, value: typeof parsed.value === 'string' ? parsed.value : '' }
+  return {
+    kind,
+    value: typeof parsed.value === 'string' ? parsed.value : '',
+    machine: typeof parsed.machine === 'string' ? parsed.machine : ''
+  }
 }
 
-/** Whether the user Path names `dir` — what a shell opened next will have, which this app's own
- *  environment, read once at its start, cannot say. */
-export async function userPathHas(a: { dir: string; env: NodeJS.ProcessEnv; run?: RunPowerShell; key?: string }): Promise<boolean> {
-  const { value } = await readUserPath(a.run ?? runWindowsPowerShell, a.key ?? USER_ENV_KEY)
-  return userPathWith(value, a.dir, a.env) === null
+/** Whether the user Path names `dir`, and whether new shells are given that Path with `dir` on it
+ *  (userPathFits): what a shell opened next will have, which this app's own environment, read once at its
+ *  start, cannot say. `fits` counts `dir` even when it is not there yet, so a Path Install refused stays
+ *  reported, and the panel does not offer a line that would make it too long. */
+export async function userPathStatus(a: {
+  dir: string
+  env: NodeJS.ProcessEnv
+  run?: RunPowerShell
+  key?: string
+}): Promise<{ has: boolean; fits: boolean }> {
+  const now = await readUserPath(a.run ?? runWindowsPowerShell, a.key ?? USER_ENV_KEY)
+  const withDir = userPathWith(now.value, a.dir, a.env)
+  return { has: withDir === null, fits: userPathFits({ machine: now.machine, user: withDir ?? now.value, env: a.env }) }
 }
 
-/** Puts `dir` at the end of the user Path, keeping the value's kind. 'present' when it was there. */
+/** Puts `dir` at the end of the user Path, keeping the value's kind. 'present' when it was there.
+ *  'tooLong', writing nothing, when new shells would not be given the longer value: Windows would then
+ *  leave out the whole user Path, and every other tool on it with ours. */
 export async function addToUserPath(a: {
   dir: string
   env: NodeJS.ProcessEnv
   run?: RunPowerShell
   key?: string
-}): Promise<'added' | 'present'> {
+}): Promise<'added' | 'present' | 'tooLong'> {
   const run = a.run ?? runWindowsPowerShell
   const key = a.key ?? USER_ENV_KEY
   const now = await readUserPath(run, key)
   const next = userPathWith(now.value, a.dir, a.env)
   if (next === null) return 'present'
+  if (!userPathFits({ machine: now.machine, user: next, env: a.env })) return 'tooLong'
   // A Path that does not exist yet is made the kind Windows itself makes it
   await run(writeUserPathScript(next, now.kind === 'String' ? 'String' : 'ExpandString', key))
   return 'added'
+}
+
+/** Takes `dir` off the user Path when it is what keeps that Path from new shells: the Path is too long
+ *  with it and fits without it. 1.4.1 added it without the length check, so a Path just under the limit
+ *  went over and every tool on it was gone from new shells. Anything else is left as it is. */
+export async function takeOffUserPathIfItBreaks(a: {
+  dir: string
+  env: NodeJS.ProcessEnv
+  run?: RunPowerShell
+  key?: string
+}): Promise<'removed' | 'kept'> {
+  const run = a.run ?? runWindowsPowerShell
+  const key = a.key ?? USER_ENV_KEY
+  const now = await readUserPath(run, key)
+  const without = userPathWithout(now.value, a.dir, a.env)
+  if (without === null) return 'kept'
+  if (userPathFits({ machine: now.machine, user: now.value, env: a.env })) return 'kept'
+  if (!userPathFits({ machine: now.machine, user: without, env: a.env })) return 'kept'
+  await run(writeUserPathScript(without, now.kind === 'String' ? 'String' : 'ExpandString', key))
+  return 'removed'
 }
 
 /** Takes every entry that is `dir` out of the user Path, keeping the value's kind and every other

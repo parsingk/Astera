@@ -1,6 +1,6 @@
 {
   "name": "astera",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "description": "Desktop app for running and orchestrating many Claude Code and Codex sessions — account rolling on usage limits, git worktree isolation, and Slack remote control.",
   "homepage": "https://github.com/parsingk/Astera",
@@ -77,6 +77,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
@@ -90,6 +91,7 @@
     "tw-shimmer": "^0.4.12",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "zod": "^4.6.5"
   }
 }

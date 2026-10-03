@@ -19,12 +19,16 @@ export function stateWord(o: {
   schedule?: unknown
 }): string {
   if (o.pendingStart === true) return 'PENDING'
-  if (o.paused === true) return 'PAUSED'
+  // A Job whose latest Run is paused says so in its outcome (command.ts jobView); the Job's own
+  // `paused` is a schedule's hold.
+  if (o.paused === true || o.outcome === 'paused') return 'PAUSED'
   if (o.schedule !== undefined && o.schedule !== null) return 'SCHEDULED'
   if ((o.questionsOpen ?? 0) > 0) return 'WAITING'
   if (o.outcome === 'completed') return 'COMPLETE'
   if (o.outcome === 'failed') return 'FAILED'
   if (o.outcome === 'running') return 'RUNNING'
+  // A Job with no Run (command.ts jobView)
+  if (o.outcome === 'pending') return 'PENDING'
   return '-'
 }
 
@@ -316,6 +320,7 @@ export function humanFor(cmd: string, data: Record<string, unknown>): string | n
     case 'host-status':
     case 'host-start':
     case 'host-stop':
+    case 'mcp-status':
       return fields(data)
     default:
       return null

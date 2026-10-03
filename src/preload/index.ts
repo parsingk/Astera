@@ -53,6 +53,7 @@ const EVENT_CHANNELS = [
   'orch:host',
   'host:driver',
   'workspace:event',
+  'mcpHttp:state',
   'understanding:changed',
   'sessionTasks:changed',
   'sessionTasks:goalIgnored',
@@ -152,7 +153,18 @@ const api = {
   cli: {
     status: invoke('cli.status'),
     install: invoke('cli.install'),
-    uninstall: invoke('cli.uninstall')
+    uninstall: invoke('cli.uninstall'),
+    pathRepairedAtStart: invoke('cli.pathRepairedAtStart')
+  },
+  mcpClients: {
+    status: invoke('mcpClients.status'),
+    register: invoke('mcpClients.register')
+  },
+  mcpHttp: {
+    status: invoke('mcpHttp.status'),
+    token: invoke('mcpHttp.token'),
+    tokenHint: invoke('mcpHttp.tokenHint'),
+    newToken: invoke('mcpHttp.newToken')
   },
   settings: {
     getLang: invoke('settings.getLang'),
@@ -174,6 +186,14 @@ const api = {
     setResumeStrategy: invoke('settings.setResumeStrategy'),
     getAgentPermissionMode: invoke('settings.getAgentPermissionMode'),
     setAgentPermissionMode: invoke('settings.setAgentPermissionMode'),
+    getMcpAccess: invoke('settings.getMcpAccess'),
+    setMcpAccess: invoke('settings.setMcpAccess'),
+    getMcpSessions: invoke('settings.getMcpSessions'),
+    setMcpSessions: invoke('settings.setMcpSessions'),
+    getMcpGithubWrite: invoke('settings.getMcpGithubWrite'),
+    setMcpGithubWrite: invoke('settings.setMcpGithubWrite'),
+    getMcpHttp: invoke('settings.getMcpHttp'),
+    setMcpHttp: invoke('settings.setMcpHttp'),
     getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
     setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),

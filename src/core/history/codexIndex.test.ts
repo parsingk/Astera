@@ -182,6 +182,67 @@ describe('codex expansion through the rollout index', () => {
     expect((await index.page({ projectPath: ALPHA })).entries.map((e) => e.sessionId)).toEqual([uuid(0)])
     expect((await index.deletionTargets(ALPHA)).files).toEqual([path.join(dir, nameOf(0))])
   })
+
+  // A child thread (a sub-agent codex starts, measured on 0.160) writes its own rollout with the same cwd
+  // and the parent's id in `parent_thread_id`. It is not a conversation to resume, so it is no row of the
+  // list; but it holds part of that conversation, so deleting the project's history takes it too.
+  const writeChild = async (acc: Account, n: number, parent: number): Promise<string> => {
+    const dir = path.join(acc.configDir, 'sessions', '2026', '07', '09')
+    const file = path.join(dir, nameOf(n))
+    const meta = { session_id: uuid(parent), id: uuid(n), parent_thread_id: uuid(parent), cwd: ALPHA, source: 'cli' }
+    await fs.writeFile(file, [{ type: 'session_meta', payload: meta }, user('child')].map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8')
+    // Newer than the parent, as the live one is: it shares the parent's session id, so the list's
+    // newest-per-session rule would show it in the parent's place.
+    const later = new Date(Date.now() + 60_000)
+    await fs.utimes(file, later, later)
+    return file
+  }
+
+  it('a child thread rollout is no row, the parent keeps its row, and deleting the history takes both', async () => {
+    const cx = codexAccount('cx')
+    const parent = await writeRollout(cx, 0, ALPHA)
+    const child = await writeChild(cx, 1, 0)
+    index = new HistoryIndex(() => [cx])
+    expect((await index.page({ projectPath: ALPHA })).entries.map((e) => e.title)).toEqual(['질문 0'])
+    expect([...(await index.deletionTargets(ALPHA)).files].sort()).toEqual([parent, child].sort())
+  })
+
+  it('after a restart the memoized child row is still hidden and still a deletion target, without a parse', async () => {
+    const cx = codexAccount('cx')
+    const parent = await writeRollout(cx, 0, ALPHA)
+    const child = await writeChild(cx, 1, 0)
+    const store = path.join(tmp, 'session-cwd.json')
+    const cache = new SessionCwdCache(store)
+    await cache.load()
+    index = new HistoryIndex(() => [cx], undefined, cache)
+    await index.page({ projectPath: ALPHA })
+    await index.stop()
+    await cache.flush()
+
+    heads.clear()
+    tails.clear()
+    const reloaded = new SessionCwdCache(store)
+    await reloaded.load()
+    index = new HistoryIndex(() => [cx], undefined, reloaded)
+    expect((await index.page({ projectPath: ALPHA })).entries.map((e) => e.title)).toEqual(['질문 0'])
+    expect([...(await index.deletionTargets(ALPHA)).files].sort()).toEqual([parent, child].sort())
+    expect(sum(heads)).toBe(0)
+  })
+
+  it('a child thread row an older build cached is built again and dropped', async () => {
+    const cx = codexAccount('cx')
+    await writeRollout(cx, 0, ALPHA)
+    const child = await writeChild(cx, 1, 0)
+    const st = await fs.stat(child)
+    const store = path.join(tmp, 'session-cwd.json')
+    // The row an earlier build wrote for the child: row version 1, shown as a session of its own.
+    const key = path.resolve(child).toLowerCase()
+    await fs.writeFile(store, JSON.stringify({ [key]: [st.mtimeMs, st.size, ALPHA, 1, uuid(1), 'child', 0] }), 'utf8')
+    const cache = new SessionCwdCache(store, 'win32')
+    await cache.load()
+    index = new HistoryIndex(() => [cx], undefined, cache)
+    expect((await index.page({ projectPath: ALPHA })).entries.map((e) => e.title)).toEqual(['질문 0'])
+  })
 })
 
 describe('codex first-time scan progress', () => {

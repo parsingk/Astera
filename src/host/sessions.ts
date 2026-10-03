@@ -151,7 +151,7 @@ async function latestEvent(file: string): Promise<{ line: string; at: number } |
  * right, because a TUI repaints after a resize.
  */
 async function render(data: string, size: { cols: number; rows: number }, lines: number): Promise<SessionScreen> {
-  const empty: SessionScreen = { ...size, screen: [], scrollback: [] }
+  const empty: SessionScreen = { ...size, screen: [], scrollback: [], screenWrapped: [], scrollbackWrapped: [] }
   if (data === '') return empty
   // The package is CommonJS. Under Node's dynamic import its exports arrive on `default` only (named
   // `Terminal` is undefined — measured on node 24 and Electron's node), while the test runner hands
@@ -164,14 +164,28 @@ async function render(data: string, size: { cols: number; rows: number }, lines:
     await new Promise<void>((resolve) => term.write(data, resolve))
     const buf = term.buffer.active
     const row = (y: number): string => buf.getLine(y)?.translateToString(true) ?? ''
+    // A row the terminal wrapped onto from the one above (a line wider than the tab): a reader joins
+    // them to get the line back, as the MCP layer does before it redacts.
+    const wrapped = (y: number): boolean => buf.getLine(y)?.isWrapped ?? false
     const screen: string[] = []
-    for (let y = buf.baseY; y < buf.baseY + size.rows; y++) screen.push(row(y))
+    const screenWrapped: boolean[] = []
+    for (let y = buf.baseY; y < buf.baseY + size.rows; y++) {
+      screen.push(row(y))
+      screenWrapped.push(wrapped(y))
+    }
     // The rows below the last thing painted are not content — a shell prompt sits at the top of an
     // otherwise empty screen.
-    while (screen.length > 0 && screen[screen.length - 1] === '') screen.pop()
+    while (screen.length > 0 && screen[screen.length - 1] === '') {
+      screen.pop()
+      screenWrapped.pop()
+    }
     const scrollback: string[] = []
-    for (let y = Math.max(0, buf.baseY - lines); y < buf.baseY; y++) scrollback.push(row(y))
-    return { ...size, screen, scrollback }
+    const scrollbackWrapped: boolean[] = []
+    for (let y = Math.max(0, buf.baseY - lines); y < buf.baseY; y++) {
+      scrollback.push(row(y))
+      scrollbackWrapped.push(wrapped(y))
+    }
+    return { ...size, screen, scrollback, screenWrapped, scrollbackWrapped }
   } finally {
     term.dispose()
   }

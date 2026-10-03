@@ -37,7 +37,7 @@ export function createOrchCommitHook(deps: {
   push: (next: OrchState) => void
   /** One Run that reached a terminal outcome on this commit. Assembling the record is the caller's —
    *  it needs the project key and the understanding pipeline, neither of which is this file's. */
-  onRunFinished: (a: { runId: string; outcome: 'completed' | 'failed'; state: OrchState }) => void
+  onRunFinished: (a: { runId: string; state: OrchState }) => void
   /** The base the *next* commit will be diffed against, and the one this call used. Held by the
    *  caller because it has to survive across both call sites and outlive this closure. */
   previous: () => OrchState | null
@@ -80,9 +80,9 @@ export function createOrchCommitHook(deps: {
     // test pins that), and a throw while handling the first would silently drop the rest. The catch
     // is needed at all because the commit has already landed by this point: a throw here must not
     // turn a successful write into a command that errors.
-    for (const { runId, outcome } of justFinished(deps.previous() ?? next, next)) {
+    for (const { runId } of justFinished(deps.previous() ?? next, next)) {
       try {
-        deps.onRunFinished({ runId, outcome, state: next })
+        deps.onRunFinished({ runId, state: next })
       } catch (e) {
         deps.log(`run-finished record failed for ${runId}: ${String(e)}`)
       }

@@ -252,6 +252,9 @@ astera questions answer --id <questionId> --answer "use the existing migration"
 を区別できます。すべてのコマンド、JSON 形式、終了コード、安全な再試行、CI の例とセキュリティは
 [`astera` コマンド](docs/cli.md)(英語) を参照してください。
 
+**MCP**
+MCP に対応したエージェントが、デスクトップアプリや CLI と同じローカルの Host を通して、Astera の Job を作成、実行、監視できます。[docs/mcp.md](docs/mcp.md)(英語) を参照してください。
+
 ## アプリを閉じたままターミナルから使う
 
 `astera` コマンドは、セッションと Job を動かすバックグラウンドのプロセス **Astera Host** と話します。
@@ -372,6 +375,7 @@ npm run dist:linux # Linux AppImage + deb
 ## ドキュメント
 
 - [`astera` コマンド](docs/cli.md) — シェルや CI から Job を扱う: インストール、コマンド、JSON、終了コード (英語)
+- [MCP](docs/mcp.md) — MCP クライアントから Job を作成、実行、監視する: 接続、ツール、MCP アクセス (英語)
 - [Slack ボットのセットアップ](docs/slack-bot-setup.md) — アプリの作成、トークン、権限
 - [リリース](docs/releasing.md) — バージョンを切って公開する手順
 - [コード署名ポリシー](docs/code-signing.md) — 誰がリリースに署名するのか、何に署名するのか、
@@ -387,10 +391,10 @@ Issue と Pull Request を歓迎します。始める前に知っておくとよ
   ルールが 1 つあります。利用量上限の文言は意図的に `+` で分割してあります。Astera がセッションの
   出力からその文言を監視しているためです — [CONTRIBUTING](.github/CONTRIBUTING.md) を参照して
   ください。
-- バグ報告は、アプリのバージョン、OS のバージョン、そしてアカウントローリングが関わる問題なら
-  `rolling.log` の該当行があると、ずっと対応しやすくなります — Windows は
-  `%APPDATA%\astera\rolling.log`、macOS は `~/Library/Application Support/astera/rolling.log`
-  です。
+- はじめての方へ: [CONTRIBUTING](.github/CONTRIBUTING.md) は、開発環境の準備、どこに何があるか、
+  まず何から手をつけるとよいかから始まります。バグは
+  [Issues](https://github.com/parsingk/Astera/issues/new/choose) のフォームで報告してください。
+  セキュリティの問題は [SECURITY.md](.github/SECURITY.md) の案内に従って非公開で知らせてください。
 
 ## 謝辞
 

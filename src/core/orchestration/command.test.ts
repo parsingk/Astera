@@ -21,14 +21,20 @@ import {
   type OrchState
 } from './state'
 import { TaskValidator } from './exec/validator'
-import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project } from './types'
+import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
+import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
+import { stateWord } from './cliHuman'
 import { runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
 import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
+import type { GhResult } from '../github/gh'
+import type { CommitSummary } from '../github/fill'
+import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
+import { issueObjective, parseIssue } from '../github/issue'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -3480,6 +3486,20 @@ describe('run-start — 코디네이터 인계', () => {
     expect(brief).toContain('tasks already defined: 1')
   })
 
+  // e2e 2026-10-01 second run: a Job from MCP create_job reaches run-start with no Tasks, and the
+  // brief told its coordinator not to create any, so it stalled at a question in its own terminal.
+  it('a Run with no Tasks hands the coordinator the planning brief, with its account and Job', async () => {
+    const deps = coordDeps()
+    const jobId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    expect((await call(deps, 'run-start', { run: jobId })).status).toBe(200)
+    const brief = deps.spawned[0].brief
+    expect(brief).toContain('PLAN THIS JOB FIRST')
+    expect(brief).not.toContain('Do not create Tasks')
+    expect(brief).toContain(`task-create --run ${runOf(deps, jobId).id}`)
+    expect(brief).toContain('--account cl1')
+    expect(brief).toContain(`run-configs list --job ${jobId}`)
+  })
+
   // 전체 브랜치 리뷰, Finding 2 — target.convergence !== undefined 는 손으로 고친 "convergence": null
   // 을 "정책이 있다" 로 잘못 읽는다. 이 자리는 이 브랜치가 reconciler.ts·ipc.ts 에서 이미 고친 것과
   // 똑같은 실수였다 — policyOf 로 판정해야 손으로 고친 orchestration.json 에도 다른 모든 관문과 같은
@@ -3542,6 +3562,28 @@ describe('run-start — 코디네이터 인계', () => {
     expect(job.pendingStart).toBe(true)
     // 회차도 만들어지지 않았다 — 실패는 아무것도 바꾸지 않는다
     expect(deps.getState().runs).toEqual([])
+  })
+
+  // The e2e check of 2026-10-01: after a refused run_job the Job read `outcome: "running"` with no Run
+  it('a Job whose jobs run failed reads pending, not running, in jobs get and jobs list', async () => {
+    const deps = coordDeps({
+      makeRunWorktree: async () => {
+        throw new Error('GIT_ADD_FAILED: Filename too long')
+      }
+    })
+    const created = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorAccount: 'cl1' })
+    const jobId = (created.body as { id: string }).id
+    expect(created.body).toMatchObject({ pendingStart: true, outcome: 'pending' })
+    expect((await call(deps, 'jobs-run', { id: jobId })).status).toBe(400)
+    expect(deps.getState().runs).toEqual([])
+
+    const got = (await call(deps, 'jobs-get', { id: jobId })).body as Record<string, unknown>
+    expect(got).toMatchObject({ pendingStart: true, outcome: 'pending' })
+    expect(stateWord(got)).toBe('PENDING')
+    const listed = (await call(deps, 'jobs-list')).body as Record<string, unknown>[]
+    expect(listed.map((j) => j.outcome)).toEqual(['pending'])
+    expect(((await call(deps, 'jobs-list', { status: 'pending' })).body as unknown[]).length).toBe(1)
+    expect(((await call(deps, 'jobs-list', { status: 'running' })).body as unknown[]).length).toBe(0)
   })
 
   // Host S3 risk 6 — 워크트리는 만들었는데 코디네이터가 못 뜨면, 상태는 위 테스트처럼 하나도 안
@@ -5575,12 +5617,44 @@ describe('runs stop', () => {
     expect((await call(deps, 'runs-resume')).status).toBe(400)
   })
 
+  // The same view `runs get` answers with, derived fields included, so a caller needs no second read.
+  it('runs resume answers with the Run as runs get shows it', async () => {
+    const { deps, runId } = await withWorker()
+    await call(deps, 'runs-stop', { id: runId })
+    const resumed = await call(deps, 'runs-resume', { id: runId })
+    expect(resumed.status).toBe(200)
+    const got = await call(deps, 'runs-get', { id: runId })
+    expect(resumed.body).toEqual(got.body)
+    expect(resumed.body).toHaveProperty('outcome')
+    expect((resumed.body as { paused?: boolean }).paused).toBeUndefined()
+  })
+
   it('열린 워커가 없어도 세운다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = deps.getState().runs[0].id
     const r = await call(deps, 'runs-stop', { id: runId })
     expect(r.body).toMatchObject({ runId, stopped: 0, paused: true })
+  })
+
+  // e2e 2026-10-01: a stop on a Run that had converged turned its outcome into `paused`.
+  it('refuses a Run that has already finished, and changes nothing', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const t = await call(deps, 'task-create', { run: runId, title: 't', spec: 's', account: 'acc1' })
+    await call(deps, 'task-update', { id: (t.body as { id: string }).id, status: 'completed' })
+    const before = deps.getState()
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain(`run ${runId} is not running: it has completed`)
+    // 2026-10-02: an MCP client has no `run-coordinator-stop`, so the refusal says what happens on its own.
+    const error = (r.body as { error: string }).error
+    expect(error).toContain('end on their own 10 minutes after')
+    expect(error).toContain(`to end the coordinator now: astera run-coordinator-stop --run ${runId}`)
+    expect(r.body).toMatchObject({ runId })
+    expect(deps.getState()).toEqual(before)
+    expect((await call(deps, 'runs-get', { id: runId })).body).toMatchObject({ outcome: 'completed' })
   })
 
   it('없는 회차는 404, id 가 없으면 400 이다', async () => {
@@ -6074,6 +6148,87 @@ describe('jobs create / tasks add / accounts list', () => {
     expect(r.body).toEqual([{ id: 'acc1', label: '계정1', provider: 'codex' }])
     await shell(deps, 'accounts-list', { agent: 'claude' })
     expect(seen).toEqual([undefined, 'claude'])
+  })
+
+  /** Accounts whose `default` marks are given only when the caller asks for them (`withDefault`). */
+  const withDefaults = (rows: Array<{ id: string; provider: 'claude' | 'codex'; default?: true }>) => {
+    const asked: Array<{ provider?: string; withDefault?: boolean }> = []
+    return {
+      asked,
+      listAccounts: (provider?: 'claude' | 'codex', opts?: { withDefault?: boolean }) => {
+        asked.push({ provider, withDefault: opts?.withDefault })
+        return rows
+          .filter((a) => provider === undefined || a.provider === provider)
+          .map(({ default: d, ...a }) => ({ ...a, label: a.id, ...(opts?.withDefault && d ? { default: d } : {}) }))
+      }
+    }
+  }
+
+  it('accounts list marks each provider\'s default account', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude', default: true },
+      { id: 'cl2', provider: 'claude' },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const r = await shell({ ...makeDeps(), listAccounts: accounts.listAccounts }, 'accounts-list', {})
+    expect(r.body).toEqual([
+      { id: 'cl1', label: 'cl1', provider: 'claude', default: true },
+      { id: 'cl2', label: 'cl2', provider: 'claude' },
+      { id: 'cx1', label: 'cx1', provider: 'codex', default: true }
+    ])
+  })
+
+  it('jobs create --coordinator-provider takes that provider\'s default account', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude' },
+      { id: 'cl2', provider: 'claude', default: true },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'claude' })
+    expect(r.status).toBe(200)
+    expect((r.body as { coordinatorAccountId?: string }).coordinatorAccountId).toBe('cl2')
+    expect(accounts.asked).toContainEqual({ provider: 'claude', withDefault: true })
+  })
+
+  it('an explicit --coordinator-account wins over --coordinator-provider', async () => {
+    const accounts = withDefaults([
+      { id: 'cl1', provider: 'claude', default: true },
+      { id: 'cx1', provider: 'codex', default: true }
+    ])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'cx1',
+      coordinatorProvider: 'claude'
+    })
+    expect(r.status).toBe(200)
+    expect((r.body as { coordinatorAccountId?: string }).coordinatorAccountId).toBe('cx1')
+  })
+
+  it('--coordinator-provider with no logged-in account of it is 400, naming the provider and accounts list', async () => {
+    const accounts = withDefaults([{ id: 'cl1', provider: 'claude', default: true }, { id: 'cx1', provider: 'codex' }])
+    const deps = { ...makeDeps(), listAccounts: accounts.listAccounts }
+    const r = await shell(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'codex' })
+    expect(r.status).toBe(400)
+    const error = String((r.body as { error?: string }).error)
+    expect(error).toContain('codex')
+    expect(error).toContain('accounts list')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('--coordinator-provider outside claude and codex is 400', async () => {
+    const r = await shell(makeDeps(), 'jobs-create', { objective: 'o', cwd: 'D:/p', coordinatorProvider: 'gemini' })
+    expect(r.status).toBe(400)
+  })
+
+  it('without either flag jobs create makes a Job with no coordinator, as before', async () => {
+    const accounts = withDefaults([{ id: 'cl1', provider: 'claude', default: true }])
+    const r = await shell({ ...makeDeps(), listAccounts: accounts.listAccounts }, 'jobs-create', { objective: 'o', cwd: 'D:/p' })
+    expect(r.status).toBe(200)
+    expect('coordinatorAccountId' in (r.body as object)).toBe(false)
+    expect(accounts.asked).toEqual([])
   })
 
   // 워커는 계획도 Task 도 만들 수 없다 — 안에서 부르는 run-create·task-create 의 경계가 그대로 선다.
@@ -6873,6 +7028,7 @@ describe('the hand-over of a fired Run lands on the current state', () => {
 describe('fix round 1: what counts as running, and one coordinator per Run', () => {
   const coordDeps = () => {
     const stopped: string[] = []
+    const reasons: Array<string | undefined> = []
     const logs: string[] = []
     const deps = makeDeps()
     const startCoordinator = vi.fn(async (a: { runId: string }) => ({ sessionId: `coord-${a.runId}` }))
@@ -6883,14 +7039,15 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
       startCoordinator,
       enterCheckWait: (runId: string, sessionId: string) => waits.enter(runId, sessionId),
       coordinatorIdle: (runId: string, sessionId: string) => waits.parked(runId, sessionId),
-      stopCoordinator: async (sessionId: string) => {
+      stopCoordinator: async (sessionId: string, reason?: string) => {
         stopped.push(sessionId)
+        reasons.push(reason)
       },
       log: (m: string) => {
         logs.push(m)
       }
     })
-    return Object.assign(deps, { startCoordinator, stopped, logs })
+    return Object.assign(deps, { startCoordinator, stopped, reasons, logs })
   }
   const scheduledJob = async (deps: OrchServerDeps): Promise<string> => {
     const r = await call(deps, 'run-create', {
@@ -7211,19 +7368,29 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
 
   // Final review I2. A replaced Run with no Tasks does not move after `runs resume` (nothing to start),
   // so "moves again" never dropped the mark and the retry stopped the coordinator the person took back.
-  it('L1: runs resume on a replaced Run drops its pending stop, so the retry no longer stops that coordinator', async () => {
-    const deps = coordDeps()
+  // Changed in review fix round 1 (I2): taking the stopped coordinator back was the race that left a
+  // resumed Run with no coordinator once that session exited. A resume now waits for the stop to land
+  // (409 while it has not, nothing changed), and then the Run gets a new coordinator, which no pending
+  // stop is left to stop.
+  it('L1: runs resume on a replaced Run waits for its stopped coordinator, then starts a new one that no retry stops', async () => {
+    const deps = Object.assign(coordDeps(), { resumeStopWaitMs: 100 })
     const jobId = await scheduledJob(deps)
     const first = (await fire(deps, jobId)).body as { id: string }
     const waiting = await park(deps, first.id)
     expect((await fire(deps, jobId)).status).toBe(200)
     await waiting.done
     expect(deps.getState().runs.find((x) => x.id === first.id)?.coordinatorStopPending).toBeDefined()
+    expect((await call(deps, 'runs-resume', { id: first.id })).status).toBe(409)
+    expect(deps.getState().runs.find((x) => x.id === first.id)?.paused).toBe(true)
+    await exited(deps, `coord-${first.id}`)
+    const starts = deps.startCoordinator.mock.calls.length
     expect((await call(deps, 'runs-resume', { id: first.id })).status).toBe(200)
+    expect(deps.startCoordinator.mock.calls.length).toBe(starts + 1)
     const resumed = deps.getState().runs.find((x) => x.id === first.id)!
     expect(resumed).not.toHaveProperty('paused')
     expect(resumed).not.toHaveProperty('coordinatorStopPending')
-    // The coordinator is at work again (not parked): a stop now is a fresh one and asks the idle check.
+    expect(resumed.coordinatorSessionId).toBe(`coord-${first.id}`)
+    // The new coordinator is at work (not parked): a stop now is a fresh one and asks the idle check.
     const r = await call(deps, 'run-coordinator-stop', { run: first.id })
     expect(r.status).toBe(409)
     expect(deps.stopped).toEqual([`coord-${first.id}`])
@@ -7349,6 +7516,7 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(run.coordinatorSessionId).toBe('coord-other')
     expect(run).not.toHaveProperty('coordinatorStartingAt')
     expect(deps.stopped).toEqual(['coord-mine'])
+    expect(deps.reasons).toEqual(['another coordinator already manages its Run'])
     expect(deps.logs.join('\n')).toMatch(/coord-mine/)
   })
 
@@ -7732,5 +7900,1024 @@ describe('handleCommand — chats pending and chats answer (chat takeover §3.5)
     const detail = 'c1 is written by an Astera too old to be asked; answer it in Astera'
     const r = await call(withChats([p('c1', 'r1')], { answered: false, reason: 'not-held', detail }).deps, 'chats-answer', { id: 'r1', allow: true }, '')
     expect(r).toEqual({ status: 409, body: { error: detail } })
+  })
+})
+
+describe('handleCommand — runs-completion', () => {
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ]
+  })
+  it('answers where each Task of the run stands', async () => {
+    const r = await call(makeDeps(seeded()), 'runs-completion', { id: 'r1' }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId: 'r1', jobId: 'job_1', state: 'checking', tasks: [{ taskId: 't1', state: 'checking' }] })
+  })
+  it('is 404 for an unknown run and 400 for no id', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'runs-completion', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'runs-completion', {}, '')).status).toBe(400)
+  })
+})
+
+describe('handleCommand — tasks-get', () => {
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+    ]
+  })
+  it('answers one Task with its attempts', async () => {
+    const r = await call(makeDeps(seeded()), 'tasks-get', { id: 't1' }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ id: 't1', title: 'T', attempts: [] })
+  })
+  it('is 404 for an unknown id and 400 for no id', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'tasks-get', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'tasks-get', {}, '')).status).toBe(400)
+  })
+})
+
+describe('handleCommand — tasks-check-output and tasks-output', () => {
+  const dispatch = (id: string, startedAt: string): OrchState['dispatches'][number] =>
+    ({ id, taskId: 't1', accountId: 'acc1', sessionId: 's', cwd: 'D:/p', specPath: 'x', startedAt, workerState: 'running' }) as unknown as OrchState['dispatches'][number]
+  const seeded = (over: Partial<OrchState> = {}, task: Record<string, unknown> = {}): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [
+      { id: 't1', runId: 'r1', title: 'T', spec: 's', deps: [], status: 'failed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ...task }
+    ],
+    ...over
+  })
+  const failed = { checks: [{ configId: 'c1', name: 'build', status: 'failed', outputTail: 'abcdefghij' }] }
+
+  it('tasks-check-output: 404 unknown task, 409 no output, 200 slice, 400 out of bounds', async () => {
+    expect((await call(makeDeps(seeded()), 'tasks-check-output', { id: 'nope' }, '')).status).toBe(404)
+    expect((await call(makeDeps(seeded()), 'tasks-check-output', { id: 't1' }, '')).status).toBe(409)
+    const deps = makeDeps(seeded({}, failed))
+    const r = await call(deps, 'tasks-check-output', { id: 't1', offset: 2, limit: 3 }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ check: 'c1', total: 10, offset: 2, text: 'cde' })
+    expect((await call(deps, 'tasks-check-output', { id: 't1', limit: 4001 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-check-output', { id: 't1', limit: 0 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-check-output', { id: 't1', offset: -1 }, '')).status).toBe(400)
+  })
+
+  it('tasks-output: reads the latest Dispatch by startedAt, paged from the end', async () => {
+    const deps = makeDeps(seeded({ dispatches: [dispatch('d2', '2026-01-02'), dispatch('d1', '2026-01-01')] }))
+    const asked: unknown[] = []
+    deps.readWorker = async (a) => {
+      asked.push(a)
+      return ['l1','l2','l3','l4'].join(String.fromCharCode(10))
+    }
+    const r = await call(deps, 'tasks-output', { id: 't1', lines: 2 }, '')
+    expect(asked).toEqual([{ dispatchId: 'd2', limit: 100000 }])
+    expect(r).toEqual({
+      status: 200,
+      body: { taskId: 't1', dispatchId: 'd2', recorded: true, totalLines: 4, more: true, lines: ['l3', 'l4'] }
+    })
+    const older = await call(deps, 'tasks-output', { id: 't1', lines: 2, skipLines: 2 }, '')
+    expect(older.body).toMatchObject({ lines: ['l1', 'l2'], more: false })
+  })
+
+  it('tasks-output: a later review Dispatch is not the worker', async () => {
+    const rev = { ...dispatch('d3', '2026-01-03'), review: true }
+    const deps = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01'), rev] }))
+    const asked: unknown[] = []
+    deps.readWorker = async (a) => {
+      asked.push(a)
+      return 'x'
+    }
+    await call(deps, 'tasks-output', { id: 't1' }, '')
+    expect(asked).toEqual([{ dispatchId: 'd1', limit: 100000 }])
+    const onlyReview = makeDeps(seeded({ dispatches: [rev] }))
+    expect((await call(onlyReview, 'tasks-output', { id: 't1' }, '')).status).toBe(409)
+  })
+
+  it('tasks-check-output: a named check that is unknown or has no output is 409', async () => {
+    const deps = makeDeps(seeded({}, { checks: [...failed.checks, { configId: 'c0', name: 'lint', status: 'passed' }] }))
+    expect((await call(deps, 'tasks-check-output', { id: 't1', check: 'nope' }, '')).status).toBe(409)
+    expect((await call(deps, 'tasks-check-output', { id: 't1', check: 'c0' }, '')).status).toBe(409)
+  })
+
+  it('tasks-output: untracked is recorded false, empty is recorded true, no Dispatch is 409', async () => {
+    const withD = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01')] }))
+    withD.readWorker = async () => TAIL_UNTRACKED
+    expect((await call(withD, 'tasks-output', { id: 't1' }, '')).body).toMatchObject({ recorded: false, lines: [] })
+    withD.readWorker = async () => TAIL_EMPTY
+    expect((await call(withD, 'tasks-output', { id: 't1' }, '')).body).toMatchObject({ recorded: true, totalLines: 0, lines: [] })
+    const none = makeDeps(seeded())
+    const r = await call(none, 'tasks-output', { id: 't1' }, '')
+    expect(r.status).toBe(409)
+    expect(r.body).toEqual({ error: 'no worker has run this task yet' })
+    expect((await call(none, 'tasks-output', { id: 'nope' }, '')).status).toBe(404)
+  })
+
+  it('tasks-output: lines 1..500', async () => {
+    const deps = makeDeps(seeded({ dispatches: [dispatch('d1', '2026-01-01')] }))
+    expect((await call(deps, 'tasks-output', { id: 't1', lines: 501 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-output', { id: 't1', lines: 0 }, '')).status).toBe(400)
+    expect((await call(deps, 'tasks-output', { id: 't1', skipLines: -1 }, '')).status).toBe(400)
+  })
+})
+
+// A worker showing a permission prompt, read off the hook events the Host already reads for `sessions
+// list` (sessionTurn). Read only: nothing here answers it.
+describe('handleCommand — waitingForApproval', () => {
+  const task = (id: string) => ({
+    id,
+    runId: 'r1',
+    title: id,
+    spec: 's',
+    deps: [],
+    status: 'dispatched' as const,
+    consecutiveFailures: 0,
+    createdAt: NOW,
+    updatedAt: NOW
+  })
+  const dispatch = (id: string, taskId: string, sessionId: string, ended = false) => ({
+    id,
+    taskId,
+    provider: 'claude' as const,
+    accountId: 'a1',
+    sessionId,
+    cwd: 'D:/p',
+    specPath: 'D:/p/spec.md',
+    startedAt: `2026-10-01T00:00:0${id.slice(-1)}.000Z`,
+    workerState: 'ready' as const,
+    retained: false,
+    ...(ended ? { outcome: 'failed' as const, endedAt: NOW } : {})
+  })
+  const seeded = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
+    runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW }],
+    tasks: [task('t1'), task('t2'), task('t3')],
+    dispatches: [
+      dispatch('d1', 't1', 's-closed', true),
+      dispatch('d2', 't1', 's-perm'),
+      dispatch('d3', 't2', 's-question'),
+      dispatch('d4', 't3', 's-perm2')
+    ]
+  })
+  type Turn = { alive: boolean; state: 'working' | 'waiting' | 'unknown'; prompt: 'permission' | 'question' | null }
+  const withTurns = (turns: Record<string, Turn | null>, state = seeded()) => {
+    const deps = makeDeps(state)
+    const sessionTurn = vi.fn(async (id: string) => turns[id] ?? null)
+    return { deps: { ...deps, sessionTurn } as typeof deps, sessionTurn }
+  }
+  const perm: Turn = { alive: true, state: 'waiting', prompt: 'permission' }
+
+  it('marks the open attempt whose session shows a permission prompt, and only that one', async () => {
+    const { deps, sessionTurn } = withTurns({ 's-closed': perm, 's-perm': perm })
+    const r = await call(deps, 'tasks-get', { id: 't1' }, '')
+    const attempts = (r.body as { attempts: Array<Record<string, unknown>> }).attempts
+    expect(attempts.map((a) => [a.id, a.waitingForApproval])).toEqual([
+      ['d1', undefined],
+      ['d2', true]
+    ])
+    // The closed attempt's session is not asked: it is not this Task's worker any more.
+    expect(sessionTurn).not.toHaveBeenCalledWith('s-closed')
+  })
+
+  it('does not mark a question or a turn that ended', async () => {
+    const { deps } = withTurns({
+      's-question': { alive: true, state: 'waiting', prompt: 'question' },
+      's-perm': { alive: true, state: 'waiting', prompt: null }
+    })
+    for (const id of ['t1', 't2']) {
+      const attempts = ((await call(deps, 'tasks-get', { id }, '')).body as { attempts: Array<Record<string, unknown>> }).attempts
+      expect(attempts.some((a) => 'waitingForApproval' in a), id).toBe(false)
+    }
+  })
+
+  it('runs get counts the Tasks waiting on an approval, and leaves the field out at none', async () => {
+    const both = withTurns({ 's-perm': perm, 's-perm2': perm, 's-question': { alive: true, state: 'waiting', prompt: 'question' } })
+    expect((await call(both.deps, 'runs-get', { id: 'r1' }, '')).body).toMatchObject({ id: 'r1', waitingForApproval: 2 })
+    const none = withTurns({})
+    expect((await call(none.deps, 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('waitingForApproval')
+  })
+
+  it('says nothing where the caller cannot read sessions (not the Host)', async () => {
+    const deps = makeDeps(seeded())
+    expect((await call(deps, 'runs-get', { id: 'r1' }, '')).body).not.toHaveProperty('waitingForApproval')
+    const attempts = ((await call(deps, 'tasks-get', { id: 't1' }, '')).body as { attempts: Array<Record<string, unknown>> }).attempts
+    expect(attempts.some((a) => 'waitingForApproval' in a)).toBe(false)
+  })
+
+  it('a session that cannot be read is not waiting, and the read still answers', async () => {
+    const deps = makeDeps(seeded())
+    const failing = { ...deps, sessionTurn: vi.fn(async () => Promise.reject(new Error('gone'))) } as typeof deps
+    expect((await call(failing, 'runs-get', { id: 'r1' }, '')).status).toBe(200)
+    expect((await call(failing, 'tasks-get', { id: 't1' }, '')).status).toBe(200)
+  })
+})
+
+// e2e 2026-10-01 second run: `runs stop` answered `stopped: 0` and left the coordinator session
+// running, so `host stop` refused and an MCP client had no way to end it. The user's decision: a stop
+// stops the coordinator too, and a resume brings one back for a Job that has a coordinator account.
+describe('runs stop and runs resume with a coordinator', () => {
+  const coordDeps = () => {
+    const stopped: string[] = []
+    const reasons: Array<string | undefined> = []
+    const deps = makeDeps()
+    const startCoordinator = vi.fn(async (a: { runId: string; brief: string }) => ({ sessionId: `coord-${a.runId}` }))
+    Object.assign(deps, {
+      listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }],
+      startCoordinator,
+      stopCoordinator: async (sessionId: string, reason?: string) => {
+        stopped.push(sessionId)
+        reasons.push(reason)
+      }
+    })
+    return Object.assign(deps, { startCoordinator, stopped, reasons })
+  }
+  /** A Job with a coordinator account, run once: its Run has coordinator `coord-<runId>`. */
+  const coordinatedRun = async (deps: OrchServerDeps): Promise<string> => {
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, coordinatorAccount: 'accA' })
+    const jobId = (r.body as { id: string }).id
+    expect((await call(deps, 'run-start', { run: jobId })).status).toBe(200)
+    return deps.getState().runs.find((x) => x.jobId === jobId)!.id
+  }
+  const exited = async (deps: OrchServerDeps, sessionId: string): Promise<void> => {
+    const released = coordinatorReleaseOf(deps.getState(), sessionId, 0)
+    if (released) await deps.setState(released.state)
+  }
+
+  it('runs stop stops the Run coordinator and says so', async () => {
+    const deps = coordDeps()
+    const runId = await coordinatedRun(deps)
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ runId, stopped: 0, paused: true, coordinatorStopped: true })
+    expect(deps.stopped).toEqual([`coord-${runId}`])
+    expect(deps.reasons).toEqual(['the run was stopped'])
+    // The slot is kept, marked, until the exit release confirms the stop (retireCoordinator, L1).
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.paused).toBe(true)
+    expect(run.coordinatorStopPending).toBeDefined()
+  })
+
+  it('runs stop of a Run with no coordinator says coordinatorStopped: false', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    const r = await call(deps, 'runs-stop', { id: runId })
+    expect(r.body).toMatchObject({ runId, paused: true, coordinatorStopped: false })
+    expect(deps.stopped).toEqual([])
+  })
+
+  it('runs resume brings the coordinator back once the stopped one is gone', async () => {
+    const deps = coordDeps()
+    const runId = await coordinatedRun(deps)
+    await call(deps, 'runs-stop', { id: runId })
+    await exited(deps, `coord-${runId}`)
+    expect(deps.getState().runs.find((x) => x.id === runId)?.coordinatorSessionId).toBeUndefined()
+    const r = await call(deps, 'runs-resume', { id: runId })
+    expect(r.status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(2)
+    expect(deps.startCoordinator.mock.calls[1][0]).toMatchObject({ runId, accountId: 'accA' })
+    // The new coordinator joins part-way, which its TAKE STOCK section covers.
+    expect(deps.startCoordinator.mock.calls[1][0].brief).toContain('TAKE STOCK BEFORE YOU START ANYTHING')
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.paused).toBeUndefined()
+    expect(run.coordinatorSessionId).toBe(`coord-${runId}`)
+    expect(r.body).toMatchObject({ id: runId, coordinatorSessionId: `coord-${runId}` })
+  })
+
+  // Review fix round 1, I2: for EXIT_DEFER_MS and the process exit after `runs stop`, the slot still
+  // names the stopped session. A resume then dropped the mark, started nothing, and left the Run
+  // running with no coordinator once that session went.
+  it('runs resume while the stopped coordinator has not exited is a 409 and changes nothing', async () => {
+    const deps = Object.assign(coordDeps(), { resumeStopWaitMs: 120 })
+    const runId = await coordinatedRun(deps)
+    await call(deps, 'runs-stop', { id: runId })
+    const before = deps.getState().runs.find((x) => x.id === runId)!
+    const r = await call(deps, 'runs-resume', { id: runId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('the coordinator is still stopping; try again in a moment')
+    expect(deps.getState().runs.find((x) => x.id === runId)).toEqual(before)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs resume waits for the stopped coordinator to exit, then starts a new one', async () => {
+    const deps = Object.assign(coordDeps(), { resumeStopWaitMs: 5_000 })
+    const runId = await coordinatedRun(deps)
+    await call(deps, 'runs-stop', { id: runId })
+    setTimeout(() => void exited(deps, `coord-${runId}`), 100)
+    const r = await call(deps, 'runs-resume', { id: runId })
+    expect(r.status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(2)
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.paused).toBeUndefined()
+    expect(run.coordinatorSessionId).toBe(`coord-${runId}`)
+  })
+
+  it('runs resume of a Job without a coordinator account starts no coordinator', async () => {
+    const deps = coordDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = deps.getState().runs[0].id
+    await call(deps, 'runs-stop', { id: runId })
+    expect((await call(deps, 'runs-resume', { id: runId })).status).toBe(200)
+    expect(deps.startCoordinator).not.toHaveBeenCalled()
+  })
+
+  it('runs resume of a Run that is not paused starts nothing', async () => {
+    const deps = coordDeps()
+    const runId = await coordinatedRun(deps)
+    await exited(deps, `coord-${runId}`)
+    expect((await call(deps, 'runs-resume', { id: runId })).status).toBe(200)
+    expect(deps.startCoordinator).toHaveBeenCalledTimes(1)
+  })
+})
+
+// e2e 2026-10-01 second run: after stop_run, get_run read `paused: true` beside `outcome: "running"`.
+// A paused Run reads `paused` as its outcome, the JOB_STATES word stateWord already gives it.
+describe('a paused Run reads paused', () => {
+  const stoppedRun = async (): Promise<{ deps: OrchServerDeps; runId: string; jobId: string }> => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const run = deps.getState().runs[0]
+    expect((await call(deps, 'runs-stop', { id: run.id })).status).toBe(200)
+    return { deps, runId: run.id, jobId: run.jobId }
+  }
+
+  it('runs get, runs list and jobs get say outcome: paused', async () => {
+    const { deps, runId, jobId } = await stoppedRun()
+    expect((await call(deps, 'runs-get', { id: runId })).body).toMatchObject({ paused: true, outcome: 'paused' })
+    expect((await call(deps, 'runs-list', {})).body).toEqual([expect.objectContaining({ id: runId, outcome: 'paused' })])
+    expect((await call(deps, 'jobs-get', { id: jobId })).body).toMatchObject({ outcome: 'paused', run: { outcome: 'paused' } })
+  })
+
+  it('jobs list --status paused finds it, and --status running does not', async () => {
+    const { deps, jobId } = await stoppedRun()
+    expect(((await call(deps, 'jobs-list', { status: 'paused' })).body as Array<{ id: string }>).map((j) => j.id)).toEqual([jobId])
+    expect((await call(deps, 'jobs-list', { status: 'running' })).body).toEqual([])
+  })
+
+  it('resumed, it reads running again', async () => {
+    const { deps, runId } = await stoppedRun()
+    expect((await call(deps, 'runs-resume', { id: runId })).body).toMatchObject({ outcome: 'running' })
+  })
+})
+
+// MCP P2-B: the three GitHub reads, answered by the Host over the user's gh. The runner here is a
+// fake keyed by argv; nothing in these tests runs a real gh.
+describe('handleCommand — github-pr, github-ci and github-issue', () => {
+  const WT = 'D:/wt/a'
+  const info = { id: 'w1', repoPath: 'D:/repo', path: WT, name: 'a', branch: 'u/a', baseRef: 'origin/main', createdAt: NOW }
+  const prRow = (over: Record<string, unknown> = {}) => ({
+    number: 12, title: 'Add a', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/12', headRefName: 'u/a', statusCheckRollup: [], ...over
+  })
+  const PR_LIST = 'pr list --head u/a --state all --limit 5 --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+  const CHECKS = (n: number) => `pr checks ${n} --json name,state,bucket,link,workflow,startedAt,completedAt`
+  const checkRow = {
+    name: 'build', state: 'FAILURE', bucket: 'fail', link: 'https://github.com/o/r/actions/runs/77/job/1',
+    workflow: 'CI', startedAt: '2026-10-01T00:00:00Z', completedAt: '2026-10-01T00:05:00Z'
+  }
+  const issueJson = {
+    number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: [{ name: 'bug' }], user: { login: 'pk' },
+    author_association: 'OWNER', html_url: 'https://github.com/o/r/issues/5'
+  }
+  /** A gh that answers by argv and records every call; an argv it was not given fails as gh would. */
+  const fakeGh = (answers: Record<string, Partial<GhResult>>) => {
+    const calls: { args: string[]; cwd: string }[] = []
+    const run = async (args: string[], cwd: string): Promise<GhResult> => {
+      calls.push({ args, cwd })
+      const a = answers[args.join(' ')]
+      return a
+        ? { ok: true, stdout: '', stderr: '', ...a }
+        : { ok: false, stdout: '', stderr: `unexpected gh call: ${args.join(' ')}`, exitCode: 1 }
+    }
+    return { run, calls }
+  }
+  const setup = (answers: Record<string, Partial<GhResult>>, run: Partial<JobRun> = { worktree: WT }) => {
+    const reg = ensureProject(emptyState(), { path: 'D:/repo', now: NOW })
+    const state: OrchState = {
+      ...reg.state,
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/repo', createdAt: NOW }],
+      runs: [{ id: 'r1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...run } as JobRun]
+    }
+    const deps = makeDeps(state)
+    const gh = fakeGh(answers)
+    const unexpected = (name: string) => async (): Promise<never> => {
+      throw new Error(`${name} was not expected`)
+    }
+    deps.github = {
+      run: gh.run,
+      worktreeOf: (p) => (p === WT ? info : null),
+      createPr: unexpected('createPr'),
+      readCommits: unexpected('readCommits'),
+      isClean: unexpected('isClean')
+    }
+    return { deps, gh, projectId: reg.project.id, projectPath: reg.project.path }
+  }
+
+  it('github-pr with a run reads the PR of its worktree branch, in the worktree', async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { stdout: JSON.stringify([prRow()]) } })
+    const r = await call(deps, 'github-pr', { run: 'r1' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+    })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([WT])
+  })
+
+  it('github-pr with a project and a branch reads in the project root; no PR is pr: null', async () => {
+    const { deps, gh, projectId, projectPath } = setup({ [PR_LIST]: { stdout: '[]' } })
+    const r = await call(deps, 'github-pr', { project: projectId, branch: 'u/a' }, '')
+    expect(r).toEqual({ status: 200, body: { branch: 'u/a', pr: null } })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([projectPath])
+    expect((await call(deps, 'github-pr', { project: projectId }, '')).status).toBe(400)
+  })
+
+  it('run and project: exactly one of the two (400); an unknown one is 404; gh is not run', async () => {
+    const { deps, gh, projectId } = setup({})
+    expect((await call(deps, 'github-pr', {}, '')).status).toBe(400)
+    expect((await call(deps, 'github-pr', { run: 'r1', project: projectId, branch: 'b' }, '')).status).toBe(400)
+    expect((await call(deps, 'github-pr', { run: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'github-pr', { project: 'nope', branch: 'b' }, '')).status).toBe(404)
+    expect((await call(deps, 'github-issue', { project: 'nope', number: 5 }, '')).status).toBe(404)
+    expect(gh.calls).toEqual([])
+  })
+
+  it('a Run with no worktree, or one the registry no longer knows, has no branch of its own (409); gh is not run', async () => {
+    for (const run of [{}, { worktree: 'D:/wt/gone' }]) {
+      const { deps, gh } = setup({}, run)
+      for (const cmd of ['github-pr', 'github-ci']) {
+        const r = await call(deps, cmd, { run: 'r1' }, '')
+        expect(r).toEqual({ status: 409, body: { error: 'This Run has no branch of its own' } })
+      }
+      expect(gh.calls).toEqual([])
+    }
+  })
+
+  // The github-pr form of this test stops at github-pr's own --branch 400; github-ci with no --pr
+  // reaches githubTarget, so these are its 400s.
+  it('githubTarget: run and project both given, or either one empty, is 400; gh is not run', async () => {
+    const { deps, gh, projectId } = setup({})
+    expect(await call(deps, 'github-ci', { run: 'r1', project: projectId }, '')).toEqual({
+      status: 400,
+      body: { error: 'give exactly one of --run (a Run id) or --project (a project id)' }
+    })
+    expect(await call(deps, 'github-ci', { run: '' }, '')).toEqual({
+      status: 400,
+      body: { error: '--run needs a value: a Run id' }
+    })
+    expect(await call(deps, 'github-ci', { project: '' }, '')).toEqual({
+      status: 400,
+      body: { error: '--project needs a value: a project id (from `projects list`)' }
+    })
+    expect(gh.calls).toEqual([])
+  })
+
+  it('a Host that has not loaded its worktree registry says so for a Run, rather than "no branch of its own"', async () => {
+    const { deps, gh, projectId } = setup({ 'api repos/{owner}/{repo}/issues/5': { stdout: JSON.stringify(issueJson) } })
+    deps.github = { ...deps.github!, worktreeOf: undefined }
+    for (const cmd of ['github-pr', 'github-ci']) {
+      expect(await call(deps, cmd, { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "This Host has not loaded its worktree registry (it starts no sessions), so it cannot find a Run's branch" }
+      })
+    }
+    expect(gh.calls).toEqual([])
+    // Project-scoped commands need no registry.
+    expect((await call(deps, 'github-issue', { project: projectId, number: 5 }, '')).status).toBe(200)
+  })
+
+  it("github-ci with a run whose PR lookup fails answers ghRefusal's status, and the checks are not read", async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { ok: false, stderr: 'dial tcp: lookup api.github.com: no such host' } })
+    expect(await call(deps, 'github-ci', { run: 'r1' }, '')).toEqual({
+      status: 502,
+      body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host' }
+    })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  it("without the github dep the three answer 409: they are the Host's", async () => {
+    const deps = makeDeps()
+    const asked: [string, Record<string, unknown>][] = [
+      ['github-pr', { run: 'r1' }],
+      ['github-ci', { run: 'r1' }],
+      ['github-issue', { project: 'p1', number: 5 }]
+    ]
+    for (const [cmd, args] of asked) {
+      const r = await call(deps, cmd, args, '')
+      expect(r.status).toBe(409)
+      expect((r.body as { error: string }).error).toMatch(/answered by the Astera Host/)
+    }
+  })
+
+  it('github-ci with a run finds its PR, then reads the checks; a failing check is a result', async () => {
+    const { deps, gh } = setup({
+      [PR_LIST]: { stdout: JSON.stringify([prRow()]) },
+      [CHECKS(12)]: { ok: false, exitCode: 1, stdout: JSON.stringify([checkRow]) }
+    })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toEqual({ status: 200, body: { pr: 12, checks: [{ ...checkRow, runId: 77 }] } })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([WT, WT])
+  })
+
+  it("github-ci with a run whose branch has no PR is 409, and the checks are not read", async () => {
+    const { deps, gh } = setup({ [PR_LIST]: { stdout: '[]' } })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toEqual({ status: 409, body: { error: "This Run's branch has no pull request" } })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  it('github-ci with a project, a pr and log returns the failed log tail', async () => {
+    const long = 'x'.repeat(9000) + '\nlast line'
+    const { deps, gh, projectId, projectPath } = setup({
+      [CHECKS(12)]: { stdout: JSON.stringify([checkRow]) },
+      'run view 77 --log-failed': { stdout: long }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 12, log: 77 }, '')
+    expect(r.status).toBe(200)
+    const body = r.body as { pr: number; checks: unknown[]; log: { runId: number; text: string; cut: boolean } }
+    expect(body.pr).toBe(12)
+    expect(body.checks).toHaveLength(1)
+    expect(body.log.runId).toBe(77)
+    expect(body.log.cut).toBe(true)
+    expect(body.log.text.endsWith('last line')).toBe(true)
+    expect(body.log.text.length).toBeLessThanOrEqual(8000)
+    expect(gh.calls.every((c) => c.cwd === projectPath)).toBe(true)
+    expect((await call(deps, 'github-ci', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'github-ci', { project: projectId, pr: 12, log: 0 }, '')).status).toBe(400)
+  })
+
+  it('github-issue reads one issue of the project', async () => {
+    const { deps, gh, projectId, projectPath } = setup({ 'api repos/{owner}/{repo}/issues/5': { stdout: JSON.stringify(issueJson) } })
+    const r = await call(deps, 'github-issue', { project: projectId, number: 5 }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: {
+        number: 5, title: 'Broken', body: 'It breaks', state: 'open', labels: ['bug'], author: 'pk',
+        authorAssociation: 'OWNER', url: 'https://github.com/o/r/issues/5', isPullRequest: false
+      }
+    })
+    expect(gh.calls.map((c) => c.cwd)).toEqual([projectPath])
+    expect((await call(deps, 'github-issue', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'github-issue', { number: 5 }, '')).status).toBe(400)
+  })
+
+  it('gh failures: not installed and not logged in are 409, not found is 404, the rest 502', async () => {
+    const ask = async (a: Partial<GhResult>) => {
+      const { deps, projectId } = setup({ 'api repos/{owner}/{repo}/issues/5': { ok: false, ...a } })
+      return call(deps, 'github-issue', { project: projectId, number: 5 }, '')
+    }
+    expect(await ask({ spawnError: 'ENOENT' })).toEqual({
+      status: 409,
+      body: { error: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH" }
+    })
+    expect(await ask({ stderr: 'To get started with GitHub CLI, please run:  gh auth login' })).toEqual({
+      status: 409,
+      body: { error: 'gh is not logged in: run `gh auth login`' }
+    })
+    expect((await ask({ stderr: 'gh: Not Found (HTTP 404)' })).status).toBe(404)
+    expect(await ask({ stderr: 'dial tcp: lookup api.github.com: no such host' })).toEqual({
+      status: 502,
+      body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host' }
+    })
+  })
+
+  // Ruling 2: gh's GraphQL wording for a missing pull request or issue is a 404 from these commands too.
+  it('GraphQL "Could not resolve to a PullRequest" is 404', async () => {
+    const { deps, projectId } = setup({
+      [CHECKS(999)]: { ok: false, exitCode: 1, stderr: 'GraphQL: Could not resolve to a PullRequest with the number of 999. (repository.pullRequest)' }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 999 }, '')
+    expect(r.status).toBe(404)
+    expect((r.body as { error: string }).error).toMatch(/Could not resolve to a PullRequest/)
+  })
+
+  describe('the writes: github-pr-create, github-ci-rerun and jobs-create-from-issue', () => {
+    const PR_URL = 'https://github.com/o/r/pull/13'
+    const task = (status: Task['status'], over: Partial<Task> = {}): Task =>
+      ({ id: `t_${status}_${Math.random()}`, runId: 'r1', title: 't', spec: 's', deps: [], status, consecutiveFailures: 0, ...over }) as Task
+    /** The three write-side members of the github dep, each recording what it was asked. */
+    const writes = (o: {
+      commits?: CommitSummary[]
+      changed?: number | Error
+      created?: PrCreateResult
+    } = {}) => {
+      const asked = { createPr: [] as PrCreateRequest[], readCommits: [] as [string, string][], isClean: [] as string[] }
+      return {
+        asked,
+        dep: {
+          createPr: async (req: PrCreateRequest) => {
+            asked.createPr.push(req)
+            return o.created ?? { ok: true as const, url: PR_URL }
+          },
+          readCommits: async (wt: string, base: string) => {
+            asked.readCommits.push([wt, base])
+            return o.commits ?? [{ subject: 'Add a', body: 'Because a was missing' }]
+          },
+          isClean: async (wt: string) => {
+            asked.isClean.push(wt)
+            if (o.changed instanceof Error) throw o.changed
+            return { changedCount: o.changed ?? 0 }
+          }
+        }
+      }
+    }
+    /** A Run with a worktree, its Tasks in `tasks`, and the write fakes over `setup`'s gh. */
+    const prSetup = async (
+      w: Parameters<typeof writes>[0] = {},
+      tasks: Task[] = [task('completed')],
+      run: Partial<JobRun> = { worktree: WT }
+    ) => {
+      const base = setup({}, run)
+      await base.deps.setState({ ...base.deps.getState(), tasks })
+      const fakes = writes(w)
+      base.deps.github = { ...base.deps.github!, ...fakes.dep }
+      return { ...base, asked: fakes.asked }
+    }
+
+    it('github-pr-create with defaults opens a draft PR titled by the one commit, pushing a branch with no upstream', async () => {
+      const { deps, asked, gh } = await prSetup()
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 200,
+        body: { url: PR_URL, draft: true, pushed: true }
+      })
+      expect(asked.isClean).toEqual([WT])
+      expect(asked.readCommits).toEqual([[WT, 'origin/main']])
+      expect(asked.createPr).toEqual([
+        {
+          worktreePath: WT, repoPath: 'D:/repo', branch: 'u/a', base: 'origin/main',
+          title: 'Add a', body: 'Because a was missing', draft: true, needsPush: true
+        }
+      ])
+      expect(gh.calls).toEqual([])
+    })
+
+    // Ruling 12: a branch ahead of a live upstream would otherwise open its PR from the stale remote
+    // head. The push is never forced, so an up-to-date branch is a no-op and a diverged one is rejected.
+    it('github-pr-create asks for the push whatever the branch upstream is', async () => {
+      const { deps, asked } = await prSetup()
+      expect((await call(deps, 'github-pr-create', { run: 'r1' }, '')).body).toEqual({ url: PR_URL, draft: true, pushed: true })
+      expect(asked.createPr[0].needsPush).toBe(true)
+    })
+
+    it('github-pr-create takes the title, body, draft and base it is given; several commits default to the branch name', async () => {
+      const commits = [{ subject: 'two', body: '' }, { subject: 'one', body: '' }]
+      const given = await prSetup({ commits })
+      const r = await call(given.deps, 'github-pr-create', { run: 'r1', title: 'T', body: 'B', draft: false, base: 'dev' }, '')
+      expect(r).toEqual({ status: 200, body: { url: PR_URL, draft: false, pushed: true } })
+      expect(given.asked.readCommits).toEqual([[WT, 'dev']])
+      expect(given.asked.createPr[0]).toMatchObject({ title: 'T', body: 'B', draft: false, base: 'dev' })
+      const filled = await prSetup({ commits })
+      await call(filled.deps, 'github-pr-create', { run: 'r1' }, '')
+      expect(filled.asked.createPr[0]).toMatchObject({ title: 'u/a', body: '- two\n- one' })
+    })
+
+    // Ruling 1: "finished" is the outcome `runs-get` answers (runView). completed and failed are
+    // terminal; running (no Tasks yet, a Task still open, a failed Task with retries left) and paused
+    // are not.
+    it("github-pr-create refuses a Run runs-get does not call finished (409), and touches nothing", async () => {
+      const working: [string, Task[], Partial<JobRun>][] = [
+        ['no Tasks yet', [], { worktree: WT }],
+        ['a Task still dispatched', [task('completed'), task('dispatched')], { worktree: WT }],
+        ['a failed Task with retries left', [task('failed', { consecutiveFailures: 1 })], { worktree: WT }]
+      ]
+      for (const [why, tasks, run] of working) {
+        const { deps, asked, gh } = await prSetup({}, tasks, run)
+        expect(await call(deps, 'github-pr-create', { run: 'r1' }, ''), why).toEqual({
+          status: 409,
+          body: { error: 'This Run is still working' }
+        })
+        expect(asked, why).toEqual({ createPr: [], readCommits: [], isClean: [] })
+        expect(gh.calls, why).toEqual([])
+      }
+      const finished: [string, Task[]][] = [
+        ['completed', [task('completed')]],
+        ['failed for good', [task('completed'), task('failed', { consecutiveFailures: FAILURE_LIMIT })]]
+      ]
+      for (const [why, tasks] of finished) {
+        const { deps } = await prSetup({}, tasks)
+        expect((await call(deps, 'runs-get', { id: 'r1' }, '')).body, why).toMatchObject({ outcome: why === 'completed' ? 'completed' : 'failed' })
+        expect((await call(deps, 'github-pr-create', { run: 'r1' }, '')).status, why).toBe(200)
+      }
+    })
+
+    // runs-get answers `paused` for it whatever its Tasks say, and "still working" would be wrong when they
+    // are all finished.
+    it('github-pr-create refuses a paused Run with its own 409, even when its Tasks are all finished', async () => {
+      const { deps, asked, gh } = await prSetup({}, [task('completed')], { worktree: WT, paused: true })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: 'This Run is paused; resume it first' }
+      })
+      expect(asked.createPr).toEqual([])
+      expect(asked.isClean).toEqual([])
+      expect(gh.calls).toEqual([])
+    })
+
+    it('github-pr-create refuses a dirty worktree, naming the count (409), and a branch with no commits (409)', async () => {
+      const dirty = await prSetup({ changed: 3 })
+      expect(await call(dirty.deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "The Run's worktree has 3 uncommitted changes" }
+      })
+      expect(dirty.asked.createPr).toEqual([])
+      const empty = await prSetup({ commits: [] })
+      expect(await call(empty.deps, 'github-pr-create', { run: 'r1', title: 'T', body: 'B' }, '')).toEqual({
+        status: 409,
+        body: { error: "The Run's branch adds no commits" }
+      })
+      expect(empty.asked.createPr).toEqual([])
+    })
+
+    it("github-pr-create: a worktree git cannot read is 409 with git's words; nothing is created", async () => {
+      const { deps, asked } = await prSetup({ changed: new Error('GIT_REMOVE_FAILED: status check failed (not a git repository)') })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "Could not read the Run's worktree: status check failed (not a git repository)" }
+      })
+      expect(asked.createPr).toEqual([])
+    })
+
+    it("github-pr-create failures: exists keeps gh's message with the URL, rejected says so, the rest map as the reads do", async () => {
+      const failed = async (kind: string, detail: string, stage: 'push' | 'create' = 'create') => {
+        const { deps } = await prSetup({ created: { ok: false, stage, kind, detail, pushed: stage === 'create' } as PrCreateResult })
+        return call(deps, 'github-pr-create', { run: 'r1' }, '')
+      }
+      const exists = 'a pull request for branch "u/a" into branch "main" already exists:\nhttps://github.com/o/r/pull/9'
+      expect(await failed('exists', exists)).toEqual({ status: 409, body: { error: exists, pushed: true } })
+      expect(await failed('rejected', '! [rejected] u/a -> u/a (fetch first)', 'push')).toEqual({
+        status: 409,
+        body: { error: 'The push was rejected', pushed: false }
+      })
+      expect(await failed('auth', 'To get started with GitHub CLI, please run:  gh auth login')).toEqual({
+        status: 409,
+        body: { error: 'gh is not logged in: run `gh auth login`', pushed: true }
+      })
+      expect(await failed('network', 'dial tcp: lookup api.github.com: no such host')).toEqual({
+        status: 502,
+        body: { error: 'Could not reach GitHub: dial tcp: lookup api.github.com: no such host', pushed: true }
+      })
+    })
+
+    it('github-pr-create with gh not installed answers the not-installed sentence (409)', async () => {
+      const { deps } = await prSetup({
+        created: { ok: false, stage: 'create', kind: 'other', detail: '', pushed: true, spawnError: 'ENOENT' }
+      })
+      expect(await call(deps, 'github-pr-create', { run: 'r1' }, '')).toEqual({
+        status: 409,
+        body: { error: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH", pushed: true }
+      })
+    })
+
+    // parseArgs keeps flag values as strings, so `--draft false` typed on the command line is 'false'.
+    it('github-pr-create takes draft as a boolean or the strings true and false; anything else is 400', async () => {
+      for (const [given, draft] of [[false, false], ['false', false], ['true', true], [true, true]] as const) {
+        const { deps, asked } = await prSetup()
+        const r = await call(deps, 'github-pr-create', { run: 'r1', draft: given }, '')
+        expect(r, String(given)).toEqual({ status: 200, body: { url: PR_URL, draft, pushed: true } })
+        expect(asked.createPr[0].draft, String(given)).toBe(draft)
+      }
+      const { deps } = await prSetup()
+      expect((await call(deps, 'github-pr-create', { run: 'r1', draft: 'no' }, '')).status).toBe(400)
+    })
+
+    it('github-pr-create argument refusals (400): a project, an empty title or base, a draft that is not true or false', async () => {
+      const { deps, asked, projectId } = await prSetup()
+      for (const args of [
+        { project: projectId },
+        { run: 'r1', title: '' },
+        { run: 'r1', base: '' },
+        { run: 'r1', body: 5 },
+        { run: 'r1', draft: 'yes' }
+      ]) {
+        expect((await call(deps, 'github-pr-create', args, '')).status, JSON.stringify(args)).toBe(400)
+      }
+      expect(asked.createPr).toEqual([])
+    })
+
+    it('github-ci-rerun reruns the failed jobs of a CI run in the project root', async () => {
+      const { deps, gh, projectId, projectPath } = setup({ 'run rerun 77 --failed': {} })
+      expect(await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).toEqual({
+        status: 200,
+        body: { runId: 77, rerun: true }
+      })
+      expect(gh.calls).toEqual([{ args: ['run', 'rerun', '77', '--failed'], cwd: projectPath }])
+    })
+
+    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or a --run, is 400', async () => {
+      const { deps, gh, projectId } = setup({ 'run rerun 77 --failed': { ok: false, stderr: 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/77/rerun-failed-jobs)' } })
+      expect((await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).status).toBe(404)
+      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1', runId: 77 }])
+        expect((await call(deps, 'github-ci-rerun', args, '')).status, JSON.stringify(args)).toBe(400)
+      expect(gh.calls).toHaveLength(1)
+    })
+
+    const ISSUE_API = 'api repos/{owner}/{repo}/issues/5'
+    const issueSetup = (over: Record<string, unknown> = {}) => setup({ [ISSUE_API]: { stdout: JSON.stringify({ ...issueJson, ...over }) } })
+
+    it("jobs-create-from-issue makes an OWNER's issue a Job in the project, its objective the delimited issue", async () => {
+      const { deps, projectId, projectPath } = issueSetup()
+      const r = await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5, concurrency: 2 }, '')
+      expect(r.status).toBe(200)
+      const body = r.body as { id: string; objective: string; cwd: string; concurrency?: number; issue: unknown }
+      expect(body.issue).toEqual({ number: 5, url: 'https://github.com/o/r/issues/5' })
+      const job = deps.getState().jobs.find((j) => j.id === body.id)
+      expect(job?.objective).toBe(issueObjective(parseIssue(JSON.stringify(issueJson))!))
+      expect(job?.cwd).toBe(projectPath)
+      expect(job?.concurrency).toBe(2)
+      expect(body.objective).toBe(job?.objective)
+    })
+
+    it('jobs-create-from-issue refuses an author outside OWNER, MEMBER and COLLABORATOR (403), and makes no Job', async () => {
+      for (const association of ['CONTRIBUTOR', 'NONE']) {
+        const { deps, projectId } = issueSetup({ author_association: association })
+        const before = deps.getState().jobs.length
+        expect(await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')).toEqual({
+          status: 403,
+          body: { error: `Issue #5 was written by a ${association} of the repository; only an owner, member or collaborator's issue becomes a Job` }
+        })
+        expect(deps.getState().jobs).toHaveLength(before)
+      }
+      for (const association of ['MEMBER', 'COLLABORATOR']) {
+        const { deps, projectId } = issueSetup({ author_association: association })
+        expect((await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')).status, association).toBe(200)
+      }
+    })
+
+    it('jobs-create-from-issue refuses a closed issue and a pull request (409), and makes no Job', async () => {
+      const closed = issueSetup({ state: 'closed' })
+      expect(await call(closed.deps, 'jobs-create-from-issue', { project: closed.projectId, number: 5 }, '')).toEqual({
+        status: 409,
+        body: { error: 'Issue #5 is closed' }
+      })
+      const pr = issueSetup({ state: 'closed', pull_request: { url: 'https://api.github.com/repos/o/r/pulls/5' } })
+      expect(await call(pr.deps, 'jobs-create-from-issue', { project: pr.projectId, number: 5 }, '')).toEqual({
+        status: 409,
+        body: { error: '#5 is a pull request, not an issue' }
+      })
+      expect(closed.deps.getState().jobs).toHaveLength(1)
+      expect(pr.deps.getState().jobs).toHaveLength(1)
+    })
+
+    it('jobs-create-from-issue refuses an objective or a cwd of its own, a missing number and a --run (400); gh is not run', async () => {
+      const { deps, gh, projectId } = issueSetup()
+      for (const args of [
+        { project: projectId, number: 5, objective: 'do something else' },
+        { project: projectId, number: 5, cwd: 'D:/elsewhere' },
+        { project: projectId },
+        { run: 'r1', number: 5 }
+      ])
+        expect((await call(deps, 'jobs-create-from-issue', args, '')).status, JSON.stringify(args)).toBe(400)
+      expect(gh.calls).toEqual([])
+    })
+
+    it('jobs-create-from-issue: a gh failure is ghRefusal, and no Job', async () => {
+      const { deps, projectId } = setup({ [ISSUE_API]: { ok: false, stderr: 'gh: Not Found (HTTP 404)' } })
+      expect((await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')).status).toBe(404)
+      expect(deps.getState().jobs).toHaveLength(1)
+    })
+
+    it("without the github dep the three writes answer 409: they are the Host's", async () => {
+      const deps = makeDeps()
+      for (const [cmd, args] of [
+        ['github-pr-create', { run: 'r1' }],
+        ['github-ci-rerun', { project: 'p1', runId: 1 }],
+        ['jobs-create-from-issue', { project: 'p1', number: 5 }]
+      ] as const) {
+        const r = await call(deps, cmd, { ...args }, '')
+        expect(r.status, cmd).toBe(409)
+        expect((r.body as { error: string }).error).toMatch(/answered by the Astera Host/)
+      }
+    })
+  })
+})
+
+describe('handleCommand — understanding-list and understanding-get', () => {
+  const rec = (id: string, at: string, over: Record<string, unknown> = {}) => ({
+    id,
+    at,
+    source: { kind: 'session', sessionId: 's1', label: 'Terminal 1' },
+    request: `request ${id}`,
+    changedFiles: ['a.ts'],
+    git: { startHead: null, endHead: null },
+    status: 'ready',
+    ...over
+  })
+  const setup = (read: () => Promise<unknown>) => {
+    const reg = ensureProject(emptyState(), { path: 'D:/repo', now: NOW })
+    const deps = makeDeps(reg.state)
+    let reads = 0
+    deps.readUnderstanding = async () => {
+      reads++
+      return (await read()) as never
+    }
+    return { deps, projectId: reg.project.id, reads: () => reads }
+  }
+  const file = {
+    projects: {
+      'D:/repo': {
+        records: [
+          rec('old', '2026-09-01T00:00:00.000Z', { validation: { status: 'passed' } }),
+          rec('new', '2026-10-01T00:00:00.000Z', { explanation: { title: 'New thing', overview: 'o' } })
+        ]
+      },
+      'D:/other': { records: [rec('elsewhere', '2026-10-02T00:00:00.000Z')] }
+    }
+  }
+
+  it("understanding-list gives the project's record summaries, newest first", async () => {
+    const { deps, projectId } = setup(async () => file)
+    const r = await call(deps, 'understanding-list', { project: projectId }, '')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual([
+      {
+        id: 'new',
+        at: '2026-10-01T00:00:00.000Z',
+        title: 'New thing',
+        request: 'request new',
+        status: 'ready',
+        source: { kind: 'session', sessionId: 's1', label: 'Terminal 1' },
+        changedFiles: 1,
+        verification: null
+      },
+      expect.objectContaining({ id: 'old', title: null, verification: { status: 'passed' } })
+    ])
+  })
+
+  it('understanding-list of a project with no records is an empty list', async () => {
+    const { deps, projectId } = setup(async () => ({ projects: {} }))
+    expect(await call(deps, 'understanding-list', { project: projectId }, '')).toEqual({ status: 200, body: [] })
+  })
+
+  it('understanding-get gives the whole record', async () => {
+    const { deps, projectId } = setup(async () => file)
+    const r = await call(deps, 'understanding-get', { project: projectId, id: 'old' }, '')
+    expect(r).toEqual({ status: 200, body: file.projects['D:/repo'].records[0] })
+  })
+
+  it("an unknown project is 404, and a record of another project or none is 404", async () => {
+    const { deps, projectId } = setup(async () => file)
+    expect((await call(deps, 'understanding-list', { project: 'nope' }, '')).status).toBe(404)
+    expect((await call(deps, 'understanding-get', { project: 'nope', id: 'old' }, '')).status).toBe(404)
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'elsewhere' }, '')).status).toBe(404)
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'missing' }, '')).status).toBe(404)
+  })
+
+  it('a missing project or id is 400', async () => {
+    const { deps, projectId } = setup(async () => file)
+    expect((await call(deps, 'understanding-list', {}, '')).status).toBe(400)
+    expect((await call(deps, 'understanding-get', { project: projectId }, '')).status).toBe(400)
+    expect((await call(deps, 'understanding-get', { id: 'old' }, '')).status).toBe(400)
+  })
+
+  it('reads the file on every call', async () => {
+    let current: unknown = { projects: {} }
+    const { deps, projectId, reads } = setup(async () => current)
+    expect((await call(deps, 'understanding-list', { project: projectId }, '')).body).toEqual([])
+    current = file
+    expect((await call(deps, 'understanding-list', { project: projectId }, '')).body).toHaveLength(2)
+    expect(reads()).toBe(2)
+  })
+
+  it('a file that cannot be read is a fixed sentence with nothing from the file', async () => {
+    const { deps, projectId } = setup(async () => {
+      throw new Error('Unexpected token s in JSON at position 3: sk-ant-secret-from-the-file')
+    })
+    for (const [cmd, args] of [
+      ['understanding-list', { project: projectId }],
+      ['understanding-get', { project: projectId, id: 'old' }]
+    ] as const) {
+      const r = await call(deps, cmd, args, '')
+      expect(r).toEqual({ status: 500, body: { error: 'understanding.json could not be read' } })
+    }
+  })
+
+  it('malformed records are skipped, not a generic failure', async () => {
+    const { deps, projectId } = setup(async () => ({
+      projects: { 'D:/repo': { records: [null, { id: 'x', at: 5 }, { id: 'nofiles', at: '2026-10-01T00:00:00.000Z', status: 'ready' }] } }
+    }))
+    const list = await call(deps, 'understanding-list', { project: projectId }, '')
+    expect(list.status).toBe(200)
+    expect(list.body).toEqual([expect.objectContaining({ id: 'nofiles', changedFiles: 0 })])
+    const got = await call(deps, 'understanding-get', { project: projectId, id: 'nofiles' }, '')
+    expect(got).toMatchObject({ status: 200, body: { id: 'nofiles', changedFiles: [] } })
+    expect((await call(deps, 'understanding-get', { project: projectId, id: 'x' }, '')).status).toBe(404)
+  })
+
+  it("without the readUnderstanding dep both answer 409: they are the Host's", async () => {
+    const deps = makeDeps()
+    for (const [cmd, args] of [
+      ['understanding-list', { project: 'p1' }],
+      ['understanding-get', { project: 'p1', id: 'r1' }]
+    ] as const) {
+      const r = await call(deps, cmd, args, '')
+      expect(r).toEqual({ status: 409, body: { error: 'How It Works records are answered by the Astera Host' } })
+    }
   })
 })

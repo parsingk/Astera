@@ -171,15 +171,19 @@ export function hostStartTargets(a: {
   execPath: string
   profileDir: string
   version: string
-  runtimeEntry?: string
+  runtime?: PreparedRuntime
   /** `resolveSkillsDir`'s answer. Undefined when this build's skills cannot be found, and then no CLI
    *  paths are passed at all: the Host started without them does not spawn rather than guess (§2.2). */
   skillsDir?: string
-}): { execPath: string; candidates: string[]; logPath: string; cli?: HostCliPaths } {
+}): { execPathFor(entry: string): string; candidates: string[]; logPath: string; cli?: HostCliPaths } {
   const beside = a.cliEntry.replace(/[^/\\]+$/, 'host.js')
+  const runtime = a.runtime
   return {
-    execPath: a.execPath,
-    candidates: a.runtimeEntry ? [a.runtimeEntry, beside] : [beside],
+    // The runtime's host.js runs on the runtime's own executable, as the app spawns it. Run from this
+    // CLI's Astera.exe it would lock the install folder for as long as the Host lives, which is the
+    // one thing the runtime exists to avoid (scripts/host-runtime.mjs).
+    execPathFor: (entry) => (runtime && entry === runtime.entryPath ? runtime.exePath : a.execPath),
+    candidates: runtime ? [runtime.entryPath, beside] : [beside],
     logPath: `${a.profileDir.replace(/[\\/]+$/, '')}/host/host.log`,
     // This CLI's own binary and bundle are what a worker's `astera` shuttle runs: the same pair the
     // app passes, so a Host started from either end spawns the same workers.
@@ -203,13 +207,18 @@ export function hostStartTargets(a: {
  *  packaged build), and an unset `resourcesPath` (not a real Electron process at all) reads the same
  *  way — both fall through to "no prepared runtime" rather than failing the command, the same way
  *  `src/main/ipc.ts`'s own read of this file treats it missing. */
-export function preparedRuntimeEntry(a: {
+export interface PreparedRuntime {
+  entryPath: string
+  exePath: string
+}
+
+export function preparedRuntime(a: {
   profileDir: string
   platform: NodeJS.Platform
   env: NodeJS.ProcessEnv
   resourcesPath: string | undefined
   readFile(p: string): string
-}): string | undefined {
+}): PreparedRuntime | undefined {
   // `userDataDir`'s last path segment is the app's own name (`astera` or `astera-dev`) — the CLI has
   // no `app.getName()` to ask, and this is the one place written down instead of hardcoding either
   // string.
@@ -233,7 +242,8 @@ export function preparedRuntimeEntry(a: {
     }
     const nodeVersion = typeof manifest.node === 'string' ? manifest.node.trim() : ''
     if (!nodeVersion) return undefined
-    return hostRuntimePaths({ base, nodeVersion, appVersion: CLI_VERSION }).entryPath
+    const { entryPath, exePath } = hostRuntimePaths({ base, nodeVersion, appVersion: CLI_VERSION })
+    return { entryPath, exePath }
   } catch {
     // No `resources/host-runtime` at all (development), or a manifest this build cannot read. Either
     // way, `hostStartTargets` falls back to the candidate beside `cli.js`.
@@ -531,7 +541,7 @@ async function runHostCommandNow(a: {
     execPath: process.execPath,
     profileDir,
     version: CLI_VERSION,
-    runtimeEntry: preparedRuntimeEntry({
+    runtime: preparedRuntime({
       profileDir,
       platform: a.platform,
       env: a.env,
@@ -551,7 +561,7 @@ async function runHostCommandNow(a: {
       }
     }
   const plan = hostSpawnPlan({
-    execPath: targets.execPath,
+    execPath: targets.execPathFor(entry),
     entryPath: entry,
     profileDir,
     logPath: targets.logPath,

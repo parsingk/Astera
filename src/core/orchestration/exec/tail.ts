@@ -18,6 +18,7 @@
 // a one-off smoke run).
 
 import { stripAnsi } from '../../rolling/detect'
+import { cutTail } from '../taskOutput'
 
 /** Characters retained per dispatch. String.slice counts UTF-16 code units, not bytes —
  *  a Hangul character is one code unit, but a JS string's internal representation is 2 bytes, so
@@ -50,6 +51,11 @@ export class WorkerTails {
   private buffers = new Map<string, string>()
   /** sessionId → the dispatchId currently receiving that session's output. Reuse overwrites it */
   private owner = new Map<string, string>()
+  /** Dispatches whose tail was one line longer than the cap, so the cut left nothing of it. */
+  private cutToNothing = new Set<string>()
+  /** Whether a dispatch has `endedAt`: the predicate the latest `start` was given (every caller
+   *  passes the same one, read from the orchestration state). */
+  private hasEndedAt: (dispatchId: string) => boolean = () => false
 
   constructor(
     private cap: number = TAIL_CAP,
@@ -71,11 +77,17 @@ export class WorkerTails {
    *   worker's output silently vanished). With no terminal dispatch to drop, nothing is dropped
    *   even if that means exceeding the ceiling — 32 workers running at once does not happen in
    *   practice, and dropping the wrong one is worse.
+   * @param hasEndedAt whether that dispatch has `endedAt` (MCP P1 final review M3): once it has, its
+   *   tail stops growing. Not `isEnded`, which also counts a dispatch the state does not hold as
+   *   ended: right for eviction, wrong here, where a state that has not caught up yet would silence
+   *   a live worker.
    */
   start(
     a: { dispatchId: string; sessionId: string; previousSessionId?: string },
-    isEnded: (dispatchId: string) => boolean
+    isEnded: (dispatchId: string) => boolean,
+    hasEndedAt?: (dispatchId: string) => boolean
   ): void {
+    if (hasEndedAt !== undefined) this.hasEndedAt = hasEndedAt
     if (!this.buffers.has(a.dispatchId)) this.buffers.set(a.dispatchId, '')
     this.owner.set(a.sessionId, a.dispatchId)
     // 롤링이 계정만 바꾸고 세션 id는 그대로일 수 있다 (rekeyDispatch의 동일성 예외 참고).
@@ -84,7 +96,10 @@ export class WorkerTails {
     for (const id of [...this.buffers.keys()]) {
       if (this.buffers.size <= this.maxDispatches) break
       if (id === a.dispatchId) continue // do not drop the one just created
-      if (isEnded(id)) this.buffers.delete(id)
+      if (isEnded(id)) {
+        this.buffers.delete(id)
+        this.cutToNothing.delete(id)
+      }
     }
   }
 
@@ -101,7 +116,22 @@ export class WorkerTails {
     if (dispatchId === undefined) return
     const prev = this.buffers.get(dispatchId)
     if (prev === undefined) return // evicted — do not resurrect it (the next start recreates it)
-    this.buffers.set(dispatchId, (prev + stripAnsi(data)).slice(-this.cap))
+    // **An ended dispatch's tail stops growing** (MCP P1 final review M3). What a person types into a
+    // finished worker's terminal is not that worker's output, and get_task_output reads this tail
+    // without the sessions setting. The session stops being followed, so its next chunks cost one
+    // Map lookup again; a later start on the same session follows it for the new dispatch.
+    if (this.hasEndedAt(dispatchId)) {
+      this.owner.delete(sessionId)
+      return
+    }
+    // **A cut at the cap starts the tail on a whole line** (M4): the cut can fall inside a secret,
+    // whose tail alone the readers' secret filter does not recognise.
+    // A tail that is one line longer than the cap is cut to nothing, which is not "no output yet".
+    const joined = prev + stripAnsi(data)
+    const next = cutTail(joined, this.cap)
+    if (next === '' && joined !== '') this.cutToNothing.add(dispatchId)
+    else this.cutToNothing.delete(dispatchId)
+    this.buffers.set(dispatchId, next)
   }
 
   /** The last `limit` lines of that dispatch. Not tracked, still empty, and has content each get a
@@ -109,7 +139,7 @@ export class WorkerTails {
   read(dispatchId: string, limit?: number): string {
     const tail = this.buffers.get(dispatchId)
     if (tail === undefined) return TAIL_UNTRACKED
-    if (tail === '') return TAIL_EMPTY
+    if (tail === '') return this.cutToNothing.has(dispatchId) ? '' : TAIL_EMPTY
     // 0, negatives, fractions, and NaN fall back to the default instead of silently becoming 1 line
     const n = Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : TAIL_DEFAULT_LIMIT
     // Strip the trailing newline first — without it, the empty last element that split produces

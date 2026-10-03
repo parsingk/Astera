@@ -81,6 +81,16 @@ describe('attachPtyHost', () => {
     expect(h.pty.sent).toEqual(['ls\r'])
   })
 
+  // What reaches the Host as pty-write is what the app sends: a person typing in a tab, and the app's
+  // own few deliveries. It is the Host's only sight of a person's typing (FINISHED_RUN_GRACE_MS).
+  it('counts an app’s write as a person’s input', () => {
+    const h = harness()
+    h.send(spawnMsg)
+    expect(h.registry.lastPersonWrite('p1')).toBe(null)
+    h.send({ t: 'pty-write', id: 'p1', data: 'ls\r' })
+    expect(h.registry.lastPersonWrite('p1')).not.toBe(null)
+  })
+
   it('lists what it holds', () => {
     const h = harness()
     h.send(spawnMsg)

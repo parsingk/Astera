@@ -181,3 +181,25 @@ describe('runningRunCount', () => {
     expect(runningRunCount(stateOf([task('t1', 'dispatched'), task('t2', 'dispatched')], ds))).toBe(1)
   })
 })
+
+// e2e 2026-10-01 second run: `astera status` said runsRunning: 0 while the Run's coordinator was at
+// work and no worker had started yet. A Run whose coordinator is attached and has work left counts.
+describe('runningRunCount with a coordinator', () => {
+  const withCoordinator = (tasks: Task[], patch: Partial<OrchState['runs'][number]> = {}): OrchState => {
+    const s = stateFromLegacy({ runs: [run('r1')], tasks, dispatches: [] })
+    return { ...s, runs: s.runs.map((r) => ({ ...r, coordinatorSessionId: 'coord-1', ...patch })) }
+  }
+
+  it('counts a Run whose coordinator is attached, with no Task yet', () => {
+    expect(runningRunCount(withCoordinator([]))).toBe(1)
+  })
+
+  it('counts a Run whose coordinator is attached and has Tasks still to start', () => {
+    expect(runningRunCount(withCoordinator([task('t1', 'pending'), task('t2', 'ready')]))).toBe(1)
+  })
+
+  it('does not count a paused Run, nor a finished one, whose coordinator is still attached', () => {
+    expect(runningRunCount(withCoordinator([], { paused: true }))).toBe(0)
+    expect(runningRunCount(withCoordinator([task('t1', 'completed')]))).toBe(0)
+  })
+})

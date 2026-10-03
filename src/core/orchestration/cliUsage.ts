@@ -116,6 +116,16 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'ask the running Host to retire',
     detail: 'Refused while the Host still holds sessions or running runs. It says how many.'
   },
+  'mcp-serve': {
+    summary: 'serve Astera to an MCP client over stdio',
+    detail:
+      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves thirty-four tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, and read the How It Works records of a project and regenerate one. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
+  },
+  'mcp-status': {
+    summary: 'would mcp serve work here: the Host, MCP access and the tool count',
+    detail:
+      'Starts no Host. 0 when a Host runs and serves MCP clients, 3 when none runs, 9 when the Host is too old for MCP clients. access is null, with a warning, when app-settings.json cannot be read. See docs/mcp.md.'
+  },
 
   'projects-list': { summary: 'every project registered in the app' },
   'projects-get': {
@@ -166,6 +176,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
         name: 'coordinator-account',
         value: '<accountId>',
         about: 'the account a coordinator session runs on (one, from `accounts list`)'
+      },
+      {
+        name: 'coordinator-provider',
+        value: '<claude|codex>',
+        about: "without --coordinator-account, that provider's default account coordinates"
       },
       {
         name: 'convergence',
@@ -348,7 +363,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'sessions-read': {
     summary: "what a terminal session's tab shows, or a chat session's recent turns",
     detail:
-      "`kind` says which shape came back. A terminal session: the Host replays its recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows (at most 10000) from just above it, oldest first; `cols` and `rows` are the size. Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session: `turns` is up to --turns turns (at most 200), oldest first, each with `role`, `text` and `tools` (one line per tool call), read from the transcript the agent writes, so it works with Astera closed and survives the session ending. `pending` names the card the session is waiting on (an approval or a question), answered by whichever process is that session's writer: the Host's own adapter, Astera closed included, or Astera when it holds the session instead. It is left out when neither can say. --lines is for terminal sessions and --turns for chat sessions; the other one is refused with 2.",
+      "`kind` says which shape came back. A terminal session: the Host replays its recent output into a terminal at the tab's size. `screen` is the visible rows, top first, with the empty rows below the last painted one left off; `scrollback` is up to --lines rows (at most 10000) from just above it, oldest first; `cols` and `rows` are the size; `screenWrapped` and `scrollbackWrapped` mark, row for row, each row that continues the one above it (a line wider than the tab). Text only, trailing spaces trimmed, no colours. The Host keeps about 256,000 characters of each running session and drops them when it ends. A chat session: `turns` is up to --turns turns (at most 200), oldest first, each with `role`, `text` and `tools` (one line per tool call), read from the transcript the agent writes, so it works with Astera closed and survives the session ending. `pending` names the card the session is waiting on (an approval or a question), answered by whichever process is that session's writer: the Host's own adapter, Astera closed included, or Astera when it holds the session instead. It is left out when neither can say. --lines is for terminal sessions and --turns for chat sessions; the other one is refused with 2.",
     flags: [
       ID('<sessionId>', 'the session to read (from `sessions list`)'),
       { name: 'lines', value: '<n>', about: 'terminal: how many rows of scrollback above the screen (default 200)' },

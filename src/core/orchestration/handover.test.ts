@@ -15,9 +15,75 @@ describe('buildHandoverPrompt', () => {
   // (handover.ts 의 JSDoc). 그래서 문구의 존재를 테스트가 고정한다.
   it('이 Run 은 사람이 짰다고 말한다 — 그대로 돌려라', () => {
     const p = prompt()
-    expect(p).toContain('A person laid it out')
     expect(p).toContain('Do not create Tasks')
     expect(p).toContain('do not rewrite their specs')
+    expect(p).not.toContain('PLAN THIS JOB FIRST')
+  })
+
+  // A Job from MCP create_job or `jobs create` reaches the Run with Tasks made elsewhere or none at
+  // all, so the opening line must not claim the app (e2e 2026-10-01, second run).
+  it('with Tasks, the opening line is true wherever the Tasks came from', () => {
+    const p = prompt({ taskCount: 2 })
+    expect(p).not.toContain('A person laid it out in the app')
+    expect(p).toContain('Its Tasks were laid out before you joined')
+  })
+
+  // Review fix round 1, Important 1: the coordinator's session runs in the project folder itself,
+  // with permissions bypassed, so nothing but the brief keeps it from doing the work itself.
+  it('in both branches, the coordinator plans and places and changes no files', () => {
+    for (const p of [prompt({ taskCount: 0 }), prompt({ taskCount: 3 })]) {
+      expect(p).toContain('You plan and place; you do not change files.')
+      expect(p).toContain("Your session runs in the project folder itself, not this Run's worktree.")
+      expect(p).toContain('every edit, build or commit is done by a worker, through a Task')
+      expect(p).not.toContain('Getting these Tasks done, and answering the workers you start, is your job.')
+      expect(p).toContain('Getting these Tasks done by workers')
+    }
+  })
+
+  // Review fix round 1, Minor 3: a predecessor stopped part-way through planning leaves Tasks that do
+  // not cover the objective; "Do not create Tasks" alone left the newcomer no way to say so.
+  it('with Tasks, the opening line holds for a coordinator joining late, and a plan that falls short goes to a Gate', () => {
+    const p = prompt({ taskCount: 2 })
+    expect(p).toContain('Its Tasks were laid out before you joined')
+    expect(p).toContain('do not cover the objective')
+    expect(p).toMatch(/open a Gate saying so/)
+  })
+
+  describe('with no Tasks, planning is the first job', () => {
+    const p = prompt({ taskCount: 0, accountId: 'acc_me', jobId: 'job_42', runId: 'run_abc' })
+
+    it('does not forbid creating Tasks, and says the Job came with no plan', () => {
+      expect(p).not.toContain('Do not create Tasks')
+      expect(p).not.toContain('THE PLAN IS ALREADY MADE')
+      expect(p).not.toContain('A person laid it out')
+      expect(p).toContain('PLAN THIS JOB FIRST')
+      expect(p).toContain('an objective and no plan')
+    })
+
+    it('names the command, the deps, the account it runs on, and the checks', () => {
+      expect(p).toContain('astera task-create --run run_abc')
+      expect(p).toContain('--deps')
+      expect(p).toContain('--account acc_me')
+      expect(p).toContain('accounts list')
+      expect(p).toContain('never mix providers inside one Task')
+      expect(p).toContain('astera run-configs list --job job_42')
+      expect(p).toContain('--validate')
+      expect(p).toContain('--review')
+      expect(p).toMatch(/few Tasks/)
+    })
+
+    it('says a Gate needs a Task, so a question before any Task goes on a first Task', () => {
+      expect(p).toContain('A Gate needs a Task')
+      expect(p).toContain('never ask only in your own terminal')
+    })
+
+    it('keeps the rest of the brief', () => {
+      for (const part of ['TAKE STOCK BEFORE YOU START ANYTHING', 'ACCOUNTS COME FROM THE TASK', 'CONCURRENCY IS 3', 'WHERE WORKERS RUN', 'YOU ARE THE INBOX', 'WHEN A PERSON IS ACTUALLY NEEDED'])
+        expect(p).toContain(part)
+      expect(buildHandoverPrompt({ runId: 'r', objective: 'o', concurrency: 1, taskCount: 0, convergence: true })).toContain(
+        'COMPLETION CONVERGENCE IS ON'
+      )
+    })
   })
 
   it('계정이 Task 에 있고 첫 계정이 provider 라고 말한다', () => {

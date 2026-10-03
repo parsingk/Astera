@@ -4,7 +4,7 @@ import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
-import type { AgentPermissionMode, ResumeStrategy, SessionKind } from '../core/types'
+import type { AgentPermissionMode, McpAccess, ResumeStrategy, SessionKind } from '../core/types'
 import { applyContinuityToggle } from '../core/continuity/settings'
 import {
   readGeneratorSettings,
@@ -20,6 +20,10 @@ import {
 import type { SkillSettings } from '../core/orchestration/skills'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
+import { mcpAccessOf } from '../core/settings/mcpAccess'
+import { mcpSessionsOf } from '../core/settings/mcpSessions'
+import { mcpGithubWriteOf } from '../core/settings/mcpGithubWrite'
+import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 
 /** The three settings that gate Astera's agent skills when the file does not say otherwise — a
@@ -113,6 +117,16 @@ export class AppSettingsStore {
   /** 에이전트를 권한 확인 없이 띄우는가. **기본은 'yolo'** — 그 근거는 AgentPermissionMode 에 있다.
    *  githubPolling 과 같은 방향의 좁히기다: 기본이 켜짐인 값이라 파일에 명시된 'manual' 만 끈다. */
   private agentPermissionMode: AgentPermissionMode = 'yolo'
+  /** What an MCP client may do through `astera mcp serve` (MCP design M5). Default 'control'; only
+   *  the two narrower values are written to the file. */
+  private mcpAccess: McpAccess = 'control'
+  /** Whether an MCP client may see and use sessions (MCP P1 design §5). Off by default; only true is written. */
+  private mcpSessions = false
+  /** Whether an MCP client may act on GitHub: push, open pull requests, rerun CI, make Jobs from
+   *  issues (MCP P2-B design). Off by default; only true is written. */
+  private mcpGithubWrite = false
+  /** MCP over HTTP (MCP HTTP design §2). Off by default; written only while a field differs from its default. */
+  private mcpHttp: McpHttpSettings = mcpHttpOf(undefined)
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
   /** Which kind the new-session and resume dialogs open on — a terminal session or a 대화 one. It
@@ -184,6 +198,14 @@ export class AppSettingsStore {
       this.agentPermissionMode = agentPermissionModeOf(
         (parsed as { agentPermissionMode?: unknown }).agentPermissionMode
       )
+      // The same function the Host's read uses (readMcpAccess), so the two cannot differ.
+      this.mcpAccess = mcpAccessOf((parsed as { mcpAccess?: unknown }).mcpAccess)
+      // The same function the Host's read uses (readMcpSessions): only an explicit true turns it on.
+      this.mcpSessions = mcpSessionsOf((parsed as { mcpSessions?: unknown }).mcpSessions)
+      // Likewise the Host's readMcpGithubWrite: only an explicit true turns it on.
+      this.mcpGithubWrite = mcpGithubWriteOf((parsed as { mcpGithubWrite?: unknown }).mcpGithubWrite)
+      // The same function the Host's readMcpHttp uses, so the two cannot differ.
+      this.mcpHttp = mcpHttpOf((parsed as { mcpHttp?: unknown }).mcpHttp)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -231,6 +253,10 @@ export class AppSettingsStore {
         this.generator = {}
         this.resumeStrategy = SKILL_SETTINGS_DEFAULTS.resumeStrategy
         this.agentPermissionMode = 'yolo'
+        this.mcpAccess = 'control'
+        this.mcpSessions = false
+        this.mcpGithubWrite = false
+        this.mcpHttp = mcpHttpOf(undefined)
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         this.defaultSessionKind = 'terminal'
@@ -262,6 +288,11 @@ export class AppSettingsStore {
       // after this, the app's or the Host's, would start with the bypass. So a recovered profile
       // asks, and the renderer says so (takeRecoveryNotice). Every other field takes its default.
       this.agentPermissionMode = 'manual'
+      // The narrower side, as agentPermissionMode: the file may have said off.
+      this.mcpAccess = 'off'
+      this.mcpSessions = false
+      this.mcpGithubWrite = false
+      this.mcpHttp = mcpHttpOf(undefined)
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       this.defaultSessionKind = 'terminal'
@@ -385,6 +416,46 @@ export class AppSettingsStore {
   /** 워커와 코디네이터를 띄우는 배선이 이 값을 읽어 bypassPermissions 로 넘긴다(src/main/ipc.ts). */
   async setAgentPermissionMode(mode: AgentPermissionMode): Promise<void> {
     this.agentPermissionMode = mode
+    await this.persist()
+  }
+
+  getMcpAccess(): McpAccess {
+    return this.mcpAccess
+  }
+
+  /** The Host reads the file on every MCP call (readMcpAccess), so saving it is the whole effect. */
+  async setMcpAccess(v: McpAccess): Promise<void> {
+    this.mcpAccess = v
+    await this.persist()
+  }
+
+  getMcpSessions(): boolean {
+    return this.mcpSessions
+  }
+
+  /** The Host reads the file on every MCP call (readMcpSessions), so saving it is the whole effect. */
+  async setMcpSessions(v: boolean): Promise<void> {
+    this.mcpSessions = v
+    await this.persist()
+  }
+
+  getMcpGithubWrite(): boolean {
+    return this.mcpGithubWrite
+  }
+
+  /** The Host reads the file on every MCP call (readMcpGithubWrite), so saving it is the whole effect. */
+  async setMcpGithubWrite(v: boolean): Promise<void> {
+    this.mcpGithubWrite = v
+    await this.persist()
+  }
+
+  getMcpHttp(): McpHttpSettings {
+    return { ...this.mcpHttp, hosts: [...this.mcpHttp.hosts] }
+  }
+
+  /** The Host reads the file on `mcp-http-reload`, which ipc.ts sends after this save. */
+  async setMcpHttp(v: McpHttpSettings): Promise<void> {
+    this.mcpHttp = { ...v, hosts: [...v.hosts] }
     await this.persist()
   }
 
@@ -523,6 +594,10 @@ export class AppSettingsStore {
       generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
       agentPermissionMode?: AgentPermissionMode
+      mcpAccess?: McpAccess
+      mcpSessions?: true
+      mcpGithubWrite?: true
+      mcpHttp?: McpHttpSettings
       terminalFont?: TerminalFont
       theme?: ThemeId
       defaultSessionKind?: SessionKind
@@ -556,6 +631,12 @@ export class AppSettingsStore {
     // Written only when it is off, for the same reason githubPolling is: the default belongs in one
     // place, and that place is load's narrowing.
     if (this.agentPermissionMode === 'manual') data.agentPermissionMode = 'manual'
+    // Written only when narrower than the default, like agentPermissionMode.
+    if (this.mcpAccess !== 'control') data.mcpAccess = this.mcpAccess
+    if (this.mcpSessions) data.mcpSessions = true
+    if (this.mcpGithubWrite) data.mcpGithubWrite = true
+    const h = this.mcpHttp
+    if (h.enabled || h.lan || h.port !== MCP_HTTP_DEFAULT_PORT || h.hosts.length > 0) data.mcpHttp = h
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.
     const desktopNotify = writableDesktopNotify(this.desktopNotify)

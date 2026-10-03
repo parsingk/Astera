@@ -222,13 +222,21 @@ describe('helpers cross to this thread', () => {
     expect(r).toEqual({ log: ['after'] })
   })
 
-  it('a helper still pending when the worker is ended settles without an unhandled rejection', async () => {
+  it('a helper still pending when the worker is ended settles without an unhandled rejection', { timeout: 20_000 }, async () => {
     const unhandled = vi.fn()
     process.on('unhandledRejection', unhandled)
     try {
+      // Ended by Stop once the helper is known to be pending, not by a short deadline: the deadline
+      // counts from the child's spawn, and on a loaded machine the child had not reached `slow()` by
+      // then, so the helper was never called. Stop and the deadline end the worker through the same
+      // path (finish), so what is left pending is the same. The 15s wait (and the 20s budget of this
+      // test and the next) is for that child's start alone, the same allowance the launch tests give it.
       let fail!: (e: Error) => void
-      const r = await run('await slow()', { slow: () => new Promise((_, reject) => (fail = reject)) }, { timeoutMs: 200 })
-      expect(r.error?.at).toBe('timeout')
+      const stop = new AbortController()
+      const p = run('await slow()', { slow: () => new Promise((_, reject) => (fail = reject)) }, { stop: stop.signal })
+      await vi.waitFor(() => expect(fail).toBeTypeOf('function'), { timeout: 15_000, interval: 20 })
+      stop.abort()
+      expect((await p).error?.at).toBe('stopped')
       fail(new Error('late'))
       await new Promise((res) => setTimeout(res, 50))
       expect(unhandled).not.toHaveBeenCalled()
@@ -237,12 +245,12 @@ describe('helpers cross to this thread', () => {
     }
   })
 
-  it('a helper the body calls after the script ended is never run', async () => {
+  it('a helper the body calls after the script ended is never run', { timeout: 20_000 }, async () => {
     const after = vi.fn()
     let release!: () => void
     const stop = new AbortController()
     const p = run('await wait(); await next()', { wait: () => new Promise<void>((r) => (release = r)), next: async () => after() }, { stop: stop.signal })
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'), { timeout: 15_000, interval: 20 })
     stop.abort()
     expect((await p).error).toEqual({ message: 'stopped', at: 'stopped' })
     release()

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal, hostSpeaksUnderstanding, hostSpeaksWorkUnits, hostSpeaksMcpHttp } from './outdated'
 import { HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_SLACK_OWNER } from '../../core/host/protocol'
 
 describe('hostIsOutdated', () => {
@@ -146,5 +146,31 @@ describe('hostSpeaksJournal (Host journal J2)', () => {
     expect(hostSpeaksJournal({ connected: false, unresponsive: true, features: ['journal'] })).toBe(true)
     expect(hostSpeaksJournal({ connected: false, features: ['journal'] })).toBe(false)
     expect(hostSpeaksJournal({ connected: true, features: ['spawn'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksUnderstanding (E1 §2)', () => {
+  it('holds for a connected or unresponsive Host that announced understanding, and nothing else', () => {
+    expect(hostSpeaksUnderstanding({ connected: true, features: ['understanding'] })).toBe(true)
+    expect(hostSpeaksUnderstanding({ connected: false, unresponsive: true, features: ['understanding'] })).toBe(true)
+    expect(hostSpeaksUnderstanding({ connected: false, features: ['understanding'] })).toBe(false)
+    expect(hostSpeaksUnderstanding({ connected: true, features: ['journal'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksWorkUnits (E2 §3)', () => {
+  it('holds for a connected or unresponsive Host that announced work-units, and nothing else', () => {
+    expect(hostSpeaksWorkUnits({ connected: true, features: ['work-units'] })).toBe(true)
+    expect(hostSpeaksWorkUnits({ connected: false, unresponsive: true, features: ['work-units'] })).toBe(true)
+    expect(hostSpeaksWorkUnits({ connected: false, features: ['work-units'] })).toBe(false)
+    expect(hostSpeaksWorkUnits({ connected: true, features: ['understanding'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksMcpHttp (MCP HTTP design §4)', () => {
+  it('holds only for a connected Host that announced mcp-http: the screen needs its answers', () => {
+    expect(hostSpeaksMcpHttp({ connected: true, features: ['mcp-http'] })).toBe(true)
+    expect(hostSpeaksMcpHttp({ connected: false, features: ['mcp-http'] })).toBe(false)
+    expect(hostSpeaksMcpHttp({ connected: true, features: ['workspace'] })).toBe(false)
   })
 })

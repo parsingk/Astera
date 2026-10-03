@@ -82,6 +82,63 @@ describe('withExitedPtyGuard', () => {
     expect(raw.written).toEqual([])
   })
 
+  // The app's half of the Host fix of 2026-10-01 (registry.ts `killSent`): node-pty 1.1.0's ConPTY
+  // kill frees the pseudoconsole on every call, and a second kill of a live pty ended the Host with
+  // STATUS_HEAP_CORRUPTION. A pty the app holds itself (no Host) takes the same kill.
+  it('sends the pty one kill, however often it is asked, and logs the repeats', () => {
+    let kills = 0
+    const raw = new TwoPhasePty()
+    raw.kill = () => { kills += 1 }
+    const logs: string[] = []
+    const p = withExitedPtyGuard(raw, (m) => logs.push(m))
+    p.kill()
+    p.kill()
+    expect(kills).toBe(1)
+    expect(logs.some((m) => m.includes('4242') && m.includes('already'))).toBe(true)
+  })
+
+  // The same escalation as the Host registry's: a repeat means the one kill did not end it, so its
+  // process tree is ended (taskkill /T /F), once, and the pty kill is never sent again.
+  it('a repeat kill ends the process tree once, and never sends the pty kill again', () => {
+    let kills = 0
+    const raw = new TwoPhasePty()
+    raw.kill = () => { kills += 1 }
+    const trees: number[] = []
+    const logs: string[] = []
+    const p = withExitedPtyGuard(raw, (m) => logs.push(m), (pid) => { trees.push(pid) })
+    p.kill()
+    expect(trees).toEqual([])
+    p.kill()
+    p.kill()
+    expect(kills).toBe(1)
+    expect(trees).toEqual([4242])
+    expect(logs.some((m) => m.includes('4242') && m.includes('process tree'))).toBe(true)
+  })
+
+  it('a repeat kill after the pty has exited does nothing', () => {
+    const raw = new TwoPhasePty()
+    const trees: number[] = []
+    const p = withExitedPtyGuard(raw, () => {}, (pid) => { trees.push(pid) })
+    p.onExit(() => {})
+    p.kill()
+    raw.emitExit(1)
+    p.kill()
+    expect(trees).toEqual([])
+  })
+
+  it('a kill that threw is not sent again either', () => {
+    let kills = 0
+    const raw = new TwoPhasePty()
+    raw.kill = () => {
+      kills += 1
+      throw new Error('AttachConsole failed')
+    }
+    const p = withExitedPtyGuard(raw, () => {})
+    expect(() => p.kill()).toThrow('AttachConsole failed')
+    p.kill()
+    expect(kills).toBe(1)
+  })
+
   // 가드가 정상 경로까지 막으면 터미널 입력과 크기 조정이 조용히 죽는다
   it('살아 있는 동안에는 그대로 전달한다', () => {
     const raw = new TwoPhasePty()

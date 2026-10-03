@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Account, HistoryEntry, ProjectSummary } from '../../types'
 import {
+  isChildThreadRollout,
   isExecRollout,
   parseCodexMeta,
   parseCodexPreview,
@@ -31,7 +32,8 @@ async function rolloutFiles(account: Account, io: HistoryIo): Promise<{ files: M
 /** The cwd the index keeps for one rollout. An exec rollout reports none, which is the same thing the
  *  list already says about a file it does not recognise — "no cwd = not a project", the rule
  *  buildEntry applies too. That keeps the exclusion in one shape rather than adding a second kind of
- *  skip. */
+ *  skip. A child thread keeps its cwd: it is a file of the project's history (a hidden row, see
+ *  entriesForProject), so deleting that history takes it. */
 async function headCwd(filePath: string): Promise<string | null> {
   const m = await parseCodexMeta(filePath)
   return isExecRollout(m) ? null : m.cwd
@@ -107,7 +109,14 @@ export const codexHistoryStrategy: HistoryStrategy = {
     })
     const rows = await io.rowMemo(mine, async (f) => {
       const e = await codexHistoryStrategy.buildEntry(account, f.path, f.mtimeMs, io)
-      return e && { cwd: e.projectPath, sessionId: e.sessionId, title: e.title, awaitingReply: e.awaitingReply }
+      if (e) return { cwd: e.projectPath, sessionId: e.sessionId, title: e.title, awaitingReply: e.awaitingReply }
+      // buildEntry turns a child thread down (it is no row); it is still this project's file, so it is
+      // kept as a hidden row, memoized like any other, for deletionTargets. Only a file buildEntry
+      // refused is read again here, and only its head.
+      const meta = await parseCodexMeta(f.path)
+      if (!isChildThreadRollout(meta) || !meta.cwd) return null
+      const sessionId = meta.sessionId ?? f.path.match(ROLLOUT_UUID_RE)?.[1]
+      return sessionId ? { cwd: meta.cwd, sessionId, title: '', awaitingReply: false, hidden: true } : null
     })
     io.flushIndex() // once for the pass: the cwds and the rows together
     const out: HistoryEntry[] = []
@@ -122,7 +131,8 @@ export const codexHistoryStrategy: HistoryStrategy = {
         updatedAt: new Date(mine[i].mtimeMs).toISOString(),
         filePath: mine[i].path,
         awaitingReply: row.awaitingReply,
-        rootUuid: null
+        rootUuid: null,
+        ...(row.hidden ? { hidden: true as const } : {})
       })
     })
     return out
@@ -139,6 +149,10 @@ export const codexHistoryStrategy: HistoryStrategy = {
     // This app's own explanation runs are not the user's conversations — they should not appear in a
     // list of sessions to resume (see isExecRollout).
     if (isExecRollout(meta)) return null
+    // A child thread (a sub-agent codex starts) is not a conversation to resume either, and it repeats
+    // its parent's session id, so as a row it would stand in for the parent's. entriesForProject keeps
+    // it as a hidden row for the delete; every other caller (locate) gets nothing for it.
+    if (isChildThreadRollout(meta)) return null
     const sessionId = meta.sessionId ?? filePath.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) return null
     let mtime = mtimeMs

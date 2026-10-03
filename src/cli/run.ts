@@ -19,6 +19,9 @@ import { connectHost, type ConnectFailure, type HostConnection } from '../core/h
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
 import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
+import { serveMcp } from './mcp/server'
+import { runMcpHttp } from './mcp/http'
+import { mcpStatus } from './mcp/status'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -30,6 +33,7 @@ import {
   messageFrom,
   nextStepsFor,
   okEnvelope,
+  refusalDetailsOf,
   silentHostEnd,
   sessionTurnEnd,
   type CliError,
@@ -597,23 +601,6 @@ export function lostAnswerDetails(a: {
   }
 }
 
-/** The ids a refusal names, as `details` for the envelope, or nothing: `requestId` (the 409 for a
- *  request already in flight), `jobId` (`tasks add --validate`'s unknown configuration, CLI phase
- *  D), `repair` (the profile file a 409 says only the app can repair, Host S2) and `retry` (a 409
- *  from a Host that is leaving, which the same command retried once a Host is up clears) and `runId` (a
- *  later `jobs run` whose coordinator did not start: the run it left behind, host S4+S5 Task 15; and the
- *  Run a `check --ack` of no such batch was checked against, for its `check --run <runId>` step). Undefined
- *  rather than an empty object so a failure that names none prints `details: {}` exactly as it did before. */
-export function refusalDetailsOf(body: unknown): Record<string, unknown> | undefined {
-  if (body === null || typeof body !== 'object') return undefined
-  const out: Record<string, unknown> = {}
-  for (const key of ['requestId', 'jobId', 'repair', 'retry', 'runId'] as const) {
-    const id = (body as Record<string, unknown>)[key]
-    if (typeof id === 'string' && id !== '') out[key] = id
-  }
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
 /** 한 명령을 Host 에 묻고 그 답을 기다린다 (host control plane design §5).
  *
  *  **닿지 못한 것과 답을 못 받은 것을 가른다.** 연결이 답 전에 끊기면 그 Host 는 사라진 것이므로
@@ -1027,6 +1014,14 @@ export async function main(): Promise<void> {
   // id appended (`retryCommandLine`), and a second read of the same array would be a second chance
   // for the two to disagree.
   const argv = process.argv.slice(2)
+  // **`mcp http` answers before usage and the parser** (MCP HTTP design §1): the Host starts it and
+  // reads its stdout, one JSON line, so no envelope or usage text may reach it. It is not in the public
+  // command table either; docs/mcp.md ("MCP over HTTP") says the Host runs it and a person does not.
+  if (argv[0] === 'mcp' && argv[1] === 'http') {
+    const code = await runMcpHttp({ argv: argv.slice(2), env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(code)
+  }
   const help = usageFor(argv, sessionUsage)
   if (help !== null) {
     if ('error' in help) {
@@ -1210,6 +1205,35 @@ export async function main(): Promise<void> {
       })
     // 다른 모든 응답과 같은 봉투로 나간다 — 이것만 예외면 `jq .ok` 가 이 한 경우에만 null 이 된다.
     out(renderOk(parsed.cmd, undeliveredReportNotice({ path: written.path }), mode))
+    process.exit(0)
+  }
+
+  // **mcp serve answers before anything writes stdout** (MCP design §4): from here on stdout is the MCP
+  // protocol's, and `out()` / `fail()` would corrupt it. It never returns to the exits below.
+  if (parsed.cmd === 'mcp-serve') {
+    // Refused, not dropped, as the host commands below refuse it: each tool carries its own requestId.
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    await serveMcp({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    // A pipe on POSIX is asynchronous: let the last answer leave before the process does.
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(0)
+  }
+
+  // **mcp status answers like `host status`** (spec §40): it starts nothing and goes through no command
+  // layer, so a request id is refused the same way.
+  if (parsed.cmd === 'mcp-status') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await mcpStatus({ env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
     process.exit(0)
   }
 

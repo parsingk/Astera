@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { appImageLaunchFor, binDirFor, isOnPath, pathEntries, pathHintFor, userPathWith, userPathWithout } from './cliInstall'
+import { appImageLaunchFor, binDirFor, isOnPath, pathEntries, pathHintFor, userPathFits, userPathWith, userPathWithout } from './cliInstall'
 
 const HOME = '/home/me'
 
@@ -150,6 +150,34 @@ describe('userPathWith / userPathWithout (win32 user Path)', () => {
     expect(userPathWithout(`C:\\tools;${dir};%USERPROFILE%\\bin`, dir, env)).toBe('C:\\tools;%USERPROFILE%\\bin')
     expect(userPathWithout('C:\\tools;;%LOCALAPPDATA%\\astera\\bin', dir, env)).toBe('C:\\tools;')
     expect(userPathWithout('C:\\tools', dir, env)).toBeNull()
+  })
+})
+
+// Measured on Windows 11 (2026-10-01) through a cmd that Explorer itself started: with a system Path
+// of 1629 characters expanded, ending in ';', a user Path of 2465 characters reached the new shell and
+// one of 2466 did not reach it at all, every entry of it gone. A REG_EXPAND_SZ user Path counted its
+// expanded length. With the same system Path's trailing ';' taken off (1628), the boundary stayed at
+// 2465 / 2466: Windows puts a ';' between them.
+describe('userPathFits (win32: whether Explorer hands the user Path to new shells)', () => {
+  const machine = `C:\\WINDOWS\\system32;${'m'.repeat(1629 - 21)};`
+  const env = { USERPROFILE: 'C:\\Users\\anipen' } as NodeJS.ProcessEnv
+
+  it('holds the measured boundary', () => {
+    expect(machine.length).toBe(1629)
+    expect(userPathFits({ machine, user: 'u'.repeat(2465), env })).toBe(true)
+    expect(userPathFits({ machine, user: 'u'.repeat(2466), env })).toBe(false)
+  })
+
+  it('counts both values expanded', () => {
+    // 13 characters raw, 15 expanded: 2460 raw fits, its 2464 expanded too; 2464 raw is 2468 expanded
+    expect(userPathFits({ machine, user: '%USERPROFILE%;%USERPROFILE%' + 'u'.repeat(2460 - 27), env })).toBe(true)
+    expect(userPathFits({ machine, user: '%USERPROFILE%;%USERPROFILE%' + 'u'.repeat(2464 - 27), env })).toBe(false)
+    expect(userPathFits({ machine: `%USERPROFILE%${machine.slice(13)}`, user: 'u'.repeat(2464), env })).toBe(false)
+  })
+
+  it('counts the separator Windows puts between them when the system Path does not end in one', () => {
+    expect(userPathFits({ machine: machine.slice(0, -1), user: 'u'.repeat(2465), env })).toBe(true)
+    expect(userPathFits({ machine: machine.slice(0, -1) + 'm', user: 'u'.repeat(2465), env })).toBe(false)
   })
 })
 

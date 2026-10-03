@@ -223,7 +223,12 @@ export class MemoryCwdStore implements CwdStore {
       mtimeMs,
       size,
       cwd,
-      row: { sessionId: row.sessionId, title: row.title, awaitingReply: row.awaitingReply }
+      row: {
+        sessionId: row.sessionId,
+        title: row.title,
+        awaitingReply: row.awaitingReply,
+        ...(row.hidden ? { hidden: true } : {})
+      }
     })
   }
   prune(root: string, livePaths: Iterable<string>): number {

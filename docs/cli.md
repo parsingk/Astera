@@ -117,8 +117,10 @@ otherwise. A script that read `.data.stopped` or `.data.sessions` off a refused 
 nothing is.
 
 A run, not a Job: a Job with two runs going at once counts as two, because two things are running.
-A run is running while it has work in flight: a worker session open on one of its tasks, or a task
-being validated or reviewed. A run whose tasks have not started yet is not. Neither is one whose
+A run is running while it has work in flight: a worker session open on one of its tasks, a task
+being validated or reviewed, or its coordinator attached while the run is neither paused nor finished
+(a coordinator planning a run that has no tasks yet counts). A run whose tasks have not started yet,
+and that has no coordinator, is not. Neither is one whose
 workers were all stopped, unless one of its tasks is still being validated or reviewed. `runs stop`
 closes the run's worker sessions and pauses it, but it does not end a validation or a review, and a
 paused run with such a task still counts. The Host finishes that task itself (with a Host that does
@@ -324,16 +326,29 @@ keep a Host running. A fire is skipped, and logged once, while the Job's latest 
 the same rule that makes `jobs run` refuse a Job that is already going (see "the still running rule"
 below).
 
-**A scheduled Job does not pile up coordinators.** When a run of a scheduled Job finishes, which means
-every one of its tasks is done, the process that drives stops that run's coordinator. It keeps asking
+**A finished run does not keep its sessions.** When a run finishes, which means every one of its tasks
+is done, the process that drives stops that run's coordinator and releases its idle workers (a worker
+whose dispatch has closed; one held with `worker-retain` is kept). A run of a scheduled Job is cleaned
+up at once, so a schedule does not pile up coordinators. Any other run gets 10 minutes, counted from
+the later of the run finishing and the last time a person typed into that session, so you can read the
+coordinator's closing summary or ask it a follow-up; each input starts the 10 minutes again. A
+person's input is typing in an Astera tab, and a reply from Slack only while the Host drives. Nothing
+else counts: not `sessions send` (agents use it too), and not the Host's or Astera's own writes into a
+session (a nudge, a prompt). A session that is busy, in the middle of a turn, is not ended mid-turn,
+for up to an hour: it is ended once it is idle again with the 10 minutes over, or an hour after the
+10 minutes ran out if it still shows busy then, since a busy sign still up after that is read as
+hung. When whether it is busy cannot be told, the 10 minutes alone decide. The time of the last
+input is kept in memory, so after a restart the 10 minutes count from the run finishing.
+`run-coordinator-stop --run <runId>` ends the coordinator now.
+For the coordinator, the process keeps asking
 until the session is confirmed gone, backing off from 30 seconds up to 10 minutes rather than asking
 once, so a run whose coordinator resists stopping can still show that coordinator, paused, for a while
 after the run itself finished. A stop that keeps failing or keeps being refused at the 10 minute cap is
 asked six times there, then the process gives up and logs one line, since nothing tells it the refusal
 is permanent; a session confirmed gone in the meantime is still released at once. Giving up lasts only
 for that process: a Host restart or a new driving process asks the same coordinator to stop again from
-30 seconds. A run that `jobs run` started for a Job with no schedule keeps its
-coordinator, because you may be reading its tab. That stop once the session is gone
+30 seconds. A worker release whose session lives on is sent again on the same backoff. That stop once
+the session is gone
 (`run-coordinator-stop --gone`) and the sweep that clears a stale coordinator start mark
 (`run-start-marks-clear`) are the driving loop's own commands: called from inside an agent session they
 are refused with exit 5, and only the app, the Host or a shell reaches them, so a coordinator can never
@@ -421,7 +436,8 @@ Jobs do not move. You can restart it from Settings, Info". If it stays that way,
 from **Settings → Info**.
 
 **Stopping a worker.** `worker-stop --dispatch <id>` ends the worker's session and marks its Dispatch
-stopped. `runs stop --id <runId>` does the same for every open worker of a run, and pauses the run.
+stopped. `runs stop --id <runId>` does the same for every open worker of a run, stops its
+coordinator, and pauses the run.
 Both refuse with 6, and end nothing, while a worker is still starting: the message is `the worker is
 still starting; try again in a moment`, and the answer is to run the same command a few seconds later.
 That refusal lasts only two minutes from the start. A start older than that is taken as one that died,
@@ -502,7 +518,7 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
 astera runs    get    --id <runId>
@@ -522,6 +538,9 @@ astera run-configs list --job <jobId>
 
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
+
+astera mcp     serve                     serve Astera to an MCP client over stdio
+astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
@@ -590,9 +609,11 @@ list. Filters on one command combine.
 - **`jobs list --status`** keeps the Jobs in one state: `pending` (made by `jobs create` and not run
   yet), `paused`, `scheduled`, `waiting` (a question is open), `running`, `completed` or `failed`. It
   is the word the first column of `--human` shows, in lower case (`COMPLETE` is `completed`), so a
-  script can work out the same word from `pendingStart`, `paused`, `schedule`, `questionsOpen` and
-  `outcome`, in that order. `paused` is the Job's own pause, which is what the table shows; a run
-  stopped with `runs stop` is paused on the run, and `runs get` shows it.
+  script can work out the same word from `pendingStart`, then `paused` or `outcome: "paused"`, then
+  `schedule`, `questionsOpen` and the rest of `outcome`, in that order. A Job with no run has `outcome: "pending"`, also when its `jobs run`
+  failed, so it never reads `running` before a run exists. `paused` is the Job's own pause, or a
+  latest run stopped with `runs stop`: that run has `paused: true`, and both it (`runs get`, `runs
+  list`) and its Job have `outcome: "paused"` until `runs resume`.
 - **`jobs list --project <path>`** keeps the Jobs of the project a folder belongs to, found the way
   `projects find` finds it (below). A folder no project holds is a 4 with `astera projects list` as its
   step. A Job belongs to the project it was created in. A Job with no project of its own, such as one
@@ -612,6 +633,11 @@ list. Filters on one command combine.
 - **`sessions list --project <path>`** keeps the sessions whose folder is inside the project, and
   the workers and coordinators of the project's runs wherever their worktree is. A session with no
   folder in its record, and not started by one of those runs, is left out.
+
+**`runs get` carries `waitingForApproval`** when some of the run's Tasks have a worker stopped at a
+permission prompt: the number of those Tasks, read from the same hook events as `sessions list`'s
+`waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
+([mcp.md](mcp.md) says more).
 
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
@@ -649,6 +675,13 @@ is parked in `check --wait`, and skips otherwise, as above.
 run. Add its tasks with `tasks add --job`, then start it with `jobs run`. This is what **New job** in
 the app does. `--cwd` defaults to the directory you ran the command from. Give `--coordinator-account`
 to have a coordinator session drive the Job once it runs; without it the workers are placed for you.
+A coordinator handed a run with tasks runs them as they stand. Handed one with no tasks, it plans the
+Job first: it breaks the objective into a few tasks (`task-create --run`, with `--deps`, an account,
+and `--validate` with the Job's run configurations when it has any), then runs them the same way.
+`--coordinator-provider claude` (or `codex`) picks that provider's default account for you: the
+earliest registered one that is logged in, the one `accounts list` marks `default: true`. With no
+account of that provider logged in it is a 2 that names the provider. When both flags are given,
+`--coordinator-account` wins.
 A Host that announces `dispatch` places them whether Astera is open or closed, and otherwise Astera
 does (see "Jobs run with Astera closed").
 
@@ -713,7 +746,9 @@ a subfolder of a project the app knows up to that project's root; with Astera cl
 folder as given, and a Job made from a subfolder then lists only what that subfolder's build files give.
 
 **`accounts list` prints `id`, `label` and `provider`** for each account the app holds, and nothing
-else about them. `--agent claude` or `--agent codex` narrows it to one vendor.
+else about them, except `default: true` on each provider's default account: the earliest registered
+one that is logged in, the one `jobs create --coordinator-provider` picks. `--agent claude` or
+`--agent codex` narrows it to one vendor.
 
 **`skills` manages the agent skills Astera installs into each account**: the files that tell an agent
 session about `astera`, and about the features switched on in the app. There are five.
@@ -757,6 +792,30 @@ second run is all `unchanged`.
 
 **Agent sessions read their skills when they start**, so a session already open does not see a
 skill installed after it, and `data.note` says so. Open a new session.
+
+**`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
+protocol. It connects to the Host of this profile, starting one when none answers, and serves
+thirty-four tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
+allows it, act on them, and read the How It Works records of a project and regenerate one. What it may do is set by
+MCP access in Settings (CLI tab). The six Job tools that change something (`create_job`,
+`create_task`, `run_job`, `stop_run`, `resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session` and the
+three GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`). See
+[MCP](mcp.md).
+
+**`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
+`cliVersion`, `transport` (`stdio`), `host` (`running`, and for a running Host its `version`,
+`protocol` and `mcp`: whether it serves MCP clients), `access` (MCP access from Settings: `off`,
+`read` or `control`) and `tools` (how many tools `mcp serve` offers). It exits 0 when a Host runs and
+serves MCP clients, 3 when no Host runs, and 9 when the Host is too old for MCP clients or a Host of
+another protocol serves the profile; on 3 and 9 the same report is in `error.details`, and for a Host
+of another protocol `hostProtocol`, `hostAddress` and `cliProtocol` beside it, as in `host status`. When `app-settings.json` cannot be read, `access` is `null`
+and `warning` says why: the Host then fails every MCP call until the file is repaired.
+
+```json
+{"ok":true,"data":{"cliVersion":"1.4.1","transport":"stdio","host":{"running":true,"version":"1.4.1",
+  "protocol":4,"mcp":true},"access":"control","tools":30}}
+```
 
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
@@ -831,12 +890,15 @@ into a terminal emulator at the tab's current size and returns what that termina
 `data.screen` is the visible rows, top first, with the empty rows below the last painted one left
 off, and `data.scrollback` is up to `--lines` rows (default 200, at most 10000) from just above the screen, oldest
 first. Each row is the text of its cells with trailing spaces trimmed; colours and other styling are
-not included. `data.cols` and `data.rows` are the size it was rendered at. `--human` prints the
-scrollback and then the screen, one row per line.
+not included. `data.cols` and `data.rows` are the size it was rendered at. `data.screenWrapped` and
+`data.scrollbackWrapped` hold one mark per row of `screen` and `scrollback`: `true` when that row
+continues the one above it, because the terminal wrapped a line wider than the tab; join them to get
+the line back. `--human` prints the scrollback and then the screen, one row per line.
 
 ```json
 {"ok":true,"data":{"id":"…","kind":"terminal","alive":true,"cols":100,"rows":30,
-  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"]}}
+  "screen":["D:\\repo>echo hi","hi","","D:\\repo>"],"scrollback":["Microsoft Windows [Version …]"],
+  "screenWrapped":[false,false,false,false],"scrollbackWrapped":[false]}}
 ```
 
 The Host keeps about 256,000 characters of each session's output while it runs, so scrollback goes
@@ -996,8 +1058,20 @@ cases. With `--request-id`, a retried `sessions create` is answered from the rec
 starting a second session; a refusal leaves no receipt.
 
 **`runs stop` is reversible, which is why it is not called cancel.** It closes the run's open worker
-dispatches and pauses the run. `runs resume` clears exactly that. It refuses while a dispatch is
-held open on purpose.
+dispatches, stops the run's coordinator session when it has one, and pauses the run. A run that has
+already finished (every task completed, or failed with no retries left) is refused with 6 and left
+as it is: its coordinator and idle workers end on their own (see "A finished run does not keep its
+sessions"), and `run-coordinator-stop --run <runId>` ends the coordinator now. The answer says
+`stopped` (how many workers) and `coordinatorStopped`: `true` means the run's coordinator was asked to
+stop, not that it has already exited. A coordinator that is still starting when the run is stopped is
+not stopped: it attaches to the paused run once its start finishes and keeps running until the run is
+stopped again. The run keeps naming that coordinator until its
+session has really ended, and the stop is sent again until it has, as for a scheduled run's
+coordinator. `runs resume` clears the pause, and for a Job with a coordinator account it starts a new
+coordinator for the run once the old one is gone, which looks at what is done and carries on. A
+resume sent while the old session is still ending waits up to 10 seconds for it to go; if it is still
+there, the resume is a 6 (`the coordinator is still stopping; try again in a moment`) and changes
+nothing, so run it again a moment later. It refuses while a dispatch is held open on purpose.
 
 **`runs follow` prints a run's events as they happen**, and stops where `runs wait` stops. The events
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
@@ -1139,8 +1213,8 @@ command runs exactly as it always did.
 **That refusal is about a Host that answered and cannot help. Some answers never reach a Host at
 all**, and they split in two.
 
-`host start`, `host status`, `host stop`, `skills list` and `skills install` do not go through the
-Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
+`host start`, `host status`, `host stop`, `skills list`, `skills install`, `mcp serve` and `mcp status` do not go
+through the Host's command layer, so a `--request-id` on one of them is **refused with exit 2** rather than
 dropped. `host stop` and `skills install` are the ones that act, and a caller that keys them is owed
 either the protection or the refusal. (`skills install` is safe to repeat anyway: a second run writes
 nothing.)

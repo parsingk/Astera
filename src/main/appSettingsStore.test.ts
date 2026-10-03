@@ -881,3 +881,164 @@ describe('readSkillSettings on a corrupt file', () => {
     }
   })
 })
+
+describe('mcpAccess', () => {
+  it('defaults to control and is not written while it is', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpAccess()).toBe('control')
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpAccess')
+    await store.setMcpAccess('read')
+    await store.setMcpAccess('control')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpAccess')
+  })
+
+  it('keeps read and off across a reload', async () => {
+    for (const value of ['read', 'off'] as const) {
+      const a = new AppSettingsStore(file())
+      await a.load()
+      await a.setMcpAccess(value)
+      expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpAccess).toBe(value)
+      const b = new AppSettingsStore(file())
+      await b.load()
+      expect(b.getMcpAccess()).toBe(value)
+    }
+  })
+
+  it('an unknown value in the file reads as control', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpAccess: 'nope' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpAccess()).toBe('control')
+  })
+
+  it('a recovered profile reads off, the narrower side', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpAccess()).toBe('off')
+  })
+})
+
+describe('mcpSessions', () => {
+  it('defaults to false and is not written while it is', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpSessions()).toBe(false)
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpSessions')
+    await store.setMcpSessions(true)
+    await store.setMcpSessions(false)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpSessions')
+  })
+
+  it('keeps true across a reload', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setMcpSessions(true)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpSessions).toBe(true)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getMcpSessions()).toBe(true)
+  })
+
+  it('anything but true in the file reads as false', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpSessions: 'yes' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpSessions()).toBe(false)
+  })
+
+  it('a recovered profile reads false', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpSessions()).toBe(false)
+  })
+})
+
+describe('mcpGithubWrite', () => {
+  it('defaults to false and is not written while it is', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpGithubWrite()).toBe(false)
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpGithubWrite')
+    await store.setMcpGithubWrite(true)
+    await store.setMcpGithubWrite(false)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpGithubWrite')
+  })
+
+  it('keeps true across a reload', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setMcpGithubWrite(true)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpGithubWrite).toBe(true)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getMcpGithubWrite()).toBe(true)
+  })
+
+  it('anything but true in the file reads as false', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpGithubWrite: 'yes' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpGithubWrite()).toBe(false)
+  })
+
+  it('a recovered profile reads false', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpGithubWrite()).toBe(false)
+  })
+})
+
+describe('mcpHttp', () => {
+  const DEFAULTS = { enabled: false, port: 7871, lan: false, hosts: [] }
+
+  it('defaults to off and is not written while every field is at its default', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpHttp()).toEqual(DEFAULTS)
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpHttp')
+    await store.setMcpHttp({ ...DEFAULTS, enabled: true })
+    await store.setMcpHttp(DEFAULTS)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('mcpHttp')
+  })
+
+  it('keeps every field across a reload, in the shape the Host reads', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    const v = { enabled: true, port: 9000, lan: true, hosts: ['box.tailnet.ts.net'] }
+    await a.setMcpHttp(v)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).mcpHttp).toEqual(v)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getMcpHttp()).toEqual(v)
+  })
+
+  it('a port written by hand that is not one reads as the default, and only true turns a switch on', async () => {
+    await fs.writeFile(file(), JSON.stringify({ mcpHttp: { enabled: 'yes', port: 70000, lan: 1, hosts: ['a', 3] } }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getMcpHttp()).toEqual({ ...DEFAULTS, hosts: ['a'] })
+  })
+
+  it('a recovered profile reads off', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    expect(await store.load()).toEqual({ recovered: true })
+    expect(store.getMcpHttp()).toEqual(DEFAULTS)
+  })
+
+  it('a value handed out cannot change the store', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setMcpHttp({ ...DEFAULTS, hosts: ['a'] })
+    store.getMcpHttp().hosts.push('b')
+    expect(store.getMcpHttp().hosts).toEqual(['a'])
+  })
+})

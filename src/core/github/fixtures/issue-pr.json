@@ -1,0 +1,36 @@
+{
+  "url": "https://api.github.com/repos/parsingk/Astera/issues/3",
+  "repository_url": "https://api.github.com/repos/parsingk/Astera",
+  "labels_url": "https://api.github.com/repos/parsingk/Astera/issues/3/labels{/name}",
+  "comments_url": "https://api.github.com/repos/parsingk/Astera/issues/3/comments",
+  "events_url": "https://api.github.com/repos/parsingk/Astera/issues/3/events",
+  "html_url": "https://github.com/parsingk/Astera/pull/3",
+  "id": 5318310873,
+  "node_id": "PR_kwDOTuf5ss8AAAABB05YHg",
+  "number": 3,
+  "title": "feat/github pr badges",
+  "user": {
+    "login": "parsingk",
+    "type": "User"
+  },
+  "labels": [],
+  "state": "closed",
+  "locked": false,
+  "comments": 1,
+  "created_at": "2026-09-02T00:34:18Z",
+  "updated_at": "2026-09-02T00:40:13Z",
+  "closed_at": "2026-09-02T00:39:46Z",
+  "author_association": "OWNER",
+  "active_lock_reason": null,
+  "draft": true,
+  "pull_request": {
+    "url": "https://api.github.com/repos/parsingk/Astera/pulls/3",
+    "html_url": "https://github.com/parsingk/Astera/pull/3",
+    "diff_url": "https://github.com/parsingk/Astera/pull/3.diff",
+    "patch_url": "https://github.com/parsingk/Astera/pull/3.patch",
+    "merged_at": null
+  },
+  "body": "- **fix: show a project's sessions loading instead of \"no sessions\"**\n- **feat(github): add a gh CLI adapter with auth probe and failure classifier**\n- **feat(github): parse one gh pr list call into a per-branch snapshot**\n- **feat(github): add the refresh pacing state machine with a rate-limit breaker**\n- **feat(github): persist the PR polling toggle, default on**\n- **fix: move githubPolling tests to their own describe block**\n- **feat(github): coordinate paced PR refresh with a breaker and stale snapshots**\n- **feat(github): expose PR snapshots and the gh probe over IPC**\n- **fix(github): validate settings.setGithubPolling input like its siblings**\n- **feat(github): add ko/en strings for the PR badge and settings card**\n- **feat(github): render a worktree row PR badge with state and check colors**\n- **feat(github): join PR snapshots onto worktree rows with a link menu**\n- **feat(github): add a settings tab for gh connection state and polling**\n- **fix(github): toast when saving the polling setting fails**\n- **fix(github): size gh()'s maxBuffer and stop hiding a truncated PR-list read**\n- **fix(github): stop stale PR snapshots, silent ENOENT, and dead-repo polling**\n- **fix(github): let a forced refresh escape the no-remote memo**\n",
+  "timeline_url": "https://api.github.com/repos/parsingk/Astera/issues/3/timeline",
+  "state_reason": null
+}

@@ -4,8 +4,9 @@ How It Works turns a finished piece of work into an explanation you can read wit
 every code change. Each record keeps your original request and explains what changed, how it
 works, why it was built that way, and which files are involved.
 
-It is experimental and off by default. It records work declared after you enable tracking;
-it does not scan your old conversations to create a history.
+It is experimental. A session's work is recorded only after you enable tracking, which is off by
+default; a finished Job Run is recorded either way. It does not scan your old conversations to
+create a history.
 
 <img src="../assets/how-it-works-demo.gif" width="820" alt="Example-data walkthrough of Astera's How It Works task list, completed explanation, flow diagram, and step-specific implementation references" />
 
@@ -33,8 +34,14 @@ Only one piece of work can be recorded per session at a time. Complete the curre
 starting the next. A piece of work that changed no files leaves no completed record.
 
 Claude Code's and Codex's `/goal` can also be recorded. Claude completes the record when the
-work finishes; Codex requires you to mark it **Done** in How It Works. Completed Jobs Runs are
-recorded too when tracking is enabled. A Job's explanation is generated after the Run finishes.
+work finishes; Codex requires you to mark it **Done** in How It Works. Completed Job Runs are
+recorded too, whether or not tracking is enabled. A Job's explanation is generated after the Run finishes.
+The Astera Host records a Job's Run, so a Run that finishes while the app is closed is recorded
+too and appears when you open the app again. The Host also tracks the sessions it runs, so a
+session's work that finishes while the app is closed is recorded the same way. Work unit tracking
+still decides whether any session is tracked: with it off, no session's work is recorded, app open
+or not. A session Astera had to run on its own because it could not reach the Host may go
+unrecorded.
 
 ## Read a completed record
 
@@ -83,6 +90,9 @@ Address the underlying task or check separately when the work itself needs fixin
   was declared. Only tracked work that changed files produces a completed record.
 - **The task is still In progress:** finish the objective and close its record. A Codex `/goal`
   requires the explicit Done action.
+- **The task is Left unfinished after a restart:** restarting the Host, for example by restarting
+  the computer, ends the sessions it ran, and their open work stops as Left unfinished. Mark it
+  Done in How It Works if the objective was met.
 - **No explanation account is set:** choose one in Settings → How It Works, then use
   **Write it up again** on the record.
 - **Writing failed or was interrupted:** read the row's reason, resolve the cause, and retry the

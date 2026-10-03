@@ -52,7 +52,7 @@ export type { ConvTurn } from './history/convTypes'
 // the renderer typecheck every Node global, which is the guard this note stands to protect.
 import type { CheckResult, GateKind, MessageType, Outcome, RepairReason, TaskStatus } from './orchestration/types'
 import type { CompletionDetail } from './orchestration/completion'
-import type { WorkspaceEvent, WorkspaceSummary } from './host/protocol'
+import type { McpHttpState, WorkspaceEvent, WorkspaceSummary } from './host/protocol'
 export type { CompletionDetail, CompletionCheckDetail } from './orchestration/completion'
 export type { MessageType, TaskStatus } from './orchestration/types'
 
@@ -233,6 +233,9 @@ export interface HistoryEntry {
   filePath: string
   awaitingReply: boolean // true when the last meaningful message was the assistant's — drives the unread-reply marker (green dot)
   rootUuid: string | null // the key that identifies a resume fork (the same conversation)
+  /** A file of the project's history that is not a row of the list: a codex child thread (a sub-agent's
+   *  rollout, which repeats its parent's session id). page() leaves it out; deletionTargets() keeps it. */
+  hidden?: true
 }
 
 export interface TranscriptMessage {
@@ -659,6 +662,10 @@ export interface JobRow {
    *  경로들을 히스토리 숨김 목록에 넣는다. 비어 있으면 그 Run 은 프로젝트 폴더에서만 일했다
    *  (동시 실행 1 의 배치 규칙). */
   worktrees?: string[]
+  /** The Run id of a Job row that shows its one Run (not nested): the row's id is the Job's, but its
+   *  progress and `worktrees` are that Run's. run-merge knows Run ids only, so the detail window's merge
+   *  button sends this. Absent on a nested Job row and on a Run row (whose id is already the Run's). */
+  foldedRunId?: string
   /** 사용자가 아직 '실행' 을 누르지 않았다 — Run 이 들고 있는 값을 그대로 옮긴 것이다.
    *  상세 창의 실행 버튼과 사이드바의 표시가 이 값으로 판단한다. */
   pendingStart?: boolean
@@ -831,6 +838,9 @@ export interface CoreEvents {
    *  `open: false` when its desktop is gone, or the latest frame. `workspace.list` answers the live ones
    *  for a window that mounts later. */
   'workspace:event': WorkspaceEvent
+  /** The MCP HTTP entrance changed, as the Host pushed it, or the connection to that Host came or went.
+   *  `mcpHttp.status` answers the same value for a window that mounts later. */
+  'mcpHttp:state': McpHttpView
 
   /** How It Works 의 저장 파일이 바뀌었다. **실린 값은 프로젝트 키이고, 받는 쪽은 그것을 쓰지
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
@@ -889,6 +899,36 @@ export type ResumeStrategy = 'smart' | 'original'
  *  Orca(stablyai/orca)가 같은 문제에 내린 결론이기도 하다 — 그쪽은 에이전트별 기본 실행 인수를
  *  두고 그 기본값이 곧 우회 플래그다(`DEFAULT_TUI_AGENT_ARGS = YOLO_TUI_AGENT_ARGS`). */
 export type AgentPermissionMode = 'yolo' | 'manual'
+
+/** What an MCP client may do through the Host (MCP design M5). Default 'control' (M6). */
+export type McpAccess = 'off' | 'read' | 'control'
+
+/** An MCP client Settings can register Astera with by its CLI (core/install/mcpClients.ts). */
+export type McpClient = 'claude' | 'codex'
+/** Whether Astera is registered with that client: with the command Settings would register, with
+ *  another one (an older install path, other args), not at all, or the client's CLI is not found. */
+export interface McpClientStatus {
+  state: 'registered' | 'different' | 'absent' | 'not-installed'
+  /** Why a client reads as absent when its config could not be read; shown on the button. */
+  detail?: string
+}
+export type McpRegisterResult = { ok: true } | { ok: false; message: string }
+
+/** The MCP over HTTP setting in app-settings.json (MCP HTTP design §2), narrowed by core/settings/mcpHttp.ts. */
+export interface McpHttpSettings {
+  enabled: boolean
+  port: number
+  /** Bind 0.0.0.0 instead of 127.0.0.1. */
+  lan: boolean
+  /** Extra host names the entrance accepts besides localhost. */
+  hosts: string[]
+}
+
+/** The MCP HTTP entrance as the settings screen sees it (MCP HTTP design §4). `host: false` when no Host
+ *  that runs it can be asked: `reason: 'none'` while no Host is connected or the one there is not answering,
+ *  `'older'` when a connected Host did not announce `mcp-http`. `state: null` until that Host answered
+ *  `mcp-http-status`. */
+export type McpHttpView = { host: false; reason: 'none' | 'older' } | { host: true; state: McpHttpState | null }
 
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
  *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
@@ -1090,7 +1130,7 @@ export interface CoreApi {
       /** null is unknown — the base did not resolve — and must not be drawn as 0. */
       behindCount: number | null
     }>
-    /** Mirrors PrCreateRequest (src/main/prCreate.ts) field-for-field, for the same reason as the
+    /** Mirrors PrCreateRequest (src/core/github/prCreate.ts) field-for-field, for the same reason as the
      *  kind union below, and with the same obligation: nothing type-checks the two declarations
      *  against each other, since preload's invoke returns Promise<any>. */
     create(req: {
@@ -1107,9 +1147,9 @@ export interface CoreApi {
       | {
           ok: false
           stage: 'push' | 'create'
-          /** Deliberately mirrors PrCreateFailureKind (src/main/prCreate.ts) member-for-member,
+          /** Deliberately mirrors PrCreateFailureKind (src/core/github/prCreate.ts) member-for-member,
            *  rather than importing it. Unlike BranchPushState above, this type's home is not just a
-           *  node-touching shape file — prCreate.ts is main-only run logic (push + gh create), so
+           *  node-touching shape file — prCreate.ts is run logic (push + gh create), so
            *  moving the declaration to core/types.ts the way BranchRef/BranchPushState were moved
            *  would mean relocating logic, not a shape. If prCreate.ts's union ever changes, update
            *  this copy to match. */
@@ -1197,6 +1237,27 @@ export interface CoreApi {
     install(opts?: { addToPath?: boolean }): Promise<CliInstallStatus>
     /** 그 자리에서 앱이 쓴 셔틀 파일만 지우고 바뀐 상태를 돌려준다. 폴더와 이웃 파일은 남긴다. */
     uninstall(): Promise<CliInstallStatus>
+    /** win32, installed app: whether this start took the folder off the user Path because it was what
+     *  made that Path too long for new shells (main/userPath.ts takeOffUserPathIfItBreaks). Waits for
+     *  that check, so the answer holds however early it is asked. */
+    pathRepairedAtStart(): Promise<boolean>
+  }
+  /** Whether `astera mcp serve` is registered with Claude Code and Codex, and registering it through
+   *  their CLIs (main/mcpClients.ts). `status` runs on opening the CLI tab in Settings and only reads
+   *  (it finds the CLIs and asks `codex mcp get --json`); `register` runs only when the person presses
+   *  Register. */
+  mcpClients: {
+    status(): Promise<Record<McpClient, McpClientStatus>>
+    register(client: McpClient): Promise<McpRegisterResult>
+  }
+  /** The MCP HTTP entrance (MCP HTTP design §4): its state (with the URLs other devices use) and the token
+   *  file. `token` only reads it (null while the Host has not made it yet), for a Show or a Copy; `tokenHint`
+   *  is its last four characters for the masked display; `newToken` replaces it and answers the new one's hint. */
+  mcpHttp: {
+    status(): Promise<McpHttpView>
+    token(): Promise<string | null>
+    tokenHint(): Promise<string | null>
+    newToken(): Promise<string>
   }
   settings: {
     // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
@@ -1241,6 +1302,18 @@ export interface CoreApi {
     // 에이전트를 권한 확인 없이 띄우는가. See AgentPermissionMode — 기본은 'yolo' 다.
     getAgentPermissionMode(): Promise<AgentPermissionMode>
     setAgentPermissionMode(mode: AgentPermissionMode): Promise<void>
+    // What an MCP client may do through `astera mcp serve`. See McpAccess.
+    getMcpAccess(): Promise<McpAccess>
+    setMcpAccess(v: McpAccess): Promise<void>
+    // Whether an MCP client may see and use sessions at all (off by default).
+    getMcpSessions(): Promise<boolean>
+    setMcpSessions(v: boolean): Promise<void>
+    // Whether an MCP client may act on GitHub (off by default; needs access Read and control).
+    getMcpGithubWrite(): Promise<boolean>
+    setMcpGithubWrite(v: boolean): Promise<void>
+    // MCP over HTTP (off by default). Saving also asks the Host to apply it (mcp-http-reload).
+    getMcpHttp(): Promise<McpHttpSettings>
+    setMcpHttp(v: McpHttpSettings): Promise<void>
     getJobContinuityEnabled(): Promise<boolean>
     setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
@@ -1716,9 +1789,13 @@ export interface CliInstallStatus {
   /** win32: the Install and Uninstall buttons can put the folder on the user Path themselves, with the
    *  person's consent (the checkbox beside Install; main/userPath.ts). Absent elsewhere. */
   canEditUserPath?: true
+  /** win32: the user Path is too long for Windows to give it to new shells, so none of its entries,
+   *  this folder's included, reach them (core/orchestration/cliInstall.ts userPathFits). onPath is then
+   *  false whatever the registry holds. */
+  userPathTooLong?: true
   /** Install or Uninstall only: what they did to the user Path, and why not when they could not. A
-   *  change reaches shells opened after it, not one already open. */
-  userPath?: 'added' | 'present' | 'removed'
+   *  change reaches shells opened after it, not one already open. 'tooLong': nothing was written. */
+  userPath?: 'added' | 'present' | 'removed' | 'tooLong'
   userPathError?: string
   /** 설치 응답에만. `.cmd` 가 정션을 거쳐야 했는데 못 해서 진짜 경로를 적은 까닭들
    *  (core/orchestration/exec/shuttle.ts 의 ShuttleWarning). 있으면 cmd·PowerShell 의 astera 가

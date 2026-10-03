@@ -101,7 +101,7 @@ export function createHostDriving(d: {
   /** The handover belt (N1): starts one open repair Dispatch that has no spec yet. */
   startRepair(a: { dispatchId: string }): void
   /** `sessionExitCode` answers the loop's `sessionGone` (limits pass L1); optional for the test fakes. */
-  registry: Pick<PtyRegistry, 'sessionPty' | 'list'> & Partial<Pick<PtyRegistry, 'sessionExitCode'>>
+  registry: Pick<PtyRegistry, 'sessionPty' | 'list'> & Partial<Pick<PtyRegistry, 'sessionExitCode' | 'lastPersonWrite'>>
   specsDir: string
   log(m: string): void
   nowMs(): number
@@ -363,6 +363,11 @@ export function createHostDriving(d: {
     sessionBusy: (id) => d.spawner.sessionBusy(id),
     typeInto: (id, text) => {
       d.spawner.typeInto(id, text)
+    },
+    // A finished Run's grace (FINISHED_RUN_GRACE_MS): what an app or Slack typed, never the Host's own.
+    lastPersonInputAt: (id) => {
+      const p = d.registry.sessionPty(id)
+      return p === null ? null : (d.registry.lastPersonWrite?.(p) ?? null)
     },
     mayStart,
     log,

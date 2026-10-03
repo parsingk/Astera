@@ -268,6 +268,9 @@ Cada código de salida tiene un solo significado, así que un pipeline distingue
 ver todos los comandos, el formato JSON, los códigos de salida, cómo reintentar una llamada sin riesgo,
 recetas de CI y notas de seguridad.
 
+**MCP**
+Permite que los agentes compatibles con MCP creen, ejecuten y supervisen Jobs de Astera a través del mismo Host local que usan la aplicación de escritorio y la CLI. Consulta [docs/mcp.md](docs/mcp.md) (en inglés).
+
 ## Usar Astera desde una terminal, con la aplicación cerrada
 
 El comando `astera` habla con el **Astera Host**, el proceso en segundo plano que ejecuta tus sesiones y
@@ -391,6 +394,7 @@ ejecuta la comprobación de tipos, la suite y una compilación completa del bund
 ## Documentación
 
 - [El comando `astera`](docs/cli.md) — manejar Jobs desde una shell o CI: instalación, comandos, JSON y códigos de salida (en inglés)
+- [MCP](docs/mcp.md) — dejar que un cliente MCP cree, ejecute y supervise Jobs: conexión, herramientas y acceso MCP (en inglés)
 - [Configuración del bot de Slack](docs/slack-bot-setup.md) — crear la aplicación, tokens y permisos
 - [Publicación de versiones](docs/releasing.md) — cómo se corta y publica una versión
 - [Política de firma de código](docs/code-signing.md) — quién firma las versiones, qué se firma y
@@ -406,10 +410,10 @@ Los issues y los pull requests son bienvenidos. Un par de cosas que conviene sab
   antes de tocar las pruebas de rotación: las frases de límite de uso están partidas con `+` a
   propósito, porque Astera vigila la salida de las sesiones buscándolas — consulta
   [CONTRIBUTING](.github/CONTRIBUTING.md).
-- Los informes de errores son mucho más fáciles de atender con la versión de la aplicación, la
-  versión de tu sistema operativo y las líneas relevantes de `rolling.log` cuando el problema
-  involucra la rotación de cuentas — `%APPDATA%\astera\rolling.log` en Windows,
-  `~/Library/Application Support/astera/rolling.log` en macOS.
+- ¿Nuevo aquí? [CONTRIBUTING](.github/CONTRIBUTING.md) empieza con la configuración inicial, dónde
+  se encuentra cada cosa y por dónde empezar. Informa de errores mediante el formulario en
+  [Issues](https://github.com/parsingk/Astera/issues/new/choose), y reporta problemas de seguridad de
+  forma privada según las indicaciones de [SECURITY.md](.github/SECURITY.md).
 
 ## Agradecimientos
 

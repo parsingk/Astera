@@ -1,4 +1,6 @@
+import { execFile } from 'node:child_process'
 import * as pty from 'node-pty'
+import { treeKillCommand } from '../run/kill'
 import { nodePtySpawnOptions, withExitedPtyGuard, type PtyFactory } from './pty'
 
 export const nodePtyFactory: PtyFactory = (file, args, opts) => {
@@ -25,5 +27,13 @@ export const nodePtyFactory: PtyFactory = (file, args, opts) => {
     // `pty.remember?.(…)`, so its absence is the no-op — the same way `meta` is ignored on the way in
     // (nodePtySpawnOptions), and the same reason: with no Host the app behaves exactly as it always
     // has.
-  })
+  }, undefined, killTree)
+}
+
+/** A repeat kill's escalation (withExitedPtyGuard): the process tree by pid, the taskkill /T /F RunManager
+ *  already runs, which never touches the ConPTY handle. Nothing off win32: there node-pty's kill is a
+ *  signal, and `treeKillCommand` answers null. Fire and forget; a process already gone is no failure. */
+function killTree(pid: number): void {
+  const cmd = treeKillCommand(process.platform, pid)
+  if (cmd) execFile(cmd.file, cmd.args, { windowsHide: true }, () => {})
 }

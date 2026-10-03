@@ -73,7 +73,8 @@ describe('parseCodexMeta', () => {
       sessionId: '019f4524-e0ac-7571-a8af-5585504f0d32',
       cwd: 'D:\\proj\\demo',
       title: '버그 고쳐줘',
-      source: null
+      source: null,
+      parentThreadId: null
     })
   })
 
@@ -84,7 +85,7 @@ describe('parseCodexMeta', () => {
 
   it('깨진 줄·meta 없음은 null 필드로 폴백한다', async () => {
     const p = await write('c.jsonl', ['{broken', noise])
-    expect(await parseCodexMeta(p)).toEqual({ sessionId: null, cwd: null, title: null, source: null })
+    expect(await parseCodexMeta(p)).toEqual({ sessionId: null, cwd: null, title: null, source: null, parentThreadId: null })
   })
 
   // 2026-08-31 실측: 사람이 연 세션은 'cli', 이 앱이 돌린 일회성 실행은 'exec' 다
@@ -95,6 +96,24 @@ describe('parseCodexMeta', () => {
     })
     expect((await parseCodexMeta(await write('src.jsonl', [line]))).source).toBe('exec')
   })
+
+  // 2026-10-03 실측 (codex-cli 0.160.0): codex 가 연 child thread 의 session_meta 는 부모 스레드를
+  // parent_thread_id 로 적고, session_id 에는 부모의 id 를 되풀이한다
+  it('session_meta 의 parent_thread_id 를 읽는다', async () => {
+    const line = JSON.stringify({
+      type: 'session_meta',
+      payload: {
+        session_id: '01a10166-d6cb-7523-9833-91b3fa9301d4',
+        id: '01a10166-d9bd-7bc3-b7c0-b1c419c4a738',
+        parent_thread_id: '01a10166-d6cb-7523-9833-91b3fa9301d4',
+        cwd: 'D:\\proj\\demo',
+        source: { subagent: { other: 'guardian' } }
+      }
+    })
+    const meta = await parseCodexMeta(await write('child.jsonl', [line]))
+    expect(meta.parentThreadId).toBe('01a10166-d6cb-7523-9833-91b3fa9301d4')
+    expect((await parseCodexMeta(await write('main.jsonl', [metaLine]))).parentThreadId).toBeNull()
+  })
 })
 
 // 이 판정이 두 곳(세션↔파일 연결, 히스토리 목록)에서 같아야 한다 — 갈라지면 한쪽에서는 걸러지고
@@ -104,7 +123,8 @@ describe('isExecRollout', () => {
     sessionId: 's',
     cwd: 'D:\\p',
     title: null,
-    source
+    source,
+    parentThreadId: null
   })
 
   it('exec 만 참이다', () => {

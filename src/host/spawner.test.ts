@@ -354,6 +354,17 @@ describe('createHostSpawner', () => {
     expect(h.spawned[0].pty.killed).toBe(true)
   })
 
+  it('logs the reason a coordinator was stopped for, and a neutral line without one', async () => {
+    const h = rig()
+    const r = await h.spawner!.startCoordinator({ runId: 'run_abcdefghijklmn', cwd: repo, accountId: 'acc1', brief: 'b' })
+    expect(h.spawner!.stopSession!(r.sessionId, 'the run was stopped')).toBe(true)
+    expect(h.logs).toContain(`coordinator ${r.sessionId} stopped: the run was stopped`)
+    const r2 = await h.spawner!.startCoordinator({ runId: 'run_abcdefghijklmn', cwd: repo, accountId: 'acc1', brief: 'b' })
+    expect(h.spawner!.stopSession!(r2.sessionId)).toBe(true)
+    expect(h.logs).toContain(`coordinator ${r2.sessionId} stopped`)
+    expect(h.logs.some((l) => l.includes('another coordinator already manages'))).toBe(false)
+  })
+
   it('logs a release for a dispatch it cannot find, as the app does', async () => {
     const h = rig()
     await h.spawner!.releaseWorker({ dispatchId: 'dsp_gone' })
@@ -614,6 +625,22 @@ describe('createHostSpawner — the loop’s session doors', () => {
     h.spawned[0].pty.emit(IDLE)
     expect(h.spawner!.sessionBusy(r.sessionId)).toBe(false)
     expect(h.spawner!.sessionBusy('never-here')).toBeNull()
+  })
+  // E2 §4: the Host's work units hear the busy and idle edges, not every chunk of output.
+  it('tells onBusyChanged each edge of a session busy verdict, once per edge', async () => {
+    const { s, taskId, dispatchId } = seeded()
+    const h = rig({ state: () => s })
+    const edges: Array<[string, boolean]> = []
+    h.spawner!.onBusyChanged((sid, busy) => edges.push([sid, busy]))
+    const r = await h.spawner!.startWorker(startArgs(taskId, dispatchId))
+    h.spawned[0].pty.emit(IDLE)
+    h.spawned[0].pty.emit(BUSY)
+    h.spawned[0].pty.emit(BUSY)
+    h.spawned[0].pty.emit(IDLE)
+    expect(edges).toEqual([
+      [r.sessionId, true],
+      [r.sessionId, false]
+    ])
   })
   it('types into the live pty of a session it holds, and answers false for one the registry does not hold', async () => {
     const { s, taskId, dispatchId } = seeded()

@@ -75,9 +75,11 @@ const RUN_FIELDS = [
  *  and until when, is the `limited` ending of `runs wait`. */
 const RUN_HIDDEN = ['coordinatorStop', 'coordinatorStartingAt', 'coordinatorStopPending'] as const
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
-const RUN = [...RUN_FIELDS, ...DERIVED]
+/** Derived like DERIVED, by `runs get` alone and only when above zero: how many of the Run's Tasks have
+ *  a worker showing a permission prompt (command.ts `waitingForApprovalIn`). */
+const RUN = [...RUN_FIELDS, ...DERIVED, 'waitingForApproval']
 
-const TASK_FIELDS = [
+export const TASK_PUBLIC_FIELDS = [
   'id',
   'runId',
   'jobId',
@@ -103,7 +105,7 @@ const TASK_FIELDS = [
  * 일부러 안 내보내는 Task 의 칸 — 전부 **앱이 수렴을 굴리려고 적어 두는 장부**다.
  *
  * 가이드가 코디네이터에게 읽으라고 말하는 칸은 `checks`·`consecutiveFailures`·`parentId` 이고
- * (resources/skills/orchestration-guide.md), 아래 일곱은 한 번도 나오지 않는다. 내보내면 앱이
+ * (resources/skills/orchestration-guide.md), 아래 여덟은 한 번도 나오지 않는다. 내보내면 앱이
  * 수렴을 어떻게 굴리는지가 그대로 공개 API 가 되어, 정책을 바꿀 때마다 남의 스크립트를 깨뜨린다.
  *
  * `completionOverride` 는 여기 없다 — 그것은 장부가 아니라 **사람이 내린 결정**이고, 지켜보는
@@ -111,6 +113,7 @@ const TASK_FIELDS = [
  */
 const TASK_HIDDEN = [
   'checkHistory',
+  'lastFailure',
   'policySnapshot',
   'policyChanged',
   'convergenceStartedAt',
@@ -118,11 +121,11 @@ const TASK_HIDDEN = [
   'suspiciousFiles',
   'reviewRequested'
 ] as const
-type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
+type _task = NothingLeft<Unlisted<Task, typeof TASK_PUBLIC_FIELDS, typeof TASK_HIDDEN>>
 
 /** `tasks list --brief` 가 덧붙이는 칸. Task 에는 없다 — 어디서 잘렸는지 알리려고 그 명령이
  *  만든다(server.ts). 목록에 넣지 않으면 --brief 가 그 표시를 조용히 잃는다. */
-const TASK = [...TASK_FIELDS, 'spec_truncated']
+const TASK = [...TASK_PUBLIC_FIELDS, 'spec_truncated']
 
 const QUESTION = [
   'id',
@@ -139,8 +142,9 @@ const QUESTION = [
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 
 /** 계정은 앱이 이미 이 셋으로만 내보낸다(ipc.ts 의 listAccounts). 그래도 적는 이유는 이 파일의
- *  머리말 그대로다 — 앱 쪽이 칸을 하나 더하는 순간 그것이 공개 API 가 되지 않게 한다. */
-const ACCOUNT = ['id', 'label', 'provider'] as const
+ *  머리말 그대로다 — 앱 쪽이 칸을 하나 더하는 순간 그것이 공개 API 가 되지 않게 한다.
+ *  `default` is the fourth: it is there only on its provider's default account (OrchAccount.default). */
+const ACCOUNT = ['id', 'label', 'provider', 'default'] as const
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
 /** 구성의 명령·env·cwd 는 앱에 남는다 — env 값은 비밀일 수 있다. 앱도 Host 도 이미 셋으로 추려
@@ -155,7 +159,7 @@ const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state'] as
 type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
 /** `sessions read` 는 두 모양이다(command.ts). 터미널은 SessionScreen 에 id·kind·alive 를 더한 것,
  *  대화는 id·kind·alive 에 턴과 열린 카드다. `sessions send` 는 명령 층이 짓는다. */
-const SESSION_READ = ['id', 'kind', 'alive', 'cols', 'rows', 'screen', 'scrollback', 'turns', 'pending'] as const
+const SESSION_READ = ['id', 'kind', 'alive', 'cols', 'rows', 'screen', 'scrollback', 'screenWrapped', 'scrollbackWrapped', 'turns', 'pending'] as const
 const SESSION_SEND = ['id', 'sent', 'enter', 'turn'] as const
 /** `tasks dispatch`: the worker the Host's loop started for the Task. The spec file's path stays on the
  *  Host: it is where the worker reads its brief, not something a shell acts on. */
@@ -286,6 +290,10 @@ const SHAPE: Record<string, readonly string[]> = {
   'jobs-create': JOB,
   'runs-list': RUN,
   'runs-get': RUN,
+  // `jobs run` answers with the Run it started (runView), so it hides what `runs get` hides.
+  'jobs-run': RUN,
+  // `runs resume` answers with the Run it took back (runView), so it hides the same.
+  'runs-resume': RUN,
   'tasks-list': TASK,
   'tasks-add': TASK,
   'tasks-dispatch': TASK_DISPATCH,

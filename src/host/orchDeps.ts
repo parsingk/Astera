@@ -15,6 +15,7 @@ import type { HostSessions } from './sessions'
 import type { HostLocal, HostLocalName } from './spawner'
 import type { HostRolling } from './rolling'
 import type { HostChats } from './hostChats'
+import type { HostWorkUnits } from './hostWorkUnits'
 import { chatPendingOf, type ChatPrompt, type ChatPromptList } from '../core/sessions/chatRead'
 
 /** What the Host answers out of itself. `runningSessions` and `appVersion` look like app questions
@@ -27,7 +28,9 @@ import { chatPendingOf, type ChatPrompt, type ChatPromptList } from '../core/ses
  *  with the CLI writing straight to the Host, a copy taken in the app can be a state one commit old,
  *  which is the one thing a safety net must not be. Here it goes through the store's own write queue,
  *  so the copy is of the state the command that asked for it just saw. */
-const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVersion', 'backup'] as const
+// `resumeStopWaitMs` is a number, not a call: the Host leaves it unset (RESUME_STOP_WAIT_MS) and only
+// tests set it, so it is never forwarded.
+const OWNED = ['getState', 'setState', 'now', 'log', 'runningSessions', 'appVersion', 'backup', 'resumeStopWaitMs'] as const
 
 /**
  * **Forwarded, and a refusal reaches the caller.** `handleCommand` either awaits these and lets the
@@ -39,8 +42,9 @@ const PROPAGATES = [
   // **The three toggles the app owns.** Each is read as the first thing its command does, before any
   // state is read and before anything has been committed, so a refusal costs nothing but the answer
   // "not now" — which is the truth, and better than telling a person the feature is off when it is
-  // their app that is missing. (`lang` is the fourth of this shape and is *not* here: see HOST_DRIVES.)
-  'browserEnabled', 'handoffEnabled', 'trackingEnabled'
+  // their app that is missing. (`lang` is the fourth of this shape and is *not* here: see HOST_DRIVES.
+  // `trackingEnabled` was the third until E2: see HOST_TRACKS.)
+  'browserEnabled', 'handoffEnabled'
 ] as const
 
 /**
@@ -51,6 +55,9 @@ const PROPAGATES = [
  *
  * All four are async and every one of their results is used by the command that called them, so all
  * four are **PROPAGATES**: a refusal decides that command's outcome and reaches the caller.
+ *
+ * **The three `sessionTasks.*` are the Host's own while it writes workUnits.json** (HOST_TRACKS), and
+ * take this route only while it does not.
  */
 const NESTED = {
   handoffs: ['save'],
@@ -115,6 +122,23 @@ const SWALLOWED = [] as const
  * absent) forwards exactly as before, by SWALLOWED's route.
  */
 const HOST_RESOLVES = ['resolveProjectRoot'] as const
+
+/**
+ * **Answered by the Host's own work units while it is their writer; forwarded otherwise** (E2 §5).
+ * `trackingEnabled` here, and NESTED's three `sessionTasks.*` by the same rule, so an agent session
+ * declares its work with the app closed.
+ *
+ * **The writer, not "an app is attached".** While an attached app keeps the `work-units` duty its own
+ * collector holds the units and the Host's is stopped (it would answer "work unit tracking is off"), so
+ * the question goes to the app, as before E2, PROPAGATES' way: an app that cannot be asked answers
+ * CONFLICT. The writer is asked once per dependency call, before anything is called (a session-task
+ * command makes two: the toggle, then the declaration).
+ *
+ * **A settings file the Host cannot read** (`RepairNeeded`) is flagged with its file, as
+ * LOCAL_WHEN_ABSENT flags one: only the app can repair it. A Host built without work units
+ * (`workUnits` absent or null: no spawner) forwards exactly as before.
+ */
+const HOST_TRACKS = ['trackingEnabled'] as const
 
 /**
  * **Called as a bare statement — nobody holds the result.**
@@ -399,7 +423,7 @@ const MARKS_AFTER_ACTING = new Set<HostLocalName>(['removeWorktrees', 'makeRunWo
 const QUIET_ABSENT: ReadonlySet<string> = new Set(['chatPending', 'chatTurn'])
 
 const DEGRADING = Object.keys(DEGRADES) as (keyof typeof DEGRADES)[]
-const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...FIRE_AND_FORGET, ...HOST_ROLLS, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT, ...HOST_CHATS]
+const REMOTE = [...HOST_LOCAL, ...PROPAGATES, ...SWALLOWED, ...HOST_RESOLVES, ...HOST_TRACKS, ...FIRE_AND_FORGET, ...HOST_ROLLS, ...HOST_DRIVES, ...DEGRADING, ...LOCAL_WHEN_ABSENT, ...HOST_WHEN_ABSENT, ...HOST_CHATS]
 
 /** Not forwarded through the generic funnel at all (fix round 1, I1): `discardRunWorktree` is built by
  *  hand inside `hostOrchDeps` (its own `const discardRunWorktree`, further down, right before it is
@@ -412,7 +436,9 @@ const NOT_FORWARDED = [
   'coordinatorIdle',
   'dispatchTask',
   'createSession',
-  'journalTimeline'
+  'journalTimeline',
+  'github',
+  'readUnderstanding'
 ] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -424,6 +450,7 @@ type Classified =
   | (typeof PROPAGATES)[number]
   | (typeof SWALLOWED)[number]
   | (typeof HOST_RESOLVES)[number]
+  | (typeof HOST_TRACKS)[number]
   | (typeof FIRE_AND_FORGET)[number]
   | (typeof HOST_ROLLS)[number]
   | HostDrivesName
@@ -460,6 +487,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   runningSessions: false,
   appVersion: false,
   backup: true,
+  resumeStopWaitMs: false,
   // HOST_LOCAL — the same values these names had in PROPAGATES and SWALLOWED before S2 (the six), and
   // in PROPAGATES before S3 (the three worktree names).
   startWorker: true,
@@ -475,6 +503,7 @@ const EFFECTFUL: Record<Classified, boolean> = {
   browserRun: true,
   browserEnabled: false,
   handoffEnabled: false,
+  // HOST_TRACKS: a toggle, on either route (it was PROPAGATES before E2).
   trackingEnabled: false,
   // HOST_RESOLVES — a question about what is already there, on either route.
   resolveProjectRoot: false,
@@ -536,7 +565,14 @@ const EFFECTFUL: Record<Classified, boolean> = {
   createSession: true,
   // NOT_FORWARDED as well (Host journal J7, P10): the Host's own journal read for `runs-follow`, never
   // the app's. A read of a file this Host holds; it leaves nothing outside the call.
-  journalTimeline: false
+  journalTimeline: false,
+  // NOT_FORWARDED as well (MCP P2-B): the Host's own gh runner and worktree registry, passed through
+  // whole, never the app's. This flag is never read for a name outside `REMOTE`: the writes through it
+  // are marked member by member where `hostOrchDeps` builds it (its `const github`).
+  github: false,
+  // NOT_FORWARDED as well (MCP P2-C): a read of this Host's profile's understanding.json, never the
+  // app's. It never writes the file and leaves nothing outside the call.
+  readUnderstanding: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -607,7 +643,7 @@ export function hostOrchDeps(a: {
   withdrawEffect?(): void
   /** `listAccounts` answered from the profile's accounts.json (LOCAL_WHEN_ABSENT). Rejects when the
    *  file cannot be read, with a message that says how to repair it. */
-  readAccounts(provider?: Provider): Promise<OrchAccount[]>
+  readAccounts(provider?: Provider, opts?: { withDefault?: boolean }): Promise<OrchAccount[]>
   /** `listRunConfigs` answered from the profile's run-configs.json and the project folder
    *  (LOCAL_WHEN_ABSENT). Rejects when the file cannot be read, with a message that says how to repair it. */
   readRunConfigs(projectPath: string): Promise<OrchRunConfig[]>
@@ -643,6 +679,17 @@ export function hostOrchDeps(a: {
   /** The Host journal's rows for one Run's timeline (J7, P10), `hostJournal.timeline`. Absent (a Host
    *  with no journal): `runs-follow` shows the state's events only. */
   journalTimeline?(runId: string, state: OrchState): JobEvent[]
+  /** GitHub through the Host's gh (MCP P2-B): the runner and the Host's worktree registry. Absent: the
+   *  `github-*` commands answer 409, as a caller that is not the Host. */
+  github?: OrchServerDeps['github']
+  /** How It Works records (MCP P2-C): this Host's profile's understanding.json, read per call. Absent:
+   *  the `understanding-*` commands answer 409, as a caller that is not the Host. */
+  readUnderstanding?: OrchServerDeps['readUnderstanding']
+  /** The Host's own session work units (HOST_TRACKS, E2 §5), asked whether it is their writer at every
+   *  call. Null or absent (no spawner): `trackingEnabled` and `sessionTasks.*` only forward, as before. */
+  workUnits?: (Pick<HostWorkUnits, 'isWriter' | 'trackingEnabled'> & {
+    sessionTasks: Pick<HostWorkUnits['sessionTasks'], 'start' | 'complete' | 'cancel'>
+  }) | null
 }): OrchServerDeps {
   const refusal = (name: string): AppUnreachable =>
     new AppUnreachable(`APP_REQUIRED: ${name} needs the Astera app running`)
@@ -990,8 +1037,8 @@ export function hostOrchDeps(a: {
    * started it, is asked, best-effort. Never flagged as the app being required: the command has
    * already decided its answer (the slot it kept), and this only tidies up.
    */
-  const stopCoordinator = async (sessionId: string): Promise<void> => {
-    if (a.local?.stopSession?.(sessionId)) return
+  const stopCoordinator = async (sessionId: string, reason?: string): Promise<void> => {
+    if (a.local?.stopSession?.(sessionId, reason)) return
     if (!a.hasApp()) {
       a.log(`coordinator ${sessionId} could not be stopped: this Host does not hold it and no app is attached`)
       return
@@ -1043,6 +1090,26 @@ export function hostOrchDeps(a: {
     }
   }
 
+  /**
+   * **The github dep, with its writes marked** (MCP P2-B). `github-pr-create` and `github-ci-rerun`
+   * act on GitHub and commit nothing, so without a mark here their receipt is never kept and a keyed
+   * retry opens a second pull request or reruns CI again. Marked **before** the call, as the `act`
+   * funnel marks: a push or a gh call that failed part way may still have landed. The writes are
+   * `createPr` (a push, then `gh pr create`) and a `gh run rerun` through the runner; every other
+   * member and runner call only reads.
+   */
+  const github = a.github && {
+    ...a.github,
+    run: (args: string[], cwd: string) => {
+      if (args[0] === 'run' && args[1] === 'rerun') a.onEffect?.()
+      return a.github!.run(args, cwd)
+    },
+    createPr: (req: Parameters<NonNullable<OrchServerDeps['github']>['createPr']>[0]) => {
+      a.onEffect?.()
+      return a.github!.createPr(req)
+    }
+  }
+
   /** HOST_RESOLVES: the Host's own resolver when no app is attached or the Host drives, else the app,
    *  and the Host again when that app cannot be asked. A failure is thrown as it is, never flagged:
    *  the command layer swallows it (see HOST_RESOLVES). */
@@ -1062,8 +1129,45 @@ export function hostOrchDeps(a: {
     }
   }
 
+  /** HOST_TRACKS: the Host's own work units while they are the writer, asked once per dependency call; null otherwise. */
+  const writingUnits = () => {
+    const w = a.workUnits
+    return w && w.isWriter() ? w : null
+  }
+  const forwardTracking = forward('trackingEnabled', true)
+  const trackingEnabled = async (): Promise<unknown> => {
+    const w = writingUnits()
+    if (!w) return forwardTracking()
+    try {
+      return await w.trackingEnabled()
+    } catch (err) {
+      if (err instanceof RepairNeeded) a.onAppRequired('trackingEnabled', err.message, { repair: err.file })
+      throw err
+    }
+  }
+  /** One `sessionTasks.*` method on HOST_TRACKS' route. Marked once it acted, or once it threw (it may
+   *  have been past its write), and never over an `{ ok: false }`, which the collector answers before
+   *  it changes anything — as `repairOnce` is marked. */
+  const hostTracks = (method: 'start' | 'complete' | 'cancel') => {
+    const fallback = forward(`sessionTasks.${method}`, true)
+    return async (...args: unknown[]): Promise<unknown> => {
+      const w = writingUnits()
+      if (!w) return fallback(...args)
+      let result: unknown
+      try {
+        result = await (w.sessionTasks[method] as (...xs: unknown[]) => Promise<unknown>)(...args)
+      } catch (err) {
+        if (EFFECTFUL.sessionTasks) a.onEffect?.()
+        throw err
+      }
+      if (EFFECTFUL.sessionTasks && (result as { ok?: unknown } | null)?.ok !== false) a.onEffect?.()
+      return result
+    }
+  }
+
   const remote = Object.fromEntries(
     REMOTE.map((name) => {
+      if (name === 'trackingEnabled') return [name, trackingEnabled]
       if (name === 'makeRunWorktree') {
         const make = hostLocal(name)
         return [
@@ -1112,7 +1216,12 @@ export function hostOrchDeps(a: {
   const nested = Object.fromEntries(
     Object.entries(NESTED).map(([group, methods]) => [
       group,
-      Object.fromEntries((methods as readonly string[]).map((m) => [m, forward(`${group}.${m}`, true)]))
+      Object.fromEntries(
+        (methods as readonly string[]).map((m) => [
+          m,
+          group === 'sessionTasks' ? hostTracks(m as 'start' | 'complete' | 'cancel') : forward(`${group}.${m}`, true)
+        ])
+      )
     ])
   )
   return {
@@ -1133,6 +1242,8 @@ export function hostOrchDeps(a: {
     ...(a.dispatchTask ? { dispatchTask } : {}),
     ...(a.createSession ? { createSession } : {}),
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
+    ...(github ? { github } : {}),
+    ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),

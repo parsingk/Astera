@@ -11,6 +11,7 @@ import {
   HOST_FEATURE_PING,
   HOST_FEATURE_ORCH,
   HOST_FEATURE_REQUESTS,
+  HOST_FEATURE_MCP,
   HOST_YIELD_ORCH_STATE_LATEST,
   ORCH_STATE_PUSH_MS,
   type ClientMessage,
@@ -23,6 +24,7 @@ import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { pidLives } from '../core/host/pidFile'
 import { privateDirProblem } from '../core/host/socketDir'
 import { hostProof } from '../core/host/hostKey'
+import { mcpClientOf, mcpRemoteOf, type McpClient } from '../core/continuity/actor'
 
 /** Thrown by `startHostServer` when another Host already answers at this address. The entry point
  *  turns it into a quiet exit: losing the race is the normal outcome of two apps starting at once. */
@@ -36,7 +38,7 @@ export const UNSAFE_ADDRESS_DIR = 'astera-host: the address directory is not pri
  *  connection in turn, never reused while it runs, so two clients of the same role can be told apart
  *  without handing the socket itself out. */
 export interface ClientRef {
-  role: 'app' | 'cli'
+  role: 'app' | 'cli' | 'mcp'
   socket: number
   /** Whether this socket has said hello on this protocol (review of Task 1). A mark made for one that
    *  has not is never released: close runs `onClientGone` only for a greeted socket. */
@@ -279,9 +281,12 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    *  `'legacy-app'` is a hello with no role: an app 1.3.25 or older (LEGACY_APP_NOTICE). It counts
    *  for `hasApp`, `appKeeps` and `appsKeep`, is never sent `orch-act`, and reaches `onMessage`,
    *  `onClientGone` and `orch-call` as `'cli'`, so no door that only an app may use opens for it. */
-  const roles = new Map<net.Socket, 'app' | 'legacy-app' | 'cli'>()
+  const roles = new Map<net.Socket, 'app' | 'legacy-app' | 'cli' | 'mcp'>()
   /** The role the hooks and the command layer hear: a legacy app is a `'cli'` to them (see `roles`). */
-  const outwardRole = (s: net.Socket): 'app' | 'cli' => (roles.get(s) === 'app' ? 'app' : 'cli')
+  const outwardRole = (s: net.Socket): 'app' | 'cli' | 'mcp' => {
+    const r = roles.get(s)
+    return r === 'app' ? 'app' : r === 'mcp' ? 'mcp' : 'cli'
+  }
   /** `lastAppPid`: the pid of the last app hello that carried one, until a probe finds it dead (see
    *  `HostServer.lastAppPid`). */
   let lastAppPid: number | null = null
@@ -289,6 +294,12 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
    *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
   const yields = new Map<net.Socket, ReadonlySet<string>>()
+  /** The MCP client each `mcp` socket's hello named, cleaned on arrival (MCP spec §29). Written and
+   *  deleted beside `roles`; a socket of any other role never has one. */
+  const mcpClients = new Map<net.Socket, McpClient>()
+  /** The HTTP caller's address each `mcp` socket's hello named, cleaned on arrival (MCP HTTP design §5).
+   *  Kept beside `mcpClients`, the same way; a stdio `mcp` socket never has one. */
+  const mcpRemotes = new Map<net.Socket, string>()
   /** Every connected socket by its number, so `yieldsOf` can answer for the number `exits` keeps.
    *  Set when the number is handed out and deleted in `gone`. */
   const socketByNo = new Map<number, net.Socket>()
@@ -412,6 +423,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     const r = roles.get(s)
     return (r === 'app' || r === 'legacy-app') && !s.destroyed
   }
+  /** An MCP client reads only the answers to its own calls (MCP design §2), so no fan-out writes to
+   *  it: an MCP link lives for hours, and every terminal's output and every state push would reach it. */
+  const isMcp = (s: net.Socket): boolean => roles.get(s) === 'mcp'
   /** Wraps `deps.onAppsChanged` so a caller's throw costs the handshake or close it rode in on
    *  nothing — logged instead, the same as `onClientGone`'s own guard below. */
   const tellAppsChanged = (): void => {
@@ -495,11 +509,18 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // forever (protocol.ts's `hello` has the whole reason). A role that is neither is a CLI.
           const wasApp = isApp(socket)
           const wasLegacy = roles.get(socket) === 'legacy-app'
-          roles.set(socket, m.role === 'app' ? 'app' : m.role === undefined ? 'legacy-app' : 'cli')
+          roles.set(socket, m.role === 'app' ? 'app' : m.role === 'mcp' ? 'mcp' : m.role === undefined ? 'legacy-app' : 'cli')
           if (roles.get(socket) === 'legacy-app' && !wasLegacy) deps.log.write(LEGACY_APP_NOTICE)
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
+          // The client names itself, so it is cleaned here whatever the sender did (never trust the wire).
+          const client = roles.get(socket) === 'mcp' ? mcpClientOf(m.client) : undefined
+          if (client) mcpClients.set(socket, client)
+          else mcpClients.delete(socket)
+          const remote = roles.get(socket) === 'mcp' ? mcpRemoteOf(m.remote) : undefined
+          if (remote) mcpRemotes.set(socket, remote)
+          else mcpRemotes.delete(socket)
           if (roles.get(socket) === 'app' && typeof m.pid === 'number' && Number.isSafeInteger(m.pid) && m.pid > 0) lastAppPid = m.pid
           if (isApp(socket) || wasApp) tellAppsChanged()
           send({
@@ -519,10 +540,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             // with no `orch` can neither run a command nor remember having run it. Announcing it
             // unconditionally would tell a caller that its presented `--request-id` protects a call
             // that is never answered at all.
+            // HOST_FEATURE_MCP too: the MCP gate lives in `createHostOrch`, so it rides the same condition.
             features: [
               HOST_FEATURE_PROC,
               HOST_FEATURE_PING,
-              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS] : []),
+              ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_FEATURE_MCP] : []),
               ...(deps.features ?? [])
             ],
             // Only while one is attached, so `astera host status` can say so (LEGACY_APP_NOTICE).
@@ -540,6 +562,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
               deps.log.write(`onAppGreeted failed: ${String(err)}`)
             }
           }
+          return
+        }
+        // **An MCP socket may send `hello`, `ping` and `orch-call`, and nothing else** (MCP design §2).
+        // Placed after the hello branch and before every other one, so `retire`, `orch-acted` and the
+        // pty and proc messages `onMessage` serves are all out of its reach, not only the ones listed
+        // today. Dropped, not answered: it is not a client of those.
+        if (roles.get(socket) === 'mcp' && m?.t !== 'ping' && m?.t !== 'orch-call') {
+          deps.log.write(`an MCP socket sent ${String(m?.t)} — dropped`)
           return
         }
         if (m?.t === 'ping') {
@@ -572,13 +602,18 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // said hello must hear nothing, here the same as everywhere else `send` is used directly
           // instead of through `broadcast`.
           if (!greetedSockets.has(socket)) return
+          const client = mcpClients.get(socket)
+          const remote = mcpRemotes.get(socket)
           const from: OrchCaller = {
             role: outwardRole(socket),
+            socket: socketNo,
+            ...(client ? { client } : {}),
+            ...(remote ? { remote } : {}),
             toOthers: (msg) => {
               const line = lazyLine(msg)
               // The sender holds this state already; anything older held for it would put it back.
               if (msg.t === 'orch-state') dropState(socket)
-              for (const s of greetedSockets) if (s !== socket && !s.destroyed) writeTo(s, msg, line)
+              for (const s of greetedSockets) if (s !== socket && !s.destroyed && !isMcp(s)) writeTo(s, msg, line)
             }
           }
           void deps.orch
@@ -635,6 +670,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const role = outwardRole(socket)
       roles.delete(socket)
       yields.delete(socket)
+      mcpClients.delete(socket)
+      mcpRemotes.delete(socket)
       dropState(socket)
       stateLanes.delete(socket)
       if (wasGreeted && wasApp) tellAppsChanged()
@@ -762,7 +799,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     broadcast: (m, to) => {
       const line = lazyLine(m)
       for (const s of greetedSockets) {
-        if (s.destroyed) continue
+        if (s.destroyed || isMcp(s)) continue
         if (to && !to(yields.get(s) ?? new Set<string>())) continue
         writeTo(s, m, line)
       }
@@ -789,6 +826,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         greetedSockets.clear()
         roles.clear()
         yields.clear()
+        mcpClients.clear()
+        mcpRemotes.clear()
         socketByNo.clear()
         // Destroying a socket fires its 'close' asynchronously, so the refusals `gone` sends would
         // arrive after this Host has already gone. Refused here instead, while there is still

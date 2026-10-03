@@ -17,7 +17,10 @@ import {
   HOST_FEATURE_COORDINATOR_IDLE,
   HOST_FEATURE_CHAT_TAKEOVER,
   HOST_FEATURE_SLACK_OWNER,
-  HOST_FEATURE_JOURNAL
+  HOST_FEATURE_JOURNAL,
+  HOST_FEATURE_UNDERSTANDING,
+  HOST_FEATURE_WORK_UNITS,
+  HOST_FEATURE_MCP_HTTP
 } from '../../core/host/protocol'
 
 /** True only when the Host's version is readable and strictly older than the app's. A version that
@@ -128,6 +131,16 @@ export function hostSpeaksJournal(status: {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_JOURNAL)
 }
 
+/** The connected Host writes How It Works records (E1 §2). Read by hostSpeaksJournal's rule, at each
+ *  greeting; appUnderstanding keeps that answer until the next one. */
+export function hostSpeaksUnderstanding(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_UNDERSTANDING)
+}
+
 /** The connected Host exchanges usage-limit block records (S6 D4): the app sends its registry's changes
  *  and absorbs the Host's `blocks` pushes. Read live, by hostSpeaksRolling's rule: an unresponsive Host
  *  still rolls, so what it is told still matters to it once it answers. An older Host is sent nothing. */
@@ -153,4 +166,21 @@ export function hostSpeaksRollJournal(status: { connected: boolean; features: re
  *  older Host is never asked, and its answer is unknown. */
 export function hostSpeaksCoordinatorIdle(status: { connected: boolean; features: readonly string[] }): boolean {
   return status.connected && status.features.includes(HOST_FEATURE_COORDINATOR_IDLE)
+}
+
+/** The connected Host detects session work units and writes workUnits.json (E2 §3). Read by
+ *  hostSpeaksJournal's rule, at each greeting; appWorkUnits keeps that answer until the next one. */
+export function hostSpeaksWorkUnits(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_WORK_UNITS)
+}
+
+/** The connected Host supervises the MCP HTTP entrance and answers the app-only `mcp-http-status` and
+ *  `mcp-http-reload` (MCP HTTP design §3). **Connected only**, as for the roll journal: the settings
+ *  screen needs the answers. An older Host is asked nothing, and the screen says it needs the current one. */
+export function hostSpeaksMcpHttp(status: { connected: boolean; features: readonly string[] }): boolean {
+  return status.connected && status.features.includes(HOST_FEATURE_MCP_HTTP)
 }

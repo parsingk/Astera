@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { orchAccountOf, readAccountEntries, readAccountsFile } from './accountsFile'
+import { orchAccountOf, orchAccountsFor, readAccountEntries, readAccountsFile } from './accountsFile'
 import { RepairNeeded } from '../settings/repairNeeded'
 
 let dir: string
@@ -92,5 +92,48 @@ describe('a corrupt accounts.json', () => {
       expect(err).toBeInstanceOf(RepairNeeded)
       expect((err as RepairNeeded).file).toBe('accounts.json')
     }
+  })
+})
+
+describe('readAccountsFile with a login probe', () => {
+  // The default is the earliest registered account that is logged in, per provider (defaultAccountIdOf).
+  it('marks each provider\'s default, and only it', async () => {
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        accounts: [
+          account({ id: 'cl1', createdAt: '2026-01-01T00:00:00.000Z' }),
+          account({ id: 'cl2', createdAt: '2026-01-02T00:00:00.000Z' }),
+          account({ id: 'cx1', provider: 'codex', createdAt: '2026-01-03T00:00:00.000Z' })
+        ]
+      }),
+      'utf8'
+    )
+    const loggedIn = async (a: { id: string }): Promise<boolean> => a.id !== 'cl1'
+    expect(await readAccountsFile(file, undefined, loggedIn)).toEqual([
+      { id: 'cl1', label: '일', provider: 'claude' },
+      { id: 'cl2', label: '일', provider: 'claude', default: true },
+      { id: 'cx1', label: '일', provider: 'codex', default: true }
+    ])
+    expect(await readAccountsFile(file, 'codex', loggedIn)).toEqual([{ id: 'cx1', label: '일', provider: 'codex', default: true }])
+  })
+
+  it('a probe that fails counts as logged out', async () => {
+    await fs.writeFile(file, JSON.stringify({ accounts: [account({ id: 'cl1' })] }), 'utf8')
+    expect(await readAccountsFile(file, undefined, async () => Promise.reject(new Error('keychain')))).toEqual([
+      { id: 'cl1', label: '일', provider: 'claude' }
+    ])
+  })
+})
+
+describe('orchAccountsFor', () => {
+  // A forwarded `listAccounts(undefined, { withDefault })` reaches the app with null for the provider.
+  it('a null provider is no filter, as an omitted one is', async () => {
+    const all = [account({ id: 'cl1' }), account({ id: 'cx1', provider: 'codex' })] as never[]
+    expect(await orchAccountsFor(all, null, async () => true)).toEqual([
+      { id: 'cl1', label: '일', provider: 'claude', default: true },
+      { id: 'cx1', label: '일', provider: 'codex', default: true }
+    ])
+    expect(orchAccountsFor(all, 'codex')).toEqual([{ id: 'cx1', label: '일', provider: 'codex' }])
   })
 })

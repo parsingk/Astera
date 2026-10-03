@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { justFinished } from './runRecord'
-import type { OrchState } from './state'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import { justFinished, runRecordInputOf } from './runRecord'
+import { foldsCaseHere } from '../testPaths'
+import { createJob, createTask, emptyState, jobOf, startJobRun, type OrchState } from './state'
 
 const state = (tasks: { runId: string; status: string; consecutiveFailures?: number }[]): OrchState =>
   ({
@@ -45,5 +46,107 @@ describe('justFinished', () => {
     const before = state([{ runId: 'r1', status: 'dispatched' }])
     const after = state([{ runId: 'r1', status: 'failed', consecutiveFailures: 1 }])
     expect(justFinished(before, after)).toEqual([])
+  })
+})
+
+describe('runRecordInputOf', () => {
+  const finished = (): { s: OrchState; runId: string } => {
+    const job = createJob(emptyState(), { objective: 'x'.repeat(70), cwd: 'D:/p' }, '2026-10-02T10:00:00.000Z')
+    if (!job.ok) throw new Error(job.error)
+    const run = startJobRun(job.state, job.value.id, '2026-10-02T10:00:00.000Z')
+    if (!run.ok) throw new Error(run.error)
+    let s = run.state
+    for (const title of ['a', 'b']) {
+      const t = createTask(s, { runId: run.value.id, title, spec: 's', deps: [] }, '2026-10-02T10:00:00.000Z')
+      if (!t.ok) throw new Error(t.error)
+      s = t.state
+    }
+    const files = [['src/a.ts', 'src/b.ts'], ['src/b.ts']]
+    s = { ...s, tasks: s.tasks.map((t, i) => ({ ...t, status: 'completed', filesModified: files[i] })) } as OrchState
+    return { s, runId: run.value.id }
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // The app's inline construction in ipc.ts before it moved here, field for field.
+  it('builds what the app built inline, with the Job cwd as the project', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-02T11:00:00.000Z'))
+    const { s, runId } = finished()
+    const run = s.runs.find((r) => r.id === runId)!
+    const tasks = s.tasks.filter((t) => t.runId === runId)
+    const job = jobOf(s, run)!
+    expect(runRecordInputOf(s, runId)).toEqual({
+      projectPath: job.cwd,
+      runId,
+      jobName: job.objective.slice(0, 60),
+      objective: job.objective,
+      at: '2026-10-02T11:00:00.000Z',
+      taskIds: tasks.map((t) => t.id),
+      tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
+      changedFiles: ['src/a.ts', 'src/b.ts'],
+      validation: { status: 'passed' }
+    })
+  })
+
+  it('a failed Run is validation failed', () => {
+    const { s, runId } = finished()
+    const failed = { ...s, tasks: s.tasks.map((t, i) => (i === 0 ? { ...t, status: 'failed', consecutiveFailures: 3 } : t)) } as OrchState
+    expect(runRecordInputOf(failed, runId)?.validation).toEqual({ status: 'failed' })
+  })
+
+  it('a Run with its own worktree gives that folder as workDir', () => {
+    const { s, runId } = finished()
+    const withWt = { ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p/.wt/r1' } : r)) } as OrchState
+    const input = runRecordInputOf(withWt, runId)!
+    expect(input.workDir).toBe('D:/p/.wt/r1')
+    expect(input.projectPath).toBe('D:/p')
+  })
+
+  it('a Run without a worktree, or one whose worktree is the project folder, has no workDir', () => {
+    const { s, runId } = finished()
+    expect(runRecordInputOf(s, runId)).not.toHaveProperty('workDir')
+    const same = { ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p' } : r)) } as OrchState
+    expect(runRecordInputOf(same, runId)).not.toHaveProperty('workDir')
+  })
+
+  // A parallel Run: its tasks ran in Task worktrees, and the Run worktree holds no work.
+  const withDispatches = (s: OrchState, runId: string, cwds: (string | null)[]): OrchState => {
+    const tasks = s.tasks.filter((t) => t.runId === runId)
+    const dispatches = cwds.map((cwd, i) => ({
+      id: `d${i}`,
+      taskId: tasks[i % tasks.length].id,
+      cwd: cwd ?? 'D:/p/.wt/open',
+      startedAt: '2026-10-02T10:00:00.000Z',
+      ...(cwd !== null ? { endedAt: '2026-10-02T10:30:00.000Z' } : {})
+    }))
+    return {
+      ...s,
+      runs: s.runs.map((r) => (r.id === runId ? { ...r, worktree: 'D:/p/.wt/r1' } : r)),
+      dispatches
+    } as unknown as OrchState
+  }
+
+  it('when every finished dispatch ran in one other folder, that folder is workDir', () => {
+    const { s, runId } = finished()
+    // the open dispatch (null: not finished) does not count
+    const st = withDispatches(s, runId, ['D:/p/.wt/t1', 'd:/P/.wt/T1', null])
+    const expected = foldsCaseHere ? 'D:/p/.wt/t1' : 'D:/p/.wt/r1'
+    expect(runRecordInputOf(st, runId)?.workDir).toBe(expected)
+    expect(runRecordInputOf(withDispatches(s, runId, ['D:/p/.wt/t1', 'D:/p/.wt/t1']), runId)?.workDir).toBe('D:/p/.wt/t1')
+  })
+
+  it('when finished dispatches ran in different folders, or there are none, the run root is workDir', () => {
+    const { s, runId } = finished()
+    expect(runRecordInputOf(withDispatches(s, runId, ['D:/p/.wt/t1', 'D:/p/.wt/t2']), runId)?.workDir).toBe('D:/p/.wt/r1')
+    expect(runRecordInputOf(withDispatches(s, runId, []), runId)?.workDir).toBe('D:/p/.wt/r1')
+  })
+
+  it('no Run, or a Run with no Job, builds nothing', () => {
+    const { s, runId } = finished()
+    expect(runRecordInputOf(s, 'nope')).toBeNull()
+    expect(runRecordInputOf({ ...s, jobs: [] }, runId)).toBeNull()
   })
 })

@@ -73,7 +73,7 @@ export interface HostLocal {
   /** Kills the pty of this session when this Host's registry holds it, and answers whether it did
    *  (Task 1 fix round 1, I2: a coordinator the hand-over must stop). Optional, and not a
    *  HostLocalName: `hostOrchDeps` builds `stopCoordinator` by hand over it. */
-  stopSession?(sessionId: string): boolean
+  stopSession?(sessionId: string, reason?: string): boolean
   /** Whether this call is the Host's to answer (R1). */
   owns(name: HostLocalName, args: unknown[]): boolean
 }
@@ -122,6 +122,9 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  true busy, false idle, null for a session whose output never carried a title here. The raw
    *  BusyScanner value, as the app's loop reads its own busyState. */
   sessionBusy(sessionId: string): boolean | null
+  /** Each change of that verdict, true or false, once per edge (E2 §4: the Host's work units open and
+   *  close a session's git attribution window on it). A listener that throws is logged. */
+  onBusyChanged(cb: (sessionId: string, busy: boolean) => void): void
   /** Writes into the live pty of this session. False when the registry holds no live pty for it. */
   typeInto(sessionId: string, text: string): boolean
   /** True from the moment `closeAndSettle` is called (R15): the driver starts nothing after that. */
@@ -269,6 +272,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   let lookSeq = 0
   const spawnedCbs: Array<(info: SessionInfo, account: Account) => void> = []
   const locatedCbs: Array<(sessionId: string, codexSessionId: string, rolloutPath: string) => void> = []
+  const busyCbs: Array<(sessionId: string, busy: boolean) => void> = []
   /** Each listener on its own: one that throws must not keep the others from hearing, nor fail a spawn
    *  whose pty is already running. */
   const tell = <A extends unknown[]>(what: string, cbs: Array<(...a: A) => void>, ...a: A): void => {
@@ -325,7 +329,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     tails.push(m.id, data)
     let b = busyOf.get(m.id)
     if (!b) busyOf.set(m.id, (b = { scanner: new BusyScanner(), busy: false }))
+    const was = b.busy
     b.busy = b.scanner.push(data)
+    if (b.busy !== was) tell('busy-changed', busyCbs, m.id, b.busy)
   })
   registry.onExit((ptyId) => {
     const m = registry.metaOf(ptyId)
@@ -736,11 +742,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
         throw !trace.opened && err instanceof Error ? refusedBeforeActing(err) : err
       }
     }),
-    stopSession: (sessionId) => {
+    stopSession: (sessionId, reason) => {
       const p = registry.sessionPty(sessionId)
       if (!p) return false
       registry.kill(p)
-      log(`coordinator ${sessionId} stopped: another coordinator already manages its Run`)
+      log(`coordinator ${sessionId} stopped${reason === undefined ? '' : `: ${reason}`}`)
       return true
     },
     releaseWorker: async ({ dispatchId }) => {
@@ -825,12 +831,19 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     onRolloutLocated: (cb) => {
       locatedCbs.push(cb)
     },
+    onBusyChanged: (cb) => {
+      busyCbs.push(cb)
+    },
     retarget: ({ dispatchId, sessionId, previousSessionId }) => {
       startedOn.set(dispatchId, sessionId)
-      tails.start({ dispatchId, sessionId, previousSessionId }, (id) => {
-        const x = d.getState().dispatches.find((y) => y.id === id)
-        return x === undefined || x.endedAt !== undefined || x.outcome !== undefined
-      })
+      tails.start(
+        { dispatchId, sessionId, previousSessionId },
+        (id) => {
+          const x = d.getState().dispatches.find((y) => y.id === id)
+          return x === undefined || x.endedAt !== undefined || x.outcome !== undefined
+        },
+        (id) => d.getState().dispatches.find((y) => y.id === id)?.endedAt !== undefined
+      )
     }
   }
 }

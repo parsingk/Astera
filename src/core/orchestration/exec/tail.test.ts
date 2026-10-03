@@ -54,12 +54,20 @@ describe('WorkerTails', () => {
     expect(t.read('dsp_1')).toBe('line1\nline2\nline3')
   })
 
+  // The cut keeps whole lines (MCP P1 final review M4): see "a tail cut at the cap" below.
   it('캡을 넘기면 앞이 버려진다', () => {
+    const t = new WorkerTails(9)
+    t.start({ dispatchId: 'dsp_1', sessionId: 'sess_A' }, never)
+    t.push('sess_A', 'ab\ncd\n')
+    t.push('sess_A', 'ef\ngh\n')
+    expect(t.read('dsp_1')).toBe('cd\nef\ngh')
+  })
+
+  it('a tail one line longer than the cap reads as empty text, not as no output yet', () => {
     const t = new WorkerTails(10)
     t.start({ dispatchId: 'dsp_1', sessionId: 'sess_A' }, never)
-    t.push('sess_A', 'abcdefgh')
-    t.push('sess_A', 'IJKLMN')
-    expect(t.read('dsp_1')).toBe('efghIJKLMN')
+    t.push('sess_A', 'x'.repeat(30))
+    expect(t.read('dsp_1')).toBe('')
   })
 
   describe('dispatch 키잉 — 재사용 세션 (리뷰 I2)', () => {
@@ -90,9 +98,9 @@ describe('WorkerTails', () => {
       t.start({ dispatchId: 'dsp_A', sessionId: 'sess_S' }, never)
       t.push('sess_S', 'AAAA')
       t.start({ dispatchId: 'dsp_B', sessionId: 'sess_S' }, never)
-      t.push('sess_S', 'BBBBBBBBBBBB')
+      t.push('sess_S', 'B1\nB2\nB3\nB4\n')
       expect(t.read('dsp_A')).toBe('AAAA')
-      expect(t.read('dsp_B')).toBe('BBBBBBBB')
+      expect(t.read('dsp_B')).toBe('B3\nB4')
     })
 
     it('서로 다른 세션도 각자의 dispatch로 갈린다', () => {
@@ -206,6 +214,47 @@ describe('WorkerTails', () => {
       t.push('s', lines.join('\n'))
       expect(t.read('d').split('\n')).toHaveLength(TAIL_DEFAULT_LIMIT)
       expect(t.read('d').split('\n')[0]).toBe('line10')
+    })
+  })
+
+  // A person typing into a finished worker's terminal is not that worker's output.
+  it('stops appending once the dispatch has ended', () => {
+    const ended = new Set<string>()
+    const t = new WorkerTails()
+    const hasEndedAt = (id: string): boolean => ended.has(id)
+    // The eviction predicate counts an unknown dispatch as ended; the push uses its own.
+    t.start({ dispatchId: 'dsp_1', sessionId: 'sess_A' }, always, hasEndedAt)
+    t.push('sess_A', 'work\n')
+    ended.add('dsp_1')
+    t.push('sess_A', 'typed afterwards\n')
+    expect(t.read('dsp_1')).toBe('work')
+    // A new dispatch on the same session still gets its own output.
+    t.start({ dispatchId: 'dsp_2', sessionId: 'sess_A' }, always, hasEndedAt)
+    t.push('sess_A', 'next worker\n')
+    expect(t.read('dsp_2')).toBe('next worker')
+  })
+
+  // The cap's cut can fall inside a secret, and its tail alone matches no pattern.
+  describe('a tail cut at the cap begins on a whole line', () => {
+    const nl = String.fromCharCode(10)
+    it('drops the partial first line the cut leaves', () => {
+      const t = new WorkerTails(16)
+      t.start({ dispatchId: 'd', sessionId: 's' }, never)
+      t.push('s', `key sk-abcdefghij${nl}`)
+      t.push('s', `next${nl}last${nl}`)
+      expect(t.read('d')).toBe(`next${nl}last`)
+    })
+    it('keeps the first line when the cut falls just after a line break', () => {
+      const t = new WorkerTails(9)
+      t.start({ dispatchId: 'd', sessionId: 's' }, never)
+      t.push('s', `old${nl}next${nl}last`)
+      expect(t.read('d')).toBe(`next${nl}last`)
+    })
+    it('a tail that was never cut keeps its first line', () => {
+      const t = new WorkerTails(100)
+      t.start({ dispatchId: 'd', sessionId: 's' }, never)
+      t.push('s', `first${nl}second`)
+      expect(t.read('d')).toBe(`first${nl}second`)
     })
   })
 })

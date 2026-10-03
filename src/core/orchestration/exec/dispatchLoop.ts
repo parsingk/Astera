@@ -38,7 +38,8 @@ import { reapableChildRuns } from '../reap'
 import { lostAttemptOf } from '../../recovery/candidates'
 import { slotsToFill, tasksMissingAccounts, type Slot } from '../schedule'
 import { coordinatorStarting, jobOf, type OrchState } from '../state'
-import { DEFAULT_CONCURRENCY, FAILURE_LIMIT } from '../types'
+import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun } from '../types'
+import { tasksOwnedBy } from '../running'
 import { outcomeOf } from '../view'
 import type { Integration } from './integrateGit'
 
@@ -66,6 +67,29 @@ export const COORDINATOR_STOP_RETRY_MAX_MS = 10 * 60_000
  *  each time. Giving up is logged once and is in memory only: the slot and its pending mark stay, so a
  *  restart or a new driver asks again, and a session later known to be gone is still released. */
 export const COORDINATOR_STOP_RETRY_CAP_TRIES = 6
+/** How long a finished manual Run keeps its coordinator, counted from the later of the Run finishing and
+ *  the last time a person typed into that session (the user's decision of 2026-10-02). Ten minutes: long
+ *  enough to read the coordinator's closing summary or ask it a follow-up, and a follow-up starts the
+ *  count again; short enough that a finished Run does not keep its sessions, and with them the Host,
+ *  alive for good. A scheduled Run gets none, since nothing watches it. */
+export const FINISHED_RUN_GRACE_MS = 10 * 60_000
+/** How long past FINISHED_RUN_GRACE_MS a busy session still holds off its end. A person's follow-up
+ *  rarely takes an hour; the busy state is a terminal title spinner that never ages out, so a spinner
+ *  still up after that is read as hung, and the session is ended anyway. */
+export const FINISHED_RUN_BUSY_CAP_MS = 60 * 60_000
+
+/** One session's resend backoff: how many sends, when the next may go, how many waited the cap, and
+ *  whether it was given up on (LP-1/2). */
+type Retry = { tries: number; nextAt: number; capped: number; gaveUp: boolean }
+
+/** The entry after one more send: the wait doubles from `COORDINATOR_STOP_RETRY_MS` up to
+ *  `COORDINATOR_STOP_RETRY_MAX_MS`, and each send that waits the cap is counted toward giving up. */
+const nextTry = (prev: Retry | undefined, nowMs: number): { entry: Retry; wait: number } => {
+  const tries = (prev?.tries ?? 0) + 1
+  const wait = Math.min(COORDINATOR_STOP_RETRY_MS * 2 ** (tries - 1), COORDINATOR_STOP_RETRY_MAX_MS)
+  const capped = (prev?.capped ?? 0) + (wait === COORDINATOR_STOP_RETRY_MAX_MS ? 1 : 0)
+  return { entry: { tries, nextAt: nowMs + wait, capped, gaveUp: false }, wait }
+}
 
 export interface DispatchLoopContext {
   /** handleCommand under this process's own caller id (the app's UI_CALLER, the Host's HOST_CALLER). */
@@ -88,6 +112,11 @@ export interface DispatchLoopContext {
   /** true busy, false idle, null cannot tell. */
   sessionBusy(sessionId: string): boolean | null
   typeInto(sessionId: string, text: string): void
+  /** When a person last typed into the session, in ms since the epoch, or null when this process has
+   *  not seen it (FINISHED_RUN_GRACE_MS). Only a person's typing: never this loop's own `typeInto`, a
+   *  prompt a spawn or a roll types, or a terminal's own reports. In memory, so a restart forgets it.
+   *  Optional: without it the grace counts from the Run's finish alone. */
+  lastPersonInputAt?(sessionId: string): number | null
   /** Asked on entry and again before each slot (§4.3). */
   mayStart(): boolean
   log(m: string): void
@@ -185,17 +214,46 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  `COORDINATOR_STOP_RETRY_MS`, then twice as long each time up to `COORDINATOR_STOP_RETRY_MAX_MS`.
    *  A refusal and a throw are retried the same way, until `COORDINATOR_STOP_RETRY_CAP_TRIES` stops at
    *  the cap have gone unanswered, then it gives up with one log line (LP-1/2). **In memory on purpose**: the pending mark is what
-   *  survives a restart or a change of driver, and a new driver's first pass sends the stop at once. */
-  const stopRetry = new Map<string, { tries: number; nextAt: number; capped: number; gaveUp: boolean }>()
+   *  survives a restart or a change of driver, and a new driver's first pass sends the stop once the
+   *  mark is `COORDINATOR_STOP_RETRY_MS` old (at once for an older one). A mark with no entry here is
+   *  timed from the mark itself, so a stop a command has just sent is not sent again by the next pass. */
+  const stopRetry = new Map<string, Retry>()
+  /** The same backoff for `worker-release` of a finished Run's idle worker, by session id: a release
+   *  whose session lives on is sent again, first after `COORDINATOR_STOP_RETRY_MS`, then twice as long
+   *  each time, and given up on after `COORDINATOR_STOP_RETRY_CAP_TRIES` at the cap. An entry goes once
+   *  its session is no longer alive. In memory: a restart or a new driver asks again. */
+  const releaseRetry = new Map<string, Retry>()
+
+  /** Whether a finished Run's session may be ended now (FINISHED_RUN_GRACE_MS): at once for a scheduled
+   *  Job's Run, otherwise once the grace has passed since the later of the Run's finish and the last time
+   *  a person typed into that session. The finish is the latest `updatedAt` of the Run's Tasks: the
+   *  commit that made the last one terminal stamps it, and nothing on the Run records the moment. A later
+   *  edit of a finished Task moves it on, which only waits longer.
+   *
+   *  **Not mid-turn, for up to an hour** (fix round 1, then the controller's ruling): the grace counts
+   *  from the last input, so a session still answering a person's follow-up past it is busy, and is
+   *  left until it is idle, or until FINISHED_RUN_BUSY_CAP_MS past the grace. A busy state this
+   *  process cannot tell (null) falls back to the time rule. `run-coordinator-stop` asks no idle state
+   *  for a finished Run, so this is the one place that asks. */
+  const graceOver = (s: OrchState, run: JobRun, sessionId: string, nowMs: number): boolean => {
+    if (jobOf(s, run)?.schedule !== undefined) return true
+    const finishedAt = Math.max(...tasksOwnedBy(s, run.id).map((t) => Date.parse(t.updatedAt)))
+    const typedAt = c.lastPersonInputAt?.(sessionId) ?? null
+    const since = nowMs - Math.max(finishedAt, typedAt ?? finishedAt)
+    if (since < FINISHED_RUN_GRACE_MS) return false
+    // The busy veto, bounded: past FINISHED_RUN_BUSY_CAP_MS a spinner still up is read as hung.
+    return c.sessionBusy(sessionId) !== true || since >= FINISHED_RUN_GRACE_MS + FINISHED_RUN_BUSY_CAP_MS
+  }
 
   /**
-   * **A scheduled Job's Run that has finished gets its coordinator stopped** (the user's U4 of
-   * 2026-09-25). Otherwise every fire leaves one more coordinator looping on `check --wait` for good.
-   * A finished Run is one whose outcome is no longer `running` (every Task done, view.ts). Only a Job
-   * with a schedule: a manual `jobs run` Run keeps its coordinator, since a person may be reading its
-   * tab (the controller's ruling on U4's scope). **A slot marked `coordinatorStopPending` is sent
-   * again too** (L1), whatever its Run's outcome: a fire's replacement leaves that Run paused and
-   * unfinished.
+   * **A Run that has finished gets its coordinator stopped** (the user's U4 of 2026-09-25, widened to
+   * every Run on 2026-10-02). Otherwise every fire leaves one more coordinator looping on `check --wait`
+   * for good, and a finished manual Run keeps its session, and with it the Host, alive with nothing an
+   * MCP client can call to end it (e2e "Fourth run"). A finished Run is one whose outcome is no longer
+   * `running` (every Task done, view.ts). A scheduled Job's Run is stopped at once; any other waits out
+   * `graceOver`, since a person may be reading its tab or asking it a follow-up. **A slot marked
+   * `coordinatorStopPending` is sent again too** (L1), whatever its Run's outcome: a fire's replacement
+   * leaves that Run paused and unfinished.
    *
    * **Only the process that drives does it.** The caller has asked `mayStart` just before, and this
    * asks again before each stop, so the app and the Host never both stop one coordinator. The stop and
@@ -213,8 +271,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       if (sessionId === undefined) continue
       const pending = run.coordinatorStopPending !== undefined
       if (!pending) {
-        if (jobOf(s, run)?.schedule === undefined) continue
         if (outcomeOf(s, run.id) === 'running') continue
+        if (!graceOver(s, run, sessionId, c.nowMs())) continue
       }
       // **A session this process knows has ended is the stop confirmed** (L1): its exit was never heard
       // (no exit release came), so nothing else would ever empty the slot, and a stop sent to it goes
@@ -233,6 +291,14 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       const nowMs = c.nowMs()
       const retry = stopRetry.get(sessionId)
       if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
+      // **A mark this loop did not send waits out its interval from the mark itself** (2026-10-01):
+      // `runs stop` and `run-coordinator-stop` from a caller stop the session and write the mark, which
+      // leaves no backoff entry here, and the commit's own pass resent the stop 12 ms later. A mark
+      // older than the interval (one left by an earlier process) still goes out at once.
+      if (!retry && pending) {
+        const markedAt = Date.parse(run.coordinatorStopPending!)
+        if (Number.isFinite(markedAt) && nowMs < markedAt + COORDINATOR_STOP_RETRY_MS) continue
+      }
       if (!c.mayStart()) return
       // LP-1/2: after COORDINATOR_STOP_RETRY_CAP_TRIES stops at the cap, one log line and no more stops.
       if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
@@ -243,12 +309,14 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         )
         continue
       }
-      const tries = (retry?.tries ?? 0) + 1
-      const wait = Math.min(COORDINATOR_STOP_RETRY_MS * 2 ** (tries - 1), COORDINATOR_STOP_RETRY_MAX_MS)
-      const capped = (retry?.capped ?? 0) + (wait === COORDINATOR_STOP_RETRY_MAX_MS ? 1 : 0)
-      stopRetry.set(sessionId, { tries, nextAt: nowMs + wait, capped, gaveUp: false })
+      const { entry, wait } = nextTry(retry, nowMs)
+      const tries = entry.tries
+      stopRetry.set(sessionId, entry)
       const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
-      const what = tries === 1 ? `scheduled run=${run.id} finished` : `run=${run.id} (stop attempt ${tries})`
+      const what =
+        tries === 1
+          ? `${jobOf(s, run)?.schedule !== undefined ? 'scheduled ' : ''}run=${run.id} finished`
+          : `run=${run.id} (stop attempt ${tries})`
       try {
         const r = await c.handle('run-coordinator-stop', { run: run.id })
         log(
@@ -258,6 +326,69 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         )
       } catch (e) {
         log(`${what}, and stopping its coordinator ${sessionId} failed: ${String(e)}${again}`)
+      }
+    }
+  }
+
+  /**
+   * **A finished Run's idle workers are released** (the user's decision of 2026-10-02). A worker reports
+   * and then waits (the guide's rule, so a follow-up can reach it), and only `worker-release` ends its
+   * session; that is the coordinator's to send, and once the Run has finished nothing sent it (e2e
+   * "Fourth run": the converged Run's worker stayed alive beside its coordinator). So the driving loop
+   * sends it, under the coordinator's grace (`graceOver`), for each Dispatch of a finished Run that is
+   * closed, not retained (`worker-retain` is a person's "keep it", never overridden here), the latest
+   * owner of its session (`releaseArgsFor`'s rule: a reused session is the later Dispatch's), and whose
+   * session is still alive. `worker-release` and not `worker-stop`: it only ends the session, where
+   * `worker-stop` would rewrite a closed Dispatch's ending. Driving process only, asked before each one;
+   * a failure is logged and never thrown (R14).
+   */
+  const releaseIdleWorkers = async (): Promise<void> => {
+    /** Whether `dispatchId` is, in `s`, an idle worker of the finished Run `runId`. */
+    const idleIn = (s: OrchState, runId: string, dispatchId: string): boolean => {
+      if (outcomeOf(s, runId) === 'running') return false
+      const d = s.dispatches.find((x) => x.id === dispatchId)
+      if (!d || d.retained || (!d.outcome && !d.endedAt)) return false
+      if (!tasksOwnedBy(s, runId).some((t) => t.id === d.taskId)) return false
+      const owners = s.dispatches.filter((x) => x.sessionId === d.sessionId)
+      return owners[owners.length - 1]?.id === d.id
+    }
+    const s = c.getState()
+    for (const id of [...releaseRetry.keys()]) if (!c.sessionAlive(id)) releaseRetry.delete(id)
+    for (const run of s.runs) {
+      if (outcomeOf(s, run.id) === 'running') continue
+      for (const d of s.dispatches) {
+        if (!idleIn(s, run.id, d.id)) continue
+        // **Asked again on the state as it is now** (fix round 1): each release below awaits, and a Run
+        // reopened, a Dispatch reused or a worker retained meanwhile must not lose its session to the
+        // snapshot this pass started from.
+        const current = c.getState()
+        const now = current.runs.find((r) => r.id === run.id)
+        if (!now || !idleIn(current, run.id, d.id)) continue
+        if (!c.sessionAlive(d.sessionId)) continue
+        const nowMs = c.nowMs()
+        if (!graceOver(current, now, d.sessionId, nowMs)) continue
+        const retry = releaseRetry.get(d.sessionId)
+        if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
+        if (!c.mayStart()) return
+        if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+          retry.gaveUp = true
+          log(`run=${run.id}: gave up releasing its worker ${d.sessionId} (dispatch ${d.id}) after ${retry.tries} attempts`)
+          continue
+        }
+        const { entry, wait } = nextTry(retry, nowMs)
+        releaseRetry.set(d.sessionId, entry)
+        const what = `run=${run.id} finished: its idle worker ${d.sessionId} (dispatch ${d.id})`
+        const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
+        try {
+          const r = await c.handle('worker-release', { dispatch: d.id })
+          log(
+            r.status >= 400
+              ? `${what} was not released: ${JSON.stringify(r.body)}${again}`
+              : `${what} was released${again}`
+          )
+        } catch (e) {
+          log(`${what} could not be released: ${String(e)}${again}`)
+        }
       }
     }
   }
@@ -281,10 +412,11 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     }
   }
 
-  /** The coordinator housekeeping: the stale start marks (L2), then the stops due (U4, L1). Run from the
-   *  pass and from the timer's `nudge`, since the app runs the pass only on commits and a stop to retry
-   *  or a mark to drop comes due with nothing committed. One at a time: a second call while one is under
-   *  way does nothing, and the backoff keeps the next one from repeating a stop just sent. */
+  /** The coordinator housekeeping: the stale start marks (L2), then the stops due (U4, L1), then the
+   *  finished Runs' idle workers. Run from the pass and from the timer's `nudge`, since the app runs the
+   *  pass only on commits and a stop to retry, a mark to drop or a grace that ran out comes due with
+   *  nothing committed. One at a time: a second call while one is under way does nothing, and the backoff
+   *  keeps the next one from repeating a stop just sent. */
   let tidying = false
   const tidyCoordinators = async (): Promise<void> => {
     if (tidying) return
@@ -294,6 +426,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       await clearStaleStartMarks()
       if (!c.mayStart()) return
       await stopFinishedCoordinators()
+      if (!c.mayStart()) return
+      await releaseIdleWorkers()
     } finally {
       tidying = false
     }
@@ -731,7 +865,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       // 세션을 닫고 `git worktree remove` 를 함께 돌리게 된다. 운전하지 않는 프로세스는 일을 하지 않는다.
       // 앱에서는 mayStart 가 언제나 참이므로(orch 는 한 번 서면 내려가지 않는다) 앱의 동작은 그대로다.
       if (!c.mayStart()) return
-      // U4: 끝난 예약 회차의 코디네이터를 세우고(L1: 확인될 때까지 다시), 낡은 기동 표시를 걷는다(L2).
+      // U4: finished Runs' coordinators are stopped (a manual Run's after its grace; L1: again until
+      // confirmed), and stale start marks are dropped (L2).
       // 회수보다 앞이다.
       await tidyCoordinators()
       if (!c.mayStart()) return

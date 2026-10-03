@@ -7,6 +7,7 @@ import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
 import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { createHostOrch } from './orch'
+import { hostFeatures } from './features'
 import { HOST_PROTOCOL, HOST_YIELD_ORCH_STATE_LATEST, ORCH_STATE_PUSH_MS, type ClientMessage, type HostMessage } from '../core/host/protocol'
 import { emptyState } from '../core/orchestration/state'
 import { versionOnlyOrchCall, AppUnreachable } from '../core/host/orchProtocol'
@@ -162,7 +163,7 @@ const start = async (
   /** Connects, completes the handshake, and hands back something to send with and read replies from.
    *  `role` is what the handshake announces — the Host sends `orch-act` only to `'app'`, and a hello
    *  with no role at all is read as a CLI (design F12), which the default here leaves testable. */
-  connect(role?: 'app' | 'cli'): Promise<{
+  connect(role?: 'app' | 'cli' | 'mcp'): Promise<{
     send(m: ClientMessage): void
     next(waitMs?: number): Promise<unknown>
     socket: net.Socket
@@ -200,7 +201,7 @@ describe('startHostServer', () => {
   it('answers a hello on the same protocol with its own version and pid', async () => {
     const h = await server()
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch', 'requests'] })
+    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch', 'requests', 'mcp'] })
     expect((reply as { startedAt: string }).startedAt).toMatch(/^\d{4}-/)
   })
 
@@ -476,6 +477,62 @@ describe('startHostServer', () => {
     expect(seen).toContain('pty-list')
   })
 
+  // MCP design §2: a socket that said role 'mcp' may send hello, ping and orch-call, and nothing else.
+  describe('an MCP socket reaches only hello, ping and orch-call', () => {
+    it("its retire does not stop the Host", async () => {
+      const h = await start({ liveCounts: () => ({ sessions: 0, runs: 0 }) })
+      const client = await h.connect('mcp')
+      client.send({ t: 'retire' })
+      await new Promise((r) => setTimeout(r, 150))
+      expect(h.stopped).toBe(false)
+    })
+    it('its pty message is not handed to onMessage, while a cli socket still reaches it', async () => {
+      const seen: string[] = []
+      const h = await start({ onMessage: (m) => { seen.push(m.t); return true } })
+      const mcp = await h.connect('mcp')
+      mcp.send({ t: 'pty-list' } as never)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual([])
+      const cli = await h.connect('cli')
+      cli.send({ t: 'pty-list' } as never)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual(['pty-list'])
+    })
+    it('still answers its ping', async () => {
+      const h = await start()
+      const mcp = await h.connect('mcp')
+      mcp.send({ t: 'ping', seq: 7 })
+      expect(await mcp.next()).toEqual({ t: 'pong', seq: 7 })
+    })
+    // An MCP link lives for hours; it reads nothing pushed, so it is sent no terminal output and no state.
+    it('is sent no broadcast, while a cli socket is', async () => {
+      const h = await start()
+      const mcp = await h.connect('mcp')
+      const cli = await h.connect('cli')
+      h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
+      expect(await cli.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
+      expect(await mcp.next(150)).toBeUndefined()
+    })
+    it("is sent no other caller's state push, and still gets its own orch-result", async () => {
+      const h = await start({
+        orch: {
+          call: async ({ from }) => {
+            from?.toOthers({ t: 'pty-data', id: 'p1', data: 'pushed to the others' })
+            return { status: 200, body: { ok: true } }
+          }
+        }
+      })
+      const mcp = await h.connect('mcp')
+      const cli = await h.connect('cli')
+      cli.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+      expect(await cli.next()).toMatchObject({ t: 'orch-result', call: 'c1', status: 200 })
+      expect(await mcp.next(150)).toBeUndefined()
+      mcp.send({ t: 'orch-call', call: 'c2', cmd: 'version', args: {} })
+      expect(await mcp.next()).toMatchObject({ t: 'orch-result', call: 'c2', status: 200 })
+      expect(await cli.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'pushed to the others' })
+    })
+  })
+
   // A Host holding a terminal must not leave when the app closes: that terminal is the whole reason
   // the Host exists (slice 2 design §2.2).
   it('does not leave on the idle timer while something is holding it', async () => {
@@ -540,10 +597,102 @@ describe('startHostServer', () => {
     expect((reply as { features: string[] }).features).not.toContain('requests')
   })
 
+  it('announces the mcp feature when it answers orch-call', async () => {
+    const h = await server()
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
+    expect((reply as { features: string[] }).features).toContain('mcp')
+  })
+
+  it('hands an mcp hello to the command layer as role mcp', async () => {
+    const roles: (string | undefined)[] = []
+    const base = versionOnlyOrchCall({ version: '9.9.9' })
+    const h = await start({
+      orch: {
+        ...base,
+        call: async (c) => {
+          roles.push(c.from?.role)
+          return base.call(c)
+        }
+      }
+    })
+    const client = await h.connect('mcp')
+    client.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+    await client.next()
+    expect(roles).toEqual(['mcp'])
+  })
+
+  // MCP spec §29: the client an MCP hello names reaches the command layer, cleaned again here (the
+  // wire is not trusted), and only from an mcp socket.
+  it("hands an mcp hello's client to the command layer, cleaned, and no client from a cli hello", async () => {
+    const clients: unknown[] = []
+    const base = versionOnlyOrchCall({ version: '9.9.9' })
+    const h = await start({
+      orch: {
+        ...base,
+        call: async (c) => {
+          clients.push(c.from?.client)
+          return base.call(c)
+        }
+      }
+    })
+    const hello = async (extra: Record<string, unknown>): Promise<{ send(m: ClientMessage): void; next(waitMs?: number): Promise<unknown> }> => {
+      const sock = await h.connectSilent()
+      const chan = messageChannel(sock)
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...extra } as ClientMessage)
+      await chan.next()
+      return chan
+    }
+    const named = await hello({ role: 'mcp', client: { name: 'claude-code\n<x>', version: '1.2.3', extra: 'dropped' } })
+    named.send({ t: 'orch-call', call: 'c1', cmd: 'version', args: {} })
+    await named.next()
+    const junk = await hello({ role: 'mcp', client: { name: 7 } })
+    junk.send({ t: 'orch-call', call: 'c2', cmd: 'version', args: {} })
+    await junk.next()
+    const cli = await hello({ role: 'cli', client: { name: 'claude-code' } })
+    cli.send({ t: 'orch-call', call: 'c3', cmd: 'version', args: {} })
+    await cli.next()
+    expect(clients).toEqual([{ name: 'claude-codex', version: '1.2.3' }, undefined, undefined])
+  })
+
+  // MCP HTTP design §5: the HTTP caller's address an mcp hello carries reaches the command layer, cleaned,
+  // and only from an mcp socket.
+  it("hands an mcp hello's remote to the command layer, and no remote from a cli hello or a stdio mcp hello", async () => {
+    const remotes: unknown[] = []
+    const base = versionOnlyOrchCall({ version: '9.9.9' })
+    const h = await start({
+      orch: {
+        ...base,
+        call: async (c) => {
+          remotes.push(c.from?.remote)
+          return base.call(c)
+        }
+      }
+    })
+    const call = async (extra: Record<string, unknown>, id: string): Promise<void> => {
+      const sock = await h.connectSilent()
+      const chan = messageChannel(sock)
+      chan.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...extra } as ClientMessage)
+      await chan.next()
+      chan.send({ t: 'orch-call', call: id, cmd: 'version', args: {} })
+      await chan.next()
+    }
+    await call({ role: 'mcp', client: { name: 'c' }, remote: '192.168.0.7\n' }, 'c1')
+    await call({ role: 'mcp', client: { name: 'c' } }, 'c2')
+    await call({ role: 'cli', remote: '192.168.0.7' }, 'c3')
+    expect(remotes).toEqual(['192.168.0.7', undefined, undefined])
+  })
+
   it('announces the extra features it was given, after the built-in ones', async () => {
     const h = await server({ features: ['spawn'] })
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'spawn'])
+    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'mcp', 'spawn'])
+  })
+  // MCP HTTP §3 (Ruling 2): the hello of a Host built as index.ts builds it tells the app it answers mcp-http-*.
+  // One Host per test (one address); features.test.ts covers the spawner half.
+  it('announces mcp-http in the hello of a Host without a spawner', async () => {
+    const h = await server({ features: hostFeatures({ spawns: false }) })
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }])
+    expect((reply as { features: string[] }).features).toContain('mcp-http')
   })
   it('tells onMessage which client sent it, by role and a per-connection number', async () => {
     const seen: Array<{ t: string; role: string; socket: number }> = []

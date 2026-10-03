@@ -6,7 +6,7 @@ import path from 'node:path'
 import { hostAddress } from '../../host/address'
 import { startHostServer, type HostServer } from '../../host/server'
 import { encodeLine, createLineReader } from '../../host/framing'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_SLACK, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_SLACK, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
 import { hostSpeaksDispatch } from './outdated'
 import { hostProof } from '../../core/host/hostKey'
@@ -295,7 +295,7 @@ describe('HostClient', () => {
     const c = new HostClient({ hostKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await waitFor(() => host.got.some((m) => m.t === 'hello'))
-    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual([HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_SLACK])
+    expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toEqual([HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_SLACK])
     expect((host.got.find((m) => m.t === 'hello') as { yields?: string[] }).yields).toContain('slack')
     await c.stop()
     await host.close()
@@ -624,7 +624,9 @@ describe('HostClient', () => {
       await settled(c, (s) => s.unresponsive)
       expect(c.status()).toMatchObject({ connected: false, unresponsive: true, pid: 4242 })
       expect(c.status().problem).toContain('stopped answering')
-      expect(h.got.filter((m) => m.t === 'ping').length).toBeGreaterThanOrEqual(3)
+      // Waited for, not read at once: the client reaches its verdict as it sends the third ping, and
+      // that ping still has to cross the socket to this peer.
+      await waitFor(() => h.got.filter((m) => m.t === 'ping').length >= 3)
       // A late answer is the one thing that takes the state back — which is why the pings do not stop.
       //
       // **Caught as the status change, not polled.** This peer never answers the pings after it, so the

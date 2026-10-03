@@ -12,8 +12,11 @@ import { toast } from '../lib/toast'
  *  옆의 체크박스가 그 동의이고 기본으로 켜져 있으며, 끄면 예전처럼 한 줄을 보여 준다. 제거는 그 항목만 뺀다.
  *
  *  같은 settings-row + settings-hint 모양을 쓴다(App.tsx 의 토글들). 상태를 스스로 읽고 쓴다 —
- *  이 값을 읽는 곳이 여기뿐이다. */
-export function CliSettings(): React.JSX.Element {
+ *  이 값을 읽는 곳이 여기뿐이다.
+ *
+ *  `onStatus` hands each value it holds (the first read, then each Install and Uninstall reply) to
+ *  the MCP lines below it (McpSettings), which need to know whether the command is installed and where. */
+export function CliSettings({ onStatus }: { onStatus?: (s: CliInstallStatus) => void } = {}): React.JSX.Element {
   const { t } = useI18n()
   const [status, setStatus] = useState<CliInstallStatus | null>(null)
   const [busy, setBusy] = useState(false)
@@ -23,12 +26,18 @@ export function CliSettings(): React.JSX.Element {
     void window.api.cli.status().then(setStatus)
   }, [])
 
+  useEffect(() => {
+    if (status) onStatus?.(status)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- follows the value, not the callback's identity
+  }, [status])
+
   const install = async (): Promise<void> => {
     setBusy(true)
     try {
       const next = await window.api.cli.install({ addToPath: status?.canEditUserPath === true && addToPath })
       setStatus(next)
       if (next.userPathError) toast.error(t('settings.cli.pathFailed', { detail: next.userPathError }))
+      else if (next.userPathTooLong) toast.error(t('settings.cli.pathTooLong.toast'))
       else toast.success(t(next.userPath === 'added' ? 'settings.cli.installed.pathAdded.toast' : 'settings.cli.installed.toast'))
     } catch (err) {
       toast.error(
@@ -90,7 +99,9 @@ export function CliSettings(): React.JSX.Element {
           {/* 설치되기 전에는 PATH 이야기를 하지 않는다 — 아직 넣을 것이 없는 폴더다. */}
           {status.installed && (
             <span className="settings-hint">
-              {status.onPath ? t('settings.cli.onPath') : t('settings.cli.pathMissing')}
+              {status.onPath
+                ? t('settings.cli.onPath')
+                : t(status.userPathTooLong ? 'settings.cli.pathTooLong' : 'settings.cli.pathMissing')}
             </span>
           )}
           {/* 설치 응답에만 온다: 설치 폴더 이름이 ASCII 가 아닌데 정션을 못 만들어 .cmd 에 진짜 경로를 적었다. */}
@@ -99,7 +110,8 @@ export function CliSettings(): React.JSX.Element {
               {t('settings.cli.cmdRawPath', { detail: status.warnings.map((w) => w.detail).join('; ') })}
             </span>
           )}
-          {status.installed && !status.onPath && (
+          {/* Not when the user Path is too long: the line would add to it and leave it out of new shells. */}
+          {status.installed && !status.onPath && !status.userPathTooLong && (
             <div className="cli-path-hint">
               <code>{status.hint}</code>
               <button onClick={() => void navigator.clipboard.writeText(status.hint)}>

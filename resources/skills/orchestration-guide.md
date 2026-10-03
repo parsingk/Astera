@@ -52,12 +52,30 @@ from anyone. `--auto` also arms a start gate (`pendingStart`): such a Run holds 
 clears it, which is the app's "Run" button in the job detail window. So a Run made this way does
 nothing at all until that command lands. This guide does not document how to do that on purpose, but nothing at the CLI's own
 argument parser stops you from passing them anyway (it accepts any `--flag value` for any command).
-**A Run someone laid out in the app may be handed to you.** When the person presses Run on a Job they
-built in the sidebar, the app starts a coordinator session — possibly you — and gives it that Run.
-Such a Run comes with its Tasks, their dependencies, their accounts and their validation settings
-already set. Run them as they stand: do not create Tasks, do not rewrite their specs, and do not
-reassign their accounts. If the plan looks wrong, raise it with the person through `gate-create`
-rather than editing around it. Your first prompt says which Run it is and repeats its limits.
+**A Run of a Job may be handed to you.** When a Job with a coordinator account is run (the person
+presses Run in the sidebar, or `jobs run`, MCP `run_job` or a schedule starts it), Astera starts a
+coordinator session — possibly you — and gives it that Run. Your first prompt says which Run it is,
+how many Tasks it already has, and repeats its limits. **You plan and place; you do not change
+files.** Your session runs in the project folder itself, not this Run's worktree. Read files to plan,
+but every edit, build or commit is done by a worker, through a Task. Two cases:
+- **It came with Tasks.** Their dependencies, their accounts and their validation settings are
+  already set. Run them as they stand: do not create Tasks, do not rewrite their specs, and do not
+  reassign their accounts. If the plan looks wrong, or the Tasks plainly do not cover the objective
+  (a coordinator before you may have been stopped part-way through planning), raise it with the
+  person through `gate-create` rather than editing around it.
+- **It came with no Tasks** (a Job made with `jobs create` or MCP `create_job` carries only its
+  objective). Planning it is your first job: break the objective into a few concrete Tasks with
+  `task-create --run <runId>` (4.2), with `--deps`, an account per Task (the one you run on, which the
+  prompt names, unless the objective names another; one provider per Task), and `--validate` with the
+  Job's run configurations (`run-configs list --job <jobId>`) when there are any; `--review` only when
+  the objective asks for one. Then run them as above. A Gate needs a Task: to ask the person
+  something before any Task exists, create the first Task (the investigation, say) and open the Gate
+  on it. Never ask only in your own terminal: nobody outside the app sees it.
+
+**Once every Task of the Run has finished, Astera ends your session.** It waits 10 minutes from the
+later of the Run finishing and the person's last input into your session (at once for a scheduled
+Job's Run), and releases the Run's idle workers the same way (a retained one is kept). So write your
+closing summary when the last Task lands.
 
 So "the most recently created Run" (which `task-create` with no `--run` attaches to) can already be
 one of these — whether the app made it that way or a coordinator did — and that is exactly the case
@@ -310,7 +328,9 @@ questions list [--task <tsk>] [--status <s>] [--json]
   you to resolve, the same as an unrunnable validation or review (section 2). Only accounts after the
   first are dropped in place like that.
 - **When the person who asked for the Job did not say which account to use, do not pick one for them
-  beyond the one unambiguous case.** Run `accounts --json` (4.3) first, then:
+  beyond the one unambiguous case.** (A coordinator planning a Run handed to it with no Tasks, section
+  1, is the exception: the account it runs on is the default its first prompt names.) Run
+  `accounts --json` (4.3) first, then:
   - exactly one account exists → use it, and say which one you used;
   - they named a provider (or the work plainly requires one) and that provider has exactly one account
     → use it, and say which one;
@@ -364,6 +384,7 @@ accounts [--agent <claude|codex>] [--json]
   yourself has none, so for those the default is still `current`.
 - **`--name <s>` is required with `--worktree new`** — it becomes the branch and directory name of the
   new worktree. Without it the request is rejected with `400 --name is required for --worktree new`.
+  A name longer than 40 characters is cut to 40 (at a `-` near the end when there is one), so keep it short.
   It is unused (ignored) with `--worktree current` or an explicit path.
 - **The placement rule.** Referred to elsewhere in this guide and defined here. A Run's concurrency
   (`jobs get --id <run>`, defaulting to 3) decides where its workers belong:
@@ -895,7 +916,8 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
 - **If there is no follow-up**, clean up with `worker-release --dispatch <dsp>`. Call it after both
   success and failure reports — it is after-the-fact cleanup, not cancellation. Only the session that
   Dispatch owns is closed; a reused session, a session the user took over, and a session whose
-  ownership cannot be proven are all preserved.
+  ownership cannot be proven are all preserved. A worker left unreleased is released by Astera itself
+  after the same 10 minutes once the Run has finished (section 1).
 - **If the user asks to keep it alive for debugging**, `worker-retain --dispatch <dsp>` — it is
   recorded as an exception rather than silently skipped. After that, `worker-stop` is rejected with 409
   and `worker-release` returns `skipped: "retained"` (meaning no session was closed). **There is no
@@ -941,7 +963,8 @@ meaningless and repeats the same failure indefinitely.
   be — ask instead (4.2).
 - Do not exceed a Run's concurrency, and do not put parallel workers in one folder — the placement
   rule (4.3).
-- Do not restructure a Run a person laid out in the app (4.1) — run it as it stands, or open a Gate.
+- Do not restructure a Run handed to you with its Tasks (section 1) — run it as it stands, or open a
+  Gate. A Run handed to you with no Tasks is yours to plan first.
 - Do not move a quota-killed worker **to a different account.** Retry on the same account after
   `limitResetsAt` (section 7).
 - Do not write, edit, or delete a worker's `## Resume briefing` section in its spec file — the app
@@ -1102,8 +1125,8 @@ own Run.**
 - **A coordinator inside its Run keeps using section 4.** `task-create --run`, `worker-start`,
   `check`, `worker-show`, `worker-read` and the rest. `tasks add --run <run>` reaches the same Run, but
   it adds nothing a coordinator needs, and one vocabulary per Run is easier to read back.
-- **A Run someone laid out in the app gets no new Tasks from `tasks add` either** (section 1). Raise a
-  plan you think is wrong with `gate-create`.
+- **A Run handed to you with its Tasks gets no new Tasks from `tasks add` either** (section 1). Raise a
+  plan you think is wrong with `gate-create`. A Run handed to you with none you plan with `task-create`.
 - **A worker uses none of this except `requests show`**, which answers a worker's own lost `send` or
   `ask` the same way (4.10). `jobs create` and `tasks add` go through `run-create` and
   `task-create`, so a worker is refused them with exit `5`, the same boundary as section 6. A worker

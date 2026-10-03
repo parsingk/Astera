@@ -49,6 +49,10 @@ import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
 import { checksForRun } from './runChecks'
+import { completionForRun } from './runCompletion'
+import { taskDetailOf } from './taskDetail'
+import { checkOutputSlice, tailWindow } from './taskOutput'
+import { TAIL_UNTRACKED, TAIL_EMPTY } from './exec/tail'
 import { eventCountFor, timelineWith } from './timeline'
 import { workerDoneFieldError } from './sendArgs'
 import type { SessionState } from '../hooks/sessionState'
@@ -89,8 +93,15 @@ import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
 import { runningRunCount } from './running'
+import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
-import type { JobEvent, RunOutcome } from '../types'
+import type { JobEvent, RunOutcome, WorktreeInfo } from '../types'
+import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
+import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
+import { prForBranch } from '../github/prs'
+import { ISSUE_JOB_ASSOCIATIONS, issueObjective, readIssue } from '../github/issue'
+import { fillFromCommits, type CommitSummary } from '../github/fill'
+import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -100,6 +111,7 @@ import type { Lang } from '../i18n'
 import { isOverrideCompletion, policyOf } from './convergence'
 import { leftNothingBehind } from '../host/orchProtocol'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
+import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
 
 /** One row of `listAccounts`. Named only because the declaration below is a union and repeating the
  *  shape on both sides invites the two halves to drift. */
@@ -107,6 +119,9 @@ export interface OrchAccount {
   id: string
   label: string
   provider: Provider
+  /** Its provider's default account (defaultAccountIdOf). Only when the list was asked for
+   *  `withDefault`: deciding it probes every account's login, so the other callers do not pay for it. */
+  default?: true
 }
 
 /** One run configuration as this layer sees it: what `--validate` takes and what `run-configs`
@@ -142,12 +157,16 @@ export interface HostSession {
 /** What `sessions read` shows: a terminal session's scrollback replayed into a terminal at the size
  *  the tab has (host/sessions.ts). `screen` is the visible rows, top first, with the blank rows under
  *  the last painted one dropped; `scrollback` is up to `--lines` rows just above it, oldest first.
- *  Each row is the text in its cells, trailing spaces trimmed. */
+ *  Each row is the text in its cells, trailing spaces trimmed. `screenWrapped` and `scrollbackWrapped`
+ *  say, row for row, whether that row continues the one above it (the terminal wrapped a line wider
+ *  than the tab); absent from a Host older than them. */
 export interface SessionScreen {
   cols: number
   rows: number
   screen: string[]
   scrollback: string[]
+  screenWrapped?: boolean[]
+  scrollbackWrapped?: boolean[]
 }
 
 /** What a turn sent to a chat session came to. The app refuses one while the session holds a card
@@ -311,8 +330,11 @@ export interface OrchServerDeps {
   }): Promise<{ sessionId: string }>
   /** Stops a coordinator session `startCoordinator` opened, when the hand-over finds another one
    *  already in the Run's slot (Task 1 fix round 1, I2). Optional: without it that session is left
-   *  running and the command says so in the log. */
-  stopCoordinator?(sessionId: string): Promise<void>
+   *  running and the command says so in the log. `reason` is why, for the log line of whoever stops it. */
+  stopCoordinator?(sessionId: string, reason?: string): Promise<void>
+  /** How long `runs resume` waits for a stopped coordinator's slot to empty before it refuses (review
+   *  fix round 1, I2). Absent means RESUME_STOP_WAIT_MS; tests shorten it. */
+  resumeStopWaitMs?: number
   /** Records a `check --wait` long-poll entering, for this Run and caller session; the returned
    *  function records its exit (final round 2, I-A; checkWaits.ts). Optional: the Host's command server,
    *  where every CLI call is served, wires it; the app serves no session's `check` and does not. */
@@ -340,7 +362,7 @@ export interface OrchServerDeps {
    *  not care which — that is the whole point of the split (host control plane design §5). The union
    *  rather than `Promise<…>` outright: `await` on a plain array is already correct, so the app's
    *  wiring and every test double that returns one stay exactly as they are. */
-  listAccounts(provider?: Provider): OrchAccount[] | Promise<OrchAccount[]>
+  listAccounts(provider?: Provider, opts?: { withDefault?: boolean }): OrchAccount[] | Promise<OrchAccount[]>
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to.
    *  **Orchestration itself has no such toggle**: it is a thing Astera has, like sessions, so the
@@ -557,6 +579,24 @@ export interface OrchServerDeps {
    *  when it holds one, the app's otherwise), its last turn's error, and the prompt it is waiting on.
    *  `undefined` when nobody can say. */
   chatTurn?(id: string): Promise<ChatTurnState | undefined>
+  /** GitHub through the user's gh (MCP P2-B): the runner, and the worktree registry's entry for a
+   *  Run's worktree (its branch, base and repository), or null when the registry does not hold it.
+   *  `worktreeOf` is absent on a Host that never loaded its registry (one with no spawner).
+   *  `github-pr-create`'s three: push then create (`createPullRequest`), the commits the branch adds
+   *  over a base, and the worktree's uncommitted change count (throws when git cannot read it).
+   *  **Only the Host injects it**: gh runs on the Host's PATH and login. Absent, the `github-*`
+   *  commands answer 409. */
+  github?: {
+    run: GhRunner
+    worktreeOf?(path: string): WorktreeInfo | null
+    createPr(req: PrCreateRequest): Promise<PrCreateResult>
+    readCommits(worktree: string, base: string): Promise<CommitSummary[]>
+    isClean(worktree: string): Promise<{ changedCount: number }>
+  }
+  /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
+   *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
+   *  app has the records in its own store and no caller asks it. Absent, `understanding-*` answer 409. */
+  readUnderstanding?(): Promise<StoreShape>
 }
 
 /** A chat session's turn as `chatTurn` reads it. `prompt` is the open prompt, as `chats pending` lists
@@ -582,6 +622,13 @@ export interface SessionCreate {
 
 type Reply = { status: number; body: unknown }
 const okBody = (body: unknown): Reply => ({ status: 200, body })
+/** An optional integer flag within [min, max]; the error text when it is not. */
+const boundedInt = (v: unknown, name: string, min: number, max: number, fallback: number): number | string => {
+  if (v === undefined) return fallback
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < min || v > max)
+    return max === Number.MAX_SAFE_INTEGER ? `--${name} must be an integer >= ${min}` : `--${name} must be an integer from ${min} to ${max}`
+  return v
+}
 const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
 /** 지목한 것이 없다. **400 과 가르는 이유는 CLI 다** — 스크립트가 "인자를 잘못 줬다"(exit 2)와
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
@@ -631,6 +678,10 @@ const releases = (d: Dispatch): boolean => !isPlaceholderSessionId(d.sessionId)
  *
  * `questionsOpen` 을 따로 세는 이유는 status 명령과 같다: 그것만이 **사람을 기다리는** 수이고,
  * 나머지 상태와 달리 사람이 답해야 움직인다.
+ *
+ * One deliberate difference: for a Job with no Run the app's Jobs view (view.ts snapshotFor) keeps
+ * `running`, which its glyph and sort rely on, and shows its "not started" chip from `pendingStart`,
+ * while the CLI/MCP view says `pending` (jobView below).
  */
 const derivedFor = (
   s: OrchState,
@@ -748,7 +799,15 @@ const startable = (tasks: readonly Task[], coordinated: boolean): Set<string> =>
 /** 회차가 없으면 계획의 정의 Task 를 센다 — tasksOwnedBy 가 두 id 를 다 받는다(view.ts). */
 const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record<string, unknown> => ({
   ...job,
-  ...derivedFor(s, run?.id ?? job.id, run ? [run.id] : [])
+  ...derivedFor(s, run?.id ?? job.id, run ? [run.id] : []),
+  // A Job with no Run has started nothing. outcomeOf reads a Task-less owner as running (right for a
+  // Run just made), so without this a Job whose `jobs run` failed read `running` beside
+  // `pendingStart: true` (the e2e check of 2026-10-01). `pending` is JOB_STATES' word for it, and
+  // stateWord reads it as PENDING. The app's sidebar keeps its own row (view.ts) with its
+  // not-started chip, and a scheduled Job still reads SCHEDULED, since stateWord asks that first.
+  ...(run === undefined ? { outcome: 'pending' } : {}),
+  // Its latest Run is paused: the same word runView gives that Run.
+  ...(run?.paused === true ? { outcome: 'paused' } : {})
 })
 
 /**
@@ -839,10 +898,28 @@ const limitedUntil = (s: OrchState, runId: string, now: string): string | null =
   return earliest
 }
 
+/** A paused Run's `outcome` is `paused` (e2e 2026-10-01: `runs stop` left `paused: true` beside
+ *  `outcome: "running"`). outcomeOf reads only the Tasks, so it cannot see the pause. `paused` is the
+ *  JOB_STATES word, and stateWord puts it ahead of the Tasks' outcome, as this does. */
 const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
   ...run,
-  ...derivedFor(s, run.id, [run.id])
+  ...derivedFor(s, run.id, [run.id]),
+  ...(run.paused === true ? { outcome: 'paused' } : {})
 })
+
+/**
+ * The open Dispatches among `ds` whose worker shows a permission prompt now, by id: the hook-event
+ * state `sessions list` reads, with its prompt (host/sessions.ts `sessionTurn`). Only the Host can read
+ * it, so elsewhere this is empty, and so is a session it cannot read. A Codex worker writes no hook
+ * events and never shows here. Read only: a person answers the prompt in Astera.
+ */
+const waitingForApprovalIn = async (deps: OrchServerDeps, ds: readonly Dispatch[]): Promise<Set<string>> => {
+  const turnOf = deps.sessionTurn
+  if (!turnOf) return new Set()
+  const open = ds.filter((d) => !d.outcome && !d.endedAt)
+  const turns = await Promise.all(open.map((d) => turnOf(d.sessionId).catch(() => null)))
+  return new Set(open.filter((_, i) => turns[i]?.prompt === 'permission').map((d) => d.id))
+}
 
 /** Commands only the orchestrator may call. Workers do not need check (the worker preamble uses only
  *  send and ask) — and on top of that the single unacknowledged Delivery is shared per Run with the
@@ -959,12 +1036,64 @@ function projectFilter(s: OrchState, given: unknown): { project: Project | undef
   return project ? { project } : { error: notFound(`no project registered for: ${p}`) }
 }
 
+/** Where a `github-*` command runs gh. A Run's: its worktree, with the branch, base and repository its
+ *  registry entry holds. A project's: its registered root. `gh` is the Host's runner. */
+export type GithubTarget =
+  | { gh: GhRunner; cwd: string; repoPath: string; branch: string; baseRef: string; run: JobRun }
+  | { gh: GhRunner; cwd: string; project: Project }
+
+/**
+ * The `--run` or `--project` of a `github-*` command (MCP P2-B), exactly one of them.
+ *
+ * `--project` is the project's **id** (from `projects list`), unlike a list command's `--project`
+ * folder: the caller is the MCP server, which names projects by id. A Run's branch is its own only
+ * when it works in a worktree the registry still holds; a Run in the project folder, or one whose
+ * entry is gone, has none, and gh is never run for it.
+ */
+export function githubTarget(
+  deps: OrchServerDeps,
+  s: OrchState,
+  args: Record<string, unknown>
+): GithubTarget | { error: Reply } {
+  if (!deps.github) return { error: conflict('GitHub commands are answered by the Astera Host, and this caller is not one') }
+  const gh = deps.github.run
+  if ((args.run === undefined) === (args.project === undefined))
+    return { error: bad('give exactly one of --run (a Run id) or --project (a project id)') }
+  if (args.run !== undefined) {
+    const id = str(args.run)
+    if (id === null) return { error: bad('--run needs a value: a Run id') }
+    const run = s.runs.find((r) => r.id === id)
+    if (!run) return { error: notFound(`unknown run: ${id}`) }
+    const { worktreeOf } = deps.github
+    if (!worktreeOf)
+      return { error: conflict("This Host has not loaded its worktree registry (it starts no sessions), so it cannot find a Run's branch") }
+    const info = run.worktree ? worktreeOf(run.worktree) : null
+    if (!info) return { error: conflict('This Run has no branch of its own') }
+    return { gh, cwd: info.path, repoPath: info.repoPath, branch: info.branch, baseRef: info.baseRef, run }
+  }
+  const id = str(args.project)
+  if (id === null) return { error: bad('--project needs a value: a project id (from `projects list`)') }
+  const project = findProject(s, id)
+  return project ? { gh, cwd: project.path, project } : { error: notFound(`unknown project: ${id}`) }
+}
+
+/** A failed gh call as a reply: not-found 404, something the person must fix (gh missing, not logged
+ *  in) 409, anything else 502, GitHub or gh having failed. The message is `ghFailureSentence`'s. */
+export function ghRefusal(f: GhFailed): Reply {
+  const status = f.kind === 'not-found' ? 404 : f.kind === 'not-installed' || f.kind === 'auth' ? 409 : 502
+  return { status, body: { error: f.message } }
+}
+
 const POLL_MS = 50
 
 /** How long one `runs-follow` call holds before it answers with nothing new (CLI spec §22). The client
  *  asks again at once, so this bounds only how long a poll outlives a client that went away, and how
  *  often an idle follow costs a round trip. `FOLLOW_WINDOW_MAX_MS` caps what a caller may ask for. */
 export const FOLLOW_WINDOW_MS = 20_000
+/** How long `runs resume` waits for the coordinator `runs stop` stopped to be gone: the exit release
+ *  waits EXIT_DEFER_MS (3 s) after the process exits, so a stop that landed has emptied the slot well
+ *  within this. */
+export const RESUME_STOP_WAIT_MS = 10_000
 const FOLLOW_WINDOW_MAX_MS = 60_000
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -1043,7 +1172,9 @@ function parseAccountList(
 
 export async function handleCommand(
   deps: OrchServerDeps,
-  caller: { sessionId: string },
+  /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
+   *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. */
+  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' },
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
@@ -1220,8 +1351,9 @@ export async function handleCommand(
 
   /**
    * **Stops a Run's coordinator that has nothing left to do** (the user's U4 of 2026-09-25). Two
-   * callers: `run-coordinator-stop`, which the driving process's loop sends once a scheduled Job's Run
-   * has finished (and again for a stop still pending), and a fire that replaces an idle-only Run
+   * callers: `run-coordinator-stop`, which the driving process's loop sends once a Run has finished (a
+   * scheduled Job's at once, any other after its grace) and again for a stop still pending, and a fire
+   * that replaces an idle-only Run
    * (`run-spawn --unless-running`), which also passes `pause` to end that unfinished Run the way
    * `runs stop` does.
    *
@@ -1252,7 +1384,7 @@ export async function handleCommand(
     still: (current: OrchState) => boolean = () => true
   ): Promise<'retired' | 'moved' | 'gone'> => {
     try {
-      if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
+      if (deps.stopCoordinator) await deps.stopCoordinator(sessionId, why)
       else deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: nothing here can stop a session`)
     } catch (e) {
       deps.log?.(`coordinator ${sessionId} of run ${runId} could not be stopped: ${String(e)}`)
@@ -1336,7 +1468,9 @@ export async function handleCommand(
           // **`s` 가 아니라 방금 만든 회차가 들어 있는 상태로 묻는다.** `s` 는 명령 진입 시점의
           // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
           // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
-          convergence: policyOf(base, { runId: target.id }) !== null
+          convergence: policyOf(base, { runId: target.id }) !== null,
+          jobId: job.id,
+          accountId
         })
       })
       sessionId = spawned.sessionId
@@ -1399,7 +1533,7 @@ export async function handleCommand(
             `stopping the one this start opened (${sessionId})`
         )
         try {
-          if (deps.stopCoordinator) await deps.stopCoordinator(sessionId)
+          if (deps.stopCoordinator) await deps.stopCoordinator(sessionId, 'another coordinator already manages its Run')
           else deps.log?.(`coordinator ${sessionId} could not be stopped: nothing here can stop a session`)
         } catch (e) {
           deps.log?.(`coordinator ${sessionId} could not be stopped: ${String(e)}`)
@@ -1500,6 +1634,21 @@ export async function handleCommand(
         if (!(await deps.listAccounts()).some((k) => k.id === coordArg))
           return notFound(`unknown account: ${coordArg}`)
         coordinatorAccountId = coordArg
+      }
+      // `--coordinator-provider`: with no `--coordinator-account`, that provider's default account
+      // (defaultAccountIdOf, which listAccounts marks when asked) coordinates. An explicit account wins.
+      // An older app attached to a newer Host returns no default mark, so this fails with the no-account
+      // 400 until the app is updated.
+      const coordProvider = args.coordinatorProvider
+      if (coordProvider !== undefined && coordProvider !== 'claude' && coordProvider !== 'codex')
+        return bad('--coordinator-provider must be claude|codex')
+      if (coordArg === null && coordProvider !== undefined) {
+        const chosen = (await deps.listAccounts(coordProvider, { withDefault: true })).find((k) => k.default === true)
+        if (!chosen)
+          return bad(
+            `no ${coordProvider} account is logged in to coordinate this Job; log one in, or name one from \`accounts list\` with --coordinator-account`
+          )
+        coordinatorAccountId = chosen.id
       }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
@@ -1833,6 +1982,23 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
       if (!run) return notFound(`unknown run: ${id}`)
+      // **A finished Run is left as it is** (e2e 2026-10-01): pausing it turned a converged Run's outcome
+      // into `paused`. Its coordinator and idle workers end on their own after the grace (the driving
+      // loop, FINISHED_RUN_GRACE_MS), which the refusal says first, since an MCP client has no
+      // `run-coordinator-stop`; that command is named for the CLI, to end the coordinator now. `runId`
+      // in the body gives the CLI's nextSteps that Run (cliOutput.ts).
+      const outcome = outcomeOf(s, id)
+      if (outcome !== 'running')
+        return {
+          status: 409,
+          body: {
+            error:
+              `run ${id} is not running: it has ${outcome}. Its coordinator and idle workers end on their own ` +
+              `${FINISHED_RUN_GRACE_MS / 60_000} minutes after the run finished or after a person last typed into them ` +
+              `(a scheduled run's at once); to end the coordinator now: astera run-coordinator-stop --run ${id}`,
+            runId: id
+          }
+        }
       const mine = new Set(s.tasks.filter((t) => t.runId === id).map((t) => t.id))
       const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt && mine.has(d.taskId))
       const retained = open.filter((d) => d.retained)
@@ -1854,7 +2020,13 @@ export async function handleCommand(
         ),
         runs: latest.runs.map((r) => (r.id === id ? { ...r, paused: true } : r))
       })
-      return okBody({ runId: id, stopped: open.length, paused: true })
+      // **The coordinator is stopped too** (the user's decision after the e2e of 2026-10-01): left
+      // running, it kept a stopped Run's session, and with it the Host, alive with no way for an MCP
+      // client to end it. The stop is `run-coordinator-stop`'s own (retireCoordinator): the slot is
+      // kept, marked pending, until the exit release confirms it, and the driving loop resends it.
+      const coordinator = deps.getState().runs.find((r) => r.id === id)?.coordinatorSessionId
+      if (coordinator !== undefined) await retireCoordinator(id, coordinator, 'the run was stopped', true)
+      return okBody({ runId: id, stopped: open.length, paused: true, coordinatorStopped: coordinator !== undefined })
     }
     /** 세워 둔 회차를 다시 돌게 한다. **`runs stop` 이 만든 상태를 푸는 유일한 길이다** —
      *  기존 `run-resume` 은 예약(계획)의 것만 걷고 예약이 아닌 Job 을 거절한다. 되돌릴 수 있다는
@@ -1862,13 +2034,71 @@ export async function handleCommand(
     case 'runs-resume': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
-      return commit(resumeRun(s, id))
+      // **A stopped coordinator still in its slot is waited for** (review fix round 1, I2). For the exit
+      // release's window after `runs stop`, the slot still names the stopped session; resuming then
+      // dropped its pending mark and started nothing, and once that session went the Run ran with no
+      // coordinator. So a paused Run of a coordinator Job whose stop is still pending waits, bounded, for
+      // the slot to empty, and a slot still named after that is a 409 that changes nothing.
+      let base = s
+      const entry = base.runs.find((r) => r.id === id)
+      if (
+        entry?.paused === true &&
+        entry.coordinatorStopPending !== undefined &&
+        entry.coordinatorSessionId !== undefined &&
+        jobOf(base, entry)?.coordinatorAccountId !== undefined &&
+        deps.startCoordinator
+      ) {
+        const stopping = entry.coordinatorSessionId
+        const waited = await pollUntil(
+          () => (deps.getState().runs.find((r) => r.id === id)?.coordinatorSessionId === stopping ? null : true),
+          deps.resumeStopWaitMs ?? RESUME_STOP_WAIT_MS
+        )
+        if (!('value' in waited))
+          return conflict(`run ${id}: the coordinator is still stopping; try again in a moment`)
+        base = deps.getState()
+      }
+      // Answered with the view `runs get` gives (derived fields included); refusals are commit's.
+      const resumed = resumeRun(base, id)
+      const reply = await commit(resumed)
+      if (!resumed.ok || reply.status !== 200) return reply
+      // **A Run `runs stop` paused gets its coordinator back** (the user's decision, 2026-10-01): the
+      // stop ended it, and without one nothing drives a coordinator Job's Run. The same guard and the
+      // same hand-over as the ▶ on a Run row (`run-start` given a run id); the new coordinator's TAKE
+      // STOCK section covers joining part-way. A slot that still names a coordinator whose stop is not
+      // pending (a hand-edited file) is left as it is. A Job with no coordinator account,
+      // or a Run that was not paused, resumes as it always did.
+      const after = deps.getState()
+      const run = after.runs.find((r) => r.id === id)
+      const job = run && jobOf(after, run)
+      if (
+        base.runs.find((r) => r.id === id)?.paused === true &&
+        run &&
+        job?.coordinatorAccountId &&
+        deps.startCoordinator &&
+        run.coordinatorSessionId === undefined &&
+        run.paused !== true &&
+        outcomeOf(after, id) === 'running'
+      ) {
+        const handed = await handToCoordinator(after, job, run, job.coordinatorAccountId, true)
+        if (handed.status < 200 || handed.status >= 300)
+          return { status: handed.status, body: { ...(handed.body as object), runId: id } }
+        const handedState = deps.getState()
+        const withCoordinator = handedState.runs.find((r) => r.id === id)
+        if (withCoordinator) return okBody(runView(handedState, withCoordinator))
+      }
+      return okBody(runView(resumed.state, resumed.value))
     }
     case 'runs-get': {
       const id = str(args.id)
       if (!id) return bad('--id is required')
       const run = s.runs.find((r) => r.id === id)
-      return run ? okBody(runView(s, run)) : notFound(`unknown run: ${id}`)
+      if (!run) return notFound(`unknown run: ${id}`)
+      // How many of its Tasks wait on a person's approval (waitingForApprovalIn); left out at none.
+      const tasks = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
+      const mine = s.dispatches.filter((d) => tasks.has(d.taskId))
+      const waiting = await waitingForApprovalIn(deps, mine)
+      const waitingTasks = new Set(mine.filter((d) => waiting.has(d.id)).map((d) => d.taskId)).size
+      return okBody({ ...runView(s, run), ...(waitingTasks > 0 ? { waitingForApproval: waitingTasks } : {}) })
     }
     /**
      * One long poll of `astera runs follow` (CLI spec §22). **The client loops; this answers once.**
@@ -1930,6 +2160,14 @@ export async function handleCommand(
       if (!id) return bad('--id is required')
       const checks = checksForRun(s, id)
       return checks ? okBody(checks) : notFound(`unknown run: ${id}`)
+    }
+    // **Where each Task stands in completion, read and never run** (MCP design §3). Not public: the
+    // MCP get_completion tool reads it; the CLI's `runs checks` stays the public view of the same run.
+    case 'runs-completion': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const completion = completionForRun(s, id)
+      return completion ? okBody(completion) : notFound(`unknown run: ${id}`)
     }
     // **계획을 낸다, 회차가 아니라.** 공개 표면의 `jobs list` 가 뜻하는 것이 계획이고, 회차는
     // `runs list` 의 것이다(공개 CLI 설계 §5). 옛 `run-list` 는 한 배열밖에 없어서 둘을 함께 냈다.
@@ -2381,10 +2619,12 @@ export async function handleCommand(
     }
     /**
      * **Stops a Run's coordinator once nothing is left for it to do** (the user's U4 of 2026-09-25).
-     * The loop of the process that drives sends it for each finished Run of a scheduled Job whose
-     * coordinator is still attached (dispatchLoop.ts), so a schedule does not leave one coordinator
-     * looping on `check --wait` per fire. A Run of a Job with no schedule is never sent: a person may
-     * be reading that coordinator's tab (the controller's ruling on U4's scope).
+     * The loop of the process that drives sends it for each finished Run whose coordinator is still
+     * attached (dispatchLoop.ts), so a schedule does not leave one coordinator looping on `check --wait`
+     * per fire, and a finished manual Run does not keep its coordinator, and the Host, alive for good. A
+     * scheduled Job's Run is sent at once; any other once FINISHED_RUN_GRACE_MS has passed with nobody
+     * typing into that coordinator, since a person may be reading its tab (the user's decision of
+     * 2026-10-02, which replaced the controller's ruling that such a Run is never sent).
      *
      * Refused, 409, while the Run still moves (runMoves, the rule `jobs run` and a fire use), so this
      * never stops a coordinator that has work. With no coordinator attached it answers 200 with
@@ -2606,6 +2846,43 @@ export async function handleCommand(
         return conflict(`run ${run.id} is at its concurrency limit: ${openHere} of ${limit} workers are open`)
       if (!deps.dispatchTask) return conflict('placing a task on request is done by the Astera Host, and this caller is not one')
       return deps.dispatchTask(id)
+    }
+    // **One Task and its attempts** (MCP design §3b). Not public: the MCP get_task tool reads it.
+    case 'tasks-get': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const detail = taskDetailOf(s, id, await waitingForApprovalIn(deps, s.dispatches.filter((d) => d.taskId === id)))
+      return detail ? okBody(detail) : notFound(`unknown task: ${id}`)
+    }
+    case 'tasks-check-output': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const task = s.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      const offset = boundedInt(args.offset, 'offset', 0, Number.MAX_SAFE_INTEGER, 0)
+      const limit = boundedInt(args.limit, 'limit', 1, 4000, 4000)
+      if (typeof offset === 'string') return bad(offset)
+      if (typeof limit === 'string') return bad(limit)
+      const slice = checkOutputSlice(task, str(args.check) ?? undefined, offset, limit)
+      return 'error' in slice ? conflict(slice.error) : okBody(slice)
+    }
+    case 'tasks-output': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      if (!s.tasks.some((t) => t.id === id)) return notFound(`unknown task: ${id}`)
+      const skipLines = boundedInt(args.skipLines, 'skip-lines', 0, Number.MAX_SAFE_INTEGER, 0)
+      const lines = boundedInt(args.lines, 'lines', 1, 500, 200)
+      if (typeof skipLines === 'string') return bad(skipLines)
+      if (typeof lines === 'string') return bad(lines)
+      const latest = s.dispatches
+        .filter((d) => d.taskId === id && !d.review)
+        .reduce<(typeof s.dispatches)[number] | undefined>((a, d) => (!a || d.startedAt > a.startedAt ? d : a), undefined)
+      if (!latest) return conflict('no worker has run this task yet')
+      const raw = await deps.readWorker({ dispatchId: latest.id, limit: 100000 })
+      if (raw === TAIL_UNTRACKED)
+        return okBody({ taskId: id, dispatchId: latest.id, recorded: false, totalLines: 0, more: false, lines: [] })
+      const window = tailWindow(raw === TAIL_EMPTY ? '' : raw, skipLines, lines)
+      return okBody({ taskId: id, dispatchId: latest.id, recorded: true, ...window })
     }
     case 'tasks-list': {
       let tasks = s.tasks
@@ -3674,7 +3951,7 @@ export async function handleCommand(
     case 'accounts':
     case 'accounts-list': {
       const agent = str(args.agent)
-      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined))
+      return okBody(await deps.listAccounts(agent === 'claude' || agent === 'codex' ? agent : undefined, { withDefault: true }))
     }
     /**
      * 세션을 보고, 읽고, 친다 — 공개 이름(phase C). 답은 Host 의 레지스트리다(`listSessions` 셋).
@@ -3806,13 +4083,17 @@ export async function handleCommand(
        * The person in a shell, the app and the Host still answer. A session whose state is not known
        * (a Codex terminal, one typed into since its last event) is not refused: nothing says it is
        * at a prompt. An observed replay types nothing and is not checked.
+       * **An MCP client is refused the same way** (MCP P1 design §2, Q4): it calls with an empty
+       * session id, which reads as a shell, but its text comes from an agent all the same.
        */
-      const fromAgent = caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER
+      const fromMcp = caller.role === 'mcp'
+      const fromAgent =
+        (caller.sessionId !== '' && caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER) || fromMcp
       if (session.kind === 'terminal' && fromAgent && !resuming && deps.sessionTurn) {
         const now = await deps.sessionTurn(id)
         if (now !== null && now.alive && now.state === 'waiting' && now.prompt !== null)
           return conflict(
-            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from an agent session would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
+            `${id} is waiting on ${now.prompt === 'permission' ? 'a permission prompt' : 'a question'}, and text sent from ${fromMcp ? 'an MCP client' : 'an agent session'} would answer it; nothing was sent. Read it with \`astera sessions read --id ${id}\` and tell the person what it is waiting on`
           )
       }
       let waitFor: (() => Promise<TurnEnding | null>) | null = null
@@ -3919,8 +4200,20 @@ export async function handleCommand(
       const account = str(args.account)
       if (account === null) return bad('--account needs a value: an account id (from `accounts list`)')
       if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
-      const cwd = str(args.cwd)
-      if (cwd === null) return bad('--cwd needs a value: a folder')
+      const asked = str(args.cwd)
+      if (asked === null) return bad('--cwd needs a value: a folder')
+      // MCP P1 design §2 (Q5): an MCP client starts a session only in a registered project's root,
+      // never an arbitrary folder (MCP spec §68). A root whose folder is gone is the starter's
+      // CWD_MISSING refusal below, probed before anything spawns. **The starter gets the registered
+      // root, not the caller's spelling**: the match resolves `..` as text, while on POSIX the kernel
+      // follows a symlink before the `..` (`<root>/link/..` lands outside), and a relative spelling
+      // resolves against the Host's own folder.
+      let cwd = asked
+      if (caller.role === 'mcp') {
+        const project = findProjectByPath(s, asked)
+        if (!project) return denied('MCP clients start sessions only in a registered project')
+        cwd = project.path
+      }
       const kind = enumFilter('kind', args.kind, ['terminal', 'chat'] as const)
       if ('error' in kind) return bad(kind.error)
       const sessionKind = kind.value ?? 'terminal'
@@ -3984,6 +4277,10 @@ export async function handleCommand(
       // and calls with an empty session id. `chats pending` is a read and stays open to every caller.
       if (routed === 'chats-answer' && caller.sessionId !== '')
         return denied('chats answer is for a person: run it from a shell, not from inside an agent session')
+      // An MCP client calls with an empty session id, so it passed the check above. The MCP gate does
+      // not list chats-answer; this refusal keeps the gate from being the only barrier (MCP P1 §2).
+      if (routed === 'chats-answer' && caller.role === 'mcp')
+        return denied('chats answer is for a person: run it from a shell, not from an MCP client')
       if (!deps.chatPrompts || !deps.chatAnswer)
         return conflict('chat prompts are answered by the Astera Host, and this caller is not one')
       const session = args.session === undefined ? undefined : str(args.session)
@@ -4018,6 +4315,186 @@ export async function handleCommand(
                 : `prompt ${id} is no longer open; nothing was answered`
         )
       return okBody({ sessionId: target.sessionId, id, decision, answered: true })
+    }
+    /**
+     * GitHub reads through the user's gh (MCP P2-B), answered by the Host only (`deps.github`). The
+     * repository is the Run's worktree or the project's root (`githubTarget`). A failing or pending
+     * check is an answer; a gh that failed is `ghRefusal`'s status.
+     */
+    case 'github-pr': {
+      if (args.run !== undefined && args.branch !== undefined)
+        return bad("--branch goes with --project; a Run's branch is its worktree's")
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      let branch: string
+      if ('branch' in t) branch = t.branch
+      else {
+        const given = str(args.branch)
+        if (given === null) return bad('--branch is required with --project: the head branch to look up')
+        branch = given
+      }
+      const found = await prForBranch(t.gh, t.cwd, branch)
+      return found.ok ? okBody({ branch, pr: found.pr }) : ghRefusal(found)
+    }
+    case 'github-ci': {
+      if (args.run !== undefined && args.pr !== undefined)
+        return bad("--pr goes with --project; a Run's pull request is its branch's")
+      const log = args.log === undefined ? undefined : posInt(args.log)
+      if (log === null) return bad('--log must be a CI run id (a positive integer, from a check\'s runId)')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      let pr: number
+      if ('branch' in t) {
+        const found = await prForBranch(t.gh, t.cwd, t.branch)
+        if (!found.ok) return ghRefusal(found)
+        if (!found.pr) return conflict("This Run's branch has no pull request")
+        pr = found.pr.number
+      } else {
+        const given = posInt(args.pr)
+        if (given === null) return bad('--pr is required with --project: a pull request number')
+        pr = given
+      }
+      const checks = await readPrChecks(t.gh, t.cwd, pr)
+      if (!checks.ok) return ghRefusal(checks)
+      if (log === undefined) return okBody({ pr, checks: checks.checks })
+      const tail = await failedLogTail(t.gh, t.cwd, log)
+      if (!tail.ok) return ghRefusal(tail)
+      return okBody({ pr, checks: checks.checks, log: { runId: log, text: tail.text, cut: tail.cut } })
+    }
+    case 'github-issue': {
+      if (args.run !== undefined) return bad('--run does not go with github-issue: give --project')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      const n = posInt(args.number)
+      if (n === null) return bad('--number is required: the issue number')
+      const read = await readIssue(t.gh, t.cwd, n)
+      return read.ok ? okBody(read.issue) : ghRefusal(read)
+    }
+    /**
+     * How It Works records (MCP P2-C), read only, answered by the Host only (`deps.readUnderstanding`).
+     * `--project` is the project's id, as for `github-*`; its records are the understanding.json entry
+     * whose key is the project's root (`recordsFor`). The file is read on every call, so a record the
+     * app wrote a moment ago is there, and a file that cannot be read answers one fixed sentence:
+     * nothing from the file, which holds the person's requests verbatim, goes into the refusal.
+     */
+    case 'understanding-list':
+    case 'understanding-get': {
+      if (!deps.readUnderstanding) return conflict('How It Works records are answered by the Astera Host')
+      const projectId = str(args.project)
+      if (projectId === null) return bad('--project is required: a project id (from `projects list`)')
+      const id = cmd === 'understanding-get' ? str(args.id) : null
+      if (cmd === 'understanding-get' && id === null) return bad('--id is required: a record id (from `understanding-list`)')
+      const project = findProject(s, projectId)
+      if (!project) return notFound(`unknown project: ${projectId}`)
+      let file: StoreShape
+      try {
+        file = await deps.readUnderstanding()
+      } catch {
+        return { status: 500, body: { error: UNREADABLE } }
+      }
+      const records = recordsFor(file, project.path)
+      if (cmd === 'understanding-list') return okBody(records.map(recordSummary))
+      const found = records.find((r) => r.id === id)
+      return found ? okBody(recordDetail(found)) : notFound(`unknown record: ${id}`)
+    }
+    /**
+     * The GitHub writes (MCP P2-B), behind `mcpGithubWrite` at the gate. Only `jobs-create-from-issue`
+     * commits a state of its own, so what keeps a keyed retry of the other two from acting twice is the
+     * effect the Host's github dep marks (orchDeps).
+     *
+     * `github-pr-create` opens a pull request from a finished Run's branch: finished is the outcome
+     * `runs-get` answers (`runView`) reading completed or failed; running and paused are not. A dirty
+     * worktree is refused, and so is a branch that adds nothing. It always pushes first, never with
+     * force (`createPullRequest`): an up-to-date branch is a no-op, a branch ahead of its upstream would
+     * otherwise open the PR from the stale remote head, and a diverged one is rejected.
+     */
+    case 'github-pr-create': {
+      const title = args.title === undefined ? undefined : str(args.title)
+      if (title === null) return bad('--title needs a value')
+      if (args.body !== undefined && typeof args.body !== 'string') return bad('--body must be text')
+      const body = args.body as string | undefined
+      // A boolean from MCP, or the string parseArgs makes of `--draft false` on the command line.
+      if (args.draft !== undefined && ![true, false, 'true', 'false'].includes(args.draft as never))
+        return bad('--draft must be true or false')
+      const draft = args.draft !== false && args.draft !== 'false'
+      const baseArg = args.base === undefined ? undefined : str(args.base)
+      if (baseArg === null) return bad('--base needs a value: the branch to open the pull request against')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      if (!('branch' in t)) return bad("github-pr-create takes --run, not --project: a pull request is opened from a Run's branch")
+      // githubTarget answered for a Run, so the dep is there.
+      const g = deps.github!
+      const outcome = runView(s, t.run).outcome
+      if (outcome === 'paused') return conflict('This Run is paused; resume it first')
+      if (outcome !== 'completed' && outcome !== 'failed') return conflict('This Run is still working')
+      let changed: number
+      try {
+        changed = (await g.isClean(t.cwd)).changedCount
+      } catch (err) {
+        // isCleanWorktree's code prefix belongs to the worktree-remove path, and reads wrong here.
+        const why = (err instanceof Error ? err.message : String(err)).replace(/^GIT_REMOVE_FAILED: /, '')
+        return conflict(`Could not read the Run's worktree: ${why}`)
+      }
+      if (changed > 0) return conflict(`The Run's worktree has ${changed} uncommitted changes`)
+      const base = baseArg ?? t.baseRef
+      const commits = await g.readCommits(t.cwd, base)
+      if (commits.length === 0) return conflict("The Run's branch adds no commits")
+      const filled = fillFromCommits(t.branch, commits)
+      const made = await g.createPr({
+        worktreePath: t.cwd,
+        repoPath: t.repoPath,
+        branch: t.branch,
+        base,
+        title: title ?? filled.title,
+        body: body ?? filled.body,
+        draft,
+        needsPush: true
+      })
+      if (made.ok) return okBody({ url: made.url, draft, pushed: true })
+      // `pushed` rides on every failure: a create that failed after a push left the branch on the
+      // remote. `exists` keeps gh's own words, which end with the existing pull request's URL.
+      if (made.kind === 'exists') return { status: 409, body: { error: made.detail.trim(), pushed: made.pushed } }
+      if (made.kind === 'rejected') return { status: 409, body: { error: 'The push was rejected', pushed: made.pushed } }
+      const refused = ghRefusal({ ok: false, ...ghFailureSentence({ ok: false, stdout: '', stderr: made.detail, spawnError: made.spawnError }) })
+      return { status: refused.status, body: { ...(refused.body as object), pushed: made.pushed } }
+    }
+    case 'github-ci-rerun': {
+      if (args.run !== undefined) return bad('--run does not go with github-ci-rerun: give --project')
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      const runId = posInt(args.runId)
+      if (runId === null) return bad("--run-id is required: the CI run id (a positive integer, from a check's runId)")
+      const r = await rerunFailed(t.gh, t.cwd, runId)
+      return r.ok ? okBody({ runId, rerun: true }) : ghRefusal(r)
+    }
+    /**
+     * An issue becomes a Job, through `jobs-create` with the issue as its objective (`issueObjective`).
+     * The checks are here, on the Host, so no client can skip them: a pull request, a closed issue and
+     * an author the repository does not already trust with its code are refused. The objective and the
+     * folder are the issue's and the project's, so a caller that gives either is refused.
+     */
+    case 'jobs-create-from-issue': {
+      if (args.run !== undefined) return bad('--run does not go with jobs-create-from-issue: give --project')
+      if (args.objective !== undefined)
+        return bad("--objective does not go with jobs-create-from-issue: the issue is the Job's objective")
+      if (args.cwd !== undefined) return bad("--cwd does not go with jobs-create-from-issue: the Job works in the project's folder")
+      const t = githubTarget(deps, s, args)
+      if ('error' in t) return t.error
+      const n = posInt(args.number)
+      if (n === null) return bad('--number is required: the issue number')
+      const read = await readIssue(t.gh, t.cwd, n)
+      if (!read.ok) return ghRefusal(read)
+      const issue = read.issue
+      if (issue.isPullRequest) return conflict(`#${n} is a pull request, not an issue`)
+      if (issue.state === 'closed') return conflict(`Issue #${n} is closed`)
+      if (!(ISSUE_JOB_ASSOCIATIONS as readonly string[]).includes(issue.authorAssociation))
+        return denied(
+          `Issue #${n} was written by a ${issue.authorAssociation} of the repository; only an owner, member or collaborator's issue becomes a Job`
+        )
+      const { project: _project, number: _number, ...rest } = args
+      const reply = await handleCommand(deps, caller, 'jobs-create', { ...rest, cwd: t.cwd, objective: issueObjective(issue) })
+      if (reply.status < 200 || reply.status >= 300) return reply
+      return okBody({ ...(reply.body as object), issue: { number: issue.number, url: issue.url } })
     }
     case 'reset': {
       const open = s.dispatches.filter((d) => !d.endedAt)

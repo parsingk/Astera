@@ -10,7 +10,16 @@ export interface GhResult {
    *  'ENOENT' means gh is not installed; MAX_BUFFER_ERROR_CODE means stdout overflowed
    *  maxBuffer and was truncated — a real (partial) result, not a plain spawn failure. */
   spawnError?: string
+  /** The exit code when the process ran to an exit (absent when it was killed or never started).
+   *  Some gh commands answer with a non-zero code and a full result on stdout (`gh pr checks`:
+   *  1 failing, 8 pending). */
+  exitCode?: number
 }
+
+/** How core code runs gh: injectable, so tests never need a real gh. */
+export type GhRunner = (args: string[], cwd: string) => Promise<GhResult>
+
+export const defaultGhRunner: GhRunner = (a, cwd) => gh(a, { cwd })
 
 const DEFAULT_TIMEOUT_MS = 30_000
 /** `gh pr list --json ...,statusCheckRollup --limit 200` is the heaviest query this feature
@@ -37,12 +46,14 @@ export function gh(args: string[], opts?: { cwd?: string; timeoutMs?: number }):
         maxBuffer: MAX_BUFFER_BYTES
       },
       (err, stdout, stderr) => {
-        const code = err ? (err as NodeJS.ErrnoException).code : undefined
+        // execFile puts a numeric exit code and a string spawn error code on the same field
+        const code: unknown = err ? (err as { code?: unknown }).code : 0
         resolve({
           ok: !err,
           stdout: (stdout ?? '').trim(),
           stderr: (stderr ?? '').trim(),
-          ...(code === 'ENOENT' || code === MAX_BUFFER_ERROR_CODE ? { spawnError: code } : {})
+          ...(code === 'ENOENT' || code === MAX_BUFFER_ERROR_CODE ? { spawnError: code } : {}),
+          ...(typeof code === 'number' ? { exitCode: code } : {})
         })
       }
     )
@@ -73,6 +84,44 @@ export function classifyGhFailure(stderr: string, spawnError?: string): GhFailur
   )
     return 'network'
   return 'other'
+}
+
+export type GhErrorKind = GhFailureKind | 'not-installed'
+
+/** A failed gh call as core answers it: the kind, and one sentence a person or an agent can act on. */
+export type GhFailed = { ok: false; kind: GhErrorKind; message: string }
+
+/** GraphQL's words for a pull request or issue that is not there (`gh pr checks 999`); REST says HTTP 404. */
+const GRAPHQL_MISSING = /could not resolve to an? (pullrequest|issue)\b/i
+
+/** One sentence for a failed gh call. Where gh's own words help, its first stderr line ends the
+ *  sentence; not-installed, auth, no-remote and truncated say all there is to say without it.
+ *
+ *  GraphQL's missing pull request or issue is not-found here and not in `classifyGhFailure`: the PR
+ *  badge coordinator sorts its failures with that one, and its buckets stay as they are. */
+export function ghFailureSentence(r: GhResult): { kind: GhErrorKind; message: string } {
+  if (r.spawnError === 'ENOENT')
+    return { kind: 'not-installed', message: "GitHub CLI (gh) is not installed or not on the Astera Host's PATH" }
+  const classified = classifyGhFailure(r.stderr, r.spawnError)
+  const kind = classified === 'other' && GRAPHQL_MISSING.test(r.stderr) ? 'not-found' : classified
+  const first = r.stderr.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? ''
+  const ending = (s: string): string => (first ? `${s}: ${first}` : s)
+  switch (kind) {
+    case 'auth':
+      return { kind, message: 'gh is not logged in: run `gh auth login`' }
+    case 'rate-limit':
+      return { kind, message: ending('GitHub rate limit reached') }
+    case 'not-found':
+      return { kind, message: ending('GitHub found no such repository, pull request, issue or run') }
+    case 'no-remote':
+      return { kind, message: "This folder's git repository has no remote for gh to use" }
+    case 'network':
+      return { kind, message: ending('Could not reach GitHub') }
+    case 'truncated':
+      return { kind, message: "gh's answer was too large and was cut off" }
+    case 'other':
+      return { kind, message: ending('gh failed') }
+  }
 }
 
 /** `gh auth status` reader. The runner is injectable so tests never need a real gh; production

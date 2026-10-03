@@ -371,6 +371,40 @@ describe('CodexRolloutWatcher', () => {
     expect(read).toBeLessThanOrEqual(3)
   })
 
+  // codex-cli 0.160.0, measured 2026-10-03: a child thread codex opens for itself is a newer rollout
+  // in the same folder, which this re-scan took for a `/new`. The session's transcript moved onto the
+  // child and the next `/goal`, written to the main file, never opened a work unit.
+  it('does not move onto a child thread rollout codex opens for the session', async () => {
+    const cwd = path.join(dir, 'proj')
+    const MAIN = '01a10166-d6cb-7523-9833-91b3fa9301d4'
+    const first = await makeRollout(dir, MAIN, MAIN, cwd)
+    const remember = vi.fn()
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, remember, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+    remember.mockClear()
+
+    now += 30_000 // past the re-scan throttle
+    await writeFile(
+      path.join(path.dirname(first), 'rollout-2026-08-02T00-00-01-01a10166-d9bd-7bc3-b7c0-b1c419c4a738.jsonl'),
+      JSON.stringify({
+        type: 'session_meta',
+        payload: {
+          session_id: MAIN,
+          id: '01a10166-d9bd-7bc3-b7c0-b1c419c4a738',
+          parent_thread_id: MAIN,
+          cwd,
+          source: { subagent: { other: 'guardian' } }
+        }
+      }) + '\n'
+    )
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(first)
+    expect(remember).not.toHaveBeenCalled()
+    w.stop()
+  })
+
   it('writes the newer mapping down, so a restart adopts the conversation the session is really on', async () => {
     const cwd = path.join(dir, 'proj')
     await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)

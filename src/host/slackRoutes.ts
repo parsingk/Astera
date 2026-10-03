@@ -43,7 +43,8 @@ export function hostInboxRoutes(d: {
     write: (sid: string, data: string): boolean => {
       const pty = d.registry.sessionPty(sid)
       if (pty === null) return false
-      d.registry.write(pty, data)
+      // A person's reply from Slack (registry.ts, lastPersonWriteAt).
+      d.registry.write(pty, data, { person: true })
       return true
     },
     isChat: (sid: string): boolean => liveChat(d.procs, sid),
