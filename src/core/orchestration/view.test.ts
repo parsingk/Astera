@@ -659,6 +659,8 @@ describe('snapshotFor — 이 Run 이 쓴 워크트리', () => {
     const byId = new Map(snap.runs.map((r) => [r.id, r]))
     expect(byId.get('job_r1')!.worktrees).toEqual([wtPath])
     expect('worktrees' in byId.get('job_r2')!).toBe(false)
+    // The merge button shows for these worktrees and sends this Run id: both come from Run r1
+    expect(byId.get('job_r1')!.foldedRunId).toBe('r1')
   })
 
   // The Job row's id is the Job's, but its worktrees are its one Run's: the detail window's merge button

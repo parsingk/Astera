@@ -52,12 +52,16 @@ export function hostsWithoutPort(allowed: Iterable<string>, port: number): strin
   return [...allowed].map((h) => (h.endsWith(suffix) ? h.slice(0, -suffix.length).replace(/^\[(.*)\]$/, '$1') : h))
 }
 
-/** Adapter names of virtual networks on this machine, matched anywhere in the name, case-insensitive: Hyper-V
- *  and WSL on Windows (`vEthernet (Default Switch)`, `vEthernet (WSL (Hyper-V firewall))`), docker (`docker0`,
- *  `br-<hex>`, `veth<hex>`), libvirt (`virbr0`), VirtualBox (`VirtualBox Host-Only Network`, `vboxnet0`), VMware
- *  (`VMware Network Adapter VMnet1`, `vmnet8`) and Windows' `Loopback Pseudo-Interface`. Other devices cannot
- *  reach their addresses. */
-const VIRTUAL_ADAPTER = /vethernet|wsl|hyper-v|default switch|docker|virtualbox|vboxnet|vmware|vmnet|virbr|veth|br-|loopback/i
+/** Adapter names of virtual networks on this machine, case-insensitive. Other devices cannot reach their
+ *  addresses. Windows names are matched anywhere: Hyper-V's `vEthernet (Default Switch)` and WSL's
+ *  `vEthernet (WSL (Hyper-V firewall))`, `VirtualBox Host-Only Network`, `VMware Network Adapter VMnet1`,
+ *  `Loopback Pseudo-Interface 1`. A bare `vEthernet` is not virtual: a Hyper-V External switch puts the
+ *  physical LAN address on `vEthernet (<switch name>)`. Linux and macOS names are matched at the start:
+ *  docker's `docker0`, `br-<hex>`, `veth<hex>` (but not `vEthernet`), libvirt's
+ *  `virbr0`, VirtualBox's `vboxnet0`, VMware's `vmnet8`.
+ *  Substring terms can still catch a physical adapter someone renamed to contain one (`wsl`, `docker`); that
+ *  is accepted, and a typed `--hosts` address is offered regardless. */
+const VIRTUAL_ADAPTER = /default switch|wsl|hyper-v|docker|virtualbox|vmware|loopback|^(?:br-|veth(?!ernet)|virbr|vboxnet|vmnet)/i
 
 /** The hosts the ready line offers (the settings screen's URLs): hostsWithoutPort of allowedHosts, without the
  *  addresses only virtual adapters have. Those stay in allowedHosts, as a VM on this machine may use them; an
@@ -138,6 +142,8 @@ export async function serveMcpHttp(a: {
   link?: (s: { client(): McpClient | undefined; remote: string | undefined }) => HostLink
   /** Test injection for the idle close. */
   idleMs?: number
+  /** Test injection for this machine's adapters, read once at start. */
+  interfaces?: Record<string, Array<{ address: string }> | undefined>
 }): Promise<{ close(): Promise<void>; address(): { port: number }; addresses(): string[] }> {
   const { log } = a
   const idleMs = a.idleMs ?? IDLE_MS
@@ -275,7 +281,7 @@ export async function serveMcpHttp(a: {
     })
   })
   const port = (httpServer.address() as { port: number }).port
-  const interfaces = os.networkInterfaces()
+  const interfaces = a.interfaces ?? os.networkInterfaces()
   allowed = allowedHosts(port, a.bind, a.hosts, interfaces)
   offered = offeredHosts(port, a.bind, a.hosts, interfaces)
 

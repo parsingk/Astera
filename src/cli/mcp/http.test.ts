@@ -28,7 +28,13 @@ afterEach(async () => {
 })
 
 async function start(
-  extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean } = {}
+  extra: {
+    idleMs?: number
+    hosts?: string[]
+    closeThrows?: boolean
+    bind?: string
+    interfaces?: Record<string, Array<{ address: string }>>
+  } = {}
 ) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-http-'))
   const tokenFile = path.join(dir, 'mcp-http-token')
@@ -37,7 +43,7 @@ async function start(
   const links: Made[] = []
   served = await serveMcpHttp({
     port: 0,
-    bind: '127.0.0.1',
+    bind: extra.bind ?? '127.0.0.1',
     hosts: extra.hosts ?? [],
     tokenFile,
     version: '1.4.1',
@@ -46,6 +52,7 @@ async function start(
     home: '/nonexistent',
     log: (m) => logs.push(m),
     ...(extra.idleMs !== undefined ? { idleMs: extra.idleMs } : {}),
+    ...(extra.interfaces !== undefined ? { interfaces: extra.interfaces } : {}),
     link: ({ client, remote }) => {
       const made: Made = { client, remote, calls: [], closed: false }
       links.push(made)
@@ -77,10 +84,10 @@ async function connect(url: URL, token: string | null, name = 'test-client') {
 }
 
 /** A raw request, so the Host header and the body can be anything. */
-function raw(port: number, a: { method?: string; path?: string; headers?: Record<string, string>; body?: string | Buffer }) {
+function raw(port: number, a: { method?: string; path?: string; headers?: Record<string, string>; body?: string | Buffer; connect?: string }) {
   return new Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, method: a.method ?? 'POST', path: a.path ?? '/mcp', headers: a.headers ?? {} },
+      { host: a.connect ?? '127.0.0.1', port, method: a.method ?? 'POST', path: a.path ?? '/mcp', headers: a.headers ?? {} },
       (res) => {
         let body = ''
         res.setEncoding('utf8')
@@ -314,6 +321,21 @@ describe('serveMcpHttp', () => {
     expect(reachableUrls(ready.addresses, ready.port, [])).toEqual([])
   })
 
+  // Bound to ::1, which is beyond 127.0.0.1 (so the adapters count) yet reaches no other device, and asks the
+  // firewall nothing.
+  it('offers only physical adapters in its ready line, and still answers at a virtual adapter address', async () => {
+    const s = await start({
+      bind: '::1',
+      interfaces: { 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }], eth0: [{ address: '192.168.0.235' }] }
+    })
+    expect(served!.addresses().sort()).toEqual(['127.0.0.1', '192.168.0.235', 'localhost'])
+    const auth = { ...JSON_HEADERS, authorization: `Bearer ${TOKEN}` }
+    const at = (host: string) => raw(s.port, { connect: '::1', headers: { ...auth, host: `${host}:${s.port}` }, body: INIT })
+    expect((await at('172.20.176.1')).status).toBe(200)
+    expect((await at('192.168.0.235')).status).toBe(200)
+    expect((await at('evil.example')).status).toBe(403)
+  })
+
   it('rejects with EADDRINUSE when the port is taken', async () => {
     const s = await start()
     const second = serveMcpHttp({
@@ -386,6 +408,13 @@ describe('offeredHosts', () => {
       en0: [{ address: '192.168.1.20' }]
     }
     expect(offeredHosts(7871, '0.0.0.0', [], unix).sort()).toEqual(['10.0.0.7', '127.0.0.1', '192.168.1.20', 'localhost'])
+  })
+
+  // A Hyper-V External switch moves the physical LAN address onto a `vEthernet (<switch name>)` adapter, so the
+  // `vEthernet` prefix alone does not mean virtual.
+  it('keeps the address of a Hyper-V External switch, which is the physical LAN', () => {
+    const external = { 'vEthernet (External)': [{ address: '192.168.0.235' }], 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }] }
+    expect(offeredHosts(7871, '0.0.0.0', [], external).sort()).toEqual(['127.0.0.1', '192.168.0.235', 'localhost'])
   })
 
   it('keeps an address a person typed, and one a physical adapter also has', () => {
