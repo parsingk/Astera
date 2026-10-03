@@ -636,7 +636,7 @@ URLs the running entrance answers at, each with its kind and a Copy button: this
 network addresses (10.x, 172.16.x to 172.31.x and 192.168.x, shown as Local network), its Tailscale
 addresses (100.64.x to 100.127.x), and the extra host names you added (for example
 `http://192.168.0.7:7871/mcp`). Public and link-local addresses are left out. A device uses one it
-can reach. **Address in the lines** picks which of these URLs, or `127.0.0.1`, the Claude Code,
+can reach. **MCP address for client setup** picks which of these URLs, or `127.0.0.1`, the Claude Code,
 Codex and Cursor lines use; it starts at the first listed URL. The list is what the entrance found
 when it started, so if this computer's address changes (a new network, say), turn **MCP over HTTP**
 off and on again.

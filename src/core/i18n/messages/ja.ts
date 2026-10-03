@@ -23,6 +23,7 @@ export const ja: Catalog = {
     'astera mcp serve で接続した MCP クライアントにできることです。読み取り専用では Job と Run を見るだけで、' +
     '読み取りと操作では Job の作成、実行、停止、再開と、質問への回答もできます。',
   'settings.mcp.copyFailed': '行をコピーできませんでした: {detail}',
+  'settings.mcp.localTitle': 'このコンピューターのクライアントを接続',
   'settings.mcp.register':
     'MCP クライアントに Astera を追加するには、そのクライアントの行を実行するか貼り付けてください。この OS に合わせた形です。Claude Code と Codex は登録ボタンでも追加できます。',
   'settings.mcp.installFirst': '先に上のコマンドラインツールをインストールしてから、MCP クライアントに Astera を追加してください。',
@@ -61,7 +62,7 @@ export const ja: Catalog = {
   'settings.mcpHttp.kind.name': '追加した名前',
   'settings.mcpHttp.othersHint': 'HTTP での提供が始まった後にこのコンピューターのアドレスが変わった場合は、「HTTP 経由の MCP」を一度オフにしてからオンに戻してください。',
   'settings.mcpHttp.othersNone': 'ローカルネットワークのアドレスが見つかりません。',
-  'settings.mcpHttp.lineAddress': '行に入れるアドレス',
+  'settings.mcpHttp.lineAddress': 'クライアント設定に使う MCP アドレス',
   'settings.mcpHttp.token': 'トークン',
   'settings.mcpHttp.reveal': '表示',
   'settings.mcpHttp.hide': '隠す',

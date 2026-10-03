@@ -379,7 +379,11 @@ export function McpSettings({ cliStatus }: { cliStatus: CliInstallStatus | null 
       </div>
       {registration !== null && (
         <div className="settings-group">
-          {/* The registration line for each client, in this platform's form (mcpRegistration.ts). */}
+          {/* The registration line for each client, in this platform's form (mcpRegistration.ts). Titled so it
+              is not taken for the HTTP section's lines below: these start `astera mcp serve` on this computer. */}
+          <div className="settings-row">
+            <span>{t('settings.mcp.localTitle')}</span>
+          </div>
           {registration === 'install-first' && <span className="settings-hint">{t('settings.mcp.installFirst')}</span>}
           {Array.isArray(registration) && (
             <>

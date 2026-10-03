@@ -23,6 +23,7 @@ export const es: Catalog = {
     'Lo que puede hacer un cliente MCP conectado mediante astera mcp serve. Con solo lectura puede ver Jobs y Runs; ' +
     'con lectura y control también puede crear, ejecutar, detener y reanudar Jobs y responder preguntas.',
   'settings.mcp.copyFailed': 'No se pudo copiar la línea: {detail}',
+  'settings.mcp.localTitle': 'Conectar clientes en este equipo',
   'settings.mcp.register':
     'Para añadir Astera a un cliente MCP, ejecuta o pega la línea de ese cliente. Las líneas están escritas para este sistema operativo. Claude Code y Codex también se pueden configurar con Registrar.',
   'settings.mcp.installFirst':
@@ -62,7 +63,7 @@ export const es: Catalog = {
   'settings.mcpHttp.kind.name': 'Nombre que añadiste',
   'settings.mcpHttp.othersHint': 'Si la dirección de este equipo cambió después de que empezara el servicio HTTP, desactiva MCP por HTTP y vuelve a activarlo.',
   'settings.mcpHttp.othersNone': 'No se encontró ninguna dirección de red local.',
-  'settings.mcpHttp.lineAddress': 'Dirección en las líneas',
+  'settings.mcpHttp.lineAddress': 'Dirección MCP para configurar el cliente',
   'settings.mcpHttp.token': 'Token',
   'settings.mcpHttp.reveal': 'Mostrar',
   'settings.mcpHttp.hide': 'Ocultar',
