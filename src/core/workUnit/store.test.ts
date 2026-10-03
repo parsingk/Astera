@@ -295,6 +295,19 @@ describe('WorkUnitStore', () => {
       expect(a.get('D:\\p')).toEqual(sample)
     })
 
+    // A Host stopped while an app was the writer, and the file was removed meanwhile: what it still held
+    // must not come back in the file its next allowed write creates.
+    it('starts over empty when the file it last saw is gone, so its next write does not bring old projects back', async () => {
+      const s = new WorkUnitStore(file)
+      await s.load()
+      await s.set('D:\\p', sample)
+      await fs.rm(file)
+      expect(await s.refresh()).toBe(true)
+      expect(s.get('D:\\p')).toBeUndefined()
+      await s.set('D:\\q', empty)
+      expect(JSON.parse(await fs.readFile(file, 'utf8'))).toEqual({ projects: { 'D:\\q': empty } })
+    })
+
     it('waits for its own queued save instead of reading the file under it', async () => {
       const s = new WorkUnitStore(file)
       await s.load()
@@ -342,6 +355,8 @@ describe('WorkUnitStore', () => {
       }
       expect(refreshed).toBe(false)
       expect(s.get('D:\\r')).toEqual(empty)
+      // The set above is not awaited: its save must land before afterEach removes the folder under it.
+      await s.settled()
     })
   })
 })
