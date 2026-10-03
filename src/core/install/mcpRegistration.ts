@@ -71,14 +71,15 @@ export function mcpRegistrationLines(a: { platform: string; shimPath: string }):
 
 /**
  * The lines that register the MCP HTTP entrance (MCP HTTP design §4), copy only. Checked against the
- * installed CLIs' help on 2026-10-03: `claude mcp add --help` (2.1.288) gives `--transport http <name>
- * <url> --header "..."`; `codex mcp add --help` (0.160.0) gives `--url` and `--bearer-token-env-var`
+ * installed CLIs' help on 2026-10-03: `claude mcp add --help` (2.1.288) gives `[options] <name> <url>` with
+ * `-s user` and `--transport http` as options and `--header "..."` (variadic, so it goes last); `-s user` for the
+ * reason at the top of this file; `codex mcp add --help` (0.160.0) gives `--url` and `--bearer-token-env-var`
  * (no header flag), so its line names a variable the person sets to the token. Cursor has no CLI here;
  * its line is the mcp.json entry with `url` and `headers`. The token is base64url, so it needs no quoting.
  */
 export function mcpHttpRegistrationLines(a: { url: string; token: string }): McpRegistrationLine[] {
   return [
-    { client: 'Claude Code', line: `claude mcp add --transport http astera ${a.url} --header "Authorization: Bearer ${a.token}"` },
+    { client: 'Claude Code', line: `claude mcp add -s user --transport http astera ${a.url} --header "Authorization: Bearer ${a.token}"` },
     { client: 'Codex', line: `codex mcp add astera --url ${a.url} --bearer-token-env-var ASTERA_MCP_TOKEN` },
     { client: 'Cursor', line: JSON.stringify({ mcpServers: { astera: { url: a.url, headers: { Authorization: `Bearer ${a.token}` } } } }) }
   ]

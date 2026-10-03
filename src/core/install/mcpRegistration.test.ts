@@ -74,7 +74,7 @@ describe('shimPathFor', () => {
 describe('mcpHttpRegistrationLines', () => {
   it('writes each client line with the URL and the token it is given', () => {
     expect(mcpHttpRegistrationLines({ url: 'http://127.0.0.1:7871/mcp', token: 'TOK' })).toEqual([
-      { client: 'Claude Code', line: 'claude mcp add --transport http astera http://127.0.0.1:7871/mcp --header "Authorization: Bearer TOK"' },
+      { client: 'Claude Code', line: 'claude mcp add -s user --transport http astera http://127.0.0.1:7871/mcp --header "Authorization: Bearer TOK"' },
       { client: 'Codex', line: 'codex mcp add astera --url http://127.0.0.1:7871/mcp --bearer-token-env-var ASTERA_MCP_TOKEN' },
       { client: 'Cursor', line: '{"mcpServers":{"astera":{"url":"http://127.0.0.1:7871/mcp","headers":{"Authorization":"Bearer TOK"}}}}' }
     ])
