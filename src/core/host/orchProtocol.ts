@@ -95,6 +95,9 @@ export interface OrchCaller {
   /** The HTTP caller's address an `mcp` socket's hello named, already cleaned (MCP HTTP design §5). Only
    *  on role `mcp`, and only over HTTP. */
   remote?: string
+  /** The server's number for this socket (`ClientRef.socket`), the one `onClientGone` is called with:
+   *  what a call registers for its caller is released by it. Absent for a caller with no socket. */
+  socket?: number
   /** Pushes a message to every greeted socket **except this one**. What `state-put` answers with: the
    *  state came from this client, so sending it back would be an echo — and the app that pushed it
    *  would then write its own state back over itself. */

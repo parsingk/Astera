@@ -713,6 +713,8 @@ async function main(): Promise<void> {
       onClientGone: (from) => {
         exits?.appGone(from.socket)
         procHolders.appGone(from.socket)
+        // E2: a Job merge the app registered with work-units-git-op and never ended is ended now.
+        hostWorkUnits?.clientGone(from.socket)
       },
       // **Both halves are real now** (ruling F57). The Host owns the state, so it can answer the
       // question `docs/cli.md` already promises `astera host stop` answers: how many Runs have work

@@ -765,6 +765,67 @@ describe('createHostWorkUnits', () => {
     it('a HEAD move inside a Host git-op is Astera own', async () => {
       expect(await moveHead((hw) => hw.onGitOp({ t: 'git-op', op: 'op-1', phase: 'begin', kind: 'job-merge', cwd: project }))).toBe(0)
     })
+    it("a HEAD move inside the app's work-units-git-op is Astera own", async () => {
+      expect(
+        await moveHead((hw) => {
+          expect(hw.gitOpBegin('job-merge', project, 1)).not.toBe('')
+        })
+      ).toBe(0)
+    })
+  })
+
+  // The app's own Job merges (`work-units-git-op`): an op with no end explains every later HEAD move of its
+  // folder, so a client that goes away mid-merge has its ops ended here.
+  describe("the app's git ops end with the client that began them", () => {
+    /** Begins an op as `client` at the clock's start, runs `then`, moves HEAD past the grace, and counts
+     *  the outside changes recorded. */
+    const moveAfter = async (client: number, then: (hw: ReturnType<typeof createHostWorkUnits>, op: string) => void): Promise<number> => {
+      let clock = Date.parse('2026-10-03T09:00:00.000Z')
+      const r = rig({ now: () => clock })
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      r.gitDirs().onChange(project)
+      await hw.flush()
+      const op = hw.gitOpBegin('job-merge', project, client)
+      then(hw, op)
+      clock += OPERATION_GRACE_MS + 1_000
+      r.git.ref = { branch: 'main', head: 'c1' }
+      r.gitDirs().onChange(project)
+      await hw.flush()
+      await hw.settled()
+      return onDisk().projects[project].externalGitChanges.length
+    }
+
+    it('an op left open explains a HEAD move however late (the bug this guards)', async () => {
+      expect(await moveAfter(1, () => {})).toBe(0)
+    })
+
+    it('an op the app ended is over: a later move is from outside', async () => {
+      expect(
+        await moveAfter(1, (hw, op) => {
+          expect(hw.gitOpEnd(op)).toBe(true)
+          expect(hw.gitOpEnd(op)).toBe(false)
+        })
+      ).toBe(1)
+    })
+
+    it('the client that began it going away ends it', async () => {
+      expect(await moveAfter(1, (hw) => hw.clientGone(1))).toBe(1)
+    })
+
+    it('another client going away does not', async () => {
+      expect(await moveAfter(1, (hw) => hw.clientGone(2))).toBe(0)
+    })
+
+    it('an op ended by the app is not ended again at its client leaving', async () => {
+      const r = rig()
+      const hw = createHostWorkUnits(r.deps)
+      await hw.start()
+      const op = hw.gitOpBegin('job-merge', project, 1)
+      hw.gitOpEnd(op)
+      hw.clientGone(1)
+      expect(hw.gitOpEnd(op)).toBe(false)
+    })
   })
 
   it('fork hands the collector a session only the app saw continue (history resume)', async () => {
