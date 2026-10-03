@@ -2,9 +2,10 @@
 // announces `work-units`, the Host is the one writer of workUnits.json: this app never starts its
 // collector, reads the file read-only for the open-task list, sends the renderer's [완료]/[취소] presses
 // as `work-units-complete`/`work-units-cancel`, a fork only it sees (history resume, its own rolls) as
-// `work-units-fork` and a changed tracking toggle as `work-units-reload`, and forwards the Host's
-// `work-units-state` and `work-units-goal-ignored` pushes to the renderer. In front of no Host, or an
-// older one, it runs its own collector and store, as it always has.
+// `work-units-fork`, a changed tracking toggle as `work-units-reload` and the begin and end of a Job merge
+// it runs itself as `work-units-git-op`, and forwards the Host's `work-units-state` and
+// `work-units-goal-ignored` pushes to the renderer. In front of no Host, or an older one, it runs its own
+// collector and store, as it always has.
 //
 // **Nothing runs before the decision** (E2 §3). Unlike appUnderstanding, there is no writer mode before
 // the first greeting: a collector started at boot would seed workUnits.json (interrupting every unit
@@ -45,13 +46,26 @@ export class AppWorkUnitStore extends WorkUnitStore {
   }
 }
 
-export type WorkUnitsCall = 'work-units-fork' | 'work-units-reload' | 'work-units-complete' | 'work-units-cancel'
+export type WorkUnitsCall =
+  | 'work-units-fork'
+  | 'work-units-reload'
+  | 'work-units-complete'
+  | 'work-units-cancel'
+  | 'work-units-git-op'
 
 export interface AppWorkUnitsDeps {
   store: AppWorkUnitStore
   collector: Pick<
     WorkUnitCollector,
-    'start' | 'stop' | 'onEnabledChanged' | 'listOpen' | 'completeTaskById' | 'cancelTaskById' | 'onSessionForked'
+    | 'start'
+    | 'stop'
+    | 'onEnabledChanged'
+    | 'listOpen'
+    | 'completeTaskById'
+    | 'cancelTaskById'
+    | 'onSessionForked'
+    | 'beginGitOperation'
+    | 'endGitOperation'
   >
   /** The tracking toggle as saved now. */
   tracking(): boolean
@@ -86,6 +100,14 @@ export interface AppWorkUnits {
   fork(newSessionId: string, transcriptPath?: string, oldSessionId?: string, hostRoll?: boolean): void
   /** The toggle was saved as `enabled`. Never rejects. */
   trackingChanged(enabled: boolean): Promise<void>
+  /** integrateWorktrees' gitOp (IntegrateContext) around a Job merge this app runs. A reader registers it
+   *  on the Host's collector (`work-units-git-op`), the one watching HEAD, so the merge's move is
+   *  Astera's there and not a change from outside; a writer, or an undecided app, on its own collector
+   *  as always. A Host begin that is refused or fails falls back to the own collector and is logged:
+   *  never rejects, a merge must not fail because its bookkeeping did. */
+  gitOpBegin(kind: 'job-merge', cwd: string): Promise<string>
+  /** Ends the op where its begin went, whatever the mode is now. Never rejects. */
+  gitOpEnd(id: string): Promise<void>
   /** Every Host message: the two work-units pushes reach the renderer, anything else is ignored. */
   onHostPush(m: HostMessage): void
 }
@@ -125,6 +147,9 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
   /** Forks made before the decision, delivered to whichever side it picks. */
   const held: Fork[] = []
   let toldUndecided = false
+  /** The op ids the Host gave (`work-units-git-op` begin): their end goes back to it even when a greeting
+   *  made this app the writer meanwhile. Any other id is the own collector's. */
+  const hostOps = new Set<string>()
 
   const keyIn = (state: StoreShape, projectPath: string): string | undefined =>
     projectPath in state.projects
@@ -289,6 +314,27 @@ export function createAppWorkUnits(d: AppWorkUnitsDeps): AppWorkUnits {
       }
       // Logged, not thrown: the setting is saved, and the Host reads it again at the next greeting.
       await call('work-units-reload', {}).catch((err) => d.log(`work units: work-units-reload failed: ${message(err)}`))
+    },
+    gitOpBegin: async (kind, cwd) => {
+      if (mode === 'reader') {
+        try {
+          const op = ((await call('work-units-git-op', { phase: 'begin', kind, cwd })) as { op?: unknown } | null)?.op
+          if (typeof op !== 'string') throw new Error('the Host answered no op id')
+          // An empty op: the Host's collector is not running (tracking off), and nothing was registered.
+          if (op !== '') hostOps.add(op)
+          return op
+        } catch (err) {
+          d.log(`work units: the Host did not take work-units-git-op for the merge into ${cwd}, registered here: ${message(err)}`)
+        }
+      }
+      return d.collector.beginGitOperation(kind, cwd)
+    },
+    gitOpEnd: async (id) => {
+      if (!hostOps.delete(id)) return d.collector.endGitOperation(id)
+      // Not retried: a Host that is gone ends the ops this app began there itself (its clientGone).
+      await call('work-units-git-op', { phase: 'end', op: id }).catch((err) =>
+        d.log(`work units: the Host did not take the end of git op ${id}: ${message(err)}`)
+      )
     },
     onHostPush: (m) => {
       try {

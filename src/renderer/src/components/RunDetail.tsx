@@ -20,6 +20,7 @@ import { canStopConvergence, nodeMetaOf, retryingCheckOf, type NodeMeta } from '
 import { formatRunDuration } from '../../../core/run/duration'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
+import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
 import { CompletionBlock } from './CompletionBlock'
@@ -528,7 +529,8 @@ export function RunDetail({
       return
     setBusy(RUN_MERGE)
     try {
-      const reply = await window.api.orch.command(projectPath, 'run-merge', { run: runId })
+      // A Job row's id is the Job's; run-merge needs the Run whose worktrees the button counted.
+      const reply = await window.api.orch.command(projectPath, 'run-merge', { run: runIdToMerge(run, runId) })
       if (reply.status >= 400) {
         const reason =
           typeof reply.body === 'object' && reply.body !== null && 'error' in reply.body

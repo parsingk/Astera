@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findRun } from './snapshot'
+import { findRun, runIdToMerge } from './snapshot'
 import type { JobRow, OrchSnapshot } from '../types'
 
 const jobRun = (id: string, over: Partial<JobRow> = {}): JobRow => ({
@@ -43,5 +43,17 @@ describe('findRun', () => {
     expect(s.runs.every((r) => !('children' in r))).toBe(true)
     expect(findRun(s, 'r1')?.id).toBe('r1')
     expect(findRun(s, 'kid')).toBeUndefined()
+  })
+})
+
+describe('runIdToMerge', () => {
+  // The detail window opened from a Job row has the Job's id; run-merge knows Run ids only.
+  it('a Job row that shows its one Run gives that Run id', () => {
+    expect(runIdToMerge(jobRun('job_a', { foldedRunId: 'run_a' }), 'job_a')).toBe('run_a')
+  })
+
+  it('a Run row gives the id it was opened with', () => {
+    expect(runIdToMerge(jobRun('run_b'), 'run_b')).toBe('run_b')
+    expect(runIdToMerge(undefined, 'run_b')).toBe('run_b')
   })
 })

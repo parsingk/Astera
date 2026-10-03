@@ -234,7 +234,13 @@ const isUnitShaped = (u: unknown): u is SessionWorkUnit => {
 }
 
 /** The app's calls into the Host's session work units (E2 §5), answered above the receipt line. */
-const WORK_UNITS_CALLS: ReadonlySet<string> = new Set(['work-units-fork', 'work-units-reload', 'work-units-complete', 'work-units-cancel'])
+const WORK_UNITS_CALLS: ReadonlySet<string> = new Set([
+  'work-units-fork',
+  'work-units-reload',
+  'work-units-complete',
+  'work-units-cancel',
+  'work-units-git-op'
+])
 
 /** `work-units-*`'s 409: an attached app keeps the duty, and its collector holds the units. */
 export const NOT_WORK_UNITS_WRITER = 'an attached Astera app is tracking session work units; ask it'
@@ -497,12 +503,12 @@ export function createHostOrch(a: {
   workspaces?: Pick<WorkspaceManager, 'run' | 'stop' | 'close' | 'list'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
-   *  `work-units-fork`, `-reload`, `-complete` and `-cancel`. Absent, or null (no spawner, so no duty):
-   *  the session-task commands are forwarded as before and the four answer 501. `sessionTasks.list` is not
+   *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
+   *  duty): the session-task commands are forwarded as before and the five answer 501. `sessionTasks.list` is not
    *  here on purpose: it answers from the collector's memory, which is stale while the collector is stopped,
    *  so a reader app reads workUnits.json itself (E2 §6) and the Host serves no list. */
   workUnits?():
-    | (Pick<HostWorkUnits, 'isWriter' | 'isRunning' | 'trackingEnabled' | 'fork' | 'reload'> & {
+    | (Pick<HostWorkUnits, 'isWriter' | 'isRunning' | 'trackingEnabled' | 'fork' | 'reload' | 'gitOpBegin' | 'gitOpEnd'> & {
         sessionTasks: Omit<HostWorkUnits['sessionTasks'], 'list'>
       })
     | null
@@ -1226,10 +1232,13 @@ export function createHostOrch(a: {
     return { status: 200, body: { id: r.id, status: 'generating' } }
   }
 
-  /** The app's four `work-units-*` calls (E2 §5): 403 for any other caller, 501 without the duty, 400 for
+  /** The app's five `work-units-*` calls (E2 §5): 403 for any other caller, 501 without the duty, 400 for
    *  missing arguments, 409 while an attached app keeps the duty. `-complete` and `-cancel` answer the
    *  collector's own result as it is, a refusal included (`unknown task: <id>`, `task is <status>`): which
-   *  of those the renderer's button reads as done is the app's mapping (ipc.ts), not the Host's. */
+   *  of those the renderer's button reads as done is the app's mapping (ipc.ts), not the Host's.
+   *  `-git-op` registers a Job merge the app runs itself on this collector, which watches HEAD (the
+   *  app's appWorkUnits): its begin is refused 409 as the others are, **its end never is**, since an op
+   *  this Host opened and never closed would explain every later HEAD move of that folder. */
   const workUnitsCall = async (cmd: string, args: Record<string, unknown>, from: OrchCaller | undefined): Promise<Reply> => {
     if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
     const units = a.workUnits?.() ?? null
@@ -1243,6 +1252,18 @@ export function createHostOrch(a: {
       units.fork(newSessionId, transcriptPath, oldSessionId)
       // A collector that is not running ignores a fork (tracking off): said, so the app need not guess.
       return { status: 200, body: { forked: units.isRunning() } }
+    }
+    if (cmd === 'work-units-git-op') {
+      const { phase, kind, cwd, op } = args
+      if (phase === 'end') {
+        if (typeof op !== 'string' || op === '') return { status: 400, body: { error: 'work-units-git-op end needs an op' } }
+        return { status: 200, body: { ended: units.gitOpEnd(op) } }
+      }
+      if (phase !== 'begin' || kind !== 'job-merge' || typeof cwd !== 'string' || cwd === '')
+        return { status: 400, body: { error: "work-units-git-op needs a phase of 'begin' with a kind of 'job-merge' and a cwd, or 'end' with an op" } }
+      if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
+      // By the calling socket, so its close ends what it began (hostWorkUnits' clientGone).
+      return { status: 200, body: { op: units.gitOpBegin(kind, cwd, from.socket) } }
     }
     if (cmd === 'work-units-reload') {
       if (!units.isWriter()) return { status: 409, body: { error: NOT_WORK_UNITS_WRITER } }
@@ -1565,8 +1586,8 @@ export function createHostOrch(a: {
           return { status: r.reason === NOT_WRITER ? 409 : 500, body: { error: r.reason ?? 'the unit was not recorded' } }
         }
         // **Beside understanding-unit, for its reason (E2 §5).** What only the app sees of session work units:
-        // a history-resume fork, the tracking toggle, and the renderer's two buttons. Never a command layer
-        // command, never a receipt.
+        // a history-resume fork, the tracking toggle, the renderer's two buttons, and the Job merges the app
+        // runs itself. Never a command layer command, never a receipt.
         if (WORK_UNITS_CALLS.has(cmd)) return await workUnitsCall(cmd, args, from)
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and
         // its two buttons. Never a command layer command, never a receipt.

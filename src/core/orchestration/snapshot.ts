@@ -25,3 +25,9 @@ export function findRun(snapshot: OrchSnapshot, runId: string): JobRow | undefin
   }
   return undefined
 }
+
+/** The Run id run-merge takes for the entry the detail window opened with `openedId`: a Job row folded onto
+ *  its one Run carries that Run's id (JobRow.foldedRunId); a Run row's id already is one. */
+export function runIdToMerge(row: JobRow | undefined, openedId: string): string {
+  return row?.foldedRunId ?? openedId
+}

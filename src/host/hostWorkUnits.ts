@@ -14,7 +14,8 @@
 //   and account from the note, the transcript from the statusline capture (Claude) or the note's
 //   rollout path (Codex), and the idle signal's trust from the account's descriptor;
 // - triggers: the transcript and git-dir watchers (core/workUnit/watch, no chokidar), the spawner's busy
-//   edges, the pty exits, the Host's own `session-rolled`, and the Host's `git-op` merges;
+//   edges, the pty exits, the Host's own `session-rolled`, the Host's `git-op` merges, and the merges an
+//   attached app runs itself (`work-units-git-op`), ended when that app's socket closes;
 // - the in-Run test over the Host's orchestration state, and the Host's merge records;
 // - tracking: `workUnitTrackingEnabled` in app-settings.json, read at start, at `reload` and at each app
 //   greeting; the collector starts and stops with it, as the app's toggle does.
@@ -182,6 +183,15 @@ export interface HostWorkUnits {
   onRolled(e: { oldSessionId: string; newSessionId: string; transcriptPath?: string; kind?: string }): void
   /** The Host's `git-op` around a merge it runs; any other message is ignored. */
   onGitOp(m: HostMessage): void
+  /** `work-units-git-op` begin: a Job merge an attached app runs itself, registered on this collector
+   *  for `client` (the calling socket's number), so its HEAD move is Astera's. '' when the collector is
+   *  not running, as its beginGitOperation answers. */
+  gitOpBegin(kind: 'job-merge', cwd: string, client: number | undefined): string
+  /** `work-units-git-op` end: false for an op this Host does not hold open for an app. */
+  gitOpEnd(op: string): boolean
+  /** A client's socket closed: the ops it began and never ended are ended, so an app that went away
+   *  mid-merge does not leave one explaining every later HEAD move of its folder. */
+  clientGone(client: number): void
   isWriter(): boolean
   /** Whether the collector runs now (tracking on and this Host the writer). */
   isRunning(): boolean
@@ -501,6 +511,8 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
   let edges: Promise<void> = Promise.resolve()
   /** The Host's own merges, registered as the app registers them (core/workUnit/hostGitOps.ts). */
   const gitOps = createHostGitOps(collector)
+  /** The ops attached apps began here and have not ended, each with the socket that began it. */
+  const appOps = new Map<string, number | undefined>()
 
   /** The screen's buttons by id. The screen lists the file's rows whether or not the collector runs, and
    *  a stopped collector's store holds what this Host last read, or nothing when it never started: so
@@ -600,6 +612,24 @@ export function createHostWorkUnits(d: HostWorkUnitsDeps): HostWorkUnits {
       collector.onSessionForked(e.newSessionId, e.transcriptPath, e.oldSessionId)
     },
     onGitOp: (m) => gitOps.pushed(m),
+    gitOpBegin: (kind, cwd, client) => {
+      const op = collector.beginGitOperation(kind, cwd)
+      if (op !== '') appOps.set(op, client)
+      return op
+    },
+    gitOpEnd: (op) => {
+      if (!appOps.delete(op)) return false
+      collector.endGitOperation(op)
+      return true
+    },
+    clientGone: (client) => {
+      for (const [op, c] of appOps)
+        if (c === client) {
+          appOps.delete(op)
+          collector.endGitOperation(op)
+          log(`ended git op ${op}: the app that began it went away before its end`)
+        }
+    },
     isWriter,
     isRunning: () => running,
     flush: () => collector.flush(),

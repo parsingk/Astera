@@ -722,7 +722,11 @@ async function hostRig(
     onIdle: () => {},
     hostKey: await ensureHostKey(profileDir),
     onMessage: () => false,
-    onClientGone: (from) => exits.appGone(from.socket),
+    onClientGone: (from) => {
+      exits.appGone(from.socket)
+      // As index.ts: a Job merge the app registered with work-units-git-op and never ended is ended now.
+      units.clientGone(from.socket)
+    },
     liveCounts: () => ({ sessions: registry.liveCount() + procs.liveCount(), runs: orch.runningRuns() }),
     orch,
     features: hostFeatures({ spawns: true, slack: false }),
@@ -2308,6 +2312,74 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
         explanation: { overview: 'the first write-up' }
       })
       expect(a.calls).toBe(1)
+    })
+
+    // A Job merge the app runs itself while the Host writes work units (`work-units-git-op`): the Host's
+    // collector, the one watching HEAD, registers it, so the merge's move is Astera's and not a change
+    // from outside; and an app that goes away mid-merge leaves no op open.
+    describe("the app's own Job merge, registered with work-units-git-op", () => {
+      /** A current app that yields the work units to the Host, attached once tracking is on, and a session
+       *  in the repo whose git the Host's collector has taken a baseline of. */
+      const attached = async () => {
+        const h = await hostRig({ runAgent: fakeAgent().runAgent })
+        await turnOn(h)
+        // A session in the repo, with the statusline capture that names its transcript.
+        const transcript = path.join(h.profileDir, 'transcripts', 'ses_watch.jsonl')
+        await fs.mkdir(path.dirname(transcript), { recursive: true })
+        await fs.writeFile(transcript, '')
+        h.workUnits.statusLine('ses_watch', { session_id: 'claude-watch', transcript_path: transcript })
+        h.openSession('ses_watch', { title: 'watch', accountId: h.accountId, cwd: h.repo })
+        const app = await rawClient(
+          h.address,
+          { ...appHello, yields: [...(appHello as { yields: string[] }).yields, HOST_YIELD_WORK_UNITS, HOST_YIELD_UNDERSTANDING] } as ClientMessage,
+          appAnswers(h.accountId)
+        )
+        await until(() => expect(h.server.hasApp()).toBe(true))
+        const unitsFile = path.join(h.profileDir, 'workUnits.json')
+        type Stored = { externalGitChanges: unknown[]; gitSnapshot?: { head: string | null } }
+        const project = async (): Promise<Stored | undefined> => {
+          if (!existsSync(unitsFile)) return undefined
+          return (JSON.parse(await fs.readFile(unitsFile, 'utf8')) as { projects: Record<string, Stored> }).projects[h.repo]
+        }
+        // The collector arms its git-dir watch at a round, and a round runs on a trigger: a transcript line
+        // runs one, and a file staged after it gives the collector its baseline. Repeated until it has one.
+        const head = gitSync(h.repo, ['rev-parse', 'HEAD']).trim()
+        let n = 0
+        await until(async () => {
+          await fs.appendFile(transcript, JSON.stringify({ type: 'user', message: { role: 'user', content: `line ${++n}` } }) + '\n')
+          await fs.writeFile(path.join(h.repo, `staged-${n}.txt`), 'staged', 'utf8')
+          gitSync(h.repo, ['add', `staged-${n}.txt`])
+          expect((await project())?.gitSnapshot?.head).toBe(head)
+        })
+        return { h, app, project }
+      }
+
+      it('its HEAD move is not recorded as a change from outside', async () => {
+        const { h, app, project } = await attached()
+        const begun = await app.call('work-units-git-op', { phase: 'begin', kind: 'job-merge', cwd: h.repo })
+        expect(begun.status).toBe(200)
+        const op = (begun.body as { op: string }).op
+        expect(op).not.toBe('')
+        // The merge: HEAD moves in the repo while no session is busy.
+        await fs.writeFile(path.join(h.repo, 'job.txt'), 'from the job', 'utf8')
+        gitSync(h.repo, ['add', 'job.txt'])
+        gitSync(h.repo, ['commit', '-m', 'merge the job'])
+        const merged = gitSync(h.repo, ['rev-parse', 'HEAD']).trim()
+        await until(async () => {
+          const p = await project()
+          expect(p?.gitSnapshot?.head).toBe(merged)
+          expect(p?.externalGitChanges).toEqual([])
+        })
+        expect(await app.call('work-units-git-op', { phase: 'end', op })).toEqual({ status: 200, body: { ended: true } })
+      })
+
+      it('an app that goes away before its end has the op ended by the Host', async () => {
+        const { h, app } = await attached()
+        const op = ((await app.call('work-units-git-op', { phase: 'begin', kind: 'job-merge', cwd: h.repo })).body as { op: string }).op
+        expect(op).not.toBe('')
+        await app.close()
+        await until(() => expect(h.logs.some((l) => l.includes(`ended git op ${op}`))).toBe(true))
+      })
     })
 
     it('an attached app that keeps How It Works (no understanding yield) stops the Host writing, and regenerate_work_record is CONFLICT', async () => {

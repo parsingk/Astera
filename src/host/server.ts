@@ -606,6 +606,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           const remote = mcpRemotes.get(socket)
           const from: OrchCaller = {
             role: outwardRole(socket),
+            socket: socketNo,
             ...(client ? { client } : {}),
             ...(remote ? { remote } : {}),
             toOthers: (msg) => {

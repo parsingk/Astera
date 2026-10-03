@@ -4068,6 +4068,8 @@ describe('session work units in the Host (E2 §5)', () => {
       trackingEnabled: vi.fn(async () => box.tracking),
       reload: vi.fn(async () => {}),
       fork: vi.fn((_n: string, _t?: string, _o?: string) => {}),
+      gitOpBegin: vi.fn((_k: 'job-merge', _cwd: string, _client?: number) => 'op-1'),
+      gitOpEnd: vi.fn((_op: string) => true),
       sessionTasks: {
         start: vi.fn(async (_s: string, _o: string): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
         complete: vi.fn(async (): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => ({ ok: true, id: 'wu-1' })),
@@ -4138,7 +4140,8 @@ describe('session work units in the Host (E2 §5)', () => {
       ['work-units-fork', { newSessionId: 'ses2', transcriptPath: 'D:/t.jsonl', oldSessionId: 'ses1' }],
       ['work-units-reload', {}],
       ['work-units-complete', { projectPath: 'D:/p', id: 'wu-1' }],
-      ['work-units-cancel', { projectPath: 'D:/p', id: 'wu-1' }]
+      ['work-units-cancel', { projectPath: 'D:/p', id: 'wu-1' }],
+      ['work-units-git-op', { phase: 'begin', kind: 'job-merge', cwd: 'D:/p' }]
     ]
     it('are the app’s alone: 403 for the CLI, an MCP client and an unknown caller', async () => {
       await fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control' }))
@@ -4164,6 +4167,7 @@ describe('session work units in the Host (E2 §5)', () => {
       expect(d.w.reload).not.toHaveBeenCalled()
       expect(d.w.sessionTasks.completeById).not.toHaveBeenCalled()
       expect(d.w.sessionTasks.cancelById).not.toHaveBeenCalled()
+      expect(d.w.gitOpBegin).not.toHaveBeenCalled()
     })
     it('400 with a request id, or without the arguments each takes', async () => {
       const d = duty()
@@ -4176,7 +4180,16 @@ describe('session work units in the Host (E2 §5)', () => {
         ['work-units-fork', { newSessionId: 'ses2', oldSessionId: '' }],
         ['work-units-complete', { id: 'wu-1' }],
         ['work-units-complete', { projectPath: 'D:/p' }],
-        ['work-units-cancel', { projectPath: '', id: 'wu-1' }]
+        ['work-units-cancel', { projectPath: '', id: 'wu-1' }],
+        ['work-units-git-op', {}],
+        ['work-units-git-op', { phase: 'middle', kind: 'job-merge', cwd: 'D:/p' }],
+        ['work-units-git-op', { phase: 'begin', kind: 'checkout', cwd: 'D:/p' }],
+        ['work-units-git-op', { phase: 'begin', cwd: 'D:/p' }],
+        ['work-units-git-op', { phase: 'begin', kind: 'job-merge', cwd: '' }],
+        ['work-units-git-op', { phase: 'begin', kind: 'job-merge' }],
+        ['work-units-git-op', { phase: 'end' }],
+        ['work-units-git-op', { phase: 'end', op: '' }],
+        ['work-units-git-op', { phase: 'end', op: 3 }]
       ]
       for (const [cmd, args] of bad) expect((await orch.call({ cmd, args, sessionId: '', from: app })).status).toBe(400)
       expect(d.w.fork).not.toHaveBeenCalled()
@@ -4213,6 +4226,29 @@ describe('session work units in the Host (E2 §5)', () => {
       expect(await orch.call({ cmd: 'work-units-complete', args: calls[2][1], sessionId: '', from: app })).toEqual({ status: 200, body: { ok: false, reason: 'unknown task: wu-1' } })
       expect(await orch.call({ cmd: 'work-units-cancel', args: calls[3][1], sessionId: '', from: app })).toEqual({ status: 200, body: { ok: true } })
       expect(d.w.sessionTasks.cancelById).toHaveBeenCalledWith('D:/p', 'wu-1')
+    })
+    it('work-units-git-op begin registers on the units for the calling socket and answers the op id; end closes it', async () => {
+      const d = duty()
+      const orch = orchOver({ workUnits: d.workUnits })
+      const fromSocket: OrchCaller = { ...app, socket: 7 }
+      expect(await orch.call({ cmd: 'work-units-git-op', args: calls[4][1], sessionId: '', from: fromSocket })).toEqual({ status: 200, body: { op: 'op-1' } })
+      expect(d.w.gitOpBegin).toHaveBeenCalledWith('job-merge', 'D:/p', 7)
+      expect(await orch.call({ cmd: 'work-units-git-op', args: { phase: 'end', op: 'op-1' }, sessionId: '', from: fromSocket })).toEqual({
+        status: 200,
+        body: { ended: true }
+      })
+      expect(d.w.gitOpEnd).toHaveBeenCalledWith('op-1')
+    })
+    it('work-units-git-op end is taken when this Host is not the writer: an op it opened must not stay open', async () => {
+      const d = duty()
+      d.box.writer = false
+      d.w.gitOpEnd.mockReturnValueOnce(false)
+      const orch = orchOver({ workUnits: d.workUnits })
+      expect(await orch.call({ cmd: 'work-units-git-op', args: { phase: 'end', op: 'op-9' }, sessionId: '', from: app })).toEqual({
+        status: 200,
+        body: { ended: false }
+      })
+      expect(d.w.gitOpEnd).toHaveBeenCalledWith('op-9')
     })
   })
 })

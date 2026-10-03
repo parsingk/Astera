@@ -438,3 +438,97 @@ describe('createAppWorkUnits: writer (no Host, or an older Host)', () => {
     ])
   })
 })
+
+// The app's own Job merges (integrateWorktrees' gitOp in ipc.ts): in front of a work-units Host they are
+// registered on the Host's collector, the one that watches HEAD, so the merge's move is Astera's there.
+describe('createAppWorkUnits: the gitOp around a Job merge this app runs', () => {
+  const hostOp = (m: Rig, op: string): void => {
+    m.state.reply = async (cmd) => ({ status: 200, body: cmd === 'work-units-git-op' ? { op } : { ok: true } })
+  }
+  const open = (m: Rig): Array<{ id: string; endedAt?: string }> => [...m.collector.getPendingGitOps()]
+
+  it('a reader sends begin and end to the Host as work-units-git-op and returns the Host op id', async () => {
+    const m = rig()
+    const begin = vi.spyOn(m.collector, 'beginGitOperation')
+    const end = vi.spyOn(m.collector, 'endGitOperation')
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(true)
+    hostOp(m, 'host-op-1')
+    expect(await w.gitOpBegin('job-merge', root)).toBe('host-op-1')
+    await w.gitOpEnd('host-op-1')
+    expect(m.calls).toEqual([
+      { cmd: 'work-units-git-op', args: { phase: 'begin', kind: 'job-merge', cwd: root } },
+      { cmd: 'work-units-git-op', args: { phase: 'end', op: 'host-op-1' } }
+    ])
+    expect(begin).not.toHaveBeenCalled()
+    expect(end).not.toHaveBeenCalled()
+  })
+
+  it('a writer registers on its own collector, as today, and sends nothing', async () => {
+    const m = rig()
+    const w = createAppWorkUnits(m.deps)
+    await w.onStartupSettled(true)
+    const id = await w.gitOpBegin('job-merge', root)
+    expect(open(m)).toEqual([expect.objectContaining({ id, kind: 'job-merge', projectPath: root })])
+    expect(open(m)[0].endedAt).toBeUndefined()
+    await w.gitOpEnd(id)
+    expect(open(m)[0].endedAt).toBeDefined()
+    expect(m.calls).toEqual([])
+  })
+
+  it('an end goes where its begin went, also when a greeting flipped the mode in between', async () => {
+    const m = rig()
+    const w = createAppWorkUnits(m.deps)
+    await w.onStartupSettled(true)
+    // Begun as the writer, ended as a reader: the local op is the one to close.
+    const local = await w.gitOpBegin('job-merge', root)
+    await w.onGreeting(true)
+    await w.gitOpEnd(local)
+    expect(m.calls).toEqual([])
+    expect(open(m).find((o) => o.id === local)?.endedAt).toBeDefined()
+    // Begun as a reader, ended as a writer (an older Host greeted): the Host's op is the one to close.
+    hostOp(m, 'host-op-2')
+    const remote = await w.gitOpBegin('job-merge', root)
+    expect(remote).toBe('host-op-2')
+    await w.onGreeting(false)
+    await w.gitOpEnd(remote)
+    expect(m.calls.at(-1)).toEqual({ cmd: 'work-units-git-op', args: { phase: 'end', op: 'host-op-2' } })
+  })
+
+  it('a Host begin that is refused or fails falls back to the local collector, is logged, and never throws', async () => {
+    const m = rig()
+    const begin = vi.spyOn(m.collector, 'beginGitOperation')
+    const end = vi.spyOn(m.collector, 'endGitOperation')
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(true)
+    m.state.reply = async () => ({ status: 409, body: { error: 'not the work units writer' } })
+    const refused = await w.gitOpBegin('job-merge', root)
+    m.state.reply = async () => {
+      throw new Error('the Host is gone')
+    }
+    const failed = await w.gitOpBegin('job-merge', root)
+    expect(begin).toHaveBeenCalledTimes(2)
+    expect(m.logs.filter((l) => l.includes('work-units-git-op'))).toHaveLength(2)
+    expect(m.logs.some((l) => l.includes('not the work units writer'))).toBe(true)
+    expect(m.logs.some((l) => l.includes('the Host is gone'))).toBe(true)
+    // Their ends go to the local collector too, not to the Host.
+    const sent = m.calls.length
+    await w.gitOpEnd(refused)
+    await w.gitOpEnd(failed)
+    expect(m.calls).toHaveLength(sent)
+    expect(end.mock.calls.map((c) => c[0])).toEqual([refused, failed])
+  })
+
+  it('a Host end that fails is logged and does not reject', async () => {
+    const m = rig()
+    const w = createAppWorkUnits(m.deps)
+    await w.onGreeting(true)
+    hostOp(m, 'host-op-3')
+    const op = await w.gitOpBegin('job-merge', root)
+    m.state.reply = async () => {
+      throw new Error('the Host is gone')
+    }
+    await expect(w.gitOpEnd(op)).resolves.toBeUndefined()
+    expect(m.logs.some((l) => l.includes('host-op-3') && l.includes('the Host is gone'))).toBe(true)
+  })
+})

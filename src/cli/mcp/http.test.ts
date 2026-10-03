@@ -6,7 +6,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { allowedHosts, hostsWithoutPort, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
+import { allowedHosts, hostsWithoutPort, offeredHosts, parseMcpHttpArgs, readyLineOf, serveMcpHttp } from './http'
 import { reachableUrls } from '../../core/mcp/httpUrls'
 import type { HostLink } from './hostLink'
 
@@ -28,7 +28,13 @@ afterEach(async () => {
 })
 
 async function start(
-  extra: { idleMs?: number; hosts?: string[]; closeThrows?: boolean } = {}
+  extra: {
+    idleMs?: number
+    hosts?: string[]
+    closeThrows?: boolean
+    bind?: string
+    interfaces?: Record<string, Array<{ address: string }>>
+  } = {}
 ) {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-mcp-http-'))
   const tokenFile = path.join(dir, 'mcp-http-token')
@@ -37,7 +43,7 @@ async function start(
   const links: Made[] = []
   served = await serveMcpHttp({
     port: 0,
-    bind: '127.0.0.1',
+    bind: extra.bind ?? '127.0.0.1',
     hosts: extra.hosts ?? [],
     tokenFile,
     version: '1.4.1',
@@ -46,6 +52,7 @@ async function start(
     home: '/nonexistent',
     log: (m) => logs.push(m),
     ...(extra.idleMs !== undefined ? { idleMs: extra.idleMs } : {}),
+    ...(extra.interfaces !== undefined ? { interfaces: extra.interfaces } : {}),
     link: ({ client, remote }) => {
       const made: Made = { client, remote, calls: [], closed: false }
       links.push(made)
@@ -77,10 +84,10 @@ async function connect(url: URL, token: string | null, name = 'test-client') {
 }
 
 /** A raw request, so the Host header and the body can be anything. */
-function raw(port: number, a: { method?: string; path?: string; headers?: Record<string, string>; body?: string | Buffer }) {
+function raw(port: number, a: { method?: string; path?: string; headers?: Record<string, string>; body?: string | Buffer; connect?: string }) {
   return new Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }>((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, method: a.method ?? 'POST', path: a.path ?? '/mcp', headers: a.headers ?? {} },
+      { host: a.connect ?? '127.0.0.1', port, method: a.method ?? 'POST', path: a.path ?? '/mcp', headers: a.headers ?? {} },
       (res) => {
         let body = ''
         res.setEncoding('utf8')
@@ -314,6 +321,21 @@ describe('serveMcpHttp', () => {
     expect(reachableUrls(ready.addresses, ready.port, [])).toEqual([])
   })
 
+  // Bound to ::1, which is beyond 127.0.0.1 (so the adapters count) yet reaches no other device, and asks the
+  // firewall nothing.
+  it('offers only physical adapters in its ready line, and still answers at a virtual adapter address', async () => {
+    const s = await start({
+      bind: '::1',
+      interfaces: { 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }], eth0: [{ address: '192.168.0.235' }] }
+    })
+    expect(served!.addresses().sort()).toEqual(['127.0.0.1', '192.168.0.235', 'localhost'])
+    const auth = { ...JSON_HEADERS, authorization: `Bearer ${TOKEN}` }
+    const at = (host: string) => raw(s.port, { connect: '::1', headers: { ...auth, host: `${host}:${s.port}` }, body: INIT })
+    expect((await at('172.20.176.1')).status).toBe(200)
+    expect((await at('192.168.0.235')).status).toBe(200)
+    expect((await at('evil.example')).status).toBe(403)
+  })
+
   it('rejects with EADDRINUSE when the port is taken', async () => {
     const s = await start()
     const second = serveMcpHttp({
@@ -347,6 +369,63 @@ describe('hostsWithoutPort', () => {
     const interfaces = { eth0: [{ address: '192.168.1.5' }, { address: 'fe80::2%eth0' }], ts: [{ address: '100.90.1.2' }] }
     const allowed = allowedHosts(7871, '0.0.0.0', ['Box.Ts.Net', 'proxy:9000', 'box:7871'], interfaces)
     expect(hostsWithoutPort(allowed, 7871).sort()).toEqual(['100.90.1.2', '127.0.0.1', '192.168.1.5', 'box', 'box.ts.net', 'fe80::2', 'localhost', 'proxy:9000'].sort())
+  })
+})
+
+describe('offeredHosts', () => {
+  // The adapters seen on a Windows machine with Hyper-V and WSL (2026-10-03): only the physical one reaches
+  // other devices, and the virtual one listed first became the settings screen's default URL.
+  const windows = {
+    'vEthernet (Default Switch)': [{ address: '172.20.176.1' }],
+    '이더넷 3': [{ address: '192.168.0.235' }],
+    'vEthernet (WSL (Hyper-V firewall))': [{ address: '172.30.128.1' }],
+    'Loopback Pseudo-Interface 1': [{ address: '::1' }, { address: '127.0.0.1' }]
+  }
+
+  it('leaves out the addresses of virtual adapters, so only the physical LAN address becomes a URL', () => {
+    const offered = offeredHosts(7871, '0.0.0.0', [], windows)
+    expect(offered.sort()).toEqual(['127.0.0.1', '192.168.0.235', 'localhost'])
+    expect(reachableUrls(offered, 7871, []).map((u) => u.url)).toEqual(['http://192.168.0.235:7871/mcp'])
+  })
+
+  it('keeps the virtual adapters in the Host/Origin allow-list: a VM on this machine may still use them', () => {
+    const allowed = allowedHosts(7871, '0.0.0.0', [], windows)
+    expect(allowed.has('172.20.176.1:7871')).toBe(true)
+    expect(allowed.has('172.30.128.1:7871')).toBe(true)
+  })
+
+  it('knows the Linux and macOS names of docker, libvirt, VirtualBox and VMware adapters, in any case', () => {
+    const unix = {
+      docker0: [{ address: '172.17.0.1' }],
+      'br-3f2a9c1d0e7b': [{ address: '172.18.0.1' }],
+      veth1a2b3c4: [{ address: '172.17.0.5' }],
+      virbr0: [{ address: '192.168.122.1' }],
+      vmnet8: [{ address: '192.168.56.1' }],
+      vboxnet0: [{ address: '192.168.57.1' }],
+      'VirtualBox Host-Only Network': [{ address: '192.168.58.1' }],
+      'VMware Network Adapter VMnet1': [{ address: '192.168.59.1' }],
+      eth0: [{ address: '10.0.0.7' }],
+      en0: [{ address: '192.168.1.20' }]
+    }
+    expect(offeredHosts(7871, '0.0.0.0', [], unix).sort()).toEqual(['10.0.0.7', '127.0.0.1', '192.168.1.20', 'localhost'])
+  })
+
+  // A Hyper-V External switch moves the physical LAN address onto a `vEthernet (<switch name>)` adapter, so the
+  // `vEthernet` prefix alone does not mean virtual.
+  it('keeps the address of a Hyper-V External switch, which is the physical LAN', () => {
+    const external = { 'vEthernet (External)': [{ address: '192.168.0.235' }], 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }] }
+    expect(offeredHosts(7871, '0.0.0.0', [], external).sort()).toEqual(['127.0.0.1', '192.168.0.235', 'localhost'])
+  })
+
+  it('keeps an address a person typed, and one a physical adapter also has', () => {
+    const shared = { 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }], eth0: [{ address: '172.20.176.1' }] }
+    expect(offeredHosts(7871, '0.0.0.0', [], shared)).toContain('172.20.176.1')
+    expect(offeredHosts(7871, '0.0.0.0', ['172.30.128.1'], windows)).toContain('172.30.128.1')
+  })
+
+  it('offers no LAN URL when every adapter is virtual', () => {
+    const offered = offeredHosts(7871, '0.0.0.0', [], { 'vEthernet (Default Switch)': [{ address: '172.20.176.1' }] })
+    expect(reachableUrls(offered, 7871, [])).toEqual([])
   })
 })
 
