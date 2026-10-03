@@ -2978,9 +2978,11 @@ export function registerIpc(
     /** The three things integrateWorktrees needs from the app (core/orchestration/exec/integrateGit.ts). */
     const gitCtx: IntegrateContext = {
       log: orchLog,
+      // Through appWorkUnits: in front of a work-units Host the merge is registered on the Host's
+      // collector (`work-units-git-op`), which is the one watching HEAD; otherwise on this app's.
       gitOp: {
-        begin: (k, cwd) => workUnitCollector.beginGitOperation(k, cwd),
-        end: (id) => workUnitCollector.endGitOperation(id)
+        begin: (k, cwd) => appWorkUnits.gitOpBegin(k, cwd),
+        end: (id) => appWorkUnits.gitOpEnd(id)
       },
       reap: reapWorktree
     }

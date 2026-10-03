@@ -116,7 +116,8 @@ export type Integration =
 
 export interface IntegrateContext {
   log(m: string): void
-  /** Who is told Astera is moving HEAD (EG §26): the app's collector in the app, `git-op` in the Host (R7). */
+  /** Who is told Astera is moving HEAD (EG §26): in the app, its own collector, or the Host's through
+   *  `work-units-git-op` in front of a Host that writes work units (appWorkUnits); `git-op` in the Host (R7). */
   /** Either may be async (R24): the Host's begin writes the merge record before it answers, and the
    *  merge waits for it. A rejecting end is logged; it never costs the merge. */
   gitOp: { begin(kind: 'job-merge', cwd: string): string | Promise<string>; end(id: string): void | Promise<void> }
