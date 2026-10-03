@@ -948,7 +948,7 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
   })
 
-  // 수집기의 주입된 시계(now)가 유예 경계를 실제로 넘기는 테스트가 없었다. isAsteraOperation 의
+  // 수집기의 주입된 시계(now)가 유예 경계를 실제로 넘기는 테스트가 없었다. asteraOperationsAt 의
   // 유예(OPERATION_GRACE_MS)는 provenance.test.ts 가 순수 함수로도 확인하지만, 여기서는 수집기
   // 자신의 begin/end + 주입된 clock 을 통해 끝에서 끝까지 확인하고, fast-forward 의 commits·
   // changedFiles 가 실제로 저장되는 기록까지 함께 본다(readRange 의 결과를 그대로 threading 하는지는
@@ -1100,7 +1100,7 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
   })
 
   // **CRITICAL 회귀 테스트.** endGitOperation 이 `!running` 가드를 갖고 있으면, 추적을 끄는 사이에
-  // 끝난 병합의 endedAt 이 영영 비고, isAsteraOperation 은 endedAt 없는 동작을 "아직 도는 중"으로
+  // 끝난 병합의 endedAt 이 영영 비고, asteraOperationsAt 은 endedAt 없는 동작을 "아직 도는 중"으로
   // 영원히 읽는다 — 그 프로젝트의 모든 외부 변경이 그때부터 조용히 삼켜진다. ipc.ts 의 job-merge
   // 자리는 토글을 묻지 않고 beginGitOperation/endGitOperation 을 부르므로, 병합 도중 설정 체크박스가
   // 눌리는 창은 실제로 열려 있다.
@@ -1133,7 +1133,7 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
 
   // ipc.ts 의 mergeInto(run.worktree ?? run.cwd)와 이 프로젝트의 cwd 는 따로 기록되고, 대소문자나
   // 구분자만 다르게 적힐 수 있다(core/orchestration/integrate.ts 의 worktreeDeps 주석과 같은 문제) —
-  // isAsteraOperation 에 isSamePath 를 넘기지 않으면 이 등록은 아무 것도 못 막는다.
+  // asteraOperationsAt 에 isSamePath 를 넘기지 않으면 이 등록은 아무 것도 못 막는다.
   // 대소문자를 접는 것은 win32 와 darwin 뿐 — linux 에서 대문자로 바꾼 경로는 다른 폴더의 병합이다
   it('등록된 경로 표기가 달라도(대소문자) Astera 의 병합으로 본다 (대소문자를 접는 플랫폼에서)', async () => {
     const fake = makeFake()
@@ -1155,7 +1155,7 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
 
   // beginGitOperation 의 프룬(pending 목록에서 유예 지난 것을 치우는 자리)은 규칙이 둘이고 서로
   // 다르다 — 하나로는 둘 다 못 잡는다. 여기서는 등록 목록 자체(getPendingGitOps)를 본다, 그
-  // 목록이 isAsteraOperation 의 판정에 미치는 영향(외부 변경 개수)이 아니라 — 판정을 통해서만
+  // 목록이 asteraOperationsAt 의 판정에 미치는 영향(외부 변경 개수)이 아니라 — 판정을 통해서만
   // 보면 두 규칙이 뒤섞여 어느 쪽이 깨졌는지 가릴 수 없다.
   it('유예가 지난 뒤 끝난 동작은 다음 등록 때 목록에서 치워진다', async () => {
     const fake = makeFake()

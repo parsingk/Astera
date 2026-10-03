@@ -130,7 +130,7 @@ export interface CollectorDeps {
   pendingGitOps?: () => readonly PendingGitOperation[]
   /** The Host's own record of the merges it made (Task 3, `src/core/git/hostMerges.ts`). Read only
    *  when a HEAD move needs explaining and no registration explains it (`asteraOperationsAt`, the
-   *  `isAsteraOperation` rule, found none) — that covers a merge
+   *  `asteraOperationsAt` rule, found none) — that covers a merge
    *  the Host made while this app was closed (no registration was ever opened for it here) and one it
    *  made while the app attached mid-merge (`git-op begin` was missed). Not passed means no records,
    *  and then a Host merge this app did not see is recorded as an outside change, same as before this
@@ -612,7 +612,7 @@ export class WorkUnitCollector {
    *  새로 넣기 전에 **유예가 지나 이미 끝난** 동작을 먼저 치운다. 지우지 않으면 Job 병합마다
    *  기록이 하나씩 쌓여 이 프로세스가 사는 동안 매 git 회차마다 다시 훑게 된다. **끝나지 않은
    *  동작은 절대 건드리지 않는다** — 오래 걸리는 병합을 유예로 착각해 지우면 그 동작이 도중에
-   *  외부로 오판된다(끝나지 않은 것을 헤아리는 판단은 `isAsteraOperation` 하나로 남긴다). */
+   *  외부로 오판된다(끝나지 않은 것을 헤아리는 판단은 `asteraOperationsAt` 하나로 남긴다). */
   beginGitOperation(kind: PendingGitOperation['kind'], projectPath: string): string {
     if (!this.running) return ''
     const now = this.deps.now()
@@ -626,15 +626,15 @@ export class WorkUnitCollector {
     return id
   }
 
-  /** 그 동작이 끝났다(성공이든 실패든). **지우지 않는다** — `isAsteraOperation`(provenance.ts)의
+  /** 그 동작이 끝났다(성공이든 실패든). **지우지 않는다** — `asteraOperationsAt`(provenance.ts)의
    *  유예가 끝난 동작을 보고 판단하기 때문이다.
    *
    *  **꺼져 있어도 닫는다.** `beginGitOperation` 과 달리 여기에 `!running` 가드를 두면, 추적을
    *  끈 사이에 `endGitOperation` 이 불려도 아무 일도 하지 않고 `endedAt` 이 영영 비게 된다 —
-   *  `isAsteraOperation` 은 `endedAt` 이 없는 동작을 "아직 도는 중"으로 읽으므로, 그 프로젝트의
+   *  `asteraOperationsAt` 은 `endedAt` 이 없는 동작을 "아직 도는 중"으로 읽으므로, 그 프로젝트의
    *  **모든** 외부 변경이 그때부터 조용히 Astera 것으로 삼켜진다(브리핑이 말한, 지어낸 외부 기록
    *  하나보다 훨씬 나쁜 실패). 꺼진 채로 `endedAt` 만 적는 것은 해가 없다 — 다음에 켜졌을 때
-   *  `isAsteraOperation` 이 유예를 그대로 적용해 판단한다. */
+   *  `asteraOperationsAt` 이 유예를 그대로 적용해 판단한다. */
   endGitOperation(id: string): void {
     const op = this.pendingOps.find((o) => o.id === id)
     if (op) op.endedAt = this.nowIso()
@@ -681,8 +681,7 @@ export class WorkUnitCollector {
    *
    *  **`PendingGitOperation` 으로 만들어 같은 목록에 넣는다.** `kind` 의 `'commit'` 은 이 브랜치
    *  내내 아무도 만들지 않는 값이었다 — 그 이름이 있던 이유가 이것이다. 판정도 유예도
-   *  `isAsteraOperation` 의 규칙 하나를 그대로 쓴다(gitRound 는 같은 규칙의 `asteraOperationsAt` 을
-   *  부른다): 바쁜 구간은 "아직 도는 중"(endedAt 없음)이고, 끝난
+   *  `asteraOperationsAt`(gitRound 가 부른다)의 규칙 하나를 그대로 쓴다: 바쁜 구간은 "아직 도는 중"(endedAt 없음)이고, 끝난
    *  구간은 `OPERATION_GRACE_MS` 만큼 더 그 세션의 것이다. 유예가 같은 폭인 이유도 같다 —
    *  감시자의 awaitWriteFinish 와 이 파일의 디바운스 때문에 `.git` 회차는 busy → false 보다 **뒤에**
    *  오고, 그 순서 역전이 유예 없이는 전부 오판된다.
@@ -1466,7 +1465,7 @@ export class WorkUnitCollector {
     for (const u of open) u.git.endHead = after.head
     // samePath: 등록 쪽(ipc.ts 의 job-merge 자리, 또는 Host 가 병합했을 때 hostGitOps.ts 가 넘기는
     // mergeInto)과 이 projectPath(세션의 cwd 에서 뽑았다)는 따로
-    // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 isAsteraOperation 주석). 그 비교를
+    // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 asteraOperationsAt 주석). 그 비교를
     // provenance.ts 는 직접 하지 못하므로(node: 없음) 여기서 isSamePath 를 넘긴다.
     //
     // **This list holds two kinds** — operations Astera ran itself (`job-merge` and the like) and the

@@ -22,7 +22,7 @@ export function createHostGitOps(collector: {
       if (m.phase === 'begin') {
         // M4 (fix round 1): a repeated begin for the same op must not leak the first registration —
         // op ids are unique per Host life, so this should not happen, but overwriting the Map entry
-        // without ending it first would leave a Work Unit operation open forever (isAsteraOperation
+        // without ending it first would leave a Work Unit operation open forever (asteraOperationsAt
         // reads one with no endedAt as still running), silently swallowing every outside change in
         // that project for the rest of this process's life.
         const prev = open.get(m.op)

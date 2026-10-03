@@ -22,7 +22,7 @@ const ms = (iso: string | undefined): number | null => {
 /**
  * **`ops` 에는 두 종류가 들어온다.** Astera 자신이 돌린 git 동작(`job-merge`)과, 세션의 에이전트가
  * 한 턴을 돌던 구간(`commit`, core/workUnit/collector.ts 의 `onSessionBusy`) — 둘 다 "이 이동은 이
- * 앱 안에서 벌어진 일이다"라는 같은 뜻이라 이 함수는 그 구분을 하지 않는다. 유예도 같다: 뒤쪽에서도
+ * 앱 안에서 벌어진 일이다"라는 같은 뜻이라 같은 규칙으로 고른다. 유예도 같다: 뒤쪽에서도
  * `.git` 이벤트가 구간이 닫힌 뒤에 도착하는 순서 역전이 그대로 일어난다.
  *
  * `projectPath`(수집기가 세션의 cwd 에서 뽑은 값)와 `o.projectPath`(등록 자리가 넘긴 값, 예:
@@ -33,25 +33,14 @@ const ms = (iso: string | undefined): number | null => {
  * 와 `D:` 로 갈리는 경우가 그것이다). 그 저장소들은 전부 `isSamePath`(core/files/tree.ts)로
  * 비교하지만, 이 파일은 node: 를 끌고 오지 않는다는 규약이 있어 그 함수를 직접 부르지 못한다 —
  * 그래서 비교 자체를 주입받는다. 기본값은 엄격한 `===`(이 파일의 나머지 테스트가 기대하는 그대로)
- * 이고, 실제 배선(collector.ts)은 `isSamePath` 를 넘긴다. (The collector now calls `asteraOperationsAt`
- * below, which applies this same rule and takes the same `samePath`; this function is that list being
- * non-empty.)
+ * 이고, 실제 배선(collector.ts)은 `isSamePath` 를 넘긴다.
+ *
+ * Returns the registrations that explain a HEAD move at `atMs`; an empty list means none (not this
+ * app's move). The list, not a yes/no, because the collector's gitRound also needs to know **which
+ * kind** explained it: a busy-window `commit` only says the session was working, while any other kind
+ * (`job-merge`, `checkout`, `other`) is Astera itself moving HEAD, i.e. content brought in rather than
+ * the session's own commit.
  */
-export function isAsteraOperation(
-  projectPath: string,
-  atMs: number,
-  ops: readonly PendingGitOperation[],
-  graceMs: number = OPERATION_GRACE_MS,
-  samePath: (a: string, b: string) => boolean = (a, b) => a === b
-): boolean {
-  return asteraOperationsAt(projectPath, atMs, ops, graceMs, samePath).length > 0
-}
-
-/** The registrations that explain a HEAD move at `atMs`, under exactly `isAsteraOperation`'s rule
- *  (which is this list being non-empty). For a caller that also needs to know **which kind** explained
- *  it: a busy-window `commit` only says the session was working, while any other kind (`job-merge`,
- *  `checkout`, `other`) is Astera itself moving HEAD, i.e. content brought in rather than the session's
- *  own commit (core/workUnit/collector.ts's gitRound). */
 export function asteraOperationsAt(
   projectPath: string,
   atMs: number,
