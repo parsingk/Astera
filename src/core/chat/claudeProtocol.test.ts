@@ -340,6 +340,13 @@ describe('claudeEffectsOf — the permission mode', () => {
     expect(claudeEffectsOf(message(statusWith('default')))).toEqual([{ type: 'permissionMode', mode: 'default' }])
   })
 
+  // `auto` is a settings default on Claude Code 2.1.288 (`permissions.defaultMode`), so a session can
+  // start in it without anyone choosing it here. Read as default, the button said 기본 while the CLI
+  // wrote files without asking (measured 2026-10-04).
+  it('carries auto through as itself', () => {
+    expect(claudeEffectsOf(message(statusWith('auto')))).toEqual([{ type: 'permissionMode', mode: 'auto' }])
+  })
+
   it('folds a mode the control does not offer onto default', () => {
     // bypassPermissions is a real mode the CLI can be started in (the spawn dialog's own checkbox) and
     // not one of the three offered here. Naming it as one of the three would be a lie about what the

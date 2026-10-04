@@ -1863,6 +1863,7 @@ export const ko = {
   'chat.mode.default': '기본',
   'chat.mode.acceptEdits': '편집 자동 승인',
   'chat.mode.plan': '플랜',
+  'chat.mode.auto': '자동',
   // chat takeover Task 10 — the mode menu's unattended-policy section and the New Session dialog's
   // matching control (P8): what a chat session does with a permission prompt nobody answers while a
   // Host holds the process as its writer.

@@ -23,8 +23,12 @@ export type ChatAnswer =
  *  knows how to ask for. Claude's own `bypassPermissions` is deliberately not among them — it is
  *  chosen when the session is made, and a live switch into it belongs to that decision, not to a
  *  menu beside the composer. A session already running in it reads as `default`, which is the
- *  honest neutral: picking `default` there really does step the CLI down. */
-export type PermissionMode = 'default' | 'acceptEdits' | 'plan'
+ *  honest neutral: picking `default` there really does step the CLI down.
+ *
+ *  `auto` (Claude only) is among them because it can be a session's starting mode without anyone
+ *  picking it here: Claude Code 2.1.288 starts in `permissions.defaultMode`, and `auto` is a value of
+ *  it. Folded onto `default`, the button read 기본 while the CLI acted without asking. */
+export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto'
 
 /** One row of the composer's mode menu.
  *
@@ -38,7 +42,7 @@ export interface PermissionModeChoice {
 }
 
 export function isPermissionMode(v: unknown): v is PermissionMode {
-  return v === 'default' || v === 'acceptEdits' || v === 'plan'
+  return v === 'default' || v === 'acceptEdits' || v === 'plan' || v === 'auto'
 }
 
 /** What a chat session does with a permission prompt while the Host is its writer and nobody answers

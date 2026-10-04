@@ -50,9 +50,9 @@ const PENDING_TURN = 'pending'
  *  the window can never outrun it. */
 const ANSWERED_KEPT = 32
 
-/** The three the composer's mode menu offers, in the order it draws them. `bypassPermissions` is
- *  deliberately absent — see PermissionMode (core/chat/types.ts). */
-const CLAUDE_PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan']
+/** The modes the composer's mode menu offers, in the order it draws them (the CLI's own cycle order).
+ *  `bypassPermissions` is deliberately absent — see PermissionMode (core/chat/types.ts). */
+const CLAUDE_PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto']
 
 export function createClaudeAdapter(deps: ClaudeAdapterDeps): ChatAdapter {
   const { proc, mode, log } = deps
