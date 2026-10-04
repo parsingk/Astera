@@ -172,6 +172,20 @@ describe('effectsOf', () => {
       { type: 'event', event: { type: 'status', status: 'idle' } }
     ])
   })
+  // codex 0.160 forwards the API's own error body as the message (measured 2026-10-04); the pane printed
+  // the JSON. What a person needs is the sentence inside it.
+  it('a failed turn whose message is an API error body reports the sentence inside it', () => {
+    const body = JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: "The 'gpt-x' model is not supported when using Codex with a ChatGPT account." }
+    })
+    const failed = JSON.stringify({ method: 'turn/completed', params: { threadId: 't', turn: { id: 'u', status: 'failed', error: { message: body } } } })
+    expect(effectsOf(note(failed))[1]).toEqual({
+      type: 'event',
+      event: { type: 'error', message: "The 'gpt-x' model is not supported when using Codex with a ChatGPT account." }
+    })
+  })
   it('thread/settings/updated reports the model, the effort and whether plan mode is on', () => {
     expect(effectsOf(note(F.THREAD_SETTINGS_UPDATED_PLAN))).toEqual([{ type: 'event', event: { type: 'model', model: { model: 'gpt-6-astra', effort: 'medium', permissionMode: 'plan' } } }])
   })

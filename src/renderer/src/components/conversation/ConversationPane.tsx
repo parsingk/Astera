@@ -78,8 +78,14 @@ export interface ConversationPaneProps {
 // (conversationPane.test.ts) — the mapping and the merge are where a wrong answer is silent, so
 // they are not left to the hand-checked cover the rest of this file gets.
 
-function toThreadPart(part: ConvPart) {
+/** How a failed turn reads in the thread. The pane passes the live error notice's own wording, so a
+ *  reopened conversation says it the way the live one did; a caller that does not care gets the CLI's
+ *  message as is. */
+type FailureWording = (message: string) => string;
+
+function toThreadPart(part: ConvPart, failure: FailureWording) {
   if (part.kind === "text") return { type: "text" as const, text: part.text };
+  if (part.kind === "failure") return { type: "text" as const, text: failure(part.message) };
   // ToolRow (./ToolRow.tsx) reads `result === undefined` as "still running". ConvPart's own
   // "no result yet" is `null`, so the nullish-coalescing here is what turns that corner —
   // passing `null` straight through would read as a finished, empty-result call instead.
@@ -94,11 +100,14 @@ function toThreadPart(part: ConvPart) {
 
 /** ConvTurn (core/history/convTypes.ts) — main's transcript reduction — into ThreadMessageLike, what
  *  the external-store runtime below reads. */
-export function toThreadMessages(turns: readonly ConvTurn[]): ThreadMessageLike[] {
+export function toThreadMessages(
+  turns: readonly ConvTurn[],
+  failure: FailureWording = (message) => message
+): ThreadMessageLike[] {
   return turns.map((turn) => ({
     id: turn.id,
     role: turn.role,
-    content: turn.parts.map(toThreadPart),
+    content: turn.parts.map((part) => toThreadPart(part, failure)),
   }));
 }
 
@@ -729,7 +738,7 @@ export function ConversationPane({
 
   const messages = useMemo(
     () => [
-      ...toThreadMessages(turns),
+      ...toThreadMessages(turns, (message) => t("chat.notice.error", { message })),
       // The person's own words, shown before the CLI writes them down. The transcript is still the
       // only place a turn really exists — this is a copy that lives exactly as long as it takes the
       // real one to arrive.
@@ -739,7 +748,7 @@ export function ConversationPane({
         content: [{ type: "text" as const, text: p.text }]
       }))
     ],
-    [turns, pending]
+    [turns, pending, t]
   );
 
   /**
@@ -1356,7 +1365,8 @@ export function ConversationPane({
     />
   );
   /** What the banner slot is for, in the order paneTransport.ts sets out. */
-  const chatBanner = chatBannerFor(chat);
+  const lastPart = turns.at(-1)?.parts.at(-1);
+  const chatBanner = chatBannerFor(chat, lastPart?.kind === "failure" ? lastPart.message : null);
   // 종료가 에러 배너를 가로채던 자리다. 사유를 배너 안으로 접어 넣어 한 곳에서 말한다 — 둘을 나란히
   // 세우면 같은 사건을 두 번 말하게 되고, 가로채면 어렵게 실어 온 이유가 화면에 닿지 못한다(설계 D2).
   const banner: ReactNode = exited ? (

@@ -40,4 +40,15 @@ describe('chatBannerFor', () => {
     expect(chatBannerFor({ ...base, notice: 'bypassed', truncated: true })).toEqual({ kind: 'notice', key: 'bypassed' })
     expect(chatBannerFor({ ...base, notice: 'bypassed', outlivesApp: false })).toEqual({ kind: 'notice', key: 'bypassed' })
   })
+
+  // codex writes a failed turn into its rollout, and the thread now draws it (convTypes' failure part):
+  // the same sentence above the composer said it twice. A failure the thread does not show (Claude's)
+  // keeps its notice.
+  it('leaves the error out when the thread already ends with that failure', () => {
+    expect(chatBannerFor({ ...base, error: 'model not enabled' }, 'model not enabled')).toEqual({ kind: 'none' })
+    expect(chatBannerFor({ ...base, error: 'model not enabled' }, 'another failure')).toEqual({
+      kind: 'error',
+      message: 'model not enabled'
+    })
+  })
 })

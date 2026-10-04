@@ -42,8 +42,9 @@ type RowEntry = [number, number, string, number, string, string, 0 | 1, 0 | 1]
 type Entry = CwdEntry | RowEntry
 
 /** Bumped whenever what buildEntry derives from a rollout changes, so rows of an older build are
- *  rebuilt rather than trusted. 3: a codex child thread rollout is a hidden row (the `hidden` slot). */
-export const ROW_VERSION = 3
+ *  rebuilt rather than trusted. 3: a codex child thread rollout is a hidden row (the `hidden` slot).
+ *  4: codex's goal continuation note is no title, and a goal-only session takes its objective. */
+export const ROW_VERSION = 4
 
 /** What a codex project expansion shows for one rollout, besides its path and mtime. */
 export interface RolloutRow {

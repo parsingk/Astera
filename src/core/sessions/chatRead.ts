@@ -53,6 +53,10 @@ export function chatTurnOf(t: ConvTurn): ChatTurn {
       text.push(p.text)
       continue
     }
+    if (p.kind === 'failure') {
+      text.push(`Turn failed: ${p.message}`)
+      continue
+    }
     const head = p.target === '' ? p.name : `${p.name} ${oneLine(p.target)}`
     // null is "no result in the window": still running, or answered where this read did not reach.
     const tail =

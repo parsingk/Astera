@@ -584,7 +584,8 @@ describe('createClaudeAdapter — the mode menu', () => {
     expect(await a.listPermissionModes()).toEqual([
       { key: 'default', label: '' },
       { key: 'acceptEdits', label: '' },
-      { key: 'plan', label: '' }
+      { key: 'plan', label: '' },
+      { key: 'auto', label: '' }
     ])
     expect(p.written.length).toBe(before) // nothing was sent
   })

@@ -17,12 +17,18 @@ describe('claude — 쓰기를 막는 세 겹', () => {
 
   // `--tools` 만으로는 막히지 않았다(실측) — 그래서 이름 차단이 함께 있어야 한다
   it('셸로 가는 길이 이름으로도 막혀 있다', () => {
-    for (const t of ['Bash', 'PowerShell', 'Task', 'Write', 'Edit']) expect(CLAUDE_DISALLOWED).toContain(t)
+    for (const t of ['Bash', 'PowerShell', 'Task', 'Agent', 'Write', 'Edit']) expect(CLAUDE_DISALLOWED).toContain(t)
   })
 
   // 사용자의 MCP 서버에는 셸을 그대로 내주는 것이 있다 — 그것이 들어오면 위의 셋이 무의미하다
   it('사용자의 MCP 서버를 들이지 않는다', () => {
     expect(args).toContain('--strict-mcp-config')
+  })
+
+  // A write-up is Astera's own one-shot run, not a conversation: saved, it showed in History under the
+  // project with the write-up prompt as its title.
+  it('leaves no session file behind', () => {
+    expect(args).toContain('--no-session-persistence')
   })
 
   it('모델과 노력은 고른 때만 실린다', () => {

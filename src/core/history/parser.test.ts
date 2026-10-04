@@ -254,6 +254,35 @@ describe('parseTranscriptMeta', () => {
   })
 })
 
+describe('slash command titles', () => {
+  // Claude Code 2.1.288 records `/astera-task <args>` as one user line opening with
+  // `<command-message>` (measured 2026-10-04). The person typed the command and its arguments.
+  const command = (name: string, args: string): string =>
+    line({
+      type: 'user',
+      sessionId: 's',
+      cwd: 'D:\\proj',
+      message: {
+        role: 'user',
+        content: `<command-message>${name}</command-message>\n<command-name>/${name}</command-name>\n<command-args>${args}</command-args>`
+      }
+    })
+
+  it('titles a slash command with its arguments as the person typed it', async () => {
+    const file = await write('cmd.jsonl', [command('astera-task', 'Create own3.txt and commit it')])
+    expect((await parseTranscriptMeta(file)).title).toBe('/astera-task Create own3.txt and commit it')
+    expect((await parseTranscriptTail(file)).lastUserTitle).toBe('/astera-task Create own3.txt and commit it')
+  })
+
+  it('a command with no arguments is still no title', async () => {
+    const file = await write('clear.jsonl', [
+      command('clear', ''),
+      line({ type: 'user', message: { role: 'user', content: '진짜 질문' } })
+    ])
+    expect((await parseTranscriptMeta(file)).title).toBe('진짜 질문')
+  })
+})
+
 describe('parseTranscriptTail', () => {
   it('isMeta 레코드는 마지막 사용자 메시지도 아니고 답변 대기 판정도 뒤집지 않는다', async () => {
     const file = await write('tail-meta.jsonl', [

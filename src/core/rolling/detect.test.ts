@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { OutputScanner, stripAnsi, findWaitChoice, looksLikeChoicePrompt } from './detect'
+import { OutputScanner, stripAnsi, findWaitChoice, looksLikeChoicePrompt, matchesLimitPhrase } from './detect'
+
+// The transcript path reads prose with real spaces (LIMIT_RE), not squashed screen text.
+describe('matchesLimitPhrase', () => {
+  it('matches the Fable limit with or without the model number', () => {
+    expect(matchesLimitPhrase("You've reached your " + 'Fable limit.')).toBe(true)
+    expect(matchesLimitPhrase("You've hit your " + 'Fable 5 limit')).toBe(true)
+  })
+})
 
 describe('stripAnsi', () => {
   it('CSI·OSC 시퀀스를 제거한다', () => {
@@ -28,6 +36,8 @@ describe('OutputScanner', () => {
     ["You've hit your " + 'Opus limit', 'Opus'],
     ["You've hit your " + 'Sonnet limit', 'Sonnet'],
     ["You've hit your " + 'Fable 5 limit', 'Fable 5'],
+    // Claude Code 2.1.288 drops the model number (measured in the binary, 2026-10-04)
+    ["You've reached your " + 'Fable limit', 'Fable'],
     ["You've hit your " + 'usage credit limit', '크레딧']
   ])('실측 한도 문구를 감지한다: %s (%s)', (text) => {
     expect(new OutputScanner().push(text).limit).toBe(true)

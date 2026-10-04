@@ -12,7 +12,7 @@ export const CLAUDE_TOOLS = 'Read,Glob,Grep'
 
 /** 그럼에도 이름으로 한 번 더 막는 것들. `--tools` 만으로는 부족했다: 그 인자만 준 에이전트가
  *  실제로 파일을 만들었고(첫 실측), 목록에는 여전히 `Write` 가 남아 보인다. 겹쳐야 막힌다 */
-export const CLAUDE_DISALLOWED = 'Write,Edit,NotebookEdit,Bash,PowerShell,Task,WebFetch,WebSearch'
+export const CLAUDE_DISALLOWED = 'Write,Edit,NotebookEdit,Bash,PowerShell,Task,Agent,WebFetch,WebSearch'
 
 export interface AgentArgsInput {
   provider: Provider
@@ -41,6 +41,9 @@ function claudeArgs(a: AgentArgsInput): string[] {
     // 그대로 내주는 것도 있다(serena 의 execute_shell_command). 이 한 줄이 없으면 위의 두 줄이
     // 막은 것을 MCP 도구가 그대로 통과시킨다 — 실측으로 이 인자가 `mcp__*` 를 전부 걷어 냈다
     '--strict-mcp-config',
+    // A write-up is a one-shot run whose answer is read from stdout, not a conversation anyone resumes:
+    // saved, it showed in History under the project, titled by the write-up prompt.
+    '--no-session-persistence',
     '--output-format',
     'json',
     ...(a.model ? ['--model', a.model] : []),

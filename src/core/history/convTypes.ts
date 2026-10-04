@@ -25,6 +25,10 @@ export type ConvPart =
       /** null while the result has not arrived, or when it fell outside the window. */
       outcome: ConvToolOutcome | null
     }
+  /** A turn the CLI could not run, in the CLI's (or its API's) own words. codex records one as a
+   *  `task_complete` with `error` and no reply; without this a reopened conversation showed the
+   *  question with nothing after it. */
+  | { kind: 'failure'; message: string }
 
 export interface ConvTurn {
   /** The uuid of the first entry the turn was built from. */

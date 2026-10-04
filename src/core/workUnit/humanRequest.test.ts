@@ -13,7 +13,9 @@ describe('hasWriteEvidence', () => {
     payload: { type: 'item_completed', item: { type: kind, id: 'i' } }
   })
 
-  it.each(['Write', 'Edit', 'NotebookEdit', 'Bash', 'PowerShell', 'Task'])(
+  // `Agent` is the sub-agent tool's name now (Claude Code 2.1.288, measured 2026-10-04); `Task` is what
+  // older transcripts carry.
+  it.each(['Write', 'Edit', 'NotebookEdit', 'Bash', 'PowerShell', 'Task', 'Agent'])(
     'claude 의 %s 는 증거다',
     (name) => {
       expect(hasWriteEvidence(claudeTool(name))).toBe(true)

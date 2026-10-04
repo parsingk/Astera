@@ -129,6 +129,16 @@ describe('reduceCodexRollout — the preamble codex writes for itself', () => {
     expect(turns.map(textOf)).toEqual(['빌드 좀 봐줘'])
   })
 
+  // codex 0.160 writes this each time it resumes work on a `/goal` (measured 2026-10-03): codex
+  // talking to itself, not something the person said.
+  it('drops the goal continuation codex writes as a user message', () => {
+    const turns = reduceCodexRollout([
+      userRecord('/goal own4.txt 를 만들어 커밋'),
+      userRecord('<codex_internal_context source="goal">\nContinue working toward the active thread goal.')
+    ])
+    expect(turns.map(textOf)).toEqual(['/goal own4.txt 를 만들어 커밋'])
+  })
+
   // The other way round is worse than a leak: a message that happens to sit beside a preamble part
   // would vanish, and nothing on screen would say a word had been lost.
   it('keeps a record that has even one part a person wrote', () => {
@@ -194,6 +204,30 @@ describe('codex exec', () => {
     expect(toolOf([call]).target).toBe('npm test')
   })
 
+  // codex 0.160 sends every tool through `exec` (measured 2026-10-04): the row named the wrapper, so a
+  // command, an MCP call and a goal update all read "exec". The tool the script calls is the name.
+  const nameOf = (input: string): string => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'custom_tool_call', id: 'c', call_id: 'c', name: 'exec', input }
+    })
+    const part = reduceCodexRollout([line], new Map()).flatMap((t) => t.parts).find((x) => x.kind === 'tool')
+    if (part === undefined || part.kind !== 'tool') throw new Error('no tool row')
+    return part.name
+  }
+
+  it('names the row after the tool the script calls', () => {
+    expect(nameOf('text(await tools.exec_command({cmd:"git log --oneline -1"}));\n')).toBe('exec_command')
+    expect(nameOf('const result = await tools.mcp__astera__list_projects({}); text(result);')).toBe(
+      'mcp__astera__list_projects'
+    )
+    expect(nameOf('text(await tools.update_goal({status:"complete"}));\n')).toBe('update_goal')
+  })
+
+  it('keeps exec when the script calls no tool it can see', () => {
+    expect(nameOf('text("hello")')).toBe('exec')
+  })
+
   it('reads a result that arrives as parts rather than a string', () => {
     expect(toolOf([call, outputOf('Script completed\nWall time 4.1 seconds')]).outcome).toEqual({
       ok: true,
@@ -240,5 +274,30 @@ describe('codex exec', () => {
     const part = turns.flatMap((t) => t.parts).find((x) => x.kind === 'tool')
     expect(part && part.kind === 'tool' ? part.target : null).toBe('src/a.ts')
     expect(part && part.kind === 'tool' ? part.outcome : null).toEqual({ ok: true, detail: '' })
+  })
+})
+
+// A turn codex could not run ends with `task_complete` carrying `error` and no reply (codex 0.160,
+// measured 2026-10-04). Reopened, the conversation showed the question with nothing after it.
+describe('codex failed turn', () => {
+  const user = JSON.stringify({
+    type: 'response_item',
+    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+  })
+  const failed = (message: string): string =>
+    JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 't', last_agent_message: null, error: { message } }
+    })
+
+  it('shows the failure, with the sentence inside an API error body', () => {
+    const body = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: 'model not enabled' } })
+    const turns = reduceCodexRollout([user, failed(body)], new Map())
+    expect(turns.at(-1)).toMatchObject({ role: 'assistant', parts: [{ kind: 'failure', message: 'model not enabled' }] })
+  })
+
+  it('a turn that completed without an error adds nothing', () => {
+    const ok = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 't', last_agent_message: 'x' } })
+    expect(reduceCodexRollout([user, ok], new Map()).flatMap((t) => t.parts).some((p) => p.kind === 'failure')).toBe(false)
   })
 })

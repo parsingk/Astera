@@ -1616,6 +1616,7 @@ export const en: Record<keyof typeof ko, string> = {
   'chat.mode.default': 'Default',
   'chat.mode.acceptEdits': 'Accept edits',
   'chat.mode.plan': 'Plan',
+  'chat.mode.auto': 'Auto',
   // chat takeover Task 10 — the mode menu's unattended-policy section and the New Session dialog's
   // matching control (P8): what a chat session does with a permission prompt nobody answers while a
   // Host holds the process as its writer.

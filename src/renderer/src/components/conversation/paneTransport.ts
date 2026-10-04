@@ -35,10 +35,13 @@ export type ChatBanner =
   | { kind: 'endsWithApp' }
   | { kind: 'none' }
 
-export function chatBannerFor(chat: ChatPaneState): ChatBanner {
+/** `threadFailure`: the failure the thread itself ends with, if any (convTypes' failure part — codex
+ *  writes a failed turn into its rollout). The same sentence above the composer would say it twice, so
+ *  the error is left to the thread then; a failure the thread does not show keeps its notice. */
+export function chatBannerFor(chat: ChatPaneState, threadFailure: string | null = null): ChatBanner {
   if (chat === null) return { kind: 'none' }
   if (chat.request !== null) return { kind: 'request', request: chat.request }
-  if (chat.error !== null) return { kind: 'error', message: chat.error }
+  if (chat.error !== null && chat.error !== threadFailure) return { kind: 'error', message: chat.error }
   if (chat.notice) return { kind: 'notice', key: chat.notice }
   if (chat.truncated && chat.status === 'idle') return { kind: 'checking' }
   if (!chat.outlivesApp && chat.status === 'idle') return { kind: 'endsWithApp' }

@@ -64,13 +64,13 @@ function squash(s: string): string {
 // limit" still matches. This is the form used on ordinary prose — transcript text and the log masking
 // below, both of which carry real spaces.
 const LIMIT_RE =
-  /you(?:['’ʼ`])?ve\s+(?:hit|reached)\s+your\s+(?:session|weekly|Opus|Sonnet|Fable\s+5|usage\s+credit)\s+limit|(?:usage|5-hour|session)\s+limit\s+reached/i
+  /you(?:['’ʼ`])?ve\s+(?:hit|reached)\s+your\s+(?:session|weekly|Opus|Sonnet|Fable(?:\s+5)?|usage\s+credit)\s+limit|(?:usage|5-hour|session)\s+limit\s+reached/i
 // The same phrase with every gap removed, for squash()ed screen text. Kept beside LIMIT_RE rather
 // than derived from it: deriving would mean rewriting \s+ into nothing at runtime, which is the kind
 // of cleverness that hides a divergence instead of preventing one. The pair is covered by a test that
 // feeds both renderings of the same sentence.
 const LIMIT_SQUASHED_RE =
-  /you(?:['’ʼ`])?ve(?:hit|reached)your(?:session|weekly|Opus|Sonnet|Fable5|usagecredit)limit|(?:usage|5-hour|session)limitreached/i
+  /you(?:['’ʼ`])?ve(?:hit|reached)your(?:session|weekly|Opus|Sonnet|Fable(?:5)?|usagecredit)limit|(?:usage|5-hour|session)limitreached/i
 // The folder-trust dialog. Trust is only ever asked of screen text, so this has no spaced twin.
 //
 // It is anchored on the **choice label**, not on the question, because the question is the part that

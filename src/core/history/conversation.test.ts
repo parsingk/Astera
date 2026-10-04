@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { reduceTranscript, type ConvPart, type ConvTurn } from './conversation'
+import { reduceTranscript, lastClaudeModelOf, type ConvPart, type ConvTurn } from './conversation'
 
 const line = (obj: unknown): string => JSON.stringify(obj)
 
@@ -348,5 +348,23 @@ describe('reduceTranscript — synthetic cases', () => {
     ])
     expect(turns).toHaveLength(1)
     expect(turns[0].parts.map((p) => p.kind)).toEqual(['text', 'tool', 'text'])
+  })
+})
+
+// A resumed chat names no model until its first turn (Claude's `initialize` carries none), so the
+// composer showed the settings' default while the CLI ran the model the conversation was last on.
+// The transcript's last reply says which one that was.
+describe('lastClaudeModelOf', () => {
+  const reply = (model: string): string =>
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', model, content: [{ type: 'text', text: 'x' }] } })
+
+  it('reads the model of the last reply', () => {
+    const lines = [reply('claude-opus-5-5'), reply('claude-haiku-4-5-20251001')]
+    expect(lastClaudeModelOf(lines)).toBe('claude-haiku-4-5-20251001')
+  })
+
+  it('skips a synthetic reply, and answers null when there is none', () => {
+    expect(lastClaudeModelOf([reply('claude-opus-5-5'), reply('<synthetic>')])).toBe('claude-opus-5-5')
+    expect(lastClaudeModelOf([JSON.stringify({ type: 'user', message: { content: 'hi' } })])).toBeNull()
   })
 })

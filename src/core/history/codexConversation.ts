@@ -1,4 +1,5 @@
 import type { ConvPart, ConvTurn, ToolPart } from './convTypes'
+import { readableCodexError } from '../chat/codexProtocol'
 
 // Folds a codex rollout into the same turns the conversation view draws for a Claude transcript.
 // Nothing is shared with conversation.ts but those shapes: codex writes a different file, with
@@ -37,7 +38,9 @@ const INJECTED_PART_PREFIXES = [
   '<environment_context>',
   '<user_instructions>',
   '<recommended_plugins>',
-  '# AGENTS.md instructions'
+  '# AGENTS.md instructions',
+  // codex 0.160's note to itself each time it resumes work on a `/goal` (measured 2026-10-03)
+  '<codex_internal_context'
 ]
 
 const isInjectedPart = (text: string): boolean =>
@@ -124,6 +127,19 @@ function outputText(output: unknown): string | null {
     if (text !== null) parts.push(text)
   }
   return parts.length === 0 ? null : parts.join('')
+}
+
+/**
+ * The tool an `exec` script calls, or null when it calls none this can see. codex 0.160 sends every
+ * tool through `exec` (measured 2026-10-04): `tools.exec_command(…)` for a command,
+ * `tools.mcp__<server>__<tool>(…)` for an MCP call, `tools.update_goal(…)` for a goal. Named after the
+ * wrapper, a row read "exec" for all of them. The first call is the name; a script that calls several
+ * is rare and still names the work it starts with.
+ */
+function execToolName(input: unknown): string | null {
+  const text = str(input)
+  if (text === null) return null
+  return /\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(text)?.[1] ?? null
 }
 
 /**
@@ -220,6 +236,20 @@ export function reduceCodexRollout(
       continue // a torn or truncated line
     }
     if (!isRecord(obj)) continue
+    // The one piece of bookkeeping a reader needs: a turn that failed. It has no reply, so without this
+    // the conversation showed the question with nothing after it.
+    if (obj.type === 'event_msg' && isRecord(obj.payload) && obj.payload.type === 'task_complete') {
+      const error = isRecord(obj.payload.error) ? str(obj.payload.error.message) : null
+      if (error !== null) {
+        const stamp = str(obj.timestamp)
+        startAssistant(stamp ?? `failure-${turns.length}`, stamp).parts.push({
+          kind: 'failure',
+          message: readableCodexError(error)
+        })
+        current = null // a turn's end
+      }
+      continue
+    }
     if (obj.type !== 'response_item') continue // event_msg / session_meta / turn_context: bookkeeping
     const payload = obj.payload
     if (!isRecord(payload)) continue
@@ -270,7 +300,10 @@ export function reduceCodexRollout(
       const part: ToolPart = {
         kind: 'tool',
         id: callId,
-        name: str(payload.name) ?? kind,
+        name:
+          (kind === 'custom_tool_call' && payload.name === 'exec' ? execToolName(payload.input) : null) ??
+          str(payload.name) ??
+          kind,
         target,
         outcome: null
       }

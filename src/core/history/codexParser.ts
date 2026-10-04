@@ -131,7 +131,10 @@ const CODEX_WRAPPER_PREFIXES = [
   // `response_item` 을 읽기 시작하면서 드러난 것(실측 2026-08-29): 사용자 롤 첫 메시지가 프로젝트의
   // AGENTS.md 를 통째로 실은 10KB 짜리 주입이다. 사람이 쓴 요청이 아니고, 그대로 두면 히스토리
   // 제목이 그 문서의 첫 줄이 된다.
-  '# AGENTS.md instructions'
+  '# AGENTS.md instructions',
+  // codex 0.160 writes this each time it resumes work on a `/goal` (measured 2026-10-03): codex telling
+  // itself to continue, recorded as a user message. Left in, it became the session's history title.
+  '<codex_internal_context'
 ]
 
 function isRealCodexUserText(text: string): boolean {
@@ -248,12 +251,20 @@ export async function parseCodexTail(
     lines = lines.filter((l) => l.trim().length > 0)
 
     let lastUserTitle: string | null = null
+    // codex records `/goal <objective>` as a goal event and no user message (0.160, measured
+    // 2026-10-03), so a session driven only by goals has no message of the person's at all. The newest
+    // objective is their words too, and stands in when no message is found.
+    let goalTitle: string | null = null
     let awaitingReply = false
     let roleResolved = false
 
     for (let i = lines.length - 1; i >= 0; i--) {
       const obj = parseLine(lines[i])
       if (!obj) continue
+      if (goalTitle === null) {
+        const objective = goalObjectiveOf(obj)
+        if (objective) goalTitle = toTitle(objective)
+      }
       const msg = eventMessage(obj)
       if (!msg) continue
 
@@ -273,10 +284,19 @@ export async function parseCodexTail(
       if (lastUserTitle !== null && roleResolved) break // early exit
     }
 
-    return { lastUserTitle, awaitingReply }
+    return { lastUserTitle: lastUserTitle ?? goalTitle, awaitingReply }
   } catch {
     return empty
   }
+}
+
+/** The objective of a codex `thread_goal_updated` event, or null for any other record. */
+function goalObjectiveOf(obj: Record<string, unknown>): string | null {
+  if (obj.type !== 'event_msg') return null
+  const p = obj.payload as { type?: unknown; goal?: { objective?: unknown } } | undefined
+  if (!p || p.type !== 'thread_goal_updated') return null
+  const o = p.goal?.objective
+  return typeof o === 'string' && o.trim() !== '' ? o : null
 }
 
 /** 미리보기용 파싱 — parseTranscriptPreview(parser.ts)와 **같은 규칙이어야 한다.** 두 provider 의

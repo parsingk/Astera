@@ -63,6 +63,7 @@ const MACHINE_USER_PREFIXES = [
   '<local-command-caveat>', // 실측
   '<local-command-stdout>', // 실측
   '<command-name>', // 실측
+  '<command-message>', // 실측 — Claude Code 2.1.288 opens a slash command's line with this (titleOfUserText reads it)
   '<bash-input>', // 실측 — 사용자가 `!` 로 실행한 명령. 행동이지만 할 말은 아니다
   '<bash-stdout>', // 실측
   '<bash-stderr>', // 모양으로 추가(위 짝)
@@ -77,6 +78,19 @@ export function isRealUserText(text: string): boolean {
   const t = text.trim()
   if (!t) return false
   return !MACHINE_USER_PREFIXES.some((p) => t.startsWith(p))
+}
+
+/** The list title a user line gives, or null when it gives none. A slash command run with arguments
+ *  (`/astera-task <objective>`) is what the person typed, so it is titled as they typed it; one with no
+ *  arguments (`/clear`) says nothing about the session and gives no title, as before. Any other line
+ *  is titled by its text when it is the person's (isRealUserText). */
+export function titleOfUserText(text: string): string | null {
+  const name = /<command-name>\s*([^<]*?)\s*<\/command-name>/.exec(text)?.[1]
+  if (name && /^\s*<command-(?:message|name)>/.test(text)) {
+    const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1]?.trim()
+    return args ? toTitle(`${name} ${args}`) : null
+  }
+  return isRealUserText(text) ? toTitle(text) : null
 }
 
 /** CLI 가 스스로 끼워 넣은 `type:'user'` 레코드인가. **텍스트가 아니라 레코드를 본다** —
@@ -173,7 +187,7 @@ export async function parseTranscriptMeta(filePath: string, maxLines = 50): Prom
       }
       if (meta.title === null && obj.type === 'user' && !isMetaUserRecord(obj)) {
         const text = extractText(obj.message)
-        if (text && isRealUserText(text)) meta.title = toTitle(text)
+        if (text) meta.title = titleOfUserText(text)
       }
       if (meta.sessionId && meta.cwd && meta.title) break
     }
@@ -242,7 +256,7 @@ export async function parseTranscriptTail(
 
       if (lastUserTitle === null && obj.type === 'user' && !isMetaUserRecord(obj)) {
         const text2 = extractText(obj.message)
-        if (text2 !== null && isRealUserText(text2)) lastUserTitle = toTitle(text2)
+        if (text2 !== null) lastUserTitle = titleOfUserText(text2)
       }
 
       if (lastUserTitle !== null && roleResolved) break // early exit
