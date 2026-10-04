@@ -73,7 +73,7 @@ export function mapUsageResponse(data: unknown): RateLimitUsage {
 /** The highest usage across every limit bucket — the value the limit verdict uses.
  *
  *  The two windows (five_hour / seven_day) alone are not enough. LIMIT_RE (core/rolling/detect.ts) also
- *  matches "Opus limit", "Sonnet limit", "Fable 5 limit" and "usage credit limit", and those live in
+ *  matches "Opus limit", "Sonnet limit", "Fable limit" (once "Fable 5 limit") and "usage credit limit", and those live in
  *  separate buckets that do not show up in either window. Judging on the two windows alone would read a
  *  genuine Opus weekly limit as "five 30% / weekly 55%" and reject it as a false positive.
  *
