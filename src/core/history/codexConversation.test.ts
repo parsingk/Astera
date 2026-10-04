@@ -276,3 +276,28 @@ describe('codex exec', () => {
     expect(part && part.kind === 'tool' ? part.outcome : null).toEqual({ ok: true, detail: '' })
   })
 })
+
+// A turn codex could not run ends with `task_complete` carrying `error` and no reply (codex 0.160,
+// measured 2026-10-04). Reopened, the conversation showed the question with nothing after it.
+describe('codex failed turn', () => {
+  const user = JSON.stringify({
+    type: 'response_item',
+    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }
+  })
+  const failed = (message: string): string =>
+    JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'task_complete', turn_id: 't', last_agent_message: null, error: { message } }
+    })
+
+  it('shows the failure, with the sentence inside an API error body', () => {
+    const body = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: 'model not enabled' } })
+    const turns = reduceCodexRollout([user, failed(body)], new Map())
+    expect(turns.at(-1)).toMatchObject({ role: 'assistant', parts: [{ kind: 'failure', message: 'model not enabled' }] })
+  })
+
+  it('a turn that completed without an error adds nothing', () => {
+    const ok = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 't', last_agent_message: 'x' } })
+    expect(reduceCodexRollout([user, ok], new Map()).flatMap((t) => t.parts).some((p) => p.kind === 'failure')).toBe(false)
+  })
+})

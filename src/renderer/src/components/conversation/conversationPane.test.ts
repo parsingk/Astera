@@ -21,6 +21,17 @@ const turnA: ConvTurn = { id: 'a', role: 'user', parts: [{ kind: 'text', text: '
 const turnB: ConvTurn = { id: 'b', role: 'assistant', parts: [{ kind: 'text', text: 'b' }] }
 const turnC: ConvTurn = { id: 'c', role: 'user', parts: [{ kind: 'text', text: 'c' }] }
 
+describe('toThreadMessages — a failed turn', () => {
+  // A turn the CLI could not run (convTypes' failure part) reads the way the live error notice does.
+  it('draws a failure as text through the given wording', () => {
+    const [message] = toThreadMessages(
+      [{ id: 't', role: 'assistant', parts: [{ kind: 'failure', message: 'model not enabled' }] }],
+      (m) => `failed: ${m}`
+    )
+    expect(message.content).toEqual([{ type: 'text', text: 'failed: model not enabled' }])
+  })
+})
+
 describe('toThreadMessages', () => {
   it('maps a text part, a tool part with an outcome, and a tool part without one', () => {
     const turn: ConvTurn = {

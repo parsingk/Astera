@@ -1,4 +1,5 @@
 import type { ConvPart, ConvTurn, ToolPart } from './convTypes'
+import { readableCodexError } from '../chat/codexProtocol'
 
 // Folds a codex rollout into the same turns the conversation view draws for a Claude transcript.
 // Nothing is shared with conversation.ts but those shapes: codex writes a different file, with
@@ -235,6 +236,20 @@ export function reduceCodexRollout(
       continue // a torn or truncated line
     }
     if (!isRecord(obj)) continue
+    // The one piece of bookkeeping a reader needs: a turn that failed. It has no reply, so without this
+    // the conversation showed the question with nothing after it.
+    if (obj.type === 'event_msg' && isRecord(obj.payload) && obj.payload.type === 'task_complete') {
+      const error = isRecord(obj.payload.error) ? str(obj.payload.error.message) : null
+      if (error !== null) {
+        const stamp = str(obj.timestamp)
+        startAssistant(stamp ?? `failure-${turns.length}`, stamp).parts.push({
+          kind: 'failure',
+          message: readableCodexError(error)
+        })
+        current = null // a turn's end
+      }
+      continue
+    }
     if (obj.type !== 'response_item') continue // event_msg / session_meta / turn_context: bookkeeping
     const payload = obj.payload
     if (!isRecord(payload)) continue

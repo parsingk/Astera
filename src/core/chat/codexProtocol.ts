@@ -261,6 +261,19 @@ export type ProtocolEffect =
    *  turn's row of zeros cannot blank a chip that was reading correctly a moment ago. */
   | { type: 'usage'; usedTokens: number; windowByModel: Record<string, number> }
 
+/** The sentence a failed codex turn's message carries. codex 0.160 forwards the API's own error body
+ *  as the message (`{"type":"error","status":400,"error":{"type":…,"message":"…"}}`, measured
+ *  2026-10-04), which the pane printed as JSON. Anything that is not such a body is returned as is. */
+export function readableCodexError(message: string): string {
+  if (!message.trimStart().startsWith('{')) return message
+  try {
+    const body = obj(JSON.parse(message))
+    return str(obj(body?.error)?.message ?? null) ?? str(body?.message ?? null) ?? message
+  } catch {
+    return message
+  }
+}
+
 export function effectsOf(frame: Extract<CodexFrame, { kind: 'notification' }>): ProtocolEffect[] {
   const p = obj(frame.params) ?? {}
   switch (frame.method) {
@@ -277,7 +290,7 @@ export function effectsOf(frame: Extract<CodexFrame, { kind: 'notification' }>):
       const turn = obj(p.turn) ?? {}
       const out: ProtocolEffect[] = [{ type: 'turn', turnId: null }]
       if (turn.status === 'failed') {
-        const message = str(obj(turn.error)?.message ?? null) ?? 'turn failed'
+        const message = readableCodexError(str(obj(turn.error)?.message ?? null) ?? 'turn failed')
         out.push({ type: 'event', event: { type: 'error', message } })
       }
       out.push({ type: 'event', event: { type: 'status', status: 'idle' } })
