@@ -127,6 +127,25 @@ function blockToPart(block: Record<string, unknown>): ConvPart | null {
  * Only the name and the arguments come back, joined the way they were typed. The message is the CLI
  * talking to itself, not anything anyone said. Null for ordinary text, which is everything else.
  */
+/** The model of a Claude transcript's last reply, or null. A resumed chat names no model until its
+ *  first turn (the CLI's `initialize` carries none), while it runs the model the conversation was last
+ *  on; this is where that one is written down. `<synthetic>` is the CLI's own stand-in for a reply no
+ *  model wrote, not a model. */
+export function lastClaudeModelOf(lines: readonly string[]): string | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let obj: unknown
+    try {
+      obj = JSON.parse(lines[i])
+    } catch {
+      continue
+    }
+    if (!isRecord(obj) || obj.type !== 'assistant' || !isRecord(obj.message)) continue
+    const model = obj.message.model
+    if (typeof model === 'string' && model !== '' && model !== '<synthetic>') return model
+  }
+  return null
+}
+
 export function typedCommandOf(text: string): string | null {
   const name = /<command-name>([^<]*)<\/command-name>/.exec(text)
   if (name === null) return null

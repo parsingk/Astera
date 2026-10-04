@@ -224,6 +224,7 @@ import { PresenceCache, PRESENCE_SWEEP_MS } from '../core/worktrees/presence'
 import { probeLog } from '../core/sessions/pathProbe'
 import { gateFolders, unreachableInLang, withUnreachableInLang } from './fileOpGate'
 import { readConfiguredModel } from './models/configuredModel'
+import { lastClaudeModelOf } from '../core/history/conversation'
 import { createPresenceRepush } from './worktreePresenceRepush'
 import {
   git,
@@ -7300,6 +7301,28 @@ export function registerIpc(
     }
     // codex keeps its model on the thread and reports it back at thread/start, so it never needs this.
     if (!account || account.provider === 'codex') return null
+    // A resumed conversation runs the model it was last on, not the settings' one: its transcript's
+    // last reply names it. Only the tail is read — the last reply is near the end, and a long
+    // conversation's file is large.
+    if (session.threadId) {
+      const resumed = await core.history
+        .transcriptPathById(session.accountId, session.threadId)
+        .then(async (p) => {
+          if (!p) return null
+          const handle = await fs.open(p, 'r')
+          try {
+            const { size } = await handle.stat()
+            const length = Math.min(size, 256 * 1024)
+            const buf = Buffer.alloc(length)
+            await handle.read(buf, 0, length, size - length)
+            return lastClaudeModelOf(buf.toString('utf8').split('\n'))
+          } finally {
+            await handle.close()
+          }
+        })
+        .catch(() => null)
+      if (resumed) return resumed
+    }
     // Async, each folder asked through the probe budget first (models/configuredModel.ts).
     return readConfiguredModel({ cwd: session.cwd || undefined, configDir: account.configDir })
   })
