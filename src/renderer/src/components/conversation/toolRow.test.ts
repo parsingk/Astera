@@ -39,6 +39,12 @@ describe('verbKeyOf', () => {
     expect(verbKeyOf('WebFetch')).toEqual({ name: 'WebFetch' })
   })
 
+  // codex 0.160's command tool, named out of its `exec` script (codexConversation.ts).
+  it('reads exec_command as a run', () => {
+    expect(verbKeyOf('exec_command')).toEqual(verbKeyOf('Bash'))
+    expect(groupKeyOf('exec_command')).toEqual(groupKeyOf('Bash'))
+  })
+
   // PowerShell is Bash under another name on Windows, and this app's own sessions use it.
   it('reads PowerShell as a run, the same as Bash', () => {
     expect(verbKeyOf('PowerShell')).toEqual(verbKeyOf('Bash'))

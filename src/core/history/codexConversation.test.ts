@@ -204,6 +204,30 @@ describe('codex exec', () => {
     expect(toolOf([call]).target).toBe('npm test')
   })
 
+  // codex 0.160 sends every tool through `exec` (measured 2026-10-04): the row named the wrapper, so a
+  // command, an MCP call and a goal update all read "exec". The tool the script calls is the name.
+  const nameOf = (input: string): string => {
+    const line = JSON.stringify({
+      type: 'response_item',
+      payload: { type: 'custom_tool_call', id: 'c', call_id: 'c', name: 'exec', input }
+    })
+    const part = reduceCodexRollout([line], new Map()).flatMap((t) => t.parts).find((x) => x.kind === 'tool')
+    if (part === undefined || part.kind !== 'tool') throw new Error('no tool row')
+    return part.name
+  }
+
+  it('names the row after the tool the script calls', () => {
+    expect(nameOf('text(await tools.exec_command({cmd:"git log --oneline -1"}));\n')).toBe('exec_command')
+    expect(nameOf('const result = await tools.mcp__astera__list_projects({}); text(result);')).toBe(
+      'mcp__astera__list_projects'
+    )
+    expect(nameOf('text(await tools.update_goal({status:"complete"}));\n')).toBe('update_goal')
+  })
+
+  it('keeps exec when the script calls no tool it can see', () => {
+    expect(nameOf('text("hello")')).toBe('exec')
+  })
+
   it('reads a result that arrives as parts rather than a string', () => {
     expect(toolOf([call, outputOf('Script completed\nWall time 4.1 seconds')]).outcome).toEqual({
       ok: true,

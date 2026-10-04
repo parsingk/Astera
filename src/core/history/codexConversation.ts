@@ -129,6 +129,19 @@ function outputText(output: unknown): string | null {
 }
 
 /**
+ * The tool an `exec` script calls, or null when it calls none this can see. codex 0.160 sends every
+ * tool through `exec` (measured 2026-10-04): `tools.exec_command(…)` for a command,
+ * `tools.mcp__<server>__<tool>(…)` for an MCP call, `tools.update_goal(…)` for a goal. Named after the
+ * wrapper, a row read "exec" for all of them. The first call is the name; a script that calls several
+ * is rare and still names the work it starts with.
+ */
+function execToolName(input: unknown): string | null {
+  const text = str(input)
+  if (text === null) return null
+  return /\btools\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(text)?.[1] ?? null
+}
+
+/**
  * What an `exec` ran, out of the little script codex writes for it.
  *
  * The call's `input` is not arguments but source: `const r = await tools.exec_command({cmd:"…",
@@ -272,7 +285,10 @@ export function reduceCodexRollout(
       const part: ToolPart = {
         kind: 'tool',
         id: callId,
-        name: str(payload.name) ?? kind,
+        name:
+          (kind === 'custom_tool_call' && payload.name === 'exec' ? execToolName(payload.input) : null) ??
+          str(payload.name) ??
+          kind,
         target,
         outcome: null
       }

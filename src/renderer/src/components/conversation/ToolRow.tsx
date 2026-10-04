@@ -37,6 +37,8 @@ const KIND_BY_TOOL: Readonly<Record<string, ToolKind>> = {
   // codex's, which do the same five things under its own names. A row reads the same either way;
   // only the CLI's word for the tool differs (core/history/codexConversation.ts names them).
   shell_command: "run",
+  // 0.160's, named out of the `exec` script that wraps every tool now (codexConversation.ts)
+  exec_command: "run",
   apply_patch: "edit",
   web_search: "find",
   tool_search: "find",
