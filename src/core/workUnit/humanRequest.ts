@@ -34,7 +34,9 @@ const CLAUDE_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'NotebookEdit',
   'Bash',
   'PowerShell',
-  'Task'
+  // The sub-agent tool: `Agent` on Claude Code 2.1.288 (measured 2026-10-04), `Task` in older transcripts.
+  'Task',
+  'Agent'
 ])
 
 /** The codex completed-item kinds that carry the same weight. Measured 2026-08-31:

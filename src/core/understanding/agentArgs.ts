@@ -12,7 +12,7 @@ export const CLAUDE_TOOLS = 'Read,Glob,Grep'
 
 /** 그럼에도 이름으로 한 번 더 막는 것들. `--tools` 만으로는 부족했다: 그 인자만 준 에이전트가
  *  실제로 파일을 만들었고(첫 실측), 목록에는 여전히 `Write` 가 남아 보인다. 겹쳐야 막힌다 */
-export const CLAUDE_DISALLOWED = 'Write,Edit,NotebookEdit,Bash,PowerShell,Task,WebFetch,WebSearch'
+export const CLAUDE_DISALLOWED = 'Write,Edit,NotebookEdit,Bash,PowerShell,Task,Agent,WebFetch,WebSearch'
 
 export interface AgentArgsInput {
   provider: Provider
