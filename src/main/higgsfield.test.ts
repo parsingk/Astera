@@ -78,3 +78,51 @@ describe('higgsfield main handlers', () => {
     await expect(fs.stat(path.join(profile, 'higgsfield', id))).rejects.toThrow()
   })
 })
+
+describe('higgsfield main handlers: no overlapping real-CLI work', () => {
+  const tracker = () => {
+    let now = 0, peak = 0, calls = 0
+    const enter = async (): Promise<void> => { now++; calls++; peak = Math.max(peak, now); await new Promise((r) => setTimeout(r, 15)); now-- }
+    return { enter, peak: () => peak, calls: () => calls }
+  }
+  it('answers two simultaneous list() calls with one set of status calls', async () => {
+    const tr = tracker()
+    const hh = h({ runStatus: async () => { await tr.enter(); return { credits: 1 } } })
+    await hh.add('A')
+    const [x, y] = await Promise.all([hh.list(), hh.list()])
+    expect(x).toEqual(y)
+    expect(tr.calls()).toBe(1)
+  })
+  it('never runs list() and login() at the same time', async () => {
+    const tr = tracker()
+    const hh = h({
+      runStatus: async () => { await tr.enter(); return { credits: 1 } },
+      runLogin: async (id: string) => { await tr.enter(); return loginOk(profile)(id) }
+    })
+    const { id } = await hh.add('A')
+    await Promise.all([hh.list(), hh.login(id), hh.list()])
+    expect(tr.peak()).toBe(1)
+  })
+  it('keeps going after a handler failed', async () => {
+    const hh = h()
+    await Promise.allSettled([hh.setCurrent('zzz')])
+    await expect(hh.add('B')).resolves.toBeTruthy()
+  })
+})
+
+describe('importCurrent validates what it copied', () => {
+  it('removes the new account and refuses a garbled source login', async () => {
+    const src = path.join(home, '.config', 'higgsfield')
+    await fs.mkdir(src, { recursive: true })
+    await fs.writeFile(path.join(src, 'credentials.json'), '{"a":')
+    await expect(h().importCurrent('Main')).rejects.toThrow(/INVALID: the login file being imported is incomplete/)
+    expect((await readHfAccounts(profile)).accounts).toEqual([])
+  })
+  it('backs up a good import', async () => {
+    const src = path.join(home, '.config', 'higgsfield')
+    await fs.mkdir(src, { recursive: true })
+    await fs.writeFile(path.join(src, 'credentials.json'), '{"a":1}')
+    const { id } = await h().importCurrent('Main')
+    await expect(fs.stat(hfEnvFor(profile, id).HIGGSFIELD_CREDENTIALS_PATH + '.bak')).resolves.toBeTruthy()
+  })
+})

@@ -20,6 +20,8 @@ export interface RealRunnerOptions {
   /** Kill the child after this long and report code 1. */
   timeoutMs?: number
   onStdout?: (chunk: string) => void
+  /** The child's stdin. Default 'inherit' (the proxy passes the agent's stdin through). */
+  stdin?: 'inherit' | 'ignore'
 }
 
 export function realRunner(file: string, platform: NodeJS.Platform, lead: string[] = [], opts: RealRunnerOptions = {}): HfRunner {
@@ -47,7 +49,7 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
           cmd = windowsSpawn(path.win32.basename(file), all, () => file)
         }
       }
-      const child = spawn(cmd.file, cmd.args, { env, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
+      const child = spawn(cmd.file, cmd.args, { env, stdio: [opts.stdin ?? 'inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
       let stdout = ''
       let stderr = ''
       let timer: NodeJS.Timeout | undefined
