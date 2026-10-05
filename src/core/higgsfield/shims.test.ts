@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { findRealHiggsfield, hfShimFiles, isHfShim } from './shims'
+import { findRealHiggsfield, hfShimFiles, isHfShim, npmShimTarget } from './shims'
 
 describe('higgsfield shims', () => {
   it('writes a .cmd and an sh file per name on win32, sh only elsewhere', () => {
@@ -44,5 +44,32 @@ describe('higgsfield shims', () => {
     const env = { PATH: '/usr/local/bin' }
     const r = (p: string) => (p === '/usr/local/bin/hf' ? '#!/usr/bin/env node' : null)
     expect(findRealHiggsfield({ env, platform: 'linux', skipDirs: [], read: r })).toBe('/usr/local/bin/hf')
+  })
+})
+
+describe('npmShimTarget', () => {
+  // The shape npm's cmd-shim writes (read from C:\Program Files\nodejs\higgsfield.cmd).
+  const SHIM = [
+    '@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+    String.raw`IF EXIST "%dp0%\node.exe" (`, String.raw`  SET "_prog=%dp0%\node.exe"`, ') ELSE (', '  SET "_prog=node"', '  SET PATHEXT=%PATHEXT:;.JS;=;%', ')', '',
+    String.raw`endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@higgsfield\cli\bin\higgsfield.js" %*`, ''
+  ].join('\r\n')
+  const file = String.raw`C:\Program Files\nodejs\higgsfield.cmd`
+  const nodeBeside = String.raw`C:\Program Files\nodejs\node.exe`
+  const read = (p: string) => (p === file ? SHIM : null)
+
+  it('finds the script and uses node.exe beside the shim when present', () => {
+    const t = npmShimTarget(file, read, { exists: (p) => p === nodeBeside })
+    expect(t).toEqual({ node: nodeBeside, script: String.raw`C:\Program Files\nodejs\node_modules\@higgsfield\cli\bin\higgsfield.js`, electronAsNode: false })
+  })
+  it('falls back to node on PATH, then to this executable as node', () => {
+    const onPath = npmShimTarget(file, read, { exists: (p) => p === String.raw`C:\n\node.exe`, env: { PATH: String.raw`C:\n` } })
+    expect(onPath?.node).toBe(String.raw`C:\n\node.exe`)
+    const self = npmShimTarget(file, read, { exists: () => false, env: { PATH: '' }, selfExecPath: String.raw`C:\app\astera.exe` })
+    expect(self).toMatchObject({ node: String.raw`C:\app\astera.exe`, electronAsNode: true })
+  })
+  it('is null for a .cmd that is not an npm shim', () => {
+    expect(npmShimTarget(String.raw`C:\x\a.cmd`, () => '@echo hi\r\n')).toBeNull()
+    expect(npmShimTarget(String.raw`C:\x\missing.cmd`, () => null)).toBeNull()
   })
 })

@@ -4,11 +4,14 @@
 // account's folder, and guards the one hazard measured on CLI 1.1.24: a failed token refresh deletes
 // the credentials file.
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { promises as fs, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { renameRetrying } from '../core/renameRetry'
+import { cmdRefusal } from '../core/install/mcpClients'
 import { cliHostTarget } from './host'
 import { hfEnvFor, patchHfAccount, readHfAccounts, type HfAccount } from '../core/higgsfield/accounts'
-import { findRealHiggsfield } from '../core/higgsfield/shims'
+import { findRealHiggsfield, npmShimTarget } from '../core/higgsfield/shims'
 import { windowsSpawn } from '../core/sessions/windowsExecutable'
 
 export interface HfRun { code: number; stdout: string; stderr: string }
@@ -18,8 +21,28 @@ export type HfRunner = (args: string[], env: NodeJS.ProcessEnv, tee: boolean) =>
 export function realRunner(file: string, platform: NodeJS.Platform, lead: string[] = []): HfRunner {
   return (args, env, tee) =>
     new Promise((resolve) => {
-      const all = [...lead, ...args]
-      const cmd = platform === 'win32' ? windowsSpawn(path.win32.basename(file), all, () => file) : { file, args: all }
+      let all = [...lead, ...args]
+      let cmd: { file: string; args: string[] } = { file, args: all }
+      if (platform === 'win32') {
+        const ext = path.win32.extname(file).toLowerCase()
+        const shim = ext === '.cmd' || ext === '.bat' ? npmShimTarget(file, readOrNull, { env }) : null
+        if (shim) {
+          // npm's own shim: run node on its script, so no cmd.exe reads the agent's words.
+          all = [shim.script, ...all]
+          cmd = { file: shim.node, args: all }
+          if (shim.electronAsNode) env = { ...env, ELECTRON_RUN_AS_NODE: '1' }
+        } else {
+          const refusal = cmdRefusal(file, all, platform)
+          if (refusal !== null) {
+            const msg = `higgsfield: ${refusal}
+`
+            if (tee) process.stderr.write(msg)
+            resolve({ code: 2, stdout: '', stderr: msg })
+            return
+          }
+          cmd = windowsSpawn(path.win32.basename(file), all, () => file)
+        }
+      }
       const child = spawn(cmd.file, cmd.args, { env, stdio: ['inherit', 'pipe', 'pipe'], windowsHide: true })
       let stdout = ''
       let stderr = ''
@@ -32,6 +55,24 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
 
 const exists = (p: string) => fs.stat(p).then(() => true, () => false)
 const readOrNull = (p: string): string | null => { try { return readFileSync(p, 'utf8') } catch { return null } }
+
+/** Refresh `<creds>.bak` from the credentials file, but only from one that parses to a non-empty
+ *  object, and atomically: a half-written file (the CLI mid-write, a concurrent session) must never
+ *  replace the only good backup. Never throws. */
+export async function backupCredentials(creds: string): Promise<void> {
+  const tmp = `${creds}.bak.${randomBytes(4).toString('hex')}.tmp`
+  try {
+    const text = await fs.readFile(creds, 'utf8')
+    const v: unknown = JSON.parse(text)
+    if (typeof v !== 'object' || v === null || Array.isArray(v) || Object.keys(v).length === 0) return
+    await fs.writeFile(tmp, text)
+    await renameRetrying(tmp, `${creds}.bak`)
+  } catch {
+    // unreadable or not JSON: keep the backup we have
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => {})
+  }
+}
 
 /** The runner to use, or null (after saying so) when no real higgsfield CLI is on PATH. */
 function pickRunner(a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; run?: HfRunner }, orchDir: string, write: (s: string) => void): HfRunner | null {
@@ -64,18 +105,23 @@ export async function restoreOnce(a: {
   creds: string; first: HfRun; write: (s: string) => void
 }): Promise<number> {
   const { run, args, env, profileDir, account, creds, first, write } = a
-  if (await exists(`${creds}.bak`)) {
-    await fs.copyFile(`${creds}.bak`, creds)
-    const check = await run(['account', 'status', '--json'], env, false)
-    if (check.code === 0 && (await exists(creds))) {
-      write('higgsfield: the login was restored from Astera\'s backup; running the command again\n')
-      const again = await run(args, env, true)
-      if (await exists(creds)) await fs.copyFile(creds, `${creds}.bak`).catch(() => {})
-      return again.code
+  try {
+    if (await exists(`${creds}.bak`)) {
+      await fs.copyFile(`${creds}.bak`, creds)
+      const check = await run(['account', 'status', '--json'], env, false)
+      if (check.code === 0 && (await exists(creds))) {
+        write("higgsfield: the login was restored from Astera's backup; running the command again\n")
+        const again = await run(args, env, true)
+        await backupCredentials(creds)
+        return again.code
+      }
     }
+    await patchHfAccount(profileDir, account.id, { needsLogin: true })
+  } catch {
+    // fall through to the message: the agent gets the instruction, not a stack trace
   }
-  await patchHfAccount(profileDir, account.id, { needsLogin: true })
-  write(`higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Higgsfield). Tell the user; do not log in yourself.\n`)
+  write(`higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Higgsfield). Tell the user; do not log in yourself.
+`)
   return first.code
 }
 
@@ -98,7 +144,12 @@ export async function hfProxy(a: {
   const creds = env.HIGGSFIELD_CREDENTIALS_PATH as string
   const first = await run(a.args, env, true)
   if (await exists(creds)) {
-    await fs.copyFile(creds, `${creds}.bak`).catch(() => {})
+    await backupCredentials(creds)
+    return first.code
+  }
+  // `auth login` / `auth logout` change the file on purpose; a missing file after them is not a failure.
+  if (a.args[0] === 'auth') {
+    if (a.args[1] === 'logout') await fs.rm(`${creds}.bak`, { force: true }).catch(() => {})
     return first.code
   }
   return restoreOnce({ run, args: a.args, env, profileDir, account, creds, first, write })

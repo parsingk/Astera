@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { hfProxy, realRunner } from './hfProxy'
+import { backupCredentials, hfProxy, realRunner } from './hfProxy'
 import { addHfAccount, hfAccountDir, readHfAccounts } from '../core/higgsfield/accounts'
 
 const FAKE = path.join(__dirname, '__fixtures__', 'fake-hf.mjs')
@@ -81,19 +81,78 @@ describe('hfProxy', () => {
 
   it('forwards stdout before the CLI exits', async () => {
     const seen: string[] = []
-    const r = realRunner(process.execPath, process.platform, ['-e', 'process.stdout.write("one");setTimeout(()=>process.stdout.write("two"),300)'])
+    const r = realRunner(process.execPath, process.platform, ['-e', 'process.stdout.write("one");setTimeout(()=>process.stdout.write("two"),1500)'])
     const orig = process.stdout.write.bind(process.stdout)
     let firstAt = 0
     ;(process.stdout as any).write = (s: string) => { if (!firstAt) firstAt = Date.now(); seen.push(String(s)); return true }
     const t0 = Date.now()
     try { await r([], process.env, true) } finally { (process.stdout as any).write = orig }
     expect(seen.join('')).toBe('onetwo')
-    expect(firstAt - t0).toBeLessThan(250)
+    expect(firstAt - t0).toBeLessThan(1000)
   })
 
   it('exits 127 naming the skipped folder when no real CLI is on PATH', async () => {
     const code = await hfProxy({ args: ['x'], env: { ASTERA_PROFILE_DIR: profile, PATH: '' }, platform: process.platform, home: profile, write: (s) => msgs.push(s) })
     expect(code).toBe(127)
     expect(msgs.join('')).toContain(path.join(profile, 'orch'))
+  })
+
+  it('never replaces a good backup with an empty or garbled credentials file', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    for (const bad of ['', '{"t":', '{}', '[]']) {
+      await fs.writeFile(creds, bad)
+      await backupCredentials(creds)
+      expect(await fs.readFile(`${creds}.bak`, 'utf8')).toBe('{"t":1}')
+    }
+    await fs.writeFile(creds, '{"t":2}')
+    await backupCredentials(creds)
+    expect(await fs.readFile(`${creds}.bak`, 'utf8')).toBe('{"t":2}')
+    expect((await fs.readdir(path.dirname(creds))).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('does not restore after auth logout, which removes the file on purpose', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}')
+    const code = await hfProxy({ args: ['auth', 'logout'], env: env({ FAKE_HF_DELETE_CREDS: '1' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(code).toBe(0)
+    expect((await calls()).length).toBe(1)
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+    expect(msgs).toEqual([])
+  })
+
+  it('still reports "log in again" when the restore itself throws', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.mkdir(`${creds}.bak`)            // a directory: copyFile from it throws
+    const code = await hfProxy({ args: ['x'], env: env({ FAKE_HF_DELETE_CREDS: '1', FAKE_HF_EXIT: '4' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(code).toBe(4)
+    expect(msgs.join('')).toMatch(/log in again/i)
+  })
+
+  it.runIf(process.platform === 'win32')('passes cmd metacharacters intact through an npm-style .cmd shim', async () => {
+    const dir = path.join(profile, 'npmbin')
+    const script = path.join(dir, 'node_modules', '@x', 'cli', 'bin', 'x.js')
+    await fs.mkdir(path.dirname(script), { recursive: true })
+    await fs.writeFile(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))')
+    await fs.copyFile(process.execPath, path.join(dir, 'node.exe'))
+    const shim = path.join(dir, 'x.cmd')
+    await fs.writeFile(shim, ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+      String.raw`IF EXIST "%dp0%\node.exe" (`, String.raw`  SET "_prog=%dp0%\node.exe"`, ') ELSE (', '  SET "_prog=node"', ')', '',
+      String.raw`endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@x\cli\bin\x.js" %*`, ''].join('\r\n'))
+    const args = ['say', 'x & y', '50%PATH% off', 'a^b', 'q"r', 'a&echo INJECTED']
+    const r = await realRunner(shim, 'win32')(args, process.env, false)
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.stdout)).toEqual(args)
+  })
+
+  it.runIf(process.platform === 'win32')('refuses cmd metacharacters for a .cmd that is not an npm shim', async () => {
+    const shim = path.join(profile, 'plain.cmd')
+    await fs.writeFile(shim, '@echo off\r\necho hi %*\r\n')
+    const r = await realRunner(shim, 'win32')(['a&b'], process.env, false)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toMatch(/cmd/)
   })
 })

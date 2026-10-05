@@ -3,6 +3,7 @@
 // They live only in the session shuttle folder (<profile>/orch), which terminal and chat sessions put
 // first on PATH; a shell Astera did not start never sees them.
 import path from 'node:path'
+import { findOnWindowsPath } from '../sessions/windowsExecutable'
 
 export const HF_NAMES = ['higgsfield', 'hf', 'higgs'] as const
 const MARK = 'astera" hf-proxy'
@@ -47,4 +48,29 @@ export function findRealHiggsfield(a: {
     }
   }
   return null
+}
+
+/** What an npm-generated `.cmd` shim runs: `"%_prog%" "%dp0%\node_modules\…\x.js" %*`. Parsing it lets
+ *  the proxy start node on the script directly, so no cmd.exe reads the agent's words (a prompt with
+ *  `&`, `%` or `^` would otherwise be syntax). `node` is the node.exe beside the shim, else `node` on
+ *  PATH, else this process's own executable run as node (`electronAsNode`: set ELECTRON_RUN_AS_NODE=1).
+ *  null when the file is not shaped like an npm shim. */
+export function npmShimTarget(
+  cmdFile: string,
+  read: (p: string) => string | null,
+  opts: { exists?: (p: string) => boolean; env?: NodeJS.ProcessEnv; selfExecPath?: string } = {}
+): { node: string; script: string; electronAsNode: boolean } | null {
+  const text = read(cmdFile)
+  if (text === null) return null
+  const m = /"%_prog%"\s+"([^"\r\n]*)"\s+%\*/i.exec(text)
+  if (!m) return null
+  const dir = path.win32.dirname(cmdFile)
+  const script = path.win32.normalize(m[1].replace(/%~dp0%?|%dp0%/gi, dir))
+  if (script.includes('%')) return null
+  const exists = opts.exists ?? ((p: string) => read(p) !== null)
+  const beside = path.win32.join(dir, 'node.exe')
+  if (exists(beside)) return { node: beside, script, electronAsNode: false }
+  const onPath = findOnWindowsPath('node', opts.env ?? process.env, exists)
+  if (onPath) return { node: onPath, script, electronAsNode: false }
+  return { node: opts.selfExecPath ?? process.execPath, script, electronAsNode: true }
 }
