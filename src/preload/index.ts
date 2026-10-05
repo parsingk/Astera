@@ -122,6 +122,8 @@ const api = {
     add: invoke('higgsfield.add'),
     importCurrent: invoke('higgsfield.importCurrent'),
     login: invoke('higgsfield.login'),
+    loginState: invoke('higgsfield.loginState'),
+    cancelLogin: invoke('higgsfield.cancelLogin'),
     remove: invoke('higgsfield.remove'),
     setCurrent: invoke('higgsfield.setCurrent')
   },

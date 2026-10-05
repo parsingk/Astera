@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { higgsfieldHandlers } from './higgsfield'
+import { higgsfieldHandlers, LOGIN_TIMEOUT_MS, loginUrlReader, type LoginIo } from './higgsfield'
 import { hfEnvFor, patchHfAccount, readHfAccounts } from '../core/higgsfield/accounts'
 
 let profile: string, home: string
@@ -124,5 +124,156 @@ describe('importCurrent validates what it copied', () => {
     await fs.writeFile(path.join(src, 'credentials.json'), '{"a":1}')
     const { id } = await h().importCurrent('Main')
     await expect(fs.stat(hfEnvFor(profile, id).HIGGSFIELD_CREDENTIALS_PATH + '.bak')).resolves.toBeTruthy()
+  })
+})
+
+describe('higgsfield login without holding the other handlers', () => {
+  const URL = 'https://clerk.higgsfield.ai/oauth/authorize?client_id=c&redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Fcallback'
+  /** A login that runs until it is aborted (killed) or released; it reports when it stopped. */
+  const heldLogin = () => {
+    let release!: (code: number) => void
+    let io: LoginIo | undefined
+    const ev: string[] = []
+    let started!: () => void
+    const startedP = new Promise<void>((r) => { started = r })
+    const run = async (id: string, given: LoginIo): Promise<number> => {
+      io = given
+      ev.push(`start ${id}`)
+      started()
+      const code = await new Promise<number>((resolve) => {
+        release = resolve
+        given.signal.addEventListener('abort', () => { ev.push('killed'); setTimeout(() => { ev.push('exited'); resolve(1) }, 20) })
+      })
+      if (code === 0) await fs.writeFile(hfEnvFor(profile, id).HIGGSFIELD_CREDENTIALS_PATH, '{"token":"t"}')
+      return code
+    }
+    return { run, ev, started: () => startedP, release: (c: number) => release(c), io: () => io! }
+  }
+
+  it('cancel kills the login process and resolves after it exited; login() resolves cancelled', async () => {
+    const hl = heldLogin()
+    const hh = h({ runLogin: hl.run })
+    const { id } = await hh.add('A')
+    const p = hh.login(id)
+    await hl.started()
+    expect(await hh.loginState()).toEqual({ id, url: null })
+    await hh.cancelLogin()
+    expect(hl.ev).toEqual([`start ${id}`, 'killed', 'exited'])
+    expect(await p).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(await hh.loginState()).toBeNull()
+    await expect(hh.cancelLogin()).resolves.toBeUndefined()   // nothing to cancel
+  })
+
+  it('times out: kills the process and says so', async () => {
+    const hl = heldLogin()
+    const hh = h({ runLogin: hl.run, loginTimeoutMs: 30 })
+    const { id } = await hh.add('A')
+    expect(await hh.login(id)).toMatchObject({ ok: false, reason: 'timeout' })
+    expect(hl.ev).toContain('killed')
+    expect(await hh.loginState()).toBeNull()
+  })
+
+  it('waits three minutes by default', async () => {
+    expect(LOGIN_TIMEOUT_MS).toBe(3 * 60_000)
+  })
+
+  it('reads the URL from the complete "visit:" line, even when it arrives in pieces', async () => {
+    const hl = heldLogin()
+    const hh = h({ runLogin: hl.run })
+    const { id } = await hh.add('A')
+    const p = hh.login(id)
+    await hl.started()
+    hl.io().onStdout('Opening browser for authentication...\nIf browser does not open, visit: ' + URL.slice(0, 40))
+    expect((await hh.loginState())?.url).toBeNull()
+    hl.io().onStdout(URL.slice(40) + '\r\nWaiting for approval...\n')
+    expect(await hh.loginState()).toEqual({ id, url: URL })
+    hl.release(0)
+    expect(await p).toEqual({ ok: true })
+  })
+
+  it('leaves the logging-in account out of list() status calls and shows it as logging in', async () => {
+    const hl = heldLogin()
+    const asked: string[] = []
+    const hh = h({ runLogin: hl.run, runStatus: async (x: string) => { asked.push(x); return { credits: 9 } } })
+    const { id: a } = await hh.add('A')
+    const { id: b } = await hh.add('B')
+    const p = hh.login(a)
+    await hl.started()
+    const l = await hh.list()
+    expect(asked).toEqual([b])
+    expect(l.accounts.find((x) => x.id === a)).toMatchObject({ loggingIn: true, credits: null })
+    expect(l.accounts.find((x) => x.id === b)).toMatchObject({ loggingIn: false, credits: 9 })
+    await hh.cancelLogin(); await p
+  })
+
+  it('keeps the other handlers working during a login, and refuses remove/login on that account', async () => {
+    const hl = heldLogin()
+    const hh = h({ runLogin: hl.run })
+    const { id: a } = await hh.add('A')
+    const { id: b } = await hh.add('B')
+    const p = hh.login(a)
+    await hl.started()
+    const src = path.join(home, '.config', 'higgsfield')
+    await fs.mkdir(src, { recursive: true })
+    await fs.writeFile(path.join(src, 'credentials.json'), '{"a":1}')
+    await expect(hh.list()).resolves.toBeTruthy()
+    await expect(hh.setCurrent(b)).resolves.toBeUndefined()
+    const { id: c } = await hh.add('C')
+    await expect(hh.importCurrent('D')).resolves.toBeTruthy()
+    await expect(hh.remove(c)).resolves.toBeUndefined()
+    await expect(hh.remove(a)).rejects.toThrow(/BUSY/)
+    await expect(hh.login(a)).rejects.toThrow(/BUSY/)
+    await expect(hh.login(b)).rejects.toThrow(/BUSY/)           // at most one login at a time
+    expect(hl.ev).toEqual([`start ${a}`])                        // still waiting: nothing above waited for it
+    hl.release(0)
+    expect(await p).toEqual({ ok: true })
+    expect((await readHfAccounts(profile)).accounts.map((x) => x.id)).toContain(a)
+  })
+
+  it('never runs two real-CLI calls on one account at once', async () => {
+    const now = new Map<string, number>(); let peak = 0
+    const enter = async (id: string, ms: number) => {
+      now.set(id, (now.get(id) ?? 0) + 1); peak = Math.max(peak, now.get(id)!)
+      await new Promise((r) => setTimeout(r, ms))
+      now.set(id, now.get(id)! - 1)
+    }
+    const hh = h({
+      runStatus: async (x: string) => { await enter(x, 25); return { credits: 1 } },
+      runLogin: async (x: string) => { await enter(x, 25); return loginOk(profile)(x) }
+    })
+    const { id: a } = await hh.add('A')
+    await hh.add('B')
+    // a list is asking A when the login of A starts; more lists come while it logs in
+    const first = hh.list()
+    await new Promise((r) => setTimeout(r, 5))
+    const p = hh.login(a)
+    await Promise.all([first, p, hh.list(), new Promise((r) => setTimeout(r, 10)).then(() => hh.list())])
+    expect(peak).toBe(1)
+  })
+
+  it('makes no status call while the CLI program is missing and reports it', async () => {
+    const asked: string[] = []
+    const hh = h({ cliIssue: () => ({ kind: 'binaryMissing', path: '/w/hf.exe' }), runStatus: async (x: string) => { asked.push(x); return { credits: 1 } } })
+    await hh.add('A')
+    const l = await hh.list()
+    expect(asked).toEqual([])
+    expect(l.cliIssue).toEqual({ kind: 'binaryMissing', path: '/w/hf.exe' })
+    expect(l.accounts[0].credits).toBeNull()
+  })
+
+  it('reports a missing program a status call found, and none otherwise', async () => {
+    const hh = h({ runStatus: async () => ({ credits: null, binaryMissing: '/v/hf' }) })
+    await hh.add('A')
+    expect((await hh.list()).cliIssue).toEqual({ kind: 'binaryMissing', path: '/v/hf' })
+    expect((await h().list()).cliIssue).toBeNull()
+  })
+})
+
+describe('loginUrlReader', () => {
+  it('takes the first visit: URL on a complete line only', () => {
+    const r = loginUrlReader()
+    expect(r('visit: https://a.example/x')).toBeNull()
+    expect(r('?y=1\n')).toBe('https://a.example/x?y=1')
+    expect(r('visit: https://b.example/\n')).toBe('https://a.example/x?y=1')
   })
 })

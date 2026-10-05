@@ -4052,7 +4052,7 @@ export function registerIpc(
 
   // PR snapshots for the worktree panel (design doc §4). Created here because it needs `send`;
   // start() probes gh once and announces the result — it fetches nothing until subscribed.
-  registerHiggsfieldIpc(ipcMain, app.getPath('userData'), os.homedir(), (url) => shell.openExternal(url))
+  registerHiggsfieldIpc(ipcMain, app.getPath('userData'), os.homedir())
   const githubPrs = createGithubPrs({
     registry: core.worktrees,
     settings: core.appSettings,

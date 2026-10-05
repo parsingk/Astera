@@ -17,11 +17,12 @@ export type HfRunner = (args: string[], env: NodeJS.ProcessEnv, tee: boolean) =>
 export interface RealRunnerOptions {
   /** false shows the console window of a Windows child (an interactive login). Default true. */
   hide?: boolean
-  /** Kill the child after this long and report code 1. */
-  timeoutMs?: number
   onStdout?: (chunk: string) => void
   /** The child's stdin. Default 'inherit' (the proxy passes the agent's stdin through). */
   stdin?: 'inherit' | 'ignore'
+  /** Aborting kills the child this runner started (that process only; nothing found by name). The run
+   *  answers once it exited. Already aborted: nothing is started. */
+  signal?: AbortSignal
 }
 
 /** How to start `file` with `args`: on win32 an npm `.cmd` becomes node on its script (so no cmd.exe reads
@@ -63,20 +64,31 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
         resolve({ code: 2, stdout: '', stderr: msg })
         return
       }
+      if (opts.signal?.aborted) {
+        resolve({ code: 1, stdout: '', stderr: 'higgsfield: cancelled' })
+        return
+      }
       const child = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: [opts.stdin ?? 'inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
       let stdout = ''
       let stderr = ''
-      let timer: NodeJS.Timeout | undefined
-      if (opts.timeoutMs !== undefined) {
-        timer = setTimeout(() => {
-          stderr += '\nhiggsfield: timed out'
-          child.kill()
-        }, opts.timeoutMs)
+      let settled = false
+      const onAbort = (): void => {
+        stderr += '\nhiggsfield: cancelled'
+        child.kill()
+        // After a kill, the exit is the answer: a process the child started may still hold the pipes open.
+        child.once('exit', (code) => finish(code))
       }
+      const finish = (code: number | null, extra = ''): void => {
+        if (settled) return
+        settled = true
+        opts.signal?.removeEventListener('abort', onAbort)
+        resolve({ code: code ?? 1, stdout, stderr: stderr + extra })
+      }
+      opts.signal?.addEventListener('abort', onAbort, { once: true })
       child.stdout.on('data', (b: Buffer) => { stdout += b.toString('utf8'); opts.onStdout?.(b.toString('utf8')); if (tee) process.stdout.write(b) })
       child.stderr.on('data', (b: Buffer) => { stderr += b.toString('utf8'); if (tee) process.stderr.write(b) })
-      child.on('error', (e) => { clearTimeout(timer); resolve({ code: 127, stdout, stderr: stderr + String(e) }) })
-      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? 1, stdout, stderr }) })
+      child.on('error', (e) => finish(127, String(e)))
+      child.on('close', (code) => finish(code))
     })
 }
 
