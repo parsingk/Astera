@@ -9,6 +9,7 @@ import { cliHostTarget } from './host'
 import { hfEnvFor, patchHfAccount, readHfAccounts, type HfAccount } from '../core/higgsfield/accounts'
 import { findRealHiggsfield, higgsfieldVendorBinary, isHiggsfieldCli } from '../core/higgsfield/shims'
 import { BALANCE_KEYS, COST_KEYS, costArgsFor, isGenerateJob, subIndex, looksOutOfCredits, numberAt, shortCreditsMessage } from '../core/higgsfield/credits'
+import { NO_WORKSPACE, noWorkspaceText } from '../core/higgsfield/display'
 import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, recordJobFile, type HfAssetLedger } from '../core/higgsfield/assets'
 import {
   backupCredentials, copyBack, exists, guardCredentials, HfBinaryMissing, passThrough, readOrNull, realRunner, sideCall, stopOnMissingBinary,
@@ -244,6 +245,8 @@ async function proxy(a: Parameters<typeof hfProxy>[0], write: (s: string) => voi
     }
   }
   const first = await run(args, env, true)
+  // A fresh login has no workspace: every call fails until the person picks one (Settings > Higgsfield).
+  if (first.code !== 0 && NO_WORKSPACE.test(first.stderr)) write(`higgsfield: ${noWorkspaceText(account.label)}\n`)
   if (first.code === 0) await recordAfter(profileDir, account.id, args, first.stdout).catch(() => {})
   if (isGenerateJob(args) && first.code !== 0 && looksOutOfCredits(first.stdout + first.stderr)) {
     await guardCredentials({ run, env, profileDir, account, creds })

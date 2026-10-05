@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { higgsfieldCommand, statusRun } from './higgsfield'
+import { higgsfieldCommand, parseWorkspaces, statusRun } from './higgsfield'
 import { addHfAccount, hfAccountDir, patchHfAccount, readHfAccounts } from '../core/higgsfield/accounts'
 import type { HfRunner } from './hfProxy'
 
@@ -128,5 +128,57 @@ describe('astera higgsfield list: status answers', () => {
     expect(asked.length).toBe(1)
     expect(r.ok && r.body.cliIssue).toEqual({ kind: 'binaryMissing', path: '/v/hf' })
     expect(r.ok && (r.body.accounts as any[]).map((x) => x.credits)).toEqual([null, null])
+  })
+})
+
+describe('workspaces', () => {
+  const NO_WS = 'Error: No workspace selected.\nHint: Run: hf workspace set <workspace_id>\n'
+  const LIST = JSON.stringify([
+    { id: '11111111-1111-4111-8111-111111111111', name: null, plan_type: 'pro', credits: 120, is_selected: false, user_role: 'owner' },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Team', plan_type: null, credits: '7', is_selected: false, user_role: 'member' }
+  ])
+  const ROWS = [
+    { id: '11111111-1111-4111-8111-111111111111', name: null, plan: 'pro', credits: 120 },
+    { id: '22222222-2222-4222-8222-222222222222', name: 'Team', plan: null, credits: 7 }
+  ]
+  const noWorkspaceCli = (log: string[]): HfRunner => async (args) => {
+    log.push(args.join(' '))
+    if (args[0] === 'workspace' && args[1] === 'list') return { code: 0, stdout: LIST, stderr: '' }
+    return { code: 4, stdout: '', stderr: NO_WS }
+  }
+
+  it('reads the workspace list, name and plan possibly null', () => {
+    expect(parseWorkspaces(LIST)).toEqual([{ ...ROWS[0], selected: false }, { ...ROWS[1], selected: false }])
+    expect(parseWorkspaces('not json')).toBeNull()
+    expect(parseWorkspaces('[{"name":"no id"}]')).toEqual([])
+  })
+
+  it('a status run without a workspace says needsWorkspace with the workspaces, and does not mark needsLogin', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{"t":1}')
+    const log: string[] = []
+    expect(await statusRun(profile, {}, noWorkspaceCli(log))(a.id)).toEqual({ credits: null, needsWorkspace: true, workspaces: ROWS })
+    expect(log).toEqual(['account status --json', 'workspace list --json'])
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeUndefined()
+  })
+
+  it('lists such a row with needsWorkspace and its workspaces; other rows carry no workspaces', async () => {
+    const a = await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+    const r = await higgsfieldCommand({ cmd: 'higgsfield-list', args: {}, profileDir: profile,
+      run: async (id) => (id === a.id ? { credits: null, needsWorkspace: true, workspaces: ROWS } : { credits: 3 }) })
+    const rows = r.ok ? (r.body.accounts as any[]) : []
+    expect(rows.find((x) => x.id === a.id)).toMatchObject({ needsWorkspace: true, needsLogin: false, workspaces: ROWS })
+    expect(rows.find((x) => x.id === b.id)).toMatchObject({ needsWorkspace: false })
+    expect(rows.find((x) => x.id === b.id)).not.toHaveProperty('workspaces')
+  })
+
+  it('use still switches to an account without a workspace, and says the workspace is missing', async () => {
+    await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+    const r = await higgsfieldCommand({ cmd: 'higgsfield-use', args: { account: 'B' }, profileDir: profile,
+      run: async () => ({ credits: null, needsWorkspace: true, workspaces: ROWS }) })
+    expect((await readHfAccounts(profile)).current).toBe(b.id)
+    const cur = r.ok ? (r.body.current as Record<string, unknown>) : {}
+    expect(cur).toMatchObject({ id: b.id, needsWorkspace: true })
+    expect(String(cur.warning)).toBe('Higgsfield account "B" has no workspace selected. Ask the user to pick one in Astera Settings > Higgsfield; do not run workspace commands yourself.')
   })
 })

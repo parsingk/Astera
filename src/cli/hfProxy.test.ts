@@ -556,3 +556,15 @@ process.exit(7)
     })
   })
 })
+
+describe('hfProxy: no workspace selected', () => {
+  it('adds one line for the agent and keeps the CLI exit code', async () => {
+    const a = await addHfAccount(profile, 'Main')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{"t":1}')
+    const run: HfRunner = async () => ({ code: 4, stdout: '', stderr: 'Error: No workspace selected.\nHint: Run: hf workspace set <workspace_id>\n' })
+    const code = await hfProxy({ args: ['model', 'list'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(4)
+    expect(msgs).toEqual(['higgsfield: Higgsfield account "Main" has no workspace selected. Ask the user to pick one in Astera Settings > Higgsfield; do not run workspace commands yourself.\n'])
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+  })
+})
