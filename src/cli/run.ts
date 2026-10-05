@@ -22,6 +22,7 @@ import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { mcpStatus } from './mcp/status'
+import { hfProxy } from './hfProxy'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -1019,6 +1020,14 @@ export async function main(): Promise<void> {
   // command table either; docs/mcp.md ("MCP over HTTP") says the Host runs it and a person does not.
   if (argv[0] === 'mcp' && argv[1] === 'http') {
     const code = await runMcpHttp({ argv: argv.slice(2), env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(code)
+  }
+  // **`hf-proxy` answers before usage and the parser** (higgsfield accounts design §2): the higgsfield
+  // shims beside the session shuttle run it with the agent's arguments verbatim, and those belong to the
+  // higgsfield CLI, not to ours (`--help`, `--json` and positional words included).
+  if (argv[0] === 'hf-proxy') {
+    const code = await hfProxy({ args: argv.slice(1), env: process.env, platform: process.platform, home: homedir() })
     await new Promise((r) => process.stdout.write('', () => r(undefined)))
     process.exit(code)
   }
