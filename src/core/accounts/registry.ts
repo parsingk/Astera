@@ -124,6 +124,12 @@ export class AccountRegistry {
   async import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account> {
     const stat = await fs.stat(input.configDir) // throws when it is missing
     if (!stat.isDirectory()) throw new Error(`not a directory: ${input.configDir}`)
+    // A folder already registered is that account, not a second one. Checked after the await and right
+    // before `add` pushes (no await in between), so two imports of one folder racing each other (the
+    // auto-detect dialog confirmed twice) still register it once.
+    const norm = comparablePath(input.configDir)
+    const existing = this.accounts.find((a) => comparablePath(a.configDir) === norm)
+    if (existing) return existing
     return this.add(input.label, input.configDir, providerOf(input))
   }
 
