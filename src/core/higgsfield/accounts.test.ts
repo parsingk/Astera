@@ -55,11 +55,11 @@ describe('higgsfield accounts store', () => {
     expect(resolveHfAccount(f, 'none')).toBeUndefined()
   })
 
-  it('moves current to the first remaining account on remove', async () => {
+  it('leaves no current account after removing the current one (D2: never picks for the person)', async () => {
     const a = await addHfAccount(profile, 'A')
-    const b = await addHfAccount(profile, 'B')
+    await addHfAccount(profile, 'B')
     await removeHfAccount(profile, a.id)
-    expect((await readHfAccounts(profile)).current).toBe(b.id)
+    expect((await readHfAccounts(profile)).current).toBeNull()
     await expect(fs.stat(hfAccountDir(profile, a.id))).rejects.toThrow()
   })
 
@@ -81,6 +81,13 @@ describe('higgsfield accounts store', () => {
 })
 
 describe('removeHfAccount guard', () => {
+  it('keeps current when another account is removed', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const b = await addHfAccount(profile, 'B')
+    await removeHfAccount(profile, b.id)
+    expect((await readHfAccounts(profile)).current).toBe(a.id)
+  })
+
   it('refuses an id that is not in the file before deleting anything', async () => {
     const a = await addHfAccount(profile, 'A')
     const sentinel = path.join(profile, 'higgsfield', 'keep.txt')

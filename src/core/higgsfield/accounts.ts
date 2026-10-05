@@ -102,7 +102,8 @@ export async function removeHfAccount(profileDir: string, id: string): Promise<v
   // Before any fs.rm: an id like '..' or '' must never reach a path join.
   if (!f.accounts.some((a) => a.id === id)) throw new Error(`unknown higgsfield account: ${id}`)
   const accounts = f.accounts.filter((a) => a.id !== id)
-  const current = f.current === id ? (accounts[0]?.id ?? null) : f.current
+  // D2: Astera never picks an account the person did not pick, so removing the current one leaves none.
+  const current = f.current === id ? null : f.current
   await writeHfAccounts(profileDir, { accounts, current })
   await fs.rm(hfAccountDir(profileDir, id), { recursive: true, force: true })
 }
