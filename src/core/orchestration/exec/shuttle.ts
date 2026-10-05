@@ -12,6 +12,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { ShuttleWarning } from '../../types'
+import { hfShimFiles } from '../../higgsfield/shims'
 
 // The reasons the installer gives when the `.cmd` had to be written raw (the type's own comment says
 // what each means). Declared in core/types.ts, which the renderer can read.
@@ -533,6 +534,12 @@ export async function writeShuttle(a: {
     await fs.chmod(p, 0o755)
     written.push(p)
   }
+  // The higgsfield shims ride with the session shuttle only (higgsfield accounts design §2).
+  for (const f of hfShimFiles(a.platform ?? process.platform)) {
+    const p = path.join(a.dir, f.name)
+    await fs.writeFile(p, f.content, 'utf8')
+    await fs.chmod(p, 0o755)
+  }
   return written[0]
 }
 
@@ -564,6 +571,20 @@ export async function ensureShuttle(a: {
       await fs.chmod(p, 0o755) // the reason is on writeShuttle
     }
     written.push(p)
+  }
+  // The higgsfield shims ride with the session shuttle only (higgsfield accounts design §2).
+  for (const f of hfShimFiles(a.platform ?? process.platform)) {
+    const p = path.join(a.dir, f.name)
+    let current: string | null = null
+    try {
+      current = await fs.readFile(p, 'utf8')
+    } catch {
+      /* no file yet: write it */
+    }
+    if (current !== f.content) {
+      await fs.writeFile(p, f.content, 'utf8')
+      await fs.chmod(p, 0o755)
+    }
   }
   return written[0]
 }

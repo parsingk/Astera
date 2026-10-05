@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { HF_NAMES } from '../../higgsfield/shims'
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
   appImageBootstrap,
@@ -22,6 +23,8 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
+
+const isHfName = (n: string): boolean => HF_NAMES.some((h) => n === h || n === `${h}.cmd`)
 
 describe('shuttleFiles', () => {
   it('모든 셔틀이 ELECTRON_RUN_AS_NODE를 세우고 실행 파일과 엔트리를 부른다', () => {
@@ -67,6 +70,17 @@ describe('shuttleFiles', () => {
 })
 
 describe('writeShuttle', () => {
+  it('writes the higgsfield shims beside the session shuttle', async () => {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), 'shuttle-hf-'))
+    await writeShuttle({ dir: d, execPath: 'C:/e/electron.exe', entryPath: 'C:/e/cli.js', platform: 'win32' })
+    expect(await fs.readFile(path.join(d, 'higgsfield.cmd'), 'utf8')).toContain('hf-proxy')
+  })
+
+  it('ensureShuttle writes them too', async () => {
+    await ensureShuttle({ dir, execPath: 'x', entryPath: 'y', platform: 'win32' })
+    expect(await fs.readFile(path.join(dir, 'hf.cmd'), 'utf8')).toContain('hf-proxy')
+  })
+
   it('파일을 만들고 절대경로를 돌려준다', async () => {
     const p = await writeShuttle({ dir, execPath: 'x', entryPath: 'y' })
     expect(path.isAbsolute(p)).toBe(true)
@@ -82,7 +96,8 @@ describe('writeShuttle', () => {
   })
   it('win32에서도 sh 셔틀 파일이 디스크에 생긴다', async () => {
     await writeShuttle({ dir, execPath: 'x', entryPath: 'y' })
-    const names = (await fs.readdir(dir)).sort()
+    // the session folder also holds the higgsfield shims; this test is about the shuttle's own files
+    const names = (await fs.readdir(dir)).filter((n) => !isHfName(n)).sort()
     expect(names).toEqual(process.platform === 'win32' ? ['astera', 'astera.cmd'] : ['astera'])
     await expect(fs.readFile(path.join(dir, 'astera'), 'utf8')).resolves.toContain('#!/bin/sh')
   })
@@ -199,7 +214,8 @@ describe('removeShuttle', () => {
     await fs.writeFile(path.join(dir, 'astera.bak'), 'a backup the person made', 'utf8')
     const removed = await removeShuttle({ dir })
     expect([...removed].sort()).toEqual([...shuttleNames()].sort())
-    expect((await fs.readdir(dir)).sort()).toEqual(['astera.bak', 'kubectl'])
+    // removeShuttle is the public folder's remover and never owned the session folder's higgsfield shims
+    expect((await fs.readdir(dir)).filter((n) => !isHfName(n)).sort()).toEqual(['astera.bak', 'kubectl'])
   })
   it('같은 이름이라도 우리 내용이 아니면 지우지 않는다', async () => {
     await fs.writeFile(path.join(dir, 'astera'), '#!/bin/sh\necho mine\n', 'utf8')
@@ -209,7 +225,7 @@ describe('removeShuttle', () => {
   it('비어도 폴더를 지우지 않고, 없는 폴더에도 실패하지 않는다', async () => {
     await writeShuttle({ dir, execPath: 'x', entryPath: 'y/cli.js' })
     await removeShuttle({ dir })
-    await expect(fs.readdir(dir)).resolves.toEqual([])
+    expect((await fs.readdir(dir)).filter((n) => !isHfName(n))).toEqual([])
     await expect(removeShuttle({ dir: path.join(dir, 'nope') })).resolves.toEqual([])
   })
 })
