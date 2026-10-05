@@ -3545,7 +3545,7 @@ export function registerIpc(
       },
       (w) => orchLog(`session astera shuttle: ${w.code}: ${w.detail}`)
     )
-    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath, link: sessionLink })
+    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath, link: sessionLink, hfShims: true })
     orch = { deps, cliPath, skillsPath, profileDir }
     // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
     // Before `pushOrchState` below, which is what redraws it.
