@@ -30,6 +30,24 @@ describe('realRunner signal', () => {
     expect(r.code).not.toBe(0)
     expect(Date.now() - t0).toBeLessThan(5000)
   }, 15000)
+  it('answers anyway when the child never exits after the kill', async () => {
+    const { EventEmitter } = await import('node:events')
+    let kills = 0
+    const fakeSpawn = (() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(), stderr: new EventEmitter(),
+        kill: () => { kills++; return true }      // ignores it: no 'exit', no 'close'
+      })
+      return child
+    }) as unknown as typeof import('node:child_process').spawn
+    const ctl = new AbortController()
+    const p = realRunner('x', 'linux', [], { stdin: 'ignore', signal: ctl.signal, spawn: fakeSpawn, killGraceMs: 30 })([], {}, false)
+    ctl.abort()
+    const r = await p
+    expect(kills).toBe(1)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toMatch(/cancelled/)
+  })
   it('does not start anything when the signal already aborted', async () => {
     const ctl = new AbortController()
     ctl.abort()

@@ -23,6 +23,11 @@ export interface RealRunnerOptions {
   /** Aborting kills the child this runner started (that process only; nothing found by name). The run
    *  answers once it exited. Already aborted: nothing is started. */
   signal?: AbortSignal
+  /** After the kill, answer (code 1) even without an exit once this long has passed, so a cancel can
+   *  never hang on a process that will not die. Default 5000. */
+  killGraceMs?: number
+  /** For tests: a fake child process. */
+  spawn?: typeof spawn
 }
 
 /** How to start `file` with `args`: on win32 an npm `.cmd` becomes node on its script (so no cmd.exe reads
@@ -68,19 +73,22 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
         resolve({ code: 1, stdout: '', stderr: 'higgsfield: cancelled' })
         return
       }
-      const child = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: [opts.stdin ?? 'inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
+      const child = (opts.spawn ?? spawn)(cmd.file, cmd.args, { env: cmd.env, stdio: [opts.stdin ?? 'inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
       let stdout = ''
       let stderr = ''
       let settled = false
+      let grace: NodeJS.Timeout | undefined
       const onAbort = (): void => {
         stderr += '\nhiggsfield: cancelled'
         child.kill()
         // After a kill, the exit is the answer: a process the child started may still hold the pipes open.
         child.once('exit', (code) => finish(code))
+        grace = setTimeout(() => finish(1, '\nhiggsfield: the process did not exit after the kill'), opts.killGraceMs ?? 5000)
       }
       const finish = (code: number | null, extra = ''): void => {
         if (settled) return
         settled = true
+        clearTimeout(grace)
         opts.signal?.removeEventListener('abort', onAbort)
         resolve({ code: code ?? 1, stdout, stderr: stderr + extra })
       }

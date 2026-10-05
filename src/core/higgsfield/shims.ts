@@ -115,10 +115,14 @@ export function npmShimTarget(
   return { node: opts.selfExecPath ?? process.execPath, script, electronAsNode: true }
 }
 
+/** The package's bin scripts: `higgsfield` and its `higgs` alias (both call bin/run.js). */
+const LAUNCHERS = new Set(['higgsfield.js', 'higgs.js'])
+
 /** The program the npm package's launcher starts. `bin/higgsfield.js` (via `run.js`) spawns
  *  `<pkg>/vendor/hf.exe` (POSIX `vendor/hf`), and only prints "binary not found" when it is gone, as
  *  happens when antivirus quarantines it. win32: the npm `.cmd`'s script; POSIX: the bin symlink's real
- *  path. Any other layout answers `{ binary: null, missing: false }`: no guessing. */
+ *  path. `missing` needs `vendor/install.json` beside the absent program; any other layout answers
+ *  `{ binary: null, missing: false }`: no guessing. */
 export function higgsfieldVendorBinary(
   file: string,
   platform: NodeJS.Platform,
@@ -133,7 +137,13 @@ export function higgsfieldVendorBinary(
     try { script = (deps.realpath ?? realpathSync.native)(file) } catch { script = null }
   }
   if (script === null || !IN_HIGGSFIELD.test(script)) return unknown
-  if (p.basename(script).toLowerCase() !== 'higgsfield.js' || p.basename(p.dirname(script)).toLowerCase() !== 'bin') return unknown
-  const binary = p.join(p.dirname(p.dirname(script)), 'vendor', platform === 'win32' ? 'hf.exe' : 'hf')
-  return { binary, missing: !(deps.exists ?? existsSync)(binary) }
+  if (!LAUNCHERS.has(p.basename(script).toLowerCase()) || p.basename(p.dirname(script)).toLowerCase() !== 'bin') return unknown
+  const exists = deps.exists ?? existsSync
+  const vendor = p.join(p.dirname(p.dirname(script)), 'vendor')
+  const binary = p.join(vendor, platform === 'win32' ? 'hf.exe' : 'hf')
+  if (exists(binary)) return { binary, missing: false }
+  // Missing only when the layout is confirmed: a quarantine removes the program but leaves the
+  // install.json the installer wrote beside it. A future CLI that keeps bin/higgsfield.js and moves
+  // its program elsewhere is not called missing; the launcher's own "binary not found" still is.
+  return exists(p.join(vendor, 'install.json')) ? { binary, missing: true } : unknown
 }

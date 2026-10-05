@@ -503,6 +503,9 @@ process.exit(7)
       const hig = path.join(profile, 'hig')
       await install(hig, 'higgsfield', '@higgsfield/cli/bin/higgsfield.js', await fs.readFile(FAKE, 'utf8'))
       const vendor = path.join(await fs.realpath(path.join(hig, 'node_modules', '@higgsfield', 'cli')), 'vendor', process.platform === 'win32' ? 'hf.exe' : 'hf')
+      // what a quarantine leaves: the vendor folder and its install.json, without the program
+      await fs.mkdir(path.dirname(vendor), { recursive: true })
+      await fs.writeFile(path.join(path.dirname(vendor), 'install.json'), '{}')
       const code = await hfProxy({ args: ['--as=higgsfield', 'generate', 'create', 'x'], env: await pathEnv([hig]), platform: process.platform, home: profile, write: (s) => msgs.push(s) })
       expect(code).toBe(127)
       await expect(fs.readFile(logFile, 'utf8')).rejects.toThrow()          // the CLI never ran

@@ -134,20 +134,37 @@ describe('higgsfieldVendorBinary', () => {
     'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\' + script + '" %*\r\n'
   const cmd = String.raw`C:\n\higgsfield.cmd`
   const exe = String.raw`C:\n\node_modules\@higgsfield\cli\vendor\hf.exe`
+  const meta = String.raw`C:\n\node_modules\@higgsfield\cli\vendor\install.json`
   it('on win32, follows the npm .cmd to <pkg>/bin/higgsfield.js and reports <pkg>/vendor/hf.exe', () => {
     const read = (p: string) => (p === cmd ? npm(String.raw`@higgsfield\cli\bin\higgsfield.js`) : null)
-    expect(higgsfieldVendorBinary(cmd, 'win32', { read, exists: (p) => p === exe, realpath: (p) => p }))
+    expect(higgsfieldVendorBinary(cmd, 'win32', { read, exists: (p) => p === exe || p === meta, realpath: (p) => p }))
       .toEqual({ binary: exe, missing: false })
-    expect(higgsfieldVendorBinary(cmd, 'win32', { read, exists: () => false, realpath: (p) => p }))
+    // quarantine removes hf.exe only; install.json beside it confirms the layout
+    expect(higgsfieldVendorBinary(cmd, 'win32', { read, exists: (p) => p === meta, realpath: (p) => p }))
       .toEqual({ binary: exe, missing: true })
+  })
+  it('accepts the higgs alias script too', () => {
+    const higgsCmd = String.raw`C:\n\higgs.cmd`
+    const read = (p: string) => (p === higgsCmd ? npm(String.raw`@higgsfield\cli\bin\higgs.js`) : null)
+    expect(higgsfieldVendorBinary(higgsCmd, 'win32', { read, exists: (p) => p === meta, realpath: (p) => p }))
+      .toEqual({ binary: exe, missing: true })
+  })
+  it('does not call the program missing unless the vendor layout is confirmed', () => {
+    const read = (p: string) => (p === cmd ? npm(String.raw`@higgsfield\cli\bin\higgsfield.js`) : null)
+    // a CLI that keeps bin/higgsfield.js but puts its program elsewhere: no vendor/install.json
+    expect(higgsfieldVendorBinary(cmd, 'win32', { read, exists: () => false, realpath: (p) => p }))
+      .toEqual({ binary: null, missing: false })
   })
   it('on POSIX, follows the bin symlink to <pkg>/vendor/hf', () => {
     const realpath = (p: string) => (p === '/usr/bin/higgsfield' ? '/usr/lib/node_modules/@higgsfield/cli/bin/higgsfield.js' : p)
     const bin = '/usr/lib/node_modules/@higgsfield/cli/vendor/hf'
+    const json = '/usr/lib/node_modules/@higgsfield/cli/vendor/install.json'
     expect(higgsfieldVendorBinary('/usr/bin/higgsfield', 'linux', { read: () => null, exists: (p) => p === bin, realpath }))
       .toEqual({ binary: bin, missing: false })
-    expect(higgsfieldVendorBinary('/usr/bin/higgsfield', 'linux', { read: () => null, exists: () => false, realpath }))
+    expect(higgsfieldVendorBinary('/usr/bin/higgsfield', 'linux', { read: () => null, exists: (p) => p === json, realpath }))
       .toEqual({ binary: bin, missing: true })
+    expect(higgsfieldVendorBinary('/usr/bin/higgsfield', 'linux', { read: () => null, exists: () => false, realpath }))
+      .toEqual({ binary: null, missing: false })
   })
   it('does not guess for a layout it does not know', () => {
     const deps = { read: (p: string) => (p === cmd ? npm(String.raw`@higgsfield\cli\dist\main.js`) : null), exists: () => false, realpath: (p: string) => p }
@@ -175,12 +192,15 @@ describe('higgsfieldVendorBinary', () => {
       await fs.symlink(path.join(pkg, 'bin', 'higgsfield.js'), file)
     }
     const vendor = path.join(pkg, 'vendor', process.platform === 'win32' ? 'hf.exe' : 'hf')
+    // bin/higgsfield.js and no vendor/ folder: not a layout it knows
+    expect(higgsfieldVendorBinary(file, process.platform)).toEqual({ binary: null, missing: false })
+    await fs.mkdir(path.dirname(vendor), { recursive: true })
+    await fs.writeFile(path.join(path.dirname(vendor), 'install.json'), '{"package_manager":"npm"}')
     const got = higgsfieldVendorBinary(file, process.platform)
     expect(got.missing).toBe(true)
     // POSIX resolves the symlink, so the answer is under the real path of the package (macOS: /private/var)
     const expected = process.platform === 'win32' ? vendor : path.join(await fs.realpath(pkg), 'vendor', 'hf')
     expect(got.binary?.toLowerCase()).toBe(expected.toLowerCase())
-    await fs.mkdir(path.dirname(vendor), { recursive: true })
     await fs.writeFile(vendor, '')
     expect(higgsfieldVendorBinary(file, process.platform).missing).toBe(false)
   })
