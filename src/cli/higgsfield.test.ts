@@ -80,3 +80,53 @@ describe('statusRun (the default account status call)', () => {
     expect(second).toEqual({ email: 'a@x.com', credits: 7 })
   })
 })
+
+describe('statusRun: what a failed status call means', () => {
+  const withLogin = async (label: string) => {
+    const a = await addHfAccount(profile, label)
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"token":"t"}'); await fs.writeFile(`${creds}.bak`, '{"token":"t"}')
+    return { a, creds }
+  }
+  it('marks an account whose server session expired "log in again", and use refuses it', async () => {
+    const { a, creds } = await withLogin('A')
+    const cli: HfRunner = async () => ({ code: 2, stdout: '', stderr: 'Error: Session expired.\nHint: Run: hf auth login\n' })
+    expect(await statusRun(profile, {}, cli)(a.id)).toEqual({ credits: null, needsLogin: true })
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBe(true)
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"token":"t"}')
+    const r = await higgsfieldCommand({ cmd: 'higgsfield-use', args: { account: 'A' }, profileDir: profile, run })
+    expect(!r.ok && r.error.code).toBe('CONFLICT')
+  })
+  it('does not mark an account for a failure that is not an expired session', async () => {
+    const { a } = await withLogin('A')
+    const cli: HfRunner = async () => ({ code: 1, stdout: '', stderr: 'network unreachable' })
+    expect(await statusRun(profile, {}, cli)(a.id)).toBeNull()
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeUndefined()
+  })
+  it('reports a missing CLI program without marking the account or touching its backup', async () => {
+    const { a, creds } = await withLogin('A')
+    await fs.writeFile(`${creds}.bak`, '{"old":1}')
+    const cli: HfRunner = async () => ({ code: 1, stdout: '', stderr: '@higgsfield/cli: binary not found at /n/@higgsfield/cli/vendor/hf. Reinstall: npm i -g @higgsfield/cli\n' })
+    expect(await statusRun(profile, {}, cli)(a.id)).toEqual({ credits: null, binaryMissing: '/n/@higgsfield/cli/vendor/hf' })
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeUndefined()
+    expect(await fs.readFile(`${creds}.bak`, 'utf8')).toBe('{"old":1}')
+  })
+})
+
+describe('astera higgsfield list: status answers', () => {
+  it('shows an account the status call found expired as "log in again"', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const r = await higgsfieldCommand({ cmd: 'higgsfield-list', args: {}, profileDir: profile,
+      run: async () => { await patchHfAccount(profile, a.id, { needsLogin: true }); return { credits: null, needsLogin: true } } })
+    expect(r.ok && (r.body.accounts as any[])[0]).toMatchObject({ credits: null, needsLogin: true })
+  })
+  it('stops asking once the CLI program is missing and says so', async () => {
+    await addHfAccount(profile, 'A'); await addHfAccount(profile, 'B')
+    const asked: string[] = []
+    const r = await higgsfieldCommand({ cmd: 'higgsfield-list', args: {}, profileDir: profile,
+      run: async (id) => { asked.push(id); return { credits: null, binaryMissing: '/v/hf' } } })
+    expect(asked.length).toBe(1)
+    expect(r.ok && r.body.cliIssue).toEqual({ kind: 'binaryMissing', path: '/v/hf' })
+    expect(r.ok && (r.body.accounts as any[]).map((x) => x.credits)).toEqual([null, null])
+  })
+})

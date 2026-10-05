@@ -8,14 +8,23 @@ import type { CliError } from '../core/orchestration/cliOutput'
 import { patchHfAccount, readHfAccounts, resolveHfAccount, setHfCurrent, type HfAccount } from '../core/higgsfield/accounts'
 import { BALANCE_KEYS, numberAt } from '../core/higgsfield/credits'
 import { findRealHiggsfield, isHiggsfieldCli } from '../core/higgsfield/shims'
-import { realRunner, sideCall, type HfRunner } from '../core/higgsfield/runner'
+import { HfBinaryMissing, realRunner, sideCall, stopOnMissingBinary, type HfRunner } from '../core/higgsfield/runner'
 
 type Outcome = { ok: true; body: Record<string, unknown> } | { ok: false; error: CliError }
-export type StatusRun = (accountId: string) => Promise<{ email?: string; credits: number | null } | null>
+/** `needsLogin`: the server said the session expired (the account was marked). `binaryMissing`: the CLI's
+ *  own program is gone (the path), so no further status call can work. */
+export type StatusSeen = { email?: string; credits: number | null; needsLogin?: true; binaryMissing?: string }
+export type StatusRun = (accountId: string) => Promise<StatusSeen | null>
+export type HfCliIssue = { kind: 'binaryMissing'; path: string }
+
+/** CLI 1.1.24 on an expired server session: exit 2, `Error: Session expired.` / `Hint: Run: hf auth login`.
+ *  The credentials file stays, so only this line tells that the login is gone. */
+export const SESSION_EXPIRED = /session expired|run: hf auth login/i
 
 const readOrNull = (p: string): string | null => { try { return readFileSync(p, 'utf8') } catch { return null } }
 
-/** `account status --json` under one account, guarded; null on any failure or when no CLI is on PATH. */
+/** `account status --json` under one account, guarded; null on any other failure or when no CLI is on
+ *  PATH. An expired session marks the account needsLogin. */
 export function statusRun(profileDir: string, env: NodeJS.ProcessEnv = process.env, runner?: HfRunner): StatusRun {
   return async (id) => {
     try {
@@ -27,8 +36,18 @@ export function statusRun(profileDir: string, env: NodeJS.ProcessEnv = process.e
       if (run === null) return null
       const account = (await readHfAccounts(profileDir)).accounts.find((x) => x.id === id)
       if (!account) return null
-      const r = await sideCall(run, ['account', 'status', '--json'], profileDir, env, account)
-      if (r.code !== 0) return null
+      let r
+      try {
+        r = await sideCall(stopOnMissingBinary(run), ['account', 'status', '--json'], profileDir, env, account)
+      } catch (e) {
+        if (e instanceof HfBinaryMissing) return { credits: null, binaryMissing: e.path }
+        throw e
+      }
+      if (r.code !== 0) {
+        if (!SESSION_EXPIRED.test(r.stderr)) return null
+        await patchHfAccount(profileDir, id, { needsLogin: true })
+        return { credits: null, needsLogin: true }
+      }
       let email: string | undefined
       try {
         const v: unknown = JSON.parse(r.stdout)
@@ -50,7 +69,10 @@ async function look(profileDir: string, account: HfAccount, run: StatusRun) {
   if (seen?.email && seen.email !== account.email) {
     await patchHfAccount(profileDir, account.id, { email: seen.email }).catch(() => {})
   }
-  return { email: seen?.email ?? account.email, credits: seen?.credits ?? null }
+  return {
+    email: seen?.email ?? account.email, credits: seen?.credits ?? null,
+    needsLogin: seen?.needsLogin === true, binaryMissing: seen?.binaryMissing
+  }
 }
 
 export async function higgsfieldCommand(a: {
@@ -69,15 +91,20 @@ export async function higgsfieldCommand(a: {
 
   if (a.cmd === 'higgsfield-list') {
     const accounts: Record<string, unknown>[] = []
+    let cliIssue: HfCliIssue | null = null
     // One after the other: two token refreshes at once are what makes the CLI delete a login.
     for (const x of file.accounts) {
-      const seen = x.needsLogin ? { email: x.email, credits: null } : await look(a.profileDir, x, run)
+      // Once the CLI program is known missing no call can answer, so the rest are not asked.
+      const seen: Awaited<ReturnType<typeof look>> = x.needsLogin || cliIssue !== null
+        ? { email: x.email, credits: null, needsLogin: false, binaryMissing: undefined }
+        : await look(a.profileDir, x, run)
+      if (seen.binaryMissing) cliIssue = { kind: 'binaryMissing', path: seen.binaryMissing }
       accounts.push({
         id: x.id, label: x.label, ...(seen.email ? { email: seen.email } : {}),
-        credits: seen.credits, current: x.id === file.current, needsLogin: x.needsLogin === true
+        credits: seen.credits, current: x.id === file.current, needsLogin: x.needsLogin === true || seen.needsLogin
       })
     }
-    return { ok: true, body: { current: file.current, accounts } }
+    return { ok: true, body: { current: file.current, accounts, ...(cliIssue ? { cliIssue } : {}) } }
   }
 
   const key = a.args.account
