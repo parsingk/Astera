@@ -18,10 +18,12 @@ import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestra
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
 import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
+import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { mcpStatus } from './mcp/status'
+import { hfProxy } from './hfProxy'
 import {
   CLI_PROTOCOL,
   askTimeoutBody,
@@ -1022,6 +1024,14 @@ export async function main(): Promise<void> {
     await new Promise((r) => process.stdout.write('', () => r(undefined)))
     process.exit(code)
   }
+  // **`hf-proxy` answers before usage and the parser** (higgsfield accounts design §2): the higgsfield
+  // shims beside the session shuttle run it with the agent's arguments verbatim, and those belong to the
+  // higgsfield CLI, not to ours (`--help`, `--json` and positional words included).
+  if (argv[0] === 'hf-proxy') {
+    const code = await hfProxy({ args: argv.slice(1), env: process.env, platform: process.platform, home: homedir() })
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(code)
+  }
   const help = usageFor(argv, sessionUsage)
   if (help !== null) {
     if ('error' in help) {
@@ -1292,6 +1302,19 @@ export async function main(): Promise<void> {
     const failed = installFailureOf(shaped)
     if (failed !== null) fail(failed)
     out(renderOk(parsed.cmd, shaped, mode))
+    process.exit(0)
+  }
+
+  // higgsfield list|use are answered here too, from <profile>/higgsfield (cli/higgsfield.ts), no Host.
+  if (parsed.cmd === 'higgsfield-list' || parsed.cmd === 'higgsfield-use') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await higgsfieldCommand({ cmd: parsed.cmd, args, profileDir })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, publicFor(parsed.cmd, done.body), mode))
     process.exit(0)
   }
 

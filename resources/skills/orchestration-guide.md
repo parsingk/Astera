@@ -1246,3 +1246,18 @@ astera skills install --json
   yours. Say so, and suggest a new session.
 - Both answer from the profile's files, with no Host and no app. They refuse `--request-id` with exit
   `2`; running `skills install` twice is safe anyway, because the second run writes nothing.
+
+### 12.5 Higgsfield accounts: `higgsfield list` and `higgsfield use`
+
+```bash
+astera higgsfield list --json
+astera higgsfield use --account <id|label|email>
+```
+
+- Astera keeps several Higgsfield accounts and runs every `higgsfield` command of a session under the
+  current one. `higgsfield list` shows them with their credits and which one is current.
+- **When a `higgsfield` command says the account is short of credits, ask the person which account to
+  use** (with choices, from `higgsfield list`), then run `higgsfield use --account <account>` and run
+  the command again. Never switch on your own.
+- An account marked `needsLogin` cannot be used until the person logs in again in Astera Settings >
+  Higgsfield; tell them, and do not log in yourself.

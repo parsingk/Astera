@@ -250,6 +250,7 @@ import { saveConfigsBatch } from './run/saveConfigs'
 import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
+import { registerHiggsfieldIpc } from './higgsfield'
 import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { fillFromCommits } from '../core/github/fill'
@@ -3545,8 +3546,9 @@ export function registerIpc(
       },
       (w) => orchLog(`session astera shuttle: ${w.code}: ${w.detail}`)
     )
-    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath, link: sessionLink })
+    const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath, link: sessionLink, hfShims: true })
     orch = { deps, cliPath, skillsPath, profileDir }
+    core.chat.setOrchEnv(orchEnvOf)
     // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
     // Before `pushOrchState` below, which is what redraws it.
     setOrchHostGate(null)
@@ -4050,6 +4052,7 @@ export function registerIpc(
 
   // PR snapshots for the worktree panel (design doc §4). Created here because it needs `send`;
   // start() probes gh once and announces the result — it fetches nothing until subscribed.
+  registerHiggsfieldIpc(ipcMain, app.getPath('userData'), os.homedir())
   const githubPrs = createGithubPrs({
     registry: core.worktrees,
     settings: core.appSettings,

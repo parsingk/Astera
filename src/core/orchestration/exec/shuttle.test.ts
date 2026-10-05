@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { HF_NAMES } from '../../higgsfield/shims'
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
   appImageBootstrap,
   ensureShuttle,
+  installShuttle,
   isShuttleContent,
   removeShuttle,
   shuttleFiles,
@@ -67,6 +69,29 @@ describe('shuttleFiles', () => {
 })
 
 describe('writeShuttle', () => {
+  it('writes the higgsfield shims beside the session shuttle', async () => {
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), 'shuttle-hf-'))
+    await writeShuttle({ dir: d, execPath: 'C:/e/electron.exe', entryPath: 'C:/e/cli.js', platform: 'win32', hfShims: true })
+    expect(await fs.readFile(path.join(d, 'higgsfield.cmd'), 'utf8')).toContain('hf-proxy')
+  })
+
+  it('writes no higgsfield shim unless asked (public dir)', async () => {
+    await writeShuttle({ dir, execPath: 'x', entryPath: 'y', platform: 'win32' })
+    expect((await fs.readdir(dir)).filter((n) => HF_NAMES.some((h) => n.startsWith(h)))).toEqual([])
+  })
+
+  it('installShuttle and syncShuttle leave the public dir without higgsfield shims', async () => {
+    await installShuttle({ dir, execPath: 'x', entryPath: 'y', platform: 'linux' })
+    await writeShuttle({ dir, execPath: 'x', entryPath: 'y2', platform: 'linux' })
+    await syncShuttle({ dir, execPath: 'x', entryPath: 'y3', platform: 'linux' })
+    expect((await fs.readdir(dir)).filter((n) => HF_NAMES.some((h) => n.startsWith(h)))).toEqual([])
+  })
+
+  it('ensureShuttle writes them too', async () => {
+    await ensureShuttle({ dir, execPath: 'x', entryPath: 'y', platform: 'win32' })
+    expect(await fs.readFile(path.join(dir, 'hf.cmd'), 'utf8')).toContain('hf-proxy')
+  })
+
   it('파일을 만들고 절대경로를 돌려준다', async () => {
     const p = await writeShuttle({ dir, execPath: 'x', entryPath: 'y' })
     expect(path.isAbsolute(p)).toBe(true)
@@ -209,7 +234,7 @@ describe('removeShuttle', () => {
   it('비어도 폴더를 지우지 않고, 없는 폴더에도 실패하지 않는다', async () => {
     await writeShuttle({ dir, execPath: 'x', entryPath: 'y/cli.js' })
     await removeShuttle({ dir })
-    await expect(fs.readdir(dir)).resolves.toEqual([])
+    expect(await fs.readdir(dir)).toEqual([])
     await expect(removeShuttle({ dir: path.join(dir, 'nope') })).resolves.toEqual([])
   })
 })

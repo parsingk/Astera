@@ -89,6 +89,23 @@ import type { HostCliPaths } from '../core/host/spawn'
 /** Every wait is bounded: long enough for real git on a loaded Windows runner, short enough to fail. */
 const WAIT = { timeout: 25_000, interval: 25 }
 const until = <T>(fn: () => T | Promise<T>): Promise<T> => vi.waitFor(fn, WAIT)
+
+/** Whether a child has left: its exit was reported, or the system already says it is not running. The
+ *  second is for Electron run as node on Windows: it calls exit at once, but on a machine saturated by the
+ *  full suite it takes 2 to 50 s more to finish exiting (measured: a three-line stdin-end script exits in
+ *  9 ms under node and 2-28 s under electron.exe beside 24 busy loops), and only then does 'exit' fire.
+ *  A signal-0 probe sees the exit code already set and answers ESRCH. The ChildProcess still holds the
+ *  process handle, so the pid cannot have gone to another process. */
+const hasLeft = (c: ChildProcess): boolean => {
+  if (c.exitCode !== null || c.signalCode !== null) return true
+  if (c.pid === undefined) return false
+  try {
+    process.kill(c.pid, 0)
+    return false
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
 /** A profile name with a space and Hangul in it, for every test: the address, the state file and the
  *  CLI's discovery all go through it (§49 "spaces/non-ASCII user directory"). */
 const PROFILE_PREFIX = 'astera cli 통합 프로필-'
@@ -502,6 +519,7 @@ async function hostRig(
   const statusLines = new Map<string, unknown>()
   const busyListeners: Array<(sessionId: string, busy: boolean) => void> = []
   const spawner = {
+    orchEnvNow: () => undefined,
     ...local,
     inFlight: () => 0,
     closeAndSettle: async () => {
@@ -1473,7 +1491,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const reloaded = await app.call('mcp-http-reload', {})
       expect(reloaded).toEqual({ status: 200, body: { state: 'off', lan: false, port: status.port } })
       const child = entrance.children[0]
-      await until(() => expect(child.exitCode !== null || child.signalCode !== null).toBe(true))
+      await until(() => expect(hasLeft(child)).toBe(true))
       expect(entrance.children).toHaveLength(1)
       await until(() => expect(app.got.filter((m) => m.t === 'mcp-http-state').at(-1)).toMatchObject({ state: { state: 'off' } }))
       await expect(fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: '{}' })).rejects.toThrow()

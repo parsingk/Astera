@@ -130,6 +130,8 @@ const NOT_SWITCHED = [
   'requests-show',
   'skills-list',
   'skills-install',
+  'higgsfield-list',
+  'higgsfield-use',
   'mcp-serve',
   'mcp-status'
 ]

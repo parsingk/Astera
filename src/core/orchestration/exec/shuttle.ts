@@ -12,6 +12,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { ShuttleWarning } from '../../types'
+import { hfShimFiles } from '../../higgsfield/shims'
 
 // The reasons the installer gives when the `.cmd` had to be written raw (the type's own comment says
 // what each means). Declared in core/types.ts, which the renderer can read.
@@ -412,7 +413,7 @@ export async function syncShuttle(a: {
       : undefined
   const desired = shuttleFiles({ ...a, link })
   const plan = shuttleSyncPlan({ current, desired })
-  if (plan === 'rewrite') await writeShuttle({ ...a, link })
+  if (plan === 'rewrite') await writeShuttle({ ...a, link, hfShims: false })
   return plan
 }
 
@@ -508,7 +509,7 @@ export async function installShuttle(a: {
       warnings.push(w)
     )
   }
-  return { path: await writeShuttle({ ...a, link }), warnings }
+  return { path: await writeShuttle({ ...a, link, hfShims: false }), warnings }
 }
 
 export async function writeShuttle(a: {
@@ -519,6 +520,8 @@ export async function writeShuttle(a: {
   platform?: NodeJS.Platform
   env?: NodeJS.ProcessEnv
   link?: CmdLink
+  /** Also write the higgsfield shims. Only the session folder wants them; the public bin dir never does. */
+  hfShims?: boolean
 }): Promise<string> {
   const files = shuttleFiles(a)
   await fs.mkdir(a.dir, { recursive: true })
@@ -532,6 +535,14 @@ export async function writeShuttle(a: {
     // required on posix and harmless on win32 (a branch here would eventually be read backwards).
     await fs.chmod(p, 0o755)
     written.push(p)
+  }
+  // The higgsfield shims ride with the session shuttle only (higgsfield accounts design §2).
+  if (a.hfShims) {
+    for (const f of hfShimFiles(a.platform ?? process.platform)) {
+      const p = path.join(a.dir, f.name)
+      await fs.writeFile(p, f.content, 'utf8')
+      await fs.chmod(p, 0o755)
+    }
   }
   return written[0]
 }
@@ -551,19 +562,23 @@ export async function ensureShuttle(a: {
   const files = shuttleFiles(a)
   await fs.mkdir(a.dir, { recursive: true })
   const written: string[] = []
-  for (const f of files) {
-    const p = path.join(a.dir, f.name)
-    let current: string | null = null
-    try {
-      current = await fs.readFile(p, 'utf8')
-    } catch {
-      /* no file yet, or unreadable: write it */
-    }
-    if (current !== f.content) {
-      await fs.writeFile(p, f.content, 'utf8')
-      await fs.chmod(p, 0o755) // the reason is on writeShuttle
-    }
-    written.push(p)
-  }
+  for (const f of files) written.push(await writeIfChanged(a.dir, f))
+  // The higgsfield shims ride with the session shuttle only (higgsfield accounts design §2).
+  for (const f of hfShimFiles(a.platform ?? process.platform)) await writeIfChanged(a.dir, f)
   return written[0]
+}
+
+async function writeIfChanged(dir: string, f: { name: string; content: string }): Promise<string> {
+  const p = path.join(dir, f.name)
+  let current: string | null = null
+  try {
+    current = await fs.readFile(p, 'utf8')
+  } catch {
+    /* no file yet, or unreadable: write it */
+  }
+  if (current !== f.content) {
+    await fs.writeFile(p, f.content, 'utf8')
+    await fs.chmod(p, 0o755) // the reason is on writeShuttle
+  }
+  return p
 }
