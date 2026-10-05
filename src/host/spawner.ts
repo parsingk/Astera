@@ -22,6 +22,7 @@ import { WorkerTails } from '../core/orchestration/exec/tail'
 import { releaseArgsFor } from '../core/orchestration/exec/release'
 import { makeLimitProbe } from '../core/orchestration/exec/limitProbe'
 import { ensureShuttle, sessionCmdLink } from '../core/orchestration/exec/shuttle'
+import type { ChatOrchEnv } from '../core/chat/manager'
 import { binDirFor } from '../core/orchestration/cliInstall'
 import {
   preTrustWorkspace,
@@ -111,6 +112,8 @@ export interface HostSpawnerDeps {
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
  *  (R5, R6, preflight C12); their JSDoc is on that interface. */
 export interface HostSpawner extends HostLocal, HostRollSpawner {
+  /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
+  orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
   inFlight(): number
   /** From now on startWorker/startCoordinator reject with "the Host is retiring…"; resolves when every
@@ -243,6 +246,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   // The app writes this same file at its start (bootOrch). Both go through the same junction decision
   // (sessionCmdLink), so on win32 from a non-ASCII install folder outside the user folders both write the
   // `.cmd` through %LOCALAPPDATA%\astera\app and neither turns the other's file back. Never removed here.
+  let orchEnvReady: ChatOrchEnv | undefined
   const shuttlePath = once(async () => {
     const link = await sessionCmdLink(
       {
@@ -254,7 +258,9 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       },
       (w) => log(`session astera shuttle: ${w.code}: ${w.detail}`)
     )
-    return ensureShuttle({ dir: path.join(profileDir, 'orch'), execPath: cli.exec, entryPath: cli.entry, env: d.env, link })
+    const p = await ensureShuttle({ dir: path.join(profileDir, 'orch'), execPath: cli.exec, entryPath: cli.entry, env: d.env, link })
+    orchEnvReady = { cliPath: p, skillsPath: cli.skills, profileDir }
+    return p
   })
   const specsDir = path.join(profileDir, 'orch', 'specs')
   const settingsPath = path.join(profileDir, 'app-settings.json')
@@ -646,7 +652,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     return false
   }
 
+  // A Host that only runs chats still needs the shuttle written: chats read it through orchEnvNow().
+  void shuttlePath().catch((e) => log(`session astera shuttle: not written at start: ${String(e)}`))
+
   return {
+    orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {
       retiring = true

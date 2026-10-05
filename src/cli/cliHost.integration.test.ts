@@ -502,6 +502,7 @@ async function hostRig(
   const statusLines = new Map<string, unknown>()
   const busyListeners: Array<(sessionId: string, busy: boolean) => void> = []
   const spawner = {
+    orchEnvNow: () => undefined,
     ...local,
     inFlight: () => 0,
     closeAndSettle: async () => {

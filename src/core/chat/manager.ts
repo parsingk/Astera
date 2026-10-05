@@ -18,6 +18,7 @@ import { providerOf } from '../providers/meta'
 import { descriptorOf, type ProviderDescriptor } from '../providers/descriptor'
 import type { ProcFactory, ProcLike } from '../sessions/proc'
 import { cliEnvFor } from '../sessions/cliEnv'
+import { prependToPath } from '../sessions/manager'
 import { buildCodexAppServerCommand, buildClaudeChatCommand } from '../sessions/commands'
 import type { PtyMeta } from '../host/protocol'
 import type { ChatAdapter, ChatAnswer, ChatEvent, ChatRequest, ChatState, PermissionMode, PermissionModeChoice, UnattendedPermission } from './types'
@@ -33,6 +34,9 @@ import { createClaudeAdapter } from './claudeAdapter'
 
 type ExitEvent = Extract<ChatEvent, { type: 'exit' }>
 
+/** The session shuttle's three values, as orchestration hands them to a session. */
+export type ChatOrchEnv = { cliPath: string; skillsPath: string; profileDir: string }
+
 export interface ChatManagerDeps {
   factory: ProcFactory
   descriptors: Record<Provider, ProviderDescriptor>
@@ -46,6 +50,10 @@ export interface ChatManagerDeps {
    *  not the app's. A function is read at each spawn, so a PATH the process has completed since
    *  (core/sessions/windowsPath.ts) reaches the next child. */
   baseEnv?: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv)
+  /** The session shuttle (orchestration's CLI) when it exists: a chat agent gets it first on PATH, as a
+   *  terminal session does (core/sessions/manager.ts), so `astera` and the higgsfield shims beside it
+   *  answer before anything else on PATH (higgsfield accounts design §2). Read at each spawn. */
+  orchEnv?: () => ChatOrchEnv | undefined
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -186,6 +194,10 @@ export class ChatSessionManager {
 
   constructor(private deps: ChatManagerDeps) {}
 
+  setOrchEnv(fn: () => ChatOrchEnv | undefined): void {
+    this.deps.orchEnv = fn
+  }
+
   /** Picks the process command and the adapter by the account's provider. Returns at once; the
    *  adapter's start() runs in the background and its failure is an `error` event followed by `exit`
    *  (the adapter kills its own proc on a failed handshake — see codexAdapter.ts's / claudeAdapter.ts's
@@ -242,7 +254,7 @@ export class ChatSessionManager {
     // respawn whose chain was already granted the bypass has to keep it (opts.startWithBypass, set by
     // index.ts's roll callbacks from `bypassedOf(oldId)`). Still never on a fresh, first spawn: that
     // path never passes `startWithBypass` at all, so S7's default holds exactly as before.
-    const env = {
+    const env: Record<string, string | undefined> = {
       ...cliEnvFor({
         base: typeof this.deps.baseEnv === 'function' ? this.deps.baseEnv() : (this.deps.baseEnv ?? process.env),
         account: opts.account,
@@ -257,6 +269,13 @@ export class ChatSessionManager {
       // what needs it. Like every role check here it reads the environment, so an agent that clears its
       // own gets past it (docs/cli.md).
       ASTERA_SESSION: id
+    }
+    const orchEnv = this.deps.orchEnv?.()
+    if (orchEnv) {
+      env.ASTERA_CLI = orchEnv.cliPath
+      env.ASTERA_PROFILE_DIR = orchEnv.profileDir
+      env.ASTERA_SKILLS = orchEnv.skillsPath
+      prependToPath(env, path.dirname(orchEnv.cliPath))
     }
     // Codex resumes over the app-server protocol (thread/resume, sent by the adapter once the process is
     // up); Claude has no such call, so its resume id is argv (--resume=<id>) instead — buildClaudeChatCommand

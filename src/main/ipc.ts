@@ -3547,6 +3547,7 @@ export function registerIpc(
     )
     const cliPath = await writeShuttle({ dir, execPath: process.execPath, entryPath, link: sessionLink, hfShims: true })
     orch = { deps, cliPath, skillsPath, profileDir }
+    core.chat.setOrchEnv(orchEnvOf)
     // Nobody is waiting on the Host any more, so the Jobs view goes back to meaning what it says.
     // Before `pushOrchState` below, which is what redraws it.
     setOrchHostGate(null)
