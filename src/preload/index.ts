@@ -125,7 +125,8 @@ const api = {
     loginState: invoke('higgsfield.loginState'),
     cancelLogin: invoke('higgsfield.cancelLogin'),
     remove: invoke('higgsfield.remove'),
-    setCurrent: invoke('higgsfield.setCurrent')
+    setCurrent: invoke('higgsfield.setCurrent'),
+    setWorkspace: invoke('higgsfield.setWorkspace')
   },
   github: {
     status: invoke('github.status'),

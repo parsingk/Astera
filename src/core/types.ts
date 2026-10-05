@@ -1175,6 +1175,9 @@ export interface CoreApi {
         id: string; label: string; email?: string; credits: number | null; current: boolean; needsLogin: boolean
         /** Its login is running: left out of the status calls. */
         loggingIn: boolean
+        /** Logged in, but no workspace selected; `workspaces` (only then) are the ones to pick from. */
+        needsWorkspace: boolean
+        workspaces?: { id: string; name: string | null; plan: string | null; credits: number | null }[]
       }[]
       cliFound: boolean
       /** The CLI's own program is gone (antivirus quarantine): no status call was made. */
@@ -1192,6 +1195,8 @@ export interface CoreApi {
     cancelLogin(): Promise<void>
     remove(id: string): Promise<void>
     setCurrent(id: string): Promise<void>
+    /** Runs `workspace set <workspaceId>` under that account. */
+    setWorkspace(id: string, workspaceId: string): Promise<void>
   }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */

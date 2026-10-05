@@ -277,3 +277,62 @@ describe('loginUrlReader', () => {
     expect(r('visit: https://b.example/\n')).toBe('https://a.example/x?y=1')
   })
 })
+
+describe('higgsfield workspaces', () => {
+  const ws = (id: string, selected = false) => ({ id, name: null, plan_type: 'pro', credits: 5, is_selected: selected, user_role: 'owner' })
+  const A1 = 'aaaaaaaa-1111-4111-8111-111111111111'
+  const A2 = 'bbbbbbbb-2222-4222-8222-222222222222'
+  /** A fake guarded CLI under one account: answers workspace list from `list`, records every call. */
+  const cli = (list: unknown[], log: string[][], setCode = 0) => async (id: string, args: string[]) => {
+    log.push([id, ...args])
+    if (args.join(' ') === 'workspace list --json') return { code: 0, stdout: JSON.stringify(list), stderr: '' }
+    if (args[0] === 'workspace' && args[1] === 'set') return { code: setCode, stdout: setCode === 0 ? `Selected workspace: ${args[2]}` : '', stderr: setCode === 0 ? '' : 'Error: not a member\n' }
+    return { code: 1, stdout: '', stderr: 'unexpected' }
+  }
+
+  it('selects the only workspace after a login', async () => {
+    const log: string[][] = []
+    const hh = h({ runCli: cli([ws(A1)], log) })
+    const { id } = await hh.add('A')
+    expect((await hh.login(id)).ok).toBe(true)
+    expect(log).toEqual([[id, 'workspace', 'list', '--json'], [id, 'workspace', 'set', A1]])
+  })
+
+  it('leaves several workspaces, or one already selected, as they are', async () => {
+    for (const list of [[ws(A1), ws(A2)], [ws(A1, true)]]) {
+      const log: string[][] = []
+      const hh = h({ runCli: cli(list, log) })
+      const { id } = await hh.add('A')
+      expect((await hh.login(id)).ok).toBe(true)
+      expect(log).toEqual([[id, 'workspace', 'list', '--json']])
+    }
+  })
+
+  it('lists a row that needs a workspace with its workspaces', async () => {
+    const rows = [{ id: A1, name: null, plan: 'pro', credits: 5 }, { id: A2, name: 'Team', plan: null, credits: null }]
+    const hh = h({ runStatus: async () => ({ credits: null, needsWorkspace: true as const, workspaces: rows }) })
+    await hh.add('A')
+    expect((await hh.list()).accounts[0]).toMatchObject({ needsWorkspace: true, needsLogin: false, workspaces: rows })
+  })
+
+  it('setWorkspace runs workspace set under that account', async () => {
+    const log: string[][] = []
+    const hh = h({ runCli: cli([], log) })
+    const { id } = await hh.add('A')
+    await expect(hh.setWorkspace(id, A2)).resolves.toBeUndefined()
+    expect(log).toEqual([[id, 'workspace', 'set', A2]])
+  })
+
+  it('setWorkspace refuses bad ids, an unknown account, and reports the CLI error', async () => {
+    const log: string[][] = []
+    const hh = h({ runCli: cli([], log, 1) })
+    const { id } = await hh.add('A')
+    await expect(hh.setWorkspace(id, 'a b')).rejects.toThrow(/INVALID/)
+    await expect(hh.setWorkspace(id, '--help')).rejects.toThrow(/INVALID/)
+    await expect(hh.setWorkspace(id, 'x'.repeat(65))).rejects.toThrow(/INVALID/)
+    await expect(hh.setWorkspace('a/b', A1)).rejects.toThrow(/INVALID/)
+    await expect(hh.setWorkspace('zzz', A1)).rejects.toThrow(/unknown higgsfield account/)
+    await expect(hh.setWorkspace(id, A1)).rejects.toThrow(/not a member/)
+    expect(log).toEqual([[id, 'workspace', 'set', A1]])
+  })
+})

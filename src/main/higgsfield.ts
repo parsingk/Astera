@@ -9,12 +9,16 @@ import {
 } from '../core/higgsfield/accounts'
 import { findRealHiggsfield, higgsfieldVendorBinary, isHiggsfieldCli } from '../core/higgsfield/shims'
 import { backupCredentials, realRunner } from '../core/higgsfield/runner'
-import { higgsfieldCommand, statusRun, type HfCliIssue, type StatusRun } from '../cli/higgsfield'
+import { accountRun, higgsfieldCommand, listWorkspaces, statusRun, type AccountRun, type HfCliIssue, type StatusRun } from '../cli/higgsfield'
+import type { HfWorkspace } from '../core/higgsfield/display'
 
 export interface HfListResult {
   current: string | null
   accounts: {
     id: string; label: string; email?: string; credits: number | null; current: boolean; needsLogin: boolean; loggingIn: boolean
+    /** Logged in, no workspace selected; `workspaces` are the ones to pick from. */
+    needsWorkspace: boolean
+    workspaces?: HfWorkspace[]
   }[]
   cliFound: boolean
   cliIssue: HfCliIssue | null
@@ -51,6 +55,12 @@ function idOf(v: unknown): string {
   if (typeof v !== 'string' || !ID.test(v)) throw new Error('INVALID: account id')
   return v
 }
+// A workspace id as the CLI prints it (a UUID); it must not start with '-', so it is never read as a flag.
+const WORKSPACE_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/
+function workspaceIdOf(v: unknown): string {
+  if (typeof v !== 'string' || !WORKSPACE_ID.test(v)) throw new Error('INVALID: workspace id')
+  return v
+}
 function labelOf(v: unknown): string {
   if (typeof v !== 'string' || v.trim() === '' || v.length > 200) throw new Error('INVALID: label must be a non-empty string')
   return v.trim()
@@ -74,7 +84,10 @@ export function higgsfieldHandlers(deps: {
   /** The CLI program missing, found without running it (default: none). */
   cliIssue?: () => HfCliIssue | null
   loginTimeoutMs?: number
+  /** A guarded real-CLI call under one account (workspace list/set). Default: no CLI. */
+  runCli?: AccountRun
 }) {
+  const runCli: AccountRun = deps.runCli ?? (async () => null)
   const { profileDir, home } = deps
   // One handler at a time: two token refreshes on one credentials file make the CLI delete it. A login
   // takes the queue only to start and to finish; while it waits for the browser its account is left
@@ -180,6 +193,11 @@ export function higgsfieldHandlers(deps: {
           await backupCredentials(creds)
           await patchHfAccount(profileDir, id, { needsLogin: false })
           // Still marked as logging in here, so no list asks this account at the same time.
+          // A fresh login has no workspace: the only one is selected; several wait for the person.
+          try {
+            const ws = await listWorkspaces(runCli, id)
+            if (ws !== null && ws.length === 1 && !ws[0].selected) await runCli(id, ['workspace', 'set', ws[0].id])
+          } catch { /* the list shows "workspace needed" instead */ }
           const seen = await deps.runStatus(id).catch(() => null)
           if (seen?.email) await patchHfAccount(profileDir, id, { email: seen.email })
           return { ok: true }
@@ -193,6 +211,23 @@ export function higgsfieldHandlers(deps: {
       const id = idOf(idRaw)
       refuseWhileLoggingIn(id)
       return serial(async () => { refuseWhileLoggingIn(id); await removeHfAccount(profileDir, id) })
+    },
+    /** `workspace set <workspaceId>` under that account, guarded. Throws with the CLI's last error line. */
+    async setWorkspace(idRaw: unknown, workspaceRaw: unknown): Promise<void> {
+      const id = idOf(idRaw)
+      const workspace = workspaceIdOf(workspaceRaw)
+      refuseWhileLoggingIn(id)
+      return serial(async () => {
+        refuseWhileLoggingIn(id)
+        if (!(await readHfAccounts(profileDir)).accounts.some((a) => a.id === id))
+          throw new Error(`unknown higgsfield account: ${id}`)
+        const r = await runCli(id, ['workspace', 'set', workspace])
+        if (r === null) throw new Error('the higgsfield CLI was not found on PATH')
+        if (r.code !== 0) {
+          const last = r.stderr.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop()
+          throw new Error(last ?? `higgsfield workspace set exited with ${r.code}`)
+        }
+      })
     },
     async setCurrent(idRaw: unknown): Promise<void> {
       const id = idOf(idRaw)
@@ -252,8 +287,13 @@ export function registerHiggsfieldIpc(
     if (real === null) return null
     return statusRun(profileDir, process.env, realRunner(real, process.platform, [], { stdin: 'ignore' }))(id)
   }
+  const runCli: AccountRun = async (id, args) => {
+    const real = findReal()
+    if (real === null) return null
+    return accountRun(profileDir, process.env, realRunner(real, process.platform, [], { stdin: 'ignore' }))(id, args)
+  }
   const h = higgsfieldHandlers({
-    profileDir, home, cliFound: () => findReal() !== null, runStatus, runLogin, cliIssue
+    profileDir, home, cliFound: () => findReal() !== null, runStatus, runLogin, cliIssue, runCli
   })
   ipcMain.handle('higgsfield.list', () => h.list())
   ipcMain.handle('higgsfield.add', (_e, label) => h.add(label))
@@ -263,4 +303,5 @@ export function registerHiggsfieldIpc(
   ipcMain.handle('higgsfield.cancelLogin', () => h.cancelLogin())
   ipcMain.handle('higgsfield.remove', (_e, id) => h.remove(id))
   ipcMain.handle('higgsfield.setCurrent', (_e, id) => h.setCurrent(id))
+  ipcMain.handle('higgsfield.setWorkspace', (_e, id, workspaceId) => h.setWorkspace(id, workspaceId))
 }
