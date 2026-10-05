@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { backupCredentials, hfProxy, realRunner } from './hfProxy'
+import { backupCredentials, hfProxy, realRunner, restoreOnce } from './hfProxy'
 import { addHfAccount, hfAccountDir, patchHfAccount, readHfAccounts } from '../core/higgsfield/accounts'
 
 const FAKE = path.join(__dirname, '__fixtures__', 'fake-hf.mjs')
@@ -162,6 +162,57 @@ describe('hfProxy', () => {
     const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env({ FAKE_HF_CREDITS: '50', FAKE_HF_COST: '5' }), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
     expect(code).toBe(1)
     expect(msgs.join('')).toContain('Ask the user which account to use')
+  })
+
+  it('runs the pre-check calls one after the other, status first', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    const base = fakeRunner(); const ev: string[] = []
+    const run = async (args: string[], e: NodeJS.ProcessEnv, t: boolean) => {
+      const n = args.slice(0, 2).join(' '); ev.push(`start ${n}`)
+      const r = await base(args, e, t); ev.push(`end ${n}`); return r
+    }
+    await hfProxy({ args: ['generate', 'create', 'kling'], env: env(), platform: process.platform, home: profile, run })
+    expect(ev.slice(0, 4)).toEqual(['start account status', 'end account status', 'start generate cost', 'end generate cost'])
+  })
+
+  it('prices a job given after leading global flags', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    const code = await hfProxy({ args: ['--json', 'generate', 'create', 'k'], env: env({ FAKE_HF_CREDITS: '3', FAKE_HF_COST: '12' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(code).toBe(75)
+  })
+
+  it('skips the pre-check for --help', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    await hfProxy({ args: ['generate', 'create', '--help'], env: env(), platform: process.platform, home: profile, run: fakeRunner() })
+    expect((await calls()).map((c) => c.args[1])).toEqual(['create'])
+  })
+
+  it('stops with "log in again" when the pre-check loses the login', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}')
+    await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    const base = fakeRunner()
+    // every call deletes the file and fails, so the guard's confirmation fails too
+    const run = (args: string[], e: NodeJS.ProcessEnv, t: boolean) => base(args, { ...e, FAKE_HF_DELETE_CREDS: '1', FAKE_HF_EXIT: '2' }, t)
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(2)
+    expect(msgs.join('')).toMatch(/log in again/i)
+    expect((await calls()).some((c) => c.args[1] === 'create')).toBe(false)
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBe(true)
+  })
+
+  it('does not overwrite a credentials file another process wrote while restoring', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":"new"}')
+    await fs.writeFile(`${creds}.bak`, '{"t":"old"}')
+    const run = async () => ({ code: 0, stdout: '', stderr: '' })
+    await restoreOnce({ run, args: ['x'], env: {}, profileDir: profile, account: a, creds, first: { code: 1, stdout: '', stderr: '' }, write: () => {} })
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"t":"new"}')
   })
 
   it('forwards stdout before the CLI exits', async () => {

@@ -97,6 +97,9 @@ async function currentAccount(profileDir: string, write: (s: string) => void): P
   }
 }
 
+const loginAgain = (account: HfAccount) =>
+  `higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Higgsfield). Tell the user; do not log in yourself.\n`
+
 /**
  * The CLI deleted the credentials file (failed refresh). Restore the backup once (spec §1), check with
  * `account status`, and rerun the command if the login holds; otherwise mark the account needsLogin.
@@ -108,7 +111,7 @@ export async function restoreOnce(a: {
   const { run, args, env, profileDir, account, creds, first, write } = a
   try {
     if (await exists(`${creds}.bak`)) {
-      await fs.copyFile(`${creds}.bak`, creds)
+      await copyBack(creds)
       const check = await run(['account', 'status', '--json'], env, false)
       if (check.code === 0 && (await exists(creds))) {
         write("higgsfield: the login was restored from Astera's backup; running the command again\n")
@@ -117,14 +120,22 @@ export async function restoreOnce(a: {
         return again.code
       }
     }
-    if (!(await exists(creds)) && (await exists(`${creds}.bak`))) await fs.copyFile(`${creds}.bak`, creds)
+    if (!(await exists(creds)) && (await exists(`${creds}.bak`))) await copyBack(creds)
     await patchHfAccount(profileDir, account.id, { needsLogin: true })
   } catch {
     // fall through to the message: the agent gets the instruction, not a stack trace
   }
-  write(`higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Higgsfield). Tell the user; do not log in yourself.
-`)
+  write(loginAgain(account))
   return first.code
+}
+
+/** Copy `.bak` to the credentials file without overwriting: a file another process just wrote wins. */
+async function copyBack(creds: string): Promise<void> {
+  try {
+    await fs.copyFile(`${creds}.bak`, creds, fs.constants.COPYFILE_EXCL)
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e
+  }
 }
 
 /**
@@ -135,18 +146,19 @@ export async function restoreOnce(a: {
  */
 export async function guardCredentials(a: {
   run: HfRunner; env: NodeJS.ProcessEnv; profileDir: string; account: HfAccount; creds: string
-}): Promise<void> {
+}): Promise<boolean> {
   const { run, env, profileDir, account, creds } = a
   try {
-    if (await exists(creds)) { await backupCredentials(creds); return }
-    if (!(await exists(`${creds}.bak`))) return
-    await fs.copyFile(`${creds}.bak`, creds)
+    if (await exists(creds)) { await backupCredentials(creds); return false }
+    if (!(await exists(`${creds}.bak`))) return false
+    await copyBack(creds)
     const check = await run(['account', 'status', '--json'], env, false)
-    if (check.code === 0 && (await exists(creds))) { await backupCredentials(creds); return }
-    if (!(await exists(creds))) await fs.copyFile(`${creds}.bak`, creds)
+    if (check.code === 0 && (await exists(creds))) { await backupCredentials(creds); return false }
+    if (!(await exists(creds))) await copyBack(creds)
     await patchHfAccount(profileDir, account.id, { needsLogin: true })
+    return true
   } catch {
-    // best effort
+    return false   // best effort
   }
 }
 
@@ -173,9 +185,13 @@ async function otherAccounts(run: HfRunner, profileDir: string, base: NodeJS.Pro
 
 /** Runs `generate cost` and `account status` under the current account, then guards its credentials once. */
 async function preCheck(run: HfRunner, env: NodeJS.ProcessEnv, args: string[], g: { profileDir: string; account: HfAccount; creds: string }) {
-  const [cost, status] = await Promise.all([run(costArgsFor(args), env, false), run(['account', 'status', '--json'], env, false)])
-  await guardCredentials({ run, env, ...g })
+  // One after the other, never together: two token refreshes on the same credentials can rotate the
+  // refresh token under each other and make the CLI delete the file.
+  const status = await run(['account', 'status', '--json'], env, false)
+  const cost = await run(costArgsFor(args), env, false)
+  const loginLost = await guardCredentials({ run, env, ...g })
   return {
+    loginLost, code: status.code !== 0 ? status.code : cost.code !== 0 ? cost.code : 1,
     need: cost.code === 0 ? numberAt(cost.stdout, COST_KEYS) : null,
     have: status.code === 0 ? numberAt(status.stdout, BALANCE_KEYS) : null
   }
@@ -200,8 +216,9 @@ export async function hfProxy(a: {
   const creds = env.HIGGSFIELD_CREDENTIALS_PATH as string
   // Task 6 rewrites local ids/paths in `a.args` here, before the pre-check, so it prices the same args the job runs.
   const args = a.args
-  if (isGenerateJob(args)) {
-    const { need, have } = await preCheck(run, env, args, { profileDir, account, creds })
+  if (isGenerateJob(args) && !args.includes('-h') && !args.includes('--help')) {
+    const { need, have, loginLost, code } = await preCheck(run, env, args, { profileDir, account, creds })
+    if (loginLost) { write(loginAgain(account)); return code }
     if (need !== null && have !== null && need > have) {
       write(shortCreditsMessage({
         current: { label: account.label, email: account.email, credits: have }, need,

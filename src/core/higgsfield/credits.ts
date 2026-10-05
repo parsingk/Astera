@@ -21,19 +21,29 @@ export function numberAt(json: string, keys: string[]): number | null {
   return null
 }
 
-export const isGenerateJob = (args: string[]): boolean =>
-  args[0] === 'generate' && (args[1] === 'create' || args[1] === 'workflow')
+/** Index of the first word that is not a leading global flag (`--json generate create ...`). */
+const subIndex = (args: string[]): number => {
+  let i = 0
+  while (i < args.length && args[i].startsWith('-')) i++
+  return i
+}
+
+export const isGenerateJob = (args: string[]): boolean => {
+  const i = subIndex(args)
+  return args[i] === 'generate' && (args[i + 1] === 'create' || args[i + 1] === 'workflow')
+}
 
 const WAIT_FLAGS = new Set(['--wait-timeout', '--wait-interval'])
 export function costArgsFor(args: string[]): string[] {
   const rest: string[] = []
-  for (let i = 2; i < args.length; i++) {
+  const base = subIndex(args)   // leading global flags are dropped from the cost call
+  for (let i = base + 2; i < args.length; i++) {
     const t = args[i]
     if (t === '--wait' || t === '--json' || t.startsWith('--wait-timeout=') || t.startsWith('--wait-interval=')) continue
     if (WAIT_FLAGS.has(t)) { i++; continue }
     rest.push(t)
   }
-  return ['generate', 'cost', ...(args[1] === 'workflow' ? ['workflow'] : []), ...rest, '--json']
+  return ['generate', 'cost', ...(args[base + 1] === 'workflow' ? ['workflow'] : []), ...rest, '--json']
 }
 
 export const looksOutOfCredits = (text: string): boolean =>

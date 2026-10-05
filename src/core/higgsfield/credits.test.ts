@@ -16,6 +16,11 @@ describe('credits', () => {
     expect(isGenerateJob(['generate', 'get', 'x'])).toBe(false)
   })
 
+  it('finds the subcommand after leading global flags', () => {
+    expect(isGenerateJob(['--json', 'generate', 'create', 'k'])).toBe(true)
+    expect(costArgsFor(['--json', 'generate', 'create', 'k', '--prompt', 'x'])).toEqual(['generate', 'cost', 'k', '--prompt', 'x', '--json'])
+  })
+
   it('recognises out-of-credit wording', () => {
     expect(looksOutOfCredits('Error: insufficient credits')).toBe(true)
     expect(looksOutOfCredits('not enough credits for this job')).toBe(true)
