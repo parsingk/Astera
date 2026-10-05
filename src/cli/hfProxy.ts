@@ -7,17 +7,26 @@ import { promises as fs, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { cliHostTarget } from './host'
 import { hfEnvFor, patchHfAccount, readHfAccounts, type HfAccount } from '../core/higgsfield/accounts'
-import { findRealHiggsfield, isHiggsfieldCli } from '../core/higgsfield/shims'
+import { findRealHiggsfield, higgsfieldVendorBinary, isHiggsfieldCli } from '../core/higgsfield/shims'
 import { BALANCE_KEYS, COST_KEYS, costArgsFor, isGenerateJob, subIndex, looksOutOfCredits, numberAt, shortCreditsMessage } from '../core/higgsfield/credits'
 import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, recordJobFile, type HfAssetLedger } from '../core/higgsfield/assets'
-import { backupCredentials, copyBack, exists, guardCredentials, passThrough, readOrNull, realRunner, sideCall, type HfRun, type HfRunner } from '../core/higgsfield/runner'
+import {
+  backupCredentials, copyBack, exists, guardCredentials, HfBinaryMissing, passThrough, readOrNull, realRunner, sideCall, stopOnMissingBinary,
+  type HfRun, type HfRunner
+} from '../core/higgsfield/runner'
 
 // Kept importable from here: the runner and guard live in core/higgsfield/runner (the app uses them too).
 export { backupCredentials, guardCredentials, realRunner, sideCall }
 export type { HfRun, HfRunner }
 
-/** The runner to use; or an exit code: 127 (after saying so) when nothing is found on PATH, or the code
- *  of a program that is not the Higgsfield CLI (Hugging Face's `hf`), which runs untouched. */
+/** What the agent is told when the CLI's own program is gone (Windows Defender quarantined hf.exe once).
+ *  Reinstalling would only bring back a file the antivirus removes again; the person decides. */
+export const binaryMissingMessage = (p: string): string =>
+  `higgsfield: the Higgsfield CLI program is missing (${p}). On Windows, antivirus may have quarantined it: ask the user to check Windows Security > Protection history. Tell the user; do not reinstall it yourself.\n`
+
+/** The runner to use; or an exit code: 127 (after saying so) when nothing is found on PATH or the
+ *  package's program is gone, or the code of a program that is not the Higgsfield CLI (Hugging Face's
+ *  `hf`), which runs untouched. */
 async function pickRunner(
   a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; run?: HfRunner }, as: string | undefined, args: string[],
   orchDir: string, write: (s: string) => void
@@ -29,6 +38,11 @@ async function pickRunner(
     return 127
   }
   if (!isHiggsfieldCli(real, a.platform, { read: readOrNull })) return passThrough(real, a.platform, args, a.env)
+  const vendor = higgsfieldVendorBinary(real, a.platform, { read: readOrNull })
+  if (vendor.missing && vendor.binary !== null) {
+    write(binaryMissingMessage(vendor.binary))
+    return 127
+  }
   return realRunner(real, a.platform)
 }
 
@@ -95,7 +109,8 @@ export async function restoreOnce(a: {
     }
     if (!(await exists(creds)) && (await exists(`${creds}.bak`))) await copyBack(creds)
     await patchHfAccount(profileDir, account.id, { needsLogin: true })
-  } catch {
+  } catch (e) {
+    if (e instanceof HfBinaryMissing) throw e
     // fall through to the message: the agent gets the instruction, not a stack trace
   }
   write(loginAgain(account))
@@ -112,7 +127,7 @@ async function otherAccounts(run: HfRunner, profileDir: string, base: NodeJS.Pro
   const file = await readHfAccounts(profileDir).catch(() => null)
   const others = (file?.accounts ?? []).filter((x) => x.id !== current.id && !x.needsLogin)
   return Promise.all(others.map(async (o) => ({
-    label: o.label, email: o.email, credits: await accountCredits(run, profileDir, base, o).catch(() => null)
+    label: o.label, email: o.email, credits: await accountCredits(run, profileDir, base, o).catch((e: unknown) => { if (e instanceof HfBinaryMissing) throw e; return null })
   })))
 }
 
@@ -159,7 +174,8 @@ async function bringIdsOver(a: {
       }
       if (!file) throw new Error('no file')
       args[f.index] = f.prefix + file
-    } catch {
+    } catch (e) {
+      if (e instanceof HfBinaryMissing) throw e
       write(`higgsfield: could not bring ${f.id} over from account "${label}"; passing it through
 `)
     }
@@ -193,10 +209,22 @@ export async function hfProxy(a: {
   downloadTimeoutMs?: number
 }): Promise<number> {
   const write = a.write ?? ((s: string) => process.stderr.write(s))
+  try {
+    return await proxy(a, write)
+  } catch (e) {
+    // The launcher said its program is gone: no account is marked and no login file touched.
+    if (!(e instanceof HfBinaryMissing)) throw e
+    write(binaryMissingMessage(e.path))
+    return 127
+  }
+}
+
+async function proxy(a: Parameters<typeof hfProxy>[0], write: (s: string) => void): Promise<number> {
   const { profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
   const { as, args: given } = splitAs(a.args)
-  const run = await pickRunner(a, as, given, path.join(profileDir, 'orch'), write)
-  if (typeof run === 'number') return run
+  const picked = await pickRunner(a, as, given, path.join(profileDir, 'orch'), write)
+  if (typeof picked === 'number') return picked
+  const run = stopOnMissingBinary(picked)
   const account = await currentAccount(profileDir, write)
   if (!account) return (await run(given, a.env, true)).code
 

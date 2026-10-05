@@ -2,9 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { backupCredentials, hfProxy, realRunner, restoreOnce } from './hfProxy'
+import { backupCredentials, hfProxy, realRunner, restoreOnce, type HfRunner } from './hfProxy'
 import { readLedger } from '../core/higgsfield/assets'
 import { addHfAccount, hfAccountDir, patchHfAccount, readHfAccounts } from '../core/higgsfield/accounts'
+
+// Verbatim (task 10 brief A3), so a change to the wording is a deliberate one.
+const missingLine = (p: string) =>
+  `higgsfield: the Higgsfield CLI program is missing (${p}). On Windows, antivirus may have quarantined it: ask the user to check Windows Security > Protection history. Tell the user; do not reinstall it yourself.\n`
 
 const FAKE = path.join(__dirname, '__fixtures__', 'fake-hf.mjs')
 // node runs the fixture; the runner is the same one production uses, given `node` + script.
@@ -493,5 +497,59 @@ process.exit(7)
       expect(code).toBe(0)
       expect(await calls()).toEqual([{ args: ['model', 'list'], creds }])
     }, 30000)
+
+    it('exits 127 without running anything when the package\'s vendor program is gone', async () => {
+      const creds = await withAccount()
+      const hig = path.join(profile, 'hig')
+      await install(hig, 'higgsfield', '@higgsfield/cli/bin/higgsfield.js', await fs.readFile(FAKE, 'utf8'))
+      const vendor = path.join(await fs.realpath(path.join(hig, 'node_modules', '@higgsfield', 'cli')), 'vendor', process.platform === 'win32' ? 'hf.exe' : 'hf')
+      const code = await hfProxy({ args: ['--as=higgsfield', 'generate', 'create', 'x'], env: await pathEnv([hig]), platform: process.platform, home: profile, write: (s) => msgs.push(s) })
+      expect(code).toBe(127)
+      await expect(fs.readFile(logFile, 'utf8')).rejects.toThrow()          // the CLI never ran
+      expect(msgs.join('').toLowerCase()).toBe(missingLine(vendor).toLowerCase())
+      expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+      expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+    }, 30000)
+  })
+
+  describe('a missing CLI program reported by the launcher', () => {
+    const VENDOR = String.raw`C:\nodejs\node_modules\@higgsfield\cli\vendor\hf.exe`
+    const gone: HfRunner = async () => ({ code: 1, stdout: '', stderr: `@higgsfield/cli: binary not found at ${VENDOR}. Reinstall: npm i -g @higgsfield/cli\n` })
+    const counting = (n: { calls: number }): HfRunner => async (a, e, t) => { n.calls++; return gone(a, e, t) }
+
+    it('says so once, exits 127, and leaves the account and its login files alone', async () => {
+      const a = await addHfAccount(profile, 'A')
+      const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+      await fs.writeFile(creds, '{"t":1}')
+      await fs.writeFile(`${creds}.bak`, '{"old":1}')
+      for (const args of [['model', 'list'], ['generate', 'create', 'kling', '--wait']]) {
+        msgs = []
+        const n = { calls: 0 }
+        const code = await hfProxy({ args, env: env(), platform: process.platform, home: profile, run: counting(n), write: (s) => msgs.push(s) })
+        expect(code).toBe(127)
+        expect(n.calls).toBe(1)
+        expect(msgs).toEqual([missingLine(VENDOR)])
+        expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+        expect(await fs.readFile(`${creds}.bak`, 'utf8')).toBe('{"old":1}')
+        expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+      }
+    })
+
+    it('does not restore a missing login file or mark the account when the program is gone', async () => {
+      const a = await addHfAccount(profile, 'A')
+      const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+      await fs.writeFile(`${creds}.bak`, '{"t":1}')
+      const code = await hfProxy({ args: ['model', 'list'], env: env(), platform: process.platform, home: profile, run: gone, write: (s) => msgs.push(s) })
+      expect(code).toBe(127)
+      await expect(fs.stat(creds)).rejects.toThrow()
+      expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+      expect(msgs).toEqual([missingLine(VENDOR)])
+    })
+
+    it('says so with no current account too', async () => {
+      const code = await hfProxy({ args: ['model', 'list'], env: env(), platform: process.platform, home: profile, run: gone, write: (s) => msgs.push(s) })
+      expect(code).toBe(127)
+      expect(msgs).toEqual([missingLine(VENDOR)])
+    })
   })
 })

@@ -80,6 +80,32 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
     })
 }
 
+/** The program path from the npm launcher's `binary not found at <path>. Reinstall: …` (exit != 0), or
+ *  null. The launcher prints it when `<pkg>/vendor/hf(.exe)` is gone (quarantined by antivirus). */
+export function binaryMissingIn(r: HfRun): string | null {
+  if (r.code === 0) return null
+  const m = /binary not found at (.+?)(?:\.\s+Reinstall\b.*)?\s*$/im.exec(r.stderr)
+  return m ? m[1].trim() : null
+}
+
+/** Thrown by a runner wrapped with `stopOnMissingBinary` once the CLI program is known to be gone. */
+export class HfBinaryMissing extends Error {
+  constructor(readonly path: string) { super(`the Higgsfield CLI program is missing (${path})`) }
+}
+
+/** Throws HfBinaryMissing for a run that reports the program gone, and for every call after it (nothing
+ *  more is started). The guards rethrow it, so no login file is restored and no account marked. */
+export function stopOnMissingBinary(run: HfRunner): HfRunner {
+  let missing: string | null = null
+  return async (args, env, tee) => {
+    if (missing !== null) throw new HfBinaryMissing(missing)
+    const r = await run(args, env, tee)
+    missing = binaryMissingIn(r)
+    if (missing !== null) throw new HfBinaryMissing(missing)
+    return r
+  }
+}
+
 export const exists = (p: string) => fs.stat(p).then(() => true, () => false)
 export const readOrNull = (p: string): string | null => { try { return readFileSync(p, 'utf8') } catch { return null } }
 
@@ -114,7 +140,7 @@ export async function copyBack(creds: string): Promise<void> {
  * After any side call (pre-check, other accounts' status): keep the backup fresh when the credentials
  * are there; when the CLI deleted them, copy the backup back (no rerun) and confirm with `account status`.
  * A failed confirmation marks the account needsLogin; the file is copied back again either way, so no
- * call leaves an account's credentials deleted. Never throws.
+ * call leaves an account's credentials deleted. Never throws, except HfBinaryMissing from its runner.
  */
 export async function guardCredentials(a: {
   run: HfRunner; env: NodeJS.ProcessEnv; profileDir: string; account: HfAccount; creds: string
@@ -129,7 +155,8 @@ export async function guardCredentials(a: {
     if (!(await exists(creds))) await copyBack(creds)
     await patchHfAccount(profileDir, account.id, { needsLogin: true })
     return true
-  } catch {
+  } catch (e) {
+    if (e instanceof HfBinaryMissing) throw e
     return false   // best effort
   }
 }

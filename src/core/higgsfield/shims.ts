@@ -114,3 +114,26 @@ export function npmShimTarget(
   if (onPath) return { node: onPath, script, electronAsNode: false }
   return { node: opts.selfExecPath ?? process.execPath, script, electronAsNode: true }
 }
+
+/** The program the npm package's launcher starts. `bin/higgsfield.js` (via `run.js`) spawns
+ *  `<pkg>/vendor/hf.exe` (POSIX `vendor/hf`), and only prints "binary not found" when it is gone, as
+ *  happens when antivirus quarantines it. win32: the npm `.cmd`'s script; POSIX: the bin symlink's real
+ *  path. Any other layout answers `{ binary: null, missing: false }`: no guessing. */
+export function higgsfieldVendorBinary(
+  file: string,
+  platform: NodeJS.Platform,
+  deps: { read?: (p: string) => string | null; realpath?: (p: string) => string; exists?: (p: string) => boolean } = {}
+): { binary: string | null; missing: boolean } {
+  const unknown = { binary: null, missing: false }
+  const p = platform === 'win32' ? path.win32 : path.posix
+  let script: string | null = null
+  if (platform === 'win32' && /\.(cmd|bat)$/i.test(file)) {
+    script = npmShimScript(file, deps.read ?? ((f) => { try { return readFileSync(f, 'utf8') } catch { return null } }))
+  } else if (platform !== 'win32') {
+    try { script = (deps.realpath ?? realpathSync.native)(file) } catch { script = null }
+  }
+  if (script === null || !IN_HIGGSFIELD.test(script)) return unknown
+  if (p.basename(script).toLowerCase() !== 'higgsfield.js' || p.basename(p.dirname(script)).toLowerCase() !== 'bin') return unknown
+  const binary = p.join(p.dirname(p.dirname(script)), 'vendor', platform === 'win32' ? 'hf.exe' : 'hf')
+  return { binary, missing: !(deps.exists ?? existsSync)(binary) }
+}
