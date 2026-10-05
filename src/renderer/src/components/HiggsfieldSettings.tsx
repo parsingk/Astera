@@ -107,6 +107,7 @@ export function HiggsfieldSettings(): React.JSX.Element {
       <div className="settings-row">
         <input
           type="text"
+          className="settings-gen-input"
           value={label}
           placeholder={t('higgsfield.label')}
           aria-label={t('higgsfield.label')}
