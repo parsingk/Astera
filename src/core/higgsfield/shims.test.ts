@@ -68,6 +68,15 @@ describe('npmShimTarget', () => {
     const self = npmShimTarget(file, read, { exists: () => false, env: { PATH: '' }, selfExecPath: String.raw`C:\app\astera.exe` })
     expect(self).toMatchObject({ node: String.raw`C:\app\astera.exe`, electronAsNode: true })
   })
+  it('accepts only node.exe from PATH, never a node.cmd version-manager shim', () => {
+    const cmdOnly = npmShimTarget(file, read, { exists: (p) => p === String.raw`C:\n\node.cmd`, env: { PATH: String.raw`C:\n`, PATHEXT: '.CMD;.EXE' }, selfExecPath: String.raw`C:\app\astera.exe` })
+    expect(cmdOnly).toMatchObject({ node: String.raw`C:\app\astera.exe`, electronAsNode: true })
+  })
+  it('does not read node.exe as text to see whether it exists (default exists check)', () => {
+    const reads: string[] = []
+    npmShimTarget(file, (p) => { reads.push(p); return p === file ? SHIM : null }, { env: { PATH: '' }, selfExecPath: 'x' })
+    expect(reads).toEqual([file])
+  })
   it('is null for a .cmd that is not an npm shim', () => {
     expect(npmShimTarget(String.raw`C:\x\a.cmd`, () => '@echo hi\r\n')).toBeNull()
     expect(npmShimTarget(String.raw`C:\x\missing.cmd`, () => null)).toBeNull()

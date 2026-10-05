@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { backupCredentials, hfProxy, realRunner } from './hfProxy'
-import { addHfAccount, hfAccountDir, readHfAccounts } from '../core/higgsfield/accounts'
+import { addHfAccount, hfAccountDir, patchHfAccount, readHfAccounts } from '../core/higgsfield/accounts'
 
 const FAKE = path.join(__dirname, '__fixtures__', 'fake-hf.mjs')
 // node runs the fixture; the runner is the same one production uses, given `node` + script.
@@ -77,6 +77,91 @@ describe('hfProxy', () => {
     expect((await calls()).length).toBe(2)            // the command, then one status check
     expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBe(true)
     expect(msgs.join('')).toMatch(/log in again/i)
+  })
+
+  it('creates no job when credits are short, and names the other account', async () => {
+    const a = await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+    for (const x of [a, b]) await fs.writeFile(path.join(hfAccountDir(profile, x.id), 'credentials.json'), '{}')
+    const code = await hfProxy({ args: ['generate', 'create', 'kling', '--prompt', 'p'], env: env({ FAKE_HF_CREDITS: '3', FAKE_HF_COST: '12' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(code).toBe(75)
+    expect((await calls()).some((c) => c.args[1] === 'create')).toBe(false)
+    expect(msgs.join('')).toContain('"B"')
+    expect(msgs.join('')).toContain('astera higgsfield use --account')
+  })
+
+  it('runs the job when the cost cannot be read', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    const run = fakeRunner()
+    const flaky = (args: string[], e: NodeJS.ProcessEnv, t: boolean) => args[1] === 'cost' ? Promise.resolve({ code: 1, stdout: '', stderr: 'net' }) : run(args, e, t)
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env(), platform: process.platform, home: profile, run: flaky })
+    expect(code).toBe(0)
+    expect((await calls()).some((c) => c.args[1] === 'create')).toBe(true)
+  })
+
+  it('runs the job when credits cover the cost', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env({ FAKE_HF_CREDITS: '50', FAKE_HF_COST: '12' }), platform: process.platform, home: profile, run: fakeRunner() })
+    expect(code).toBe(0)
+    expect((await calls()).some((c) => c.args[1] === 'create')).toBe(true)
+  })
+
+  it('does not pre-check commands that are not jobs', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    await hfProxy({ args: ['generate', 'get', 'x'], env: env(), platform: process.platform, home: profile, run: fakeRunner() })
+    expect((await calls()).map((c) => c.args.slice(0, 2).join(' '))).toEqual(['generate get'])
+  })
+
+  it('leaves another account\'s credentials restored when its status call deletes them', async () => {
+    const a = await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+    const credsOf = (x: { id: string }) => path.join(hfAccountDir(profile, x.id), 'credentials.json')
+    await fs.writeFile(credsOf(a), '{}')
+    await fs.writeFile(credsOf(b), '{"t":"b"}')
+    await fs.writeFile(`${credsOf(b)}.bak`, '{"t":"b"}')
+    const base = fakeRunner()
+    // the CLI "fails to refresh" and deletes the file only when it runs under B
+    const run = (args: string[], e: NodeJS.ProcessEnv, t: boolean) =>
+      base(args, e.HIGGSFIELD_CREDENTIALS_PATH === credsOf(b) ? { ...e, FAKE_HF_DELETE_CREDS: '1' } : e, t)
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env({ FAKE_HF_CREDITS: '3', FAKE_HF_COST: '12' }), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(75)
+    expect(await fs.readFile(credsOf(b), 'utf8')).toBe('{"t":"b"}')
+    expect(await fs.readFile(credsOf(a), 'utf8')).toBe('{}')
+  })
+
+  it('restores the current account\'s credentials when the pre-check deletes them', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}')
+    await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    const base = fakeRunner()
+    const run = (args: string[], e: NodeJS.ProcessEnv, t: boolean) =>
+      base(args, args[1] === 'cost' ? { ...e, FAKE_HF_DELETE_CREDS: '1' } : e, t)
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(0)
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+  })
+
+  it('skips accounts that need a login when listing the others', async () => {
+    const a = await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    await patchHfAccount(profile, b.id, { needsLogin: true })
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env({ FAKE_HF_CREDITS: '3', FAKE_HF_COST: '12' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(code).toBe(75)
+    expect(msgs.join('')).not.toContain('"B"')
+    expect(msgs.join('')).toContain('no other account')
+  })
+
+  it('tells the agent to ask when the job itself is refused for credits', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    const base = fakeRunner()
+    const run = (args: string[], e: NodeJS.ProcessEnv, t: boolean) =>
+      args[1] === 'create' ? Promise.resolve({ code: 1, stdout: '', stderr: 'Error: insufficient credits' }) : base(args, e, t)
+    const code = await hfProxy({ args: ['generate', 'create', 'kling'], env: env({ FAKE_HF_CREDITS: '50', FAKE_HF_COST: '5' }), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(1)
+    expect(msgs.join('')).toContain('Ask the user which account to use')
   })
 
   it('forwards stdout before the CLI exits', async () => {

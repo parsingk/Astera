@@ -2,6 +2,7 @@
 // design §2). Each shim hands its arguments to the `astera` shuttle beside it as `astera hf-proxy …`.
 // They live only in the session shuttle folder (<profile>/orch), which terminal and chat sessions put
 // first on PATH; a shell Astera did not start never sees them.
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { findOnWindowsPath } from '../sessions/windowsExecutable'
 
@@ -67,10 +68,11 @@ export function npmShimTarget(
   const dir = path.win32.dirname(cmdFile)
   const script = path.win32.normalize(m[1].replace(/%~dp0%?|%dp0%/gi, dir))
   if (script.includes('%')) return null
-  const exists = opts.exists ?? ((p: string) => read(p) !== null)
+  const exists = opts.exists ?? existsSync
   const beside = path.win32.join(dir, 'node.exe')
   if (exists(beside)) return { node: beside, script, electronAsNode: false }
-  const onPath = findOnWindowsPath('node', opts.env ?? process.env, exists)
+  // Only a real .exe: a node.cmd/node.bat (version-manager shim) cannot be spawned without a shell.
+  const onPath = findOnWindowsPath('node.exe', opts.env ?? process.env, exists)
   if (onPath) return { node: onPath, script, electronAsNode: false }
   return { node: opts.selfExecPath ?? process.execPath, script, electronAsNode: true }
 }
