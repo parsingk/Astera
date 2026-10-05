@@ -31,6 +31,9 @@ export const ko = {
   'higgsfield.loginHint': '다른 계정으로 로그인된 브라우저가 열렸다면 주소를 복사해 시크릿 창에 붙여 넣으세요.',
   'higgsfield.loginTimeout': '3분 안에 로그인이 끝나지 않아 멈췄습니다. 다시 시도하세요.',
   'higgsfield.loginFailed': '로그인하지 못했습니다.',
+  'higgsfield.needsWorkspace': '작업 공간 선택 필요',
+  'higgsfield.pickWorkspace': '선택',
+  'higgsfield.workspace': '작업 공간',
   // 에이전트 세션을 어떻게 띄우고 이어가는가 — 일반에서 갈라져 나온 탭이다
   'settings.tab.agent': '에이전트',
   'settings.tab.info': '정보',

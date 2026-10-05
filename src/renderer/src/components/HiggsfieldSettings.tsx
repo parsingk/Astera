@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
+import { hfAccountTitle, hfWorkspaceLabel } from '../../../core/higgsfield/display'
 
 type HfList = Awaited<ReturnType<typeof window.api.higgsfield.list>>
 type HfAccountRow = HfList['accounts'][number]
@@ -20,6 +21,8 @@ export function HiggsfieldSettings(): React.JSX.Element {
   // pane opened is followed by polling alone.
   const awaitingLogin = useRef(false)
   const [removeTarget, setRemoveTarget] = useState<HfAccountRow | null>(null)
+  // The workspace chosen in each row's picker (account id -> workspace id); the first one until changed.
+  const [picked, setPicked] = useState<Record<string, string>>({})
 
   const reload = useCallback(async (): Promise<void> => {
     try {
@@ -136,14 +139,13 @@ export function HiggsfieldSettings(): React.JSX.Element {
           const url = isLoggingIn ? login?.url ?? null : null
           return (
             <li key={a.id} className="account-row">
-              <span className="account-label">
-                {a.label}
-                {a.email ? ` · ${a.email}` : ''}
-              </span>
+              <span className="account-label">{hfAccountTitle(a.label, a.email)}</span>
               {isLoggingIn ? (
                 <span className="badge">{t('higgsfield.loggingIn')}</span>
               ) : a.needsLogin ? (
                 <span className="badge">{t('higgsfield.needsLogin')}</span>
+              ) : a.needsWorkspace ? (
+                <span className="badge">{t('higgsfield.needsWorkspace')}</span>
               ) : (
                 <span className="badge ok">
                   {a.credits === null ? t('higgsfield.creditsUnknown') : t('higgsfield.credits', { n: a.credits })}
@@ -173,6 +175,25 @@ export function HiggsfieldSettings(): React.JSX.Element {
                 </button>
               </span>
               {isLoggingIn && <span className="settings-hint account-row-hint">{t('higgsfield.loginHint')}</span>}
+              {!isLoggingIn && a.needsWorkspace && (a.workspaces?.length ?? 0) > 0 && (
+                <span className="account-row-hint account-row-actions">
+                  <select
+                    aria-label={t('higgsfield.workspace')}
+                    value={picked[a.id] ?? a.workspaces![0].id}
+                    onChange={(e) => setPicked((p) => ({ ...p, [a.id]: e.target.value }))}
+                  >
+                    {a.workspaces!.map((w) => (
+                      <option key={w.id} value={w.id}>{hfWorkspaceLabel(w, (n) => t('higgsfield.credits', { n }))}</option>
+                    ))}
+                  </select>
+                  <button
+                    disabled={busy}
+                    onClick={() => void act(() => window.api.higgsfield.setWorkspace(a.id, picked[a.id] ?? a.workspaces![0].id))}
+                  >
+                    {t('higgsfield.pickWorkspace')}
+                  </button>
+                </span>
+              )}
             </li>
           )
         })}
