@@ -116,7 +116,10 @@ describe('createHostSpawner', () => {
   it('writes the session shuttle at creation and says where, for the chats that read it', async () => {
     const h = rig()
     expect(h.spawner!.orchEnvNow()).toBeUndefined()
-    await vi.waitFor(() => expect(h.spawner!.orchEnvNow()).toBeDefined())
+    // The shuttle is written in the background (sessionCmdLink, then the shuttle and the higgsfield
+    // shims): a few ms on a quiet machine, but in the full suite it overran vi.waitFor's default 1 s.
+    // The test's own 10 s is the real bound.
+    await vi.waitFor(() => expect(h.spawner!.orchEnvNow()).toBeDefined(), { timeout: 8_000 })
     const env = h.spawner!.orchEnvNow()!
     expect(path.dirname(env.cliPath)).toBe(path.join(profile, 'orch'))
     expect(env.profileDir).toBe(profile)
