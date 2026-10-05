@@ -1,19 +1,24 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 
 type HfList = Awaited<ReturnType<typeof window.api.higgsfield.list>>
 type HfAccountRow = HfList['accounts'][number]
+type HfLoginState = Awaited<ReturnType<typeof window.api.higgsfield.loginState>>
 
 /** The Higgsfield pane of the settings modal: the accounts Astera keeps, the one every agent
  *  `higgsfield` call runs under, and how to add, import, log in and remove them. The current account is
- *  shown at the top of this tab only (Astera has no app-wide status bar). */
+ *  shown at the top of this tab only (Astera has no app-wide status bar). A login runs alongside the
+ *  other buttons: its row offers the login link to copy (for a private window) and a cancel. */
 export function HiggsfieldSettings(): React.JSX.Element {
   const { t } = useI18n()
   const [data, setData] = useState<HfList | null>(null)
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
-  const [loggingIn, setLoggingIn] = useState<string | null>(null)
+  const [login, setLogin] = useState<HfLoginState>(null)
+  // true while this pane awaits login(): its answer reloads the list. A login found running when the
+  // pane opened is followed by polling alone.
+  const awaitingLogin = useRef(false)
   const [removeTarget, setRemoveTarget] = useState<HfAccountRow | null>(null)
 
   const reload = useCallback(async (): Promise<void> => {
@@ -26,7 +31,23 @@ export function HiggsfieldSettings(): React.JSX.Element {
 
   useEffect(() => {
     void reload()
+    window.api.higgsfield.loginState().then((s) => { if (s) setLogin(s) }, () => {})
   }, [reload])
+
+  const loginId = login?.id ?? null
+  useEffect(() => {
+    if (loginId === null) return
+    const timer = setInterval(() => {
+      window.api.higgsfield.loginState().then((s) => {
+        if (s) setLogin(s)
+        else if (!awaitingLogin.current) {
+          setLogin(null)
+          void reload()
+        }
+      }, () => {})
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [loginId, reload])
 
   const act = async (fn: () => Promise<unknown>): Promise<void> => {
     if (busy) return
@@ -50,16 +71,45 @@ export function HiggsfieldSettings(): React.JSX.Element {
     })
   }
 
-  const login = (a: HfAccountRow): Promise<void> =>
-    act(async () => {
-      setLoggingIn(a.id)
-      try {
-        const r = await window.api.higgsfield.login(a.id)
-        if (!r.ok) toast.error(r.message ?? t('higgsfield.login'))
-      } finally {
-        setLoggingIn(null)
-      }
-    })
+  // Not through act(): the other buttons stay usable while the browser is open.
+  const startLogin = async (a: HfAccountRow): Promise<void> => {
+    if (login !== null || awaitingLogin.current) return
+    awaitingLogin.current = true
+    setLogin({ id: a.id, url: null })
+    try {
+      const r = await window.api.higgsfield.login(a.id)
+      if (r.reason === 'timeout') toast.error(t('higgsfield.loginTimeout'))
+      else if (!r.ok && r.reason !== 'cancelled') toast.error(r.message ?? t('higgsfield.loginFailed'))
+    } catch (err) {
+      toast.error(String(err))
+    } finally {
+      awaitingLogin.current = false
+      setLogin(null)
+    }
+    await reload()
+  }
+
+  const cancelLogin = async (): Promise<void> => {
+    try {
+      await window.api.higgsfield.cancelLogin()
+    } catch (err) {
+      toast.error(String(err))
+    }
+    // A login this pane did not start: nothing else will put the row back.
+    if (!awaitingLogin.current) {
+      setLogin(null)
+      await reload()
+    }
+  }
+
+  const copyLoginUrl = async (url: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success(t('higgsfield.urlCopied'))
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
 
   const confirmRemove = async (): Promise<void> => {
     const target = removeTarget
@@ -69,39 +119,63 @@ export function HiggsfieldSettings(): React.JSX.Element {
   }
 
   const current = data?.accounts.find((a) => a.current)
+  // From the list too: a login started before this pane opened shows before the first poll answers.
+  const loggingInId = loginId ?? data?.accounts.find((a) => a.loggingIn)?.id ?? null
 
   return (
     <div className="settings-accounts">
+      {data?.cliIssue && (
+        <div className="settings-warn-box" role="alert">{t('higgsfield.binaryMissing', { path: data.cliIssue.path })}</div>
+      )}
       {data !== null && !data.cliFound && <span className="settings-hint">{t('higgsfield.cliMissing')}</span>}
       {current && <div className="settings-row"><span>{t('higgsfield.current', { label: current.label })}</span></div>}
       <span className="settings-hint">{t('higgsfield.hint')}</span>
       <ul>
-        {data?.accounts.map((a) => (
-          <li key={a.id} className="account-row">
-            <span className="account-label">
-              {a.label}
-              {a.email ? ` · ${a.email}` : ''}
-            </span>
-            {a.needsLogin ? (
-              <span className="badge">{t('higgsfield.needsLogin')}</span>
-            ) : (
-              <span className="badge ok">
-                {a.credits === null ? t('higgsfield.creditsUnknown') : t('higgsfield.credits', { n: a.credits })}
+        {data?.accounts.map((a) => {
+          const isLoggingIn = loggingInId === a.id
+          const url = isLoggingIn ? login?.url ?? null : null
+          return (
+            <li key={a.id} className="account-row">
+              <span className="account-label">
+                {a.label}
+                {a.email ? ` · ${a.email}` : ''}
               </span>
-            )}
-            <span className="account-row-actions">
-              <button disabled={busy || a.current || a.needsLogin} onClick={() => void act(() => window.api.higgsfield.setCurrent(a.id))}>
-                {t('higgsfield.use')}
-              </button>
-              <button disabled={busy || !data.cliFound} onClick={() => void login(a)}>
-                {loggingIn === a.id ? t('higgsfield.loggingIn') : t('higgsfield.login')}
-              </button>
-              <button className="ghost danger" disabled={busy} onClick={() => setRemoveTarget(a)}>
-                {t('higgsfield.remove')}
-              </button>
-            </span>
-          </li>
-        ))}
+              {isLoggingIn ? (
+                <span className="badge">{t('higgsfield.loggingIn')}</span>
+              ) : a.needsLogin ? (
+                <span className="badge">{t('higgsfield.needsLogin')}</span>
+              ) : (
+                <span className="badge ok">
+                  {a.credits === null ? t('higgsfield.creditsUnknown') : t('higgsfield.credits', { n: a.credits })}
+                </span>
+              )}
+              <span className="account-row-actions">
+                <button disabled={busy || a.current || a.needsLogin} onClick={() => void act(() => window.api.higgsfield.setCurrent(a.id))}>
+                  {t('higgsfield.use')}
+                </button>
+                {isLoggingIn ? (
+                  <>
+                    <button disabled={url === null} onClick={() => { if (url !== null) void copyLoginUrl(url) }}>
+                      {t('higgsfield.copyUrl')}
+                    </button>
+                    <button onClick={() => void cancelLogin()}>{t('higgsfield.cancelLogin')}</button>
+                  </>
+                ) : (
+                  <button
+                    disabled={busy || !data.cliFound || data.cliIssue !== null || loggingInId !== null}
+                    onClick={() => void startLogin(a)}
+                  >
+                    {t('higgsfield.login')}
+                  </button>
+                )}
+                <button className="ghost danger" disabled={busy || isLoggingIn} onClick={() => setRemoveTarget(a)}>
+                  {t('higgsfield.remove')}
+                </button>
+              </span>
+              {isLoggingIn && <span className="settings-hint account-row-hint">{t('higgsfield.loginHint')}</span>}
+            </li>
+          )
+        })}
         {data !== null && data.accounts.length === 0 && <li className="empty">{t('higgsfield.none')}</li>}
       </ul>
       <div className="settings-row">

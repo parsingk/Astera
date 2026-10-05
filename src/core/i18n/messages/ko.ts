@@ -24,6 +24,13 @@ export const ko = {
   'higgsfield.removeConfirm': '"{label}" 계정을 Astera 에서 지울까요? 이 계정의 로그인 파일도 함께 지워집니다.',
   'higgsfield.use': '이 계정 쓰기',
   'higgsfield.hint': 'Astera 세션의 에이전트가 부르는 higgsfield 명령은 모두 지금 쓰는 계정으로 실행됩니다. 크레딧이 모자라면 에이전트가 어느 계정으로 바꿀지 물어봅니다.',
+  'higgsfield.binaryMissing': 'Higgsfield CLI 실행 파일이 없습니다 ({path}). Windows 보안 > 보호 기록에서 격리되었는지 확인하세요.',
+  'higgsfield.copyUrl': '주소 복사',
+  'higgsfield.urlCopied': '로그인 주소를 복사했습니다.',
+  'higgsfield.cancelLogin': '취소',
+  'higgsfield.loginHint': '다른 계정으로 로그인된 브라우저가 열렸다면 주소를 복사해 시크릿 창에 붙여 넣으세요.',
+  'higgsfield.loginTimeout': '3분 안에 로그인이 끝나지 않아 멈췄습니다. 다시 시도하세요.',
+  'higgsfield.loginFailed': '로그인하지 못했습니다.',
   // 에이전트 세션을 어떻게 띄우고 이어가는가 — 일반에서 갈라져 나온 탭이다
   'settings.tab.agent': '에이전트',
   'settings.tab.info': '정보',
