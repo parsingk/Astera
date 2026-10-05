@@ -13,6 +13,7 @@ import { cliHostTarget } from './host'
 import { hfEnvFor, patchHfAccount, readHfAccounts, type HfAccount } from '../core/higgsfield/accounts'
 import { findRealHiggsfield, npmShimTarget } from '../core/higgsfield/shims'
 import { BALANCE_KEYS, COST_KEYS, costArgsFor, isGenerateJob, looksOutOfCredits, numberAt, shortCreditsMessage } from '../core/higgsfield/credits'
+import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, recordJobFile, type HfAssetLedger } from '../core/higgsfield/assets'
 import { windowsSpawn } from '../core/sessions/windowsExecutable'
 
 export interface HfRun { code: number; stdout: string; stderr: string }
@@ -183,6 +184,57 @@ async function otherAccounts(run: HfRunner, profileDir: string, base: NodeJS.Pro
   })))
 }
 
+/**
+ * Swap every upload/job id that belongs to another account for a local file the CLI will upload itself.
+ * An upload becomes its recorded path; a job's first media file is downloaded once (the job is read under
+ * its own account, through the guarded side call). Any failure leaves that id as it was, with one line.
+ */
+async function bringIdsOver(a: {
+  run: HfRunner; args: string[]; profileDir: string; base: NodeJS.ProcessEnv; account: HfAccount
+  doFetch: typeof fetch; write: (s: string) => void
+}): Promise<string[]> {
+  const { run, profileDir, base, account, doFetch, write } = a
+  const args = [...a.args]
+  let ledger: HfAssetLedger
+  let accounts: HfAccount[] = []
+  try {
+    ledger = await readLedger(profileDir)
+    if (!foreignIds(args, ledger, account.id).length) return args
+    accounts = (await readHfAccounts(profileDir)).accounts
+  } catch {
+    return args
+  }
+  for (const f of foreignIds(args, ledger, account.id)) {
+    const upload = ledger.uploads[f.id]
+    const ownerId = (upload ?? ledger.jobs[f.id]).account
+    const label = accounts.find((x) => x.id === ownerId)?.label ?? ownerId
+    try {
+      let file: string | undefined
+      if (upload) {
+        if (await exists(upload.path)) file = upload.path
+      } else {
+        const job = ledger.jobs[f.id]
+        if (job.file && (await exists(job.file))) file = job.file
+        else {
+          const owner = accounts.find((x) => x.id === ownerId)
+          if (!owner) throw new Error('unknown account')
+          const got = await sideCall(run, ['generate', 'get', f.id, '--json'], profileDir, base, owner)
+          const url = got.code === 0 ? firstMediaUrl(got.stdout) : null
+          if (!url) throw new Error('no media url')
+          file = await downloadAsset(profileDir, f.id, url, doFetch)
+          await recordJobFile(profileDir, f.id, file)
+        }
+      }
+      if (!file) throw new Error('no file')
+      args[f.index] = f.prefix + file
+    } catch {
+      write(`higgsfield: could not bring ${f.id} over from account "${label}"; passing it through
+`)
+    }
+  }
+  return args
+}
+
 /** Runs `generate cost` and `account status` under the current account, then guards its credentials once. */
 async function preCheck(run: HfRunner, env: NodeJS.ProcessEnv, args: string[], g: { profileDir: string; account: HfAccount; creds: string }) {
   // One after the other, never together: two token refreshes on the same credentials can rotate the
@@ -204,6 +256,7 @@ export async function hfProxy(a: {
   home: string
   run?: HfRunner
   write?: (s: string) => void
+  fetch?: typeof fetch
 }): Promise<number> {
   const write = a.write ?? ((s: string) => process.stderr.write(s))
   const { profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
@@ -214,8 +267,8 @@ export async function hfProxy(a: {
 
   const env = { ...a.env, ...hfEnvFor(profileDir, account.id) }
   const creds = env.HIGGSFIELD_CREDENTIALS_PATH as string
-  // Task 6 rewrites local ids/paths in `a.args` here, before the pre-check, so it prices the same args the job runs.
-  const args = a.args
+  // Ids of another account become files before the pre-check, so it prices the same args the job runs.
+  const args = await bringIdsOver({ run, args: a.args, profileDir, base: a.env, account, doFetch: a.fetch ?? fetch, write })
   if (isGenerateJob(args) && !args.includes('-h') && !args.includes('--help')) {
     const { need, have, loginLost, code } = await preCheck(run, env, args, { profileDir, account, creds })
     if (loginLost) { write(loginAgain(account)); return code }
@@ -228,6 +281,7 @@ export async function hfProxy(a: {
     }
   }
   const first = await run(args, env, true)
+  if (first.code === 0) await recordAfter(profileDir, account.id, args, first.stdout).catch(() => {})
   if (isGenerateJob(args) && first.code !== 0 && looksOutOfCredits(first.stdout + first.stderr)) {
     await guardCredentials({ run, env, profileDir, account, creds })
     write(shortCreditsMessage({

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { backupCredentials, hfProxy, realRunner, restoreOnce } from './hfProxy'
+import { readLedger } from '../core/higgsfield/assets'
 import { addHfAccount, hfAccountDir, patchHfAccount, readHfAccounts } from '../core/higgsfield/accounts'
 
 const FAKE = path.join(__dirname, '__fixtures__', 'fake-hf.mjs')
@@ -290,5 +291,91 @@ describe('hfProxy', () => {
     const r = await realRunner(shim, 'win32')(['a&b'], process.env, false)
     expect(r.code).toBe(2)
     expect(r.stderr).toMatch(/cmd/)
+  })
+
+  describe('assets across accounts', () => {
+    const U = '11111111-1111-4111-8111-111111111111'
+    const J = '22222222-2222-4222-8222-222222222222'
+    const ledgerFile = () => path.join(profile, 'higgsfield', 'assets.json')
+    const setup = async () => {
+      const a = await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+      for (const x of [a, b]) await fs.writeFile(path.join(hfAccountDir(profile, x.id), 'credentials.json'), '{}')
+      return { a, b }
+    }
+    const jobRunner = (log: string[][]) => {
+      const base = fakeRunner()
+      return (args: string[], e: NodeJS.ProcessEnv, t: boolean) => {
+        if (args[0] === 'generate' && args[1] === 'get') {
+          log.push([args.join(' '), e.HIGGSFIELD_CREDENTIALS_PATH as string])
+          return Promise.resolve({ code: 0, stdout: `{"result":{"url":"https://cdn.x/out.mp4?sig=1&e=2"}}`, stderr: '' })
+        }
+        return base(args, e, t)
+      }
+    }
+
+    it('swaps an upload id of another account for its file', async () => {
+      const { a, b } = await setup()
+      const img = path.join(profile, 'img.png'); await fs.writeFile(img, 'x')
+      await fs.mkdir(path.join(profile, 'higgsfield'), { recursive: true })
+      await fs.writeFile(ledgerFile(), JSON.stringify({ uploads: { [U]: { account: a.id, path: img } }, jobs: {} }))
+      await patchHfAccount(profile, b.id, {})
+      const { setHfCurrent } = await import('../core/higgsfield/accounts')
+      await setHfCurrent(profile, b.id)
+      await hfProxy({ args: ['generate', 'create', 'k', '--image', U], env: env(), platform: process.platform, home: profile, run: fakeRunner() })
+      const c = (await calls()).find((x) => x.args[1] === 'create')
+      expect(c.args).toEqual(['generate', 'create', 'k', '--image', img])
+    })
+
+    it('records an upload made under the current account', async () => {
+      const { a } = await setup()
+      await hfProxy({ args: ['upload', 'create', 'pic.png'], env: env(), platform: process.platform, home: profile, run: fakeRunner() })
+      expect((await readLedger(profile)).uploads[U]).toEqual({ account: a.id, path: path.resolve('pic.png') })
+    })
+
+    it('does not record after a failed run, and a ledger write failure keeps the exit code', async () => {
+      await setup()
+      await hfProxy({ args: ['upload', 'create', 'pic.png'], env: env({ FAKE_HF_EXIT: '3' }), platform: process.platform, home: profile, run: fakeRunner() })
+      await expect(fs.stat(ledgerFile())).rejects.toThrow()
+      await fs.mkdir(ledgerFile(), { recursive: true })   // a directory where the file goes: every write fails
+      const code = await hfProxy({ args: ['upload', 'create', 'pic.png'], env: env(), platform: process.platform, home: profile, run: fakeRunner() })
+      expect(code).toBe(0)
+    })
+
+    it('downloads a job of another account once, under that account, and uses the file', async () => {
+      const { a, b } = await setup()
+      await fs.mkdir(path.join(profile, 'higgsfield'), { recursive: true })
+      await fs.writeFile(ledgerFile(), JSON.stringify({ uploads: {}, jobs: { [J]: { account: a.id } } }))
+      const { setHfCurrent } = await import('../core/higgsfield/accounts')
+      await setHfCurrent(profile, b.id)
+      const gets: string[][] = []; const urls: string[] = []
+      const fetchFake = (async (u: string) => { urls.push(u); return new Response('bytes') }) as unknown as typeof fetch
+      const go = () => hfProxy({ args: ['generate', 'create', 'k', `--start-image=${J}`], env: env(), platform: process.platform, home: profile, run: jobRunner(gets), fetch: fetchFake })
+      await go()
+      const file = path.join(profile, 'higgsfield', 'assets', `${J}.mp4`)
+      expect(await fs.readFile(file, 'utf8')).toBe('bytes')
+      expect(urls).toEqual(['https://cdn.x/out.mp4?sig=1&e=2'])
+      expect(gets).toEqual([[`generate get ${J} --json`, path.join(hfAccountDir(profile, a.id), 'credentials.json')]])
+      const c = (await calls()).filter((x) => x.args[1] === 'create')
+      expect(c[0].args[3]).toBe(`--start-image=${file}`)
+      expect((await readLedger(profile)).jobs[J].file).toBe(file)
+      await go()   // second time: the file is there, nothing fetched
+      expect(urls.length).toBe(1)
+      expect(gets.length).toBe(1)
+    })
+
+    it('keeps the id and says so once when the download fails', async () => {
+      const { a, b } = await setup()
+      await fs.mkdir(path.join(profile, 'higgsfield'), { recursive: true })
+      await fs.writeFile(ledgerFile(), JSON.stringify({ uploads: {}, jobs: { [J]: { account: a.id } } }))
+      const { setHfCurrent } = await import('../core/higgsfield/accounts')
+      await setHfCurrent(profile, b.id)
+      const fetchFake = (async () => new Response('no', { status: 500 })) as unknown as typeof fetch
+      await hfProxy({ args: ['generate', 'create', 'k', '--image', J], env: env(), platform: process.platform, home: profile, run: jobRunner([]), fetch: fetchFake, write: (s) => msgs.push(s) })
+      expect((await calls()).find((x) => x.args[1] === 'create').args).toEqual(['generate', 'create', 'k', '--image', J])
+      expect(msgs).toEqual([`higgsfield: could not bring ${J} over from account "A"; passing it through
+`])
+      const left = await fs.readdir(path.join(profile, 'higgsfield', 'assets')).catch(() => [])
+      expect(left).toEqual([])
+    })
   })
 })

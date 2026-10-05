@@ -22,7 +22,7 @@ export function numberAt(json: string, keys: string[]): number | null {
 }
 
 /** Index of the first word that is not a leading global flag (`--json generate create ...`). */
-const subIndex = (args: string[]): number => {
+export const subIndex = (args: string[]): number => {
   let i = 0
   while (i < args.length && args[i].startsWith('-')) i++
   return i
