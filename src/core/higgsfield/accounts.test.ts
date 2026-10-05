@@ -79,3 +79,16 @@ describe('higgsfield accounts store', () => {
     expect(await fs.readdir(path.join(profile, 'higgsfield'))).toEqual(['accounts.json'])
   })
 })
+
+describe('removeHfAccount guard', () => {
+  it('refuses an id that is not in the file before deleting anything', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const sentinel = path.join(profile, 'higgsfield', 'keep.txt')
+    await fs.writeFile(sentinel, 'x')
+    for (const bad of ['..', '', '.', 'nope']) {
+      await expect(removeHfAccount(profile, bad)).rejects.toThrow(/unknown higgsfield account/)
+    }
+    expect(await fs.readFile(sentinel, 'utf8')).toBe('x')
+    expect((await readHfAccounts(profile)).accounts.map((x) => x.id)).toEqual([a.id])
+  })
+})

@@ -1168,6 +1168,20 @@ export interface CoreApi {
         }
     >
   }
+  higgsfield: {
+    list(): Promise<{
+      current: string | null
+      accounts: { id: string; label: string; email?: string; credits: number | null; current: boolean; needsLogin: boolean }[]
+      cliFound: boolean
+    }>
+    add(label: string): Promise<{ id: string }>
+    /** Copies ~/.config/higgsfield (the login outside Astera); never moves it. */
+    importCurrent(label: string): Promise<{ id: string }>
+    /** Runs the real CLI's `auth login` under that account; the CLI opens the browser. */
+    login(id: string): Promise<{ ok: boolean; message?: string }>
+    remove(id: string): Promise<void>
+    setCurrent(id: string): Promise<void>
+  }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */
     status(): Promise<GhProbe>

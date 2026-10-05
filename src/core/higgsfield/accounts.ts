@@ -99,6 +99,8 @@ export const importHfAccount = (profileDir: string, label: string, sourceDir: st
 
 export async function removeHfAccount(profileDir: string, id: string): Promise<void> {
   const f = await readHfAccounts(profileDir)
+  // Before any fs.rm: an id like '..' or '' must never reach a path join.
+  if (!f.accounts.some((a) => a.id === id)) throw new Error(`unknown higgsfield account: ${id}`)
   const accounts = f.accounts.filter((a) => a.id !== id)
   const current = f.current === id ? (accounts[0]?.id ?? null) : f.current
   await writeHfAccounts(profileDir, { accounts, current })

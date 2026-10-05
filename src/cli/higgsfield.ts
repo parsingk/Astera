@@ -8,7 +8,7 @@ import type { CliError } from '../core/orchestration/cliOutput'
 import { patchHfAccount, readHfAccounts, resolveHfAccount, setHfCurrent, type HfAccount } from '../core/higgsfield/accounts'
 import { BALANCE_KEYS, numberAt } from '../core/higgsfield/credits'
 import { findRealHiggsfield } from '../core/higgsfield/shims'
-import { realRunner, sideCall, type HfRunner } from './hfProxy'
+import { realRunner, sideCall, type HfRunner } from '../core/higgsfield/runner'
 
 type Outcome = { ok: true; body: Record<string, unknown> } | { ok: false; error: CliError }
 export type StatusRun = (accountId: string) => Promise<{ email?: string; credits: number | null } | null>
