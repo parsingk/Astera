@@ -24,32 +24,46 @@ export interface RealRunnerOptions {
   stdin?: 'inherit' | 'ignore'
 }
 
+/** How to start `file` with `args`: on win32 an npm `.cmd` becomes node on its script (so no cmd.exe reads
+ *  the agent's words), any other `.cmd`/`.bat` goes through cmd.exe only when no argument is cmd syntax. */
+function commandFor(file: string, platform: NodeJS.Platform, args: string[], env: NodeJS.ProcessEnv):
+  { file: string; args: string[]; env: NodeJS.ProcessEnv } | { refusal: string } {
+  if (platform !== 'win32') return { file, args, env }
+  const ext = path.win32.extname(file).toLowerCase()
+  const shim = ext === '.cmd' || ext === '.bat' ? npmShimTarget(file, readOrNull, { env }) : null
+  if (shim) return { file: shim.node, args: [shim.script, ...args], env: shim.electronAsNode ? { ...env, ELECTRON_RUN_AS_NODE: '1' } : env }
+  const refusal = cmdRefusal(file, args, platform)
+  if (refusal !== null) return { refusal }
+  return { ...windowsSpawn(path.win32.basename(file), args, () => file), env }
+}
+
+/** Runs `file` exactly as typed: the environment it was given, stdio inherited, its exit code. For a
+ *  program found under a Higgsfield name that is not the Higgsfield CLI (Hugging Face's `hf`). */
+export function passThrough(file: string, platform: NodeJS.Platform, args: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  return new Promise((resolve) => {
+    const cmd = commandFor(file, platform, args, env)
+    if ('refusal' in cmd) {
+      process.stderr.write(`${path.basename(file)}: ${cmd.refusal}\n`)
+      resolve(2)
+      return
+    }
+    const child = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: 'inherit' })
+    child.on('error', (e) => { process.stderr.write(`${String(e)}\n`); resolve(127) })
+    child.on('close', (code) => resolve(code ?? 1))
+  })
+}
+
 export function realRunner(file: string, platform: NodeJS.Platform, lead: string[] = [], opts: RealRunnerOptions = {}): HfRunner {
   return (args, env, tee) =>
     new Promise((resolve) => {
-      let all = [...lead, ...args]
-      let cmd: { file: string; args: string[] } = { file, args: all }
-      if (platform === 'win32') {
-        const ext = path.win32.extname(file).toLowerCase()
-        const shim = ext === '.cmd' || ext === '.bat' ? npmShimTarget(file, readOrNull, { env }) : null
-        if (shim) {
-          // npm's own shim: run node on its script, so no cmd.exe reads the agent's words.
-          all = [shim.script, ...all]
-          cmd = { file: shim.node, args: all }
-          if (shim.electronAsNode) env = { ...env, ELECTRON_RUN_AS_NODE: '1' }
-        } else {
-          const refusal = cmdRefusal(file, all, platform)
-          if (refusal !== null) {
-            const msg = `higgsfield: ${refusal}
-`
-            if (tee) process.stderr.write(msg)
-            resolve({ code: 2, stdout: '', stderr: msg })
-            return
-          }
-          cmd = windowsSpawn(path.win32.basename(file), all, () => file)
-        }
+      const cmd = commandFor(file, platform, [...lead, ...args], env)
+      if ('refusal' in cmd) {
+        const msg = `higgsfield: ${cmd.refusal}\n`
+        if (tee) process.stderr.write(msg)
+        resolve({ code: 2, stdout: '', stderr: msg })
+        return
       }
-      const child = spawn(cmd.file, cmd.args, { env, stdio: [opts.stdin ?? 'inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
+      const child = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: [opts.stdin ?? 'inherit', 'pipe', 'pipe'], windowsHide: opts.hide ?? true })
       let stdout = ''
       let stderr = ''
       let timer: NodeJS.Timeout | undefined

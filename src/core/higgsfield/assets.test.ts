@@ -53,6 +53,15 @@ describe('assets', () => {
     expect(path.extname(await downloadAsset(profile, 'j2', 'https://cdn.x/a.mp4:x', f))).toBe('.bin')
     expect(path.extname(await downloadAsset(profile, 'j3', 'https://cdn.x/a.waytoolongext1', f))).toBe('.bin')
   })
+
+  it('gives up on a download that does not answer in time, leaving no file', async () => {
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfd-'))
+    const hang = ((_u: string, init?: RequestInit) => new Promise<Response>((_res, rej) => {
+      init?.signal?.addEventListener('abort', () => rej(init.signal!.reason))
+    })) as unknown as typeof fetch
+    await expect(downloadAsset(profile, 'j1', 'https://cdn.x/a.mp4', hang, { timeoutMs: 50 })).rejects.toThrow()
+    expect(await fs.readdir(path.join(profile, 'higgsfield', 'assets'))).toEqual([])
+  }, 5000)
 })
 
 describe('recordAfter / readLedger', () => {

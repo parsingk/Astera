@@ -7,24 +7,35 @@ import { promises as fs, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { cliHostTarget } from './host'
 import { hfEnvFor, patchHfAccount, readHfAccounts, type HfAccount } from '../core/higgsfield/accounts'
-import { findRealHiggsfield } from '../core/higgsfield/shims'
-import { BALANCE_KEYS, COST_KEYS, costArgsFor, isGenerateJob, looksOutOfCredits, numberAt, shortCreditsMessage } from '../core/higgsfield/credits'
+import { findRealHiggsfield, isHiggsfieldCli } from '../core/higgsfield/shims'
+import { BALANCE_KEYS, COST_KEYS, costArgsFor, isGenerateJob, subIndex, looksOutOfCredits, numberAt, shortCreditsMessage } from '../core/higgsfield/credits'
 import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, recordJobFile, type HfAssetLedger } from '../core/higgsfield/assets'
-import { backupCredentials, copyBack, exists, guardCredentials, readOrNull, realRunner, sideCall, type HfRun, type HfRunner } from '../core/higgsfield/runner'
+import { backupCredentials, copyBack, exists, guardCredentials, passThrough, readOrNull, realRunner, sideCall, type HfRun, type HfRunner } from '../core/higgsfield/runner'
 
 // Kept importable from here: the runner and guard live in core/higgsfield/runner (the app uses them too).
 export { backupCredentials, guardCredentials, realRunner, sideCall }
 export type { HfRun, HfRunner }
 
-/** The runner to use, or null (after saying so) when no real higgsfield CLI is on PATH. */
-function pickRunner(a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; run?: HfRunner }, orchDir: string, write: (s: string) => void): HfRunner | null {
+/** The runner to use; or an exit code: 127 (after saying so) when nothing is found on PATH, or the code
+ *  of a program that is not the Higgsfield CLI (Hugging Face's `hf`), which runs untouched. */
+async function pickRunner(
+  a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; run?: HfRunner }, as: string | undefined, args: string[],
+  orchDir: string, write: (s: string) => void
+): Promise<HfRunner | number> {
   if (a.run) return a.run
-  const real = findRealHiggsfield({ env: a.env, platform: a.platform, skipDirs: [orchDir], read: readOrNull })
+  const real = findRealHiggsfield({ env: a.env, platform: a.platform, skipDirs: [orchDir], read: readOrNull, prefer: as })
   if (real === null) {
-    write(`higgsfield: the higgsfield CLI was not found on PATH (Astera's own folder ${orchDir} was skipped)\n`)
-    return null
+    write(`${as ?? 'higgsfield'}: the higgsfield CLI was not found on PATH (Astera's own folder ${orchDir} was skipped)\n`)
+    return 127
   }
+  if (!isHiggsfieldCli(real, a.platform, { read: readOrNull })) return passThrough(real, a.platform, args, a.env)
   return realRunner(real, a.platform)
+}
+
+/** `--as=<name>` (the name the shim was invoked by) leads the shim's arguments; the rest belong to the CLI. */
+export function splitAs(args: string[]): { as?: string; args: string[] } {
+  const m = /^--as=(.+)$/.exec(args[0] ?? '')
+  return m ? { as: m[1], args: args.slice(1) } : { args }
 }
 
 /** The current account, or undefined (running without one) when none is set or the file is unreadable. */
@@ -41,20 +52,41 @@ async function currentAccount(profileDir: string, write: (s: string) => void): P
 const loginAgain = (account: HfAccount) =>
   `higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Higgsfield). Tell the user; do not log in yourself.\n`
 
+/** A command that may have created something billed or stored before it failed: a job, or an upload. */
+const mayHaveCreated = (args: string[]): boolean => {
+  const i = subIndex(args)
+  return isGenerateJob(args) || (args[i] === 'upload' && args[i + 1] === 'create')
+}
+
+const notRerun = (args: string[]) => {
+  const what = isGenerateJob(args) ? 'job' : 'upload'
+  const check = what === 'job'
+    ? '`higgsfield generate get <id>` or the job list'
+    : 'the upload list'
+  return `higgsfield: the Higgsfield login was restored from Astera's backup, but the command was not run again: the ${what} may already have been created. Check with ${check} before retrying.\n`
+}
+
 /**
  * The CLI deleted the credentials file (failed refresh). Restore the backup once (spec §1), check with
  * `account status`, and rerun the command if the login holds; otherwise mark the account needsLogin.
+ * A job or an upload is never rerun: it may already exist, and a second run would charge again.
  */
 export async function restoreOnce(a: {
   run: HfRunner; args: string[]; env: NodeJS.ProcessEnv; profileDir: string; account: HfAccount
   creds: string; first: HfRun; write: (s: string) => void
 }): Promise<number> {
   const { run, args, env, profileDir, account, creds, first, write } = a
+  const noRerun = mayHaveCreated(args)
   try {
     if (await exists(`${creds}.bak`)) {
       await copyBack(creds)
       const check = await run(['account', 'status', '--json'], env, false)
       if (check.code === 0 && (await exists(creds))) {
+        if (noRerun) {
+          await backupCredentials(creds)
+          write(notRerun(args))
+          return first.code
+        }
         write("higgsfield: the login was restored from Astera's backup; running the command again\n")
         const again = await run(args, env, true)
         await backupCredentials(creds)
@@ -91,9 +123,9 @@ async function otherAccounts(run: HfRunner, profileDir: string, base: NodeJS.Pro
  */
 async function bringIdsOver(a: {
   run: HfRunner; args: string[]; profileDir: string; base: NodeJS.ProcessEnv; account: HfAccount
-  doFetch: typeof fetch; write: (s: string) => void
+  doFetch: typeof fetch; downloadTimeoutMs?: number; write: (s: string) => void
 }): Promise<string[]> {
-  const { run, profileDir, base, account, doFetch, write } = a
+  const { run, profileDir, base, account, doFetch, downloadTimeoutMs, write } = a
   const args = [...a.args]
   let ledger: HfAssetLedger
   let accounts: HfAccount[] = []
@@ -121,7 +153,7 @@ async function bringIdsOver(a: {
           const got = await sideCall(run, ['generate', 'get', f.id, '--json'], profileDir, base, owner)
           const url = got.code === 0 ? firstMediaUrl(got.stdout) : null
           if (!url) throw new Error('no media url')
-          file = await downloadAsset(profileDir, f.id, url, doFetch)
+          file = await downloadAsset(profileDir, f.id, url, doFetch, { timeoutMs: downloadTimeoutMs })
           await recordJobFile(profileDir, f.id, file)
         }
       }
@@ -157,18 +189,21 @@ export async function hfProxy(a: {
   run?: HfRunner
   write?: (s: string) => void
   fetch?: typeof fetch
+  /** How long a download of another account's job may take (default 120 s). */
+  downloadTimeoutMs?: number
 }): Promise<number> {
   const write = a.write ?? ((s: string) => process.stderr.write(s))
   const { profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
-  const run = pickRunner(a, path.join(profileDir, 'orch'), write)
-  if (!run) return 127
+  const { as, args: given } = splitAs(a.args)
+  const run = await pickRunner(a, as, given, path.join(profileDir, 'orch'), write)
+  if (typeof run === 'number') return run
   const account = await currentAccount(profileDir, write)
-  if (!account) return (await run(a.args, a.env, true)).code
+  if (!account) return (await run(given, a.env, true)).code
 
   const env = { ...a.env, ...hfEnvFor(profileDir, account.id) }
   const creds = env.HIGGSFIELD_CREDENTIALS_PATH as string
   // Ids of another account become files before the pre-check, so it prices the same args the job runs.
-  const args = await bringIdsOver({ run, args: a.args, profileDir, base: a.env, account, doFetch: a.fetch ?? fetch, write })
+  const args = await bringIdsOver({ run, args: given, profileDir, base: a.env, account, doFetch: a.fetch ?? fetch, downloadTimeoutMs: a.downloadTimeoutMs, write })
   if (isGenerateJob(args) && !args.includes('-h') && !args.includes('--help')) {
     const { need, have, loginLost, code } = await preCheck(run, env, args, { profileDir, account, creds })
     if (loginLost) { write(loginAgain(account)); return code }
@@ -195,8 +230,8 @@ export async function hfProxy(a: {
     return first.code
   }
   // `auth login` / `auth logout` change the file on purpose; a missing file after them is not a failure.
-  if (a.args[0] === 'auth') {
-    if (a.args[1] === 'logout') await fs.rm(`${creds}.bak`, { force: true }).catch(() => {})
+  if (given[0] === 'auth') {
+    if (given[1] === 'logout') await fs.rm(`${creds}.bak`, { force: true }).catch(() => {})
     return first.code
   }
   return restoreOnce({ run, args, env, profileDir, account, creds, first, write })

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
-import { findRealHiggsfield, hfShimFiles, isHfShim, npmShimTarget } from './shims'
+import { findRealHiggsfield, hfShimFiles, isHfShim, isHiggsfieldCli, npmShimTarget } from './shims'
 
 describe('higgsfield shims', () => {
   it('writes a .cmd and an sh file per name on win32, sh only elsewhere', () => {
@@ -9,15 +9,19 @@ describe('higgsfield shims', () => {
     expect(hfShimFiles('linux').map((f) => f.name).sort()).toEqual(['hf', 'higgs', 'higgsfield'])
   })
 
-  it('forwards every argument to the shuttle beside it', () => {
+  it('forwards every argument to the shuttle beside it, with the name it was invoked by', () => {
     const cmd = hfShimFiles('win32').find((f) => f.name === 'hf.cmd')!.content
-    expect(cmd).toBe('@echo off\r\n"%~dp0astera.cmd" hf-proxy %*\r\n')
+    expect(cmd).toBe('@echo off\r\n"%~dp0astera.cmd" hf-proxy --as=hf %*\r\n')
     const sh = hfShimFiles('linux').find((f) => f.name === 'hf')!.content
-    expect(sh).toBe('#!/bin/sh\nexec "$(dirname "$0")/astera" hf-proxy "$@"\n')
+    expect(sh).toBe('#!/bin/sh\nexec "$(dirname "$0")/astera" hf-proxy --as=hf "$@"\n')
+    expect(hfShimFiles('win32').find((f) => f.name === 'higgs.cmd')!.content).toContain('hf-proxy --as=higgs %*')
+    expect(hfShimFiles('win32').find((f) => f.name === 'higgsfield')!.content).toContain('hf-proxy --as=higgsfield "$@"')
   })
 
-  it('recognises its own files and nothing else', () => {
+  it('recognises its own files, old and new, and nothing else', () => {
     for (const f of hfShimFiles('win32')) expect(isHfShim(f.content)).toBe(true)
+    expect(isHfShim('@echo off\r\n"%~dp0astera.cmd" hf-proxy %*\r\n')).toBe(true)
+    expect(isHfShim('#!/bin/sh\nexec "$(dirname "$0")/astera" hf-proxy "$@"\n')).toBe(true)
     expect(isHfShim('@echo off\r\nnode "%~dp0node_modules\\@higgsfield\\cli\\bin.js" %*')).toBe(false)
   })
 
@@ -38,6 +42,23 @@ describe('higgsfield shims', () => {
   it('answers null when only shims are on PATH', () => {
     const env = { PATH: 'C:\\p\\orch', PATHEXT: '.CMD' }
     expect(findRealHiggsfield({ env, platform: 'win32', skipDirs: [], read })).toBeNull()
+  })
+
+  it('looks up the name it was invoked by first', () => {
+    const env = { PATH: '/a:/b' }
+    const have: Record<string, string> = { '/a/higgsfield': 'x', '/b/hf': 'y' }
+    const r = (p: string) => have[p] ?? null
+    expect(findRealHiggsfield({ env, platform: 'linux', skipDirs: [], read: r, prefer: 'hf' })).toBe('/b/hf')
+    expect(findRealHiggsfield({ env, platform: 'linux', skipDirs: [], read: r, prefer: 'higgs' })).toBe('/a/higgsfield')
+    // a name that is not one of ours is looked up alone
+    expect(findRealHiggsfield({ env, platform: 'linux', skipDirs: [], read: r, prefer: 'other' })).toBeNull()
+  })
+
+  it('skips files the caller does not accept and keeps looking', () => {
+    const env = { PATH: '/a:/b' }
+    const have: Record<string, string> = { '/a/hf': 'hugging', '/b/hf': 'higgs' }
+    const r = (p: string) => have[p] ?? null
+    expect(findRealHiggsfield({ env, platform: 'linux', skipDirs: [], read: r, prefer: 'hf', accept: (f) => f === '/b/hf' })).toBe('/b/hf')
   })
 
   it('falls back to hf and higgs when higgsfield is absent', () => {
@@ -80,5 +101,30 @@ describe('npmShimTarget', () => {
   it('is null for a .cmd that is not an npm shim', () => {
     expect(npmShimTarget(String.raw`C:\x\a.cmd`, () => '@echo hi\r\n')).toBeNull()
     expect(npmShimTarget(String.raw`C:\x\missing.cmd`, () => null)).toBeNull()
+  })
+})
+
+describe('isHiggsfieldCli', () => {
+  const npm = (script: string) =>
+    'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\' + script + '" %*\r\n'
+  it('on win32, reads where an npm .cmd points', () => {
+    const files: Record<string, string> = {
+      [String.raw`C:\n\hf.cmd`]: npm(String.raw`@higgsfield\cli\bin\higgsfield.js`),
+      [String.raw`C:\h\hf.cmd`]: npm(String.raw`huggingface\hf.js`)
+    }
+    const deps = { read: (p: string) => files[p] ?? null, realpath: (p: string) => p }
+    expect(isHiggsfieldCli(String.raw`C:\n\hf.cmd`, 'win32', deps)).toBe(true)
+    expect(isHiggsfieldCli(String.raw`C:\h\hf.cmd`, 'win32', deps)).toBe(false)
+  })
+  it('on win32, takes an executable whose real path is inside @higgsfield', () => {
+    const deps = { read: () => null, realpath: (p: string) => (p === String.raw`C:\x\hf.exe` ? String.raw`C:\g\node_modules\@higgsfield\cli\vendor\hf.exe` : p) }
+    expect(isHiggsfieldCli(String.raw`C:\x\hf.exe`, 'win32', deps)).toBe(true)
+    expect(isHiggsfieldCli(String.raw`C:\Python\Scripts\hf.exe`, 'win32', deps)).toBe(false)
+  })
+  it('on POSIX, follows the symlink', () => {
+    const deps = { read: () => null, realpath: (p: string) => (p === '/usr/bin/hf' ? '/usr/lib/node_modules/@higgsfield/cli/bin/higgsfield.js' : p) }
+    expect(isHiggsfieldCli('/usr/bin/hf', 'linux', deps)).toBe(true)
+    expect(isHiggsfieldCli('/home/u/.local/bin/hf', 'linux', deps)).toBe(false)
+    expect(isHiggsfieldCli('/gone/hf', 'linux', { read: () => null, realpath: () => { throw new Error('ENOENT') } })).toBe(false)
   })
 })

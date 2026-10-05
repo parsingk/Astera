@@ -68,6 +68,41 @@ describe('hfProxy', () => {
     expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
   })
 
+  it('restores the login but never reruns a job that may already exist (no second charge)', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}')
+    await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    const base = fakeRunner()
+    // the job is created, then the refresh during --wait fails and the CLI deletes the file
+    const run = (args: string[], e: NodeJS.ProcessEnv, t: boolean) =>
+      base(args, args.includes('create') ? { ...e, FAKE_HF_DELETE_CREDS: '1', FAKE_HF_EXIT: '1' } : e, t)
+    const code = await hfProxy({ args: ['--json', 'generate', 'create', 'kling', '--wait'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(1)
+    expect((await calls()).filter((c) => c.args.includes('create')).length).toBe(1)
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+    expect(msgs.length).toBe(1)
+    expect(msgs[0]).toMatch(/login was restored/i)
+    expect(msgs[0]).toContain('higgsfield generate get <id>')
+    expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+  })
+
+  it('never reruns an upload create after restoring the login', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}')
+    await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    let n = 0
+    const base = fakeRunner()
+    const run = (args: string[], e: NodeJS.ProcessEnv, tee: boolean) =>
+      base(args, n++ === 0 ? { ...e, FAKE_HF_DELETE_CREDS: '1', FAKE_HF_EXIT: '1' } : e, tee)
+    const code = await hfProxy({ args: ['upload', 'create', 'pic.png'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(1)
+    expect((await calls()).map((c) => c.args.slice(0, 2).join(' '))).toEqual(['upload create', 'account status'])
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+    expect(msgs.join('')).toMatch(/login was restored/i)
+  })
+
   it('marks the account "log in again" when the restore does not hold, without looping', async () => {
     const a = await addHfAccount(profile, 'A')
     const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
@@ -377,5 +412,86 @@ describe('hfProxy', () => {
       const left = await fs.readdir(path.join(profile, 'higgsfield', 'assets')).catch(() => [])
       expect(left).toEqual([])
     })
+
+    it('keeps the id and says so once when the download hangs past the timeout', async () => {
+      const { a, b } = await setup()
+      await fs.mkdir(path.join(profile, 'higgsfield'), { recursive: true })
+      await fs.writeFile(ledgerFile(), JSON.stringify({ uploads: {}, jobs: { [J]: { account: a.id } } }))
+      const { setHfCurrent } = await import('../core/higgsfield/accounts')
+      await setHfCurrent(profile, b.id)
+      const hang = ((_u: string, init?: RequestInit) => new Promise<Response>((_res, rej) => {
+        init?.signal?.addEventListener('abort', () => rej(init.signal!.reason))
+      })) as unknown as typeof fetch
+      await hfProxy({ args: ['generate', 'create', 'k', '--image', J], env: env(), platform: process.platform, home: profile, run: jobRunner([]), fetch: hang, downloadTimeoutMs: 50, write: (s) => msgs.push(s) })
+      expect((await calls()).find((x) => x.args[1] === 'create').args).toEqual(['generate', 'create', 'k', '--image', J])
+      expect(msgs).toEqual([`higgsfield: could not bring ${J} over from account "A"; passing it through
+`])
+    }, 10000)
+  })
+
+  describe('which CLI the name finds', () => {
+    // Bins found through PATH the way production finds them: an npm .cmd on win32, a symlink elsewhere.
+    const install = async (dir: string, name: string, rel: string, body: string) => {
+      const script = path.join(dir, 'node_modules', ...rel.split('/'))
+      await fs.mkdir(path.dirname(script), { recursive: true })
+      await fs.writeFile(script, body, { mode: 0o755 })
+      if (process.platform === 'win32') {
+        await fs.writeFile(path.join(dir, `${name}.cmd`), ['@ECHO off', 'GOTO start', ':find_dp0', 'SET dp0=%~dp0', 'EXIT /b', ':start', 'SETLOCAL', 'CALL :find_dp0', '',
+          String.raw`IF EXIST "%dp0%\node.exe" (`, String.raw`  SET "_prog=%dp0%\node.exe"`, ') ELSE (', '  SET "_prog=node"', ')', '',
+          `endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\${rel.split('/').join('\\')}" %*`, ''].join('\r\n'))
+      } else {
+        await fs.symlink(script, path.join(dir, name))
+      }
+    }
+    const HUGGING = `#!/usr/bin/env node
+import fs from 'node:fs'
+const e = process.env
+fs.appendFileSync(e.FAKE_HF_LOG, JSON.stringify({ hugging: true, args: process.argv.slice(2), creds: e.HIGGSFIELD_CREDENTIALS_PATH ?? null, cfg: e.HIGGSFIELD_CONFIG_PATH ?? null }) + '\\n')
+if (e.HIGGSFIELD_CREDENTIALS_PATH) fs.rmSync(e.HIGGSFIELD_CREDENTIALS_PATH, { force: true })
+process.exit(7)
+`
+    // PATH holds only the test's folders and a folder with node alone in it: node's own install folder
+    // can hold the real higgsfield CLI, which a test must never run.
+    const pathEnv = async (dirs: string[]) => {
+      const nodeDir = path.join(profile, 'nodebin')
+      const node = path.join(nodeDir, path.basename(process.execPath))
+      await fs.mkdir(nodeDir, { recursive: true })
+      if (process.platform === 'win32') await fs.link(process.execPath, node).catch(() => fs.copyFile(process.execPath, node))
+      else await fs.symlink(process.execPath, path.join(nodeDir, 'node'))
+      const e: NodeJS.ProcessEnv = {}
+      for (const [k, v] of Object.entries(process.env)) if (k.toUpperCase() !== 'PATH') e[k] = v
+      e.PATH = [...dirs, nodeDir].join(path.delimiter)
+      return { ...e, ASTERA_PROFILE_DIR: profile, FAKE_HF_LOG: logFile }
+    }
+    const withAccount = async () => {
+      const a = await addHfAccount(profile, 'A')
+      const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+      await fs.writeFile(creds, '{"t":1}')
+      await fs.writeFile(`${creds}.bak`, '{"t":1}')
+      return creds
+    }
+
+    it('runs another program named hf untouched: no account, no guard, no messages', async () => {
+      const creds = await withAccount()
+      const hug = path.join(profile, 'hug'); const hig = path.join(profile, 'hig')
+      await install(hug, 'hf', 'huggingface_hub/hf.mjs', HUGGING)
+      await install(hig, 'hf', '@higgsfield/cli/bin/higgsfield.mjs', await fs.readFile(FAKE, 'utf8'))
+      const code = await hfProxy({ args: ['--as=hf', 'generate', 'create', 'x'], env: await pathEnv([hug, hig]), platform: process.platform, home: profile, write: (s) => msgs.push(s) })
+      expect(code).toBe(7)
+      expect(await calls()).toEqual([{ hugging: true, args: ['generate', 'create', 'x'], creds: null, cfg: null }])
+      expect(msgs).toEqual([])
+      expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+      expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
+    }, 30000)
+
+    it('runs the Higgsfield hf under the account when it comes first, without the --as word', async () => {
+      const creds = await withAccount()
+      const hug = path.join(profile, 'hug'); const hig = path.join(profile, 'hig')
+      await install(hug, 'hf', 'huggingface_hub/hf.mjs', HUGGING)
+      await install(hig, 'hf', '@higgsfield/cli/bin/higgsfield.mjs', await fs.readFile(FAKE, 'utf8'))
+      const code = await hfProxy({ args: ['--as=hf', 'model', 'list'], env: await pathEnv([hig, hug]), platform: process.platform, home: profile, write: (s) => msgs.push(s) })
+      expect(code).toBe(0)
+      expect(await calls()).toEqual([{ args: ['model', 'list'], creds }])
+    }, 30000)
   })
 })

@@ -7,7 +7,7 @@ import path from 'node:path'
 import {
   addHfAccount, hfEnvFor, importHfAccount, patchHfAccount, readHfAccounts, removeHfAccount, setHfCurrent
 } from '../core/higgsfield/accounts'
-import { findRealHiggsfield } from '../core/higgsfield/shims'
+import { findRealHiggsfield, isHiggsfieldCli } from '../core/higgsfield/shims'
 import { backupCredentials, realRunner } from '../core/higgsfield/runner'
 import { higgsfieldCommand, statusRun, type StatusRun } from '../cli/higgsfield'
 
@@ -121,7 +121,8 @@ export function registerHiggsfieldIpc(
   openExternal: (url: string) => Promise<void> | void
 ): void {
   const findReal = (): string | null =>
-    findRealHiggsfield({ env: process.env, platform: process.platform, skipDirs: [path.join(profileDir, 'orch')], read: readOrNull })
+    findRealHiggsfield({ env: process.env, platform: process.platform, skipDirs: [path.join(profileDir, 'orch')], read: readOrNull,
+      accept: (f) => isHiggsfieldCli(f, process.platform, { read: readOrNull }) })
   const runLogin: LoginRun = async (id) => {
     const real = findReal()
     if (real === null) return { code: 127, lastError: 'the higgsfield CLI was not found on PATH' }

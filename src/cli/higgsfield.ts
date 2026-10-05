@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import type { CliError } from '../core/orchestration/cliOutput'
 import { patchHfAccount, readHfAccounts, resolveHfAccount, setHfCurrent, type HfAccount } from '../core/higgsfield/accounts'
 import { BALANCE_KEYS, numberAt } from '../core/higgsfield/credits'
-import { findRealHiggsfield } from '../core/higgsfield/shims'
+import { findRealHiggsfield, isHiggsfieldCli } from '../core/higgsfield/shims'
 import { realRunner, sideCall, type HfRunner } from '../core/higgsfield/runner'
 
 type Outcome = { ok: true; body: Record<string, unknown> } | { ok: false; error: CliError }
@@ -20,7 +20,8 @@ export function statusRun(profileDir: string, env: NodeJS.ProcessEnv = process.e
   return async (id) => {
     try {
       const run = runner ?? (() => {
-        const real = findRealHiggsfield({ env, platform: process.platform, skipDirs: [path.join(profileDir, 'orch')], read: readOrNull })
+        const real = findRealHiggsfield({ env, platform: process.platform, skipDirs: [path.join(profileDir, 'orch')], read: readOrNull,
+          accept: (f) => isHiggsfieldCli(f, process.platform, { read: readOrNull }) })
         return real === null ? null : realRunner(real, process.platform)
       })()
       if (run === null) return null

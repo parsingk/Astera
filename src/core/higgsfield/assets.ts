@@ -85,9 +85,13 @@ export function firstMediaUrl(json: string): string | null {
   }
 }
 
-/** Download `url` to `<profile>/higgsfield/assets/<id><ext>` (tmp file, then rename). Throws on failure,
- *  after removing the tmp file. */
-export async function downloadAsset(profileDir: string, id: string, url: string, doFetch: typeof fetch): Promise<string> {
+export const DOWNLOAD_TIMEOUT_MS = 120_000
+
+/** Download `url` to `<profile>/higgsfield/assets/<id><ext>` (tmp file, then rename). Throws on failure
+ *  or when the whole download takes longer than `timeoutMs`, after removing the tmp file. */
+export async function downloadAsset(
+  profileDir: string, id: string, url: string, doFetch: typeof fetch, opts: { timeoutMs?: number } = {}
+): Promise<string> {
   const dir = path.join(hfRoot(profileDir), 'assets')
   let ext = '.bin'
   try {
@@ -98,7 +102,7 @@ export async function downloadAsset(profileDir: string, id: string, url: string,
   const tmp = `${dest}.${randomUUID()}.tmp`
   try {
     await fs.mkdir(dir, { recursive: true })
-    const res = await doFetch(url)
+    const res = await doFetch(url, { signal: AbortSignal.timeout(opts.timeoutMs ?? DOWNLOAD_TIMEOUT_MS) })
     if (!res.ok) throw new Error(`download answered ${res.status}`)
     await fs.writeFile(tmp, Buffer.from(await res.arrayBuffer()))
     await renameRetrying(tmp, dest)
