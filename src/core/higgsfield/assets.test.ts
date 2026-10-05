@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { firstMediaUrl, foreignIds, readLedger, recordAfter } from './assets'
+import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter } from './assets'
 
 const U = '11111111-1111-4111-8111-111111111111'
 const J = '22222222-2222-4222-8222-222222222222'
@@ -38,6 +38,20 @@ describe('assets', () => {
   it('does not break on JSON-escaped slashes', () => {
     const m = firstMediaUrl('{"url":"https:\/\/cdn.x\/a.mp4?s=1"}')
     expect(m).toBe('https://cdn.x/a.mp4?s=1')
+  })
+
+  it('decodes \u0026 as Go writes it in JSON', () => {
+    expect(firstMediaUrl(String.raw`{"url":"https://cdn.x/a.mp4?x=1\u0026sig=2"}`)).toBe('https://cdn.x/a.mp4?x=1&sig=2')
+    expect(firstMediaUrl(String.raw`{"url":"https:\/\/cdn.x\/a.mp4?x=1\u0026sig=2"}`)).toBe('https://cdn.x/a.mp4?x=1&sig=2')
+    expect(firstMediaUrl(String.raw`not json "https://cdn.x/a.mp4?x=1\u0026sig=2"`)).toBe('https://cdn.x/a.mp4?x=1&sig=2')
+  })
+
+  it('keeps a download extension only when it is a plain one', async () => {
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfd-'))
+    const f = async () => new Response(new Uint8Array([1]))
+    expect(path.extname(await downloadAsset(profile, 'j1', 'https://cdn.x/a.mp4', f))).toBe('.mp4')
+    expect(path.extname(await downloadAsset(profile, 'j2', 'https://cdn.x/a.mp4:x', f))).toBe('.bin')
+    expect(path.extname(await downloadAsset(profile, 'j3', 'https://cdn.x/a.waytoolongext1', f))).toBe('.bin')
   })
 })
 

@@ -121,6 +121,8 @@ export const NOUNS = {
   // **CLI 프로세스 안에서 답한다 — Host 도 앱도 없이**(run.ts, `help` 와 같은 자리). 프로필의
   // accounts.json 과 app-settings.json 을 읽고 계정의 설정 폴더에 스킬 파일을 심는다(cli/skills.ts).
   skills: ['list', 'install'],
+  // **Answered in the CLI process** (higgsfield accounts design §3): reads <profile>/higgsfield; the agent runs `use` only after the person picked an account.
+  higgsfield: ['list', 'use'],
   // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
   // id 는 앱의 세션 id(`ASTERA_SESSION`)이다. 대화 세션도 읽고 친다(phase D) — 치기는 앱이 열려 있으면 앱이 한다.
   sessions: ['list', 'read', 'send', 'create'],

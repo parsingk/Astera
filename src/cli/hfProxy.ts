@@ -164,7 +164,7 @@ export async function guardCredentials(a: {
 }
 
 /** One side call under `account`, guarded. */
-async function sideCall(run: HfRunner, args: string[], profileDir: string, base: NodeJS.ProcessEnv, account: HfAccount): Promise<HfRun> {
+export async function sideCall(run: HfRunner, args: string[], profileDir: string, base: NodeJS.ProcessEnv, account: HfAccount): Promise<HfRun> {
   const env = { ...base, ...hfEnvFor(profileDir, account.id) }
   const r = await run(args, env, false)
   await guardCredentials({ run, env, profileDir, account, creds: env.HIGGSFIELD_CREDENTIALS_PATH as string })

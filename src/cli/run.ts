@@ -18,6 +18,7 @@ import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestra
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
 import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
+import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
@@ -1301,6 +1302,19 @@ export async function main(): Promise<void> {
     const failed = installFailureOf(shaped)
     if (failed !== null) fail(failed)
     out(renderOk(parsed.cmd, shaped, mode))
+    process.exit(0)
+  }
+
+  // higgsfield list|use are answered here too, from <profile>/higgsfield (cli/higgsfield.ts), no Host.
+  if (parsed.cmd === 'higgsfield-list' || parsed.cmd === 'higgsfield-use') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await higgsfieldCommand({ cmd: parsed.cmd, args, profileDir })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, publicFor(parsed.cmd, done.body), mode))
     process.exit(0)
   }
 

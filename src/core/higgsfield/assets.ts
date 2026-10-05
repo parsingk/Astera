@@ -64,10 +64,25 @@ export function foreignIds(args: string[], l: HfAssetLedger, account: string): {
   return out
 }
 
+const MEDIA_URL = /^https?:\/\/[^\s"]+?\.(mp4|mov|webm|png|jpe?g|webp|gif|mp3|wav|m4a|glb)(\?[^\s"]*)?$/i
+
+/** First media URL in the CLI's JSON. Parsed and walked when it is JSON (so Go's six-character escape for `&` and
+ *  `\/` are decoded by the parser); otherwise a regex over the text with those two unescaped. */
 export function firstMediaUrl(json: string): string | null {
-  const plain = json.split('\\/').join('/')   // tolerate an encoder that escapes slashes
-  const m = plain.match(/https?:\/\/[^"\s]+?\.(mp4|mov|webm|png|jpe?g|webp|gif|mp3|wav|m4a|glb)(\?[^"\s]*)?(?=")/i)
-  return m ? m[0] : null
+  try {
+    const walk = (v: unknown): string | null => {
+      if (typeof v === 'string') return MEDIA_URL.test(v) ? v : null
+      if (v && typeof v === 'object') {
+        for (const x of Object.values(v)) { const r = walk(x); if (r) return r }
+      }
+      return null
+    }
+    return walk(JSON.parse(json))
+  } catch {
+    const plain = json.split('\\/').join('/').split('\\u0026').join('&')
+    const m = plain.match(/https?:\/\/[^"\s]+?\.(mp4|mov|webm|png|jpe?g|webp|gif|mp3|wav|m4a|glb)(\?[^"\s]*)?(?=")/i)
+    return m ? m[0] : null
+  }
 }
 
 /** Download `url` to `<profile>/higgsfield/assets/<id><ext>` (tmp file, then rename). Throws on failure,
@@ -75,7 +90,10 @@ export function firstMediaUrl(json: string): string | null {
 export async function downloadAsset(profileDir: string, id: string, url: string, doFetch: typeof fetch): Promise<string> {
   const dir = path.join(hfRoot(profileDir), 'assets')
   let ext = '.bin'
-  try { ext = path.extname(new URL(url).pathname) || '.bin' } catch { /* keep .bin */ }
+  try {
+    const e = path.extname(new URL(url).pathname)
+    if (/^\.[a-z0-9]{1,8}$/i.test(e)) ext = e
+  } catch { /* keep .bin */ }
   const dest = path.join(dir, `${id}${ext}`)
   const tmp = `${dest}.${randomUUID()}.tmp`
   try {

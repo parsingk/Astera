@@ -539,6 +539,9 @@ astera run-configs list --job <jobId>
 astera skills  list    [--account <accountId>]
 astera skills  install [--account <accountId>]
 
+astera higgsfield list
+astera higgsfield use --account <id|label|email>
+
 astera mcp     serve                     serve Astera to an MCP client over stdio
 astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
