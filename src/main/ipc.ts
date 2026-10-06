@@ -4974,7 +4974,10 @@ export function registerIpc(
   // (main/run/resolveLink.ts resolveExistingFile says why there is no path guard). The one files.*
   // call without assertAllowedPath — it reads nothing and answers only "a file exists here". A media
   // file it answers is admitted to the media allowlist, which is how the viewer tab may then load it
-  // through astera-media:// and nothing else may.
+  // through astera-media://. Since this admits any absolute path the renderer names, the allowlist is
+  // defence in depth (it binds content that cannot call window.api), not a boundary against the
+  // renderer itself (main/media/allowlist.ts). UNC and device paths are refused before any stat —
+  // this runs on hover (resolveExistingFile says why).
   ipcMain.handle('files.resolveLink', async (_e, cwd: unknown, target: unknown) => {
     if (typeof cwd !== 'string' || typeof target !== 'string') return null
     const p = await resolveExistingFile({ cwd, target, stat: (f) => fs.stat(f) })

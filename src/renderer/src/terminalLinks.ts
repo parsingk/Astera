@@ -1,6 +1,37 @@
 import type { ILink, Terminal } from '@xterm/xterm'
 import { bufferRangeAt, cellsOfJoinedLine, findConsoleLinks, joinWrappedLine } from '../../core/run/consoleLinks'
 
+/** How long a target that did not resolve is believed. Long enough to absorb the stream of hover
+ *  questions about one row (xterm re-asks on every mouse move across it); short enough that a path
+ *  printed before its file was written — an agent's tool call naming the clip it is about to render —
+ *  becomes a link the next time the pointer comes back. */
+const MISS_TTL_MS = 5000
+
+/** `resolve`, cached per target. A hit is kept for the terminal's life (a file that existed stays a
+ *  link; following it to a deleted file is the opener's error to report). A miss — null or a
+ *  rejection — is kept for `missTtlMs` only. A request still in flight is shared. Exported for the
+ *  test; `now` is a parameter for the same reason. */
+export function cachedResolver(
+  resolve: (target: string) => Promise<string | null>,
+  now: () => number = Date.now,
+  missTtlMs: number = MISS_TTL_MS
+): (target: string) => Promise<string | null> {
+  const cache = new Map<string, { p: Promise<string | null>; missAt?: number }>()
+  return (target) => {
+    const hit = cache.get(target)
+    if (hit && (hit.missAt === undefined || now() - hit.missAt < missTtlMs)) return hit.p
+    const entry: { p: Promise<string | null>; missAt?: number } = { p: Promise.resolve(null) }
+    entry.p = resolve(target)
+      .catch(() => null)
+      .then((r) => {
+        if (r === null) entry.missAt = now()
+        return r
+      })
+    cache.set(target, entry)
+    return entry.p
+  }
+}
+
 /** The xterm link provider the run console, the project terminals and the session terminals share.
  *  Moved here from RunPanel unchanged in what it does; the one addition is that a URL's activation
  *  hands the mouse event on, so the caller can read Ctrl/Cmd (the link rule in core/preview/url.ts).
@@ -18,20 +49,8 @@ export function attachConsoleLinks(
     onOpenFile?: (path: string, at: { line?: number; col?: number }) => void
   }
 ): () => void {
-  // Resolutions are cached per target: xterm asks about the row under the pointer, so the same line
-  // is re-asked on every mouse move across it. The cache's cost is that a path printed *before* the
-  // file is written (a build artifact, a generated snapshot) caches null and never becomes a link for
-  // this terminal's life.
-  const resolved = new Map<string, Promise<string | null>>()
-  const resolve = (target: string): Promise<string | null> => {
-    if (!opts.resolvePath) return Promise.resolve(null)
-    let p = resolved.get(target)
-    if (!p) {
-      p = opts.resolvePath(target).catch(() => null)
-      resolved.set(target, p)
-    }
-    return p
-  }
+  const resolvePath = opts.resolvePath
+  const resolve = resolvePath ? cachedResolver(resolvePath) : (): Promise<string | null> => Promise.resolve(null)
   const provider = term.registerLinkProvider({
     provideLinks: (y, callback) => {
       const buf = term.buffer.active

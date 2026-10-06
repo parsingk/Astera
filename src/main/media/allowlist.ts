@@ -4,10 +4,14 @@ import { mediaKindOf } from '../../core/files/media'
 
 /** The files the media protocol (./protocol.ts) may serve: the ones the renderer was told exist, by
  *  files.resolveLink (a session terminal's link, or a SendUserFile row resolving its paths before
- *  opening them). The protocol is reachable from any page the renderer loads, so "the URL names a
- *  media file" is not enough — without this, astera-media:// would be a read of any image or video on
- *  the machine by spelling its path. In memory only: a restart forgets it, and the next link the
- *  person clicks resolves (and admits) its file again.
+ *  opening them) or run.resolveLink.
+ *
+ *  **Defence in depth, not a boundary.** files.resolveLink admits any absolute media path the
+ *  renderer names, so code that can call window.api can put anything on this list. What it does bind
+ *  is a page that cannot: without it, anything the window loads that is able to make a request to
+ *  astera-media:// could read any image or video on the machine by spelling its path; with it, only
+ *  files the app itself resolved are served. In memory only: a restart forgets it, and the next link
+ *  the person clicks resolves (and admits) its file again.
  *
  *  Only media is ever admitted, so a resolved link to a source file or a key never becomes servable
  *  here; that is files.read's business, under its own guard. Keys are normalised (`..` folded) and
