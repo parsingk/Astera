@@ -158,7 +158,7 @@ export function placeMediaTab(
   path: string,
   opts: PlaceOptions = {},
   platform: string = runtimePlatform()
-): PlaceResult {
+): PlaceResult & { reopened: string | null } {
   const key = pathKey(path, platform)
   if (root) {
     for (const leaf of leaves(root)) {
@@ -168,9 +168,11 @@ export function placeMediaTab(
       })
       if (hit) {
         const act = activateTab(root, hit)
-        if (act) return { root: act.root, paneId: act.paneId, splitFellBack: false }
+        // `reopened` names the tab that was already there, so the caller can tell its viewer to look
+        // at the file again — a second click on a link is how the person asks for the new version
+        if (act) return { root: act.root, paneId: act.paneId, splitFellBack: false, reopened: hit }
       }
     }
   }
-  return placeTab(root, mediaTab(path), opts)
+  return { ...placeTab(root, mediaTab(path), opts), reopened: null }
 }

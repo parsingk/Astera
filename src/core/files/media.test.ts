@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mediaKindOf, mediaMime, mediaUrl, pathOfMediaUrl } from './media'
+import { mediaChanged, mediaKindOf, mediaMime, mediaUrl, mediaVersion, pathOfMediaUrl, resumeAt } from './media'
 
 describe('mediaKindOf', () => {
   it('names the video extensions the viewer plays', () => {
@@ -55,5 +55,56 @@ describe('mediaUrl / pathOfMediaUrl', () => {
     expect(pathOfMediaUrl('astera-media://other/%2Fa.png')).toBeNull()
     expect(pathOfMediaUrl('astera-media://file/%E0%A4%A')).toBeNull()
     expect(pathOfMediaUrl('astera-media://file/')).toBeNull()
+  })
+})
+
+// The viewer re-reads the file's stat on mount, on window focus, when the same link is clicked again
+// and every few seconds while it is on screen; these decide what a fresh stat means.
+describe('mediaChanged', () => {
+  const st = (mtimeMs: number, size: number): { mtimeMs: number; size: number } => ({ mtimeMs, size })
+
+  it('the first stat is a change: there is nothing loaded yet', () => {
+    expect(mediaChanged(undefined, st(1, 10))).toBe(true)
+  })
+
+  it('the same mtime and size is not a change — a poll that finds nothing new reloads nothing', () => {
+    expect(mediaChanged(st(1, 10), st(1, 10))).toBe(false)
+  })
+
+  it('a new mtime or a new size is a change (the file was regenerated under the same name)', () => {
+    expect(mediaChanged(st(1, 10), st(2, 10))).toBe(true)
+    expect(mediaChanged(st(1, 10), st(1, 11))).toBe(true)
+  })
+
+  it('a file that came back after being gone is a change', () => {
+    expect(mediaChanged(null, st(1, 10))).toBe(true)
+  })
+
+  it('a file that is gone is not a reload — the viewer says it cannot open it instead', () => {
+    expect(mediaChanged(st(1, 10), null)).toBe(false)
+  })
+})
+
+describe('mediaVersion', () => {
+  it('differs when only the size differs, so the URL changes with either', () => {
+    expect(mediaVersion({ mtimeMs: 5.7, size: 1 })).not.toBe(mediaVersion({ mtimeMs: 5.7, size: 2 }))
+    expect(mediaUrl('/a.mp4', mediaVersion({ mtimeMs: 5, size: 1 }))).not.toBe(mediaUrl('/a.mp4', mediaVersion({ mtimeMs: 6, size: 1 })))
+  })
+})
+
+describe('resumeAt', () => {
+  it('keeps the play position when the new file is still that long', () => {
+    expect(resumeAt(12.5, 30)).toBe(12.5)
+  })
+
+  it('starts at 0 when the new file is shorter than where playback was', () => {
+    expect(resumeAt(12.5, 10)).toBe(0)
+    expect(resumeAt(10, 10)).toBe(0)
+  })
+
+  it('starts at 0 when either number is not usable', () => {
+    expect(resumeAt(Number.NaN, 30)).toBe(0)
+    expect(resumeAt(5, Number.NaN)).toBe(0)
+    expect(resumeAt(5, Number.POSITIVE_INFINITY)).toBe(5) // a live-like stream with no known end still covers it
   })
 })

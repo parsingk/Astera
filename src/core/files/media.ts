@@ -49,8 +49,39 @@ const PREFIX = `${MEDIA_SCHEME}://file/`
 /** The URL the viewer loads `p` from. `version` (the file's mtime) goes in the query so a file
  *  regenerated under the same name is a different URL and the element reloads instead of showing the
  *  cached one; the protocol ignores the query. */
-export function mediaUrl(p: string, version?: number): string {
-  return PREFIX + encodeURIComponent(p) + (version === undefined ? '' : `?v=${Math.trunc(version)}`)
+export function mediaUrl(p: string, version?: number | string): string {
+  if (version === undefined) return PREFIX + encodeURIComponent(p)
+  const v = typeof version === 'number' ? String(Math.trunc(version)) : version
+  return `${PREFIX}${encodeURIComponent(p)}?v=${encodeURIComponent(v)}`
+}
+
+export interface MediaStat {
+  mtimeMs: number
+  size: number
+}
+
+/** The URL version for a stat: mtime and size together, so a regenerated file that keeps one of the
+ *  two (a coarse clock, an encoder that writes the same length) still gets a new URL. */
+export function mediaVersion(st: MediaStat): string {
+  return `${Math.trunc(st.mtimeMs)}-${st.size}`
+}
+
+/** Whether a fresh stat means the viewer should load the file again. `prev` is what is loaded:
+ *  undefined before the first stat, null when the file was last found missing. A file that is gone
+ *  now is not a reload — the viewer says it cannot open it — and the same mtime and size is nothing
+ *  new, which is what keeps the viewer's poll from restarting a playing video every few seconds. */
+export function mediaChanged(prev: MediaStat | null | undefined, next: MediaStat | null): boolean {
+  if (next === null) return false
+  if (!prev) return true
+  return prev.mtimeMs !== next.mtimeMs || prev.size !== next.size
+}
+
+/** Where to resume after a reload: the old position when the new file still runs past it, else the
+ *  start. A duration of Infinity (no known end yet) covers any position; NaN (not known at all)
+ *  covers none. */
+export function resumeAt(prevTime: number, duration: number): number {
+  if (!Number.isFinite(prevTime) || prevTime < 0 || Number.isNaN(duration)) return 0
+  return prevTime < duration ? prevTime : 0
 }
 
 /** The absolute path a media URL names, or null when it is not one of ours. Never throws: the

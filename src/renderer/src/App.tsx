@@ -738,6 +738,8 @@ export default function App(): React.JSX.Element {
   // and this tab's project could not be answered, from the tree string alone (see RecordTab's comment
   // in WorkbenchTabs.tsx).
   const [recordTabs, setRecordTabs] = useState<RecordTab[]>([])
+  /** Media tab id → reload nonce (openMedia bumps it when a link names an already-open file) */
+  const [mediaNonces, setMediaNonces] = useState<Record<string, number>>({})
   /** Preview (browser) tabs. Renderer-only, like fileTabs; the page state lives in the mounted webview */
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([])
   const browserTabsRef = useRef(browserTabs)
@@ -1781,6 +1783,10 @@ export default function App(): React.JSX.Element {
     const placed = placeMediaTab(layoutRef.current, path, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
+    // A second click on a link to an open file is how the person asks for the new version: its
+    // viewer re-reads the stat on the bump and reloads if the file changed
+    const reopened = placed.reopened
+    if (reopened) setMediaNonces((prev) => ({ ...prev, [reopened]: (prev[reopened] ?? 0) + 1 }))
   }
 
   /** A resolved path link (a console, a terminal, a SendUserFile row): media goes to the viewer, any
@@ -1934,7 +1940,9 @@ export default function App(): React.JSX.Element {
       return
     }
     if (ref.kind === 'media') {
-      // The tab id is the whole record (tabId's mediaTab): dropping it is the whole close
+      // The tab id is the whole record (tabId's mediaTab): dropping it, and its reload nonce, is the
+      // whole close; the viewer's slot unmounts with it
+      setMediaNonces(({ [tabId]: _n, ...rest }) => rest)
       dropTabFromTree(tabId)
       return
     }
@@ -4353,6 +4361,7 @@ export default function App(): React.JSX.Element {
                 onDropTabInBar={dropTabInGroup}
                 onOpenUrl={openUrl}
                 onOpenPath={openLinkedPath}
+                mediaNonces={mediaNonces}
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its

@@ -2,49 +2,86 @@
 // session is, instead of in File Explorer. The bytes come through astera-media:// (main/media/
 // protocol.ts), which serves only files a link resolved for (main/media/allowlist.ts), with Range so
 // the <video> can seek. The bar names the file and its folder and offers the two ways out of the app.
-import { useEffect, useState } from 'react'
-import { mediaKindOf, mediaUrl } from '../../../core/files/media'
+import { useEffect, useRef, useState } from 'react'
+import { mediaChanged, mediaKindOf, mediaUrl, mediaVersion, resumeAt, type MediaStat } from '../../../core/files/media'
 import { parentDir } from '../../../core/files/paths'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 
-/** `version` is the file's mtime, and it is what makes a file regenerated under the same name show
- *  its new content: the URL changes with it, so the element reloads instead of keeping the old one.
- *  It is re-read on mount — the slot is drawn only while its tab is active (PaneGrid), so coming back
- *  to the tab is a mount — and when the window regains focus, which is when the person returns from
- *  wherever the file was remade. A watcher was the other option; this costs one stat per return and
- *  has nothing to leak or keep alive. */
-export function MediaViewer({ path }: { path: string }): React.JSX.Element {
+/** How often a viewer on screen re-reads the file's stat. An agent rewriting a clip while the person
+ *  watches it in a split is the case this is for; one stat every few seconds is nothing next to a
+ *  video decode, and it stops the moment the viewer is hidden. */
+const POLL_MS = 3000
+
+/** The viewer stays mounted for its tab's life (PaneGrid keeps one slot per media tab, hidden while
+ *  inactive), so a video keeps its element and its place across tab switches. `active` is whether it
+ *  is on screen: turning false pauses the video, so a hidden tab makes no sound.
+ *
+ *  A file regenerated under the same name reloads. The stat is re-read on mount, when the tab comes
+ *  back on screen, when the window regains focus, when the person clicks a link to the same file
+ *  again (`nonce`, bumped by App's openMedia), and every POLL_MS while on screen. A new mtime or
+ *  size (mediaChanged) gives the URL a new version, so the element loads the new bytes instead of the
+ *  cached ones; the play position is carried over when the new file still runs that long. */
+export function MediaViewer({ path, active, nonce }: { path: string; active: boolean; nonce: number }): React.JSX.Element {
   const { t } = useI18n()
   const kind = mediaKindOf(path)
   // undefined while the first stat is in flight, null when the file cannot be opened
-  const [version, setVersion] = useState<number | null | undefined>(undefined)
+  const [stat, setStat] = useState<MediaStat | null | undefined>(undefined)
   // The element itself failed (a codec Chromium cannot play, a truncated file) — distinct from a
   // stat failure, but said the same way: the person can still open it in the default app.
   const [broken, setBroken] = useState(false)
+  const statRef = useRef<MediaStat | null | undefined>(undefined)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  // Where the old element was when a reload replaced it, applied once the new one knows its duration
+  const resumeRef = useRef<{ time: number; playing: boolean } | null>(null)
 
+  const activeRef = useRef(active)
+  activeRef.current = active
+  const checkRef = useRef<() => void>(() => {})
+  checkRef.current = () => {
+    void window.api.media.stat(path).then(
+      (next) => {
+        const prev = statRef.current
+        if (next === null) {
+          statRef.current = null
+          setStat(null)
+          return
+        }
+        if (!mediaChanged(prev, next)) return
+        const v = videoRef.current
+        if (prev && v) resumeRef.current = { time: v.currentTime, playing: !v.paused }
+        statRef.current = next
+        setBroken(false)
+        setStat(next)
+      },
+      () => {
+        statRef.current = null
+        setStat(null)
+      }
+    )
+  }
+
+  // Mount, a second click on the same link, and coming back on screen
   useEffect(() => {
-    let alive = true
-    const check = (): void => {
-      void window.api.media.stat(path).then(
-        (st) => {
-          if (!alive) return
-          setVersion((prev) => {
-            const next = st ? st.mtimeMs : null
-            if (next !== prev) setBroken(false)
-            return next
-          })
-        },
-        () => alive && setVersion(null)
-      )
+    if (active) checkRef.current()
+  }, [path, nonce, active])
+
+  // On screen: poll, and re-check when the window comes back to the front. Hidden: pause and stop.
+  useEffect(() => {
+    if (!active) {
+      videoRef.current?.pause()
+      return
     }
-    check()
-    window.addEventListener('focus', check)
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') checkRef.current()
+    }, POLL_MS)
+    const onFocus = (): void => checkRef.current()
+    window.addEventListener('focus', onFocus)
     return () => {
-      alive = false
-      window.removeEventListener('focus', check)
+      clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
     }
-  }, [path])
+  }, [active])
 
   const name = path.split(/[\\/]/).pop() || t('media.tab.untitled')
   const folder = parentDir(path)
@@ -53,7 +90,7 @@ export function MediaViewer({ path }: { path: string }): React.JSX.Element {
   const fail = (): void => {
     toast.error(t('media.error.cannotOpen'))
   }
-  const src = typeof version === 'number' ? mediaUrl(path, version) : null
+  const src = stat ? mediaUrl(path, mediaVersion(stat)) : null
 
   return (
     <div className="media-viewer">
@@ -72,12 +109,27 @@ export function MediaViewer({ path }: { path: string }): React.JSX.Element {
         </button>
       </div>
       <div className="media-viewer-stage">
-        {version === null || broken || kind === null ? (
+        {stat === null || broken || kind === null ? (
           <div className="media-viewer-empty">{t('media.error.cannotOpen')}</div>
         ) : src === null ? null : kind === 'video' ? (
           // key: a new version is a new element, so playback starts clean rather than seeking a
-          // half-loaded old stream
-          <video key={src} className="media-viewer-media" src={src} controls autoPlay={false} onError={() => setBroken(true)} />
+          // half-loaded old stream; the old position is carried over on loadedmetadata
+          <video
+            key={src}
+            ref={videoRef}
+            className="media-viewer-media"
+            src={src}
+            controls
+            onLoadedMetadata={(e) => {
+              const r = resumeRef.current
+              resumeRef.current = null
+              if (!r) return
+              const el = e.currentTarget
+              el.currentTime = resumeAt(r.time, el.duration)
+              if (r.playing && activeRef.current) void el.play().catch(() => {})
+            }}
+            onError={() => setBroken(true)}
+          />
         ) : (
           <img key={src} className="media-viewer-media" src={src} alt={name} draggable={false} onError={() => setBroken(true)} />
         )}

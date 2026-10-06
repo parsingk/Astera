@@ -62,3 +62,20 @@ describe('placeMediaTab — opening a path already open focuses that tab', () =>
     expect(allTabs(res.root)).toEqual(['media:/a/b.png'])
   })
 })
+
+// Clicking a link to a file that is already open is how the person says "show me the new one": the
+// caller bumps that tab's reload nonce, which needs to know which tab (by id) was found.
+describe('placeMediaTab — reports the tab it reopened', () => {
+  it('a first open reports nothing reopened', () => {
+    const g = createGroup('session:s1')
+    expect(placeMediaTab(g, '/a/b.mp4', { activePaneId: g.id }, 'linux').reopened).toBeNull()
+    expect(placeMediaTab(null, '/a/b.mp4', {}, 'linux').reopened).toBeNull()
+  })
+
+  it('a second open reports the existing tab id, as it was first spelled', () => {
+    const g = createGroup('session:s1')
+    const once = placeMediaTab(g, 'D:\\Clips\\G1.mp4', { activePaneId: g.id }, 'win32')
+    const twice = placeMediaTab(once.root, 'd:\\clips\\g1.mp4', { activePaneId: g.id }, 'win32')
+    expect(twice.reopened).toBe('media:D:\\Clips\\G1.mp4')
+  })
+})

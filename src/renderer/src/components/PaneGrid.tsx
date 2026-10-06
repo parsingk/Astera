@@ -67,6 +67,7 @@ export function PaneGrid({
   onRestart,
   onOpenUrl,
   onOpenPath,
+  mediaNonces,
   onSelectTab,
   onCloseTab,
   onNewInGroup,
@@ -120,6 +121,9 @@ export function PaneGrid({
   /** A path a session resolved to a real file was activated — a terminal link, or a file a
    *  SendUserFile row names. App opens media in the viewer and anything else as a file tab. */
   onOpenPath: (path: string, at?: { line?: number; col?: number }) => void
+  /** Media tab id -> how many times a link to that already-open file was clicked again. A change
+   *  tells its viewer to look at the file again (MediaViewer). */
+  mediaNonces: Record<string, number>
   /** A tab was clicked — of any kind. App activates it in the tree, which also moves the focus there */
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
@@ -178,11 +182,14 @@ export function PaneGrid({
   // so each one is read back through parseTab and only the session tabs are kept
   const paneOfSession = new Map<string, PaneLeaf>()
   const paneOfBrowser = new Map<string, PaneLeaf>()
+  // Media tab id → its pane. The tree is the only list of media tabs (the id is the whole record)
+  const paneOfMedia = new Map<string, PaneLeaf>()
   for (const l of paneLeaves)
     for (const tabId of l.tabIds) {
       const ref = parseTab(tabId)
       if (ref?.kind === 'session') paneOfSession.set(ref.id, l)
       else if (ref?.kind === 'browser') paneOfBrowser.set(tabId, l)
+      else if (ref?.kind === 'media') paneOfMedia.set(tabId, l)
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
@@ -432,27 +439,34 @@ export function PaneGrid({
           </div>
         )
       })}
-      {/* The media viewer slot: the record slot's rule, drawn only while active. A video that is not
-          on screen stops rather than playing on unheard, and coming back is a mount, which is when
-          MediaViewer re-reads the file's mtime. The tab id is the whole record (tabId's mediaTab). */}
-      {paneLeaves.map((l) => {
-        const rect = rects.get(l.id)
-        const ref = parseTab(l.activeTabId)
-        if (!rect || ref?.kind !== 'media') return null
+      {/* Media viewer slots — the browser slots' rule: one per open media tab for the tab's whole
+          life, display:none unless it is its pane's active tab, so a video keeps its element and its
+          place across a tab switch (MediaViewer pauses it while hidden). Closing the tab drops it from
+          the tree and so unmounts the slot. Rendered in tab-id order rather than pane order: dragging
+          a tab to another pane must not move its node in the DOM, which would detach the <video> and
+          stop it. The tab id is the whole record (tabId's mediaTab). */}
+      {[...paneOfMedia.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([tabId, pane]) => {
+        const rect = rects.get(pane.id)
+        const visible = rect != null && pane.activeTabId === tabId
+        const path = tabId.slice('media:'.length)
         return (
           <div
-            key={`media-${l.id}`}
+            key={tabId}
             className="terminal-slot"
-            style={{
-              display: 'flex',
-              left: `${rect.x}%`,
-              width: `${rect.w}%`,
-              top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
-              height: `calc(${rect.h}% - var(--pane-tabbar-h))`
-            }}
-            onMouseDown={() => onFocusPane(l.id)}
+            style={
+              visible
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
+            }
+            onMouseDown={() => onFocusPane(pane.id)}
           >
-            <MediaViewer key={ref.id} path={ref.id} />
+            <MediaViewer path={path} active={visible} nonce={mediaNonces[tabId] ?? 0} />
           </div>
         )
       })}
