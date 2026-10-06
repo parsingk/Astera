@@ -521,7 +521,8 @@ describe('createHostUnderstanding', () => {
       agentGo.resolve()
     }
     await vi.waitFor(async () => expect((await recordsOnDisk(project))[0]?.status).toBe('ready'))
-    expect(pushed).toEqual([project, project])
+    // The second push follows the write, so the file can read ready a moment before it lands.
+    await vi.waitFor(() => expect(pushed).toEqual([project, project]))
   })
 
   // Final review item 4: the read tools match a project's key with isSamePath, so regenerate does too. A

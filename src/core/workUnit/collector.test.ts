@@ -3188,7 +3188,9 @@ describe('WorkUnitCollector — work committed inside the unit is observed at co
     expect(u.git.observedChangedFiles).toEqual(['c.txt'])
     // The pull is still recorded as an outside change, exactly as before
     expect(store.get(repo)!.externalGitChanges.map((c) => c.changedFiles)).toEqual([['c.txt'], ['p.txt']])
-  })
+    // Real git: a commit, a push and a pull through a bare upstream. Nothing here waits on a condition; it is
+    // slow work, and on a Windows CI runner busy with a release build it passed 10 s (v1.4.4 CI).
+  }, 30_000)
 
   it('an untrusted session: its own commit -a with no pull is still counted', async () => {
     const { repo, collector, store, closed } = await openUnit(false)
