@@ -1,7 +1,8 @@
 // What the transcript and git-dir watchers share: a non-recursive `fs.watch` on one directory that
 // can be re-armed by a sweep, and the size/mtime stamp the sweep compares. Built after
 // core/hooks/eventWatcher.ts, without chokidar, because the Host imports these (src/host/importFence.test.ts).
-import { watch, accessSync, statSync, type FSWatcher } from 'node:fs'
+import { watch, statSync, type FSWatcher } from 'node:fs'
+import { dirIdentity, namesAPath } from '../../files/watchedDir'
 
 /** How often the sweep runs. fs.watch sometimes delivers nothing at all (measured on macOS, see
  *  HookEventWatcher.sweep), so the sweep is what bounds the delay of a dropped event. */
@@ -44,16 +45,6 @@ export function dirWatch(
   let watcher: FSWatcher | null = null
   let ino: bigint | null = null // of the directory the running watch was armed on
   let failureLogged = false
-  // **The access check comes first**: a win32 directory that is pending delete (removed while a watch
-  // holds it) still answers `stat` with its old id, but refuses access (measured 2026-10-06).
-  const inoOf = (): bigint | null => {
-    try {
-      accessSync(dir)
-      return statSync(dir, { bigint: true }).ino
-    } catch {
-      return null
-    }
-  }
   const drop = (): void => {
     try {
       watcher?.close()
@@ -61,6 +52,10 @@ export function dirWatch(
       /* closing a watcher that already failed changes nothing */
     }
     watcher = null
+  }
+  const notWatchable = (why: string): void => {
+    if (!failureLogged) log(`watch failed on ${dir}, relying on the sweep: ${why}`)
+    failureLogged = true
   }
   return {
     armed: () => watcher !== null,
@@ -70,23 +65,28 @@ export function dirWatch(
         // a directory that is gone and a recreated one is never watched. So a directory that is missing,
         // or is not the one the watch was armed on, drops the watch here. (An inode the filesystem hands
         // back to the recreated directory goes unnoticed; the sweep still covers that case.)
-        const now = inoOf()
-        if (now !== null && now === ino) return
+        if (dirIdentity(dir) === ino) return
         drop()
       }
+      // Read before the watch opens, and no watch without it: a watch whose directory has no id could
+      // never tell that directory going (a null id equals "gone"), and a directory replaced in between
+      // leaves this id older than the one watched, which the next check reads as replaced.
+      const id = dirIdentity(dir)
+      if (id === null) return notWatchable('the directory is not there')
       try {
         const w = watchFn(dir, (_event, filename) => {
           // A null filename names nothing this watch can filter on; the sweep covers that platform.
           if (!filename) return
           const name = filename.toString()
           // **The watched directory itself was removed** (a worktree's git dir after `git worktree
-          // remove`, say). On win32 the watch then raises no 'error': it fires 'rename' events named after
-          // the directory's own path, ~100,000 a second at ~90% of a core, until it is closed, and the
-          // directory stays pending delete meanwhile (measured 2026-10-06). A name that is a path rather
-          // than a child's is that storm: a directory that is no longer the one armed drops the watch
-          // here, and the owner's sweep arms it again if it comes back.
-          if (name.includes('/') || name.includes('\\')) {
-            if (watcher === w && inoOf() !== ino) drop()
+          // remove`, say; watchedDir.ts has the win32 measurement): the watch fires events named after
+          // the directory's own path without a pause until it is closed. A directory that is no longer
+          // the one armed drops the watch here, and the owner's sweep arms it again if it comes back.
+          if (namesAPath(name)) {
+            if (watcher === w && dirIdentity(dir) !== ino) {
+              log(`watch on ${dir} closed: the directory was removed or replaced`)
+              drop()
+            }
             return
           }
           onName(name)
@@ -99,11 +99,10 @@ export function dirWatch(
         // The fs.watch handle is ref'd and keeps the event loop alive until close(). That is fine for the
         // Host, a long-running process that closes its watchers when it stops.
         watcher = w
-        ino = inoOf()
+        ino = id
         failureLogged = false
       } catch (err) {
-        if (!failureLogged) log(`watch failed on ${dir}, relying on the sweep: ${err instanceof Error ? err.message : String(err)}`)
-        failureLogged = true
+        notWatchable(err instanceof Error ? err.message : String(err))
       }
     },
     close: drop

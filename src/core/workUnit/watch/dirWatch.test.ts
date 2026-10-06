@@ -45,13 +45,16 @@ describe('dirWatch', () => {
   it('closes the watch at the first event after its directory was removed, and hands that storm on to nobody', async () => {
     const { made, watchFn } = fakeWatch()
     const names: string[] = []
-    const w = dirWatch(dir, (n) => names.push(n), () => {}, watchFn)
+    const logs: string[] = []
+    const w = dirWatch(dir, (n) => names.push(n), (m) => logs.push(m), watchFn)
     w.arm()
     await fs.rm(dir, { recursive: true, force: true })
     for (let i = 0; i < 1000; i++) made[0].fire('rename', `\\\\?\\${dir}`)
     expect(made[0].closes).toBe(1)
     expect(w.armed()).toBe(false)
     expect(names).toEqual([])
+    // One line says why the watch went.
+    expect(logs.filter((l) => l.includes('closed: the directory was removed'))).toHaveLength(1)
     // The owner's sweep arms it again once the directory is back.
     await fs.mkdir(dir)
     w.arm()
@@ -67,6 +70,26 @@ describe('dirWatch', () => {
     made[0].fire('rename', path.join(dir, 'x'))
     expect(made[0].closes).toBe(0)
     expect(w.armed()).toBe(true)
+    w.close()
+  })
+
+  it('opens no watch on a directory that is not there, says so once, and opens one once it is', async () => {
+    const { made, watchFn } = fakeWatch()
+    const logs: string[] = []
+    await fs.rm(dir, { recursive: true, force: true })
+    const w = dirWatch(dir, () => {}, (m) => logs.push(m), watchFn)
+    w.arm()
+    w.arm()
+    expect(made).toHaveLength(0)
+    expect(w.armed()).toBe(false)
+    expect(logs.filter((l) => l.includes('relying on the sweep'))).toHaveLength(1)
+    await fs.mkdir(dir)
+    w.arm()
+    expect(made).toHaveLength(1)
+    // Armed on a real id, so the directory going is seen at its first event.
+    await fs.rm(dir, { recursive: true, force: true })
+    made[0].fire('rename', dir)
+    expect(made[0].closes).toBe(1)
     w.close()
   })
 })

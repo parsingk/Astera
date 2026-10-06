@@ -1,9 +1,10 @@
 // Hook event file watcher. Reads the hook payloads astera-hook-capture.cjs appended to
 // hook-events/<sessionId>.jsonl, starting from each file's own offset, and hands them to the callback (SlackNotifier.onHookEvent).
 // Watcher errors and parse failures are only logged — a failed Slack notification must not block the session.
-import { watch, accessSync, readdirSync, statSync, type FSWatcher } from 'node:fs'
+import { watch, readdirSync, statSync, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { dirIdentity, namesAPath } from '../files/watchedDir'
 
 /**
  * How often the reconciliation sweep runs. See `sweep` for why there is one at all.
@@ -20,8 +21,10 @@ export class HookEventWatcher {
   private watcher: FSWatcher | null = null
   /** Until start(), and after stop(): the sweep arms no watch. */
   private stopped = true
-  /** The file id of the folder the running watch was armed on. */
-  private watchedId: bigint | null = null
+  /** The file id of the folder the last watch was armed on, kept after that watch is closed: a watch
+   *  armed again on the same folder (a moment's failed access, say) keeps the offsets, and one armed on
+   *  a new folder starts its files from 0. */
+  private armedId: bigint | null = null
   private sweeper: NodeJS.Timeout | null = null
   private offsets = new Map<string, number>() // filePath → byte offset already processed (stable because the file is append-only)
   private draining = new Set<string>() // Per-file re-entrancy guard
@@ -40,7 +43,13 @@ export class HookEventWatcher {
 
   /** Arms the folder's watch, when it is not running and the folder is there. Never throws. */
   private arm(): void {
-    if (this.watcher || !this.dirExists()) return
+    if (this.watcher) return
+    // Read before the watch opens: a folder replaced in between leaves this id older than the folder
+    // watched, which the next check reads as replaced and arms again, rather than an id that passes.
+    const id = dirIdentity(this.dir)
+    if (id === null) return
+    if (this.armedId !== null && id !== this.armedId) this.offsets.clear() // a new folder: its files start from 0
+    this.armedId = id
     try {
       const w = (this.opts.watch ?? watch)(this.dir, (_ev, filename) => {
         const name = filename?.toString()
@@ -48,31 +57,28 @@ export class HookEventWatcher {
           void this.drain(path.join(this.dir, name))
           return
         }
-        // **The watched folder itself was removed** (the app's startupCleanup removes and remakes it at
-        // every launch, under a Host that outlives the app). On win32 the watch then raises no 'error':
-        // it fires 'rename' events named after the folder's own path without a pause, ~100,000 a second
-        // at ~90% of a core (measured, Electron 41 / Node 24, 2026-10-06), until it is closed. And while
-        // it is open the folder stays pending delete, so the app's mkdir fails with EPERM. So any event
-        // that is not a session file asks whether the folder is still there, and a gone one drops the
-        // watch; the sweep arms it again once the folder is back.
-        if (this.watcher === w && !this.stillWatched()) {
-          this.log(`hook watcher: ${this.dir} was removed; the watch is closed until the folder is back`)
-          this.drop()
-          // Its files went with it: a file of the same name in the new folder starts from 0.
-          this.offsets.clear()
-          // A folder already made again is watched now rather than at the next sweep.
-          this.arm()
-        }
+        // **The watched folder itself was removed** (watchedDir.ts has the win32 measurement): the watch
+        // then fires events named after the folder's own path without a pause, until it is closed. So
+        // an event named by a path asks whether the folder is still the one armed on; when it is not,
+        // the watch closes, and is armed again now if a new folder is already there, else by the sweep.
+        if (name && namesAPath(name) && this.watcher === w) this.recheck()
       })
       w.on('error', (err) => {
         this.log(`hook watcher error: ${err.message}`)
         if (this.watcher === w) this.drop()
       })
       this.watcher = w
-      this.watchedId = this.dirId()
     } catch (err) {
       this.log(`hook watcher start failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  /** Closes the watch when its folder is no longer the one it was armed on, then arms again. */
+  private recheck(): void {
+    if (!this.watcher || dirIdentity(this.dir) === this.armedId) return
+    this.log(`hook watcher: ${this.dir} was removed or replaced; the watch is closed until the folder is back`)
+    this.drop()
+    if (!this.stopped) this.arm()
   }
 
   private drop(): void {
@@ -82,30 +88,6 @@ export class HookEventWatcher {
       /* closing a watch that already failed changes nothing */
     }
     this.watcher = null
-  }
-
-  /** The folder's file id now, or null when it is not there to be read. **The access check comes
-   *  first**: a win32 folder that is pending delete (removed while this watch holds it) still answers
-   *  `stat`, with its old id, but refuses access (measured 2026-10-06), and a recursive mkdir on it
-   *  even reports success. */
-  private dirId(): bigint | null {
-    try {
-      accessSync(this.dir)
-      const s = statSync(this.dir, { bigint: true })
-      return s.isDirectory() ? s.ino : null
-    } catch {
-      return null
-    }
-  }
-
-  private dirExists(): boolean {
-    return this.dirId() !== null
-  }
-
-  /** The watched folder is still the one the watch was armed on. */
-  private stillWatched(): boolean {
-    const id = this.dirId()
-    return id !== null && id === this.watchedId
   }
 
   start(): void {
@@ -156,8 +138,13 @@ export class HookEventWatcher {
    * catch it, so a throw here would be an unhandled rejection in the main process.
    */
   async sweep(): Promise<void> {
-    // A watch dropped because its folder went (or one that could not start) is armed again here.
-    if (!this.stopped) this.arm()
+    // The watch's identity, once a sweep (one access and one stat): the event path above is not the only
+    // guard, since a folder replaced without a storm would otherwise pass for good. A watch dropped
+    // because its folder went, or one that could not start, is armed again here.
+    if (!this.stopped) {
+      this.recheck()
+      this.arm()
+    }
     let names: string[]
     try {
       names = await fs.readdir(this.dir)
