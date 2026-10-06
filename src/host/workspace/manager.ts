@@ -314,20 +314,29 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     else if (!slots.isRunning(e.sessionId) && !isOpen(e) && entries.get(e.sessionId) === e) entries.delete(e.sessionId)
   }
 
+  /** The page's window.innerWidth and innerHeight (scrollbars included), or undefined. */
+  const innerSize = (cdp: Cdp): Promise<unknown> =>
+    cdp.send('Runtime.evaluate', { expression: '[window.innerWidth, window.innerHeight]', returnByValue: true }).then(
+      (r) => (r.result as { value?: unknown } | undefined)?.value,
+      () => undefined
+    )
+  /** The page layer workaround of pageSizedByCdp (size.ts): this page target only, so a popup or a second
+   *  window keeps its own size, and the override goes with this CDP socket if it drops. */
+  const overridePageSize = (cdp: Cdp, size: AppSize): Promise<unknown> =>
+    cdp.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false })
+
   /** Lays the page out at `size` through CDP's device metrics and checks that it stays: measured on the
    *  hidden desktop (desktop.e2e.test.ts), an override set as the page settles after launch held for
    *  about 300 ms and was then undone, and set again it held. So it is set, watched for OVERRIDE_HOLD_MS,
    *  and set again while it does not hold, OVERRIDE_TRIES times at most. Answers what it did, for the log. */
   const holdPageSize = async (cdp: Cdp, size: AppSize): Promise<string> => {
     const viewport = async (): Promise<AppSize | null> => {
-      const v = await cdp
-        .send('Runtime.evaluate', { expression: '[window.innerWidth, window.innerHeight]', returnByValue: true })
-        .then((r) => (r.result as { value?: unknown } | undefined)?.value, () => undefined)
+      const v = await innerSize(cdp)
       return Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number' ? { width: v[0], height: v[1] } : null
     }
     let seen: AppSize | null = null
     for (let i = 1; i <= OVERRIDE_TRIES; i++) {
-      await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false })
+      await overridePageSize(cdp, size)
       let held = true
       for (let waited = 0; waited < OVERRIDE_HOLD_MS && !disposed; waited += OVERRIDE_POLL_MS) {
         seen = await viewport()
@@ -344,11 +353,13 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     return `the page did not keep that size (it is ${seen ? `${seen.width}x${seen.height}` : 'unknown'})`
   }
 
-  /** Gives the app the session's target size (the mirror tab's, or DEFAULT_APP_SIZE): its window
-   *  where the desk can size it, in the page's device pixels, and its page through CDP's device metrics
-   *  where the window's size does not reliably reach the page (pageSizedByCdp, size.ts says what was
-   *  measured). One at a time per entry; a request during one runs once after it. Never rejects (R3). */
-  const fitWindow = async (e: Entry, why: string): Promise<void> => {
+  /** Gives the app the session's target size (the mirror tab's, or DEFAULT_APP_SIZE): its page through
+   *  CDP's device metrics where the window's size does not reliably reach the page (pageSizedByCdp,
+   *  size.ts says what was measured), its window otherwise (Linux), in the page's device pixels. `hold`
+   *  (the first fit after a launch or relaunch) watches the override and sets it again while it does not
+   *  hold; a later fit sets it once. One at a time per entry; a request during one runs once after it.
+   *  Never rejects (R3). */
+  const fitWindow = async (e: Entry, why: string, hold = false): Promise<void> => {
     const desk = e.desk
     const cdp = e.state.cdp
     const byCdp = cdp !== null && pageSizedByCdp(d.platform)
@@ -370,15 +381,21 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
               () => 1
             )
           : 1
-        // Best effort where the page is sized through CDP anyway: a window that cannot be found yet (a
-        // launch whose port opened before its window) leaves the page to the metrics below.
+        // A window that cannot be found yet (a launch whose port opened before its window) is logged;
+        // the frames' check asks again.
         const got = await desk.fit(deviceSize(target, dpr)).then(
           (g) => `the window's client area is ${g.width}x${g.height}`,
           (err: unknown) => `the window could not be sized (${messageOf(err)})`
         )
         done.push(got)
       }
-      if (cdp && byCdp) done.push(await holdPageSize(cdp, target))
+      if (cdp && byCdp) {
+        if (hold) done.push(await holdPageSize(cdp, target))
+        else {
+          await overridePageSize(cdp, target)
+          done.push('the page lays out at that size')
+        }
+      }
       d.log(`workspace ${e.sessionId}: the app was given ${target.width}x${target.height} CSS px (${why}): ${done.join('; ')}`)
     } catch (err) {
       d.log(`workspace ${e.sessionId}: the app could not be sized (${why}): ${messageOf(err)}`)
@@ -392,12 +409,16 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     void captureFrame(e).catch(() => undefined)
   }
 
-  /** A page whose viewport is not the size its window was given asks for the fit again, REFIT_AFTER_MS
-   *  after the last one and at most REFIT_TRIES times for one size. */
+  /** A page whose viewport is not the size it was given asks for the fit again, REFIT_AFTER_MS after the
+   *  last one and at most REFIT_TRIES times in a row for one size. */
   const checkFit = (e: Entry, viewport: AppSize): void => {
     if (!e.state.launched || e.fitting || (!e.desk?.fit && !pageSizedByCdp(d.platform))) return
     const target = targetOf(e.sessionId)
-    if (!needsRefit(viewport, target)) return
+    if (!needsRefit(viewport, target)) {
+      // A page at its size refills the budget: REFIT_TRIES caps fits that fail one after another.
+      if (e.fitted) e.fitted.tries = 0
+      return
+    }
     // No fit yet: the launch is still waiting for the page, and fits the window once it settles.
     const f = e.fitted
     if (!f) return
@@ -408,7 +429,7 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
   const frameOf = async (e: Entry): Promise<WorkspaceFrame | null> => {
     const cdp = e.state.cdp
     if (cdp) {
-      const fc = frameClip(await cdp.send('Page.getLayoutMetrics'), FRAME_MAX_WIDTH)
+      const fc = frameClip(await cdp.send('Page.getLayoutMetrics'), FRAME_MAX_WIDTH, await innerSize(cdp))
       if (fc) checkFit(e, fc.css)
       const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: FRAME_QUALITY, ...(fc ? { clip: fc.clip } : {}) })
       if (typeof r.data !== 'string' || r.data === '') return null
@@ -543,7 +564,7 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     recordLaunch: () => persist(),
     started: () => {
       e.fitted = null
-      return fitWindow(e, 'launched')
+      return fitWindow(e, 'launched', true)
     },
     changed: () => {
       void captureFrame(e).catch(() => undefined)

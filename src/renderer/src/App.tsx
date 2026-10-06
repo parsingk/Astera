@@ -19,7 +19,7 @@ import { invalidateImageCache } from './components/MarkdownPreview'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
-import { applyWorkspaceEvent, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './lib/workspaceMirror'
+import { applyWorkspaceEvent, createSessionSizeReporters, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './lib/workspaceMirror'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
@@ -672,6 +672,9 @@ export default function App(): React.JSX.Element {
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   const [agentAppEnabled, setAgentAppEnabled] = useState(false) // the agent app workspace toggle
+  // The mirror panes' sizes, one reporter per session however many panes show it. A size the Host
+  // could not take leaves the app at its own size: nothing to tell the person.
+  const [mirrorSizes] = useState(() => createSessionSizeReporters((id, size) => void window.api.workspace.size(id, size).catch(() => undefined)))
   // Which kind the new-session and resume dialogs open on. Needed outside the settings modal — both
   // dialogs seed their own selection from it — so it is loaded at mount rather than only while the
   // modal is open.
@@ -3080,8 +3083,8 @@ export default function App(): React.JSX.Element {
             })
             .catch(fail)
         }
-        // A size the Host could not take leaves the app at its own size: nothing to tell the person.
-        onSize={(size) => void window.api.workspace.size(ref.id, size).catch(() => undefined)}
+        sessionId={ref.id}
+        sizes={mirrorSizes}
       />
     )
   }

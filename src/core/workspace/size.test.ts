@@ -67,6 +67,16 @@ describe('frameClip', () => {
     expect(frameClip({ cssLayoutViewport: { clientWidth: 800, clientHeight: 500 } }, 960)).toMatchObject({ clip: { scale: 1 }, frame: { width: 800, height: 500 } })
   })
 
+  it('takes the page inner size, which counts a scrollbar the metrics leave out', () => {
+    expect(frameClip({ cssVisualViewport: { clientWidth: 1265, clientHeight: 800 } }, 960, [1280, 800])).toMatchObject({
+      css: { width: 1280, height: 800 },
+      clip: { width: 1280, height: 800, scale: 0.75 },
+      frame: { width: 960, height: 600 }
+    })
+    expect(frameClip({ cssVisualViewport: { clientWidth: 1265, clientHeight: 800 } }, 960, undefined)).toMatchObject({ css: { width: 1265 } })
+    expect(frameClip({ cssVisualViewport: { clientWidth: 1265, clientHeight: 800 } }, 960, [0, 0])).toMatchObject({ css: { width: 1265 } })
+  })
+
   it('no viewport size means no clip', () => {
     expect(frameClip({}, 960)).toBeNull()
     expect(frameClip({ cssVisualViewport: { clientWidth: 0, clientHeight: 0 } }, 960)).toBeNull()

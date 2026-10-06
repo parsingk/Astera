@@ -4,24 +4,24 @@
 // the Host gives the app's window that size, so the picture fills the stage (src/core/workspace/size.ts).
 import { useEffect, useRef } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
-import { createSizeReporter, mirrorStatus, type MirrorEntry } from '../lib/workspaceMirror'
+import { mirrorStatus, type MirrorEntry, type SessionSizeReporters } from '../lib/workspaceMirror'
 
 export function AppMirrorPane(props: {
   sessionTitle: string
   mirror: MirrorEntry | null
   onStop(): void
   onClose(): void
-  /** The stage's content box in CSS pixels once a resize settles, and null when the tab goes. */
-  onSize(size: { width: number; height: number } | null): void
+  sessionId: string
+  /** Where the stage's content box goes (CSS pixels), shared by every pane of this session. */
+  sizes: SessionSizeReporters
 }): React.JSX.Element {
   const { t } = useI18n()
   const stage = useRef<HTMLDivElement>(null)
-  const onSize = useRef(props.onSize)
-  onSize.current = props.onSize
+  const { sizes, sessionId } = props
   useEffect(() => {
     const el = stage.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const reporter = createSizeReporter((s) => onSize.current(s))
+    const reporter = sizes.acquire(sessionId)
     const ro = new ResizeObserver((entries) => {
       const box = entries[entries.length - 1]?.contentRect
       if (box) reporter.measured({ width: box.width, height: box.height })
@@ -29,9 +29,9 @@ export function AppMirrorPane(props: {
     ro.observe(el)
     return () => {
       ro.disconnect()
-      reporter.dispose()
+      reporter.release()
     }
-  }, [])
+  }, [sizes, sessionId])
   const m = props.mirror
   const open = m?.open === true
   const s = mirrorStatus(m)

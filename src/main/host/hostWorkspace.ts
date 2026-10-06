@@ -47,6 +47,10 @@ export function createHostWorkspaceView(d: {
   log(m: string): void
 }): HostWorkspaceView {
   const live = new Map<string, WorkspaceSummary>()
+  /** Each mirror's last size, kept here because the Host keeps its copy in memory only: a Host that
+   *  replaced the last one, or that announced workspace-size only at the handshake after the tab
+   *  measured, hears every one again from `connected()`. */
+  const sizes = new Map<string, AppSize>()
   const has = (feature: string = HOST_FEATURE_WORKSPACE): boolean => {
     try {
       const features = d.status().features
@@ -85,6 +89,16 @@ export function createHostWorkspaceView(d: {
       return false
     }
   }
+  const sendSize = async (sessionId: string, size: AppSize | null): Promise<boolean> => {
+    if (!has(HOST_FEATURE_WORKSPACE_SIZE)) return false
+    try {
+      const r = await d.call({ cmd: 'workspace-size', args: { sessionId, size }, sessionId: '' })
+      return r.status === 200
+    } catch (err) {
+      d.log(`host: workspace-size failed: ${String(err)}`)
+      return false
+    }
+  }
   return {
     pushed: (m) => {
       try {
@@ -114,6 +128,9 @@ export function createHostWorkspaceView(d: {
       } catch (err) {
         d.log(`host: workspace-list failed: ${String(err)}`)
       }
+      // Every mirror's size again: this Host may be a new one, or one that announced workspace-size
+      // only now. sendSize never throws, and asks nothing of a Host without the feature.
+      for (const [sessionId, size] of [...sizes]) await sendSize(sessionId, size)
     },
     status: (s) => {
       try {
@@ -126,14 +143,9 @@ export function createHostWorkspaceView(d: {
     stop: (sessionId) => button('workspace-stop', sessionId, 'stopped'),
     close: (sessionId) => button('workspace-close', sessionId, 'closed'),
     size: async (sessionId, size) => {
-      if (!has(HOST_FEATURE_WORKSPACE_SIZE)) return false
-      try {
-        const r = await d.call({ cmd: 'workspace-size', args: { sessionId, size }, sessionId: '' })
-        return r.status === 200
-      } catch (err) {
-        d.log(`host: workspace-size failed: ${String(err)}`)
-        return false
-      }
+      if (size === null) sizes.delete(sessionId)
+      else sizes.set(sessionId, size)
+      return sendSize(sessionId, size)
     }
   }
 }

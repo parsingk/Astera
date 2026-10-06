@@ -98,6 +98,30 @@ describe('createHostWorkspaceView', () => {
     expect(failing.logs.some((l) => l.includes('workspace-size failed'))).toBe(true)
   })
 
+  it('every mirror size is sent again after each handshake: a Host that announced the feature late, or a new Host', async () => {
+    const features: string[] = [HOST_FEATURE_WORKSPACE]
+    const changed: WorkspaceEvent[] = []
+    const call = vi.fn(async (m: { cmd: string; args: Record<string, unknown> }) =>
+      m.cmd === 'workspace-list' ? { status: 200, body: { workspaces: [] } } : { status: 200, body: { sized: true } }
+    )
+    const view = createHostWorkspaceView({ status: () => ({ features }), call, changed: (e) => changed.push(e), log: () => {} })
+    // Measured before the Host said it sizes app windows: nothing sent, but kept.
+    expect(await view.size('s1', { width: 1400, height: 900 })).toBe(false)
+    expect(await view.size('s2', { width: 800, height: 600 })).toBe(false)
+    expect(await view.size('s2', null)).toBe(false)
+    features.push(HOST_FEATURE_WORKSPACE_SIZE)
+    await view.connected()
+    const sized = () => call.mock.calls.map((c) => c[0]).filter((m) => m.cmd === 'workspace-size')
+    expect(sized()).toEqual([{ cmd: 'workspace-size', args: { sessionId: 's1', size: { width: 1400, height: 900 } }, sessionId: '' }])
+    // The Host was replaced: its sizes are gone with it, and the app sends them again.
+    await view.connected()
+    expect(sized()).toHaveLength(2)
+    // A list that fails still resends.
+    call.mockRejectedValueOnce(new Error('gone'))
+    await view.connected()
+    expect(sized()).toHaveLength(3)
+  })
+
   it('a list call that fails is logged, never thrown', async () => {
     const { view, call, logs } = rig()
     call.mockRejectedValueOnce(new Error('APP_REQUIRED'))

@@ -5,7 +5,7 @@ import type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary } from '../../../
 import { placeTab } from '../../../core/panes/place'
 import { appTab } from '../../../core/panes/tabId'
 import { groupOfTab, removeTab, type PaneNode } from '../../../core/panes/tree'
-import { SIZE_REPORT_DEBOUNCE_MS, sizeToReport, type AppSize } from '../../../core/workspace/size'
+import { SIZE_REPORT_DEBOUNCE_MS, clampAppSize, sizeToReport, type AppSize } from '../../../core/workspace/size'
 
 export interface MirrorEntry {
   sessionId: string
@@ -87,6 +87,8 @@ export function createSizeReporter(send: (size: AppSize | null) => void, timers:
   }
   return {
     measured: (size) => {
+      // A hidden pane measures 0 by 0: it neither sends nor cancels a size on its way.
+      if (clampAppSize(size) === null) return
       pending = size
       if (timer !== null) timers.clear(timer)
       timer = timers.set(flush, delayMs)
@@ -97,6 +99,48 @@ export function createSizeReporter(send: (size: AppSize | null) => void, timers:
       pending = null
       if (last !== null) send(null)
       last = null
+    }
+  }
+}
+
+export interface SessionSizeReporters {
+  /** A mirror pane for `sessionId` appeared: its measurements go to that session's one reporter, so
+   *  the pane resized last sets the size. `release` when the pane goes; the session's size is taken
+   *  back (null) only when its last pane goes. */
+  acquire(sessionId: string): { measured(size: { width: number; height: number }): void; release(): void }
+}
+
+/** One size reporter per session, shared by every pane that mirrors it (a session's mirror tab can
+ *  show in more than one pane group), counted so the size is withdrawn only with the last of them. */
+export function createSessionSizeReporters(
+  send: (sessionId: string, size: AppSize | null) => void,
+  timers: ReporterTimers = realTimers,
+  delayMs = SIZE_REPORT_DEBOUNCE_MS
+): SessionSizeReporters {
+  const live = new Map<string, { reporter: SizeReporter; panes: number }>()
+  return {
+    acquire: (sessionId) => {
+      let e = live.get(sessionId)
+      if (!e) {
+        e = { reporter: createSizeReporter((s) => send(sessionId, s), timers, delayMs), panes: 0 }
+        live.set(sessionId, e)
+      }
+      const entry = e
+      entry.panes += 1
+      let released = false
+      return {
+        measured: (size) => {
+          if (!released) entry.reporter.measured(size)
+        },
+        release: () => {
+          if (released) return
+          released = true
+          entry.panes -= 1
+          if (entry.panes > 0) return
+          entry.reporter.dispose()
+          if (live.get(sessionId) === entry) live.delete(sessionId)
+        }
+      }
     }
   }
 }

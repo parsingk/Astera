@@ -59,7 +59,7 @@ export function deviceSize(css: AppSize, dpr: unknown): AppSize {
 }
 
 export interface FrameClip {
-  /** The page's viewport in CSS pixels, as Page.getLayoutMetrics answers it. */
+  /** The page's viewport in CSS pixels with its scrollbars, which is what the size override sets. */
   css: AppSize
   /** Page.captureScreenshot's clip: the whole viewport, scaled down to `maxWidth` at most. */
   clip: { x: 0; y: 0; width: number; height: number; scale: number }
@@ -67,12 +67,15 @@ export interface FrameClip {
   frame: AppSize
 }
 
-/** The capture of the page's viewport from a Page.getLayoutMetrics answer, or null when it gives no
- *  viewport size (the capture then takes whatever the page has). */
-export function frameClip(metrics: Record<string, unknown>, maxWidth: number): FrameClip | null {
+/** The capture of the page's whole viewport, or null when nothing gives its size (the capture then
+ *  takes whatever the page has). `inner` is the page's window.innerWidth and innerHeight, which count
+ *  its scrollbars; Page.getLayoutMetrics' client sizes leave a scrollbar out (a page with a 15 px
+ *  vertical scrollbar reads 1265 wide at an override of 1280), so they are only the fallback. */
+export function frameClip(metrics: Record<string, unknown>, maxWidth: number, inner?: unknown): FrameClip | null {
   const vp = (metrics.cssVisualViewport ?? metrics.cssLayoutViewport) as { clientWidth?: unknown; clientHeight?: unknown } | undefined
-  const w = vp?.clientWidth
-  const h = vp?.clientHeight
+  const own = Array.isArray(inner) && finite(inner[0]) && finite(inner[1]) && inner[0] > 0 && inner[1] > 0 ? { w: inner[0], h: inner[1] } : null
+  const w = own ? own.w : vp?.clientWidth
+  const h = own ? own.h : vp?.clientHeight
   if (!finite(w) || !finite(h) || w <= 0 || h <= 0) return null
   const scale = maxWidth > 0 && w > maxWidth ? maxWidth / w : 1
   return {
@@ -88,14 +91,18 @@ export function needsRefit(viewport: AppSize, target: AppSize): boolean {
   return !sameSize(viewport, target)
 }
 
-
-/** Whether the page's size is set through CDP (Emulation.setDeviceMetricsOverride) as well as its
+/** Whether the page's size is set through CDP (Emulation.setDeviceMetricsOverride) instead of its
  *  window's. Measured on the Windows hidden desktop (desktop.e2e.test.ts): a window restored from
  *  maximized and resized with SetWindowPos often leaves its page at the old size, and after a few
  *  resizes the page stops following the window at all, while the device metrics override takes at once
  *  and the capture follows it. macOS has no window to size (the app runs in the person's session).
  *  Linux sizes the window on its own Xvfb (no window manager), and its drag() reads the page's offset
- *  in its window from the window and page sizes, which an override would make wrong. */
+ *  in its window from the window and page sizes, which an override would make wrong.
+ *
+ *  The override is a page layer workaround for the mismatch between the window (sized in the person's
+ *  device pixels) and the renderer (scale 1 on a display it does not have), not a window size: it holds
+ *  for the page target the manager is connected to, so a popup or a second window of the app keeps its
+ *  own size, and a CDP socket that drops takes the override with it until the next launch or relaunch. */
 export function pageSizedByCdp(platform: string): boolean {
   return platform !== 'linux'
 }
