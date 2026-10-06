@@ -1060,6 +1060,12 @@ export const es: Catalog = {
   'run.rail.scrollToEnd': 'Ir al final',
   'run.rail.find': 'Buscar',
   'run.rail.rerunGone': 'La configuración fue eliminada',
+  // ---- media viewer (components/MediaViewer.tsx) ----
+  'media.tab.untitled': 'Multimedia',
+  'media.action.openExternal': 'Abrir con la app predeterminada',
+  'media.action.reveal': 'Mostrar en la carpeta',
+  'media.error.cannotOpen': 'No se puede abrir el archivo',
+  'conversation.sentFile.open': 'Abrir {name}',
   // ---- preview ----
   'preview.tab.untitled': 'Vista previa',
   'preview.toolbar.back': 'Atrás',

@@ -36,3 +36,29 @@ export async function resolveConsolePath(a: {
   }
   return null
 }
+
+/** Whether a path a session terminal (or a session's SendUserFile) names is a regular file, and
+ *  where. resolveConsolePath's rule cut down to its core: an absolute target as it is, a relative one
+ *  against the session's cwd — one candidate, no source roots, because a session's output is not a
+ *  build's stack trace and a second guess would turn a typo into some other file.
+ *
+ *  No path guard, unlike the run console. An agent writes where the person told it to — a video
+ *  pipeline's output folder is rarely a registered project — and a link that refuses those is the
+ *  feature not working. What this hands back is only "a file exists here"; reading it is still
+ *  someone else's check (files.read keeps assertAllowedPath, the media protocol keeps its own
+ *  allowlist). A relative target with no absolute cwd is null: path.resolve would otherwise fill the
+ *  gap with main's own working directory, which names nothing the session meant. */
+export async function resolveExistingFile(a: {
+  cwd: string
+  target: string
+  stat: (p: string) => Promise<{ isFile(): boolean }>
+}): Promise<string | null> {
+  if (a.target === '') return null
+  if (!path.isAbsolute(a.target) && !path.isAbsolute(a.cwd)) return null
+  const resolved = path.resolve(a.cwd, a.target)
+  try {
+    return (await a.stat(resolved)).isFile() ? resolved : null
+  } catch {
+    return null // missing, or unreadable — not a link either way
+  }
+}

@@ -1285,6 +1285,12 @@ export const ko = {
   'run.rail.scrollToEnd': '끝으로',
   'run.rail.find': '찾기',
   'run.rail.rerunGone': '구성이 삭제되었습니다',
+  // ---- media viewer (components/MediaViewer.tsx) ----
+  'media.tab.untitled': '미디어',
+  'media.action.openExternal': '기본 앱으로 열기',
+  'media.action.reveal': '폴더에서 보기',
+  'media.error.cannotOpen': '파일을 열 수 없습니다',
+  'conversation.sentFile.open': '{name} 열기',
   // ---- preview ----
   'preview.tab.untitled': '미리보기',
   'preview.toolbar.back': '뒤로',

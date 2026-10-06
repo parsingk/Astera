@@ -1115,6 +1115,12 @@ export const en: Record<keyof typeof ko, string> = {
   'run.rail.scrollToEnd': 'Scroll to end',
   'run.rail.find': 'Find',
   'run.rail.rerunGone': 'The configuration was deleted',
+  // ---- media viewer (components/MediaViewer.tsx) ----
+  'media.tab.untitled': 'Media',
+  'media.action.openExternal': 'Open in default app',
+  'media.action.reveal': 'Show in folder',
+  'media.error.cannotOpen': 'Cannot open the file',
+  'conversation.sentFile.open': 'Open {name}',
   // ---- preview ----
   'preview.tab.untitled': 'Preview',
   'preview.toolbar.back': 'Back',

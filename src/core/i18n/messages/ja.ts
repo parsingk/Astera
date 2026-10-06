@@ -1047,6 +1047,12 @@ export const ja: Catalog = {
   'run.rail.scrollToEnd': '末尾へ',
   'run.rail.find': '検索',
   'run.rail.rerunGone': '構成が削除されました',
+  // ---- media viewer (components/MediaViewer.tsx) ----
+  'media.tab.untitled': 'メディア',
+  'media.action.openExternal': '既定のアプリで開く',
+  'media.action.reveal': 'フォルダーで表示',
+  'media.error.cannotOpen': 'ファイルを開けません',
+  'conversation.sentFile.open': '{name} を開く',
   // ---- preview ----
   'preview.tab.untitled': 'プレビュー',
   'preview.toolbar.back': '戻る',
