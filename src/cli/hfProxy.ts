@@ -8,7 +8,10 @@ import path from 'node:path'
 import { cliHostTarget } from './host'
 import { hfEnvFor, patchHfAccount, readHfAccounts, type HfAccount } from '../core/higgsfield/accounts'
 import { findRealHiggsfield, higgsfieldVendorBinary, isHiggsfieldCli } from '../core/higgsfield/shims'
-import { BALANCE_KEYS, COST_KEYS, costArgsFor, isGenerateJob, subIndex, looksOutOfCredits, numberAt, shortCreditsMessage } from '../core/higgsfield/credits'
+import {
+  BALANCE_KEYS, COST_KEYS, costArgsFor, expiredLoginMessage, isBalanceQuery, isGenerateJob, subIndex, looksOutOfCredits, numberAt,
+  otherAccountsLine, SESSION_EXPIRED, shortCreditsMessage, type OtherAccount
+} from '../core/higgsfield/credits'
 import { NO_WORKSPACE, noWorkspaceText } from '../core/higgsfield/display'
 import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, recordJobFile, type HfAssetLedger } from '../core/higgsfield/assets'
 import {
@@ -119,17 +122,28 @@ export async function restoreOnce(a: {
 }
 
 
-async function accountCredits(run: HfRunner, profileDir: string, base: NodeJS.ProcessEnv, account: HfAccount): Promise<number | null> {
+async function accountCredits(run: HfRunner, profileDir: string, base: NodeJS.ProcessEnv, account: HfAccount): Promise<Pick<OtherAccount, 'credits' | 'state'>> {
   const r = await sideCall(run, ['account', 'status', '--json'], profileDir, base, account)
-  return r.code === 0 ? numberAt(r.stdout, BALANCE_KEYS) : null
+  if (r.code === 0) return { credits: numberAt(r.stdout, BALANCE_KEYS) }
+  return NO_WORKSPACE.test(r.stderr) ? { credits: null, state: 'needsWorkspace' } : { credits: null }
 }
 
-async function otherAccounts(run: HfRunner, profileDir: string, base: NodeJS.ProcessEnv, current: HfAccount) {
+/** The accounts other than the current one, each with its credits (one guarded status call at a time).
+ *  An account that needs a login is left out, or with `withUnusable` listed without a call. */
+async function otherAccounts(
+  run: HfRunner, profileDir: string, base: NodeJS.ProcessEnv, current: HfAccount, withUnusable = false
+): Promise<OtherAccount[]> {
   const file = await readHfAccounts(profileDir).catch(() => null)
-  const others = (file?.accounts ?? []).filter((x) => x.id !== current.id && !x.needsLogin)
-  return Promise.all(others.map(async (o) => ({
-    label: o.label, email: o.email, credits: await accountCredits(run, profileDir, base, o).catch((e: unknown) => { if (e instanceof HfBinaryMissing) throw e; return null })
-  })))
+  const out: OtherAccount[] = []
+  for (const o of (file?.accounts ?? []).filter((x) => x.id !== current.id && (withUnusable || !x.needsLogin))) {
+    if (o.needsLogin) { out.push({ label: o.label, email: o.email, credits: null, state: 'needsLogin' }); continue }
+    const seen = await accountCredits(run, profileDir, base, o).catch((e: unknown) => {
+      if (e instanceof HfBinaryMissing) throw e
+      return { credits: null } as const
+    })
+    out.push({ label: o.label, email: o.email, ...seen })
+  }
+  return out
 }
 
 /**
@@ -248,6 +262,18 @@ async function proxy(a: Parameters<typeof hfProxy>[0], write: (s: string) => voi
   // A fresh login has no workspace: every call fails until the person picks one (Settings > Higgsfield).
   if (first.code !== 0 && NO_WORKSPACE.test(first.stderr)) write(`higgsfield: ${noWorkspaceText(account.label)}\n`)
   if (first.code === 0) await recordAfter(profileDir, account.id, args, first.stdout).catch(() => {})
+  // The session was rejected by the server while the file is still there: nothing is restored or rerun.
+  // A missing file is a failed refresh, and falls through to the restore below.
+  if (first.code !== 0 && given[0] !== 'auth' && SESSION_EXPIRED.test(first.stderr) && (await exists(creds))) {
+    await patchHfAccount(profileDir, account.id, { needsLogin: true }).catch(() => {})
+    write(expiredLoginMessage(account.label))
+    return first.code
+  }
+  // A balance query never says other accounts exist: one stderr line does (stdout stays the CLI's own).
+  if (first.code === 0 && isBalanceQuery(args)) {
+    const others = await otherAccounts(run, profileDir, a.env, account, true)
+    if (others.length) write(otherAccountsLine(others))
+  }
   if (isGenerateJob(args) && first.code !== 0 && looksOutOfCredits(first.stdout + first.stderr)) {
     await guardCredentials({ run, env, profileDir, account, creds })
     write(shortCreditsMessage({

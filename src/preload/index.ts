@@ -232,7 +232,13 @@ const api = {
     importExternal: invoke('files.importExternal'),
     pathForFile: (file: File) => webUtils.getPathForFile(file),
     reveal: invoke('files.reveal'),
-    countEntries: invoke('files.countEntries')
+    countEntries: invoke('files.countEntries'),
+    resolveLink: invoke('files.resolveLink')
+  },
+  media: {
+    stat: invoke('media.stat'),
+    openExternal: invoke('media.openExternal'),
+    reveal: invoke('media.reveal')
   },
   git: {
     status: invoke('git.status'),

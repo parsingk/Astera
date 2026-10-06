@@ -6,7 +6,7 @@ import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import type { CliError } from '../core/orchestration/cliOutput'
 import { patchHfAccount, readHfAccounts, resolveHfAccount, setHfCurrent, type HfAccount } from '../core/higgsfield/accounts'
-import { BALANCE_KEYS, numberAt } from '../core/higgsfield/credits'
+import { BALANCE_KEYS, numberAt, SESSION_EXPIRED } from '../core/higgsfield/credits'
 import { findRealHiggsfield, isHiggsfieldCli } from '../core/higgsfield/shims'
 import { HfBinaryMissing, realRunner, sideCall, stopOnMissingBinary, type HfRun, type HfRunner } from '../core/higgsfield/runner'
 import { NO_WORKSPACE, noWorkspaceText, type HfWorkspace } from '../core/higgsfield/display'
@@ -25,9 +25,6 @@ export type AccountRun = (accountId: string, args: string[]) => Promise<HfRun | 
 export type StatusRun = (accountId: string) => Promise<StatusSeen | null>
 export type HfCliIssue = { kind: 'binaryMissing'; path: string }
 
-/** CLI 1.1.24 on an expired server session: exit 2, `Error: Session expired.` / `Hint: Run: hf auth login`.
- *  The credentials file stays, so only this line tells that the login is gone. */
-export const SESSION_EXPIRED = /session expired|run: hf auth login/i
 
 const readOrNull = (p: string): string | null => { try { return readFileSync(p, 'utf8') } catch { return null } }
 

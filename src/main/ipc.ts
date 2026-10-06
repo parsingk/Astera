@@ -245,7 +245,9 @@ import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareLaunch } from '../core/run/prepare'
 import { allowingJobCwds, orchRunConfigOf } from '../core/run/runConfigsFile'
 import { executeLaunch } from './run/launch'
-import { resolveConsolePath } from './run/resolveLink'
+import { resolveConsolePath, resolveExistingFile } from './run/resolveLink'
+import { mediaAllowlist } from './media/allowlist'
+import { mediaKindOf } from '../core/files/media'
 import { saveConfigsBatch } from './run/saveConfigs'
 import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
@@ -4962,7 +4964,49 @@ export function registerIpc(
     const cwd = core.run.cwdOf(runId)
     if (!cwd) return null
     const p = await resolveConsolePath({ cwd, target, stat: (f) => fs.stat(f), assertAllowedPath })
+    // A run that writes a screenshot or a clip prints its path too; the link opens the media viewer
+    // (App's openLinkedPath), which can load it only once it is on the media allowlist
+    if (p && mediaKindOf(p)) mediaAllowlist.add(p)
     return p ? { path: p } : null
+  })
+  // A session terminal's path link, or a SendUserFile row's path, resolved against the session's (or
+  // project terminal's) cwd: the absolute path when a regular file is there, null otherwise
+  // (main/run/resolveLink.ts resolveExistingFile says why there is no path guard). The one files.*
+  // call without assertAllowedPath — it reads nothing and answers only "a file exists here". A media
+  // file it answers is admitted to the media allowlist, which is how the viewer tab may then load it
+  // through astera-media://. Since this admits any absolute path the renderer names, the allowlist is
+  // defence in depth (it binds content that cannot call window.api), not a boundary against the
+  // renderer itself (main/media/allowlist.ts). UNC and device paths are refused before any stat —
+  // this runs on hover (resolveExistingFile says why).
+  ipcMain.handle('files.resolveLink', async (_e, cwd: unknown, target: unknown) => {
+    if (typeof cwd !== 'string' || typeof target !== 'string') return null
+    const p = await resolveExistingFile({ cwd, target, stat: (f) => fs.stat(f) })
+    if (!p) return null
+    if (mediaKindOf(p)) mediaAllowlist.add(p)
+    return { path: p }
+  })
+  // The media viewer's own calls. Each is checked against the media allowlist rather than
+  // assertAllowedPath: the file was admitted when its link resolved, and it is usually outside every
+  // project (an agent's output folder), where the project guard would refuse the very file on screen.
+  const assertMedia = (p: unknown): string => {
+    if (typeof p !== 'string' || !mediaAllowlist.has(p)) throw new Error(t(core.lang, 'media.error.cannotOpen'))
+    return p
+  }
+  ipcMain.handle('media.stat', async (_e, p: unknown) => {
+    try {
+      const st = await fs.stat(assertMedia(p))
+      return st.isFile() ? { mtimeMs: st.mtimeMs, size: st.size } : null
+    } catch {
+      return null // gone, or never admitted — the viewer says it cannot open the file
+    }
+  })
+  ipcMain.handle('media.openExternal', async (_e, p: unknown) => {
+    // shell.openPath answers an error string rather than throwing
+    const err = await shell.openPath(assertMedia(p))
+    if (err) throw new Error(err)
+  })
+  ipcMain.handle('media.reveal', async (_e, p: unknown) => {
+    shell.showItemInFolder(assertMedia(p))
   })
   ipcMain.on('run.write', (_e, runId: string, data: string) => core.run.write(runId, data))
   ipcMain.on('run.resize', (_e, runId: string, cols: number, rows: number) => core.run.resize(runId, cols, rows))

@@ -28,12 +28,26 @@ function targetOf(name: string, input: unknown): string {
       return typeof inp.command === 'string' ? inp.command : ''
     case 'Grep':
       return typeof inp.pattern === 'string' ? inp.pattern : ''
+    // The files themselves ride on the part (filesOf); the caption is what the row says beside them.
+    // Named here rather than left to the first-string rule, which would read `status` when there is
+    // no caption and draw "proactive" as if it were what was sent.
+    case 'SendUserFile':
+      return typeof inp.caption === 'string' ? inp.caption : ''
     default:
       for (const v of Object.values(inp)) {
         if (typeof v === 'string') return v
       }
       return ''
   }
+}
+
+/** The paths a SendUserFile call handed the person — the one tool whose point is a list of files.
+ *  undefined for every other tool, and for a SendUserFile whose input has no such list, so a part
+ *  without the field is an ordinary row. Anything in the array that is not a non-empty string is
+ *  dropped rather than shown as a button that names nothing. */
+function filesOf(name: string, input: unknown): string[] | undefined {
+  if (name !== 'SendUserFile' || !isRecord(input) || !Array.isArray(input.files)) return undefined
+  return input.files.filter((f): f is string => typeof f === 'string' && f !== '')
 }
 
 /** Real Bash stdout almost always ends with a trailing newline; split('\n') would otherwise count
@@ -107,7 +121,10 @@ function blockToPart(block: Record<string, unknown>): ConvPart | null {
       return typeof block.text === 'string' ? { kind: 'text', text: block.text } : null
     case 'tool_use': {
       if (typeof block.id !== 'string' || typeof block.name !== 'string') return null
-      return { kind: 'tool', id: block.id, name: block.name, target: targetOf(block.name, block.input), outcome: null }
+      const part: ToolPart = { kind: 'tool', id: block.id, name: block.name, target: targetOf(block.name, block.input), outcome: null }
+      const files = filesOf(block.name, block.input)
+      if (files) part.files = files
+      return part
     }
     default:
       return null

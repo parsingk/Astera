@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import path from 'node:path'
-import { resolveConsolePath } from './resolveLink'
+import { resolveConsolePath, resolveExistingFile } from './resolveLink'
 import { absPath } from '../../core/testPaths'
 
 const file = { isFile: () => true }
@@ -84,5 +84,82 @@ describe('resolveConsolePath', () => {
     const stat = vi.fn(async () => { throw new Error('ENOENT') })
     await expect(resolveConsolePath({ cwd: '/proj', target: 'Nope.java', stat, assertAllowedPath: async () => undefined })).resolves.toBeNull()
     expect(stat).toHaveBeenCalledTimes(1 + 5)
+  })
+})
+
+// The session terminals' resolver (files.resolveLink). Narrower than the run console's in one way —
+// no source roots, a target names one place — and wider in another: there is no path guard, because
+// a session's agent writes wherever it was told to (a video pipeline's output folder is rarely a
+// registered project), and this only ever answers "is there a regular file here".
+describe('resolveExistingFile', () => {
+  it('an absolute existing file is answered as it is', async () => {
+    const target = absPath('elsewhere', 'clips', 'g1.mp4')
+    const stat = vi.fn(async () => file)
+    expect(await resolveExistingFile({ cwd: absPath('proj'), target, stat })).toBe(path.resolve(target))
+    expect(stat).toHaveBeenCalledWith(path.resolve(target))
+  })
+
+  it('a relative target is resolved against the cwd', async () => {
+    const cwd = absPath('proj')
+    expect(await resolveExistingFile({ cwd, target: 'out/a.png', stat: async () => file })).toBe(path.resolve(cwd, 'out/a.png'))
+  })
+
+  it('a file outside the cwd is still a file — nothing is special about outside', async () => {
+    const cwd = absPath('proj', 'sub')
+    expect(await resolveExistingFile({ cwd, target: '../../other/b.mp4', stat: async () => file })).toBe(
+      path.resolve(cwd, '../../other/b.mp4')
+    )
+  })
+
+  it('a missing file is null', async () => {
+    const stat = async (): Promise<{ isFile(): boolean }> => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    }
+    expect(await resolveExistingFile({ cwd: absPath('proj'), target: 'gone.mp4', stat })).toBeNull()
+  })
+
+  it('a directory is null', async () => {
+    expect(await resolveExistingFile({ cwd: absPath('proj'), target: 'clips', stat: async () => dir })).toBeNull()
+  })
+
+  // No guessing: one candidate, one stat — unlike resolveConsolePath, no source roots are tried
+  it('tries exactly one place', async () => {
+    const stat = vi.fn(async () => { throw new Error('ENOENT') })
+    await resolveExistingFile({ cwd: absPath('proj'), target: 'com/anipen/App.java', stat })
+    expect(stat).toHaveBeenCalledTimes(1)
+  })
+
+  // A relative target with no real cwd would otherwise resolve against main's own working directory
+  it('a relative target with no absolute cwd is null and touches nothing', async () => {
+    const stat = vi.fn(async () => file)
+    expect(await resolveExistingFile({ cwd: '', target: 'a.png', stat })).toBeNull()
+    expect(await resolveExistingFile({ cwd: 'relative/dir', target: 'a.png', stat })).toBeNull()
+    expect(stat).not.toHaveBeenCalled()
+  })
+
+  it('an empty target is null', async () => {
+    const stat = vi.fn(async () => file)
+    expect(await resolveExistingFile({ cwd: absPath('proj'), target: '', stat })).toBeNull()
+    expect(stat).not.toHaveBeenCalled()
+  })
+
+  // This runs on hover. A stat of a UNC path makes Windows connect to that SMB host — offering the
+  // user's NTLM credentials to whoever printed the path, and parking a threadpool thread on a host
+  // that does not answer. Anything that starts with two separators (\\server, //server, \\?\, \\.\)
+  // is refused before the disk, on every platform.
+  it('a UNC, device or double-slash target is null and is never stat-ed', async () => {
+    const stat = vi.fn(async () => file)
+    for (const target of ['\\\\h\\s\\a.png', '//h/s/a.png', '\\\\?\\C:\\x.png', '\\\\.\\pipe\\x.png', '/\\h\\s\\a.png']) {
+      expect(await resolveExistingFile({ cwd: absPath('proj'), target, stat }), target).toBeNull()
+    }
+    expect(stat).not.toHaveBeenCalled()
+  })
+
+  it('a relative target under a UNC cwd is null and is never stat-ed', async () => {
+    const stat = vi.fn(async () => file)
+    for (const cwd of ['\\\\h\\share\\proj', '//h/share/proj']) {
+      expect(await resolveExistingFile({ cwd, target: 'out/a.png', stat }), cwd).toBeNull()
+    }
+    expect(stat).not.toHaveBeenCalled()
   })
 })

@@ -575,3 +575,122 @@ describe('hfProxy: no workspace selected', () => {
     expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
   })
 })
+
+describe('hfProxy: hints for the agent', () => {
+  const two = async (opts: { bNeedsLogin?: boolean } = {}) => {
+    const a = await addHfAccount(profile, 'A'); const b = await addHfAccount(profile, 'B')
+    await patchHfAccount(profile, b.id, { email: 'b@x.com', ...(opts.bNeedsLogin ? { needsLogin: true } : {}) })
+    for (const x of [a, b]) await fs.writeFile(path.join(hfAccountDir(profile, x.id), 'credentials.json'), '{}')
+    return { a, b }
+  }
+  const alsoLine = (list: string) =>
+    `higgsfield: Astera also keeps ${list}. If this account runs short, ask the user which account to use (offer them as choices), then run \`astera higgsfield use --account <account>\`.\n`
+  const statusAs = (args: string[], base: HfRunner = fakeRunner()): HfRunner => (a, e, t) =>
+    base(a[0] === '--json' ? a.slice(1) : a, e, t)
+
+  it('lists the other accounts on account status, on stderr only, exit code kept', async () => {
+    await two()
+    const code = await hfProxy({ args: ['account', 'status'], env: env({ FAKE_HF_CREDITS: '7' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(code).toBe(0)
+    expect(msgs).toEqual([alsoLine('"B" (b@x.com, 7 credits)')])
+  })
+
+  it('does the same for workspace status and for a leading --json', async () => {
+    await two()
+    for (const args of [['workspace', 'status'], ['--json', 'account', 'status']]) {
+      msgs = []
+      await hfProxy({ args, env: env({ FAKE_HF_CREDITS: '7' }), platform: process.platform, home: profile, run: statusAs(args), write: (s) => msgs.push(s) })
+      expect(msgs).toEqual([alsoLine('"B" (b@x.com, 7 credits)')])
+    }
+  })
+
+  it('leaves stdout exactly the CLI output', async () => {
+    await two()
+    const out: string[] = []
+    const run: HfRunner = async (_a, _e, t) => { if (t) out.push('{"credits":1}'); return { code: 0, stdout: '{"credits":1}', stderr: '' } }
+    const orig = process.stdout.write.bind(process.stdout)
+    ;(process.stdout as any).write = (s: string) => { out.push('LEAK:' + s); return true }
+    try { await hfProxy({ args: ['--json', 'account', 'status'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) }) } finally { (process.stdout as any).write = orig }
+    expect(out).toEqual(['{"credits":1}'])
+    expect(msgs.length).toBe(1)
+  })
+
+  it('says nothing with no other account, and nothing extra on other commands', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await fs.writeFile(path.join(hfAccountDir(profile, a.id), 'credentials.json'), '{}')
+    await hfProxy({ args: ['account', 'status'], env: env(), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(msgs).toEqual([])
+    await two()
+    await fs.rm(logFile)
+    await hfProxy({ args: ['model', 'list'], env: env(), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(msgs).toEqual([])
+    expect((await calls()).map((c) => c.args.join(' '))).toEqual(['model list'])
+  })
+
+  it('shows an account that needs a login as such, without calling the CLI for it', async () => {
+    const { b } = await two({ bNeedsLogin: true })
+    await hfProxy({ args: ['account', 'status'], env: env(), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(msgs).toEqual([alsoLine('"B" (log in again in Astera Settings)')])
+    expect((await calls()).every((c) => c.creds !== path.join(hfAccountDir(profile, b.id), 'credentials.json'))).toBe(true)
+  })
+
+  it('shows an account without a workspace, and credits unknown on failure', async () => {
+    const { b } = await two()
+    const base = fakeRunner()
+    const credsB = path.join(hfAccountDir(profile, b.id), 'credentials.json')
+    const run: HfRunner = (a, e, t) => e.HIGGSFIELD_CREDENTIALS_PATH === credsB && t === false
+      ? Promise.resolve({ code: 4, stdout: '', stderr: 'Error: No workspace selected.' }) : base(a, e, t)
+    await hfProxy({ args: ['account', 'status'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(msgs).toEqual([alsoLine('"B" (workspace needed in Astera Settings)')])
+    msgs = []
+    const failing: HfRunner = (a, e, t) => e.HIGGSFIELD_CREDENTIALS_PATH === credsB && t === false
+      ? Promise.resolve({ code: 1, stdout: '', stderr: 'net' }) : base(a, e, t)
+    await hfProxy({ args: ['account', 'status'], env: env(), platform: process.platform, home: profile, run: failing, write: (s) => msgs.push(s) })
+    expect(msgs).toEqual([alsoLine('"B" (b@x.com, credits unknown)')])
+  })
+
+  it('does not list the others when the balance query fails', async () => {
+    await two()
+    await hfProxy({ args: ['account', 'status'], env: env({ FAKE_HF_EXIT: '3' }), platform: process.platform, home: profile, run: fakeRunner(), write: (s) => msgs.push(s) })
+    expect(msgs.join('')).not.toContain('also keeps')
+  })
+
+  it('marks the account and says the login expired, without a rerun', async () => {
+    const { a } = await two()
+    for (const stderr of ['Error: Session expired.\n', 'Hint: Run: hf auth login\n']) {
+      await patchHfAccount(profile, a.id, { needsLogin: false }); msgs = []
+      let n = 0
+      const run: HfRunner = async () => { n++; return { code: 1, stdout: '', stderr } }
+      const code = await hfProxy({ args: ['generate', 'get', 'x'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+      expect(code).toBe(1)
+      expect(n).toBe(1)
+      expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBe(true)
+      expect(msgs).toEqual(['higgsfield: the Higgsfield login of account "A" has expired. Ask the user to log in again in Astera Settings > Higgsfield. Do not suggest `hf auth login` — on this computer `hf` may be another program.\n'])
+    }
+  })
+
+  it('does not mark the account for an auth command', async () => {
+    const { a } = await two()
+    const run: HfRunner = async () => ({ code: 1, stdout: '', stderr: 'Hint: Run: hf auth login\n' })
+    const code = await hfProxy({ args: ['auth', 'login'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(1)
+    expect((await readHfAccounts(profile)).accounts.find((x) => x.id === a.id)!.needsLogin).toBeFalsy()
+    expect(msgs.join('')).not.toContain('has expired')
+  })
+
+  it('still restores from the backup when "Session expired" comes with a deleted credentials file', async () => {
+    const { a } = await two()
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}'); await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    const base = fakeRunner(); let n = 0
+    const run: HfRunner = async (args, e, t) => n++ === 0
+      ? (await base(args, { ...e, FAKE_HF_DELETE_CREDS: '1' }, false), { code: 2, stdout: '', stderr: 'Error: Session expired.\n' })
+      : base(args, e, t)
+    const code = await hfProxy({ args: ['generate', 'get', 'x'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(0)
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+    expect(msgs.join('')).toMatch(/running the command again/)
+    expect((await readHfAccounts(profile)).accounts.find((x) => x.id === a.id)!.needsLogin).toBeFalsy()
+  })
+
+})

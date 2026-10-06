@@ -24,6 +24,8 @@ export type ConvPart =
       target: string
       /** null while the result has not arrived, or when it fell outside the window. */
       outcome: ConvToolOutcome | null
+      /** SendUserFile only: the paths it sent, which the row draws as buttons that open them. */
+      files?: string[]
     }
   /** A turn the CLI could not run, in the CLI's (or its API's) own words. codex records one as a
    *  `task_complete` with `error` and no reply; without this a reopened conversation showed the

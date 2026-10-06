@@ -49,6 +49,17 @@ export function costArgsFor(args: string[]): string[] {
 export const looksOutOfCredits = (text: string): boolean =>
   /insufficient (credits|balance)|not enough credits|out of credits|credit(s)? (limit|exhausted)/i.test(text)
 
+/** `account status` / `workspace status` (leading flags skipped): the balance queries. */
+export const isBalanceQuery = (args: string[]): boolean => {
+  const i = subIndex(args)
+  return (args[i] === 'account' || args[i] === 'workspace') && args[i + 1] === 'status'
+}
+
+/** CLI 1.1.24 on an expired server session: exit 2, `Error: Session expired.` / `Hint: Run: hf auth login`.
+ *  The credentials file stays, so only this line tells that the login is gone. Anchored to the line start
+ *  so echoed prompt text does not match. */
+export const SESSION_EXPIRED = /^Error: Session expired|^Hint: Run: hf auth login/im
+
 type Who = { label: string; email?: string; credits: number | null }
 const credits = (n: number | null) => (n === null ? 'credits unknown' : `${n} credits`)
 
@@ -61,3 +72,18 @@ export function shortCreditsMessage(a: { current: Who; need: number | null; othe
     : ' There is no other account in Astera.'
   return `${cur}${need}.${others} Ask the user which account to use (offer them as choices; never pick one yourself), then run \`astera higgsfield use --account <account>\` and run this command again.\n`
 }
+
+export type OtherAccount = Who & { state?: 'needsLogin' | 'needsWorkspace' }
+
+/** The one line a balance query gets: the accounts Astera also keeps (stderr, so `--json` stays parseable). */
+export function otherAccountsLine(others: OtherAccount[]): string {
+  const one = (o: OtherAccount) => o.state === 'needsLogin' ? `"${o.label}" (log in again in Astera Settings)`
+    : o.state === 'needsWorkspace' ? `"${o.label}" (workspace needed in Astera Settings)`
+    : `"${o.label}" (${o.email ? `${o.email}, ` : ''}${credits(o.credits)})`
+  return `higgsfield: Astera also keeps ${others.map(one).join(', ')}. If this account runs short, ask the user which account to use (offer them as choices), then run \`astera higgsfield use --account <account>\`.
+`
+}
+
+export const expiredLoginMessage = (label: string): string =>
+  `higgsfield: the Higgsfield login of account "${label}" has expired. Ask the user to log in again in Astera Settings > Higgsfield. Do not suggest \`hf auth login\` — on this computer \`hf\` may be another program.
+`

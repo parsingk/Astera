@@ -20,7 +20,8 @@ export function TerminalView({
   rollState = null,
   schedState = null,
   active = false,
-  onOpenUrl
+  onOpenUrl,
+  onOpenFile
 }: {
   session: SessionInfo
   onRestart: (old: SessionInfo) => void
@@ -28,6 +29,8 @@ export function TerminalView({
   schedState?: SchedStateEvent | null
   active?: boolean
   onOpenUrl: (url: string, ev: MouseEvent) => void
+  /** A path link was activated — the path main resolved, and the line/column the output named */
+  onOpenFile: (path: string, at: { line?: number; col?: number }) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const { family } = useTerminalFont()
@@ -36,6 +39,8 @@ export function TerminalView({
   const termRef = useRef<Terminal | null>(null)
   const onOpenUrlRef = useRef(onOpenUrl)
   onOpenUrlRef.current = onOpenUrl
+  const onOpenFileRef = useRef(onOpenFile)
+  onOpenFileRef.current = onOpenFile
   // Set by the construction effect so the font effect can reuse its lastSent-guarded sendResize
   // instead of calling window.api.sessions.resize directly (which would bypass the guard and leave
   // its lastSent stale for the next ResizeObserver-driven call)
@@ -60,8 +65,17 @@ export function TerminalView({
     // If a program run inside the session changes the cursor style and does not restore it, only that tab's cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
     term.open(host)
-    // URLs in the output are links (paths are not — this terminal does not know its cwd, see terminalLinks.ts)
-    const disposeLinks = attachConsoleLinks(term, { onUrl: (url, ev) => onOpenUrlRef.current(url, ev) })
+    // URLs and paths in the output are links. A path is resolved by main against the session's cwd and
+    // is a link only when a regular file is there (files.resolveLink) — an agent printing where it put
+    // a rendered clip is the case this is for. The cwd is the one the session started in: a shell
+    // inside the session that `cd`s elsewhere makes a relative path miss, which is no link, not a
+    // wrong one.
+    const cwd = session.cwd
+    const disposeLinks = attachConsoleLinks(term, {
+      onUrl: (url, ev) => onOpenUrlRef.current(url, ev),
+      resolvePath: (target) => window.api.files.resolveLink(cwd, target).then((r) => r?.path ?? null, () => null),
+      onOpenFile: (path, at) => onOpenFileRef.current(path, at)
+    })
     // Fit to the cell grid directly instead of using FitAddon — FitAddon always subtracts 15px for a scrollbar, which left the right side empty
     fitTerminalToHost(term, host)
     termRef.current = term
