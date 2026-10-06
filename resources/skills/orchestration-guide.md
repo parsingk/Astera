@@ -1256,8 +1256,10 @@ astera higgsfield use --account <id|label|email>
 
 - Astera keeps several Higgsfield accounts and runs every `higgsfield` command of a session under the
   current one. `higgsfield list` shows them with their credits and which one is current.
-- **When a `higgsfield` command says the account is short of credits, ask the person which account to
-  use** (with choices, from `higgsfield list`), then run `higgsfield use --account <account>` and run
-  the command again. Never switch on your own.
-- An account marked `needsLogin` cannot be used until the person logs in again in Astera Settings >
-  Higgsfield; tell them, and do not log in yourself.
+- **When a balance looks too low for the next job** (from `higgsfield account status`, which also lists
+  the other accounts on stderr, or from any short-credits message), do not stop or ask for a top-up
+  first: run `higgsfield list`, ask the person which account to use (with choices), then run
+  `higgsfield use --account <account>` and run the command again. Never switch on your own.
+- An account marked `needsLogin`, or a command that says the login has expired, cannot be used until the
+  person logs in again in Astera Settings > Higgsfield; tell them, and do not log in yourself. Never
+  suggest `hf auth login`: on this computer `hf` may be another program.
