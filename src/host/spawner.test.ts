@@ -29,7 +29,7 @@ beforeEach(async () => {
     { id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg1'), color: '#888', createdAt: NOW, provider: 'claude' }
   ] }))
 })
-afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+afterEach(async () => { await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) })
 
 type Spawned = { file: string; args: string[] | string; opts: { cwd: string; env: Record<string, string | undefined> }; pty: RegistryPty & { emit(d: string): void; exit(c: number): void; killed: boolean } }
 type LocateHooks = Pick<HostSpawnerDeps, 'findRollout' | 'locatePollMs' | 'locateForMs' | 'readAccounts'>
@@ -113,6 +113,19 @@ describe.runIf(process.platform === 'win32')('createHostSpawner, session shuttle
 })
 
 describe('createHostSpawner', () => {
+  it('writes the session shuttle at creation and says where, for the chats that read it', async () => {
+    const h = rig()
+    expect(h.spawner!.orchEnvNow()).toBeUndefined()
+    // The shuttle is written in the background (sessionCmdLink, then the shuttle and the higgsfield
+    // shims): a few ms on a quiet machine, but in the full suite it overran vi.waitFor's default 1 s.
+    // The test's own 10 s is the real bound.
+    await vi.waitFor(() => expect(h.spawner!.orchEnvNow()).toBeDefined(), { timeout: 8_000 })
+    const env = h.spawner!.orchEnvNow()!
+    expect(path.dirname(env.cliPath)).toBe(path.join(profile, 'orch'))
+    expect(env.profileDir).toBe(profile)
+    expect(env.skillsPath).toBe(path.join(dir, 'skills'))
+  })
+
   // Host journal, A19 lifted: the Host's coordinator reports the prompt writes the journal reasons from.
   it('reports each prompt write of a worker it starts', async () => {
     const { s, taskId, dispatchId } = seeded()

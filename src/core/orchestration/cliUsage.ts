@@ -345,6 +345,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [{ name: 'account', value: '<accountId>', about: 'only this account (from `accounts list`)' }]
   },
 
+  'higgsfield-list': { summary: 'List the Higgsfield accounts Astera keeps, with credits and the current one' },
+  'higgsfield-use': {
+    summary: 'Make one Higgsfield account current for every session (only after the user picked it)',
+    flags: [{ name: 'account', value: '<id|label|email>', required: true, about: 'the account to switch to' }]
+  },
+
   // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.
   'sessions-list': {
     summary: 'the agent sessions the Host holds, running and ended',

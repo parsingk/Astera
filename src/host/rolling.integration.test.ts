@@ -114,6 +114,7 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
     onSpawned: (cb: (i: SessionInfo, a: Account) => void) => { onSpawned.push(cb) },
     onRolloutLocated: (cb: (s: string, c: string, p: string) => void) => { onLocated.push(cb) },
     retarget: () => {},
+    orchEnvNow: () => undefined,
     isRetiring: () => false
   }
   const afters: Array<() => void> = []
@@ -222,7 +223,7 @@ function composeWithoutServer(): void {
     procs: new ProcRegistry({ spawn: () => { throw new Error('no chat proc here') }, log: () => {} }),
     procHolders: createProcHolders(),
     version: '0.0.0',
-    spawner: { prepareRollSpawn: async () => {}, rollSpawn: () => { throw new Error('no') }, statusLinePayload: async () => null, onSpawned: () => {}, onRolloutLocated: () => {}, retarget: () => {}, isRetiring: () => false } as never,
+    spawner: { prepareRollSpawn: async () => {}, rollSpawn: () => { throw new Error('no') }, statusLinePayload: async () => null, onSpawned: () => {}, onRolloutLocated: () => {}, retarget: () => {}, isRetiring: () => false, orchEnvNow: () => undefined } as never,
     exits: () => undefined as never,
     server: () => undefined as never,
     orch: () => undefined as never,

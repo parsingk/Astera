@@ -63,7 +63,7 @@ beforeEach(async () => {
   logs = []
 })
 afterEach(async () => {
-  await fs.rm(dir, { recursive: true, force: true })
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
 /** A profile with one Job, one Run and one Task in it — written the way the app writes it, through

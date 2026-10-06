@@ -47,6 +47,37 @@ describe('AccountRegistry', () => {
     expect(account.configDir).toBe(dir)
   })
 
+  it('importing a folder that is already registered returns that account instead of adding another', async () => {
+    const dir = path.join(tmp, 'existing')
+    await fs.mkdir(dir)
+    const first = await registry.import({ label: 'a', configDir: dir })
+    const again = await registry.import({ label: 'b', configDir: dir })
+    expect(again.id).toBe(first.id)
+    expect(registry.list()).toHaveLength(1)
+  })
+
+  it('two imports of the same folder at once register it once', async () => {
+    const dir = path.join(tmp, 'existing')
+    await fs.mkdir(dir)
+    const [a, b] = await Promise.all([
+      registry.import({ label: 'x', configDir: dir }),
+      registry.import({ label: 'x', configDir: dir })
+    ])
+    expect(a.id).toBe(b.id)
+    expect(registry.list()).toHaveLength(1)
+    const reloaded = new AccountRegistry(path.join(tmp, 'accounts.json'), path.join(tmp, 'accounts-root'))
+    await reloaded.load()
+    expect(reloaded.list()).toHaveLength(1)
+  })
+
+  it.runIf(process.platform === 'win32')('treats a folder spelled in another case as the same on win32', async () => {
+    const dir = path.join(tmp, 'Existing')
+    await fs.mkdir(dir)
+    const first = await registry.import({ label: 'a', configDir: dir })
+    const again = await registry.import({ label: 'a', configDir: dir.toLowerCase() })
+    expect(again.id).toBe(first.id)
+  })
+
   it('loginStatus는 .credentials.json 존재 여부만 본다', async () => {
     const account = await registry.create({ label: 'login' })
     expect(await registry.loginStatus(account.id)).toBe(false)

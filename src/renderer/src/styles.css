@@ -552,6 +552,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .account-row[tabindex] { cursor: pointer; }
 .account-row.expanded { background: var(--elevated); border-left-color: var(--accent); }
 .account-row-actions { display: inline-flex; align-items: center; gap: 8px; }
+/* A line under an account row (the Higgsfield login hint): the row wraps, so it takes a line of its own. */
+.account-row-hint { flex-basis: 100%; }
+/* A problem with the whole tab (the Higgsfield CLI program is missing), above everything else in it. */
+.settings-warn-box { padding: 8px 12px; font-size: 12px; color: var(--warn-ink); background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 6px; }
 .account-row:hover { background: var(--elevated); border-left-color: var(--accent); }
 .account-label { flex: 1; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .color-dot { width: 8px; height: 8px; border-radius: var(--radius-sm); flex-shrink: 0; }

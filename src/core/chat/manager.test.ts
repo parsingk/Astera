@@ -210,6 +210,28 @@ describe('ChatSessionManager.spawn', () => {
   beforeEach(() => {
     vi.stubEnv('PATH', '')
   })
+
+  it('puts the session shuttle folder first on PATH and names the CLI, as a terminal session does', () => {
+    vi.stubEnv('PATH', 'C:\Windows')
+    const { spawned, manager } = setup('win32')
+    const cliPath = path.join('prof', 'orch', 'astera.cmd')
+    manager.setOrchEnv(() => ({ cliPath, skillsPath: 'skills', profileDir: 'prof' }))
+    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    const env = spawned[0].opts.env as Record<string, string>
+    const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH')!
+    expect(env[pathKey].split(path.delimiter)[0]).toBe(path.dirname(cliPath))
+    expect(env.ASTERA_CLI).toBe(cliPath)
+    expect(env.ASTERA_PROFILE_DIR).toBe('prof')
+    expect(env.ASTERA_SKILLS).toBe('skills')
+  })
+
+  it('leaves PATH alone when orchestration has not started', () => {
+    vi.stubEnv('PATH', 'C:\Windows')
+    const { spawned, manager } = setup('win32')
+    manager.setOrchEnv(() => undefined)
+    manager.spawn({ account: codexAccount, cwd: 'D:/proj' })
+    expect(spawned[0].opts.env.ASTERA_CLI).toBeUndefined()
+  })
   afterEach(() => {
     vi.unstubAllEnvs()
   })

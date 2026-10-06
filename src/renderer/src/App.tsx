@@ -42,6 +42,7 @@ import { CliSettings } from './components/CliSettings'
 import { McpSettings } from './components/McpSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
+import { HiggsfieldSettings } from './components/HiggsfieldSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
@@ -638,6 +639,7 @@ export default function App(): React.JSX.Element {
     | 'general'
     | 'appearance'
     | 'accounts'
+    | 'higgsfield'
     | 'agent'
     | 'cli'
     | 'hiw'
@@ -4548,6 +4550,7 @@ export default function App(): React.JSX.Element {
                     ['general', t('settings.tab.general')],
                     ['appearance', t('settings.tab.appearance')],
                     ['accounts', t('settings.tab.accounts')],
+                    ['higgsfield', t('settings.tab.higgsfield')],
                     // 에이전트와 How It Works — 둘 다 일반에서 갈라져 나왔고, 계정 바로 뒤가
                     // 제자리다: 어느 계정으로 무엇을 띄울지 정한 다음에 오는 이야기다.
                     // How It Works 의 이름은 사이드바·탭과 같은 키를 쓴다(새 문구를 만들지 않는다).
@@ -4767,6 +4770,7 @@ export default function App(): React.JSX.Element {
                   </>
                 )}
                 {settingsTab === 'accounts' && <AccountSettings accounts={accounts} />}
+                {settingsTab === 'higgsfield' && <HiggsfieldSettings />}
                 {settingsTab === 'info' && (
                   <>
                     <div className="settings-row">

@@ -10,7 +10,7 @@
 import type { PtyEntry } from '../core/host/protocol'
 import type { SessionInfo } from '../core/types'
 import { makeDescriptors } from '../core/providers/descriptor'
-import { ChatSessionManager, type ChatManagerDeps } from '../core/chat/manager'
+import { ChatSessionManager, type ChatManagerDeps, type ChatOrchEnv } from '../core/chat/manager'
 import { chatSpawnOptsOf, type ChatRollSpawn } from '../core/chat/respawn'
 import { isUnattendedPermission, type ChatAnswer, type ChatEvent, type ChatRequest, type UnattendedPermission } from '../core/chat/types'
 import { chatAnswerFailureOf, chatPromptsOf, type ChatAnswerResult, type ChatPrompt } from '../core/sessions/chatRead'
@@ -36,6 +36,8 @@ export interface HostChatsDeps {
   version: string
   /** Read at each spawn when a function, so a PATH the Host has completed since reaches the child. */
   baseEnv: NodeJS.ProcessEnv | (() => NodeJS.ProcessEnv)
+  /** The session shuttle once the Host wrote it (spawner.orchEnvNow); read at each spawn. */
+  orchEnv?: () => ChatOrchEnv | undefined
   /** The app's chatSend (server.act), for a turn while the app is the writer. */
   askApp(name: 'chatSend', args: [string, string]): Promise<unknown>
   log(m: string): void
@@ -165,6 +167,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     version: d.version,
     log: d.log,
     baseEnv: d.baseEnv,
+    orchEnv: d.orchEnv,
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 

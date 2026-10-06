@@ -1168,6 +1168,36 @@ export interface CoreApi {
         }
     >
   }
+  higgsfield: {
+    list(): Promise<{
+      current: string | null
+      accounts: {
+        id: string; label: string; email?: string; credits: number | null; current: boolean; needsLogin: boolean
+        /** Its login is running: left out of the status calls. */
+        loggingIn: boolean
+        /** Logged in, but no workspace selected; `workspaces` (only then) are the ones to pick from. */
+        needsWorkspace: boolean
+        workspaces?: { id: string; name: string | null; plan: string | null; credits: number | null }[]
+      }[]
+      cliFound: boolean
+      /** The CLI's own program is gone (antivirus quarantine): no status call was made. */
+      cliIssue: null | { kind: 'binaryMissing'; path: string }
+    }>
+    add(label: string): Promise<{ id: string }>
+    /** Copies ~/.config/higgsfield (the login outside Astera); never moves it. */
+    importCurrent(label: string): Promise<{ id: string }>
+    /** Runs the real CLI's `auth login` under that account; the CLI opens the browser. Resolves when the
+     *  login ends (ok, cancelled, failed, or after 3 minutes); the other handlers keep working meanwhile. */
+    login(id: string): Promise<{ ok: boolean; message?: string; reason?: 'cancelled' | 'timeout' }>
+    /** The login running now and the URL it printed (null until printed). Never runs the CLI. */
+    loginState(): Promise<{ id: string; url: string | null } | null>
+    /** Kills the running login; resolves after it exited. */
+    cancelLogin(): Promise<void>
+    remove(id: string): Promise<void>
+    setCurrent(id: string): Promise<void>
+    /** Runs `workspace set <workspaceId>` under that account. */
+    setWorkspace(id: string, workspaceId: string): Promise<void>
+  }
   github: {
     /** The cached probe from app start or the last re-check — never runs gh itself. */
     status(): Promise<GhProbe>

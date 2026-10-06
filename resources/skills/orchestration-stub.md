@@ -33,6 +33,8 @@ and `astera tasks add --job` plan work a person starts later. `astera sessions l
 skill. **`sessions send` types into whatever the other session shows**, a permission prompt or a
 first-run screen included, so `sessions read` it right before you send.
 
+- Higgsfield: when a higgsfield command says the account is short of credits, ask the user which account to use with choices (AskUserQuestion), then run `astera higgsfield use --account <account>` and run the command again. Never switch on your own.
+
 ## When not to use this
 
 If the user only said "hand this off" / "give it to another agent" (or "넘겨라" / "handoff" /

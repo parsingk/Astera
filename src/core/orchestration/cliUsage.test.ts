@@ -362,6 +362,8 @@ describe('orchestration-guide — 에이전트에게 공개 명령을 가르친�
       'sessions-send',
       'skills-list',
       'skills-install',
+      'higgsfield-list',
+      'higgsfield-use',
       'requests-show'
     ])
       expect(shown.has(cmd), `\`astera ${cmd.replace(/-(?=[a-z]+$)/, ' ')}\` is on no command line of the guide`).toBe(true)

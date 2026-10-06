@@ -29,7 +29,7 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) c()
   vi.useRealTimers()
   await new Promise((r) => setTimeout(r, 50))
-  for (const d of dirs.splice(0)) await fs.rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 })
+  for (const d of dirs.splice(0)) await fs.rm(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
 /** The rolling seams every rig passes: nothing of this machine's accounts, keychain or network is read. */
@@ -128,6 +128,7 @@ async function rig() {
     onSpawned: () => {},
     onRolloutLocated: () => {},
     retarget: () => {},
+    orchEnvNow: () => undefined,
     isRetiring: () => false
   }
   const afters: Array<() => void> = []

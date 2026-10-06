@@ -59,6 +59,9 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
   const [importLabel, setImportLabel] = useState('')
   const [importProvider, setImportProvider] = useState<Provider>('claude')
   const [detectItems, setDetectItems] = useState<DetectItem[] | null>(null)
+  // A ref, not only state: two clicks (or Enter and a click) in one frame both see the state still false.
+  const importing = useRef(false)
+  const [importBusy, setImportBusy] = useState(false)
   const autoDetectDone = useRef(false)
 
   useEffect(() => {
@@ -108,7 +111,9 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
   }
 
   const importSelected = async (): Promise<void> => {
-    if (!detectItems) return
+    if (!detectItems || importing.current) return
+    importing.current = true
+    setImportBusy(true)
     let failCount = 0
     for (const item of detectItems.filter((it) => it.selected)) {
       try {
@@ -121,6 +126,8 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         failCount++
       }
     }
+    importing.current = false
+    setImportBusy(false)
     setDetectItems(null)
     if (failCount > 0) toast.error(t('account.import.someFailed', { count: failCount }))
   }
@@ -350,6 +357,7 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
                   className="primary"
                   type="button"
                   disabled={
+                    importBusy ||
                     !detectItems.some((it) => it.selected) ||
                     detectItems.some((it) => it.selected && !it.label.trim())
                   }

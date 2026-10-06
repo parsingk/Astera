@@ -242,6 +242,7 @@ async function rig(o: RigOpts) {
     removeWorktrees: (paths) => worktrees.removeWorktrees(paths)
   }
   const spawner = {
+    orchEnvNow: () => undefined,
     ...local,
     inFlight: () => 0,
     closeAndSettle: async () => {
