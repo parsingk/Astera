@@ -5,9 +5,11 @@ import { bufferRangeAt, cellsOfJoinedLine, findConsoleLinks, joinWrappedLine } f
  *  Moved here from RunPanel unchanged in what it does; the one addition is that a URL's activation
  *  hands the mouse event on, so the caller can read Ctrl/Cmd (the link rule in core/preview/url.ts).
  *
- *  Path links exist only when `resolvePath` is given — the run console knows its run's cwd through
- *  main; the terminals do not, and a link that cannot be resolved is worse than no link. Returns the
- *  dispose function. */
+ *  Path links exist only when `resolvePath` is given, and a target is a link only when it resolves —
+ *  a link that cannot be followed is worse than no link. The run console resolves through
+ *  run.resolveLink (its run's cwd, guarded, source roots tried); the session and project terminals
+ *  through files.resolveLink (their own cwd, one candidate, any regular file). Returns the dispose
+ *  function. */
 export function attachConsoleLinks(
   term: Terminal,
   opts: {

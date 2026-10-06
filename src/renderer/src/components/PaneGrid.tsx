@@ -14,6 +14,8 @@ import {
   type Rect
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
+import { mediaKindOf } from '../../../core/files/media'
+import { MediaViewer } from './MediaViewer'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { sessionKindOf } from '../../../core/sessions/kind'
 import type { RecordStatus } from '../../../core/understanding/types'
@@ -64,6 +66,7 @@ export function PaneGrid({
   onDropTabIntoPane,
   onRestart,
   onOpenUrl,
+  onOpenPath,
   onSelectTab,
   onCloseTab,
   onNewInGroup,
@@ -114,6 +117,9 @@ export function PaneGrid({
   onRestart: (s: SessionInfo) => void
   /** A URL link in a session terminal was activated — App's link rule routes it. */
   onOpenUrl: (url: string, ev: MouseEvent) => void
+  /** A path a session resolved to a real file was activated — a terminal link, or a file a
+   *  SendUserFile row names. App opens media in the viewer and anything else as a file tab. */
+  onOpenPath: (path: string, at?: { line?: number; col?: number }) => void
   /** A tab was clicked — of any kind. App activates it in the tree, which also moves the focus there */
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
@@ -280,6 +286,8 @@ export function PaneGrid({
                   active={visible && pane != null && pane.id === activePaneId}
                   rollState={rollStates[s.id] ?? null}
                   schedState={schedStates[s.id] ?? null}
+                  cwd={s.cwd}
+                  onOpenPath={onOpenPath}
                 />
               </div>
             ) : (
@@ -291,6 +299,7 @@ export function PaneGrid({
                   schedState={schedStates[s.id] ?? null}
                   active={visible && pane != null && pane.id === activePaneId}
                   onOpenUrl={onOpenUrl}
+                  onOpenFile={onOpenPath}
                 />
               </div>
             )}
@@ -423,6 +432,30 @@ export function PaneGrid({
           </div>
         )
       })}
+      {/* The media viewer slot: the record slot's rule, drawn only while active. A video that is not
+          on screen stops rather than playing on unheard, and coming back is a mount, which is when
+          MediaViewer re-reads the file's mtime. The tab id is the whole record (tabId's mediaTab). */}
+      {paneLeaves.map((l) => {
+        const rect = rects.get(l.id)
+        const ref = parseTab(l.activeTabId)
+        if (!rect || ref?.kind !== 'media') return null
+        return (
+          <div
+            key={`media-${l.id}`}
+            className="terminal-slot"
+            style={{
+              display: 'flex',
+              left: `${rect.x}%`,
+              width: `${rect.w}%`,
+              top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+              height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+            }}
+            onMouseDown={() => onFocusPane(l.id)}
+          >
+            <MediaViewer key={ref.id} path={ref.id} />
+          </div>
+        )
+      })}
       {/* The pane bodies' drop targets — one per pane, whichever kind of tab that pane is showing. They
           cannot live on the slots: a session slot is display:none unless it is the active tab, so a pane
           showing a file had no target, and putting them on the editor slot as well would give one pane two
@@ -517,6 +550,10 @@ export function PaneGrid({
                 // (UnderstandingIcons' RECORD_GLYPH_COLOR)
                 glyphColor: status ? RECORD_GLYPH_COLOR[status] : null
               }
+            }
+            if (ref?.kind === 'media') {
+              const title = ref.id.split(/[\\/]/).pop() || t('media.tab.untitled')
+              return { tabId, kind: 'media', path: ref.id, title, video: mediaKindOf(ref.id) === 'video' }
             }
             if (ref?.kind === 'app') {
               const info = appTabInfo(ref.id)

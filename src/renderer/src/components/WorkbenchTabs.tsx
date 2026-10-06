@@ -3,7 +3,7 @@ import type { SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Globe, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
+import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
  *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
@@ -100,6 +100,14 @@ export type WorkbenchTab =
       running: boolean
       /** The desktop still exists. */
       open: boolean
+    }
+  | {
+      tabId: string
+      kind: 'media'
+      /** The file shown — the tab id carries it (core/panes/tabId's mediaTab), so there is no record */
+      path: string
+      title: string
+      video: boolean
     }
   | {
       tabId: string
@@ -231,7 +239,7 @@ export function WorkbenchTabs({
                 }
               : undefined
           }
-          title={tab.kind === 'file' ? tab.path : tab.kind === 'browser' ? tab.url : tab.title}
+          title={tab.kind === 'file' || tab.kind === 'media' ? tab.path : tab.kind === 'browser' ? tab.url : tab.title}
           // 이름을 고치는 동안은 끌 수 없다 — 입력칸 안에서 글자를 끄는 것이 탭 이동이 되어 버린다
           draggable={renamingTabId !== tab.tabId}
           onClick={() => onSelect(tab.tabId)}
@@ -273,6 +281,10 @@ export function WorkbenchTabs({
                 <Monitor size={11} />
               </span>
             )
+          ) : tab.kind === 'media' ? (
+            <span className="tab-glyph" aria-hidden="true">
+              {tab.video ? <Film size={11} /> : <ImageIcon size={11} />}
+            </span>
           ) : tab.kind === 'record' ? (
             // Same glyph as the sidebar row's .hiw-g — the same record must not wear two different
             // labels in two places. When the status is unknown, no span is left either — an empty
