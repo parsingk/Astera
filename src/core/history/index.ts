@@ -1,4 +1,5 @@
 import { watch as fsWatch } from 'node:fs'
+import { dirIdentity, namesAPath } from '../files/watchedDir'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
 import chokidar from 'chokidar'
@@ -115,7 +116,9 @@ export class HistoryIndex {
   constructor(
     private getAccounts: () => Account[],
     private descriptors: Record<Provider, ProviderDescriptor> = makeDescriptors(process.platform),
-    cwdCache?: CwdStore
+    cwdCache?: CwdStore,
+    /** `watch`: a test seam, node's fs.watch when left out. `log`: where a closed watch is told. */
+    private watchDeps: { watch?: typeof fsWatch; log?: (m: string) => void } = {}
   ) {
     this.store = cwdCache ?? new MemoryCwdStore()
   }
@@ -447,11 +450,33 @@ export class HistoryIndex {
   private async startWatcher(): Promise<void> {
     // Two accounts can share a configDir; chokidar deduped its own paths, a handle per root does not
     const roots = [...new Set(this.getAccounts().map((a) => this.scanRoot(a)))]
+    const watch = this.watchDeps.watch ?? fsWatch
+    const log = this.watchDeps.log ?? ((m: string) => console.warn(m))
     for (const root of roots) {
+      // Read before the handle opens (watchedDir.ts): a root replaced in between reads as replaced.
+      const rootId = dirIdentity(root)
       try {
-        const w = fsWatch(root, { recursive: true }, (_type, filename) => {
+        const w = watch(root, { recursive: true }, (_type, filename) => {
           // filename is relative to the root, and null when the platform cannot name the entry
-          if (filename !== null) this.onFileEvent(path.join(root, String(filename)))
+          if (filename === null) return
+          const name = String(filename)
+          // **The root itself was removed** (a config folder deleted under the app): win32 then fires
+          // events named after the root's own path without a pause, and each would drop the project
+          // cache and send an update. Never an entry, so never one; a root that is no longer the one
+          // opened closes its handle, and the next reload() (an account change) registers it again.
+          if (namesAPath(name)) {
+            if ((rootId === null || dirIdentity(root) !== rootId) && this.watchers.includes(w)) {
+              log(`history: the watch on ${root} closed: the folder was removed or replaced`)
+              this.watchers = this.watchers.filter((x) => x !== w)
+              try {
+                w.close()
+              } catch {
+                /* already gone */
+              }
+            }
+            return
+          }
+          this.onFileEvent(path.join(root, name))
         })
         w.on('error', () => {
           /* watcher failure → fall back to the UI's manual refresh. The app keeps working */

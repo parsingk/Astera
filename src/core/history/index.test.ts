@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, watch as fsWatch } from 'node:fs'
 import os from 'node:os'
+import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import type { Account, Provider } from '../types'
 import { HistoryIndex } from './index'
@@ -949,4 +950,57 @@ describe('HistoryIndex (lazy)', () => {
     })
   })
 
+})
+
+// A scan root removed under its recursive handle (watchedDir.ts): win32 then fires events named after
+// the root's own path without a pause, and each one used to drop the whole project cache and send an
+// update. The handle is closed at the first of them; reload() registers the roots again.
+describe('HistoryIndex: a scan root removed under its watch', () => {
+  function fakeWatch() {
+    const made: Array<{ fire(ev: string, name: string): void; closes: number }> = []
+    const watch = ((_root: string, _opts: unknown, listener: (ev: string, name: string | null) => void) => {
+      const w = Object.assign(new EventEmitter(), {
+        closes: 0,
+        close() {
+          w.closes++
+        },
+        fire: (ev: string, name: string) => listener(ev, name)
+      })
+      made.push(w)
+      return w
+    }) as unknown as typeof fsWatch
+    return { made, watch }
+  }
+
+  it('closes the handle at the first event after the root went, sends no update for that storm, and reload opens it again', async () => {
+    const a = account('acc-a')
+    await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+    const { made, watch } = fakeWatch()
+    const logs: string[] = []
+    index = new HistoryIndex(() => [a], undefined, undefined, { watch, log: (m) => logs.push(m) })
+    await index.startBackground()
+    expect(made).toHaveLength(1)
+    const updated = vi.fn()
+    index.onUpdated = updated
+    const root = path.join(a.configDir, 'projects')
+    await fs.rm(root, { recursive: true, force: true })
+    for (let i = 0; i < 1000; i++) made[0].fire('rename', `\\\\?\\${root}`)
+    expect(made[0].closes).toBe(1)
+    expect(logs.filter((l) => l.includes('was removed or replaced'))).toHaveLength(1)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(updated).not.toHaveBeenCalled()
+    await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+    await index.reload()
+    expect(made).toHaveLength(2)
+  })
+
+  it('keeps the handle for a path-named event while the root is still the one it opened', async () => {
+    const a = account('acc-a')
+    await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+    const { made, watch } = fakeWatch()
+    index = new HistoryIndex(() => [a], undefined, undefined, { watch, log: () => {} })
+    await index.startBackground()
+    made[0].fire('rename', path.join(a.configDir, 'projects'))
+    expect(made[0].closes).toBe(0)
+  })
 })

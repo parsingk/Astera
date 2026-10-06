@@ -1416,8 +1416,10 @@ export interface CoreApi {
     /** A session terminal's path link (or a SendUserFile row's path): `target` as it is when absolute,
      *  against `cwd` when relative; the absolute path only when a regular file is there. The one call
      *  here without the path guard — it reads nothing (main/run/resolveLink.ts resolveExistingFile).
-     *  A media file it answers becomes loadable by the media viewer (media.* below). */
-    resolveLink(cwd: string, target: string): Promise<{ path: string } | null>
+     *  A media file it answers becomes loadable by the media viewer (media.* below).
+     *  `sessionId`, when the link is in a session, makes a relative target try the agent's current
+     *  directory (from that session's statusLine payload) before `cwd`. */
+    resolveLink(cwd: string, target: string, sessionId?: string): Promise<{ path: string } | null>
   }
   /** The media viewer tab (components/MediaViewer.tsx). Every call accepts only a media file that
    *  files.resolveLink answered in this run of the app (main/media/allowlist.ts). */

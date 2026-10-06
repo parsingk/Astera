@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, watch } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
 import { StatusLineManager } from './statusline'
+import { dirIdentity } from '../files/watchedDir'
 
 const account: Account = {
   id: 'a1', label: 't', configDir: path.join(os.tmpdir(), 'astera-none-config'), color: '#fff',
@@ -357,6 +358,34 @@ describe('StatusLineManager.ensureFiles (the Host half)', () => {
     await fs.writeFile(payload, '{}')
     await mgr.ensureFiles()
     expect(await fs.readFile(payload, 'utf8')).toBe('{}')
+  })
+
+  // A Host that outlives the app holds a watch on this folder. Removing the folder under that watch
+  // left it pending delete on win32, the mkdir after it did nothing, and the folder was gone for the
+  // whole app session once the watch let go: every hook event of it was dropped (watchedDir.ts).
+  it('startupCleanup empties the hook events folder in place, under a watch held on it', async () => {
+    const mgr = new StatusLineManager(dir)
+    await fs.mkdir(mgr.hookEventsDir, { recursive: true })
+    await fs.writeFile(path.join(mgr.hookEventsDir, 'old.jsonl'), 'x\n')
+    await fs.writeFile(path.join(mgr.hookEventsDir, 'older.jsonl'), 'y\n')
+    const before = dirIdentity(mgr.hookEventsDir)
+    const held = watch(mgr.hookEventsDir, () => {})
+    held.on('error', () => {})
+    try {
+      await mgr.startupCleanup()
+      // The same folder, readable, and empty.
+      expect(dirIdentity(mgr.hookEventsDir)).toBe(before)
+      expect(await fs.readdir(mgr.hookEventsDir)).toEqual([])
+    } finally {
+      held.close()
+    }
+  })
+
+  it('startupCleanup makes the hook events folder when it is missing', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.startupCleanup()
+    expect(dirIdentity(mgr.hookEventsDir)).not.toBeNull()
+    expect(await fs.readdir(mgr.hookEventsDir)).toEqual([])
   })
 
   it('startupCleanup empties the hook events folder, as init always has', async () => {

@@ -4,6 +4,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Account } from '../types'
 import { hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
+import { dirIdentity } from '../files/watchedDir'
 import { HOOK_EVENT_AT } from '../hooks/eventTime'
 import { renameRetrying } from '../renameRetry'
 
@@ -176,7 +177,9 @@ export class StatusLineManager {
   constructor(
     private userDataDir: string,
     /** The node that will run the capture script. The default matches prior behavior (a PATH lookup). */
-    private nodePath: string = 'node'
+    private nodePath: string = 'node',
+    /** Where a folder it cannot use is told. */
+    private log: (m: string) => void = (m) => console.warn(m)
   ) {
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
     this.settingsFile = path.join(userDataDir, 'astera-statusline-settings.json')
@@ -322,8 +325,26 @@ export class StatusLineManager {
     // Hook events are a queue the app drains while it runs, so anything still sitting here was
     // written while it was away and is stale on arrival — a Notification from hours ago would push a
     // session into `waiting` over whatever is true now. Dropped, not replayed.
-    await fs.rm(this.hookEventsDir, { recursive: true, force: true }).catch(() => {})
+    //
+    // **Emptied in place, never removed.** A Host that outlives the app holds a watch on this folder,
+    // and on win32 removing a watched folder leaves it pending delete: the mkdir after it reported
+    // success without making anything, and once the Host let go the folder was gone for the whole app
+    // session, every hook event of it dropped by the capture script's swallowed write error
+    // (watchedDir.ts has the measurement). One file that will not delete costs only itself.
     await fs.mkdir(this.hookEventsDir, { recursive: true })
+    let names: string[] = []
+    try {
+      names = await fs.readdir(this.hookEventsDir)
+    } catch {
+      /* checked below */
+    }
+    for (const name of names) {
+      if (name.endsWith('.jsonl')) await fs.rm(path.join(this.hookEventsDir, name), { force: true }).catch(() => {})
+    }
+    // A folder that cannot be read now (pending delete under an older Host's watch) loses every hook
+    // event the sessions write: said, and not fatal to the app's start.
+    if (dirIdentity(this.hookEventsDir) === null)
+      this.log(`statusline: the hook events folder ${this.hookEventsDir} cannot be used; hook events are lost until it can`)
     // The session payloads are NOT cleared here, and used to be. They are the latest snapshot rather
     // than a queue, and the Host means a session outlives the app that started it: wiping the folder
     // took the transcript path away from every session that survived a restart, so the conversation

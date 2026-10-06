@@ -39,8 +39,8 @@ export function cachedResolver(
  *  Path links exist only when `resolvePath` is given, and a target is a link only when it resolves —
  *  a link that cannot be followed is worse than no link. The run console resolves through
  *  run.resolveLink (its run's cwd, guarded, source roots tried); the session and project terminals
- *  through files.resolveLink (their own cwd, one candidate, any regular file). Returns the dispose
- *  function. */
+ *  through files.resolveLink (a session's agent directory then its cwd, or a project terminal's cwd;
+ *  any regular file). Returns the dispose function. */
 export function attachConsoleLinks(
   term: Terminal,
   opts: {

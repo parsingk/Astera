@@ -430,13 +430,14 @@ export function ConversationPane({
   // Stable across renders (the opener and the cwd are read through a ref): App hands a new onOpenPath
   // every render, and a context value that changed with it would re-render every tool row in the
   // thread for nothing — re-renders around assistant-ui's composer are what eat typed characters.
-  const openPathRef = useRef({ cwd, onOpenPath });
-  openPathRef.current = { cwd, onOpenPath };
+  const openPathRef = useRef({ cwd, onOpenPath, sessionId });
+  openPathRef.current = { cwd, onOpenPath, sessionId };
   const canOpen = onOpenPath !== undefined;
   const openSentFile = useCallback(
     (file: string): void => {
-      const { cwd: base, onOpenPath: open } = openPathRef.current;
-      void window.api.files.resolveLink(base ?? "", file).then(
+      const { cwd: base, onOpenPath: open, sessionId: sid } = openPathRef.current;
+      // The session id: a relative path is tried under the agent's current directory first
+      void window.api.files.resolveLink(base ?? "", file, sid).then(
         (r) => (r && open ? open(r.path) : toast.error(t("media.error.cannotOpen"))),
         () => toast.error(t("media.error.cannotOpen"))
       );

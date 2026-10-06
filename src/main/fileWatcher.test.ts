@@ -213,4 +213,37 @@ describe('FileWatcher — win32 는 기본 재귀 감시 하나를 쓴다', () =
     expect(fakes).toHaveLength(1)
     await w.unwatch()
   })
+
+  // A root removed under the handle (watchedDir.ts): win32 then fires rename events named after the
+  // root's own path without a pause, and each one used to become a path joined onto the root and an
+  // lstat. The handle is closed at the first of them, and the next watch of the root opens a new one.
+  it('closes the handle when the root itself is removed, reports nothing for that storm, and reopens on the next watch', async () => {
+    const root = await tmpRoot()
+    const native = fakeNative()
+    const logs: string[] = []
+    const send = vi.fn<(b: FileChangeBatch) => void>()
+    const w = new FileWatcher(send, (m) => logs.push(m), { platform: 'win32', watchNative: native.watch })
+    await w.watch(root)
+    await fs.rm(root, { recursive: true, force: true })
+    for (let i = 0; i < 1000; i++) native.fire('rename', `\\\\?\\${root}`)
+    expect(native.closed).toBe(1)
+    expect(logs.filter((l) => l.includes('was removed or replaced'))).toHaveLength(1)
+    await fs.mkdir(root)
+    await w.watch(root)
+    expect(native.opened).toEqual([root, root])
+    await settle(w)
+    expect(send).not.toHaveBeenCalled()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('keeps the handle for a path-named event while the root is still the one it opened', async () => {
+    const root = await tmpRoot()
+    const native = fakeNative()
+    const w = new FileWatcher(vi.fn(), undefined, { platform: 'win32', watchNative: native.watch })
+    await w.watch(root)
+    native.fire('rename', root)
+    expect(native.closed).toBe(0)
+    await w.unwatch()
+    await fs.rm(root, { recursive: true, force: true })
+  })
 })
