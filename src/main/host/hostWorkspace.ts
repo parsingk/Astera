@@ -3,7 +3,8 @@
 // this keeps the latest per session, forwards each to the window, asks for the live ones after every
 // handshake (an app that attaches later), and closes every tab when the connection goes. It never
 // throws, the hostDriver.ts rule. ipc.ts only wires it.
-import { HOST_FEATURE_WORKSPACE, type HostMessage, type WorkspaceEvent, type WorkspaceFrame, type WorkspaceSummary } from '../../core/host/protocol'
+import { HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKSPACE_SIZE, type HostMessage, type WorkspaceEvent, type WorkspaceFrame, type WorkspaceSummary } from '../../core/host/protocol'
+import type { AppSize } from '../../core/workspace/size'
 
 export interface HostWorkspaceView {
   pushed(m: HostMessage): void
@@ -12,6 +13,9 @@ export interface HostWorkspaceView {
   current(): WorkspaceSummary[]
   stop(sessionId: string): Promise<boolean>
   close(sessionId: string): Promise<boolean>
+  /** The mirror tab's size in CSS pixels, or null when the tab closed (HOST_FEATURE_WORKSPACE_SIZE).
+   *  False when the Host cannot size its app windows, or refused. */
+  size(sessionId: string, size: AppSize | null): Promise<boolean>
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -43,9 +47,10 @@ export function createHostWorkspaceView(d: {
   log(m: string): void
 }): HostWorkspaceView {
   const live = new Map<string, WorkspaceSummary>()
-  const has = (): boolean => {
+  const has = (feature: string = HOST_FEATURE_WORKSPACE): boolean => {
     try {
-      return d.status().features.includes(HOST_FEATURE_WORKSPACE)
+      const features = d.status().features
+      return features.includes(HOST_FEATURE_WORKSPACE) && features.includes(feature)
     } catch {
       return false
     }
@@ -119,6 +124,16 @@ export function createHostWorkspaceView(d: {
     },
     current: () => [...live.values()].map((w) => ({ ...w })),
     stop: (sessionId) => button('workspace-stop', sessionId, 'stopped'),
-    close: (sessionId) => button('workspace-close', sessionId, 'closed')
+    close: (sessionId) => button('workspace-close', sessionId, 'closed'),
+    size: async (sessionId, size) => {
+      if (!has(HOST_FEATURE_WORKSPACE_SIZE)) return false
+      try {
+        const r = await d.call({ cmd: 'workspace-size', args: { sessionId, size }, sessionId: '' })
+        return r.status === 200
+      } catch (err) {
+        d.log(`host: workspace-size failed: ${String(err)}`)
+        return false
+      }
+    }
   }
 }

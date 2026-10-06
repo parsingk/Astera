@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { appTab, sessionTab } from '../../../core/panes/tabId'
 import { createGroup, leaves, type PaneNode } from '../../../core/panes/tree'
-import { applyWorkspaceEvent, mirrorStatus, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './workspaceMirror'
+import { applyWorkspaceEvent, createSizeReporter, mirrorStatus, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './workspaceMirror'
 
 const frame = { jpeg: '/9j/', width: 4, height: 3, at: 1 }
 
@@ -91,5 +91,60 @@ describe('placing the mirror tabs', () => {
     const plain = createGroup(sessionTab('s1'))
     expect(removeAppTab(plain, 's1')).toBe(plain)
     expect(removeAppTab(null, 's1')).toBeNull()
+  })
+})
+
+describe('createSizeReporter', () => {
+  const rigReporter = () => {
+    const sent: Array<{ width: number; height: number } | null> = []
+    const timers: Array<{ fn: () => void; live: boolean }> = []
+    const r = createSizeReporter((s) => sent.push(s), {
+      set: (fn) => {
+        const t = { fn, live: true }
+        timers.push(t)
+        return t
+      },
+      clear: (h) => {
+        ;(h as { live: boolean }).live = false
+      }
+    })
+    const fire = (): void => {
+      for (const t of timers.splice(0)) if (t.live) t.fn()
+    }
+    return { r, sent, fire }
+  }
+
+  it('sends the size once a resize has settled: the last of a burst, clamped', () => {
+    const { r, sent, fire } = rigReporter()
+    r.measured({ width: 900, height: 600 })
+    r.measured({ width: 1100, height: 650 })
+    r.measured({ width: 1577.6, height: 988.4 })
+    expect(sent).toEqual([])
+    fire()
+    expect(sent).toEqual([{ width: 1578, height: 988 }])
+  })
+
+  it('sends nothing for the size it last sent, or for a hidden tab', () => {
+    const { r, sent, fire } = rigReporter()
+    r.measured({ width: 1200, height: 700 })
+    fire()
+    r.measured({ width: 1200.3, height: 700 })
+    fire()
+    r.measured({ width: 0, height: 0 })
+    fire()
+    expect(sent).toEqual([{ width: 1200, height: 700 }])
+  })
+
+  it('a closed tab takes its size back, and one that never sent one sends nothing', () => {
+    const a = rigReporter()
+    a.r.measured({ width: 1200, height: 700 })
+    a.fire()
+    a.r.dispose()
+    expect(a.sent).toEqual([{ width: 1200, height: 700 }, null])
+    const b = rigReporter()
+    b.r.measured({ width: 1200, height: 700 })
+    b.r.dispose()
+    b.fire()
+    expect(b.sent).toEqual([])
   })
 })

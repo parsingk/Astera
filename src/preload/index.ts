@@ -386,7 +386,8 @@ const api = {
   workspace: {
     list: invoke('workspace.list'),
     stop: invoke('workspace.stop'),
-    close: invoke('workspace.close')
+    close: invoke('workspace.close'),
+    size: invoke('workspace.size')
   },
   conversation: {
     open: invoke('conversation.open'),

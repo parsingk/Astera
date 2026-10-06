@@ -3080,6 +3080,8 @@ export default function App(): React.JSX.Element {
             })
             .catch(fail)
         }
+        // A size the Host could not take leaves the app at its own size: nothing to tell the person.
+        onSize={(size) => void window.api.workspace.size(ref.id, size).catch(() => undefined)}
       />
     )
   }

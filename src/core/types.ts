@@ -1943,6 +1943,9 @@ export type RendererApi = CoreApi & {
     stop(sessionId: string): Promise<boolean>
     /** The mirror's Close: kills the app and closes its desktop. */
     close(sessionId: string): Promise<boolean>
+    /** The mirror tab's size in CSS pixels, which the Host gives the app's window; null when the tab
+     *  closed. False when the Host cannot size app windows (src/core/workspace/size.ts). */
+    size(sessionId: string, size: { width: number; height: number } | null): Promise<boolean>
   }
   /** The conversation view's IPC surface (main/conversation.ts). `open` and `more` fail soft: null
    *  means the session has no transcript path yet, or the file could not be read — never an error,
