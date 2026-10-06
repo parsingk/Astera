@@ -368,3 +368,42 @@ describe('lastClaudeModelOf', () => {
     expect(lastClaudeModelOf([JSON.stringify({ type: 'user', message: { content: 'hi' } })])).toBeNull()
   })
 })
+
+// SendUserFile is how an agent hands the person a file (a rendered clip, a frame grid). Its input
+// keeps the paths in an array the generic first-string target never reaches, so the part carries
+// them on their own and the row can make each one a button (ToolRow.tsx). Input shape measured from
+// real transcripts: { files: string[], caption, status, display? }.
+describe('reduceTranscript — SendUserFile', () => {
+  const send = (input: unknown): ConvPart[] =>
+    reduceTranscript([
+      line({
+        type: 'assistant',
+        uuid: 'a1',
+        message: { content: [{ type: 'tool_use', id: 't1', name: 'SendUserFile', input }] }
+      })
+    ]).flatMap(toolParts)
+
+  it('carries the files, and keeps the caption as the target', () => {
+    const [p] = send({ files: ['/out/g1.mp4', '/out/g1_tile.png'], caption: 'G1 v3', status: 'normal' })
+    expect(p).toMatchObject({ kind: 'tool', name: 'SendUserFile', target: 'G1 v3', files: ['/out/g1.mp4', '/out/g1_tile.png'] })
+  })
+
+  it('drops entries that are not non-empty strings', () => {
+    const [p] = send({ files: ['/out/a.png', 3, '', null], caption: 'x' })
+    expect(p).toMatchObject({ files: ['/out/a.png'] })
+  })
+
+  it('no files array means no files field — the row stays an ordinary row', () => {
+    const [p] = send({ caption: 'x' })
+    expect(p).not.toHaveProperty('files')
+  })
+
+  it('another tool never carries files, even with a files array in its input', () => {
+    const [p] = send({ files: ['/a.png'] })
+    expect(p).toHaveProperty('files')
+    const other = reduceTranscript([
+      line({ type: 'assistant', uuid: 'a2', message: { content: [{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: '/a.ts', files: ['/b.png'] } }] } })
+    ]).flatMap(toolParts)
+    expect(other[0]).not.toHaveProperty('files')
+  })
+})

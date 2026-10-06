@@ -26,7 +26,7 @@ import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.a
  *  menu below changes on every key, so the menu must not be able to re-render this: its rows travel
  *  by context to a slot inside, and everything else this takes is stable. */
 const MemoThread = memo(Thread);
-import { ToolRow, ToolRowGroup } from "./ToolRow";
+import { SentFileOpenContext, ToolRow, ToolRowGroup } from "./ToolRow";
 import { ChatNotice, ExitedNotice, RunningNotice } from "./PendingBanner";
 import { BypassRetryDialog } from "./BypassRetryDialog";
 import { ModelControl, type ModelControlProps } from "./ModelControl";
@@ -71,6 +71,11 @@ export interface ConversationPaneProps {
    *  TerminalView shows them. */
   rollState?: RollStateEvent | null;
   schedState?: SchedStateEvent | null;
+  /** The session's cwd — what a relative path a SendUserFile row names resolves against. */
+  cwd?: string;
+  /** Opens a file a SendUserFile row names, once main has resolved it (App: media in the viewer,
+   *  anything else as a file tab). Absent, the row's file names are plain text. */
+  onOpenPath?: (path: string) => void;
 }
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -89,11 +94,15 @@ function toThreadPart(part: ConvPart, failure: FailureWording) {
   // ToolRow (./ToolRow.tsx) reads `result === undefined` as "still running". ConvPart's own
   // "no result yet" is `null`, so the nullish-coalescing here is what turns that corner —
   // passing `null` straight through would read as a finished, empty-result call instead.
+  // A SendUserFile part's files ride along for ToolRow's file buttons, added only when present: the
+  // args must be a JSON object, where a key holding undefined does not type-check.
+  const args: { [key: string]: string | string[] } = { target: part.target };
+  if (part.files) args.files = part.files;
   return {
     type: "tool-call" as const,
     toolCallId: part.id,
     toolName: part.name,
-    args: { target: part.target },
+    args,
     result: part.outcome ?? undefined,
   };
 }
@@ -409,9 +418,31 @@ export function ConversationPane({
   active = false,
   exited = false,
   rollState = null,
-  schedState = null
+  schedState = null,
+  cwd,
+  onOpenPath
 }: ConversationPaneProps): ReactNode {
   const { t } = useI18n();
+  // A SendUserFile row's file button (ToolRow.tsx). The path goes through files.resolveLink first even
+  // though it is already absolute: that is the one call that admits a media file to the viewer's
+  // allowlist, and it also answers whether the file is still there, so a deleted clip says so here
+  // instead of opening a tab that cannot load.
+  // Stable across renders (the opener and the cwd are read through a ref): App hands a new onOpenPath
+  // every render, and a context value that changed with it would re-render every tool row in the
+  // thread for nothing — re-renders around assistant-ui's composer are what eat typed characters.
+  const openPathRef = useRef({ cwd, onOpenPath });
+  openPathRef.current = { cwd, onOpenPath };
+  const canOpen = onOpenPath !== undefined;
+  const openSentFile = useCallback(
+    (file: string): void => {
+      const { cwd: base, onOpenPath: open } = openPathRef.current;
+      void window.api.files.resolveLink(base ?? "", file).then(
+        (r) => (r && open ? open(r.path) : toast.error(t("media.error.cannotOpen"))),
+        () => toast.error(t("media.error.cannotOpen"))
+      );
+    },
+    [t]
+  );
   /** This session's whole state — status, the request it is waiting on, its model, the last turn's
    *  error — folded from `chat.state` and the `chat:event` stream (hooks/useChatState.ts). Null until
    *  that first answer lands. */
@@ -1448,6 +1479,7 @@ export function ConversationPane({
 
 
   return (
+    <SentFileOpenContext.Provider value={canOpen ? openSentFile : null}>
     <div
       ref={paneRef}
       data-slot="conversation-pane"
@@ -1519,5 +1551,6 @@ export function ConversationPane({
         />
       )}
     </div>
+    </SentFileOpenContext.Provider>
   );
 }

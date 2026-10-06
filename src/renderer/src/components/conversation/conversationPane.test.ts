@@ -77,6 +77,18 @@ describe('toThreadMessages', () => {
     expect(runningPart.result).not.toBeNull()
   })
 
+  // ToolRow draws a SendUserFile row's files as buttons; they reach it only through args
+  it("hands a SendUserFile part's files to the row in its args", () => {
+    const [message] = toThreadMessages([
+      {
+        id: 't1',
+        role: 'assistant',
+        parts: [{ kind: 'tool', id: 'tool-1', name: 'SendUserFile', target: 'G1 v3', outcome: null, files: ['/out/g1.mp4'] }]
+      }
+    ])
+    expect((message.content[0] as { args: unknown }).args).toEqual({ target: 'G1 v3', files: ['/out/g1.mp4'] })
+  })
+
   it('keeps a text part and a tool part in the order the turn held them', () => {
     const turn: ConvTurn = {
       id: 'turn-2',
