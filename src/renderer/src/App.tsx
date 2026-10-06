@@ -119,7 +119,8 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { placeTab } from '../../core/panes/place'
+import { placeMediaTab, placeTab } from '../../core/panes/place'
+import { mediaKindOf } from '../../core/files/media'
 import { sessionKindOf } from '../../core/sessions/kind'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
@@ -737,6 +738,8 @@ export default function App(): React.JSX.Element {
   // and this tab's project could not be answered, from the tree string alone (see RecordTab's comment
   // in WorkbenchTabs.tsx).
   const [recordTabs, setRecordTabs] = useState<RecordTab[]>([])
+  /** Media tab id → reload nonce (openMedia bumps it when a link names an already-open file) */
+  const [mediaNonces, setMediaNonces] = useState<Record<string, number>>({})
   /** Preview (browser) tabs. Renderer-only, like fileTabs; the page state lives in the mounted webview */
   const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([])
   const browserTabsRef = useRef(browserTabs)
@@ -860,7 +863,9 @@ export default function App(): React.JSX.Element {
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' ? activeTabId : null
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' || activeTab?.kind === 'app' || activeTab?.kind === 'media'
+      ? activeTabId
+      : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
    *  render-time values (via closeFileTab), so a key listener registered once that called a captured
    *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
@@ -1770,6 +1775,30 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  /** Opens the media viewer on `path`, or focuses the tab already showing it (placeMediaTab). Needs no
+   *  project, unlike openFile: the viewer reads nothing through the project guard, and an agent's
+   *  output folder is rarely a project. The path must have come from files.resolveLink or
+   *  run.resolveLink — that is what lets main serve it (main/media/allowlist.ts). */
+  const openMedia = (path: string): void => {
+    const placed = placeMediaTab(layoutRef.current, path, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+    // A second click on a link to an open file is how the person asks for the new version: its
+    // viewer re-reads the stat on the bump and reloads if the file changed
+    const reopened = placed.reopened
+    if (reopened) setMediaNonces((prev) => ({ ...prev, [reopened]: (prev[reopened] ?? 0) + 1 }))
+  }
+
+  /** A resolved path link (a console, a terminal, a SendUserFile row): media goes to the viewer, any
+   *  other file to an ordinary file tab at the line the output named. */
+  const openLinkedPath = (path: string, at?: { line?: number; col?: number }): void => {
+    if (mediaKindOf(path)) {
+      openMedia(path)
+      return
+    }
+    openFile(path, at?.line === undefined ? undefined : { line: at.line, col: at.col })
+  }
+
   /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .run-host가 통째로
    *  언마운트되므로, 이 경로가 없으면 되돌리기 이력이 거기서 끊긴다(세션 탭은 숨기기만 해서 안 끊긴다).
    *
@@ -1907,6 +1936,13 @@ export default function App(): React.JSX.Element {
       setBrowserTabs((prev) => prev.filter((x) => x.id !== tabId))
       setBrowserLoading(({ [tabId]: _l, ...rest }) => rest)
       setBrowserNonce(({ [tabId]: _n, ...rest }) => rest)
+      dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'media') {
+      // The tab id is the whole record (tabId's mediaTab): dropping it, and its reload nonce, is the
+      // whole close; the viewer's slot unmounts with it
+      setMediaNonces(({ [tabId]: _n, ...rest }) => rest)
       dropTabFromTree(tabId)
       return
     }
@@ -4324,6 +4360,8 @@ export default function App(): React.JSX.Element {
                 onDragTabChange={setDragTabId}
                 onDropTabInBar={dropTabInGroup}
                 onOpenUrl={openUrl}
+                onOpenPath={openLinkedPath}
+                mediaNonces={mediaNonces}
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
@@ -4405,10 +4443,11 @@ export default function App(): React.JSX.Element {
                     onStopRun={runStop}
                     onRerun={(configId) => runStart(configId)}
                     onDismissRun={runDismiss}
-                    onOpenFile={(path, at) => openFile(path, at.line === undefined ? undefined : { line: at.line, col: at.col })}
+                    onOpenFile={openLinkedPath}
                     onOpenUrl={openUrl}
                     onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
                     terminals={terminals}
+                    terminalCwd={bottomRoot}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}
                     onNewTerminal={() => void newTerminal()}

@@ -29,6 +29,7 @@ export function BottomPanel({
   onOpenUrl,
   onOpenPreview,
   terminals,
+  terminalCwd,
   activeTab,
   onSelectTab,
   onNewTerminal,
@@ -51,13 +52,16 @@ export function BottomPanel({
   onRerun: (configId: string) => void
   /** Drop a finished run — the tab's ✕. Only ever offered on a finished run, so a live run cannot be lost here. */
   onDismissRun: (runId: string) => void
-  /** A path link in a console was activated — App opens the file at that line */
+  /** A path link in a console or a terminal was activated — App opens the file at that line, or a
+   *  media file in the viewer */
   onOpenFile: (path: string, at: { line?: number; col?: number }) => void
   /** A URL link in a console or a terminal was activated — App's link rule routes it. */
   onOpenUrl: (url: string, ev: MouseEvent) => void
   /** Open a running server's address in a preview tab — the run tab's globe button. */
   onOpenPreview: (url: string) => void
   terminals: TerminalBuffer[]
+  /** The folder the terminals were opened in — a relative path link in one resolves against it */
+  terminalCwd: string | null
   activeTab: string
   onSelectTab: (tab: string) => void
   onNewTerminal: () => void
@@ -219,7 +223,9 @@ export function BottomPanel({
               initialBuffer={term.buffer}
               clearNonce={clearNonces[term.id] ?? 0}
               active={activeTab === term.id}
+              cwd={terminalCwd}
               onOpenUrl={onOpenUrl}
+              onOpenFile={onOpenFile}
             />
           </div>
         ))}

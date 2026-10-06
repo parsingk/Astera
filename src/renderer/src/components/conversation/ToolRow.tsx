@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentType, PropsWithChildren, ReactNode } from "react";
+import { createContext, useContext, type ComponentType, type PropsWithChildren, type ReactNode } from "react";
 import {
   useAuiState,
   type ToolCallMessagePartComponent,
@@ -146,10 +146,20 @@ export function outcomeText(t: (key: MessageKey) => string, outcome: ConvToolOut
   return outcome.detail ? `${failed} · ${outcome.detail}` : failed;
 }
 
+/** How a SendUserFile row opens one of its files: ConversationPane provides it (resolving the path
+ *  through main first, which is what lets the media viewer load it). A context rather than a prop
+ *  because ToolRow is handed to assistant-ui as a component and rendered by it, with only the tool
+ *  call's own data. null — no opener — leaves the file names as plain text. */
+export const SentFileOpenContext = createContext<((file: string) => void) | null>(null);
+
+/** A file name, not the whole path — the path is in the tooltip. */
+const baseName = (p: string): string => p.slice(Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) + 1) || p;
+
 /** The one-line tool row: verb, target, outcome right-aligned. Registered as `ToolFallback` in
  *  `ThreadComponents` (Task 9 wires it) — the args/result shape is the contract Task 9's mapping
- *  produces from `ConvPart`'s tool variant (`src/core/history/convTypes.ts`). */
-export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolOutcome> = ({
+ *  produces from `ConvPart`'s tool variant (`src/core/history/convTypes.ts`). A SendUserFile row
+ *  shows its files in place of the target (args.files). */
+export const ToolRow: ToolCallMessagePartComponent<{ target: string; files?: string[] }, ConvToolOutcome> = ({
   toolName,
   args,
   result,
@@ -160,6 +170,8 @@ export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolO
   const label = result === undefined ? groupKeyOf(toolName) : verbKeyOf(toolName);
   const left = "key" in label ? t(label.key) : label.name;
   const target = shortenTarget(toolName, args.target);
+  const openFile = useContext(SentFileOpenContext);
+  const files = args.files ?? [];
 
   return (
     <div
@@ -167,9 +179,36 @@ export const ToolRow: ToolCallMessagePartComponent<{ target: string }, ConvToolO
       className="flex min-w-0 items-center gap-2 py-0.5 text-sm"
     >
       <span className="text-muted-foreground shrink-0">{left}</span>
-      <span className="min-w-0 flex-1 truncate" title={args.target}>
-        {target}
-      </span>
+      {files.length > 0 ? (
+        // SendUserFile: the files are what was sent, so they take the row; the caption becomes the
+        // tooltip. Each is a button when there is an opener, so the person can play the clip here.
+        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden" title={args.target}>
+          {files.map((f, i) =>
+            openFile ? (
+              <button
+                key={i}
+                type="button"
+                data-slot="conversation-sent-file"
+                // The markdown link's look (markdown-text.tsx), so a clickable name reads as a link
+                className="text-primary hover:text-primary/80 min-w-0 shrink cursor-pointer truncate underline underline-offset-2"
+                title={f}
+                aria-label={t("conversation.sentFile.open", { name: baseName(f) })}
+                onClick={() => openFile(f)}
+              >
+                {baseName(f)}
+              </button>
+            ) : (
+              <span key={i} className="min-w-0 shrink truncate" title={f}>
+                {baseName(f)}
+              </span>
+            )
+          )}
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate" title={args.target}>
+          {target}
+        </span>
+      )}
       {result === undefined ? (
         // Words only. The pulsing dot that used to sit here said the same thing as the one the pane
         // now keeps at the end of the output for the whole time the CLI is working, and the two

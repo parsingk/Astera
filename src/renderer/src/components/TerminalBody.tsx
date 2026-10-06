@@ -28,13 +28,20 @@ export function TerminalBody({
   initialBuffer,
   clearNonce,
   active,
-  onOpenUrl
+  cwd,
+  onOpenUrl,
+  onOpenFile
 }: {
   id: string
   initialBuffer?: string
   clearNonce: number
   active: boolean
+  /** Where the shell was opened (the bottom panel's root) — what a relative path link resolves
+   *  against. null leaves only absolute paths as links. */
+  cwd: string | null
   onOpenUrl: (url: string, ev: MouseEvent) => void
+  /** A path link was activated — the path main resolved, and the line/column the output named */
+  onOpenFile: (path: string, at: { line?: number; col?: number }) => void
 }): React.JSX.Element {
   const { family } = useTerminalFont()
   const { theme } = useTheme()
@@ -43,6 +50,11 @@ export function TerminalBody({
   const fitRef = useRef<FitAddon | null>(null)
   const onOpenUrlRef = useRef(onOpenUrl)
   onOpenUrlRef.current = onOpenUrl
+  const onOpenFileRef = useRef(onOpenFile)
+  onOpenFileRef.current = onOpenFile
+  // Read through a ref by the link provider, which the construction effect builds once per id
+  const cwdRef = useRef(cwd)
+  cwdRef.current = cwd
 
   // deps is [id] only — initialBuffer is for a single replay at mount and is deliberately left out (with
   // it in, every time the buffer grows xterm gets recreated and the screen is wiped). Output after that
@@ -60,8 +72,15 @@ export function TerminalBody({
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(host)
-    // URLs in the output are links (paths are not — this terminal does not know its cwd, see terminalLinks.ts)
-    const disposeLinks = attachConsoleLinks(term, { onUrl: (url, ev) => onOpenUrlRef.current(url, ev) })
+    // URLs and paths in the output are links; a path is a link only when main finds a regular file
+    // there (files.resolveLink), relative ones against the folder the shell was opened in — the same
+    // rule as a session terminal (TerminalView), with the same blind spot after a `cd`
+    const disposeLinks = attachConsoleLinks(term, {
+      onUrl: (url, ev) => onOpenUrlRef.current(url, ev),
+      resolvePath: (target) =>
+        window.api.files.resolveLink(cwdRef.current ?? '', target).then((r) => r?.path ?? null, () => null),
+      onOpenFile: (path, at) => onOpenFileRef.current(path, at)
+    })
     fit.fit()
     termRef.current = term
     fitRef.current = fit

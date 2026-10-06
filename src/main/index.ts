@@ -8,6 +8,7 @@ import {
   shell,
   webContents,
   Notification,
+  protocol,
   // Squirrel.Mac itself, not electron-updater's wrapper around it. Only listened to — see the
   // staging block below for why its verdict has to be read separately from electron-updater's.
   autoUpdater as squirrel
@@ -27,6 +28,9 @@ import type { Theme } from '../core/theme/themes'
 import { pickInitialLang } from '../core/i18n/locale'
 import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
+import { handleMediaRequest } from './media/protocol'
+import { mediaAllowlist } from './media/allowlist'
+import { MEDIA_SCHEME } from '../core/files/media'
 import { isOwnDocument } from './navigationGuard'
 import { installPreviewGuards } from './preview/guest'
 import { AgentGuestRegistry } from './agentBrowser/registry'
@@ -102,6 +106,16 @@ if (shouldForceWaylandOzone(process.platform, process.env['WAYLAND_DISPLAY'], ex
 // in their dep blocks below recognises it in order to drop it: a chat session is handed a whole
 // message rather than keystrokes, so the Enter that follows the text on a pty has nothing to do there.
 const ENTER = String.fromCharCode(13)
+
+// The media viewer's scheme (main/media/protocol.ts). Privileges are fixed before the app is ready, so
+// this sits at the top level. `stream` is what lets <video> read it in ranges and seek; `standard`
+// gives the URL a host and an origin; `secure` keeps it from counting as mixed content under the dev
+// server's http:// page. No bypassCSP: the renderer has no CSP today, and if one is added it should
+// name this scheme in media-src/img-src rather than have it slip past. No supportFetchAPI either:
+// only <video> and <img> load it and nothing fetch()es it, so the privilege would only widen access.
+protocol.registerSchemesAsPrivileged([
+  { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, stream: true } }
+])
 
 let core: Core | null = null
 let codexRollingRef: CodexRollingCoordinator | null = null
@@ -420,6 +434,11 @@ app.whenReady().then(async () => {
   // Tells a Host this app is not attached to that an app is alive and may be running sessions the
   // Host cannot see, so it refuses to remove a worktree folder under them (core/host/pidFile.ts).
   markAppRunning(app.getPath('userData'), process.pid)
+  // Serves only media files the renderer resolved through files.resolveLink or run.resolveLink — a
+  // defence-in-depth allowlist, not a boundary against the renderer (main/media/allowlist.ts says
+  // what it does and does not bind). On the default session, which is the main
+  // window's; the preview webviews run in their own partitions and never see this scheme.
+  protocol.handle(MEDIA_SCHEME, (req) => handleMediaRequest(req, { allowed: (p) => mediaAllowlist.has(p) }))
   // Windows delivers a toast against the process's AppUserModelID and silently drops it when that
   // does not match a shortcut's — indistinguishable from the OS-refusal case DesktopNotifierDeps's
   // `show` already expects to swallow (design doc §9). Called unconditionally rather than guarded to

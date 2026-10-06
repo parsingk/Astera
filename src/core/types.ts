@@ -1413,6 +1413,21 @@ export interface CoreApi {
     pathForFile(file: File): string
     reveal(path: string): Promise<void> // show in the OS file manager
     countEntries(path: string): Promise<number> // child count for the delete confirmation (stops at 9999)
+    /** A session terminal's path link (or a SendUserFile row's path): `target` as it is when absolute,
+     *  against `cwd` when relative; the absolute path only when a regular file is there. The one call
+     *  here without the path guard — it reads nothing (main/run/resolveLink.ts resolveExistingFile).
+     *  A media file it answers becomes loadable by the media viewer (media.* below). */
+    resolveLink(cwd: string, target: string): Promise<{ path: string } | null>
+  }
+  /** The media viewer tab (components/MediaViewer.tsx). Every call accepts only a media file that
+   *  files.resolveLink answered in this run of the app (main/media/allowlist.ts). */
+  media: {
+    /** null when the file is gone or was never resolved. mtimeMs busts the viewer's cache. */
+    stat(path: string): Promise<{ mtimeMs: number; size: number } | null>
+    /** Opens the file in the OS's default app. */
+    openExternal(path: string): Promise<void>
+    /** Shows the file in the OS file manager. */
+    reveal(path: string): Promise<void>
   }
   git: {
     // Inline status in the tree. root is the root the explorer is showing (same casing as files.list) —

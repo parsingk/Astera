@@ -19,12 +19,15 @@ import {
   firstLeaf,
   groupOfTab,
   leafOf,
+  leaves,
   replaceTabId,
   splitAndMove,
   type PaneDir,
   type PaneLeaf,
   type PaneNode
 } from './tree'
+import { mediaTab, parseTab } from './tabId'
+import { foldPathCase, runtimePlatform } from '../files/paths'
 
 export type PlaceResult = {
   root: PaneNode
@@ -131,4 +134,45 @@ export function placeTab(
     return { ...intoGroup(root, tabId, opts.activePaneId), splitFellBack: true }
   }
   return intoGroup(root, tabId, opts.activePaneId)
+}
+
+/** A path as a comparison key: separators unified, `.` and `..` folded, case folded where the
+ *  filesystem ignores it. No node:path — this file is imported by the renderer. */
+function pathKey(p: string, platform: string): string {
+  const win = platform === 'win32'
+  const parts: string[] = []
+  for (const seg of (win ? p.replace(/\\/g, '/') : p).split('/')) {
+    if (seg === '.' || (seg === '' && parts.length > 0)) continue
+    if (seg === '..' && parts.length > 1) parts.pop()
+    else parts.push(seg)
+  }
+  return foldPathCase(parts.join('/'), platform)
+}
+
+/** Opens the media viewer tab for `path`, or focuses the one already showing that file — in whichever
+ *  pane it sits. The tab id carries the path as it was first opened; a later link that names the same
+ *  file in another spelling (an agent's lower-case drive letter, a relative link with `..`) finds that
+ *  tab by key rather than opening a second viewer of the same file. */
+export function placeMediaTab(
+  root: PaneNode | null,
+  path: string,
+  opts: PlaceOptions = {},
+  platform: string = runtimePlatform()
+): PlaceResult & { reopened: string | null } {
+  const key = pathKey(path, platform)
+  if (root) {
+    for (const leaf of leaves(root)) {
+      const hit = leaf.tabIds.find((id) => {
+        const ref = parseTab(id)
+        return ref?.kind === 'media' && pathKey(ref.id, platform) === key
+      })
+      if (hit) {
+        const act = activateTab(root, hit)
+        // `reopened` names the tab that was already there, so the caller can tell its viewer to look
+        // at the file again — a second click on a link is how the person asks for the new version
+        if (act) return { root: act.root, paneId: act.paneId, splitFellBack: false, reopened: hit }
+      }
+    }
+  }
+  return { ...placeTab(root, mediaTab(path), opts), reopened: null }
 }
