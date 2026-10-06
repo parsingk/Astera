@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mediaChanged, mediaKindOf, mediaMime, mediaUrl, mediaVersion, pathOfMediaUrl, resumeAt } from './media'
+import { mediaKindOf, mediaMime, mediaUrl, mediaVersion, pathOfMediaUrl, reloadStep, resumeAt, type ReloadState } from './media'
 
 describe('mediaKindOf', () => {
   it('names the video extensions the viewer plays', () => {
@@ -58,33 +58,6 @@ describe('mediaUrl / pathOfMediaUrl', () => {
   })
 })
 
-// The viewer re-reads the file's stat on mount, on window focus, when the same link is clicked again
-// and every few seconds while it is on screen; these decide what a fresh stat means.
-describe('mediaChanged', () => {
-  const st = (mtimeMs: number, size: number): { mtimeMs: number; size: number } => ({ mtimeMs, size })
-
-  it('the first stat is a change: there is nothing loaded yet', () => {
-    expect(mediaChanged(undefined, st(1, 10))).toBe(true)
-  })
-
-  it('the same mtime and size is not a change — a poll that finds nothing new reloads nothing', () => {
-    expect(mediaChanged(st(1, 10), st(1, 10))).toBe(false)
-  })
-
-  it('a new mtime or a new size is a change (the file was regenerated under the same name)', () => {
-    expect(mediaChanged(st(1, 10), st(2, 10))).toBe(true)
-    expect(mediaChanged(st(1, 10), st(1, 11))).toBe(true)
-  })
-
-  it('a file that came back after being gone is a change', () => {
-    expect(mediaChanged(null, st(1, 10))).toBe(true)
-  })
-
-  it('a file that is gone is not a reload — the viewer says it cannot open it instead', () => {
-    expect(mediaChanged(st(1, 10), null)).toBe(false)
-  })
-})
-
 describe('mediaVersion', () => {
   it('differs when only the size differs, so the URL changes with either', () => {
     expect(mediaVersion({ mtimeMs: 5.7, size: 1 })).not.toBe(mediaVersion({ mtimeMs: 5.7, size: 2 }))
@@ -106,5 +79,85 @@ describe('resumeAt', () => {
     expect(resumeAt(Number.NaN, 30)).toBe(0)
     expect(resumeAt(5, Number.NaN)).toBe(0)
     expect(resumeAt(5, Number.POSITIVE_INFINITY)).toBe(5) // a live-like stream with no known end still covers it
+  })
+})
+
+// A generator that rewrites a clip in place (ffmpeg -y truncates, then writes for seconds) shows a
+// different, half-written stat on every poll until it is done. Reloading on each of those flashed
+// "cannot open" or a short clip, and the position was lost to the half-written duration. A change is
+// therefore loaded only once two checks in a row see the same new stat. Replies are also tagged:
+// checks run concurrently (poll, focus, a second click) and an older reply must not win.
+describe('reloadStep', () => {
+  const st = (mtimeMs: number, size: number): { mtimeMs: number; size: number } => ({ mtimeMs, size })
+  const start: ReloadState = { loaded: undefined, pending: undefined, lastSeq: 0 }
+
+  it('the first stat loads at once — there is nothing on screen to keep', () => {
+    const r = reloadStep(start, 1, st(1, 10))
+    expect(r.action).toBe('reload')
+    expect(r.state.loaded).toEqual(st(1, 10))
+  })
+
+  it('a size-only change counts, the same as an mtime change', () => {
+    let s = reloadStep(start, 1, st(1, 10)).state
+    s = reloadStep(s, 2, st(1, 11)).state
+    expect(reloadStep(s, 3, st(1, 11)).action).toBe('reload')
+  })
+
+  it('the same stat as loaded does nothing', () => {
+    const s1 = reloadStep(start, 1, st(1, 10)).state
+    expect(reloadStep(s1, 2, st(1, 10)).action).toBe('none')
+  })
+
+  it('a file being rewritten reloads once, when two checks agree on the new stat', () => {
+    let s = reloadStep(start, 1, st(1, 1000)).state
+    const steps: string[] = []
+    for (const [seq, next] of [
+      [2, st(2, 0)], // truncated
+      [3, st(3, 400)], // half written
+      [4, st(4, 900)], // still going
+      [5, st(5, 1200)], // done
+      [6, st(5, 1200)] // and still the same: stable
+    ] as const) {
+      const r = reloadStep(s, seq, next)
+      steps.push(r.action)
+      s = r.state
+    }
+    expect(steps).toEqual(['none', 'none', 'none', 'none', 'reload'])
+    expect(s.loaded).toEqual(st(5, 1200))
+    expect(s.pending).toBeUndefined()
+  })
+
+  it('a change that goes back to what is loaded is no change', () => {
+    let s = reloadStep(start, 1, st(1, 10)).state
+    s = reloadStep(s, 2, st(2, 5)).state
+    const r = reloadStep(s, 3, st(1, 10))
+    expect(r.action).toBe('none')
+    expect(r.state.pending).toBeUndefined()
+  })
+
+  it('a missing file is "gone" only when two checks agree — a delete-then-rewrite does not flash', () => {
+    let s = reloadStep(start, 1, st(1, 10)).state
+    let r = reloadStep(s, 2, null)
+    expect(r.action).toBe('none')
+    s = reloadStep(r.state, 3, st(4, 20)).state // it came back, mid-write
+    r = reloadStep(s, 4, st(4, 20))
+    expect(r.action).toBe('reload')
+    r = reloadStep(r.state, 5, null)
+    r = reloadStep(r.state, 6, null)
+    expect(r.action).toBe('gone')
+    expect(r.state.loaded).toBeNull()
+  })
+
+  it('a file missing from the first check is gone at once', () => {
+    expect(reloadStep(start, 1, null).action).toBe('gone')
+  })
+
+  it('a reply older than the newest applied one is dropped, state untouched', () => {
+    const s1 = reloadStep(start, 2, st(2, 20)).state // the newer check answered first
+    const r = reloadStep(s1, 1, st(1, 10)) // the older one lands late
+    expect(r.action).toBe('none')
+    expect(r.state).toBe(s1)
+    // and a reply with the same sequence number is not applied twice
+    expect(reloadStep(s1, 2, st(3, 30)).state).toBe(s1)
   })
 })
