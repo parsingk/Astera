@@ -179,6 +179,6 @@ describe('workspaces', () => {
     expect((await readHfAccounts(profile)).current).toBe(b.id)
     const cur = r.ok ? (r.body.current as Record<string, unknown>) : {}
     expect(cur).toMatchObject({ id: b.id, needsWorkspace: true })
-    expect(String(cur.warning)).toBe('Higgsfield account "B" has no workspace selected. Ask the user to pick one in Astera Settings > Higgsfield; do not run workspace commands yourself.')
+    expect(String(cur.warning)).toBe('Higgsfield account "B" has no workspace selected. Ask the user to pick one in Astera Settings > Creative Hub > Higgsfield; do not run workspace commands yourself.')
   })
 })

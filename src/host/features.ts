@@ -12,6 +12,7 @@ import {
   HOST_FEATURE_SPAWN,
   HOST_FEATURE_UNDERSTANDING,
   HOST_FEATURE_WORKSPACE,
+  HOST_FEATURE_WORKSPACE_SIZE,
   HOST_FEATURE_WORK_UNITS,
   HOST_FEATURE_WORKTREES
 } from '../core/host/protocol'
@@ -40,6 +41,6 @@ export function hostFeatures(a: { spawns: boolean; slack?: boolean; workspace?: 
     HOST_FEATURE_JOURNAL,
     HOST_FEATURE_UNDERSTANDING,
     HOST_FEATURE_MCP_HTTP,
-    ...(a.workspace === true ? [HOST_FEATURE_WORKSPACE] : [])
+    ...(a.workspace === true ? [HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKSPACE_SIZE] : [])
   ]
 }

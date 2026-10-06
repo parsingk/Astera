@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { hostFeatures } from './features'
-import { HOST_FEATURE_BLOCKS, HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_DISPATCH, HOST_FEATURE_DRIVER, HOST_FEATURE_JOURNAL, HOST_FEATURE_MCP_HTTP, HOST_FEATURE_ROLLING, HOST_FEATURE_ROLL_JOURNAL, HOST_FEATURE_SLACK_OWNER, HOST_FEATURE_SPAWN, HOST_FEATURE_UNDERSTANDING, HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORK_UNITS, HOST_FEATURE_WORKTREES } from '../core/host/protocol'
+import { HOST_FEATURE_BLOCKS, HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_COORDINATOR_IDLE, HOST_FEATURE_DISPATCH, HOST_FEATURE_DRIVER, HOST_FEATURE_JOURNAL, HOST_FEATURE_MCP_HTTP, HOST_FEATURE_ROLLING, HOST_FEATURE_ROLL_JOURNAL, HOST_FEATURE_SLACK_OWNER, HOST_FEATURE_SPAWN, HOST_FEATURE_UNDERSTANDING, HOST_FEATURE_WORKSPACE, HOST_FEATURE_WORKSPACE_SIZE, HOST_FEATURE_WORK_UNITS, HOST_FEATURE_WORKTREES } from '../core/host/protocol'
 
 describe('hostFeatures (R17)', () => {
   it('announces spawn, worktrees, dispatch, rolling, blocks and roll-journal together, or none of them', () => {
@@ -67,5 +67,8 @@ describe('hostFeatures (R17)', () => {
     expect(hostFeatures({ spawns: false, workspace: true })).toContain(HOST_FEATURE_WORKSPACE)
     expect(hostFeatures({ spawns: true, workspace: true })).toContain(HOST_FEATURE_WORKSPACE)
     expect(hostFeatures({ spawns: true })).not.toContain(HOST_FEATURE_WORKSPACE)
+    // The mirror tab's size rides the workspace: a Host with one sizes its app windows.
+    expect(hostFeatures({ spawns: false, workspace: true })).toContain(HOST_FEATURE_WORKSPACE_SIZE)
+    expect(hostFeatures({ spawns: true })).not.toContain(HOST_FEATURE_WORKSPACE_SIZE)
   })
 })

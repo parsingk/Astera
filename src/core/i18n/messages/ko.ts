@@ -7,7 +7,7 @@ export const ko = {
   'settings.tab.general': '일반',
   'settings.tab.appearance': '모양',
   'settings.tab.accounts': '계정',
-  'settings.tab.higgsfield': 'Higgsfield',
+  'settings.tab.creativeHub': 'Creative Hub',
   'higgsfield.current': '지금 쓰는 계정: {label}',
   'higgsfield.none': '아직 계정이 없습니다. 지금 로그인된 계정을 가져오거나 새로 추가하세요.',
   'higgsfield.cliMissing': 'higgsfield CLI 를 찾지 못했습니다. 설치 후 다시 열어 주세요.',

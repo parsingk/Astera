@@ -68,7 +68,7 @@ async function currentAccount(profileDir: string, write: (s: string) => void): P
 }
 
 const loginAgain = (account: HfAccount) =>
-  `higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Higgsfield). Tell the user; do not log in yourself.\n`
+  `higgsfield: Higgsfield account "${account.label}" has to log in again (Astera Settings > Creative Hub > Higgsfield). Tell the user; do not log in yourself.\n`
 
 /** A command that may have created something billed or stored before it failed: a job, or an upload. */
 const mayHaveCreated = (args: string[]): boolean => {
@@ -259,7 +259,7 @@ async function proxy(a: Parameters<typeof hfProxy>[0], write: (s: string) => voi
     }
   }
   const first = await run(args, env, true)
-  // A fresh login has no workspace: every call fails until the person picks one (Settings > Higgsfield).
+  // A fresh login has no workspace: every call fails until the person picks one (Settings > Creative Hub > Higgsfield).
   if (first.code !== 0 && NO_WORKSPACE.test(first.stderr)) write(`higgsfield: ${noWorkspaceText(account.label)}\n`)
   if (first.code === 0) await recordAfter(profileDir, account.id, args, first.stdout).catch(() => {})
   // The session was rejected by the server while the file is still there: nothing is restored or rerun.

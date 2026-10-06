@@ -1,3 +1,4 @@
+import { mediaKindOf } from '../files/media'
 import { isLoopbackUrl, previewTargetOf } from '../preview/url'
 
 // What in a line of run output is a link, and how xterm's rows relate to that line. All pure — the
@@ -60,10 +61,14 @@ const JVM_FRAME_RE = /\bat\s+(?:[\w.]+\/\/?)?((?:[\w$]+\.)*)[\w$]+\.[\w$<>]+\(((
 const PY_FRAME_RE = /File "([^"]+)", line (\d+)/g
 
 /** A path candidate is a link when it contains a separator, or has an extension and a line — a bare
- *  word is not a file, and `12:30` is a clock. */
+ *  word is not a file, and `12:30` is a clock. A bare video or image name is the exception: Claude
+ *  Code prints a file it sends from the agent's own folder that way (`› [file] seg31.mp4`), and a
+ *  word that happens to end in `.mp4` or `.png` names a file far more often than `index.ts` in
+ *  prose does. Main still links it only when the file exists. */
 function acceptPath(target: string, line: number | undefined): boolean {
   if (target === '') return false
   if (SEP.test(target)) return true
+  if (mediaKindOf(target) !== null) return true
   return EXT.test(target) && line !== undefined
 }
 

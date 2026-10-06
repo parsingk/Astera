@@ -6,7 +6,7 @@ export const es: Catalog = {
   'settings.tab.general': 'General',
   'settings.tab.appearance': 'Apariencia',
   'settings.tab.accounts': 'Cuentas',
-  'settings.tab.higgsfield': 'Higgsfield',
+  'settings.tab.creativeHub': 'Creative Hub',
   'higgsfield.current': 'Cuenta actual: {label}',
   'higgsfield.none': 'Aún no hay cuentas. Importa la cuenta con sesión iniciada ahora o añade una nueva.',
   'higgsfield.cliMissing': 'No se encontró la CLI de higgsfield. Instálala y vuelve a abrir esta pestaña.',

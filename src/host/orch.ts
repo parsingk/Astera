@@ -498,9 +498,9 @@ export function createHostOrch(a: {
    *  records no Run, and both calls answer 501. */
   understanding?: Pick<HostUnderstanding, 'onRunFinished' | 'onUnitClosed' | 'regenerate' | 'isWriter'> | null
   /** The agent app workspace (agent workspace design): `app-js` below the receipt line (plan ruling
-   *  P2), and the app only `workspace-list`, `workspace-stop` and `workspace-close` above it. Absent: all
-   *  four answer 501. */
-  workspaces?: Pick<WorkspaceManager, 'run' | 'stop' | 'close' | 'list'>
+   *  P2), and the app only `workspace-list`, `workspace-stop`, `workspace-close` and `workspace-size` above
+   *  it. Absent: all five answer 501. */
+  workspaces?: Pick<WorkspaceManager, 'run' | 'stop' | 'close' | 'list' | 'resize'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -1466,6 +1466,7 @@ export function createHostOrch(a: {
             cmd === 'workspace-list' ||
             cmd === 'workspace-stop' ||
             cmd === 'workspace-close' ||
+            cmd === 'workspace-size' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
         )
@@ -1591,13 +1592,18 @@ export function createHostOrch(a: {
         if (WORK_UNITS_CALLS.has(cmd)) return await workUnitsCall(cmd, args, from)
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and
         // its two buttons. Never a command layer command, never a receipt.
-        if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close') {
+        if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close' || cmd === 'workspace-size') {
           if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
           if (!a.workspaces) return { status: 501, body: { error: 'this Host has no agent app workspace' } }
           if (cmd === 'workspace-list') return { status: 200, body: { workspaces: a.workspaces.list() } }
           const target = args.sessionId
           if (typeof target !== 'string' || target === '') return { status: 400, body: { error: `${cmd} needs a sessionId` } }
           if (cmd === 'workspace-stop') return { status: 200, body: { stopped: a.workspaces.stop(target) } }
+          // The mirror tab's size (HOST_FEATURE_WORKSPACE_SIZE): a size, or null when the tab closed.
+          if (cmd === 'workspace-size') {
+            if (!a.workspaces.resize(target, args.size)) return { status: 400, body: { error: 'workspace-size needs a size: { width, height } in CSS pixels, or null' } }
+            return { status: 200, body: { sized: true } }
+          }
           return { status: 200, body: { closed: await a.workspaces.close(target) } }
         }
         // **Request receipts, and still the same synchronous step the call entered in** — nothing

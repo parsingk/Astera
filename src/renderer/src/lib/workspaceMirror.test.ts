@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { appTab, sessionTab } from '../../../core/panes/tabId'
 import { createGroup, leaves, type PaneNode } from '../../../core/panes/tree'
-import { applyWorkspaceEvent, mirrorStatus, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './workspaceMirror'
+import { applyWorkspaceEvent, createSessionSizeReporters, createSizeReporter, mirrorStatus, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './workspaceMirror'
 
 const frame = { jpeg: '/9j/', width: 4, height: 3, at: 1 }
 
@@ -91,5 +91,126 @@ describe('placing the mirror tabs', () => {
     const plain = createGroup(sessionTab('s1'))
     expect(removeAppTab(plain, 's1')).toBe(plain)
     expect(removeAppTab(null, 's1')).toBeNull()
+  })
+})
+
+describe('createSizeReporter', () => {
+  const rigReporter = () => {
+    const sent: Array<{ width: number; height: number } | null> = []
+    const timers: Array<{ fn: () => void; live: boolean }> = []
+    const r = createSizeReporter((s) => sent.push(s), {
+      set: (fn) => {
+        const t = { fn, live: true }
+        timers.push(t)
+        return t
+      },
+      clear: (h) => {
+        ;(h as { live: boolean }).live = false
+      }
+    })
+    const fire = (): void => {
+      for (const t of timers.splice(0)) if (t.live) t.fn()
+    }
+    return { r, sent, fire }
+  }
+
+  it('sends the size once a resize has settled: the last of a burst, clamped', () => {
+    const { r, sent, fire } = rigReporter()
+    r.measured({ width: 900, height: 600 })
+    r.measured({ width: 1100, height: 650 })
+    r.measured({ width: 1577.6, height: 988.4 })
+    expect(sent).toEqual([])
+    fire()
+    expect(sent).toEqual([{ width: 1578, height: 988 }])
+  })
+
+  it('sends nothing for the size it last sent, or for a hidden tab', () => {
+    const { r, sent, fire } = rigReporter()
+    r.measured({ width: 1200, height: 700 })
+    fire()
+    r.measured({ width: 1200.3, height: 700 })
+    fire()
+    r.measured({ width: 0, height: 0 })
+    fire()
+    expect(sent).toEqual([{ width: 1200, height: 700 }])
+  })
+
+  it('a closed tab takes its size back, and one that never sent one sends nothing', () => {
+    const a = rigReporter()
+    a.r.measured({ width: 1200, height: 700 })
+    a.fire()
+    a.r.dispose()
+    expect(a.sent).toEqual([{ width: 1200, height: 700 }, null])
+    const b = rigReporter()
+    b.r.measured({ width: 1200, height: 700 })
+    b.r.dispose()
+    b.fire()
+    expect(b.sent).toEqual([])
+  })
+})
+
+describe('createSessionSizeReporters', () => {
+  const rigShared = () => {
+    const sent: Array<[string, { width: number; height: number } | null]> = []
+    const timers: Array<{ fn: () => void; live: boolean }> = []
+    const r = createSessionSizeReporters((id, s) => sent.push([id, s]), {
+      set: (fn) => {
+        const t = { fn, live: true }
+        timers.push(t)
+        return t
+      },
+      clear: (h) => {
+        ;(h as { live: boolean }).live = false
+      }
+    })
+    const fire = (): void => {
+      for (const t of timers.splice(0)) if (t.live) t.fn()
+    }
+    return { r, sent, fire }
+  }
+
+  it('two panes of one session share one size: the pane resized last sets it', () => {
+    const { r, sent, fire } = rigShared()
+    const a = r.acquire('s1')
+    const b = r.acquire('s1')
+    a.measured({ width: 1200, height: 700 })
+    b.measured({ width: 800, height: 600 })
+    fire()
+    expect(sent).toEqual([['s1', { width: 800, height: 600 }]])
+    a.measured({ width: 1300, height: 760 })
+    fire()
+    expect(sent.at(-1)).toEqual(['s1', { width: 1300, height: 760 }])
+  })
+
+  it('a hidden pane (0 by 0) does not cancel the size another pane is sending', () => {
+    const { r, sent, fire } = rigShared()
+    const a = r.acquire('s1')
+    const hidden = r.acquire('s1')
+    a.measured({ width: 1200, height: 700 })
+    hidden.measured({ width: 0, height: 0 })
+    fire()
+    expect(sent).toEqual([['s1', { width: 1200, height: 700 }]])
+  })
+
+  it('the size is taken back only when the last pane of the session goes', () => {
+    const { r, sent, fire } = rigShared()
+    const a = r.acquire('s1')
+    const b = r.acquire('s1')
+    const other = r.acquire('s2')
+    a.measured({ width: 1200, height: 700 })
+    other.measured({ width: 900, height: 500 })
+    fire()
+    a.release()
+    a.release()
+    expect(sent.filter(([, s]) => s === null)).toEqual([])
+    b.release()
+    expect(sent.at(-1)).toEqual(['s1', null])
+    other.release()
+    expect(sent.at(-1)).toEqual(['s2', null])
+    // A pane that comes back after all of them went starts afresh and sends its size again.
+    const again = r.acquire('s1')
+    again.measured({ width: 1200, height: 700 })
+    fire()
+    expect(sent.at(-1)).toEqual(['s1', { width: 1200, height: 700 }])
   })
 })

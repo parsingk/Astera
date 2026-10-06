@@ -6,7 +6,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.tab.general': 'General',
   'settings.tab.appearance': 'Appearance',
   'settings.tab.accounts': 'Accounts',
-  'settings.tab.higgsfield': 'Higgsfield',
+  'settings.tab.creativeHub': 'Creative Hub',
   'higgsfield.current': 'Current account: {label}',
   'higgsfield.none': 'No accounts yet. Import the account that is logged in now, or add a new one.',
   'higgsfield.cliMissing': 'The higgsfield CLI was not found. Install it and open this tab again.',

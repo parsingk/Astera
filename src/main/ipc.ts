@@ -44,6 +44,7 @@ import { askHostCoordinatorIdle } from './host/coordinatorIdle'
 import { createBlockSync } from './host/blockSync'
 import { createHostDriverView, type HostDriverView } from './host/hostDriver'
 import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWorkspace'
+import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
@@ -7125,6 +7126,13 @@ export function registerIpc(
   ipcMain.handle('workspace.close', async (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string' || sessionId === '') throw new Error(`INVALID_SESSION_ID: ${String(sessionId)}`)
     return (await hostWorkspaceView?.close(sessionId)) ?? false
+  })
+  // The mirror tab's size (debounced in the window), which the Host gives the app's window.
+  ipcMain.handle('workspace.size', async (_e, sessionId: unknown, size: unknown) => {
+    if (typeof sessionId !== 'string' || sessionId === '') throw new Error(`INVALID_SESSION_ID: ${String(sessionId)}`)
+    const clamped = size === null ? null : clampAppSize(size)
+    if (size !== null && clamped === null) return false
+    return (await hostWorkspaceView?.size(sessionId, clamped)) ?? false
   })
   // How many of the running sessions would still be running after this app quits — the window-close
   // confirmation's question (App.tsx's closeWindow, then `quitConfirmBody`).

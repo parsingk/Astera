@@ -7,6 +7,7 @@ import { hookEventsDirIn, hookEventsFileIn } from '../hooks/sessionState'
 import { dirIdentity } from '../files/watchedDir'
 import { HOOK_EVENT_AT } from '../hooks/eventTime'
 import { renameRetrying } from '../renameRetry'
+import { SESSION_CONTEXT_SCRIPT } from './sessionContext'
 
 /** The statusLine injection info handed to SessionManager when a session is spawned. */
 export interface StatusLineSpawn {
@@ -172,6 +173,7 @@ export class StatusLineManager {
   private readonly outDir: string
   private readonly hookCapturePath: string
   private readonly hooksSettingsFile: string
+  private readonly sessionContextPath: string
   readonly hookEventsDir: string // Watched by index.ts's HookEventWatcher
 
   constructor(
@@ -186,6 +188,7 @@ export class StatusLineManager {
     this.outDir = path.join(userDataDir, 'statusline')
     this.hookCapturePath = path.join(userDataDir, 'astera-hook-capture.cjs')
     this.hooksSettingsFile = path.join(userDataDir, 'astera-hooks-settings.json')
+    this.sessionContextPath = path.join(userDataDir, 'astera-session-context.cjs')
     // The Host reads these files back for `sessions list` (host/sessions.ts), so where they are is one
     // rule in core rather than a path spelled out twice.
     this.hookEventsDir = hookEventsDirIn(userDataDir)
@@ -206,7 +209,9 @@ export class StatusLineManager {
     // scripts by path, and a hook that fires during an in-place write would load half a script.
     await writeScript(this.capturePath, CAPTURE_SCRIPT)
     await writeScript(this.hookCapturePath, HOOK_CAPTURE_SCRIPT)
+    await writeScript(this.sessionContextPath, SESSION_CONTEXT_SCRIPT)
     const hookCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.hookCapturePath.replace(/\\/g, '/')}"`
+    const contextCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.sessionContextPath.replace(/\\/g, '/')}"`
     // Hooks from --settings merge with the account's global settings.json hooks and both run
     // (measured). The global settings stay untouched.
     //
@@ -227,6 +232,11 @@ export class StatusLineManager {
     // kept out of here on the grounds that nothing but slack.ts read it; attention.ts reads it now.
     // The cost is one node process at the end of a turn, which is minutes apart, not per keystroke.
     const everySessionHooks = {
+      // What Astera offers, told to the agent as it starts (sessionContext.ts). Synchronous on purpose:
+      // the text has to be in the conversation before the first turn, so unlike the capture hooks it
+      // is not `async`. It is not the capture script — it prints the hook JSON on stdout — and it runs
+      // once per session start.
+      SessionStart: [{ hooks: [{ type: 'command', command: contextCmd }] }],
       Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }],
       Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
       // The question capture. Every session: the conversation view draws AskUserQuestion as a form from

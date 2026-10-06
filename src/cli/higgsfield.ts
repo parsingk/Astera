@@ -162,7 +162,7 @@ export async function higgsfieldCommand(a: {
     return invalid(`"${key}" matches more than one account; use an id: ${file.accounts.map((x) => x.id).join(', ')}`)
   if (hit === undefined) return { ok: false, error: { code: 'NOT_FOUND', message: `unknown Higgsfield account: ${key}` } }
   if (hit.needsLogin)
-    return { ok: false, error: { code: 'CONFLICT', message: `Higgsfield account "${hit.label}" has to log in again: log in again in Astera Settings > Higgsfield` } }
+    return { ok: false, error: { code: 'CONFLICT', message: `Higgsfield account "${hit.label}" has to log in again: log in again in Astera Settings > Creative Hub > Higgsfield` } }
   try {
     await setHfCurrent(a.profileDir, hit.id)
   } catch (err) {
