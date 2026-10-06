@@ -624,7 +624,12 @@ async function hostRig(
         hostAddress: hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL }).address,
         env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ASTERA_|CLAUDE_|CODEX_)/i.test(k))),
         spawn: (exec, args, opts) => {
-          const child = spawn(exec, args, opts)
+          // In the system temp folder, not the profile the supervisor names: the teardown removes the profile,
+          // and Windows refuses to remove a folder that is a live process's cwd. electron.exe run as node
+          // under load reports its exit code within 40 ms of its stdin ending but holds its cwd until its
+          // process ends 5-35 s later (measured beside 24 busy threads), longer than rmrf's retries, so the
+          // profile's removal failed EBUSY. Nothing else of the child's is in the profile.
+          const child = spawn(exec, args, { ...opts, cwd: os.tmpdir() })
           mcpHttpChildren.push(child)
           return child
         },
