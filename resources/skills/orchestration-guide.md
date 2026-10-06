@@ -1261,5 +1261,5 @@ astera higgsfield use --account <id|label|email>
   first: run `higgsfield list`, ask the person which account to use (with choices), then run
   `higgsfield use --account <account>` and run the command again. Never switch on your own.
 - An account marked `needsLogin`, or a command that says the login has expired, cannot be used until the
-  person logs in again in Astera Settings > Higgsfield; tell them, and do not log in yourself. Never
+  person logs in again in Astera Settings > Creative Hub > Higgsfield; tell them, and do not log in yourself. Never
   suggest `hf auth login`: on this computer `hf` may be another program.

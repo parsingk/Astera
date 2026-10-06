@@ -7,7 +7,7 @@ export const ja: Catalog = {
   'settings.tab.general': '一般',
   'settings.tab.appearance': '外観',
   'settings.tab.accounts': 'アカウント',
-  'settings.tab.higgsfield': 'Higgsfield',
+  'settings.tab.creativeHub': 'Creative Hub',
   'higgsfield.current': '使用中のアカウント: {label}',
   'higgsfield.none': 'アカウントがまだありません。現在ログインしているアカウントを取り込むか、新しく追加してください。',
   'higgsfield.cliMissing': 'higgsfield CLI が見つかりません。インストールしてからもう一度開いてください。',
