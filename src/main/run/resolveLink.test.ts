@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import path from 'node:path'
-import { resolveConsolePath, resolveExistingFile } from './resolveLink'
+import { agentDirOf, resolveConsolePath, resolveExistingFile } from './resolveLink'
 import { absPath } from '../../core/testPaths'
 
 const file = { isFile: () => true }
@@ -155,11 +155,87 @@ describe('resolveExistingFile', () => {
     expect(stat).not.toHaveBeenCalled()
   })
 
+  // The agent `cd`s inside its Bash tool, and Claude Code prints a SendUserFile path relative to that
+  // directory, not to the session's cwd. The statusLine payload names it (agentDirOf).
+  it("tries the agent's current directory first, then the session cwd", async () => {
+    const cwd = absPath('ANIPEN', 'short-video')
+    const currentDir = absPath('ANIPEN', 'short-video', 'video', 'EP01', 'prompts')
+    const hit = path.resolve(currentDir, 'clips\\chk\\a.mp4')
+    const seen: string[] = []
+    const stat = vi.fn(async (p: string) => {
+      seen.push(p)
+      if (p === hit) return file
+      throw new Error('ENOENT')
+    })
+    expect(await resolveExistingFile({ cwd, currentDir, target: 'clips\\chk\\a.mp4', stat })).toBe(hit)
+    expect(seen).toEqual([hit])
+  })
+
+  it('falls back to the session cwd when the current directory does not have it', async () => {
+    const cwd = absPath('proj')
+    const currentDir = absPath('proj', 'sub')
+    const atCwd = path.resolve(cwd, 'out/a.png')
+    const seen: string[] = []
+    const stat = vi.fn(async (p: string) => {
+      seen.push(p)
+      if (p === atCwd) return file
+      throw new Error('ENOENT')
+    })
+    expect(await resolveExistingFile({ cwd, currentDir, target: 'out/a.png', stat })).toBe(atCwd)
+    expect(seen).toEqual([path.resolve(currentDir, 'out/a.png'), atCwd])
+  })
+
+  it('a current directory that is the cwd is tried once, and none at all means cwd only', async () => {
+    const cwd = absPath('proj')
+    const stat = vi.fn(async () => { throw new Error('ENOENT') })
+    await resolveExistingFile({ cwd, currentDir: cwd, target: 'a.png', stat })
+    expect(stat).toHaveBeenCalledTimes(1)
+    await resolveExistingFile({ cwd, currentDir: null, target: 'a.png', stat })
+    expect(stat).toHaveBeenCalledTimes(2)
+  })
+
+  it('an absolute target is tried as it is, whatever the current directory', async () => {
+    const target = absPath('elsewhere', 'b.mp4')
+    const stat = vi.fn(async () => file)
+    expect(await resolveExistingFile({ cwd: absPath('proj'), currentDir: absPath('proj', 'sub'), target, stat })).toBe(path.resolve(target))
+    expect(stat).toHaveBeenCalledTimes(1)
+  })
+
+  it('a UNC or relative current directory is skipped without a stat, and the cwd is still tried', async () => {
+    const cwd = absPath('proj')
+    for (const currentDir of ['\\\\h\\share\\x', '//h/share/x', 'relative\\dir']) {
+      const seen: string[] = []
+      const stat = vi.fn(async (p: string) => {
+        seen.push(p)
+        throw new Error('ENOENT')
+      })
+      expect(await resolveExistingFile({ cwd, currentDir, target: 'a.png', stat }), currentDir).toBeNull()
+      expect(seen, currentDir).toEqual([path.resolve(cwd, 'a.png')])
+    }
+  })
+
   it('a relative target under a UNC cwd is null and is never stat-ed', async () => {
     const stat = vi.fn(async () => file)
     for (const cwd of ['\\\\h\\share\\proj', '//h/share/proj']) {
       expect(await resolveExistingFile({ cwd, target: 'out/a.png', stat }), cwd).toBeNull()
     }
     expect(stat).not.toHaveBeenCalled()
+  })
+})
+
+// The statusLine payload Claude Code hands the capture script, read back per session
+// (StatusLineManager.read): workspace.current_dir is where the agent is now, cwd the fallback.
+describe('agentDirOf', () => {
+  it('prefers workspace.current_dir', () => {
+    expect(agentDirOf({ cwd: '/a', workspace: { current_dir: '/a/b' } })).toBe('/a/b')
+  })
+
+  it('falls back to the payload cwd', () => {
+    expect(agentDirOf({ cwd: '/a' })).toBe('/a')
+    expect(agentDirOf({ cwd: '/a', workspace: { current_dir: 3 } })).toBe('/a')
+  })
+
+  it('a missing or corrupt payload names nothing', () => {
+    for (const p of [null, undefined, 'x', 7, [], {}, { workspace: null }, { cwd: '' }]) expect(agentDirOf(p), JSON.stringify(p)).toBeNull()
   })
 })

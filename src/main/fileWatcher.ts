@@ -3,6 +3,7 @@ import { promises as fs, watch as fsWatch } from 'node:fs'
 import type { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { buildIgnoreMatcher } from '../core/files/tree'
+import { dirIdentity, namesAPath } from '../core/files/watchedDir'
 import { createChangeBatcher, type ChangeBatcher, type FileChangeBatch, type FileChangeKind } from '../core/files/changeBatch'
 
 export type { FileChange, FileChangeKind } from '../core/files/changeBatch'
@@ -136,10 +137,23 @@ export class FileWatcher {
   private openNative(): boolean {
     const root = this.root
     if (!root || this.native) return this.native !== null
+    // Read before the handle opens (watchedDir.ts): a root replaced in between reads as replaced.
+    const rootId = dirIdentity(root)
     try {
       const h = this.watchNative(root, (type, filename) => {
         // null when the platform cannot name the entry — nothing to point the tree at
         if (filename === null || this.native !== h) return
+        // **The root itself was removed** (an open project folder deleted outside the app): win32 then
+        // fires events named after the root's own path without a pause, and each one would become an
+        // lstat. Never an entry, so never reported; a root that is no longer the one opened closes the
+        // handle, and the explorer's next watch of it opens a new one.
+        if (namesAPath(filename)) {
+          if (rootId === null || dirIdentity(root) !== rootId) {
+            this.log(`watch on ${root} closed: the folder was removed or replaced`)
+            this.closeNative()
+          }
+          return
+        }
         if (this.ignored?.(filename)) return
         const full = path.join(root, filename)
         if (type === 'change') this.batcher.push({ path: full, kind: 'change' })

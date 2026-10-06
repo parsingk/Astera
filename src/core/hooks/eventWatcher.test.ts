@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { EventEmitter } from 'node:events'
 import { HookEventWatcher } from './eventWatcher'
 
 describe('HookEventWatcher', () => {
@@ -181,6 +182,128 @@ describe('HookEventWatcher', () => {
       const afterStop = spy.mock.calls.length
       await new Promise((r) => setTimeout(r, 200)) // 주기의 열 배
       expect(spy.mock.calls.length).toBe(afterStop)
+    })
+  })
+
+  describe('its folder removed under it (the app relaunching under a Host that outlives it)', () => {
+    /** A watch that behaves as win32's did when the measured Host spun (2026-10-06): once the folder is
+     *  gone it raises no 'error' and keeps firing 'rename' named after the folder's own path. */
+    function fakeWatch() {
+      const made: Array<{ fire(ev: string, name: string): void; closes: number }> = []
+      const watchFn = ((_dir: string, listener: (ev: string, name: string | null) => void) => {
+        const w = Object.assign(new EventEmitter(), {
+          closes: 0,
+          close() {
+            w.closes++
+          },
+          fire: (ev: string, name: string) => listener(ev, name)
+        })
+        made.push(w)
+        return w
+      }) as unknown as typeof import('node:fs').watch
+      return { made, watchFn }
+    }
+
+    it('closes the watch at the first event after the folder went, and arms a new one once it is back', async () => {
+      const { made, watchFn } = fakeWatch()
+      const got: unknown[] = []
+      const w = new HookEventWatcher(dir, (_sid, p) => got.push(p), (m) => logs.push(m), 60_000, { watch: watchFn })
+      w.start()
+      expect(made).toHaveLength(1)
+
+      await fs.rm(dir, { recursive: true, force: true })
+      const ownPath = `\\\\?\\${dir}`
+      for (let i = 0; i < 1000; i++) made[0].fire('rename', ownPath)
+      // One close, one line: the storm ends at its first event instead of running for the Host's life.
+      expect(made[0].closes).toBe(1)
+      expect(logs.filter((l) => l.includes('was removed'))).toHaveLength(1)
+
+      // Still gone at the sweep: nothing is armed.
+      await w.sweep()
+      expect(made).toHaveLength(1)
+
+      // Back: the sweep arms a new watch, and a session file in the new folder is read from its start.
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(path.join(dir, 's1.jsonl'), '{"n":1}\n')
+      await w.sweep()
+      expect(made).toHaveLength(2)
+      expect(got).toEqual([{ n: 1 }])
+      await fs.appendFile(path.join(dir, 's1.jsonl'), '{"n":2}\n')
+      made[1].fire('change', 's1.jsonl')
+      await vi.waitFor(() => expect(got).toEqual([{ n: 1 }, { n: 2 }]))
+      w.stop()
+      expect(made[1].closes).toBe(1)
+    })
+
+    it('a folder already made again is a new folder: the old watch is closed and the new one watched at once', async () => {
+      const { made, watchFn } = fakeWatch()
+      const w = new HookEventWatcher(dir, () => {}, (m) => logs.push(m), 60_000, { watch: watchFn })
+      w.start()
+      // The old folder is renamed away rather than removed, so it still exists and the new folder at the
+      // path cannot be handed its file id.
+      const moved = `${dir}-old`
+      await fs.rename(dir, moved)
+      await fs.mkdir(dir)
+      try {
+        made[0].fire('rename', `\\\\?\\${dir}`)
+        expect(made[0].closes).toBe(1)
+        expect(made).toHaveLength(2)
+        made[1].fire('rename', 'notes.txt')
+        expect(made[1].closes).toBe(0)
+      } finally {
+        w.stop()
+        await fs.rm(moved, { recursive: true, force: true })
+      }
+    })
+
+    it('the sweep finds a folder replaced without a single event, closes the old watch and arms the new folder', async () => {
+      const { made, watchFn } = fakeWatch()
+      const w = new HookEventWatcher(dir, () => {}, (m) => logs.push(m), 60_000, { watch: watchFn })
+      w.start()
+      const moved = `${dir}-old`
+      await fs.rename(dir, moved)
+      await fs.mkdir(dir)
+      try {
+        await w.sweep()
+        expect(made[0].closes).toBe(1)
+        expect(made).toHaveLength(2)
+        // The same folder at the next sweep: nothing more is closed or opened.
+        await w.sweep()
+        expect(made).toHaveLength(2)
+        expect(made[1].closes).toBe(0)
+      } finally {
+        w.stop()
+        await fs.rm(moved, { recursive: true, force: true })
+      }
+    })
+
+    it('a folder that is briefly unreadable and then the same folder again keeps its offsets: nothing is delivered twice', async () => {
+      const { made, watchFn } = fakeWatch()
+      const got: unknown[] = []
+      const w = new HookEventWatcher(dir, (_sid, p) => got.push(p), (m) => logs.push(m), 60_000, { watch: watchFn })
+      await fs.writeFile(path.join(dir, 's1.jsonl'), '{"n":1}\n')
+      w.start()
+      await w.sweep()
+      expect(got).toEqual([{ n: 1 }])
+      // Away for a moment (as an access that fails once would read), then back: the same folder.
+      const away = `${dir}-away`
+      await fs.rename(dir, away)
+      made[0].fire('rename', `\\\\?\\${dir}`)
+      expect(made[0].closes).toBe(1)
+      await fs.rename(away, dir)
+      await w.sweep()
+      expect(made).toHaveLength(2)
+      expect(got).toEqual([{ n: 1 }])
+      w.stop()
+    })
+
+    it('leaves the watch alone for an event that is not a session file while the folder is there', () => {
+      const { made, watchFn } = fakeWatch()
+      const w = new HookEventWatcher(dir, () => {}, (m) => logs.push(m), 60_000, { watch: watchFn })
+      w.start()
+      made[0].fire('rename', 'notes.txt')
+      expect(made[0].closes).toBe(0)
+      w.stop()
     })
   })
 

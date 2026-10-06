@@ -65,15 +65,19 @@ export function TerminalView({
     // If a program run inside the session changes the cursor style and does not restore it, only that tab's cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
     term.open(host)
-    // URLs and paths in the output are links. A path is resolved by main against the session's cwd and
-    // is a link only when a regular file is there (files.resolveLink) — an agent printing where it put
-    // a rendered clip is the case this is for. The cwd is the one the session started in: a shell
-    // inside the session that `cd`s elsewhere makes a relative path miss, which is no link, not a
-    // wrong one.
+    // URLs and paths in the output are links. A path is resolved by main — against the agent's current
+    // directory (its statusLine payload), then the session's cwd — and is a link only when a regular
+    // file is there (files.resolveLink); an agent printing where it put a rendered clip is the case
+    // this is for. A session whose CLI writes no statusLine (codex) has the cwd alone, so after a `cd`
+    // a relative path misses, which is no link, not a wrong one.
     const cwd = session.cwd
+    const sessionId = session.id
     const disposeLinks = attachConsoleLinks(term, {
       onUrl: (url, ev) => onOpenUrlRef.current(url, ev),
-      resolvePath: (target) => window.api.files.resolveLink(cwd, target).then((r) => r?.path ?? null, () => null),
+      // The session id lets main try the agent's current directory first: Claude Code prints a sent
+      // file relative to wherever its Bash tool `cd`'d, not to the session's cwd
+      resolvePath: (target) =>
+        window.api.files.resolveLink(cwd, target, sessionId).then((r) => r?.path ?? null, () => null),
       onOpenFile: (path, at) => onOpenFileRef.current(path, at)
     })
     // Fit to the cell grid directly instead of using FitAddon — FitAddon always subtracts 15px for a scrollbar, which left the right side empty

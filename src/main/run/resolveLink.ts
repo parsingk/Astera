@@ -42,8 +42,9 @@ const UNC_LIKE = /^[\\/]{2}/
 
 /** Whether a path a session terminal (or a session's SendUserFile) names is a regular file, and
  *  where. resolveConsolePath's rule cut down to its core: an absolute target as it is, a relative one
- *  against the session's cwd — one candidate, no source roots, because a session's output is not a
- *  build's stack trace and a second guess would turn a typo into some other file.
+ *  against the agent's current directory and then the session's cwd — no source roots, because a
+ *  session's output is not a build's stack trace and a guess past where the agent actually is would
+ *  turn a typo into some other file.
  *
  *  No path guard, unlike the run console. An agent writes where the person told it to — a video
  *  pipeline's output folder is rarely a registered project — and a link that refuses those is the
@@ -53,23 +54,52 @@ const UNC_LIKE = /^[\\/]{2}/
  *  gap with main's own working directory, which names nothing the session meant. */
 export async function resolveExistingFile(a: {
   cwd: string
+  /** Where the agent is now, when that differs from where the session started: Claude Code prints a
+   *  SendUserFile path relative to the directory its Bash tool `cd`'d into (agentDirOf reads it off
+   *  the statusLine payload). Tried before `cwd`; null or absent means cwd only. */
+  currentDir?: string | null
   target: string
   stat: (p: string) => Promise<{ isFile(): boolean }>
 }): Promise<string | null> {
   if (a.target === '') return null
-  if (!path.isAbsolute(a.target) && !path.isAbsolute(a.cwd)) return null
   // This runs on hover (xterm asks about the row under the pointer), over text any program or web
   // page can put on the screen. On win32 a stat of `\\host\share\x` — or of `//host/...`, which
   // path.resolve turns into the same — makes Windows open an SMB connection to that host: the user's
   // NTLM credentials go to whoever printed the path, and a host that never answers holds a libuv
   // threadpool thread. run.resolveLink is covered by its project guard; this has none, so anything
   // starting with two separators (\\server, //server, \\?\, \\.\) is refused before the disk —
-  // checked on the raw target, the cwd and the result, and on every platform, which costs nothing.
-  const resolved = path.resolve(a.cwd, a.target)
-  if ([a.target, a.cwd, resolved].some((p) => UNC_LIKE.test(p))) return null
-  try {
-    return (await a.stat(resolved)).isFile() ? resolved : null
-  } catch {
-    return null // missing, or unreadable — not a link either way
+  // checked on the raw target, every base directory used and every result, on every platform.
+  if (UNC_LIKE.test(a.target)) return null
+  // An absolute target names one place. A relative one is tried under the agent's current directory,
+  // then under the session cwd — one candidate per directory, each skipped (not fatal) when it is not
+  // an absolute, non-UNC path: a relative base would resolve against main's own working directory.
+  const candidates: string[] = []
+  const add = (resolved: string): void => {
+    if (!UNC_LIKE.test(resolved) && !candidates.includes(resolved)) candidates.push(resolved)
   }
+  if (path.isAbsolute(a.target)) add(path.resolve(a.target))
+  else
+    for (const base of [a.currentDir, a.cwd]) {
+      if (typeof base !== 'string' || !path.isAbsolute(base) || UNC_LIKE.test(base)) continue
+      add(path.resolve(base, a.target))
+    }
+  for (const resolved of candidates) {
+    try {
+      if ((await a.stat(resolved)).isFile()) return resolved
+    } catch {
+      // missing, or unreadable — try the next directory
+    }
+  }
+  return null
+}
+
+/** The directory the agent is in now, from a Claude statusLine payload (StatusLineManager.read):
+ *  `workspace.current_dir`, else the payload's `cwd`. null for a missing or corrupt payload — a chat
+ *  session or a codex one writes none — which leaves the session cwd as the only base. */
+export function agentDirOf(payload: unknown): string | null {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const p = payload as { workspace?: unknown; cwd?: unknown }
+  const ws = p.workspace !== null && typeof p.workspace === 'object' ? (p.workspace as { current_dir?: unknown }) : undefined
+  if (typeof ws?.current_dir === 'string' && ws.current_dir !== '') return ws.current_dir
+  return typeof p.cwd === 'string' && p.cwd !== '' ? p.cwd : null
 }
