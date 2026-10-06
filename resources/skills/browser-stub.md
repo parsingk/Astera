@@ -1,6 +1,6 @@
 ---
 name: astera-browser
-description: Open and check the web app this project is developing, in a browser the agent controls. Use when the person asks to open the page, see whether it renders, check the console for errors, reload after a change, or click through a flow — on this project's own dev server (localhost). Not for the open web.
+description: Open and check the web app this project is developing, in a browser the agent controls. Use whenever you need to open this project's web app or dev server pages (localhost), see whether they render, check the console for errors, reload after a change or click through a flow — whether the person asked or you are checking your own change. Not for the open web.
 ---
 
 <!-- managed by Astera — the app owns this file. Local edits are overwritten on the next launch.

@@ -43,6 +43,19 @@ describe('StatusLineManager 훅 주입', () => {
     expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 
+  // The context is only worth anything if it is in every session and in the one place Claude reads it:
+  // a synchronous SessionStart hook whose stdout is the hook JSON (sessionContext.ts).
+  it('SessionStart 훅이 두 설정 파일 모두에 있고 컨텍스트 스크립트를 가리킨다', async () => {
+    for (const f of ['astera-statusline-settings.json', 'astera-hooks-settings.json']) {
+      const settings = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8'))
+      const hook = settings.hooks.SessionStart[0].hooks[0]
+      expect(hook.command).toContain('astera-session-context.cjs')
+      expect(hook.async).toBeUndefined()
+      expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+    }
+    expect(await fs.readFile(path.join(dir, 'astera-session-context.cjs'), 'utf8')).toContain('SessionStart')
+  })
+
   it('spawnConfig: toolHooks=true면 도구 캡처까지 든 설정 파일', () => {
     const c = mgr.spawnConfig('sess-1', account, { toolHooks: true })
     expect(c.settingsFile).toContain('astera-hooks-settings.json')

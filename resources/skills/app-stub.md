@@ -1,6 +1,6 @@
 ---
 name: astera-app
-description: Launch, drive and photograph this project's own desktop app (an Electron app first) where the person never sees it (a hidden desktop on Windows, a virtual display on Linux, the background on macOS). Use when the person asks to run the app and check that it works, click through a flow, check a native dialog or a drop of files, and you would otherwise take their screen, pointer or keyboard. Not for web pages in a browser (use astera-browser) and not for the open web.
+description: Launch, drive and photograph this project's own desktop app (an Electron app first) where the person never sees it (a hidden desktop on Windows, a virtual display on Linux, the background on macOS). Use whenever you need to launch, click through or photograph this project's own desktop app — whether the person asked or you are checking your own change, including a native dialog or a drop of files — instead of launching it on the person's screen or taking their pointer or keyboard. Not for web pages in a browser (use astera-browser) and not for the open web.
 ---
 
 <!-- managed by Astera — the app owns this file. Local edits are overwritten on the next launch.
