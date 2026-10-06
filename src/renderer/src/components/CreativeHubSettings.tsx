@@ -28,7 +28,7 @@ export function CreativeHubSettings(): React.JSX.Element {
           ))}
         </div>
       ) : (
-        current && <div className="settings-field-label">{current.label}</div>
+        current && <div className="settings-row"><span>{current.label}</span></div>
       )}
       {current && <current.Settings key={current.id} />}
     </div>
