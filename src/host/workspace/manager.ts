@@ -21,6 +21,7 @@ import {
   type WorkspaceRecord
 } from '../../core/workspace/lifecycle'
 import type { LinuxTools } from '../../core/workspace/platform'
+import { DEFAULT_APP_SIZE, clampAppSize, deviceSize, frameClip, needsRefit, pageSizedByCdp, sameSize, type AppSize } from '../../core/workspace/size'
 import { runScriptInWorker } from './scriptWorker'
 import type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary } from '../../core/host/protocol'
 export type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary }
@@ -28,6 +29,17 @@ export type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary }
 export const FRAME_EVERY_MS = 1_000
 export const FRAME_MAX_WIDTH = 960
 export const IDLE_TICK_MS = 30_000
+/** How long after a window fit a frame whose page is another size asks for the fit again: the app may
+ *  maximize itself after its page answered (an Electron app's `maximize()` on the hidden desktop). */
+export const REFIT_AFTER_MS = 3_000
+/** Fits of one target size that may follow one another before the manager stops asking: an app that
+ *  holds its window at a size of its own (a minimum size larger than the tab) is left at it. */
+export const REFIT_TRIES = 3
+/** How long a page's size override must hold before it is taken as set, how often it is read
+ *  meanwhile, and how many times it is set before the manager gives up (holdPageSize). */
+export const OVERRIDE_HOLD_MS = 700
+export const OVERRIDE_POLL_MS = 100
+export const OVERRIDE_TRIES = 5
 /** How long the Host's way out waits for `dispose()` (final review Important 2). A hung helper can
  *  hold a cleanup for tens of seconds, and the server keeps its listener until the Host closes it, so a
  *  replacing Host would wait behind it. Past the cap the Host goes on; the next Host's `sweepLeftovers`
@@ -88,6 +100,10 @@ export interface WorkspaceManager {
   run(sessionId: string, script: string): Promise<WorkspaceReply>
   stop(sessionId: string): boolean
   close(sessionId: string): Promise<boolean>
+  /** The mirror tab's size in CSS pixels (the app's `workspace-size`): the session's app window is
+   *  given that size, now if it is running and at its next launch otherwise. `null` forgets it (the
+   *  tab closed), and the next launch takes DEFAULT_APP_SIZE. False when `size` is neither. */
+  resize(sessionId: string, size: unknown): boolean
   list(): WorkspaceSummary[]
   sessionEnded(sessionId: string): void
   sweepLeftovers(): Promise<void>
@@ -115,6 +131,10 @@ interface Entry {
   /** The running script's launch is waiting for the app's port or page (stage 4, task 2): since when,
    *  and which script's it is. The mirror shows "Starting the app" with the seconds from `since`. */
   launching: { since: number; owner: AbortController } | null
+  /** The last window fit: the size it asked for, when, and how many fits of that size ran in a row. */
+  fitted: { target: AppSize; at: number; tries: number } | null
+  fitting: boolean
+  refit: boolean
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -130,6 +150,9 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     })
   const prefix = d.deskPrefix ?? `astera-ws-${process.pid}`
   const entries = new Map<string, Entry>()
+  /** Each session's mirror tab size, kept across launches (and an entry the manager forgot). */
+  const sizes = new Map<string, AppSize>()
+  const targetOf = (sessionId: string): AppSize => sizes.get(sessionId) ?? DEFAULT_APP_SIZE
   const slots = new ScriptSlots()
   let counter = 0
   let disposed = false
@@ -186,7 +209,7 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
   const entryOf = (sessionId: string): Entry => {
     let e = entries.get(sessionId)
     if (!e) {
-      e = { sessionId, desk: null, deskStarting: null, state: { launched: null, cdp: null }, lastActivityAt: now(), helper: null, frame: null, capturing: false, dirty: false, stopFrames: null, script: null, told: false, launching: null }
+      e = { sessionId, desk: null, deskStarting: null, state: { launched: null, cdp: null }, lastActivityAt: now(), helper: null, frame: null, capturing: false, dirty: false, stopFrames: null, script: null, told: false, launching: null, fitted: null, fitting: false, refit: false }
       entries.set(sessionId, e)
     }
     return e
@@ -291,18 +314,105 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     else if (!slots.isRunning(e.sessionId) && !isOpen(e) && entries.get(e.sessionId) === e) entries.delete(e.sessionId)
   }
 
+  /** Lays the page out at `size` through CDP's device metrics and checks that it stays: measured on the
+   *  hidden desktop (desktop.e2e.test.ts), an override set as the page settles after launch held for
+   *  about 300 ms and was then undone, and set again it held. So it is set, watched for OVERRIDE_HOLD_MS,
+   *  and set again while it does not hold, OVERRIDE_TRIES times at most. Answers what it did, for the log. */
+  const holdPageSize = async (cdp: Cdp, size: AppSize): Promise<string> => {
+    const viewport = async (): Promise<AppSize | null> => {
+      const v = await cdp
+        .send('Runtime.evaluate', { expression: '[window.innerWidth, window.innerHeight]', returnByValue: true })
+        .then((r) => (r.result as { value?: unknown } | undefined)?.value, () => undefined)
+      return Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number' ? { width: v[0], height: v[1] } : null
+    }
+    let seen: AppSize | null = null
+    for (let i = 1; i <= OVERRIDE_TRIES; i++) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false })
+      let held = true
+      for (let waited = 0; waited < OVERRIDE_HOLD_MS && !disposed; waited += OVERRIDE_POLL_MS) {
+        seen = await viewport()
+        // A page that does not say its size (no answer) is taken at the override's word.
+        if (seen === null) return 'the page lays out at that size'
+        if (!sameSize(seen, size, 0)) {
+          held = false
+          break
+        }
+        await new Promise((r) => setTimeout(r, OVERRIDE_POLL_MS))
+      }
+      if (held) return i === 1 ? 'the page lays out at that size' : `the page lays out at that size (set ${i} times)`
+    }
+    return `the page did not keep that size (it is ${seen ? `${seen.width}x${seen.height}` : 'unknown'})`
+  }
+
+  /** Gives the app the session's target size (the mirror tab's, or DEFAULT_APP_SIZE): its window
+   *  where the desk can size it, in the page's device pixels, and its page through CDP's device metrics
+   *  where the window's size does not reliably reach the page (pageSizedByCdp, size.ts says what was
+   *  measured). One at a time per entry; a request during one runs once after it. Never rejects (R3). */
+  const fitWindow = async (e: Entry, why: string): Promise<void> => {
+    const desk = e.desk
+    const cdp = e.state.cdp
+    const byCdp = cdp !== null && pageSizedByCdp(d.platform)
+    if (disposed || !e.state.launched || (!desk?.fit && !byCdp)) return
+    if (e.fitting) {
+      e.refit = true
+      return
+    }
+    e.fitting = true
+    const target = targetOf(e.sessionId)
+    const done: string[] = []
+    try {
+      const tries = e.fitted && sameSize(e.fitted.target, target, 0) ? e.fitted.tries + 1 : 1
+      e.fitted = { target, at: now(), tries }
+      if (desk?.fit && !byCdp) {
+        const dpr = cdp
+          ? await cdp.send('Runtime.evaluate', { expression: 'window.devicePixelRatio', returnByValue: true }).then(
+              (r) => (r.result as { value?: unknown } | undefined)?.value,
+              () => 1
+            )
+          : 1
+        // Best effort where the page is sized through CDP anyway: a window that cannot be found yet (a
+        // launch whose port opened before its window) leaves the page to the metrics below.
+        const got = await desk.fit(deviceSize(target, dpr)).then(
+          (g) => `the window's client area is ${g.width}x${g.height}`,
+          (err: unknown) => `the window could not be sized (${messageOf(err)})`
+        )
+        done.push(got)
+      }
+      if (cdp && byCdp) done.push(await holdPageSize(cdp, target))
+      d.log(`workspace ${e.sessionId}: the app was given ${target.width}x${target.height} CSS px (${why}): ${done.join('; ')}`)
+    } catch (err) {
+      d.log(`workspace ${e.sessionId}: the app could not be sized (${why}): ${messageOf(err)}`)
+    } finally {
+      e.fitting = false
+    }
+    if (e.refit) {
+      e.refit = false
+      return fitWindow(e, why)
+    }
+    void captureFrame(e).catch(() => undefined)
+  }
+
+  /** A page whose viewport is not the size its window was given asks for the fit again, REFIT_AFTER_MS
+   *  after the last one and at most REFIT_TRIES times for one size. */
+  const checkFit = (e: Entry, viewport: AppSize): void => {
+    if (!e.state.launched || e.fitting || (!e.desk?.fit && !pageSizedByCdp(d.platform))) return
+    const target = targetOf(e.sessionId)
+    if (!needsRefit(viewport, target)) return
+    // No fit yet: the launch is still waiting for the page, and fits the window once it settles.
+    const f = e.fitted
+    if (!f) return
+    if (sameSize(f.target, target, 0) && (f.tries >= REFIT_TRIES || now() - f.at < REFIT_AFTER_MS)) return
+    void fitWindow(e, `the page is ${viewport.width}x${viewport.height}`)
+  }
+
   const frameOf = async (e: Entry): Promise<WorkspaceFrame | null> => {
     const cdp = e.state.cdp
     if (cdp) {
-      const m = await cdp.send('Page.getLayoutMetrics')
-      const vp = (m.cssVisualViewport ?? m.cssLayoutViewport) as { clientWidth?: number; clientHeight?: number } | undefined
-      const w = vp?.clientWidth ?? 0
-      const h = vp?.clientHeight ?? 0
-      const scale = w > FRAME_MAX_WIDTH ? FRAME_MAX_WIDTH / w : 1
-      const clip = w > 0 && h > 0 ? { clip: { x: 0, y: 0, width: w, height: h, scale } } : {}
-      const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: FRAME_QUALITY, ...clip })
+      const fc = frameClip(await cdp.send('Page.getLayoutMetrics'), FRAME_MAX_WIDTH)
+      if (fc) checkFit(e, fc.css)
+      const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: FRAME_QUALITY, ...(fc ? { clip: fc.clip } : {}) })
       if (typeof r.data !== 'string' || r.data === '') return null
-      return { jpeg: r.data, width: Math.round(w * scale), height: Math.round(h * scale), at: now() }
+      return { jpeg: r.data, width: fc?.frame.width ?? 0, height: fc?.frame.height ?? 0, at: now() }
     }
     if (e.desk && e.state.launched) {
       const s = await e.desk.shot({ format: 'jpeg', maxWidth: FRAME_MAX_WIDTH })
@@ -381,6 +491,7 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     windows: () => desk.windows(),
     shot: (a) => desk.shot(a),
     keys: (a) => desk.keys(a),
+    ...(desk.fit ? { fit: desk.fit.bind(desk) } : {}),
     ...(desk.pointer ? { pointer: desk.pointer } : {}),
     close: () => desk.close()
   })
@@ -430,6 +541,10 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     connectCdp: (port, waitMs) => d.connectCdp(port, waitMs),
     saveCapture,
     recordLaunch: () => persist(),
+    started: () => {
+      e.fitted = null
+      return fitWindow(e, 'launched')
+    },
     changed: () => {
       void captureFrame(e).catch(() => undefined)
     },
@@ -541,6 +656,19 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
       }
     },
     stop: (sessionId) => slots.stop(sessionId),
+    resize: (sessionId, size) => {
+      if (size === null) {
+        sizes.delete(sessionId)
+        return true
+      }
+      const next = clampAppSize(size)
+      if (next === null) return false
+      const was = sizes.get(sessionId) ?? null
+      sizes.set(sessionId, next)
+      const e = entries.get(sessionId)
+      if (e && isOpen(e) && !sameSize(was, next, 0)) void fitWindow(e, 'the mirror tab was resized')
+      return true
+    },
     close: async (sessionId) => {
       const e = entries.get(sessionId)
       if (!e || !isOpen(e)) return false
@@ -550,6 +678,7 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
     list: () =>
       [...entries.values()].filter(isOpen).map((e) => ({ sessionId: e.sessionId, running: slots.isRunning(e.sessionId), helper: e.helper, frame: e.frame })),
     sessionEnded: (sessionId) => {
+      sizes.delete(sessionId)
       const e = entries.get(sessionId)
       if (!e) return
       slots.stop(sessionId)

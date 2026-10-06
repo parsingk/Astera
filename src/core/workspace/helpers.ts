@@ -35,6 +35,11 @@ export interface Desk {
   windows(): Promise<DeskWindow[]>
   shot(a: { title?: string; format: 'png' | 'jpeg'; maxWidth?: number }): Promise<DeskShot>
   keys(a: { title: string; text?: string; key?: string }): Promise<void>
+  /** Gives the window titled `title` (the largest titled window when it is absent, as `shot` picks it)
+   *  a client area of `width` by `height` device pixels and answers the size it ended with. Linux only
+   *  (its own Xvfb): on Windows the page is sized through CDP instead (pageSizedByCdp in size.ts says
+   *  why), and on macOS the app's windows are the person's to place. */
+  fit?(a: { title?: string; width: number; height: number }): Promise<{ width: number; height: number }>
   /** Real pointer input on a display that is the workspace's own (Linux's Xvfb). Absent on Windows and
    *  macOS, where the pointer is the person's: drag() stays on CDP there. */
   pointer?: DeskPointer
@@ -120,6 +125,9 @@ export interface HelperDeps {
   saveCapture(data: string, ext: 'png'): Promise<string>
   /** The launched process changed: the manager rewrites workspaces.json. */
   recordLaunch(l: Launched | null): void
+  /** The launched app answered on its port and its page settled, or its port never opened: the manager
+   *  gives its window the mirror tab's size (size.ts says why). Never rejects. Absent: nothing is sized. */
+  started?(): Promise<void>
   /** A helper that changes the screen finished: the mirror takes a frame. Fire and forget. */
   changed(): void
   /** `close()`: kill the tree, close the desktop, end the helper, without stopping this script. */
@@ -383,6 +391,8 @@ export function workspaceHelpers(deps: HelperDeps, ctx: RunContext): Record<stri
     deps.state.cdp = cdp
     deps.changed()
     if (!cdp) {
+      // The app is running without its port: its window is still the workspace's to size.
+      await deps.started?.()
       const platform = deps.platform ?? 'win32'
       const portRef = cdpPortRef(platform)
       const after =
@@ -398,6 +408,7 @@ export function workspaceHelpers(deps: HelperDeps, ctx: RunContext): Record<stri
     // Stopped while the port wait ran: the connection is kept for the next script, the page not waited for.
     if (deps.stopped()) throw new Error(`${at}: stopped`)
     await pageSettled(cdp, deps, deps.now() + Math.max(0, Math.min(PAGE_READY_MS, left())))
+    if (deps.state.launched === launched) await deps.started?.()
     return { pid, port }
   }
 
