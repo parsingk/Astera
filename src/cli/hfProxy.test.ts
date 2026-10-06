@@ -677,4 +677,20 @@ describe('hfProxy: hints for the agent', () => {
     expect((await readHfAccounts(profile)).accounts.find((x) => x.id === a.id)!.needsLogin).toBeFalsy()
     expect(msgs.join('')).not.toContain('has expired')
   })
+
+  it('still restores from the backup when "Session expired" comes with a deleted credentials file', async () => {
+    const { a } = await two()
+    const creds = path.join(hfAccountDir(profile, a.id), 'credentials.json')
+    await fs.writeFile(creds, '{"t":1}'); await fs.writeFile(`${creds}.bak`, '{"t":1}')
+    const base = fakeRunner(); let n = 0
+    const run: HfRunner = async (args, e, t) => n++ === 0
+      ? (await base(args, { ...e, FAKE_HF_DELETE_CREDS: '1' }, false), { code: 2, stdout: '', stderr: 'Error: Session expired.\n' })
+      : base(args, e, t)
+    const code = await hfProxy({ args: ['generate', 'get', 'x'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
+    expect(code).toBe(0)
+    expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
+    expect(msgs.join('')).toMatch(/running the command again/)
+    expect((await readHfAccounts(profile)).accounts.find((x) => x.id === a.id)!.needsLogin).toBeFalsy()
+  })
+
 })

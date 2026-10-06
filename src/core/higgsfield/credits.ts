@@ -55,8 +55,10 @@ export const isBalanceQuery = (args: string[]): boolean => {
   return (args[i] === 'account' || args[i] === 'workspace') && args[i + 1] === 'status'
 }
 
-/** The server rejected the login: what the CLI prints when a session is over. */
-export const SESSION_EXPIRED = /session expired|run: hf auth login/i
+/** CLI 1.1.24 on an expired server session: exit 2, `Error: Session expired.` / `Hint: Run: hf auth login`.
+ *  The credentials file stays, so only this line tells that the login is gone. Anchored to the line start
+ *  so echoed prompt text does not match. */
+export const SESSION_EXPIRED = /^Error: Session expired|^Hint: Run: hf auth login/im
 
 type Who = { label: string; email?: string; credits: number | null }
 const credits = (n: number | null) => (n === null ? 'credits unknown' : `${n} credits`)

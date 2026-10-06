@@ -99,7 +99,7 @@ export async function restoreOnce(a: {
     if (await exists(`${creds}.bak`)) {
       await copyBack(creds)
       const check = await run(['account', 'status', '--json'], env, false)
-      if (check.code === 0 && (await exists(creds))) {
+      if (check.code === 0) {
         if (noRerun) {
           await backupCredentials(creds)
           write(notRerun(args))
@@ -262,8 +262,9 @@ async function proxy(a: Parameters<typeof hfProxy>[0], write: (s: string) => voi
   // A fresh login has no workspace: every call fails until the person picks one (Settings > Higgsfield).
   if (first.code !== 0 && NO_WORKSPACE.test(first.stderr)) write(`higgsfield: ${noWorkspaceText(account.label)}\n`)
   if (first.code === 0) await recordAfter(profileDir, account.id, args, first.stdout).catch(() => {})
-  // The session was rejected by the server: the file is still there, so nothing is restored or rerun.
-  if (first.code !== 0 && given[0] !== 'auth' && SESSION_EXPIRED.test(first.stderr)) {
+  // The session was rejected by the server while the file is still there: nothing is restored or rerun.
+  // A missing file is a failed refresh, and falls through to the restore below.
+  if (first.code !== 0 && given[0] !== 'auth' && SESSION_EXPIRED.test(first.stderr) && (await exists(creds))) {
     await patchHfAccount(profileDir, account.id, { needsLogin: true }).catch(() => {})
     write(expiredLoginMessage(account.label))
     return first.code
