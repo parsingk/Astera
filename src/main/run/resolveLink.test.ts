@@ -142,4 +142,24 @@ describe('resolveExistingFile', () => {
     expect(await resolveExistingFile({ cwd: absPath('proj'), target: '', stat })).toBeNull()
     expect(stat).not.toHaveBeenCalled()
   })
+
+  // This runs on hover. A stat of a UNC path makes Windows connect to that SMB host — offering the
+  // user's NTLM credentials to whoever printed the path, and parking a threadpool thread on a host
+  // that does not answer. Anything that starts with two separators (\\server, //server, \\?\, \\.\)
+  // is refused before the disk, on every platform.
+  it('a UNC, device or double-slash target is null and is never stat-ed', async () => {
+    const stat = vi.fn(async () => file)
+    for (const target of ['\\\\h\\s\\a.png', '//h/s/a.png', '\\\\?\\C:\\x.png', '\\\\.\\pipe\\x.png', '/\\h\\s\\a.png']) {
+      expect(await resolveExistingFile({ cwd: absPath('proj'), target, stat }), target).toBeNull()
+    }
+    expect(stat).not.toHaveBeenCalled()
+  })
+
+  it('a relative target under a UNC cwd is null and is never stat-ed', async () => {
+    const stat = vi.fn(async () => file)
+    for (const cwd of ['\\\\h\\share\\proj', '//h/share/proj']) {
+      expect(await resolveExistingFile({ cwd, target: 'out/a.png', stat }), cwd).toBeNull()
+    }
+    expect(stat).not.toHaveBeenCalled()
+  })
 })

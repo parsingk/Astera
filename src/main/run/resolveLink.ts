@@ -37,6 +37,9 @@ export async function resolveConsolePath(a: {
   return null
 }
 
+/** Two separators in front: a UNC share, a `\\?\` or `\\.\` device path, or the `//` spelling of either. */
+const UNC_LIKE = /^[\\/]{2}/
+
 /** Whether a path a session terminal (or a session's SendUserFile) names is a regular file, and
  *  where. resolveConsolePath's rule cut down to its core: an absolute target as it is, a relative one
  *  against the session's cwd — one candidate, no source roots, because a session's output is not a
@@ -55,7 +58,15 @@ export async function resolveExistingFile(a: {
 }): Promise<string | null> {
   if (a.target === '') return null
   if (!path.isAbsolute(a.target) && !path.isAbsolute(a.cwd)) return null
+  // This runs on hover (xterm asks about the row under the pointer), over text any program or web
+  // page can put on the screen. On win32 a stat of `\\host\share\x` — or of `//host/...`, which
+  // path.resolve turns into the same — makes Windows open an SMB connection to that host: the user's
+  // NTLM credentials go to whoever printed the path, and a host that never answers holds a libuv
+  // threadpool thread. run.resolveLink is covered by its project guard; this has none, so anything
+  // starting with two separators (\\server, //server, \\?\, \\.\) is refused before the disk —
+  // checked on the raw target, the cwd and the result, and on every platform, which costs nothing.
   const resolved = path.resolve(a.cwd, a.target)
+  if ([a.target, a.cwd, resolved].some((p) => UNC_LIKE.test(p))) return null
   try {
     return (await a.stat(resolved)).isFile() ? resolved : null
   } catch {
