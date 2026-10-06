@@ -99,7 +99,7 @@ export async function restoreOnce(a: {
     if (await exists(`${creds}.bak`)) {
       await copyBack(creds)
       const check = await run(['account', 'status', '--json'], env, false)
-      if (check.code === 0) {
+      if (check.code === 0 && (await exists(creds))) {
         if (noRerun) {
           await backupCredentials(creds)
           write(notRerun(args))
