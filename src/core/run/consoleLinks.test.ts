@@ -275,3 +275,16 @@ describe('cellsOfJoinedLine', () => {
     ])
   })
 })
+
+// Claude Code's TUI line for a SendUserFile, measured from a real session: the path is relative to
+// the agent's own current directory (not the session's cwd), with backslashes, and the file's size
+// follows in parentheses.
+describe('findConsoleLinks — the SendUserFile line of the Claude TUI', () => {
+  it('extracts the relative backslash path and leaves the size out', () => {
+    const line = '  › [file] clips\\chk\\preview_c26_c27.mp4 (1.2MB)'
+    const paths = findConsoleLinks(line).filter((l) => l.kind === 'path')
+    expect(paths).toHaveLength(1)
+    expect(paths[0]).toMatchObject({ kind: 'path', target: 'clips\\chk\\preview_c26_c27.mp4' })
+    expect(line.slice(paths[0].start, paths[0].end)).toBe('clips\\chk\\preview_c26_c27.mp4')
+  })
+})

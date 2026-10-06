@@ -245,7 +245,7 @@ import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareLaunch } from '../core/run/prepare'
 import { allowingJobCwds, orchRunConfigOf } from '../core/run/runConfigsFile'
 import { executeLaunch } from './run/launch'
-import { resolveConsolePath, resolveExistingFile } from './run/resolveLink'
+import { agentDirOf, resolveConsolePath, resolveExistingFile } from './run/resolveLink'
 import { mediaAllowlist } from './media/allowlist'
 import { mediaKindOf } from '../core/files/media'
 import { saveConfigsBatch } from './run/saveConfigs'
@@ -4978,9 +4978,21 @@ export function registerIpc(
   // defence in depth (it binds content that cannot call window.api), not a boundary against the
   // renderer itself (main/media/allowlist.ts). UNC and device paths are refused before any stat —
   // this runs on hover (resolveExistingFile says why).
-  ipcMain.handle('files.resolveLink', async (_e, cwd: unknown, target: unknown) => {
+  // `sessionId` (a session terminal or a conversation view; absent for a project terminal) adds the
+  // agent's current directory as the first base for a relative target: Claude Code prints a
+  // SendUserFile path relative to wherever its Bash tool `cd`'d, which the session's statusLine
+  // payload names (agentDirOf). That payload is one small JSON file per session, read on each call —
+  // cheap enough for hover, and the renderer caches hits and retries misses only every few seconds.
+  // The id is checked for shape before it is joined into a file name.
+  // A session id as this app makes them (randomUUID), checked before it becomes part of a file name
+  const SESSION_ID_SHAPE = /^[A-Za-z0-9_-]{1,128}$/
+  ipcMain.handle('files.resolveLink', async (_e, cwd: unknown, target: unknown, sessionId?: unknown) => {
     if (typeof cwd !== 'string' || typeof target !== 'string') return null
-    const p = await resolveExistingFile({ cwd, target, stat: (f) => fs.stat(f) })
+    const currentDir =
+      typeof sessionId === 'string' && SESSION_ID_SHAPE.test(sessionId) && !path.isAbsolute(target)
+        ? agentDirOf(await core.statusLinePayload(sessionId))
+        : null
+    const p = await resolveExistingFile({ cwd, currentDir, target, stat: (f) => fs.stat(f) })
     if (!p) return null
     if (mediaKindOf(p)) mediaAllowlist.add(p)
     return { path: p }
