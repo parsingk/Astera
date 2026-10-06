@@ -1,7 +1,7 @@
 // Hook event file watcher. Reads the hook payloads astera-hook-capture.cjs appended to
 // hook-events/<sessionId>.jsonl, starting from each file's own offset, and hands them to the callback (SlackNotifier.onHookEvent).
 // Watcher errors and parse failures are only logged — a failed Slack notification must not block the session.
-import { watch, readdirSync, statSync, type FSWatcher } from 'node:fs'
+import { watch, accessSync, readdirSync, statSync, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
@@ -18,6 +18,10 @@ export const HOOK_SWEEP_MS = 10_000
 
 export class HookEventWatcher {
   private watcher: FSWatcher | null = null
+  /** Until start(), and after stop(): the sweep arms no watch. */
+  private stopped = true
+  /** The file id of the folder the running watch was armed on. */
+  private watchedId: bigint | null = null
   private sweeper: NodeJS.Timeout | null = null
   private offsets = new Map<string, number>() // filePath → byte offset already processed (stable because the file is append-only)
   private draining = new Set<string>() // Per-file re-entrancy guard
@@ -31,8 +35,78 @@ export class HookEventWatcher {
     private sweepMs: number = HOOK_SWEEP_MS,
     /** Start every file already in `dir` at its current end, so events written before this watcher
      *  existed are not delivered (the Host, S6 R13). Files that appear later are read from 0. */
-    private opts: { startAtEnd?: boolean } = {}
+    private opts: { startAtEnd?: boolean; watch?: typeof watch } = {}
   ) {}
+
+  /** Arms the folder's watch, when it is not running and the folder is there. Never throws. */
+  private arm(): void {
+    if (this.watcher || !this.dirExists()) return
+    try {
+      const w = (this.opts.watch ?? watch)(this.dir, (_ev, filename) => {
+        const name = filename?.toString()
+        if (name && name.endsWith('.jsonl')) {
+          void this.drain(path.join(this.dir, name))
+          return
+        }
+        // **The watched folder itself was removed** (the app's startupCleanup removes and remakes it at
+        // every launch, under a Host that outlives the app). On win32 the watch then raises no 'error':
+        // it fires 'rename' events named after the folder's own path without a pause, ~100,000 a second
+        // at ~90% of a core (measured, Electron 41 / Node 24, 2026-10-06), until it is closed. And while
+        // it is open the folder stays pending delete, so the app's mkdir fails with EPERM. So any event
+        // that is not a session file asks whether the folder is still there, and a gone one drops the
+        // watch; the sweep arms it again once the folder is back.
+        if (this.watcher === w && !this.stillWatched()) {
+          this.log(`hook watcher: ${this.dir} was removed; the watch is closed until the folder is back`)
+          this.drop()
+          // Its files went with it: a file of the same name in the new folder starts from 0.
+          this.offsets.clear()
+          // A folder already made again is watched now rather than at the next sweep.
+          this.arm()
+        }
+      })
+      w.on('error', (err) => {
+        this.log(`hook watcher error: ${err.message}`)
+        if (this.watcher === w) this.drop()
+      })
+      this.watcher = w
+      this.watchedId = this.dirId()
+    } catch (err) {
+      this.log(`hook watcher start failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  private drop(): void {
+    try {
+      this.watcher?.close()
+    } catch {
+      /* closing a watch that already failed changes nothing */
+    }
+    this.watcher = null
+  }
+
+  /** The folder's file id now, or null when it is not there to be read. **The access check comes
+   *  first**: a win32 folder that is pending delete (removed while this watch holds it) still answers
+   *  `stat`, with its old id, but refuses access (measured 2026-10-06), and a recursive mkdir on it
+   *  even reports success. */
+  private dirId(): bigint | null {
+    try {
+      accessSync(this.dir)
+      const s = statSync(this.dir, { bigint: true })
+      return s.isDirectory() ? s.ino : null
+    } catch {
+      return null
+    }
+  }
+
+  private dirExists(): boolean {
+    return this.dirId() !== null
+  }
+
+  /** The watched folder is still the one the watch was armed on. */
+  private stillWatched(): boolean {
+    const id = this.dirId()
+    return id !== null && id === this.watchedId
+  }
 
   start(): void {
     if (this.opts.startAtEnd) {
@@ -45,22 +119,16 @@ export class HookEventWatcher {
         this.log(`hook watcher could not read ${this.dir} at start: ${String(err)}`)
       }
     }
-    try {
-      this.watcher = watch(this.dir, (_ev, filename) => {
-        if (filename && filename.endsWith('.jsonl')) void this.drain(path.join(this.dir, filename))
-      })
-      this.watcher.on('error', (err) => this.log(`hook watcher error: ${err.message}`))
-    } catch (err) {
-      this.log(`hook watcher start failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    this.stopped = false
+    this.arm()
     // unref: a timer whose only job is to catch up must never be the reason the process stays alive.
     this.sweeper = setInterval(() => void this.sweep(), this.sweepMs)
     this.sweeper.unref?.()
   }
 
   stop(): void {
-    this.watcher?.close()
-    this.watcher = null
+    this.stopped = true
+    this.drop()
     if (this.sweeper) clearInterval(this.sweeper)
     this.sweeper = null
   }
@@ -88,6 +156,8 @@ export class HookEventWatcher {
    * catch it, so a throw here would be an unhandled rejection in the main process.
    */
   async sweep(): Promise<void> {
+    // A watch dropped because its folder went (or one that could not start) is armed again here.
+    if (!this.stopped) this.arm()
     let names: string[]
     try {
       names = await fs.readdir(this.dir)

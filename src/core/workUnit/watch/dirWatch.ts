@@ -1,7 +1,7 @@
 // What the transcript and git-dir watchers share: a non-recursive `fs.watch` on one directory that
 // can be re-armed by a sweep, and the size/mtime stamp the sweep compares. Built after
 // core/hooks/eventWatcher.ts, without chokidar, because the Host imports these (src/host/importFence.test.ts).
-import { watch, statSync, type FSWatcher } from 'node:fs'
+import { watch, accessSync, statSync, type FSWatcher } from 'node:fs'
 
 /** How often the sweep runs. fs.watch sometimes delivers nothing at all (measured on macOS, see
  *  HookEventWatcher.sweep), so the sweep is what bounds the delay of a dropped event. */
@@ -34,13 +34,22 @@ export interface DirWatch {
   close(): void
 }
 
-export function dirWatch(dir: string, onName: (name: string) => void, log: (m: string) => void): DirWatch {
+export function dirWatch(
+  dir: string,
+  onName: (name: string) => void,
+  log: (m: string) => void,
+  /** Test seam; node's fs.watch when left out. */
+  watchFn: typeof watch = watch
+): DirWatch {
   let watcher: FSWatcher | null = null
-  let ino: number | null = null // of the directory the running watch was armed on
+  let ino: bigint | null = null // of the directory the running watch was armed on
   let failureLogged = false
-  const inoOf = (): number | null => {
+  // **The access check comes first**: a win32 directory that is pending delete (removed while a watch
+  // holds it) still answers `stat` with its old id, but refuses access (measured 2026-10-06).
+  const inoOf = (): bigint | null => {
     try {
-      return statSync(dir).ino
+      accessSync(dir)
+      return statSync(dir, { bigint: true }).ino
     } catch {
       return null
     }
@@ -66,9 +75,21 @@ export function dirWatch(dir: string, onName: (name: string) => void, log: (m: s
         drop()
       }
       try {
-        const w = watch(dir, (_event, filename) => {
+        const w = watchFn(dir, (_event, filename) => {
           // A null filename names nothing this watch can filter on; the sweep covers that platform.
-          if (filename) onName(filename.toString())
+          if (!filename) return
+          const name = filename.toString()
+          // **The watched directory itself was removed** (a worktree's git dir after `git worktree
+          // remove`, say). On win32 the watch then raises no 'error': it fires 'rename' events named after
+          // the directory's own path, ~100,000 a second at ~90% of a core, until it is closed, and the
+          // directory stays pending delete meanwhile (measured 2026-10-06). A name that is a path rather
+          // than a child's is that storm: a directory that is no longer the one armed drops the watch
+          // here, and the owner's sweep arms it again if it comes back.
+          if (name.includes('/') || name.includes('\\')) {
+            if (watcher === w && inoOf() !== ino) drop()
+            return
+          }
+          onName(name)
         })
         // A watched directory that is deleted errors here; drop it so the sweep re-arms it if it returns.
         w.on('error', (err) => {
