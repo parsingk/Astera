@@ -288,3 +288,19 @@ describe('findConsoleLinks — the SendUserFile line of the Claude TUI', () => {
     expect(line.slice(paths[0].start, paths[0].end)).toBe('clips\\chk\\preview_c26_c27.mp4')
   })
 })
+
+// The same TUI, when the file sits in the agent's own folder: a bare name with no separator. Measured
+// from a real session where the line above it (with a separator) was a link and this one was not.
+describe('findConsoleLinks — bare media names', () => {
+  it('links a bare video or image name, as the SendUserFile line prints it', () => {
+    const line = '  › [file] seg31.mp4 (888.9KB)'
+    const paths = findConsoleLinks(line).filter((l) => l.kind === 'path')
+    expect(paths).toHaveLength(1)
+    expect(line.slice(paths[0].start, paths[0].end)).toBe('seg31.mp4')
+    expect(findConsoleLinks('saved cover.PNG').filter((l) => l.kind === 'path')).toHaveLength(1)
+  })
+
+  it('still leaves a bare non-media word alone', () => {
+    expect(findConsoleLinks('edit index.ts and README.md').filter((l) => l.kind === 'path')).toEqual([])
+  })
+})
