@@ -509,7 +509,14 @@ process.exit(7)
       const code = await hfProxy({ args: ['--as=higgsfield', 'generate', 'create', 'x'], env: await pathEnv([hig]), platform: process.platform, home: profile, write: (s) => msgs.push(s) })
       expect(code).toBe(127)
       await expect(fs.readFile(logFile, 'utf8')).rejects.toThrow()          // the CLI never ran
-      expect(msgs.join('').toLowerCase()).toBe(missingLine(vendor).toLowerCase())
+      // The path in the line is the one the lookup walked, which on a CI runner can be the 8.3 short form of
+      // the temp folder (RUNNER~1) while `vendor` above is its real path: compare the folders, not the spelling.
+      const said = msgs.join('')
+      const open = 'program is missing ('
+      const shown = said.slice(said.indexOf(open) + open.length, said.indexOf('). On Windows'))
+      expect(said.toLowerCase()).toBe(missingLine(shown).toLowerCase())
+      expect((await fs.realpath(path.dirname(shown))).toLowerCase()).toBe((await fs.realpath(path.dirname(vendor))).toLowerCase())
+      expect(path.basename(shown)).toBe(path.basename(vendor))
       expect(await fs.readFile(creds, 'utf8')).toBe('{"t":1}')
       expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
     }, 30000)
