@@ -63,3 +63,12 @@ describe('runtime registry (remote runtime design §4.6, N8)', () => {
     expect(await r.token('rt_a')).toBe('two')
   })
 })
+
+describe('runtime ids and case (Phase 2 review)', () => {
+  it('refuses an id with capitals, which on a case-insensitive disk would share another runtime’s token file', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_ab'), 'mine')
+    await expect(r.add(p('RT_AB'), 'theirs')).rejects.toThrow(/runtime id/)
+    expect(await r.token('rt_ab')).toBe('mine')
+  })
+})

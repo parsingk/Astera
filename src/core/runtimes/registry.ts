@@ -26,8 +26,9 @@ export interface RuntimeRegistry {
 const REGISTRY = 'runtimes.json'
 const TOKEN = '.token'
 
-/** A runtime id comes from the Runtime, and it names a file here: nothing but these characters. */
-export const isRuntimeId = (s: string): boolean => /^[A-Za-z0-9_-]{1,64}$/.test(s)
+/** A runtime id comes from the Runtime, and it names a file here: nothing but these characters, and lower case only,
+ *  since NTFS and APFS would let `rt_ab` and `RT_AB` share one token file. */
+export const isRuntimeId = (s: string): boolean => /^[a-z0-9_-]{1,64}$/.test(s)
 
 const tokenFile = (id: string): string => {
   if (!isRuntimeId(id)) throw new Error(`not a runtime id: ${JSON.stringify(id)}`)

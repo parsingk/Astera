@@ -1695,6 +1695,8 @@ export function createHostOrch(a: {
           const out = await a.controllers.revoke(id)
           // Phase 3's link closes `out.conns` (design §3.3's revocation order: record gone, bindings dropped, then
           // close-conn). Until a link exists there is nothing open to close.
+          if (out.saveError !== undefined)
+            return { status: 500, body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}`, clientId: id } }
           return out.revoked ? { status: 200, body: { revoked: true, clientId: id } } : { status: 404, body: { error: `unknown client: ${id}` } }
         }
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close' || cmd === 'workspace-size') {

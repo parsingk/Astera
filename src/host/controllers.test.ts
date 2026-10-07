@@ -153,3 +153,53 @@ describe('client records on disk (remote runtime design §4.6, N8)', () => {
     }
   })
 })
+
+describe('client records: final review fixes', () => {
+  it('saves one at a time, each with memory as it is when it starts, so an older snapshot never lands last', async () => {
+    let landed: ControllerRecord[] = []
+    const pending: Array<{ records: ControllerRecord[]; release: () => void }> = []
+    // A store whose writes can land in any order: whichever is released last is what the file holds.
+    const file = {
+      load: async (): Promise<ControllerRecord[]> => [],
+      save: (records: ControllerRecord[]) => new Promise<void>((release) => pending.push({ records, release: () => ((landed = records), release()) }))
+    }
+    const r = createControllerRegistry({ records: file })
+    const redeem = async (n: string) => {
+      const p = r.redeem(r.createPairing({ permission: 'read-only' }).code, n)
+      await new Promise((x) => setImmediate(x))
+      pending.shift()!.release()
+      const got = await p
+      if (!got.ok) throw new Error('redeem')
+      return got.clientId
+    }
+    const a = await redeem('a')
+    const b = await redeem('b')
+    const first = r.revoke(a)
+    const second = r.revoke(b)
+    // Release the newest pending write first, then any that follow, as an unordered store might.
+    for (let i = 0; i < 10; i++) {
+      await new Promise((x) => setImmediate(x))
+      pending.pop()?.release()
+    }
+    await Promise.all([first, second])
+    expect(landed).toEqual([])
+  })
+  it('a revoke whose save fails still answers the connections to close, and says the save failed', async () => {
+    const file = { load: async (): Promise<ControllerRecord[]> => [], save: async (): Promise<void> => {} }
+    const r = createControllerRegistry({ records: file })
+    const got = await r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')
+    if (!got.ok) throw new Error('redeem')
+    r.bind(1, 'c', got.clientId)
+    file.save = async () => {
+      throw new Error('disk full')
+    }
+    const out = await r.revoke(got.clientId)
+    expect(out).toMatchObject({ revoked: true, conns: [{ linkGen: 1, conn: 'c' }], saveError: 'disk full' })
+    expect(r.principalFor(1, 'c')).toBeNull()
+  })
+  it('a redeem whose save fails leaves no client behind', async () => {
+    const r = createControllerRegistry({ records: { load: async () => [], save: async () => Promise.reject(new Error('disk full')) } })
+    await expect(r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')).rejects.toThrow('disk full')
+    expect(r.list()).toEqual([])
+  })
+})

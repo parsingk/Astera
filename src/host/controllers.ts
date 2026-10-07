@@ -60,7 +60,7 @@ export interface ControllerRegistry {
   /** A Gateway generation is gone: every binding it held goes with it. */
   dropLink(linkGen: number): void
   /** Deletes the record and every binding to it, and names the connections to close (design §3.3's order). */
-  revoke(clientId: string): Promise<{ revoked: boolean; conns: Array<{ linkGen: number; conn: string }> }>
+  revoke(clientId: string): Promise<{ revoked: boolean; conns: Array<{ linkGen: number; conn: string }>; saveError?: string }>
   list(): Array<Omit<ControllerRecord, 'tokenHash'>>
 }
 
@@ -81,10 +81,16 @@ export function createControllerRegistry(
   let loading: Promise<void> | null = null
   /** A failed load, kept: every later write fails the same way instead of saving a set missing what it could not read. */
   let loadFailed: unknown = null
-  // Every save writes the whole set as memory holds it then; the store's lock orders the writes on disk.
-  const persist = async (): Promise<void> => {
-    if (loadFailed !== null) throw loadFailed
-    if (deps.records) await deps.records.save([...records.values()])
+  /** The saves, one after another. The store's lock is not a queue, so two saves let run together could land in
+   *  either order; chained, each takes memory as it is when it starts, and the last to start is the last to land. */
+  let saving: Promise<void> = Promise.resolve()
+  const persist = (): Promise<void> => {
+    const next = saving.then(async () => {
+      if (loadFailed !== null) throw loadFailed
+      if (deps.records) await deps.records.save([...records.values()])
+    })
+    saving = next.catch(() => {})
+    return next
   }
   /** Pending pairing codes by hash: what a redeem needs, and the attempts wrong guesses have spent. */
   const codes = new Map<string, { expiresAt: number; attempts: number; permission: ControllerPermission; name?: string }>()
@@ -151,7 +157,14 @@ export function createControllerRegistry(
         createdAt: new Date(now()).toISOString(),
         lastSeenAt: null
       })
-      await persist()
+      try {
+        await persist()
+      } catch (e) {
+        // A client whose record is not on disk would be lost at the next restart while its controller still held the
+        // token: take it back, and the controller is told the pairing failed.
+        records.delete(clientId)
+        throw e
+      }
       return { ok: true, clientId, token }
     },
     authenticate: (tokenHash) => {
@@ -184,7 +197,14 @@ export function createControllerRegistry(
         const [gen, conn] = k.split('\u0000')
         conns.push({ linkGen: Number(gen), conn })
       }
-      if (revoked) await persist()
+      // The connections to close are answered even when the file could not be written: the client is already refused
+      // for this Host's life, and its open connections must still go (design §3.3).
+      if (revoked)
+        try {
+          await persist()
+        } catch (e) {
+          return { revoked, conns, saveError: e instanceof Error ? e.message : String(e) }
+        }
       return { revoked, conns }
     },
     list: () => [...records.values()].map(({ tokenHash: _hidden, ...rest }) => rest)

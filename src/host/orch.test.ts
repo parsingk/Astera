@@ -4497,3 +4497,18 @@ describe('session work units in the Host (E2 §5)', () => {
     })
   })
 })
+
+describe('clients-revoke when clients.json cannot be written (remote runtime Phase 2 review)', () => {
+  it('answers 500 naming the failure, with the client already refused', async () => {
+    let fail = false
+    const controllers = createControllerRegistry({ records: { load: async () => [], save: async () => { if (fail) throw new Error('disk full') } } })
+    const orch = orchOver({ controllers })
+    const got = await controllers.redeem(controllers.createPairing({ permission: 'read-only' }).code, 'x')
+    if (!got.ok) throw new Error('redeem')
+    fail = true
+    const r = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: { role: 'cli', toOthers: () => {} } })
+    expect(r.status).toBe(500)
+    expect(JSON.stringify(r.body)).toContain('disk full')
+    expect(controllers.list()).toEqual([])
+  })
+})

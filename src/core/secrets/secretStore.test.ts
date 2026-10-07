@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openSecretStore, SecretFileUnsafe, SecretStoreBusy } from './secretStore'
@@ -102,4 +102,45 @@ describe('SecretStore (remote runtime design §4.6)', () => {
     const final = JSON.parse((await s.read('set.json'))!) as string[]
     expect(final.sort()).toEqual(Array.from({ length: 20 }, (_, i) => `a${i}`).sort())
   }, 60_000)
+})
+
+describe('SecretStore lock: final review fixes', () => {
+  it('never removes a lock another process took after this one judged the old one dead (Phase 2 review I2)', async () => {
+    const lock = path.join(dir, 'lock')
+    const fresh = JSON.stringify({ pid: process.pid, startedAt: Date.now(), nonce: 'other' })
+    const s = openSecretStore({
+      dir,
+      profileDir: profile,
+      lockWaitMs: 300,
+      // The moment this store judges the dead lock, another process breaks it and takes its own.
+      pidLives: (pid) => {
+        if (pid !== 999999) return true
+        writeFileSync(lock, fresh)
+        return false
+      }
+    })
+    await s.withLock(async () => {})
+    await fs.writeFile(lock, JSON.stringify({ pid: 999999, startedAt: Date.now() }))
+    await expect(s.withLock(async () => {})).rejects.toBeInstanceOf(SecretStoreBusy)
+    expect(await fs.readFile(lock, 'utf8')).toBe(fresh)
+  })
+  it('an empty lock left by a writer that died is broken once it is old, under the default limits (I3)', async () => {
+    const s = openSecretStore({ dir, profileDir: profile })
+    await s.withLock(async () => {})
+    const lock = path.join(dir, 'lock')
+    await fs.writeFile(lock, '')
+    const old = new Date(Date.now() - 31_000)
+    await fs.utimes(lock, old, old)
+    await s.withLock((tx) => tx.write('a', 'x'))
+    expect(await s.read('a')).toBe('x')
+  })
+  it.runIf(process.platform === 'win32')('a write lands even while another reader holds the file open for a moment (I4)', async () => {
+    const s = openSecretStore({ dir, profileDir: profile })
+    await s.withLock((tx) => tx.write('a', 'one'))
+    const h = await fs.open(path.join(dir, 'a'), 'r')
+    setTimeout(() => void h.close(), 300)
+    await s.withLock((tx) => tx.write('a', 'two'))
+    expect(await s.read('a')).toBe('two')
+    expect((await fs.readdir(dir)).filter((n) => n.startsWith('.tmp-'))).toEqual([])
+  })
 })
