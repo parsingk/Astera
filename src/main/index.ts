@@ -13,6 +13,7 @@ import {
   // staging block below for why its verdict has to be read separately from electron-updater's.
   autoUpdater as squirrel
 } from 'electron'
+import { clearUpdateHold, UPDATE_HOLD_MS, writeUpdateHold } from '../core/remote/updateHold'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { existsSync, readFileSync, promises as fsp } from 'node:fs'
@@ -434,6 +435,12 @@ app.whenReady().then(async () => {
   // Tells a Host this app is not attached to that an app is alive and may be running sessions the
   // Host cannot see, so it refuses to remove a worktree folder under them (core/host/pidFile.ts).
   markAppRunning(app.getPath('userData'), process.pid)
+  // The update that wrote a hold is over once an app boots (remote runtime design §2.9).
+  try {
+    clearUpdateHold(app.getPath('userData'))
+  } catch {
+    /* nothing to clear */
+  }
   // Serves only media files the renderer resolved through files.resolveLink or run.resolveLink — a
   // defence-in-depth allowlist, not a boundary against the renderer (main/media/allowlist.ts says
   // what it does and does not bind). On the default session, which is the main
@@ -1449,6 +1456,14 @@ app.whenReady().then(async () => {
           // Awaited, and a failure is not one: the point is to be gone, and a Host that never
           // answered is already that. quitAndInstall follows either way — the installer's own
           // customCheckAppRunning (build/installer.nsh) is the net under this.
+          // **And `astera runtime serve` starts no Host while the installer runs** (remote runtime design §2.9): the
+          // hold names this process and lasts ten minutes, so an installer that dies does not keep the Runtime down.
+          // The next app removes it at boot. Best effort, like the retire below.
+          try {
+            writeUpdateHold(app.getPath('userData'), { pid: process.pid, until: Date.now() + UPDATE_HOLD_MS })
+          } catch {
+            /* a hold that could not be written only means serve may race the installer, as before */
+          }
           if (!(hostSurvivesUpdateRef?.() ?? process.platform !== 'win32')) {
             try {
               await hostClientRetireRef?.()

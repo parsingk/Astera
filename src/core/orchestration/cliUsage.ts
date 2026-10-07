@@ -135,6 +135,11 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     detail: 'Writes remote-runtime.json and stops the Gateway. Paired controllers stay paired; they cannot connect until it is on again.'
   },
   'runtime-status': { summary: 'whether Remote Runtime is on, the Gateway state, the fingerprint and the paired clients' },
+  'runtime-serve': {
+    summary: 'keep a Host running while Remote Runtime is on (for an OS service, in the foreground)',
+    detail:
+      'For a logon task, a LaunchAgent or a systemd unit, not for a person. It never turns Remote on or off: it runs a Host while `runtime start` left it on, starts none while it is off, watches a Host the app already started, restarts one that crashes, and starts none during an app update. SIGTERM or SIGINT stops its Host and it exits 0. `astera host stop` is followed by a new Host while Remote is on: run `astera runtime stop` first.'
+  },
   'runtime-pair': {
     summary: 'a one-time pairing string for another machine (valid 10 minutes)',
     detail:

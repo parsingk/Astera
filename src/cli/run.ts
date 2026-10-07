@@ -6,6 +6,7 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import os, { homedir } from 'node:os'
 import { leadingGlobals, parseArgs } from '../core/orchestration/cliArgs'
 import { publicEvent, publicFor } from '../core/orchestration/cliPublic'
@@ -17,13 +18,16 @@ import { humanFor, quietFor } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
-import { cliHostTarget, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
+import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
+import { runServe, type ServeDeps } from './runtime/serve'
+import { readValidHold } from '../core/remote/updateHold'
+import { pidLives } from '../core/host/pidFile'
 import { readRemoteSettings, writeRemoteSettings } from '../core/remote/settings'
 import { loadIdentity, loadOrCreateIdentity } from '../core/remote/identity'
 import { openSecretStore } from '../core/secrets/secretStore'
@@ -691,6 +695,55 @@ const privateAddress = (): string | null => {
   return null
 }
 
+/** What `astera runtime serve` runs on (cli/runtime/serve.ts): this profile's settings, its update hold, its Host. */
+const serveDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; home: string }): ServeDeps => {
+  const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
+  // A signal wakes whatever wait is under way, so `serve` leaves at once rather than after its 30 s backoff.
+  let wake = (): void => {}
+  return {
+    settings: () => readRemoteSettings(profileDir),
+    hold: () => readValidHold(profileDir, Date.now(), pidLives) !== null,
+    hostAnswers: async () => {
+      const conn = await connectHost({ address, profileDir, app: CLI_VERSION, log: () => {} })
+      if ('error' in conn) return false
+      conn.close()
+      return true
+    },
+    startHostChild: () => {
+      const planned = hostSpawnPlanFor({ profileDir, platform: a.platform, env: a.env })
+      if ('error' in planned) {
+        logToStderr(`astera runtime serve: ${planned.error.message}`)
+        return { wait: Promise.resolve(1), kill: () => {} }
+      }
+      // In the foreground: a child of this process, so a service manager that stops `serve` stops the Host with it.
+      const child = spawn(planned.plan.command, planned.plan.args, { ...planned.plan.options, detached: false, stdio: 'ignore' })
+      const wait = new Promise<number | null>((resolve) => {
+        child.once('exit', (code) => resolve(code))
+        child.once('error', () => resolve(1))
+      })
+      return { wait, kill: (signal) => void child.kill(signal) }
+    },
+    sleep: (ms) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, ms)
+        wake = () => {
+          clearTimeout(t)
+          resolve()
+        }
+      }),
+    onSignal: (fn) => {
+      const stop = (): void => {
+        fn()
+        wake()
+      }
+      process.once('SIGTERM', stop)
+      process.once('SIGINT', stop)
+    },
+    now: Date.now,
+    log: (m) => logToStderr(`astera runtime serve: ${m}`)
+  }
+}
+
 /** What `astera runtime ...` reads and asks on this machine (cli/runtime/commands.ts). */
 const runtimeDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; home: string; noKeepalive: boolean }): RuntimeCommandDeps => {
   const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
@@ -1355,6 +1408,11 @@ export async function main(): Promise<void> {
         code: 'INVALID_ARGUMENTS',
         message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
       })
+    // `serve` runs until SIGTERM or SIGINT and always ends with 0 (design §2.9): its Host's crashes are its own business.
+    if (parsed.cmd === 'runtime-serve') {
+      await runServe(serveDeps({ env: process.env, platform: process.platform, home: homedir() }))
+      process.exit(0)
+    }
     const done = await runRuntimeCommand(parsed.cmd, parsed.args, runtimeDeps({ env: process.env, platform: process.platform, home: homedir(), noKeepalive: parsed.noKeepalive }))
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))

@@ -524,6 +524,7 @@ const NOT_SWITCHED = [
   'runtime-start',
   'runtime-stop',
   'runtime-status',
+  'runtime-serve',
   'runtime-pair',
   'runtime-clients',
   'runtime-revoke'

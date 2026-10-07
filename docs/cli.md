@@ -498,6 +498,7 @@ astera runtime pair --name laptop            a one-time pairing string, valid 10
 astera runtime clients                       who is paired
 astera runtime revoke --id <clientId>        unpair one and close its connections now
 astera runtime stop                          stop listening; the Host and its Jobs keep running
+astera runtime serve                         for an OS service: keep a Host running while Remote is on
 ```
 
 `start` writes `remote-runtime.json` in the profile, makes this machine's identity the first time (a key and a
@@ -534,7 +535,7 @@ astera status                            is the orchestrator there, and what is 
 astera host    status | stop
 astera host    start  [--replace]
 
-astera runtime status | stop | clients
+astera runtime status | stop | clients | serve
 astera runtime start   [--listen <addr>] [--port <n>]
 astera runtime pair    [--read-only] [--name <n>]
 astera runtime revoke  --id <clientId>

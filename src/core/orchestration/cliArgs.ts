@@ -142,7 +142,7 @@ export const NOUNS = {
   mcp: ['serve', 'status'],
   // **Remote Runtime on this machine** (remote runtime design §2.9, plan ruling P1): answered in the CLI process,
   // which writes remote-runtime.json and the identity and asks the Host only what it holds (cli/runtime/commands.ts).
-  runtime: ['start', 'stop', 'status', 'pair', 'clients', 'revoke']
+  runtime: ['start', 'stop', 'status', 'serve', 'pair', 'clients', 'revoke']
 } as const
 
 /** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고

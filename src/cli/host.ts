@@ -404,6 +404,49 @@ export function startHostNotice(a: {
 /** Runs a `host-*` command and hands back what happened, without printing anything on stdout (see
  *  the note at the top of this file) — `run.ts` renders `body` and exits with `code`. `host start` and
  *  `host stop` say on stderr that they are still waiting (startHostNotice). */
+/**
+ * How this CLI starts a Host for a profile: the build to run, the runtime to run it on, the CLI paths it hands its
+ * workers. `host start` spawns it detached; `runtime serve` spawns it in the foreground (remote runtime design §2.9).
+ */
+export function hostSpawnPlanFor(a: {
+  profileDir: string
+  platform: NodeJS.Platform
+  env: NodeJS.ProcessEnv
+}): { plan: ReturnType<typeof hostSpawnPlan>; logPath: string } | { error: CliError } {
+  const targets = hostStartTargets({
+    cliEntry: process.argv[1] ?? '',
+    execPath: process.execPath,
+    profileDir: a.profileDir,
+    version: CLI_VERSION,
+    runtime: preparedRuntime({
+      profileDir: a.profileDir,
+      platform: a.platform,
+      env: a.env,
+      resourcesPath: process.resourcesPath,
+      readFile: (p) => readFileSync(p, 'utf8')
+    }),
+    skillsDir: resolveSkillsDir({ resourcesPath: process.resourcesPath, cliEntry: process.argv[1] ?? '', exists: existsSync })
+  })
+  const entry = resolveHostEntry(targets.candidates, existsSync)
+  if (!entry)
+    return {
+      error: {
+        code: 'HOST_NOT_RUNNING',
+        message: `no Host build found among: ${targets.candidates.join(', ')}`,
+        details: { candidates: targets.candidates }
+      }
+    }
+  const plan = hostSpawnPlan({
+    execPath: targets.execPathFor(entry),
+    entryPath: entry,
+    profileDir: a.profileDir,
+    logPath: targets.logPath,
+    version: CLI_VERSION,
+    cli: targets.cli
+  })
+  return { plan, logPath: targets.logPath }
+}
+
 export async function runHostCommand(a: {
   cmd: string
   env: NodeJS.ProcessEnv
@@ -536,38 +579,9 @@ async function runHostCommandNow(a: {
       }
   }
 
-  const targets = hostStartTargets({
-    cliEntry: process.argv[1] ?? '',
-    execPath: process.execPath,
-    profileDir,
-    version: CLI_VERSION,
-    runtime: preparedRuntime({
-      profileDir,
-      platform: a.platform,
-      env: a.env,
-      resourcesPath: process.resourcesPath,
-      readFile: (p) => readFileSync(p, 'utf8')
-    }),
-    skillsDir: resolveSkillsDir({ resourcesPath: process.resourcesPath, cliEntry: process.argv[1] ?? '', exists: existsSync })
-  })
-  const entry = resolveHostEntry(targets.candidates, existsSync)
-  if (!entry)
-    return {
-      ok: false,
-      error: {
-        code: 'HOST_NOT_RUNNING',
-        message: `no Host build found among: ${targets.candidates.join(', ')}`,
-        details: { candidates: targets.candidates }
-      }
-    }
-  const plan = hostSpawnPlan({
-    execPath: targets.execPathFor(entry),
-    entryPath: entry,
-    profileDir,
-    logPath: targets.logPath,
-    version: CLI_VERSION,
-    cli: targets.cli
-  })
+  const planned = hostSpawnPlanFor({ profileDir, platform: a.platform, env: a.env })
+  if ('error' in planned) return { ok: false, error: planned.error }
+  const { plan, logPath } = planned
   const child = spawn(plan.command, plan.args, plan.options)
   // A spawn that fails arrives as an async 'error' event, not a throw — see the same handling in
   // `src/main/ipc.ts`'s `startHostClient`. The polling loop below reports the outcome either way; this
@@ -586,8 +600,8 @@ async function runHostCommandNow(a: {
     ok: false,
     error: {
       code: 'HOST_NOT_RUNNING',
-      message: `the Host did not answer within ${START_TIMEOUT_MS}ms — its log is at ${targets.logPath}`,
-      details: { logPath: targets.logPath }
+      message: `the Host did not answer within ${START_TIMEOUT_MS}ms — its log is at ${logPath}`,
+      details: { logPath }
     }
   }
 }

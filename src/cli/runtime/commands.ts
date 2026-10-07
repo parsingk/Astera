@@ -1,4 +1,5 @@
-// `astera runtime start | stop | status | pair | clients | revoke` (remote runtime design §2.9, plan ruling P1): the
+// `astera runtime start | stop | status | pair | clients | revoke` (and `serve`, in serve.ts, which run.ts dispatches;
+// named here as 'runtime-serve' only so the agent-context witness finds every runtime command in one file) (remote runtime design §2.9, plan ruling P1): the
 // person's switches for Remote Runtime on this machine. They answer in the CLI process, reading and writing
 // remote-runtime.json and the identity, and ask the Host only what only it knows. Everything a command needs from the
 // machine comes through `RuntimeCommandDeps`, so each one is tested without a Host or a network.
@@ -128,6 +129,8 @@ export async function runRuntimeCommand(cmd: string, args: Record<string, unknow
       if ('down' in r) return hostDown()
       return answered(r)
     }
+    case 'runtime-serve':
+      return failure('FAILED', 'runtime serve runs in the foreground from run.ts, not here')
     default:
       return failure('FAILED', `${cmd} is not a runtime command`)
   }
