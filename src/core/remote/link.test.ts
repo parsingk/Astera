@@ -15,7 +15,8 @@ function fakeRuntime(o: {
   connectFails?: (n: number) => Error | null
   hello?: HelloFrame
   authFails?: RemoteError
-  answer?: (s: Sent, conn: number) => CallReply | 'drop' | 'hang' | RemoteError
+  answer?: (s: Sent, conn: number) => CallReply | 'drop' | 'hang' | RemoteError | { dropWith: string }
+  connectHangs?: (n: number) => boolean
 }) {
   const sent: Array<Sent & { conn: number }> = []
   let conns = 0
@@ -24,6 +25,7 @@ function fakeRuntime(o: {
     const n = ++conns
     const fail = o.connectFails?.(n) ?? null
     if (fail) throw fail
+    if (o.connectHangs?.(n)) await new Promise(() => {})
     let closeIt!: (v: { code?: string }) => void
     const closed = new Promise<{ code?: string }>((r) => (closeIt = r))
     let gone = false
@@ -42,9 +44,10 @@ function fakeRuntime(o: {
           sent.push({ ...s, conn: n })
           const a = o.answer ? o.answer(s, n) : { status: 200, body: { ok: true } }
           if (a === 'hang') return
-          if (a === 'drop') {
+          if (a === 'drop' || (typeof a === 'object' && 'dropWith' in a)) {
             gone = true
-            reject(new RemoteError('RUNTIME_OFFLINE', 'the connection to the Runtime closed'))
+            const code = a === 'drop' ? 'RUNTIME_OFFLINE' : a.dropWith
+            reject(Object.assign(new RemoteError(code, 'the connection to the Runtime closed'), { lost: true }))
             for (const w of waiting.splice(0)) w(new RemoteError('RUNTIME_OFFLINE', 'closed'))
             closeIt({})
             return
@@ -79,7 +82,7 @@ const fastLink = (rt: ReturnType<typeof fakeRuntime>, over: Partial<Parameters<t
     reconnectForMs: 60_000,
     ...over
   })
-  return { link, sleeps }
+  return { link, sleeps, advance: (ms: number) => void (clock += ms) }
 }
 
 describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
@@ -152,7 +155,7 @@ describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
   })
 
   it('backs off 1 s, 2 s, 5 s, 10 s, then 30 s, with jitter around each', async () => {
-    const rt = fakeRuntime({ connectFails: () => Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }) })
+    const rt = fakeRuntime({ connectFails: (n) => (n === 1 ? null : Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' })), answer: () => 'drop' })
     const jitters = [0, 0.99, 0.5, 0.25, 0.75, 0.5]
     let i = 0
     const { link, sleeps } = fastLink(rt, { random: () => jitters[i++ % jitters.length], reconnectForMs: 100_000 })
@@ -176,5 +179,77 @@ describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
     const { link } = fastLink(rt)
     expect(await link.call('jobs-list', {})).toMatchObject({ code: 'RUNTIME_BUSY' })
     expect(rt.sent).toHaveLength(1)
+  })
+
+  // Final review C1: a connection the Gateway closed with a code (busy, silent, bad frame) lost the call; it is not the
+  // Runtime's answer to it.
+  it('a change whose connection was closed with a code is sent again as a retry, not answered with that code', async () => {
+    const rt = fakeRuntime({ answer: (_s, conn) => (conn === 1 ? { dropWith: 'RUNTIME_BUSY' } : { status: 200, body: { id: 'job_1' }, replayed: true }) })
+    const { link } = fastLink(rt)
+    expect(await link.call('jobs-run', { id: 'job_1' }, { request: 'req-9' })).toEqual({ status: 200, body: { id: 'job_1' }, replayed: true })
+    expect(rt.sent.map((x) => x.o)).toEqual([{ request: 'req-9' }, { request: 'req-9', retry: true }])
+  })
+
+  it('a revocation that closes the connection mid-call is final', async () => {
+    const rt = fakeRuntime({ answer: () => ({ dropWith: 'RUNTIME_AUTH_FAILED' }) })
+    const { link } = fastLink(rt)
+    expect(await link.call('jobs-run', { id: 'job_1' }, { request: 'req-10' })).toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
+    expect(rt.conns()).toBe(1)
+  })
+
+  // Final review I1: the reconnect window starts at the loss, not at the call.
+  it('a long call that drops late still gets its whole reconnect window', async () => {
+    let h!: ReturnType<typeof fastLink>
+    const rt = fakeRuntime({
+      connectFails: (n) => (n === 2 ? Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }) : null),
+      answer: (_s, conn) => {
+        if (conn === 1) {
+          h.advance(10 * 60_000)
+          return 'drop'
+        }
+        return { status: 200, body: { merged: true } }
+      }
+    })
+    h = fastLink(rt)
+    expect(await h.link.call('run-merge', { run: 'r' }, { request: 'req-11' })).toEqual({ status: 200, body: { merged: true } })
+  })
+
+  // Final review I3: a Runtime that is not there says so at once, and a hung connect does not hang the call.
+  it('a fresh call to a Runtime that cannot be reached is RUNTIME_OFFLINE at once, with no backoff', async () => {
+    const rt = fakeRuntime({ connectFails: () => Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }) })
+    const { link, sleeps } = fastLink(rt)
+    expect(await link.call('jobs-list', {})).toMatchObject({ code: 'RUNTIME_OFFLINE' })
+    expect(sleeps).toEqual([])
+    expect(rt.conns()).toBe(1)
+  })
+
+  it('a connect that never completes is RUNTIME_OFFLINE after the connect timeout', async () => {
+    const rt = fakeRuntime({ connectHangs: () => true })
+    const { link } = fastLink(rt, { connectTimeoutMs: 20 })
+    expect(await link.call('jobs-list', {})).toMatchObject({ code: 'RUNTIME_OFFLINE' })
+  })
+
+  it('a reply timeout drops the connection, so the next call opens a new one', async () => {
+    const rt = fakeRuntime({ answer: (_s, conn) => (conn === 1 ? 'hang' : { status: 200, body: [] }) })
+    const { link } = fastLink(rt)
+    expect(await link.call('jobs-list', {}, { timeoutMs: 20 })).toMatchObject({ code: 'REMOTE_TIMEOUT' })
+    expect(await link.call('jobs-list', {})).toEqual({ status: 200, body: [] })
+    expect(rt.conns()).toBe(2)
+  })
+
+  // A retry that finds its own first attempt still running (409 with its request id) asks again until it is done.
+  it('a retry answered "already running" waits and asks again, and gets the replay', async () => {
+    let asks = 0
+    const rt = fakeRuntime({
+      answer: (_s, conn) => {
+        if (conn === 1) return 'drop'
+        asks++
+        return asks < 3 ? { status: 409, body: { error: 'request req-12 is already running', requestId: 'req-12' } } : { status: 200, body: { id: 'job_1' }, replayed: true }
+      }
+    })
+    const { link, sleeps } = fastLink(rt)
+    expect(await link.call('run-merge', { run: 'r' }, { request: 'req-12' })).toEqual({ status: 200, body: { id: 'job_1' }, replayed: true })
+    expect(sleeps.length).toBe(2)
+    expect(rt.sent.slice(1).every((x) => x.o?.retry === true)).toBe(true)
   })
 })

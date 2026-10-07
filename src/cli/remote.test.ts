@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { answerRemote, type RemoteDeps } from './remote'
+import { answerRemote, trailingRuntimeError, type RemoteDeps } from './remote'
+import { nextStepsFor } from '../core/orchestration/cliOutput'
 import { controllerRegistry } from './runtimes'
 import { RemoteError } from '../core/remote/client'
 import type { RemoteLink, RemoteTarget } from '../core/remote/link'
@@ -96,9 +97,29 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     expect((await fs.readdir(dir)).sort()).toEqual(before)
   })
 
-  it("a Runtime's refusal keeps its own answer for the shared rendering", async () => {
+  // Final review I2: a Runtime's refusal names that Runtime, so its next steps point there, not at this machine.
+  it("a Runtime's refusal keeps its code and names the Runtime", async () => {
     const h = deps(() => ({ status: 403, body: { error: 'needs full control', code: 'RUNTIME_PERMISSION_DENIED' } }))
-    expect(await ask('runs-stop', { id: 'run_1' }, h.d)).toEqual({ status: 403, body: { error: 'needs full control', code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect(await ask('runs-stop', { id: 'run_1' }, h.d)).toEqual({ error: { code: 'RUNTIME_PERMISSION_DENIED', message: 'needs full control', details: { runtime: 'rt_a' } } })
+  })
+  it('a retry that finds the first attempt still running points at requests show on that Runtime', async () => {
+    const h = deps(() => ({ status: 409, body: { error: 'request req-1 is already running', requestId: 'req-1' } }))
+    const r = (await ask('jobs-run', { id: 'job_1' }, h.d)) as { error: { code: string; details: Record<string, unknown> } }
+    expect(r.error).toMatchObject({ code: 'CONFLICT', details: { requestId: 'req-1', runtime: 'rt_a' } })
+    expect(nextStepsFor({ code: 'CONFLICT', cmd: 'jobs-run', details: r.error.details })).toEqual(['astera --runtime rt_a requests show --id req-1'])
+  })
+  it("the Runtime's own outcome unknown reads like the link's: request id, runtime, and the list to check", async () => {
+    const h = deps(() => ({ status: 409, body: { error: 'no receipt for req-1; list what it changed', code: 'RUNTIME_OUTCOME_UNKNOWN', retry: 'outcome-unknown' } }))
+    const r = (await ask('jobs-run', { id: 'job_1' }, h.d)) as { error: { code: string; message: string; details: Record<string, unknown> } }
+    expect(r.error.code).toBe('RUNTIME_OUTCOME_UNKNOWN')
+    expect(r.error.details).toEqual({ runtime: 'rt_a', requestId: 'req-1' })
+    expect(r.error.message).toMatch(/newest Jobs on this runtime/)
+  })
+  // Final review I5: run-create is jobs create under its old name, with the same Host-side default folder.
+  it('a remote run-create needs --cwd too', async () => {
+    const h = deps()
+    expect(await ask('run-create', { objective: 'o' }, h.d)).toMatchObject({ error: { code: 'INVALID_ARGUMENTS' } })
+    expect(h.calls).toEqual([])
   })
 
   it('runs follow is the same loop of calls, over the link', async () => {
@@ -113,5 +134,14 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     const r = await answerRemote({ cmd: 'runs-follow', args: { id: 'run_1' }, runtime: 'rt_a', request: 'req-1', profileDir: dir, mode: 'json', write: (l) => lines.push(l), version: '1.4.8', deps: h.d })
     expect(r).toMatchObject({ status: 200, body: { state: 'completed' } })
     expect(h.calls.every((c) => c.cmd === 'runs-follow' && c.o?.request === undefined)).toBe(true)
+  })
+})
+
+// Final review I4: a command not in the public table takes any flag, so --runtime after it would be dropped into args
+// and the command would run on this machine.
+describe('trailingRuntimeError', () => {
+  it('refuses --runtime after the command, for every command', () => {
+    expect(trailingRuntimeError({ runtime: 'office' })).toMatch(/before the command/)
+    expect(trailingRuntimeError({ run: 'r1' })).toBeNull()
   })
 })

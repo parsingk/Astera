@@ -25,13 +25,27 @@ export interface RuntimeLink {
 
 export class RemoteError extends Error {
   readonly code: string
-  constructor(code: string, message: string) {
+  /** The connection was lost with this call on it (closed, with or without a code the Runtime named, or silent): the
+   *  call may or may not have run, and it is not the Runtime's answer to it (Phase 4 review C1). */
+  readonly lost: boolean
+  constructor(code: string, message: string, o: { lost?: boolean } = {}) {
     super(message)
     this.code = code
+    this.lost = o.lost === true
   }
 }
 
-export async function connectRuntime(o: { host: string; port: number; pin: string; answerPings?: boolean }): Promise<RuntimeLink> {
+/** The controller's heartbeat (design §3.1, N14): a ping every 15 s, and a link with nothing heard for 45 s is dropped. */
+export const HEARTBEAT = { everyMs: 15_000, silenceMs: 45_000 }
+
+export async function connectRuntime(o: {
+  host: string
+  port: number
+  pin: string
+  answerPings?: boolean
+  /** Test seam; HEARTBEAT when left out. */
+  heartbeat?: { everyMs: number; silenceMs: number }
+}): Promise<RuntimeLink> {
   const sock: TLSSocket = await connectPinned({ host: o.host, port: o.port, pin: o.pin })
   sock.setEncoding('utf8')
   const answerPings = o.answerPings ?? true
@@ -60,7 +74,7 @@ export async function connectRuntime(o: { host: string; port: number; pin: strin
         const whole = reassemble.add(f as ChunkFrame)
         if (whole === null) return
         if (typeof whole !== 'string') {
-          failAll(new RemoteError(whole.error, 'a reply could not be put back together'))
+          failAll(new RemoteError(whole.error, 'a reply could not be put back together', { lost: true }))
           sock.destroy()
           return
         }
@@ -86,7 +100,7 @@ export async function connectRuntime(o: { host: string; port: number; pin: strin
           p?.reject(e)
         } else {
           closeCode ??= f.code
-          failAll(e)
+          failAll(new RemoteError(f.code, f.message, { lost: true }))
         }
         return
       }
@@ -98,6 +112,20 @@ export async function connectRuntime(o: { host: string; port: number; pin: strin
     }
   }
 
+  // Silence is a lost link (N14): a half-open socket after sleep or a network change would otherwise hold every call.
+  const hb = o.heartbeat ?? HEARTBEAT
+  let heard = Date.now()
+  sock.on('data', () => {
+    heard = Date.now()
+  })
+  const beat = setInterval(() => {
+    if (Date.now() - heard > hb.silenceMs) {
+      sock.destroy()
+      return
+    }
+    send({ t: 'ping' })
+  }, hb.everyMs)
+  beat.unref()
   sock.on(
     'data',
     createLineReader({
@@ -110,7 +138,8 @@ export async function connectRuntime(o: { host: string; port: number; pin: strin
   )
   const closed = new Promise<{ code?: string }>((resolve) => {
     const done = (): void => {
-      failAll(new RemoteError(closeCode ?? 'RUNTIME_OFFLINE', 'the connection to the Runtime closed'))
+      clearInterval(beat)
+      failAll(new RemoteError(closeCode ?? 'RUNTIME_OFFLINE', 'the connection to the Runtime closed', { lost: true }))
       resolve(closeCode !== undefined ? { code: closeCode } : {})
     }
     sock.once('close', done)
@@ -134,7 +163,8 @@ export async function connectRuntime(o: { host: string; port: number; pin: strin
     },
     call: (cmd, args, co = {}) =>
       new Promise<CallReply>((resolve, reject) => {
-        if (sock.destroyed) return reject(new RemoteError(closeCode ?? 'RUNTIME_OFFLINE', 'the connection to the Runtime is closed'))
+        // Nothing was written: the call is lost with its connection, and a caller may send it again (review C1).
+        if (sock.destroyed) return reject(new RemoteError(closeCode ?? 'RUNTIME_OFFLINE', 'the connection to the Runtime is closed', { lost: true }))
         const id = String(++n)
         pending.set(id, { resolve, reject })
         send({ t: 'call', id, cmd, args, ...co })

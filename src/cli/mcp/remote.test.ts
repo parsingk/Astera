@@ -143,6 +143,18 @@ describe('openMcpRuntimes', () => {
     expect(opened).toEqual([{ runtimeId: 'rt_a', address: '10.0.0.2', port: 47831, fingerprint: FP, token: 'tok-a' }])
     expect(await r.linkFor('nope')).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
   })
+
+  // Final review I6: a re-pair (new token or key for the same Runtime) reaches a running MCP server at its next call.
+  it('opens a new link when the Runtime was paired again', async () => {
+    opened.length = 0
+    const r = rts()
+    await r.linkFor('rt_a')
+    const reg = await controllerRegistry(dir)
+    await reg.add({ runtimeId: 'rt_a', name: 'Office', address: '10.0.0.2', port: 47831, fingerprint: 'G'.repeat(43), permission: 'full-control', createdAt: 'y', lastSeenAt: null }, 'tok-b')
+    await r.linkFor('rt_a')
+    expect(opened.map((t) => t.token)).toEqual(['tok-a', 'tok-b'])
+    expect(opened[1].fingerprint).toBe('G'.repeat(43))
+  })
 })
 
 describe('remoteHostLink', () => {

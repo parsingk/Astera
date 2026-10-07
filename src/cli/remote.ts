@@ -13,7 +13,7 @@
 import { remoteMutation, remoteTarget } from '../core/remote/targets'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remote/link'
 import { RemoteError } from '../core/remote/client'
-import { remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
+import { codeForStatus, messageFrom, refusalDetailsOf, remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import type { RuntimeRegistry } from '../core/runtimes/registry'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
@@ -44,6 +44,16 @@ const refusalOf = (e: RemoteError, runtimeId: string, request: string | undefine
   }
 }
 
+/** `--runtime` after the command (review I4). A public command refuses it as a flag it does not take; a session command
+ *  takes any flag, so it would land in the arguments and the command would run on this machine. */
+export function trailingRuntimeError(args: Record<string, unknown>): string | null {
+  return args.runtime === undefined ? null : '--runtime goes before the command: astera --runtime <id|name> <command> ...'
+}
+
+/** The commands that make a Job and fill a missing folder with the Runtime Host's own working directory (command.ts):
+ *  `jobs create`, and `run-create`, its older name (review I5). */
+const MAKES_A_JOB: ReadonlySet<string> = new Set(['jobs-create', 'run-create'])
+
 export async function answerRemote(a: {
   cmd: string
   args: Record<string, unknown>
@@ -62,11 +72,11 @@ export async function answerRemote(a: {
         message: `${spelledCommand(a.cmd)} works on this machine only; it has no --runtime form`
       }
     }
-  if (a.cmd === 'jobs-create' && (typeof a.args.cwd !== 'string' || a.args.cwd === ''))
+  if (MAKES_A_JOB.has(a.cmd) && (typeof a.args.cwd !== 'string' || a.args.cwd === ''))
     return {
       error: {
         code: 'INVALID_ARGUMENTS',
-        message: "a remote jobs create needs --cwd: the folder on the Runtime, which this machine's folder is not"
+        message: `a remote ${spelledCommand(a.cmd)} needs --cwd: the folder on the Runtime, which this machine's folder is not`
       }
     }
   const registry = await (a.deps?.registry ?? (() => controllerRegistry(a.profileDir)))()
@@ -102,7 +112,12 @@ export async function answerRemote(a: {
     const request = remoteMutation(a.cmd) ? a.request : undefined
     const r = await link.call(a.cmd, a.args, { ...(request !== undefined ? { request } : {}), timeoutMs: clientTimeoutMs({ cmd: a.cmd, args: a.args }) })
     if (r instanceof RemoteError) return refusalOf(r, found.runtimeId, request)
-    return r
+    if (r.status >= 200 && r.status < 300) return r
+    // A refusal from the Runtime names that Runtime (review I2), so its next steps point there and not here.
+    const code = remoteCodeOf(r.body) ?? codeForStatus(r.status)
+    const message = messageFrom(r.body, `the Runtime answered ${r.status}`)
+    if (code === 'RUNTIME_OUTCOME_UNKNOWN') return refusalOf(new RemoteError(code, message), found.runtimeId, request)
+    return { error: { code, message, details: { ...refusalDetailsOf(r.body), runtime: found.runtimeId } } }
   } finally {
     link.close()
   }

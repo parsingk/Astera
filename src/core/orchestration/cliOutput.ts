@@ -400,7 +400,8 @@ const STEPS: Record<
   // 말한다. `astera status` 를 주면 그 파일과 상관없는 것을 보러 가게 된다. 이것도 칸으로 가른다.
   CONFLICT: (cmd, details) =>
     typeof details.requestId === 'string'
-      ? ['astera requests show --id <requestId>']
+      ? // A Runtime's receipt is asked of that Runtime (remote runtime design §3.9).
+        [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} requests show --id <requestId>` : 'astera requests show --id <requestId>']
       : typeof details.repair === 'string'
         ? []
         : // A Host that is leaving refused a start (Host S2, ruling a): the same command again once a

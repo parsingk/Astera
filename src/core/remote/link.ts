@@ -39,6 +39,8 @@ const RECONNECT_CAP_MS = 30_000
 export const DEFAULT_CALL_TIMEOUT_MS = 60_000
 /** How long a lost call keeps trying to reach the Runtime again before it gives up. */
 export const DEFAULT_RECONNECT_FOR_MS = 60_000
+/** How long one connect and sign-in may take before the Runtime counts as not answering. */
+export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
 
 /** Codes after which another try cannot help: the Runtime said who it is not, or that it does not know this
  *  controller, or speaks another protocol. */
@@ -58,6 +60,8 @@ export function openRemoteLink(a: {
   sleep?(ms: number): Promise<void>
   random?(): number
   reconnectForMs?: number
+  /** How long one connect and sign-in may take; DEFAULT_CONNECT_TIMEOUT_MS when left out. */
+  connectTimeoutMs?: number
   now?(): number
 }): RemoteLink {
   const connect = a.connect ?? connectRuntime
@@ -65,6 +69,7 @@ export function openRemoteLink(a: {
   const random = a.random ?? Math.random
   const now = a.now ?? Date.now
   const reconnectForMs = a.reconnectForMs ?? DEFAULT_RECONNECT_FOR_MS
+  const connectTimeoutMs = a.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
   const { target } = a
 
   let live: Promise<RuntimeLink | RemoteError> | null = null
@@ -74,7 +79,20 @@ export function openRemoteLink(a: {
   const open = async (): Promise<RuntimeLink | RemoteError> => {
     let link: RuntimeLink
     try {
-      link = await connect({ host: target.address, port: target.port, pin: target.fingerprint })
+      // Bounded (review I3): a blackholed address would otherwise hold the call for the OS's whole SYN wait.
+      const c = connect({ host: target.address, port: target.port, pin: target.fingerprint })
+      const got = await new Promise<RuntimeLink | 'timeout'>((resolve, reject) => {
+        const t = setTimeout(() => resolve('timeout'), connectTimeoutMs)
+        c.then(
+          (l) => (clearTimeout(t), resolve(l)),
+          (e) => (clearTimeout(t), reject(e))
+        )
+      })
+      if (got === 'timeout') {
+        void c.then((l) => l.close(), () => {})
+        return new RemoteError('RUNTIME_OFFLINE', `the Runtime at ${target.address}:${target.port} did not answer within ${Math.round(connectTimeoutMs / 1000)} s`)
+      }
+      link = got
     } catch (e) {
       return asRemoteError(e, 'RUNTIME_OFFLINE')
     }
@@ -93,7 +111,10 @@ export function openRemoteLink(a: {
       return asRemoteError(e, 'RUNTIME_OFFLINE')
     }
     void link.closed.then(() => {
-      if (live !== null) void live.then((l) => l === link && (live = null))
+      if (current === link) {
+        current = null
+        live = null
+      }
     })
     return link
   }
@@ -102,14 +123,22 @@ export function openRemoteLink(a: {
       const p = open()
       live = p
       void p.then((l) => {
-        if (l instanceof RemoteError && live === p) live = null
+        if (live !== p) return
+        if (l instanceof RemoteError) live = null
+        else current = l
       })
     }
     return live
   }
+  /** The connection `live` resolved to, so a drop forgets it in the same turn: the retry right after must not be
+   *  handed the dead one again. */
+  let current: RuntimeLink | null = null
   const drop = (link: RuntimeLink): void => {
     link.close()
-    if (live !== null) void live.then((l) => l === link && (live = null))
+    if (current === link) {
+      current = null
+      live = null
+    }
   }
   const backoff = (i: number): number =>
     Math.min(RECONNECT_CAP_MS, Math.round(RECONNECT_STEPS_MS[Math.min(i, RECONNECT_STEPS_MS.length - 1)] * (0.5 + random())))
@@ -134,21 +163,22 @@ export function openRemoteLink(a: {
     call: async (cmd, args, o = {}) => {
       const request = o.request
       const timeoutMs = o.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
-      const deadline = now() + reconnectForMs
+      /** Set at each loss (review I1): the window to reach the Runtime again runs from when it was lost. */
+      let deadline = 0
       /** Whether this change may have reached the Runtime: then a lost reply is OUTCOME_UNKNOWN, never OFFLINE. */
       let sent = false
-      let tries = 0
+      /** Whether this call lost a connection. Until it has, a Runtime that cannot be reached is OFFLINE at once
+       *  (review I3): there is nothing in flight to recover, and a person waits on the answer. */
       let losses = 0
+      let tries = 0
+      const unknown = (why: string): RemoteError =>
+        new RemoteError('RUNTIME_OUTCOME_UNKNOWN', `the answer to ${cmd} was lost and the Runtime cannot say whether it ran: ${why}`)
       for (;;) {
         if (closed) return new RemoteError('RUNTIME_OFFLINE', 'the link to the Runtime is closed')
         const link = await ensure()
         if (link instanceof RemoteError) {
-          if (FINAL.has(link.code)) return link
-          if (now() >= deadline) {
-            return sent && request !== undefined
-              ? new RemoteError('RUNTIME_OUTCOME_UNKNOWN', `the answer to ${cmd} was lost and the Runtime could not be reached again: ${link.message}`)
-              : link
-          }
+          if (FINAL.has(link.code) || losses === 0) return sent && request !== undefined && !FINAL.has(link.code) ? unknown(link.message) : link
+          if (now() >= deadline) return sent && request !== undefined ? unknown(link.message) : link
           await sleep(backoff(tries++))
           continue
         }
@@ -159,24 +189,34 @@ export function openRemoteLink(a: {
           r = await withDeadline(co ? link.call(cmd, args, co) : link.call(cmd, args), timeoutMs)
         } catch (e) {
           const err = asRemoteError(e, 'RUNTIME_OFFLINE')
-          // A refusal of this call by the Runtime (busy, too large) is its answer. A lost connection is not.
-          if (err.code !== 'RUNTIME_OFFLINE') {
-            if (err.code === 'RUNTIME_AUTH_FAILED') drop(link)
-            return err
-          }
+          // The Runtime's own refusal of this call (busy, too large) is its answer (review C1: told apart by `lost`,
+          // never by the code, since a connection the Gateway closes carries the code it closed with).
+          if (!err.lost) return err
           drop(link)
-          // The first loss reconnects at once; a Runtime that keeps dropping is backed off like one that is down.
-          if (losses++ > 0) {
-            if (now() >= deadline)
-              return request !== undefined
-                ? new RemoteError('RUNTIME_OUTCOME_UNKNOWN', `the answer to ${cmd} was lost more than once and the Runtime cannot say whether it ran`)
-                : new RemoteError('RUNTIME_OFFLINE', `the connection to the Runtime kept closing during ${cmd}`)
-            await sleep(backoff(tries++))
+          // A revocation closes the connection: final, and a change sent on it keeps its request id for the person.
+          if (err.code === 'RUNTIME_AUTH_FAILED') return err
+          if (losses++ === 0) {
+            deadline = now() + reconnectForMs
+            continue
           }
+          if (now() >= deadline)
+            return request !== undefined ? unknown('the connection kept closing') : new RemoteError('RUNTIME_OFFLINE', `the connection to the Runtime kept closing during ${cmd}`)
+          await sleep(backoff(tries++))
           continue
         }
-        if (r === 'timeout')
+        if (r === 'timeout') {
+          // A link that does not answer may be half-open (review I3): the next call opens a new one.
+          drop(link)
           return new RemoteError('REMOTE_TIMEOUT', `the Runtime did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; it may still finish`)
+        }
+        // A retry that finds its own first attempt still running (§3.9: 409, naming this request) asks again until that
+        // attempt is done and its receipt can be replayed, within the window the loss opened.
+        const b = r.body as { requestId?: unknown; code?: unknown } | null
+        // The "may or may not have run" 409 names the request too, with its code: that one is an answer.
+        if (co?.retry === true && r.status === 409 && b?.requestId === request && b?.code === undefined && now() < deadline) {
+          await sleep(backoff(tries++))
+          continue
+        }
         return r
       }
     },

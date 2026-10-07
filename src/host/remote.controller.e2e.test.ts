@@ -153,7 +153,7 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
     const rt = await runtime()
     await pair(await rt.pairing('read-only'))
     expect(await remote('rt_p4', 'jobs-list', {})).toMatchObject({ status: 200 })
-    expect(await remote('rt_p4', 'runs-stop', { id: 'run_x' })).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+    expect(await remote('rt_p4', 'runs-stop', { id: 'run_x' })).toMatchObject({ error: { code: 'RUNTIME_PERMISSION_DENIED', details: { runtime: 'rt_p4' } } })
   })
 
   it('a change whose answer is lost is sent again and replayed: one Job, not two', async () => {
@@ -204,7 +204,7 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
           }
         })
     })
-    expect(r).toMatchObject({ status: 409, body: { code: 'RUNTIME_OUTCOME_UNKNOWN' } })
+    expect(r).toMatchObject({ error: { code: 'RUNTIME_OUTCOME_UNKNOWN', details: { runtime: 'rt_p4', requestId: 'req-unknown' } } })
     expect(JSON.stringify(rt.state())).toBe(before)
   })
 

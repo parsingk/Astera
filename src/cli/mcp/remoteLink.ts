@@ -5,7 +5,7 @@
 // The laptop's settings are enforced here, on the laptop: an agent that can run `astera --runtime x` directly has the
 // CLI's authority, which is the paired permission (the accepted limit §2.8 states).
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
 import { remoteMutation } from '../../core/remote/targets'
@@ -51,7 +51,8 @@ export function openMcpRuntimes(a: {
   /** Test seam: the controller link for a target. */
   open?(t: RemoteTarget): RemoteLink
 }): McpRuntimes {
-  const links = new Map<string, HostLink>()
+  /** One link per Runtime, with the pairing it was opened for: a re-pair (a new token or key) opens a new one (review I6). */
+  const links = new Map<string, { link: HostLink; pairing: string }>()
   const settingsFile = path.join(a.profileDir, 'app-settings.json')
   return {
     list: async () => (await controllerRegistry(a.profileDir)).list(),
@@ -71,20 +72,22 @@ export function openMcpRuntimes(a: {
       const reg = await controllerRegistry(a.profileDir)
       const found = resolveRuntime(await reg.list(), key)
       if ('code' in found) return { code: found.code, message: found.message }
-      const kept = links.get(found.runtimeId)
-      if (kept) return kept
       const token = await reg.token(found.runtimeId)
       if (token === null) return { code: 'RUNTIME_NOT_FOUND', message: `${found.name} has no token on this machine; pair it again with \`astera runtimes add\`` }
+      const pairing = `${found.address}:${found.port}:${found.fingerprint}:${createHash('sha256').update(token).digest('hex')}`
+      const kept = links.get(found.runtimeId)
+      if (kept?.pairing === pairing) return kept.link
+      kept?.link.close()
       const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
       const c = a.client()
       const link = remoteHostLink(
         (a.open ?? ((t) => openRemoteLink({ target: t, client: { name: c?.name ?? 'astera mcp', version: c?.version ?? a.version, surface: 'mcp' } })))(target)
       )
-      links.set(found.runtimeId, link)
+      links.set(found.runtimeId, { link, pairing })
       return link
     },
     close: () => {
-      for (const l of links.values()) l.close()
+      for (const l of links.values()) l.link.close()
       links.clear()
     }
   }
