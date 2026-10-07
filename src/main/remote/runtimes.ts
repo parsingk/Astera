@@ -7,6 +7,10 @@ import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/r
 import { controllerRegistry, resolveRuntime } from '../../cli/runtimes'
 import { createRemoteRuntimeClient, type RemoteRuntimeClient } from './runtimeClient'
 
+/** How long a lost call from the app keeps trying to reach the Runtime again: a view waiting on it shows offline after
+ *  this, where the CLI's one-shot command waits the link's full minute. */
+export const APP_RECONNECT_FOR_MS = 10_000
+
 export interface RemoteRuntimes {
   client(runtimeId: string): Promise<RemoteRuntimeClient | { code: string; message: string }>
   close(): void
@@ -32,7 +36,7 @@ export function createRemoteRuntimes(a: {
       if (kept?.pairing === pairing) return kept.client
       kept?.client.close()
       const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
-      const link = (a.open ?? ((t) => openRemoteLink({ target: t, client: { name: 'astera app', version: a.version, surface: 'desktop' } })))(target)
+      const link = (a.open ?? ((t) => openRemoteLink({ target: t, client: { name: 'astera app', version: a.version, surface: 'desktop' }, reconnectForMs: APP_RECONNECT_FOR_MS })))(target)
       const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link })
       clients.set(found.runtimeId, { client, pairing })
       return client
