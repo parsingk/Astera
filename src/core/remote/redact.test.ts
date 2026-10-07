@@ -20,4 +20,13 @@ describe('redactSecrets (remote runtime design §4.7)', () => {
     const line = 'gateway: listening on 127.0.0.1:47831 (3 clients)'
     expect(redactSecrets(line)).toBe(line)
   })
+
+  // Phase 3 minor: Node's inspect form (an Error or an object printed to stderr) quotes values with ' and leaves keys bare.
+  it("redacts the inspect form: { token: '...', code: '...' }", () => {
+    const out = redactSecrets("Error: x { token: 'abcdef', tokenHash: 'h1', code: 'ABCDEFGHJK', other: 'keep' }")
+    expect(out).not.toContain('abcdef')
+    expect(out).not.toContain("'h1'")
+    expect(out).not.toContain('ABCDEFGHJK')
+    expect(out).toContain("other: 'keep'")
+  })
 })

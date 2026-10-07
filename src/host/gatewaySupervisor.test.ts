@@ -136,6 +136,20 @@ describe('the Gateway supervisor (remote runtime design §2.3)', () => {
     await r.clock.advance(1_000)
     expect(r.children).toHaveLength(2)
   })
+  // Phase 3 minor: an app greeting reloads too, and must not cut a failed Gateway's cadence short; the person's own
+  // `runtime start` (runtime-reload) does try again at once.
+  it('a plain reload leaves a failed Gateway to its cadence; reload({ now: true }) tries again at once', async () => {
+    const r = rig()
+    await r.sup.reload()
+    r.last().frame({ t: 'gateway-failed', code: 'BIND_IN_USE', message: 'in use' })
+    await settle()
+    r.last().exit(1)
+    await settle()
+    await r.sup.reload()
+    expect(r.children).toHaveLength(1)
+    await r.sup.reload({ now: true })
+    expect(r.children).toHaveLength(2)
+  })
   it('restarts a crashed Gateway after 1, 2 then 5 seconds, each with a new link generation', async () => {
     const r = rig()
     await r.sup.reload()
@@ -161,6 +175,15 @@ describe('the Gateway supervisor (remote runtime design §2.3)', () => {
     expect(all).not.toContain('SECRET-TOKEN-VALUE')
     expect(r.errLog.some((l) => l.includes('[redacted]'))).toBe(true)
     expect(all).not.toContain('gateway-ready')
+  })
+  // Phase 3 minor: a stderr that never ends a line cannot grow without bound; it is written in pieces.
+  it('writes a stderr line with no end in pieces of at most 64 KiB', async () => {
+    const r = rig()
+    await r.sup.reload()
+    r.last().stderr.write('x'.repeat(200 * 1024))
+    await settle()
+    expect(r.errLog.length).toBeGreaterThanOrEqual(3)
+    for (const m of r.errLog) expect(m.length).toBeLessThanOrEqual(64 * 1024 + 64)
   })
   it('does not restart for a reload with the same settings, and restarts for new ones', async () => {
     const r = rig()

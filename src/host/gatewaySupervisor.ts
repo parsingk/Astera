@@ -15,6 +15,8 @@ import { openHostLog } from './log'
 
 export const GATEWAY_BACKOFF_MS = [1_000, 2_000, 5_000]
 export const GATEWAY_RETRY_MS = 30_000
+/** The longest stderr line kept before it is written in pieces. */
+const STDERR_LINE_MAX = 64 * 1024
 const STABLE_MS = 30_000
 const STOP_GRACE_MS = 5_000
 const CLOSE_GRACE_MS = 1_000
@@ -45,7 +47,9 @@ export interface GatewayLinkLike {
 }
 
 export interface GatewaySupervisor {
-  reload(): Promise<void>
+  /** Reads the settings again and applies them. A failed Gateway with the same settings is left to its retry cadence
+   *  unless `now` (the person's own `runtime start`): an app greeting reloads too, and must not cut it short. */
+  reload(o?: { now?: boolean }): Promise<void>
   status(): GatewayState
   /** The live generation's link, for revocation; null while none runs. */
   link(): GatewayLinkLike | null
@@ -193,6 +197,11 @@ export function createGatewaySupervisor(d: {
         buffered = buffered.slice(i + 1)
         if (line !== '') err(line)
       }
+      // A line that never ends is written in pieces (Phase 3 minor), so a Gateway stuck printing cannot grow this.
+      while (buffered.length > STDERR_LINE_MAX) {
+        err(buffered.slice(0, STDERR_LINE_MAX))
+        buffered = buffered.slice(STDERR_LINE_MAX)
+      }
     })
     proc.stdin?.on('error', (e) => d.log(`remote: Gateway stdin: ${e.name}`))
     proc.stdout?.on('error', (e) => d.log(`remote: Gateway stdout: ${e.name}`))
@@ -256,7 +265,7 @@ export function createGatewaySupervisor(d: {
   }
 
   return {
-    reload: () =>
+    reload: (o = {}) =>
       serial(async () => {
         if (left) return
         let s: RemoteSettings
@@ -276,6 +285,10 @@ export function createGatewaySupervisor(d: {
           return set({ state: 'failed', code: 'NO_CLI_PATHS', message: 'this Host was started without the CLI paths, so it cannot start the Gateway' })
         }
         if (applied && applied.listen === s.listen && applied.port === s.port && child) return
+        // Failed with these settings and a retry already set (Phase 3 minor): the cadence decides, unless asked now.
+        if (applied && applied.listen === s.listen && applied.port === s.port && cancelRetry && o.now !== true) return
+        cancelRetry?.()
+        cancelRetry = null
         await stopChild()
         applied = s
         failures = 0

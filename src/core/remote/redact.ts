@@ -6,6 +6,8 @@
 const RULES: Array<[RegExp, string]> = [
   // JSON fields: "token", "tokenHash", "code" (pairing codes), whatever their value.
   [/("(?:token|tokenHash|code)"\s*:\s*)"[^"]*"/g, '$1"[redacted]"'],
+  // The same fields as Node's inspect prints them (an Error or an object on stderr): bare keys, values in '.
+  [/(\b(?:token|tokenHash|code)\s*:\s*)'[^']*'/g, "$1'[redacted]'"],
   // Command-line arguments: --token x, --token=x, --code x, --code=x.
   [/(--(?:token|code)(?:=|\s+))\S+/g, '$1[redacted]'],
   // The pairing string carries the code.

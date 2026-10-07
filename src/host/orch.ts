@@ -447,7 +447,7 @@ export function createHostOrch(a: {
   closeControllerConns?(conns: Array<{ linkGen: number; conn: string }>): void
   /** The Remote Gateway's supervisor (remote runtime design §2.3): `runtime-reload` and `runtime-status`. Absent on a
    *  Host built without one; both then answer 501. */
-  gateway?: { reload(): Promise<void>; status(): GatewayState }
+  gateway?: { reload(o?: { now?: boolean }): Promise<void>; status(): GatewayState }
   /** The Host's own checks and whether it drives now (orchDeps' HOST_DRIVES), passed through to
    *  `hostOrchDeps`. Absent: validation, review and repair take their pre-S5 routes. */
   drive?: { owns(): boolean; checks: HostChecks } | null
@@ -1695,7 +1695,7 @@ export function createHostOrch(a: {
         if (cmd === 'runtime-reload' || cmd === 'runtime-status') {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
           if (!a.gateway) return { status: 501, body: { error: 'this Host does not run the Remote Gateway' } }
-          if (cmd === 'runtime-reload') await a.gateway.reload()
+          if (cmd === 'runtime-reload') await a.gateway.reload({ now: true })
           return { status: 200, body: { gateway: a.gateway.status(), clients: a.controllers?.list() ?? [] } }
         }
         if (cmd === 'pair-create' || cmd === 'clients-list' || cmd === 'clients-revoke') {
