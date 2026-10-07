@@ -415,6 +415,9 @@ const isLink = (x: HostLink | CallToolResult): x is HostLink => typeof (x as Hos
 
 /** list_runtimes and get_runtime: this machine's registry, never a Host. */
 async function runtimeTool(runtimes: McpRuntimes | undefined, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
+  // Reads, under this machine's MCP access like any other read (Phase 4 review M2): asked as a project list would be.
+  const refused = (await runtimes?.refusal('projects-list')) ?? null
+  if (refused !== null) return errorResult('PERMISSION_DENIED', refused)
   const list = (await runtimes?.list()) ?? []
   const shown = list.map((r) => ({ runtimeId: r.runtimeId, name: r.name, address: r.address, port: r.port, permission: r.permission, lastSeenAt: r.lastSeenAt }))
   if (t.name === 'list_runtimes') {
@@ -452,7 +455,9 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
   )
   // wait_for_run's events sent, per Run, for this server's one client.
   const memory: WaitMemory = new Map()
-  for (const t of TOOLS)
+  // A server with no paired Runtimes behind it (the HTTP entrance) does not offer the two Runtime tools (review M3); a
+  // runtimeId given to any other tool there answers RUNTIME_CAPABILITY_MISSING (linkForCall).
+  for (const t of TOOLS.filter((x) => a.runtimes !== undefined || !RUNTIME_TOOLS.has(x.name)))
     server.registerTool(
       t.name,
       {
@@ -523,6 +528,8 @@ export async function serveMcp(a: {
   stdout?: Writable
   /** Test injection; without it the real link to this profile's Host is opened. */
   link?: HostLink
+  /** Test injection; without it this profile's paired Runtimes are opened. */
+  runtimes?: McpRuntimes
   /** How long the end of stdin waits for calls still in flight before closing anyway. Test injection. */
   drainCapMs?: number
 }): Promise<void> {
@@ -537,25 +544,38 @@ export async function serveMcp(a: {
   // still running, so their answers would never be written.
   let inFlight = 0
   let idle: () => void = () => {}
-  const link: HostLink = {
+  /** A link whose calls count toward the drain: this machine's Host's, and each paired Runtime's (review M8). */
+  const counted = (l: HostLink): HostLink => ({
     async call(cmd, args, request) {
       inFlight++
       try {
-        return await inner.call(cmd, args, request)
+        return await l.call(cmd, args, request)
       } finally {
         inFlight--
         if (inFlight === 0) idle()
       }
     },
-    close: () => inner.close()
-  }
+    close: () => l.close()
+  })
+  const link = counted(inner)
 
   // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8).
-  const runtimes = openMcpRuntimes({
-    profileDir: cliHostTarget({ env: a.env, platform: a.platform, home: a.home }).profileDir,
-    version: a.version,
-    client: () => server.server.getClientVersion()
-  })
+  const opened =
+    a.runtimes ??
+    openMcpRuntimes({
+      profileDir: cliHostTarget({ env: a.env, platform: a.platform, home: a.home }).profileDir,
+      version: a.version,
+      client: () => server.server.getClientVersion()
+    })
+  const runtimes: McpRuntimes = {
+    list: () => opened.list(),
+    refusal: (cmd) => opened.refusal(cmd),
+    linkFor: async (key) => {
+      const l = await opened.linkFor(key)
+      return 'code' in l ? l : counted(l)
+    },
+    close: () => opened.close()
+  }
   const server = createMcpServer({ link, version: a.version, log, debug: a.env.ASTERA_MCP_LOG_LEVEL === 'debug', runtimes })
   // The transport's own onclose belongs to the SDK (Protocol.connect chains it); the server's hook
   // fires on every close, ours below or one the transport makes on a broken stream.

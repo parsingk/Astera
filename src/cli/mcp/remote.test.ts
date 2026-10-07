@@ -106,6 +106,30 @@ describe('MCP tools with runtimeId (remote runtime design §2.8, X1-07)', () => 
     expect(rts.opened).toEqual([])
   })
 
+  // Phase 4 review M2: the two Runtime tools are reads, under this machine's MCP access like any other.
+  it('list_runtimes and get_runtime are refused when this machine refuses reads', async () => {
+    const client = await connected(recording().link, runtimes(recording().link, 'MCP access is off in this machine’s Astera settings'))
+    for (const [name, args] of [['list_runtimes', {}], ['get_runtime', { runtimeId: 'rt_a' }]] as const) {
+      const r = await client.callTool({ name, arguments: args })
+      expect(r.isError, name).toBe(true)
+      expect(textOf(r), name).toMatch(/PERMISSION_DENIED/)
+    }
+  })
+
+  // Phase 4 review M3: a server with no paired Runtimes behind it (the HTTP entrance) does not offer the Runtime tools.
+  it('a server given no Runtimes lists no Runtime tools, and refuses runtimeId', async () => {
+    const server = createMcpServer({ link: recording().link, version: '1.4.8', log: () => {} })
+    const [x, y] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 't', version: '0' })
+    await Promise.all([server.connect(x), client.connect(y)])
+    const names = (await client.listTools()).tools.map((t) => t.name)
+    expect(names).not.toContain('list_runtimes')
+    expect(names).not.toContain('get_runtime')
+    expect(names).toHaveLength(34)
+    const r = await client.callTool({ name: 'list_jobs', arguments: { runtimeId: 'rt_a' } })
+    expect(textOf(r)).toMatch(/RUNTIME_CAPABILITY_MISSING/)
+  })
+
   it('list_runtimes lists the paired Runtimes without tokens; get_runtime finds one by name, or says NOT_FOUND', async () => {
     const client = await connected(recording().link, runtimes(recording().link))
     const listed = await client.callTool({ name: 'list_runtimes', arguments: {} })

@@ -18,8 +18,7 @@ const TOOLS = [
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
   'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
-  'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record',
-  'list_runtimes', 'get_runtime'
+  'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record'
 ]
 
 async function connected(link: HostLink) {
@@ -80,7 +79,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-six tools', async () => {
+  it('lists exactly the thirty-four tools (a server with no Runtimes behind it)', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -762,6 +761,35 @@ describe('the MCP server', () => {
   })
 })
 
+// Phase 4 review M8: a call to a paired Runtime still in flight when stdin ends is answered too.
+describe('serveMcp drains remote calls as well', () => {
+  it('answers a remote call still in flight when stdin ends', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const lines: string[] = []
+    stdout.on('data', (c: Buffer) => lines.push(...c.toString('utf8').split('\n').filter(Boolean)))
+    const remote: HostLink = { call: () => new Promise((r) => setTimeout(() => r({ status: 200, body: { id: 'run_9' } }), 40)), close: () => {} }
+    const done = serveMcp({
+      env: { ASTERA_PROFILE_DIR: '/nonexistent-astera-mcp-test' },
+      platform: process.platform,
+      home: '/nonexistent',
+      version: '1.4.1',
+      stdin,
+      stdout,
+      link: answering({}).link,
+      runtimes: { list: async () => [], refusal: async () => null, linkFor: async () => remote, close: () => {} }
+    })
+    const send = (m: unknown): void => void stdin.write(JSON.stringify(m) + '\n')
+    send(INITIALIZE)
+    send({ jsonrpc: '2.0', method: 'notifications/initialized' })
+    send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_run', arguments: { runId: 'run_9', runtimeId: 'rt_a' } } })
+    stdin.end()
+    await done
+    const answer = lines.map((l) => JSON.parse(l)).find((m) => m.id === 2)
+    expect(answer?.result?.structuredContent).toMatchObject({ id: 'run_9' })
+  })
+})
+
 describe('the session and output tools (MCP P1)', () => {
   const SK = 'sk-abcdefghijklmnopqrstuvwxyz0123456789'
   const BEARER = 'abcDEF123ghiJKL456mnoPQR789'
@@ -1271,9 +1299,9 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-six tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-four tools, six of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(36)
+    expect(tools).toHaveLength(34)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
     for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)

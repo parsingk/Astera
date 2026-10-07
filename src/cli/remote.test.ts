@@ -145,3 +145,20 @@ describe('trailingRuntimeError', () => {
     expect(trailingRuntimeError({ run: 'r1' })).toBeNull()
   })
 })
+
+// Phase 4 review M6: run.ts imports remote.ts, so remote.ts must not import run.ts back.
+describe('the module graph', () => {
+  it('remote.ts does not import run.ts', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./remote.ts', import.meta.url), 'utf8')
+    expect(src).not.toMatch(/from '\.\/run'/)
+  })
+  // Phase 4 review M4: a local-only command is refused before stdin is read, so a terminal does not block for EOF first.
+  it('run.ts refuses a local-only --runtime command before it reads stdin', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('./run.ts', import.meta.url), 'utf8')
+    const refusal = src.indexOf("remoteTarget(parsed.cmd) === 'no'")
+    expect(refusal).toBeGreaterThan(0)
+    expect(refusal).toBeLessThan(src.indexOf('await readStdin()'))
+  })
+})

@@ -58,6 +58,13 @@ describe('resolveRuntime', () => {
     expect(resolveRuntime(list, 'rt_b')).toMatchObject({ runtimeId: 'rt_b' })
     expect(resolveRuntime(list, 'office')).toMatchObject({ runtimeId: 'rt_a' })
   })
+  // Phase 4 review M7: a key that is one Runtime's id and another's name is refused, not taken as the id silently.
+  it('refuses a key that is one id and another name', () => {
+    const odd = [profile(), profile({ runtimeId: 'rt_b', name: 'rt_a' })]
+    const r = resolveRuntime(odd, 'rt_a')
+    expect(r).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
+    expect((r as { message: string }).message).toMatch(/rt_a.*rt_b|rt_b.*rt_a/)
+  })
   it('refuses a name two Runtimes share, naming both ids, and an unknown one', () => {
     const two = resolveRuntime(list, 'BUILD')
     expect(two).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
@@ -100,6 +107,28 @@ describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
     const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'WRONGCODE1', fingerprint: FP })
     expect(await runRuntimesCommand('runtimes-add', { pair }, deps().d)).toMatchObject({ ok: false, error: { code: 'RUNTIME_AUTH_FAILED' } })
     expect(await (await controllerRegistry(dir)).list()).toEqual([])
+  })
+  // Phase 4 review M5: a Runtime of another remote protocol is not stored, and a pairing left behind is named.
+  it('a Runtime of another remote protocol is refused and not stored, and the message says the pairing stays there', async () => {
+    const h = deps()
+    const base = h.d.connect
+    h.d.connect = async (o) => {
+      const l = await base(o)
+      return { ...l, auth: async (t, c) => ({ ...(await l.auth(t, c)), gatewayProtocol: 2 }) }
+    }
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    const r = await runRuntimesCommand('runtimes-add', { pair }, h.d)
+    expect(r).toMatchObject({ ok: false, error: { code: 'RUNTIME_PROTOCOL_MISMATCH', message: expect.stringMatching(/runtime revoke/) } })
+    expect(await (await controllerRegistry(dir)).list()).toEqual([])
+  })
+  it('a first sign-in that fails after the code was redeemed says the pairing stays on the Runtime', async () => {
+    const h = deps()
+    const base = h.d.connect
+    let n = 0
+    h.d.connect = async (o) => (++n === 1 ? base(o) : Promise.reject(Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' })))
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    const r = await runRuntimesCommand('runtimes-add', { pair }, h.d)
+    expect(r).toMatchObject({ ok: false, error: { message: expect.stringMatching(/runtime revoke/) } })
   })
   it('an unreachable Runtime is RUNTIME_OFFLINE', async () => {
     const h = deps({ connect: async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) } })

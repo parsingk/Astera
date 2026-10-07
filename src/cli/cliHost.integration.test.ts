@@ -1428,7 +1428,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   const cliBuilt = existsSync(cliBundle)
   if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
   it.runIf(cliBuilt)(
-    'over HTTP: the Host runs the entrance, a client with the token lists 36 tools and acts, the journal names its address, and off stops it',
+    'over HTTP: the Host runs the entrance, a client with the token lists 34 tools and acts, the journal names its address, and off stops it',
     async () => {
       const cli: HostCliPaths = {
         exec: createRequire(import.meta.url)('electron') as string,
@@ -1455,7 +1455,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const client = new Client({ name: 'it-http', version: '1' })
       await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
       cleanups.push(() => client.close())
-      expect((await client.listTools()).tools).toHaveLength(36)
+      expect((await client.listTools()).tools).toHaveLength(34)
       const projects = (await client.callTool({ name: 'list_projects', arguments: {} })) as ToolResult
       expect(projects.isError).toBeFalsy()
       expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })

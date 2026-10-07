@@ -6,6 +6,7 @@ import path from 'node:path'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { openRuntimeRegistry, type RuntimeProfile, type RuntimeRegistry } from '../core/runtimes/registry'
 import { parsePairing } from '../core/remote/pairing'
+import { GATEWAY_PROTOCOL } from '../core/remote/frames'
 import { RemoteError, type RuntimeLink } from '../core/remote/client'
 import { remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
 import { REMOTE_DEFAULTS } from '../core/remote/settings'
@@ -34,8 +35,12 @@ export const controllerRegistry = (profileDir: string): Promise<RuntimeRegistry>
  *  is refused with both ids rather than answered with the first (Review Focus 3). */
 export function resolveRuntime(list: RuntimeProfile[], key: string): RuntimeProfile | { code: 'RUNTIME_NOT_FOUND'; message: string } {
   const byId = list.find((r) => r.runtimeId === key)
-  if (byId) return byId
   const byName = list.filter((r) => r.name.toLowerCase() === key.toLowerCase())
+  // One Runtime's id and another's name (review M7): neither is the obvious one, so neither is taken.
+  const other = byName.filter((r) => r !== byId)
+  if (byId && other.length > 0)
+    return { code: 'RUNTIME_NOT_FOUND', message: `${key} is the id of ${byId.runtimeId} and the name of ${other.map((r) => r.runtimeId).join(', ')}; use the other runtime's id, or rename it` }
+  if (byId) return byId
   if (byName.length === 1) return byName[0]
   if (byName.length > 1)
     return { code: 'RUNTIME_NOT_FOUND', message: `the name ${key} matches ${byName.map((r) => r.runtimeId).join(', ')}; use the runtime id` }
@@ -60,6 +65,9 @@ const shown = (p: RuntimeProfile): Record<string, unknown> => ({
   createdAt: p.createdAt,
   lastSeenAt: p.lastSeenAt
 })
+
+/** What a pairing that was redeemed but not kept leaves on the Runtime, and how to clear it. */
+const LEFT_BEHIND = 'The Runtime still lists this pairing: run `astera runtime clients` and `astera runtime revoke --id <clientId>` there'
 
 async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
   let address: string
@@ -112,8 +120,14 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
       link.close()
     }
   } catch (e) {
-    return failure(codeOfError(e), `paired with ${address}:${port}, but the first sign-in failed: ${messageOf(e)}`)
+    // The code is spent and the Runtime keeps a pairing whose token is now lost (review M5): say how to clear it.
+    return failure(codeOfError(e), `paired with ${address}:${port}, but the first sign-in failed: ${messageOf(e)}. ${LEFT_BEHIND}`)
   }
+  if (hello.gatewayProtocol !== GATEWAY_PROTOCOL)
+    return failure(
+      'RUNTIME_PROTOCOL_MISMATCH',
+      `the Runtime speaks remote protocol ${hello.gatewayProtocol} and this build speaks ${GATEWAY_PROTOCOL}; update the older side and pair again. ${LEFT_BEHIND}`
+    )
   const profile: RuntimeProfile = {
     runtimeId: hello.runtimeId,
     name: typeof args.name === 'string' && args.name !== '' ? args.name : hello.displayName,

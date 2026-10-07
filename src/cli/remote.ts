@@ -18,7 +18,7 @@ import type { RuntimeRegistry } from '../core/runtimes/registry'
 import { spelledCommand } from '../core/orchestration/cliUsage'
 import { DEFAULT_WAIT_TIMEOUT_MS } from '../core/orchestration/types'
 import { controllerRegistry, resolveRuntime } from './runtimes'
-import { clientTimeoutMs, followRun, type HostAnswer, type OutputMode } from './run'
+import { clientTimeoutMs, followRun, type HostAnswer, type OutputMode } from './follow'
 
 export interface RemoteDeps {
   registry(): Promise<RuntimeRegistry>

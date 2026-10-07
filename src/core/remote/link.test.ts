@@ -15,7 +15,7 @@ function fakeRuntime(o: {
   connectFails?: (n: number) => Error | null
   hello?: HelloFrame
   authFails?: RemoteError
-  answer?: (s: Sent, conn: number) => CallReply | 'drop' | 'hang' | RemoteError | { dropWith: string }
+  answer?: (s: Sent, conn: number) => CallReply | 'drop' | 'hang' | 'unsent' | RemoteError | { dropWith: string }
   connectHangs?: (n: number) => boolean
 }) {
   const sent: Array<Sent & { conn: number }> = []
@@ -44,6 +44,12 @@ function fakeRuntime(o: {
           sent.push({ ...s, conn: n })
           const a = o.answer ? o.answer(s, n) : { status: 200, body: { ok: true } }
           if (a === 'hang') return
+          if (a === 'unsent') {
+            gone = true
+            reject(Object.assign(new RemoteError('RUNTIME_OFFLINE', 'the connection to the Runtime is closed'), { lost: true, unsent: true }))
+            closeIt({})
+            return
+          }
           if (a === 'drop' || (typeof a === 'object' && 'dropWith' in a)) {
             gone = true
             const code = a === 'drop' ? 'RUNTIME_OFFLINE' : a.dropWith
@@ -251,5 +257,14 @@ describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
     expect(await link.call('run-merge', { run: 'r' }, { request: 'req-12' })).toEqual({ status: 200, body: { id: 'job_1' }, replayed: true })
     expect(sleeps.length).toBe(2)
     expect(rt.sent.slice(1).every((x) => x.o?.retry === true)).toBe(true)
+  })
+
+  // Phase 4 review M1: a change that never left (its connection was already gone) is sent as a first attempt again,
+  // not as a retry the Runtime would answer with RUNTIME_OUTCOME_UNKNOWN.
+  it('a change that was never written goes again as a first attempt', async () => {
+    const rt = fakeRuntime({ answer: (_s, conn) => (conn === 1 ? 'unsent' : { status: 200, body: { id: 'job_1' } }) })
+    const { link } = fastLink(rt)
+    expect(await link.call('jobs-run', { id: 'job_1' }, { request: 'req-13' })).toEqual({ status: 200, body: { id: 'job_1' } })
+    expect(rt.sent.map((x) => x.o)).toEqual([{ request: 'req-13' }, { request: 'req-13' }])
   })
 })

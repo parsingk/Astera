@@ -568,7 +568,7 @@ a field with nothing left.
 ## MCP over HTTP
 
 An agent on another device, or a client that speaks MCP only over HTTP, can use this computer's
-Astera through an HTTP entrance the Host runs. It offers the same 36 tools as `astera mcp serve`,
+Astera through an HTTP entrance the Host runs. It offers the same tools as `astera mcp serve` except the two that list paired Runtimes (34),
 under the same [MCP access](#mcp-access) settings, with the same redaction, and the Job Journal
 records its calls as surface `mcp` like any other client.
 

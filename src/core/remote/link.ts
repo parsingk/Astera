@@ -184,6 +184,7 @@ export function openRemoteLink(a: {
         }
         const co = request === undefined ? undefined : { request, ...(sent ? { retry: true as const } : {}) }
         let r: CallReply | 'timeout'
+        const wasSent: boolean = sent
         try {
           sent = sent || request !== undefined
           r = await withDeadline(co ? link.call(cmd, args, co) : link.call(cmd, args), timeoutMs)
@@ -192,6 +193,7 @@ export function openRemoteLink(a: {
           // The Runtime's own refusal of this call (busy, too large) is its answer (review C1: told apart by `lost`,
           // never by the code, since a connection the Gateway closes carries the code it closed with).
           if (!err.lost) return err
+          if (err.unsent) sent = wasSent
           drop(link)
           // A revocation closes the connection: final, and a change sent on it keeps its request id for the person.
           if (err.code === 'RUNTIME_AUTH_FAILED') return err

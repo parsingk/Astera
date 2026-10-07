@@ -28,10 +28,13 @@ export class RemoteError extends Error {
   /** The connection was lost with this call on it (closed, with or without a code the Runtime named, or silent): the
    *  call may or may not have run, and it is not the Runtime's answer to it (Phase 4 review C1). */
   readonly lost: boolean
-  constructor(code: string, message: string, o: { lost?: boolean } = {}) {
+  /** The call was never written: its connection was already gone (review M1). A change sent again is a first attempt. */
+  readonly unsent: boolean
+  constructor(code: string, message: string, o: { lost?: boolean; unsent?: boolean } = {}) {
     super(message)
     this.code = code
     this.lost = o.lost === true
+    this.unsent = o.unsent === true
   }
 }
 
@@ -164,7 +167,7 @@ export async function connectRuntime(o: {
     call: (cmd, args, co = {}) =>
       new Promise<CallReply>((resolve, reject) => {
         // Nothing was written: the call is lost with its connection, and a caller may send it again (review C1).
-        if (sock.destroyed) return reject(new RemoteError(closeCode ?? 'RUNTIME_OFFLINE', 'the connection to the Runtime is closed', { lost: true }))
+        if (sock.destroyed) return reject(new RemoteError(closeCode ?? 'RUNTIME_OFFLINE', 'the connection to the Runtime is closed', { lost: true, unsent: true }))
         const id = String(++n)
         pending.set(id, { resolve, reject })
         send({ t: 'call', id, cmd, args, ...co })
