@@ -1045,17 +1045,18 @@ export function createHostOrch(a: {
    * response is the one failure a mechanism like this must never have.
    */
   const holdRequest = (
-    sessionId: string,
+    caller: string,
     requestId: string,
     cmd: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    retry: boolean
   ):
     | { answer: Reply; replayed?: true }
     | { observe: { key: string; recorded: Reply; args: Record<string, unknown>; fp: string } }
     | { key: string; fp: string } => {
     const bad = badRequestId(requestId)
     if (bad) return { answer: { status: 400, body: { error: bad } } }
-    const key = `${sessionId}\u0000${requestId}`
+    const key = `${caller}\u0000${requestId}`
     const fp = fingerprintOf(cmd, args)
     const held = receipts.get(key)
     // **A collision is a refusal, never a wrong answer.** The caller is told which command the id
@@ -1105,9 +1106,29 @@ export function createHostOrch(a: {
           }
         }
       }
+    // **A retry never claims a free id** (remote runtime design §3.9, X1-03): the first attempt may have run, and the
+    // record that would say so is gone. Decided in the same synchronous step that would otherwise claim it, so there is
+    // no lookup-then-resubmit race.
+    if (retry)
+      return {
+        answer: {
+          status: 409,
+          body: {
+            error: `request ${requestId} may or may not have run: this Runtime no longer holds its receipt — list what it changed before sending it again`,
+            code: 'RUNTIME_OUTCOME_UNKNOWN',
+            retry: 'outcome-unknown',
+            requestId
+          }
+        }
+      }
     receipts.set(key, { state: 'pending', cmd, at: a.now(), fp })
     return { key, fp }
   }
+
+  /** Whose receipts these are (remote runtime design §3.9, N11): a controller by the client the Host bound it to,
+   *  everyone else by the session they sent, as before. A NUL cannot occur in either. */
+  const receiptCaller = (sessionId: string, from: OrchCaller | undefined): string =>
+    from?.role === 'controller' && from.principal ? `controller:${from.principal.clientId}` : sessionId
 
   /**
    * Writes one completed receipt down and then sweeps — **lazily, on the write that made the store
@@ -1299,7 +1320,7 @@ export function createHostOrch(a: {
    * receipts live in memory, so a Host that started after the request was sent never saw it and the
    * one that did is gone (§4).
    */
-  const requestsShow = (args: Record<string, unknown>, sessionId: string): Reply => {
+  const requestsShow = (args: Record<string, unknown>, caller: string): Reply => {
     const id = args.id
     // A missing id is the caller's mistake and is worth saying so, rather than answering `absent`
     // about nothing: every answer below is about *some* id, and there is none here to be about.
@@ -1307,7 +1328,7 @@ export function createHostOrch(a: {
     const bad = badRequestId(id)
     if (bad) return { status: 400, body: { error: bad } }
     const hostStartedAt = a.hostStartedAt()
-    const held = receipts.get(`${sessionId}\u0000${id}`)
+    const held = receipts.get(`${caller}\u0000${id}`)
     if (!held)
       return { status: 200, body: { id, state: 'absent', hostStartedAt, interpretation: interpretationOf.absent(id) } }
     const head = { id, state: held.state, cmd: held.cmd, at: held.at, hostStartedAt }
@@ -1407,7 +1428,7 @@ export function createHostOrch(a: {
       await drain(queued).catch((err) => a.log(`pending reports — the drain failed: ${String(err)}`))
       return true
     },
-    call: async ({ cmd, args, sessionId, from, request }) => {
+    call: async ({ cmd, args, sessionId, from, request, retry }) => {
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
       // not a 500 — it is no `orch-result` at all, a caller waiting forever, and an unhandled
@@ -1626,7 +1647,7 @@ export function createHostOrch(a: {
         // **A caller that sent no id skips all of it** and gets the same answer, the same exit code
         // and the same order as before this existed (§9).
         if (request !== undefined) {
-          const held = holdRequest(sessionId, request, cmd, args)
+          const held = holdRequest(receiptCaller(sessionId, from), request, cmd, args, retry === true)
           // **A refusal is not a replay.** A malformed id and a call that is already in flight both
           // answer from this branch without a receipt behind them, so only the one that really came
           // out of a receipt carries the word.
@@ -1666,7 +1687,7 @@ export function createHostOrch(a: {
         // **And the state is not loaded for it.** Receipts are not in the state file (§4), so a `ready()`
         // here would read a file to answer a question the file has nothing to say about.
         if (cmd === 'requests-show') {
-          const shown = requestsShow(args, sessionId)
+          const shown = requestsShow(args, receiptCaller(sessionId, from))
           return claimed === null ? shown : settleRequest(claimed, cmd, marks, shown)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.

@@ -134,6 +134,9 @@ export interface OrchCall {
      *  did not ask for a receipt, and then nothing about this call changes: no lookup, no record,
      *  and the same reply in the same order as before the mechanism existed (§9). */
     request?: string
+    /** This call resends `request` after a lost reply (remote runtime design §3.9, X1-03). When the receipt is gone
+     *  (evicted, expired, or a Host restart) the Host answers RUNTIME_OUTCOME_UNKNOWN instead of running it. */
+    retry?: true
   }): Promise<{
     status: number
     body: unknown

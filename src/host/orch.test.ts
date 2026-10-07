@@ -139,6 +139,62 @@ describe('createHostOrch', () => {
       const r = await orchOver().call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: controller() })
       expect(r).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
     })
+    it('keys receipts by client, so two controllers sending the same request id do not collide', async () => {
+      await seed()
+      const orch = orchOver()
+      const a = { ...controller(), principal: { clientId: 'cli_a', name: 'cli', permission: 'full-control' as const } }
+      const b = { ...controller(), principal: { clientId: 'cli_b', name: 'mcp', permission: 'full-control' as const } }
+      const first = await orch.call({ cmd: 'jobs-create', args: { objective: 'one', cwd: 'D:/p' }, sessionId: '', from: a, request: 'r-1' })
+      const second = await orch.call({ cmd: 'jobs-create', args: { objective: 'two', cwd: 'D:/p' }, sessionId: '', from: b, request: 'r-1' })
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+      expect(second.replayed).not.toBe(true)
+      const shownByB = await orch.call({ cmd: 'requests-show', args: { id: 'r-1' }, sessionId: '', from: b })
+      expect((shownByB.body as { cmd: string }).cmd).toBe('jobs-create')
+      const shownByCli = await orch.call({ cmd: 'requests-show', args: { id: 'r-1' }, sessionId: '' })
+      expect((shownByCli.body as { state: string }).state).toBe('absent')
+    })
+    it('answers a retry whose receipt is gone with RUNTIME_OUTCOME_UNKNOWN, and runs nothing', async () => {
+      await seed()
+      const orch = orchOver()
+      await orch.ready()
+      const before = orch.state().jobs.length
+      const r = await orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: controller(), request: 'r-lost', retry: true })
+      expect(r).toMatchObject({ status: 409, body: { code: 'RUNTIME_OUTCOME_UNKNOWN', retry: 'outcome-unknown', requestId: 'r-lost' } })
+      expect(orch.state().jobs.length).toBe(before)
+    })
+    it('replays a retry whose receipt is still held', async () => {
+      await seed()
+      const orch = orchOver()
+      const call = (retry?: true) => orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: controller(), request: 'r-2', ...(retry ? { retry } : {}) })
+      const first = await call()
+      const again = await call(true)
+      expect(again.replayed).toBe(true)
+      expect(JSON.stringify(again.body)).toBe(JSON.stringify(first.body))
+    })
+    // Each jobs-create commits, so each leaves a receipt; 201 of them push the first one out (RECEIPTS_PER_CALLER).
+    it('answers outcome-unknown after per-caller eviction (201 calls) rather than running again', async () => {
+      await seed()
+      const orch = orchOver()
+      for (let i = 1; i <= RECEIPTS_PER_CALLER + 1; i++)
+        await orch.call({ cmd: 'jobs-create', args: { objective: `fill ${i}`, cwd: 'D:/p' }, sessionId: '', from: controller(), request: `fill-${i}` })
+      const jobs = orch.state().jobs.length
+      const r = await orch.call({ cmd: 'jobs-create', args: { objective: 'fill 1', cwd: 'D:/p' }, sessionId: '', from: controller(), request: 'fill-1', retry: true })
+      expect(r).toMatchObject({ status: 409, body: { code: 'RUNTIME_OUTCOME_UNKNOWN' } })
+      expect(orch.state().jobs.length).toBe(jobs)
+    }, 60_000)
+    // Receipts live in memory and die with the Host (request receipts design §4): every retry after a restart lands here.
+    it('answers outcome-unknown to a retry that reaches a restarted Host', async () => {
+      await seed()
+      const first = orchOver()
+      await first.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: controller(), request: 'r-boot' })
+      const restarted = orchOver()
+      await restarted.ready()
+      const jobs = restarted.state().jobs.length
+      const r = await restarted.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from: controller(), request: 'r-boot', retry: true })
+      expect(r).toMatchObject({ status: 409, body: { code: 'RUNTIME_OUTCOME_UNKNOWN' } })
+      expect(restarted.state().jobs.length).toBe(jobs)
+    })
   })
 
   describe('MCP access gate', () => {
