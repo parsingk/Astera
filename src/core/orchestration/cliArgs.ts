@@ -105,7 +105,8 @@ const APP_SUBCOMMANDS = new Set<string>(APP_VERBS)
  */
 export const NOUNS = {
   host: ['start', 'status', 'stop'],
-  projects: ['list', 'get', 'find'],
+  // `add` registers a folder of this machine (remote runtime N5): the Host answers it for local callers only.
+  projects: ['list', 'get', 'find', 'add'],
   // `jobs create` 와 `tasks add` 는 phase C 다 — 앞의 것은 run-create 를 `--auto` 로, 뒤의 것은
   // task-create 를 부른다(command.ts). 코디네이터가 쓰는 두 이름은 그대로 남는다.
   jobs: ['list', 'get', 'wait', 'run', 'create'],
@@ -138,7 +139,10 @@ export const NOUNS = {
   // **Answered by the CLI itself, for an MCP client to launch** (MCP design §4, cli/mcp/server.ts):
   // stdout carries the MCP protocol, and each tool is one Host command over one long-lived link.
   // `status` says whether that would work here, and starts nothing (cli/mcp/status.ts).
-  mcp: ['serve', 'status']
+  mcp: ['serve', 'status'],
+  // **Remote Runtime on this machine** (remote runtime design §2.9, plan ruling P1): answered in the CLI process,
+  // which writes remote-runtime.json and the identity and asks the Host only what it holds (cli/runtime/commands.ts).
+  runtime: ['start', 'stop', 'status', 'pair', 'clients', 'revoke']
 } as const
 
 /** 명사이면서 동사 없이도 명령인 이름. `accounts` 는 공개 명사가 되기 전부터 세션 명령이었고

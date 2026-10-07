@@ -23,6 +23,10 @@ import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
+import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
+import { readRemoteSettings, writeRemoteSettings } from '../core/remote/settings'
+import { loadIdentity, loadOrCreateIdentity } from '../core/remote/identity'
+import { openSecretStore } from '../core/secrets/secretStore'
 import { mcpStatus } from './mcp/status'
 import { hfProxy } from './hfProxy'
 import {
@@ -677,6 +681,52 @@ export function callHost(a: {
   })
 }
 
+/** A private IPv4 of this machine (RFC 1918 or the 100.64/10 range Tailscale uses), for a pairing string while the
+ *  Gateway listens on every interface. */
+const privateAddress = (): string | null => {
+  for (const list of Object.values(os.networkInterfaces()))
+    for (const n of list ?? [])
+      if (n.family === 'IPv4' && !n.internal && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(n.address))
+        return n.address
+  return null
+}
+
+/** What `astera runtime ...` reads and asks on this machine (cli/runtime/commands.ts). */
+const runtimeDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; home: string; noKeepalive: boolean }): RuntimeCommandDeps => {
+  const { address, profileDir } = cliHostTarget({ env: a.env, platform: a.platform, home: a.home })
+  const store = () => openSecretStore({ dir: path.join(profileDir, 'remote'), profileDir })
+  return {
+    readSettings: () => readRemoteSettings(profileDir),
+    writeSettings: (p) => writeRemoteSettings(profileDir, p),
+    ensureIdentity: (san) => loadOrCreateIdentity(store(), { displayName: os.hostname(), ...(san === '0.0.0.0' || san === '::' ? {} : { san }) }),
+    loadIdentity: () => loadIdentity(store()),
+    hostCall: async (cmd, args, o) => {
+      let conn = await connectHost({ address, profileDir, app: CLI_VERSION, log: logToStderr })
+      const startHost = (): ReturnType<typeof runHostCommand> =>
+        runHostCommand({ cmd: 'host-start', env: a.env, platform: a.platform, home: a.home, noKeepalive: a.noKeepalive })
+      if ('error' in conn && conn.error === 'unreachable' && o.start) {
+        const started = await startHost()
+        if (!started.ok) return { error: started.error }
+        conn = await connectHost({ address, profileDir, app: CLI_VERSION, log: logToStderr })
+      }
+      if ('error' in conn) {
+        if (conn.error === 'impostor') return { error: impostorError(address, profileDir) }
+        return { down: true }
+      }
+      try {
+        const r = await callHost({ conn, cmd, args, sessionId: '', timeoutMs: 30_000 })
+        if ('unreachable' in r) return { down: true }
+        if ('stuck' in r) return { error: { code: 'TIMEOUT', message: r.stuck } }
+        return { status: r.status, body: r.body }
+      } finally {
+        conn.close()
+      }
+    },
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    privateAddress
+  }
+}
+
 /** `callHost`, timed for `--verbose`: how long the round trip took and how it ended. With `--verbose`
  *  off this is `callHost` itself. */
 export function timedCall(
@@ -1292,6 +1342,20 @@ export async function main(): Promise<void> {
     // A failure is a `CliError` and goes out like every other one (review I1): `ok: false`, its code,
     // its nextSteps, and the `error:` sentence under `--human`. `host stop`'s refusal keeps its counts
     // in `error.details`.
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
+    process.exit(0)
+  }
+
+  // **runtime 명령도 CLI 가 답한다** (remote runtime design §2.9): remote-runtime.json 과 신원은 이 프로세스가 읽고
+  // 쓰고, Host 에는 그것만 아는 것을 묻는다. host 명령과 같은 이유로 요청 id 를 받지 않는다.
+  if (parsed.cmd.startsWith('runtime-')) {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await runRuntimeCommand(parsed.cmd, parsed.args, runtimeDeps({ env: process.env, platform: process.platform, home: homedir(), noKeepalive: parsed.noKeepalive }))
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
     process.exit(0)

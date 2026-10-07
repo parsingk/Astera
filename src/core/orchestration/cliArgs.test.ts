@@ -196,7 +196,7 @@ describe('공개 표면 — 두 낱말 명령', () => {
   })
 
   it('동사가 없으면 무엇을 칠 수 있는지 말한다', () => {
-    expect(parseArgs(['projects'])).toEqual({ error: 'projects needs one of: list, get, find' })
+    expect(parseArgs(['projects'])).toEqual({ error: 'projects needs one of: list, get, find, add' })
     expect(parseArgs(['jobs'])).toEqual({ error: 'jobs needs one of: list, get, wait, run, create' })
   })
 

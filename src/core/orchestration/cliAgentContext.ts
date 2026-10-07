@@ -517,7 +517,16 @@ const NOT_SWITCHED = [
   'higgsfield-list',
   'higgsfield-use',
   'mcp-serve',
-  'mcp-status'
+  'mcp-status',
+  // Remote runtime: `projects add` is Host-answered beside `pair-create` (src/host/orch.ts), and the runtime commands
+  // answer in the CLI process (src/cli/runtime/commands.ts).
+  'projects-add',
+  'runtime-start',
+  'runtime-stop',
+  'runtime-status',
+  'runtime-pair',
+  'runtime-clients',
+  'runtime-revoke'
 ] as const satisfies readonly AgentCommand[]
 
 /**

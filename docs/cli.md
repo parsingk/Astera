@@ -488,6 +488,30 @@ command, and `ASTERA_SKILLS` is the folder `astera help` reads its guide from. O
 `astera help`, `astera browser help` and `astera app help` read the guides that ship with the
 installed Astera instead.
 
+### Remote Runtime
+
+Another machine can run Jobs on this one through Remote Runtime. On the machine that does the work:
+
+```text
+astera runtime start --listen 100.64.0.5     listen on that address (default 127.0.0.1, port 47831)
+astera runtime pair --name laptop            a one-time pairing string, valid 10 minutes
+astera runtime clients                       who is paired
+astera runtime revoke --id <clientId>        unpair one and close its connections now
+astera runtime stop                          stop listening; the Host and its Jobs keep running
+```
+
+`start` writes `remote-runtime.json` in the profile, makes this machine's identity the first time (a key and a
+certificate kept owner-only under `remote/`), starts a Host if none runs, and waits until the Gateway listens.
+Every later Host start, by the app, `astera host start` or an MCP client, starts the Gateway again while Remote is on,
+and the Host does not leave idle while it is on.
+
+The pairing string carries a secret code and this machine's fingerprint. Give it to the other machine directly, not
+through a chat or a ticket. The other machine checks the fingerprint before it sends anything, so a different machine
+answering at that address is refused. Five wrong codes burn the code.
+
+Listen on a private network, a VPN or Tailscale. Do not forward the port to the internet. A paired controller with
+read-only permission can read Jobs, Runs and Tasks but not change them.
+
 ## Command reference
 
 Every command is a noun and a verb. A noun with no verb is rejected with the list of its verbs, so
@@ -510,9 +534,15 @@ astera status                            is the orchestrator there, and what is 
 astera host    status | stop
 astera host    start  [--replace]
 
+astera runtime status | stop | clients
+astera runtime start   [--listen <addr>] [--port <n>]
+astera runtime pair    [--read-only] [--name <n>]
+astera runtime revoke  --id <clientId>
+
 astera projects list
 astera projects get   --id <projectId>
 astera projects find  --path <path>
+astera projects add   --path <path>
 
 astera jobs    list   [--status <pending|paused|scheduled|waiting|running|completed|failed>] [--project <path>]
 astera jobs    get    --id <jobId | runId>
