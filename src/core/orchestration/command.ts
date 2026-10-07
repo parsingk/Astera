@@ -233,7 +233,7 @@ export interface OrchServerDeps {
     terminalCwd?: string
     terminalProvider?: Provider
     terminalAccountId?: string
-    /** Set only by recovery (main/recovery/execute.ts) — this wrapper forwards it straight through
+    /** Set only by recovery (core/recovery/execute.ts) — this wrapper forwards it straight through
      *  to OrchCoordinator.startWorker, where the reason it exists is documented. Nothing else in this
      *  file reads it. */
     resume?: { nativeSessionId?: string; briefing?: string }
@@ -3234,7 +3234,7 @@ export async function handleCommand(
         // rule. Calling closeDispatch alone would leave the Task at dispatched, and the --ready list
         // does not show those, so nothing would pick it up on its own. A Gate can reach it now:
         // recovery added the dispatched -> blocked edge to ALLOWED (core/orchestration/types.ts) and
-        // main/recovery/execute.ts opens exactly that Gate when startWorker fails on it. But that is
+        // core/recovery/execute.ts opens exactly that Gate when startWorker fails on it. But that is
         // for a lost worker with nobody waiting on an answer; here a caller is, so putting the Task
         // back where it was needs no question of anyone.
         // So this removes the dispatch from the array entirely and restores the Task directly to its

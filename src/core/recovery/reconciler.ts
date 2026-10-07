@@ -1,20 +1,20 @@
 // The recovery reconciler (P1 design §6): the piece that finds a lost worker, asks decide.ts for a
 // strategy, journals the decision, and hands it to execute.ts. Nothing here decides or carries out a
-// strategy — those live in core/recovery/decide.ts and main/recovery/execute.ts, the same split the
+// strategy — those live in core/recovery/decide.ts and core/recovery/execute.ts, the same split the
 // orchestration guide draws between "what happened", "what to do" and "doing it".
-import { jobOf, placedByApp, type OrchState } from '../../core/orchestration/state'
-import { checkConfigIdsOf, policyOf } from '../../core/orchestration/convergence'
-import { DEFAULT_CONCURRENCY } from '../../core/orchestration/types'
-import type { GitFacts, LostAttempt, RecoveryDecision } from '../../core/recovery/types'
-import { decideRecovery } from '../../core/recovery/decide'
-import type { ContinuityEvent, ContinuityEventType } from '../../core/continuity/events'
-import type { CheckpointRow, ContinuityJournal, RecoveryActionRow } from '../../core/continuity/journal'
-import { retryBusy } from '../../core/continuity/busyRetry'
+import { jobOf, placedByApp, type OrchState } from '../orchestration/state'
+import { checkConfigIdsOf, policyOf } from '../orchestration/convergence'
+import { DEFAULT_CONCURRENCY } from '../orchestration/types'
+import type { GitFacts, LostAttempt, RecoveryDecision } from './types'
+import { decideRecovery } from './decide'
+import type { ContinuityEvent, ContinuityEventType } from '../continuity/events'
+import type { CheckpointRow, ContinuityJournal, RecoveryActionRow } from '../continuity/journal'
+import { retryBusy } from '../continuity/busyRetry'
 import type { ExecuteResult } from './execute'
 
 // `candidates` and its seed live in core now (the Host's lost-worker Gate asks the same question, R16).
-export { candidates, type LostAttemptSeed } from '../../core/recovery/candidates'
-import { candidates, type LostAttemptSeed } from '../../core/recovery/candidates'
+export { candidates, type LostAttemptSeed } from './candidates'
+import { candidates, type LostAttemptSeed } from './candidates'
 
 /** What the reconciler needs of the journal. A port rather than the class since the Host journal (J3):
  *  in front of a Host that writes the journal the app reads through a read-only reader and sends its

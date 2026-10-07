@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { candidates, RECOVERY_PASS_BUDGET_MS, RecoveryReconciler } from './reconciler'
-import { emptyState, type OrchState } from '../../core/orchestration/state'
-import type { Dispatch, Task } from '../../core/orchestration/types'
-import type { GitFacts, LostAttempt } from '../../core/recovery/types'
-import { stateFromLegacy } from '../../core/orchestration/legacyState'
-import type { LegacyRun } from '../../core/orchestration/legacy'
-import type { EventsPage, JournalEventRow } from '../../core/continuity/journal'
+import { emptyState, type OrchState } from '../orchestration/state'
+import type { Dispatch, Task } from '../orchestration/types'
+import type { GitFacts, LostAttempt } from './types'
+import { stateFromLegacy } from '../orchestration/legacyState'
+import type { LegacyRun } from '../orchestration/legacy'
+import type { EventsPage, JournalEventRow } from '../continuity/journal'
 
 const NOW = '2026-09-09T10:00:00.000Z'
 const EARLIER = '2026-09-09T09:00:00.000Z'
@@ -486,7 +486,7 @@ describe('the seam with the real store', () => {
   it('a crafted orchestration.json boots into exactly one candidate', async () => {
     // The reconciler's input is whatever store.load() leaves behind, so craft the file the way a
     // crash leaves it (an open Dispatch) and let the real cleanup close it.
-    const { OrchestrationStore } = await import('../../core/orchestration/store')
+    const { OrchestrationStore } = await import('../orchestration/store')
     const fs = await import('node:fs')
     const os = await import('node:os')
     const path = await import('node:path')

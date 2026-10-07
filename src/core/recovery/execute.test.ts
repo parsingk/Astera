@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { executeRecovery } from './execute'
-import { emptyState, type OrchState } from '../../core/orchestration/state'
-import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
-import type { Dispatch, Task } from '../../core/orchestration/types'
-import { stateFromLegacy } from '../../core/orchestration/legacyState'
-import type { LegacyRun } from '../../core/orchestration/legacy'
+import { emptyState, type OrchState } from '../orchestration/state'
+import type { LostAttempt, RecoveryDecision } from './types'
+import type { Dispatch, Task } from '../orchestration/types'
+import { stateFromLegacy } from '../orchestration/legacyState'
+import type { LegacyRun } from '../orchestration/legacy'
 
 const NOW = '2026-09-09T10:00:00.000Z'
 const run = (over: Partial<LegacyRun> = {}): LegacyRun => ({ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, autoDispatch: true, ...over })

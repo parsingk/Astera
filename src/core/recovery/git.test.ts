@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readGitFacts } from './git'
-import { makeRepo, gitSync } from '../../core/worktrees/testRepo'
+import { makeRepo, gitSync } from '../worktrees/testRepo'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -46,7 +46,7 @@ describe('readGitFacts', () => {
     gitSync(d, ['commit', '-am', 'ours'])
     // the merge is expected to fail; gitSync throws on a non-zero exit, so go through the adapter
     const facts = await (async () => {
-      const { git } = await import('../../core/worktrees/git')
+      const { git } = await import('../worktrees/git')
       await git(['merge', 'other'], { cwd: d })
       return readGitFacts(d)
     })()
@@ -76,7 +76,7 @@ describe('readGitFacts', () => {
 
   it('when status fails, dirty and conflicts are null to signal unreliability', async () => {
     const d = await repo()
-    const { git } = await import('../../core/worktrees/git')
+    const { git } = await import('../worktrees/git')
     const failingGit = async (args: string[], opts?: { cwd?: string }) => {
       if (args[0] === 'status') return { ok: false, stdout: '', stderr: 'boom' }
       return git(args, opts)

@@ -27,7 +27,7 @@ import type { CheckpointHead } from '../../core/orchestration/exec/validation'
 import { journalTimeline } from '../../core/continuity/timelineRows'
 import { JOURNAL_EVENTS_MAX, type JournalOp } from '../../core/continuity/journalOps'
 import { hostSpeaksJournal } from '../host/outdated'
-import type { ReconcilerJournal } from '../recovery/reconciler'
+import type { ReconcilerJournal } from '../../core/recovery/reconciler'
 
 /** How many timeline rows one page of the run-detail read holds (stage 3 T1). The read runs on Electron's
  *  main thread at every snapshot change while the window is open, so it reads the newest page only;

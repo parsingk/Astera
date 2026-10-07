@@ -141,7 +141,7 @@ export async function readPendingReports(a: {
  *  **Both of those endings leave a Dispatch nothing speaks for, so both call `writeOff`.** The
  *  restart cleanup left that Dispatch open on the strength of this report (`reportedDispatchIds` in
  *  OrchestrationStore.load); once the report is refused or given up on, no report does, and the
- *  Dispatch's Task is one `candidates` in main/recovery/reconciler.ts will not look at. Waiting for
+ *  Dispatch's Task is one `candidates` in core/recovery/reconciler.ts will not look at. Waiting for
  *  the next start's cleanup to close it costs a whole app session in the refusal case and one more
  *  start in the give-up case, for a Dispatch this boot already knows is finished with.
  *

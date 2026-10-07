@@ -1,5 +1,5 @@
 // Which lost workers a recovery pass may act on (P1 design §6). Moved here unchanged from
-// src/main/recovery/reconciler.ts, which re-exports it, so the Host can ask the same question: the
+// the reconciler (then in src/main/recovery), which re-exports it, so the Host can ask the same question: the
 // Host's lost-worker Gate (R16, core/orchestration/lostGate.ts) and the app's reconciler judge "lost"
 // by one rule. Pure: no electron, no src/main.
 import { runGatedForTask, runIdOf, type OrchState } from '../orchestration/state'

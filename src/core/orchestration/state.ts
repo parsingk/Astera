@@ -1490,7 +1490,7 @@ export function interruptStalledTask(
  *  Dispatch that the boot cleanup left open only because a queued report spoke for it, and then
  *  finds it cannot apply that report — the app refuses it, or applying it throws until the drain
  *  gives up. Nothing speaks for the Dispatch after that, and leaving it open costs the Task a whole
- *  start: `candidates` in main/recovery/reconciler.ts skips a Task with any open Dispatch, so
+ *  start: `candidates` in core/recovery/reconciler.ts skips a Task with any open Dispatch, so
  *  recovery cannot take it until the next boot's cleanup writes it off. Closing it here lets the
  *  same boot's recovery sweep, which runs after the drain, do that work now.
  *

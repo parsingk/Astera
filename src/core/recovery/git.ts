@@ -1,4 +1,4 @@
-// What recovery needs to know about a worktree (P1 design §5). Main-side because it runs git; the
+// What recovery needs to know about a worktree (P1 design §5). It runs git (in the app and in the Host); the
 // judgment is pure and lives in core/recovery/decide.ts.
 //
 // Same conventions as gitSummary.ts: the adapter comes from core/worktrees/git.ts, it never throws,
@@ -11,9 +11,9 @@
 // is "cannot say" — `exists: null`, `inProgress: 'unknown'` — which recovery reads as a reason to stop,
 // never as "gone" or "nothing in progress".
 import path from 'node:path'
-import { git } from '../../core/worktrees/git'
-import { defaultCwdProbe, type Probe } from '../../core/sessions/pathProbe'
-import type { GitFacts } from '../../core/recovery/types'
+import { git } from '../worktrees/git'
+import { defaultCwdProbe, type Probe } from '../sessions/pathProbe'
+import type { GitFacts } from './types'
 
 export interface GitFactsDeps {
   /** Test injection, as in GitSummaryDeps — the real git is used when this is absent. */

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { candidates, isLost } from './candidates'
-import { candidates as reExported } from '../../main/recovery/reconciler'
+import { candidates as reExported } from './reconciler'
 import { emptyState, type OrchState } from '../orchestration/state'
 import type { Dispatch, Task } from '../orchestration/types'
 
@@ -23,7 +23,7 @@ const state = (d: Dispatch[] = [dispatch()]): OrchState => ({
   dispatches: d
 })
 
-// Moved from src/main/recovery/reconciler.ts unchanged; its own tests (reconciler.test.ts) still run
+// Moved from src/core/recovery/reconciler.ts unchanged; its own tests (reconciler.test.ts) still run
 // against the re-export. These pin that the two are one function, and the rule the Host now shares.
 describe('candidates (core)', () => {
   it('is the function the reconciler re-exports', () => {

@@ -2,17 +2,17 @@
 // here decides a strategy — it just runs the one it is handed, the same split the orchestration
 // guide draws between "what to do" and "doing it".
 import { randomBytes } from 'node:crypto'
-import { openDispatch, beginValidation, createGate, jobOf, type OrchState } from '../../core/orchestration/state'
-import { buildCheckpoint, type GitSummary } from '../../core/orchestration/checkpoint'
-import { formatResumeSection } from '../../core/orchestration/resumeSection'
-import { policyOf, repairCountOf } from '../../core/orchestration/convergence'
-import { FAILURE_LIMIT } from '../../core/orchestration/types'
-import { isSamePath } from '../../core/files/tree'
-import { t, type Lang } from '../../core/i18n'
-import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
-import type { Provider } from '../../core/providers/meta'
-import type { KnowledgeFiles } from '../../core/knowledge/detect'
-import { buildSpecFile } from '../../core/orchestration/exec/coordinator'
+import { openDispatch, beginValidation, createGate, jobOf, type OrchState } from '../orchestration/state'
+import { buildCheckpoint, type GitSummary } from '../orchestration/checkpoint'
+import { formatResumeSection } from '../orchestration/resumeSection'
+import { policyOf, repairCountOf } from '../orchestration/convergence'
+import { FAILURE_LIMIT } from '../orchestration/types'
+import { isSamePath } from '../files/tree'
+import { t, type Lang } from '../i18n'
+import type { LostAttempt, RecoveryDecision } from './types'
+import type { Provider } from '../providers/meta'
+import type { KnowledgeFiles } from '../knowledge/detect'
+import { buildSpecFile } from '../orchestration/exec/coordinator'
 
 export type ExecuteResult = { ok: true; newDispatchId?: string } | { ok: false; error: string }
 

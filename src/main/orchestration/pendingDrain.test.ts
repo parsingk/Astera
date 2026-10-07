@@ -18,7 +18,7 @@ import {
   writeOffDispatch,
   type OrchState
 } from '../../core/orchestration/state'
-import { candidates } from '../recovery/reconciler'
+import { candidates } from '../../core/recovery/reconciler'
 import { handleCommand, type OrchServerDeps } from '../../core/orchestration/command'
 
 let dir: string
@@ -304,7 +304,7 @@ describe('applyPendingReports', () => {
   })
 
   // The Dispatch was left open at boot *because* this report spoke for it. Once the report is gone
-  // nothing does, and an open Dispatch is what candidates() in main/recovery/reconciler.ts skips --
+  // nothing does, and an open Dispatch is what candidates() in core/recovery/reconciler.ts skips --
   // so without this the Task waits for the whole of the next app session.
   it('writes off the Dispatch of a report the app refused', async () => {
     await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_gone' })
