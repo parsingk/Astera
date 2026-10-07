@@ -19,7 +19,9 @@ const env = (extra: Record<string, string> = {}) => ({ ...process.env, ASTERA_PR
 const calls = async () => (await fs.readFile(logFile, 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
 
 beforeEach(async () => {
-  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfp-'))
+  // The `astera-` prefix is what vitest.globalSetup.ts sweeps. The cmd-shim test copies node.exe (~87 MB)
+  // in here, and under the old `hfp-` prefix every run of this file left one behind for good.
+  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfp-'))
   logFile = path.join(profile, 'calls.log')
   msgs = []
 })
