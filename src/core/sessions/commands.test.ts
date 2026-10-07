@@ -9,6 +9,8 @@ const SHIMS: Record<string, string> = {
   codex: 'C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd'
 }
 const shim = (name: string): string | null => SHIMS[name] ?? null
+/** What every codex command opens with (the update check off; see `codex update check` below). */
+const NO_UPDATE = ['-c', 'check_for_update_on_startup=false']
 
 describe('initialPrompt', () => {
   it('claude: 마지막 위치 인자로 싣는다', () => {
@@ -67,26 +69,40 @@ describe('claude --add-dir', () => {
   })
 })
 
+// A codex TUI with an update out opens on "Update available … 1. Update now 2. Skip", and a worker
+// nobody sits in front of stops there (measured 2026-10-07, 0.160.0 with 0.160.1 out).
+describe('codex update check', () => {
+  it('is off for every codex session Astera starts', () => {
+    expect(buildCodexCommand('linux')({}).args).toEqual(NO_UPDATE)
+  })
+  // Ahead of the subcommand, where codex's root options apply to `resume` too (measured: the update menu
+  // without it, the session picker with it), and out of the way of the prompt, which stays last.
+  it('comes before resume, and the prompts stay last', () => {
+    expect(buildCodexCommand('linux')({ resumeSessionId: 'sid', resumePrompt: 'go on' }).args).toEqual([...NO_UPDATE, 'resume', 'sid', 'go on'])
+    expect(buildCodexCommand('linux')({ bypassPermissions: true, initialPrompt: 'do it' }).args.at(-1)).toBe('do it')
+  })
+})
+
 // A codex 0.160 TUI attached to the shared app-server daemon runs its shell in the daemon's environment,
 // not its own (codexNoDaemon.ts). The builder asks whether this codex knows `--no-daemon`.
 describe('codex --no-daemon', () => {
   it('runs its own server when the binary knows the flag', () => {
-    expect(buildCodexCommand('linux', undefined, () => true)({}).args).toEqual(['--no-daemon'])
+    expect(buildCodexCommand('linux', undefined, () => true)({}).args).toEqual([...NO_UPDATE, '--no-daemon'])
   })
   it('keeps the flag on a resume, after the resume arguments', () => {
     const { args } = buildCodexCommand('linux', undefined, () => true)({ resumeSessionId: 'sid', resumePrompt: 'go on' })
-    expect(args).toEqual(['resume', 'sid', 'go on', '--no-daemon'])
+    expect(args).toEqual([...NO_UPDATE, 'resume', 'sid', 'go on', '--no-daemon'])
   })
   it('leaves the prompt last', () => {
     const { args } = buildCodexCommand('linux', undefined, () => true)({ bypassPermissions: true, initialPrompt: 'do it' })
-    expect(args).toEqual(['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', 'do it'])
+    expect(args).toEqual([...NO_UPDATE, '--no-daemon', '--dangerously-bypass-approvals-and-sandbox', 'do it'])
   })
   it('goes inside the cmd.exe wrapper on win32', () => {
-    expect(buildCodexCommand('win32', shim, () => true)({}).args).toEqual(['/d', '/c', 'call', SHIMS.codex, '--no-daemon'])
+    expect(buildCodexCommand('win32', shim, () => true)({}).args).toEqual(['/d', '/c', 'call', SHIMS.codex, ...NO_UPDATE, '--no-daemon'])
   })
   it('is left out for a binary that does not know it, and by default', () => {
-    expect(buildCodexCommand('linux', undefined, () => false)({}).args).toEqual([])
-    expect(buildCodexCommand('linux')({}).args).toEqual([])
+    expect(buildCodexCommand('linux', undefined, () => false)({}).args).toEqual(NO_UPDATE)
+    expect(buildCodexCommand('linux')({}).args).toEqual(NO_UPDATE)
   })
 })
 

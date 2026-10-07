@@ -50,13 +50,16 @@ describe('provider descriptor', () => {
     }
     expect(makeDescriptors('darwin').claude.buildCommand({})).toEqual({ file: 'claude', args: [] })
     // The codex answer is fixed here: the real probe runs whatever codex this machine has on PATH.
-    expect(makeDescriptors('darwin', undefined, undefined, () => false).codex.buildCommand({})).toEqual({ file: 'codex', args: [] })
+    expect(makeDescriptors('darwin', undefined, undefined, () => false).codex.buildCommand({})).toEqual({
+      file: 'codex',
+      args: ['-c', 'check_for_update_on_startup=false']
+    })
   })
 
   it('codex의 --no-daemon 은 그 판별을 따른다', () => {
     expect(makeDescriptors('darwin', undefined, undefined, () => true).codex.buildCommand({})).toEqual({
       file: 'codex',
-      args: ['--no-daemon']
+      args: ['-c', 'check_for_update_on_startup=false', '--no-daemon']
     })
   })
 

@@ -101,7 +101,13 @@ export function buildCodexCommand(
   noDaemon: () => boolean = () => false
 ): CommandBuilder {
   return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt }) => {
-    const args: string[] = []
+    // **No update check, ever.** With an update out, codex opens on "Update available … 1. Update now
+    // 2. Skip" (measured 2026-10-07, 0.160.0 with 0.160.1 out), and a worker, a coordinator or a roll's
+    // respawn has nobody in front of it to answer: the Job just stops. Settled for every session Astera
+    // starts, a person's own tabs included; codex run outside Astera still says so. Ahead of `resume`,
+    // where a root option reaches that subcommand too (measured: the menu without it, the session picker
+    // with it). Not gated like --no-daemon: codex takes an unknown `-c` key and starts as usual.
+    const args: string[] = ['-c', 'check_for_update_on_startup=false']
     if (resumeSessionId) {
       args.push('resume', resumeSessionId)
       const safe = resumePrompt ? sanitizeResumePrompt(resumePrompt) : ''
