@@ -728,6 +728,7 @@ export const GLOBAL_FLAGS: readonly string[] = [
   'no-keepalive',
   'verbose',
   'project',
+  'runtime',
   'request-id',
   'help'
 ]
@@ -736,7 +737,7 @@ export const GLOBAL_FLAGS: readonly string[] = [
  *  flag, accepted where `USAGE` declares it and refused elsewhere: accepting it on every command would
  *  let `runs get --project p` run and ignore it, the fault this check exists for. run.ts hands this
  *  check the line from the command on, so a leading `--project` never reaches it. */
-const LEADING_ONLY: ReadonlySet<string> = new Set(['project'])
+const LEADING_ONLY: ReadonlySet<string> = new Set(['project', 'runtime'])
 
 /** Flags a public command really reads that its `USAGE` entry leaves out on purpose. `--skills-dir`
  *  is the one, and the comment on `help` above says why it is not listed. */

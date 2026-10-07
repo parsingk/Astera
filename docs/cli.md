@@ -681,6 +681,11 @@ in either place and in `projects find --path`, is taken from the directory you r
 never from the Host's. After the command, `--project` is refused with 2 by a command that does not
 take one, as any flag a command does not take is.
 
+**The global `--runtime <id|name>` goes before the command too**, as in `astera --runtime office jobs list`,
+and sends the command to a paired Runtime instead of this machine's Host ([remote-runtime.md](remote-runtime.md)).
+Only the commands a Runtime offers take it; any other refuses with `RUNTIME_CAPABILITY_MISSING` before it
+reads anything on this machine. After the command, `--runtime` is refused with 2.
+
 **`projects find --path <path>` names the project a folder belongs to**: the registered project whose
 folder is that path or holds it. When registered projects nest, as a package registered inside a
 registered monorepo, the one with the longest folder wins. A folder that only shares a prefix with a

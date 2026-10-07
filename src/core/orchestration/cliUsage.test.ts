@@ -564,3 +564,9 @@ describe('문서가 보여 주는 명령 줄은 전부 파서와 플래그 검�
     }
   })
 })
+
+describe('--runtime is a leading flag only (remote runtime design §2.8)', () => {
+  it('after the command it is refused as a flag the command does not take', () => {
+    expect(unknownFlagError('jobs-list', ['jobs', 'list', '--runtime', 'rt_a'])).toMatch(/does not take --runtime/)
+  })
+})

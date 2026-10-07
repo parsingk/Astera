@@ -27,6 +27,9 @@ export interface ParsedArgs {
    *  that take one (`jobs list`, `runs list`, `sessions list`). After the command, `--project` is that
    *  command's own flag and lands in `args`, where it wins over this. Absent when not given. */
   project?: string
+  /** The global `--runtime <id|name>` (remote runtime design §2.8), before the command only: the paired Runtime this
+   *  command is sent to instead of this machine's Host. Absent when not given. */
+  runtime?: string
 }
 
 /**
@@ -42,12 +45,20 @@ const LEADING_MODES = new Set(['json', 'human', 'quiet', 'noKeepalive', 'verbose
  *  only way to tell it from a command's own `--project`, spelled the same. */
 export function leadingGlobals(
   argv: readonly string[]
-): { modes: Set<string>; project?: string; start: number } | { error: string } {
+): { modes: Set<string>; project?: string; runtime?: string; start: number } | { error: string } {
   const modes = new Set<string>()
   let project: string | undefined
+  let runtime: string | undefined
   let i = 0
   while (i < argv.length && argv[i].startsWith('-')) {
     const key = camel(argv[i].replace(/^--?/, ''))
+    if (argv[i] === '--runtime') {
+      const value = argv[i + 1]
+      if (value === undefined || value.startsWith('--') || value === '') return { error: '--runtime needs a runtime id or name' }
+      runtime = value
+      i += 2
+      continue
+    }
     if (argv[i] === '--project') {
       const value = argv[i + 1]
       if (value === undefined || value.startsWith('--') || value === '') return { error: '--project needs a path' }
@@ -59,7 +70,7 @@ export function leadingGlobals(
     modes.add(key)
     i++
   }
-  return { modes, ...(project === undefined ? {} : { project }), start: i }
+  return { modes, ...(project === undefined ? {} : { project }), ...(runtime === undefined ? {} : { runtime }), start: i }
 }
 
 export const camel = (flag: string): string =>
@@ -299,5 +310,5 @@ export function parseArgs(all: string[]): ParsedArgs | { error: string } {
     // Only when neither --script nor --file was given; `--script -` already asked.
     if (!hasScript && !hasFile) wantsStdin.push('script')
   }
-  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive, verbose, ...(lead.project === undefined ? {} : { project: lead.project }) }
+  return { cmd, args, wantsStdin, json, human, quiet, noKeepalive, verbose, ...(lead.project === undefined ? {} : { project: lead.project }), ...(lead.runtime === undefined ? {} : { runtime: lead.runtime }) }
 }

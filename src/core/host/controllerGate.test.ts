@@ -24,4 +24,10 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
     expect(controllerRefusal('jobs-list', p('control'))).toMatchObject({ status: 403 })
     expect(controllerRefusal('jobs-list', undefined)).toMatchObject({ status: 401, body: { code: 'RUNTIME_AUTH_FAILED' } })
   })
+
+  // Phase 4 ruling: the two waits are long-poll reads (§3.1 budgets them as in-flight calls).
+  it('lets runs-wait and jobs-wait through as reads', () => {
+    for (const cmd of ['runs-wait', 'jobs-wait'])
+      expect(controllerRefusal(cmd, { clientId: 'c', name: 'n', permission: 'read-only' } as never), cmd).toBeNull()
+  })
 })

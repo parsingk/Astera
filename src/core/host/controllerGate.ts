@@ -19,6 +19,9 @@ export const CONTROLLER_READ_COMMANDS = [
   'tasks-check-output',
   'tasks-output',
   'runs-follow',
+  // Long-poll reads (Phase 4 ruling): §3.1 counts them among a connection's in-flight calls.
+  'runs-wait',
+  'jobs-wait',
   'questions-list',
   'questions-get',
   'run-configs-list',

@@ -364,3 +364,19 @@ describe('parseArgs — the global --project, before the command', () => {
     expect(parseArgs(['--project'])).toEqual({ error: '--project needs a path' })
   })
 })
+
+// Remote runtime design §2.8: `--runtime <id|name>` joins the leading flags, before the command only.
+describe('parseArgs — the global --runtime, before the command', () => {
+  it('is read before the command and kept out of args', () => {
+    const r = parseArgs(['--runtime', 'rt_a', 'jobs', 'list'])
+    expect(r).toMatchObject({ cmd: 'jobs-list', runtime: 'rt_a' })
+    expect((r as { args: Record<string, unknown> }).args.runtime).toBeUndefined()
+  })
+  it('sits with the other leading flags in any order', () => {
+    expect(parseArgs(['--verbose', '--runtime', 'office pc', '--project', '/p', 'jobs', 'list'])).toMatchObject({ cmd: 'jobs-list', runtime: 'office pc', project: '/p', verbose: true })
+  })
+  it('needs a value', () => {
+    expect(parseArgs(['--runtime'])).toEqual({ error: '--runtime needs a runtime id or name' })
+    expect(parseArgs(['--runtime', '--json', 'jobs', 'list'])).toEqual({ error: '--runtime needs a runtime id or name' })
+  })
+})

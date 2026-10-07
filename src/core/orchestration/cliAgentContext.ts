@@ -631,6 +631,13 @@ const GLOBAL: readonly AgentContextFlag[] = [
       'before the command only (`astera --project <path> jobs list`): the default project for jobs list, runs list and sessions list, found the way `projects find` finds it. A relative path is taken from the current directory. A --project after the command belongs to that command and wins; other commands ignore the default.'
   },
   {
+    name: 'runtime',
+    takesValue: true,
+    required: false,
+    about:
+      'before the command only (`astera --runtime <id|name> jobs list`): send this command to a paired Runtime instead of this machine. Only the commands a Runtime offers take it; the rest refuse with RUNTIME_CAPABILITY_MISSING before reading anything here. `astera runtimes list` names the paired Runtimes.'
+  },
+  {
     name: 'request-id',
     takesValue: true,
     required: false,
