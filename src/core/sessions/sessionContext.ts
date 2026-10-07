@@ -10,6 +10,10 @@
 // print a failure into a conversation. Outside a session Astera started (no ASTERA_CLI) it prints
 // nothing.
 
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { LAUNCH_FORBIDDEN } from './commands'
+
 const HEADER = 'This session runs inside Astera. Use Astera\'s tools before building your own:'
 const LINES = {
   app:
@@ -46,3 +50,80 @@ try {
 } catch {}
 process.exit(0)
 `
+
+/** The lines the script above prints, decided by the same rules, for a session that cannot run it: a
+ *  codex TUI (codexDeveloperInstructions). The script keeps its own copy because it runs as a separate
+ *  file; a test runs both over the same settings (sessionContext.test.ts) so the two cannot drift. */
+export function sessionContextLines(settings: unknown, higgsfield: unknown): string[] {
+  const s = settings && typeof settings === 'object' ? (settings as Record<string, unknown>) : {}
+  const hf = higgsfield && typeof higgsfield === 'object' ? (higgsfield as { accounts?: unknown }) : null
+  const lines = [HEADER]
+  if (s.agentAppEnabled === true) lines.push(LINES.app)
+  if (s.agentBrowserEnabled === true) lines.push(LINES.browser)
+  if (s.workUnitTrackingEnabled === true) lines.push(LINES.task)
+  if (s.resumeStrategy === 'smart') lines.push(LINES.handoff)
+  lines.push(LINES.orchestration)
+  if (hf && Array.isArray(hf.accounts) && hf.accounts.length > 0) lines.push(LINES.higgsfield)
+  lines.push(FOOTER)
+  return lines
+}
+
+/** True when this config.toml sets `developer_instructions` itself, at the top level: a key under a
+ *  table (`[profiles.x]`) belongs to that table, not to every session. */
+function setsDeveloperInstructions(toml: string): boolean {
+  for (const line of toml.split(/\r?\n/)) {
+    if (/^\s*\[/.test(line)) return false
+    if (/^\s*developer_instructions\s*=/.test(line)) return true
+  }
+  return false
+}
+
+function readJson(read: (p: string) => string | null, file: string): unknown {
+  try {
+    const text = read(file)
+    return text === null ? null : JSON.parse(text)
+  } catch {
+    return null
+  }
+}
+
+function readFileOrNull(file: string): string | null {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What a codex session is told about Astera at start, as one `developer_instructions` value, or null.
+ *
+ * **Not a hook, though codex 0.160 has SessionStart hooks** (measured 2026-10-07). It runs no hook it
+ * has not been told to trust: a "Hooks need review" menu stops the session first, a hook given with
+ * `-c` included, and nobody is in front of a worker to answer it. The one switch past that,
+ * `--dangerously-bypass-hook-trust`, would also run whatever hooks a cloned repository ships. A
+ * `developer_instructions` override reaches the model as a developer message with no menu at all. It is
+ * decided when the session is spawned rather than when it starts, which for a session is one moment.
+ *
+ * **One line, with nothing cmd.exe reads as syntax** (LAUNCH_FORBIDDEN): an npm-installed codex starts
+ * through `cmd.exe /c call`, where a line break or a `<` would break the launch. The higgsfield line's
+ * `<account>` becomes `(account)` for that reason.
+ *
+ * **Null when the account's own config.toml sets developer_instructions**: `-c` would replace it, and the
+ * person's own instructions matter more than this list.
+ */
+export function codexDeveloperInstructions(a: {
+  profileDir: string
+  codexHome: string
+  read?: (file: string) => string | null
+}): string | null {
+  const read = a.read ?? readFileOrNull
+  const own = read(path.join(a.codexHome, 'config.toml'))
+  if (own !== null && setsDeveloperInstructions(own)) return null
+  const lines = sessionContextLines(
+    readJson(read, path.join(a.profileDir, 'app-settings.json')),
+    readJson(read, path.join(a.profileDir, 'higgsfield', 'accounts.json'))
+  )
+  const text = lines.join(' ').replace(/</g, '(').replace(/>/g, ')')
+  return LAUNCH_FORBIDDEN.test(text) ? null : text
+}

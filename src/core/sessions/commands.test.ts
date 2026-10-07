@@ -83,6 +83,22 @@ describe('codex update check', () => {
   })
 })
 
+// What Astera tells a codex session at start (sessionContext.ts, codexDeveloperInstructions).
+describe('codex developer_instructions', () => {
+  it('goes ahead of resume as one -c value, and the prompts stay last', () => {
+    const { args } = buildCodexCommand('linux')({ developerInstructions: 'This session runs inside Astera.', resumeSessionId: 'sid', resumePrompt: 'go on' })
+    expect(args).toEqual([...NO_UPDATE, '-c', 'developer_instructions=This session runs inside Astera.', 'resume', 'sid', 'go on'])
+  })
+  it('is left out when there is none', () => {
+    expect(buildCodexCommand('linux')({}).args).not.toContain('-c developer_instructions')
+    expect(buildCodexCommand('linux')({}).args.some((a) => a.startsWith('developer_instructions='))).toBe(false)
+  })
+  // A value cmd.exe would cut or run would break the launch itself; a briefing is not worth that.
+  it('is dropped rather than carried when it holds cmd.exe syntax', () => {
+    expect(buildCodexCommand('win32', shim)({ developerInstructions: 'a & b' }).args.some((a) => a.startsWith('developer_instructions='))).toBe(false)
+  })
+})
+
 // A codex 0.160 TUI attached to the shared app-server daemon runs its shell in the daemon's environment,
 // not its own (codexNoDaemon.ts). The builder asks whether this codex knows `--no-daemon`.
 describe('codex --no-daemon', () => {

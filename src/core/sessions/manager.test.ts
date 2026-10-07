@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
 import { PTY_LOST_SIGHT_EXIT_CODE, type PtyFactory, type PtyLike, type PtySpawnOptions } from './pty'
@@ -732,6 +733,32 @@ describe('SessionManager', () => {
         orchEnv: { ...orchEnv, profileDir: 'C:/Users/x/AppData/Roaming/astera-dev' }
       })
       expect(spawned[0].opts.env.ASTERA_PROFILE_DIR).toBe('C:/Users/x/AppData/Roaming/astera-dev')
+    })
+
+    // Claude 세션은 SessionStart 훅으로 Astera 안내를 받고, codex 는 그 훅을 신뢰 없이 돌리지 않으므로
+    // 같은 줄을 developer_instructions 로 받는다 (sessionContext.ts).
+    describe('codex 의 시작 안내', () => {
+      let profile: string
+      beforeEach(() => {
+        profile = mkdtempSync(path.join(os.tmpdir(), 'astera-mgr-brief-'))
+        writeFileSync(path.join(profile, 'app-settings.json'), JSON.stringify({ agentAppEnabled: true }))
+      })
+      afterEach(() => rmSync(profile, { recursive: true, force: true }))
+
+      it('Astera 가 띄운 codex 세션은 그 프로필 설정대로 안내를 받는다', () => {
+        const { manager, spawned } = setup()
+        manager.spawn({ account: codexAccount, cwd: process.cwd(), orchEnv: { ...orchEnv, profileDir: profile } })
+        const text = argsText(spawned[0].args)
+        expect(text).toContain('developer_instructions=This session runs inside Astera.')
+        expect(text).toContain('astera app js')
+      })
+      it('Claude 세션과 orchEnv 없는 codex 세션에는 싣지 않는다', () => {
+        const { manager, spawned } = setup()
+        manager.spawn({ account, cwd: process.cwd(), orchEnv: { ...orchEnv, profileDir: profile } })
+        manager.spawn({ account: codexAccount, cwd: process.cwd() })
+        expect(argsText(spawned[0].args)).not.toContain('developer_instructions')
+        expect(argsText(spawned[1].args)).not.toContain('developer_instructions')
+      })
     })
 
     it('같은 orchEnv로 두 세션을 띄우면 ASTERA_SESSION만 서로 다르다', () => {

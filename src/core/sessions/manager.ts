@@ -15,6 +15,8 @@ import type { PtyFactory, PtyLike } from './pty'
 import type { RollSpawnExtra } from '../rolling/snapshot'
 import { sessionInfoFromNote } from './noteInfo'
 import { cliEnvFor } from './cliEnv'
+import { providerOf } from '../providers/meta'
+import { codexDeveloperInstructions } from './sessionContext'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -252,15 +254,28 @@ export class SessionManager {
     const sl = d.usesStatusLine
       ? (this.statusLineProvider?.(id, opts.account, { toolHooks: wantToolHooks }) ?? null)
       : null
+    const env = this.envFor(opts.account)
+    // What Astera offers, told to a codex session as it starts. A Claude session gets the same lines from
+    // the SessionStart hook in `sl`'s settings file; codex runs no hook nobody has trusted, so it gets
+    // them as developer instructions instead (sessionContext.ts). Only in a session Astera wires up
+    // (orchEnv), as the hook prints nothing without ASTERA_CLI. The account's own config.toml is the one
+    // in CODEX_HOME, or ~/.codex for the ambient account, whose CODEX_HOME cliEnvFor leaves unset.
+    const developerInstructions =
+      opts.orchEnv && providerOf(opts.account) === 'codex'
+        ? (codexDeveloperInstructions({
+            profileDir: opts.orchEnv.profileDir,
+            codexHome: env.CODEX_HOME ?? path.join(this.homeDir, '.codex')
+          }) ?? undefined)
+        : undefined
     const { file, args } = d.buildCommand({
       resumeSessionId: opts.resumeSessionId,
       settingsFile: sl?.settingsFile,
       bypassPermissions: opts.bypassPermissions,
       addDirs: this.sessionReadDirs,
       resumePrompt: opts.resumePrompt,
-      initialPrompt: opts.initialPrompt
+      initialPrompt: opts.initialPrompt,
+      developerInstructions
     })
-    const env = this.envFor(opts.account)
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
     // available; without one the statusLine capture never runs and the app never learns this session's
