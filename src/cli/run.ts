@@ -25,6 +25,8 @@ import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
+import { controllerRegistry, runRuntimesCommand } from './runtimes'
+import { connectRuntime } from '../core/remote/client'
 import { runServe, type ServeDeps } from './runtime/serve'
 import { readValidHold } from '../core/remote/updateHold'
 import { readRemoteSettings, writeRemoteSettings } from '../core/remote/settings'
@@ -1413,6 +1415,26 @@ export async function main(): Promise<void> {
       process.exit(0)
     }
     const done = await runRuntimeCommand(parsed.cmd, parsed.args, runtimeDeps({ env: process.env, platform: process.platform, home: homedir(), noKeepalive: parsed.noKeepalive }))
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
+    process.exit(0)
+  }
+
+  // **runtimes 명령은 이 프로세스가 답한다** (remote runtime design §4.4): 짝지은 Runtime 목록과 토큰은 이 프로필의
+  // runtimes 폴더에 있고, Host 에 물을 것이 없다. runtime 명령과 같은 이유로 요청 id 를 받지 않는다.
+  if (parsed.cmd.startsWith('runtimes-')) {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await runRuntimesCommand(parsed.cmd, args, {
+      registry: () => controllerRegistry(profileDir),
+      connect: (o) => connectRuntime(o),
+      hostname: () => os.hostname(),
+      now: () => new Date().toISOString(),
+      version: CLI_VERSION
+    })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, done.body, mode))
     process.exit(0)

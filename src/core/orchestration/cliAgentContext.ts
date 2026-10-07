@@ -527,7 +527,11 @@ const NOT_SWITCHED = [
   'runtime-serve',
   'runtime-pair',
   'runtime-clients',
-  'runtime-revoke'
+  'runtime-revoke',
+  // The controller's side (src/cli/runtimes.ts), answered in the CLI process from <profile>/runtimes.
+  'runtimes-add',
+  'runtimes-list',
+  'runtimes-remove'
 ] as const satisfies readonly AgentCommand[]
 
 /**
@@ -592,7 +596,21 @@ const MEANING: Record<CliErrorCode, string> = {
   TIMEOUT: 'a deadline elapsed, or the Host is running and not answering',
   WAITING_FOR_INPUT: 'a wait stopped because a person is needed: a question is open, or the run is paused',
   VERSION_MISMATCH: 'the command exists in this CLI but not in the running build',
-  RUN_FAILED: 'a wait ended with the Job or run in failure'
+  RUN_FAILED: 'a wait ended with the Job or run in failure',
+  RUNTIME_NOT_FOUND: 'no paired Runtime has that id or name (--runtime)',
+  RUNTIME_OFFLINE: 'the paired Runtime could not be reached',
+  RUNTIME_AUTH_FAILED: 'the Runtime no longer knows this controller: it was revoked, or never paired',
+  RUNTIME_IDENTITY_CHANGED: "the Runtime's key is not the one this controller pinned at pairing",
+  RUNTIME_PROTOCOL_MISMATCH: 'the Runtime speaks another remote protocol; update the older side',
+  RUNTIME_PROJECT_NOT_FOUND: 'the project is not registered on that Runtime',
+  RUNTIME_ACCOUNT_NOT_FOUND: 'the account does not exist on that Runtime',
+  RUNTIME_CAPABILITY_MISSING: 'the command has no --runtime form, or that Runtime cannot do it',
+  RUNTIME_BUSY: 'the Runtime refused for now: too many connections or calls in flight',
+  RUNTIME_PERMISSION_DENIED: "refused by the Runtime's pairing: a read-only controller asked for a change",
+  RUNTIME_OUTCOME_UNKNOWN: 'a change was sent and its answer lost, and the Runtime cannot say whether it ran; list before trying again',
+  REMOTE_TIMEOUT: 'the Runtime did not answer in time; the command may still finish',
+  REMOTE_OPERATION_CONFLICT: 'refused by the Runtime because of current state',
+  REMOTE_REPLY_TOO_LARGE: "the Runtime's answer was over 64 MiB and was refused"
 }
 
 /** The flags every command accepts. They are read by the parser and by the output layer rather than

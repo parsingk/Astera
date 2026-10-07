@@ -540,6 +540,10 @@ astera runtime start   [--listen <addr>] [--port <n>]
 astera runtime pair    [--read-only] [--name <n>]
 astera runtime revoke  --id <clientId>
 
+astera runtimes list
+astera runtimes add    [--pair <string>] [--address <host>] [--port <n>] [--code <code>] [--fingerprint <fp>] [--name <n>]
+astera runtimes remove --id <runtimeId|name>
+
 astera projects list
 astera projects get   --id <projectId>
 astera projects find  --path <path>

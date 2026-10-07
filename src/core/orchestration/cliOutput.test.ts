@@ -9,6 +9,8 @@ import {
   messageFrom,
   nextStepsFor,
   okEnvelope,
+  remoteCodeOf,
+  type CliErrorCode,
   silentHostEnd,
   sessionTurnEnd,
   waitEnd
@@ -653,5 +655,31 @@ describe('sessionTurnEnd — how a waited turn exits', () => {
       'astera sessions read --id s1',
       'astera host status'
     ])
+  })
+})
+
+// Remote runtime design §3.10: the remote codes travel in error.code, and each exits as its nearest local kin.
+describe('the remote runtime codes', () => {
+  it('each exits as its nearest local code', () => {
+    const want: Record<string, number> = {
+      RUNTIME_NOT_FOUND: 4, RUNTIME_OFFLINE: 3, RUNTIME_AUTH_FAILED: 5, RUNTIME_IDENTITY_CHANGED: 5,
+      RUNTIME_PROTOCOL_MISMATCH: 9, RUNTIME_PROJECT_NOT_FOUND: 4, RUNTIME_ACCOUNT_NOT_FOUND: 4,
+      RUNTIME_CAPABILITY_MISSING: 9, RUNTIME_BUSY: 6, RUNTIME_PERMISSION_DENIED: 5, RUNTIME_OUTCOME_UNKNOWN: 6,
+      REMOTE_TIMEOUT: 7, REMOTE_OPERATION_CONFLICT: 6, REMOTE_REPLY_TOO_LARGE: 1
+    }
+    for (const [code, exit] of Object.entries(want)) {
+      expect(CLI_ERROR_CODES as readonly string[]).toContain(code)
+      expect(exitCodeFor(code as CliErrorCode), code).toBe(exit)
+    }
+  })
+  it('remoteCodeOf reads a remote code from a refusal body, and nothing else', () => {
+    expect(remoteCodeOf({ code: 'RUNTIME_PERMISSION_DENIED', error: 'x' })).toBe('RUNTIME_PERMISSION_DENIED')
+    expect(remoteCodeOf({ code: 'NOT_FOUND' })).toBeNull()
+    expect(remoteCodeOf({ code: 'NOPE' })).toBeNull()
+    expect(remoteCodeOf('RUNTIME_BUSY')).toBeNull()
+    expect(remoteCodeOf(null)).toBeNull()
+  })
+  it('outcome unknown says to list the newest Jobs on that runtime', () => {
+    expect(nextStepsFor({ code: 'RUNTIME_OUTCOME_UNKNOWN', details: { runtime: 'rt_a' } })).toEqual(['astera --runtime rt_a jobs list'])
   })
 })

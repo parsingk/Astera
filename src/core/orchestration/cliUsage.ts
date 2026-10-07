@@ -154,6 +154,24 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'unpair a controller and close its connections now',
     flags: [ID('<clientId>', 'the controller to unpair (from `runtime clients`)')]
   },
+  'runtimes-add': {
+    summary: 'pair this machine with a Runtime, from the string `astera runtime pair` printed there',
+    detail:
+      'Checks the Runtime\'s key against the fingerprint before the code is sent, keeps the token in this profile and never prints it. The parts may be given one by one instead of --pair; the fingerprint is then required.',
+    flags: [
+      { name: 'pair', value: '<string>', about: 'the astera-pair:v1: string' },
+      { name: 'address', value: '<host>', about: 'the address to reach the Runtime at, over the one in the string' },
+      { name: 'port', value: '<n>', about: 'its port, without --pair (default 47831)' },
+      { name: 'code', value: '<code>', about: 'the one-time code, without --pair' },
+      { name: 'fingerprint', value: '<fp>', about: 'the key fingerprint, without --pair' },
+      { name: 'name', value: '<n>', about: 'what to call the Runtime here (default its own name)' }
+    ]
+  },
+  'runtimes-list': { summary: 'the Runtimes this machine is paired with' },
+  'runtimes-remove': {
+    summary: 'forget a paired Runtime on this machine (it does not revoke the pairing there)',
+    flags: [ID('<runtimeId|name>', 'the Runtime to forget (from `runtimes list`)')]
+  },
   'mcp-status': {
     summary: 'would mcp serve work here: the Host, MCP access and the tool count',
     detail:

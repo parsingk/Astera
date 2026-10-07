@@ -18,6 +18,25 @@ import { USAGE, spelledCommand } from './cliUsage'
  * 코드도, 무엇을 하면 되는지 정하지 않은 코드도 나갈 수 없다. 배열로 둔 이유는 하나 더 있다:
  * `astera agent-context` 가 이 열 개를 그대로 실어 내보낸다(cliAgentContext.ts).
  */
+/** The remote runtime's codes (design §3.10), as the Runtime's controller gate and the controller link name them. */
+export const REMOTE_ERROR_CODES = [
+  'RUNTIME_NOT_FOUND',
+  'RUNTIME_OFFLINE',
+  'RUNTIME_AUTH_FAILED',
+  'RUNTIME_IDENTITY_CHANGED',
+  'RUNTIME_PROTOCOL_MISMATCH',
+  'RUNTIME_PROJECT_NOT_FOUND',
+  'RUNTIME_ACCOUNT_NOT_FOUND',
+  'RUNTIME_CAPABILITY_MISSING',
+  'RUNTIME_BUSY',
+  'RUNTIME_PERMISSION_DENIED',
+  'RUNTIME_OUTCOME_UNKNOWN',
+  'REMOTE_TIMEOUT',
+  'REMOTE_OPERATION_CONFLICT',
+  'REMOTE_REPLY_TOO_LARGE'
+] as const
+export type RemoteErrorCode = (typeof REMOTE_ERROR_CODES)[number]
+
 export const CLI_ERROR_CODES = [
   'FAILED',
   'INVALID_ARGUMENTS',
@@ -28,7 +47,10 @@ export const CLI_ERROR_CODES = [
   'TIMEOUT',
   'WAITING_FOR_INPUT',
   'VERSION_MISMATCH',
-  'RUN_FAILED'
+  'RUN_FAILED',
+  // Remote runtime design §3.10: a controller's answers from a paired Runtime. Each exits as its nearest local code,
+  // so a script that branches on the exit keeps working and one that reads error.code can tell them apart.
+  ...REMOTE_ERROR_CODES
 ] as const
 
 export type CliErrorCode = (typeof CLI_ERROR_CODES)[number]
@@ -44,7 +66,30 @@ const EXIT: Record<CliErrorCode, number> = {
   TIMEOUT: 7,
   WAITING_FOR_INPUT: 8,
   VERSION_MISMATCH: 9,
-  RUN_FAILED: 10
+  RUN_FAILED: 10,
+  RUNTIME_NOT_FOUND: 4,
+  RUNTIME_OFFLINE: 3,
+  RUNTIME_AUTH_FAILED: 5,
+  RUNTIME_IDENTITY_CHANGED: 5,
+  RUNTIME_PROTOCOL_MISMATCH: 9,
+  RUNTIME_PROJECT_NOT_FOUND: 4,
+  RUNTIME_ACCOUNT_NOT_FOUND: 4,
+  RUNTIME_CAPABILITY_MISSING: 9,
+  RUNTIME_BUSY: 6,
+  RUNTIME_PERMISSION_DENIED: 5,
+  RUNTIME_OUTCOME_UNKNOWN: 6,
+  REMOTE_TIMEOUT: 7,
+  REMOTE_OPERATION_CONFLICT: 6,
+  REMOTE_REPLY_TOO_LARGE: 1
+}
+
+const REMOTE: ReadonlySet<string> = new Set(REMOTE_ERROR_CODES)
+
+/** The remote code a Runtime's refusal names in its body (`{ code }`), or null. Read from the field, never the
+ *  sentence (§3.10). */
+export const remoteCodeOf = (body: unknown): RemoteErrorCode | null => {
+  const code = typeof body === 'object' && body !== null ? (body as { code?: unknown }).code : undefined
+  return typeof code === 'string' && REMOTE.has(code) ? (code as RemoteErrorCode) : null
 }
 
 export const exitCodeFor = (code: CliErrorCode): number => EXIT[code]
@@ -306,6 +351,22 @@ const STEPS: Record<
 > = {
   FAILED: () => [],
   INVALID_ARGUMENTS: (cmd) => [usageCommandFor(cmd)],
+  RUNTIME_NOT_FOUND: () => ['astera runtimes list'],
+  RUNTIME_OFFLINE: () => ['astera runtimes list'],
+  // Paired again from the Runtime's own screen: `astera runtime pair` there, `astera runtimes add` here.
+  RUNTIME_AUTH_FAILED: () => ['astera runtimes add --pair <string>'],
+  RUNTIME_IDENTITY_CHANGED: () => ['astera runtimes add --pair <string>'],
+  RUNTIME_PROTOCOL_MISMATCH: () => ['astera version'],
+  RUNTIME_PROJECT_NOT_FOUND: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} projects list` : 'astera runtimes list'],
+  RUNTIME_ACCOUNT_NOT_FOUND: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} accounts list` : 'astera runtimes list'],
+  RUNTIME_CAPABILITY_MISSING: (cmd) => [usageCommandFor(cmd)],
+  RUNTIME_BUSY: () => [],
+  RUNTIME_PERMISSION_DENIED: () => [],
+  // §3.9: whether the first attempt ran cannot be proven; the newest Jobs on that Runtime say.
+  RUNTIME_OUTCOME_UNKNOWN: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
+  REMOTE_TIMEOUT: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
+  REMOTE_OPERATION_CONFLICT: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
+  REMOTE_REPLY_TOO_LARGE: () => [],
   // **`host start` 가 3 으로 끝난 것에 `host start` 를 권하지 않는다**(리뷰 I1). 방금 그것이 안 됐다.
   // 무엇을 봤는지는 `host status` 가 말하고, Host 의 로그 자리는 이 오류의 details 가 싣는다.
   HOST_NOT_RUNNING: (cmd) => [cmd === 'host-start' ? 'astera host status' : 'astera host start'],

@@ -1,0 +1,160 @@
+// `astera runtimes add | list | remove` (remote runtime design §4.4, §4.5, N8): this machine's list of paired Runtimes,
+// the controller side of pairing. Answered in the CLI process: the profiles and their tokens live in
+// `<profile>/runtimes/` through the secret store, and a token is never printed, never read from an argument and never
+// put in the environment. `remove` forgets a Runtime here; it does not revoke the pairing there (§4.5).
+import path from 'node:path'
+import { openSecretStore } from '../core/secrets/secretStore'
+import { openRuntimeRegistry, type RuntimeProfile, type RuntimeRegistry } from '../core/runtimes/registry'
+import { parsePairing } from '../core/remote/pairing'
+import { RemoteError, type RuntimeLink } from '../core/remote/client'
+import { remoteCodeOf, type CliError } from '../core/orchestration/cliOutput'
+import { REMOTE_DEFAULTS } from '../core/remote/settings'
+
+export interface RuntimesDeps {
+  registry(): Promise<RuntimeRegistry>
+  /** A pinned TLS connection (core/remote/client.ts `connectRuntime`). */
+  connect(o: { host: string; port: number; pin: string }): Promise<RuntimeLink>
+  hostname(): string
+  now(): string
+  version: string
+}
+
+type Result = { ok: true; body: unknown } | { ok: false; error: CliError }
+
+const failure = (code: CliError['code'], message: string, details?: Record<string, unknown>): Result => ({
+  ok: false,
+  error: { code, message, ...(details ? { details } : {}) }
+})
+
+/** The controller's registry in this profile. */
+export const controllerRegistry = (profileDir: string): Promise<RuntimeRegistry> =>
+  openRuntimeRegistry(openSecretStore({ dir: path.join(profileDir, 'runtimes'), profileDir }))
+
+/** The profile `key` names: a runtime id exactly, else one name equal to it ignoring case. A name two Runtimes share
+ *  is refused with both ids rather than answered with the first (Review Focus 3). */
+export function resolveRuntime(list: RuntimeProfile[], key: string): RuntimeProfile | { code: 'RUNTIME_NOT_FOUND'; message: string } {
+  const byId = list.find((r) => r.runtimeId === key)
+  if (byId) return byId
+  const byName = list.filter((r) => r.name.toLowerCase() === key.toLowerCase())
+  if (byName.length === 1) return byName[0]
+  if (byName.length > 1)
+    return { code: 'RUNTIME_NOT_FOUND', message: `the name ${key} matches ${byName.map((r) => r.runtimeId).join(', ')}; use the runtime id` }
+  return { code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime is called ${key}; \`astera runtimes list\` names them` }
+}
+
+/** The code a connection or handshake failure carries, or RUNTIME_OFFLINE for one that never reached the Runtime. */
+const codeOfError = (e: unknown): CliError['code'] => {
+  const code = e instanceof RemoteError ? e.code : (e as { code?: unknown } | null)?.code
+  return remoteCodeOf({ code }) ?? 'RUNTIME_OFFLINE'
+}
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** A profile as printed: everything but the token, which the registry never hands back with it anyway. */
+const shown = (p: RuntimeProfile): Record<string, unknown> => ({
+  runtimeId: p.runtimeId,
+  name: p.name,
+  address: p.address,
+  port: p.port,
+  fingerprint: p.fingerprint,
+  permission: p.permission,
+  createdAt: p.createdAt,
+  lastSeenAt: p.lastSeenAt
+})
+
+async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
+  let address: string
+  let port: number
+  let code: string
+  let fingerprint: string
+  if (typeof args.pair === 'string') {
+    const parts = parsePairing(args.pair)
+    if ('error' in parts) return failure('INVALID_ARGUMENTS', parts.error)
+    ;({ address, port, code, fingerprint } = parts)
+  } else {
+    if (typeof args.address !== 'string' || typeof args.code !== 'string')
+      return failure('INVALID_ARGUMENTS', 'runtimes add needs --pair <string>, or --address, --code and --fingerprint')
+    // §4.4: the CLI has no prompt to show a key and ask, so the fingerprint is required.
+    if (typeof args.fingerprint !== 'string') return failure('INVALID_ARGUMENTS', 'pairing needs the fingerprint the Runtime printed')
+    address = args.address
+    code = args.code
+    fingerprint = args.fingerprint
+    port = REMOTE_DEFAULTS.port
+  }
+  if (args.port !== undefined) {
+    const p = Number(args.port)
+    if (!Number.isInteger(p) || p < 1 || p > 65535) return failure('INVALID_ARGUMENTS', '--port needs a whole number from 1 to 65535')
+    port = p
+  }
+  // --address wins over the hint the string carries (Tailscale names, NAT).
+  if (typeof args.address === 'string' && args.address !== '') address = args.address
+  const name = typeof args.name === 'string' && args.name !== '' ? args.name : d.hostname()
+  const client = { name: 'astera cli', version: d.version, surface: 'cli' as const }
+
+  // The pin is checked on the TLS handshake, before any frame (§3.2): a different key never sees the code.
+  let paired: { clientId: string; token: string }
+  try {
+    const link = await d.connect({ host: address, port, pin: fingerprint })
+    try {
+      paired = await link.redeem(code, name, client)
+    } finally {
+      link.close()
+    }
+  } catch (e) {
+    return failure(codeOfError(e), `pairing with ${address}:${port} failed: ${messageOf(e)}`)
+  }
+  // A new connection with the new token reads who the Runtime is and what this pairing may do.
+  let hello: Awaited<ReturnType<RuntimeLink['auth']>>
+  try {
+    const link = await d.connect({ host: address, port, pin: fingerprint })
+    try {
+      hello = await link.auth(paired.token, client)
+    } finally {
+      link.close()
+    }
+  } catch (e) {
+    return failure(codeOfError(e), `paired with ${address}:${port}, but the first sign-in failed: ${messageOf(e)}`)
+  }
+  const profile: RuntimeProfile = {
+    runtimeId: hello.runtimeId,
+    name: typeof args.name === 'string' && args.name !== '' ? args.name : hello.displayName,
+    address,
+    port,
+    fingerprint,
+    permission: hello.permission,
+    createdAt: d.now(),
+    lastSeenAt: d.now()
+  }
+  try {
+    await (await d.registry()).add(profile, paired.token)
+  } catch (e) {
+    return failure('FAILED', `paired, but this machine could not keep the pairing: ${messageOf(e)}`)
+  }
+  return { ok: true, body: shown(profile) }
+}
+
+export async function runRuntimesCommand(cmd: string, args: Record<string, unknown>, d: RuntimesDeps): Promise<Result> {
+  switch (cmd) {
+    case 'runtimes-add':
+      return add(args, d)
+    case 'runtimes-list':
+      return { ok: true, body: (await (await d.registry()).list()).map(shown) }
+    case 'runtimes-remove': {
+      if (typeof args.id !== 'string' || args.id === '') return failure('INVALID_ARGUMENTS', 'runtimes remove needs --id <runtimeId|name>')
+      const reg = await d.registry()
+      const found = resolveRuntime(await reg.list(), args.id)
+      if ('code' in found) return failure(found.code, found.message)
+      await reg.remove(found.runtimeId)
+      return {
+        ok: true,
+        body: {
+          removed: found.runtimeId,
+          // §4.5: forgetting here leaves the pairing standing there until it is revoked on the Runtime.
+          revoked: false,
+          note: `${found.name} still lists this machine until \`astera runtime revoke\` runs there`
+        }
+      }
+    }
+    default:
+      return failure('INVALID_ARGUMENTS', `unknown runtimes command ${cmd}`)
+  }
+}
