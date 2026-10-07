@@ -63,7 +63,9 @@ function load(json: string, keyPem: string | null, certPem: string | null): Runt
   let keyPin: string
   let certPin: string
   try {
-    keyPin = spkiSha256(createPublicKey(createPrivateKey(keyPem)))
+    // A private key, not a public one standing in for it: the Gateway signs with it.
+    createPrivateKey(keyPem)
+    keyPin = spkiSha256(createPublicKey(keyPem))
     certPin = spkiSha256(new X509Certificate(certPem).publicKey)
   } catch {
     return fail('the key or certificate does not parse')

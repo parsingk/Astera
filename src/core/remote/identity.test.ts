@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
-import { X509Certificate, createPrivateKey, createPublicKey } from 'node:crypto'
+import { X509Certificate, createPublicKey } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { openSecretStore } from '../secrets/secretStore'
@@ -20,7 +20,7 @@ describe('loadOrCreateIdentity (remote runtime design §4.1)', () => {
     const id = await loadOrCreateIdentity(store(), { displayName: 'desk' })
     expect(id.runtimeId).toMatch(/^rt_[0-9a-f]{16}$/)
     expect(spkiSha256(new X509Certificate(id.certPem).publicKey)).toBe(id.spkiSha256)
-    expect(spkiSha256(createPublicKey(createPrivateKey(id.keyPem)))).toBe(id.spkiSha256)
+    expect(spkiSha256(createPublicKey(id.keyPem))).toBe(id.spkiSha256)
     expect(await loadOrCreateIdentity(store(), { displayName: 'other' })).toEqual(id)
   })
   it('discards a key that has no identity.json, and makes a new identity', async () => {
