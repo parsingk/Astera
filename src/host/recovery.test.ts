@@ -7,6 +7,7 @@ import type { LegacyRun } from '../core/orchestration/legacy'
 import type { GitFacts } from '../core/recovery/types'
 import type { ResumeStrategy } from '../core/types'
 import { HOST_YIELD_RECOVERY } from '../core/host/protocol'
+import { createLostGateGuard, type LostGateGuard } from './lostGateGuard'
 
 const NOW = '2026-10-08T10:00:00.000Z'
 const EARLIER = '2026-10-08T09:00:00.000Z'
@@ -33,6 +34,7 @@ function rig(over: {
   strategy?: () => ResumeStrategy
   dirty?: boolean
   state?: OrchState
+  guard?: LostGateGuard
 } = {}) {
   let current = over.state ?? lostState()
   const appended: Array<{ type: string }> = []
@@ -60,6 +62,7 @@ function rig(over: {
     },
     checks: { startValidation: () => {}, langNow: () => 'en' },
     profileDir: 'D:/profile',
+    ...(over.guard ? { guard: over.guard } : {}),
     log: (m) => logs.push(m),
     now: () => NOW,
     readGitFacts: async (): Promise<GitFacts> => {
@@ -132,8 +135,15 @@ describe('createHostRecovery (remote runtime design §2.6, Phase 3R)', () => {
     expect(h.handled).toEqual([{ cmd: 'gate-create', args: { task: 'tsk_1', question: expect.stringContaining('dsp_1') } }])
   })
 
-  it('leaves an unwitnessed lost attempt alone while an app is attached', async () => {
+  it('gates an unwitnessed lost attempt while an attached app yields recovery (it runs no reconciler)', async () => {
     const h = rig({ events: [], hasApp: true })
+    await h.r.sweep('a test')
+    expect(h.handled.map((x) => x.cmd)).toEqual(['gate-create'])
+  })
+  it('does not gate an unwitnessed attempt the driving is already gating', async () => {
+    const guard = createLostGateGuard()
+    guard.claim('tsk_1')
+    const h = rig({ events: [], guard })
     await h.r.sweep('a test')
     expect(h.handled).toEqual([])
   })

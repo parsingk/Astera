@@ -37,6 +37,7 @@ import type { OrchState } from '../core/orchestration/state'
 import type { ResumeStrategy } from '../core/types'
 import type { HostChecks } from './checks'
 import type { HostJournal } from './hostJournal'
+import { createLostGateGuard, type LostGateGuard } from './lostGateGuard'
 
 export interface HostRecoveryDeps {
   journal: Pick<HostJournal, 'reconcilerJournal' | 'writes'>
@@ -53,6 +54,8 @@ export interface HostRecoveryDeps {
   log(m: string): void
   now(): string
   /** Test seams. */
+  /** Shared with the driving's lost-worker Gate (lostGateGuard.ts). */
+  guard?: LostGateGuard
   readGitFacts?(cwd: string): Promise<GitFacts>
   readResumeStrategy?(settingsPath: string): Promise<ResumeStrategy>
   executeRecovery?: typeof realExecuteRecovery
@@ -111,13 +114,20 @@ export function createHostRecovery(d: HostRecoveryDeps): HostRecovery {
 
   /** The lost-worker Gate for an attempt the journal never saw, which the reconciler leaves alone: with no app
    *  attached nobody else would ever look at it. The same Gate, on the same Tasks, as the driving's `gateLost`. */
+  const guard = d.guard ?? createLostGateGuard()
   const gateUnwitnessed = async (seed: LostAttemptSeed): Promise<void> => {
-    if (d.server.hasApp() || !d.mayStart()) return
+    // An attached app that yields recovery runs no reconciler (Phase 3R minor), so only one that keeps it is left to.
+    if ((d.server.hasApp() && d.server.appsKeep(HOST_YIELD_RECOVERY)) || !d.mayStart()) return
     if (!lostWithNobody(d.orch.state()).some((s) => s.dispatch.id === seed.dispatch.id)) return
-    const question = t(d.checks.langNow(), 'jobs.gate.workerLostNoApp', { dispatch: seed.dispatch.id })
-    const r = await d.orch.handle('gate-create', { task: seed.taskId, question })
-    if (r.status >= 400) log(`recovery: lost worker task=${seed.taskId}: the Gate was refused (${r.status} ${JSON.stringify(r.body)})`)
-    else log(`recovery: lost worker task=${seed.taskId} dispatch=${seed.dispatch.id} predates the journal — gated`)
+    if (!guard.claim(seed.taskId)) return
+    try {
+      const question = t(d.checks.langNow(), 'jobs.gate.workerLostNoApp', { dispatch: seed.dispatch.id })
+      const r = await d.orch.handle('gate-create', { task: seed.taskId, question })
+      if (r.status >= 400) log(`recovery: lost worker task=${seed.taskId}: the Gate was refused (${r.status} ${JSON.stringify(r.body)})`)
+      else log(`recovery: lost worker task=${seed.taskId} dispatch=${seed.dispatch.id} predates the journal — gated`)
+    } finally {
+      guard.release(seed.taskId)
+    }
   }
 
   const reconciler = new RecoveryReconciler({

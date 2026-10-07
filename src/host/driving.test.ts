@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createLostGateGuard, type LostGateGuard } from './lostGateGuard'
 import { APP_LEFT_GRACE_MS, createHostDriving, type HostDriving } from './driving'
 import { createHostOrch, type HostOrch } from './orch'
 import type { HostLocal } from './spawner'
@@ -100,6 +101,7 @@ interface RigOpts {
   realAppPid?: boolean
   /** Phase 3R: a Host recovery (remote runtime design §2.6); none means the journal is off. */
   recovery?: { owns(): boolean; sweep(why: string): Promise<void>; catchUp(): Promise<void> }
+  guard?: LostGateGuard
 }
 
 /** Under the test's own folder (review m7): never a literal path, should the fake ever resolve one. */
@@ -185,7 +187,7 @@ async function rig(o: RigOpts = {}) {
     await fs.writeFile(path.join(specsDir, 'dsp_live.md'), 'the spec a live worker reads', 'utf8')
   }
 
-  const server = { app: false, keeps: false, lastPid: null as number | null, pidAsks: 0 }
+  const server = { app: false, keeps: false, keepsOnly: [] as string[], lastPid: null as number | null, pidAsks: 0 }
   const coordinator = { busy: false as boolean | null }
   const typed: Array<[string, string]> = []
   const typeInto = vi.fn((id: string, text: string) => {
@@ -273,7 +275,7 @@ async function rig(o: RigOpts = {}) {
   const driving = createHostDriving({
     profileDir: dir,
     orch: { handle, internalDeps: () => orch.internalDeps(), loaded: () => orch.loaded(), drainOnce, state: () => orch.state() },
-    server: { hasApp: () => server.app, appsKeep: () => server.keeps, lastAppPid: () => {
+    server: { hasApp: () => server.app, appsKeep: (duty: string) => server.app && (server.keeps || server.keepsOnly.includes(duty)), lastAppPid: () => {
       server.pidAsks++
       return server.lastPid
     } },
@@ -301,6 +303,7 @@ async function rig(o: RigOpts = {}) {
     ...(o.realAppPid ? {} : { appPid: () => appPid.value }),
     onReport: (r) => reports.push(r),
     ...(o.recovery ? { recovery: o.recovery } : {}),
+    ...(o.guard ? { guard: o.guard } : {}),
     ...(o.refuseGates
       ? { interruptStalled: (st: OrchState) => ({ state: st, interrupted: null, resume: null, stuck: true }) }
       : {}),
@@ -607,9 +610,26 @@ describe('createHostDriving', () => {
     release()
     await vi.waitFor(() => expect(h.workerStarts()).toBe(1))
   })
-  it('leaves that Task to the app’s reconciler while an app is attached (D8)', async () => {
+  it('leaves that Task to the app’s reconciler while an attached app keeps recovery (D8)', async () => {
     const h = await rig({ lostDispatch: true })
-    h.server.app = true // a new app: attached, yields dispatch
+    h.server.app = true // an older app: attached, yields dispatch, keeps recovery
+    h.server.keepsOnly = ['recovery']
+    await h.load()
+    h.driving.kick('test')
+    await h.settle()
+    expect(h.taskStatus()).toBe('dispatched')
+  })
+  // Phase 3R minor: a new app yields recovery and runs no reconciler, so with the journal off nobody else looks.
+  it('gates that Task while an attached app yields recovery and the Host cannot recover (journal off)', async () => {
+    const h = await rig({ lostDispatch: true })
+    h.server.app = true
+    await h.load()
+    await vi.waitFor(() => expect(h.taskStatus()).toBe('blocked'))
+  })
+  it('does not gate a Task the Host recovery is already gating', async () => {
+    const guard = createLostGateGuard()
+    expect(guard.claim('tsk_lost')).toBe(true)
+    const h = await rig({ lostDispatch: true, guard })
     await h.load()
     h.driving.kick('test')
     await h.settle()

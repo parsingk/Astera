@@ -270,6 +270,10 @@ export class ContinuityJournal {
    *  an older one whose upgrade failed: it is left untouched, reads still work and every write becomes
    *  a no-op (a journal problem must never stop a Job). */
   private readonly usable: boolean
+  /** Whether a write lands: false for a file a newer build wrote (or whose upgrade failed), which this build only reads. */
+  get writable(): boolean {
+    return this.usable
+  }
   /** Whether journal_events has actor_json: false only on an older file whose upgrade failed. */
   private readonly withActor: boolean
   /** How deep `transaction` is nested right now: 0 outside, 1 inside the outer BEGIN, more inside

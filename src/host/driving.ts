@@ -43,11 +43,12 @@
 // Imports only core modules and node builtins: this bundles into the Host.
 import path from 'node:path'
 import { t } from '../core/i18n'
-import { HOST_YIELD_DISPATCH } from '../core/host/protocol'
+import { HOST_YIELD_DISPATCH, HOST_YIELD_RECOVERY } from '../core/host/protocol'
 import { driverOf, readDispatchGate, type DispatchGate, type Driver } from '../core/host/driver'
 import { createDispatchLoop, ORCH_FIRE_TICK_MS } from '../core/orchestration/exec/dispatchLoop'
 import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { lostWithNobody } from '../core/orchestration/lostGate'
+import { createLostGateGuard, type LostGateGuard } from './lostGateGuard'
 import { policyOf } from '../core/orchestration/convergence'
 import { interruptStalledTask, type OrchState } from '../core/orchestration/state'
 import { liveAppPid } from '../core/host/pidFile'
@@ -119,6 +120,8 @@ export function createHostDriving(d: {
   /** The Host's own recovery (remote runtime design §2.6): swept at every handover and app-left, and while it owns
    *  recovery the lost-worker Gate opens nothing. Absent: the Gate as before. */
   recovery?: { owns(): boolean; sweep(why: string): Promise<void>; catchUp(): Promise<void> }
+  /** Shared with the Host recovery's own lost-worker Gate, so the two never both ask for one (lostGateGuard.ts). */
+  guard?: LostGateGuard
   /** Test seam (B6); defaults to readDispatchGate. */
   readGate?(settingsPath: string): Promise<DispatchGate>
   /** Told every change of `report()` (limits pass L3), in the same turn as the change. A throw is
@@ -381,23 +384,33 @@ export function createHostDriving(d: {
     nowMs: () => d.nowMs()
   })
 
+  const guard = d.guard ?? createLostGateGuard()
+  /** An attached app keeps recovery: its own reconciler decides (D8). */
+  const keepsRecovery = (): boolean => d.server.hasApp() && d.server.appsKeep(HOST_YIELD_RECOVERY)
   /** Whether a lost-worker pass is running: the Gate it opens commits, and that commit's pass must not
    *  gate the same Task a second time while the first is still asking. */
   let gating = false
   /** D6/R16: a Gate on every lost worker nobody else will look after — only while no app is attached
    *  (an app's reconciler decides then, journal in hand, D8). Asked again before each Gate. */
   const gateLost = async (): Promise<void> => {
-    if (gating || d.server.hasApp()) return
+    // An attached app that keeps recovery looks after it (D8); one that yields it runs no reconciler, so with this Host
+    // unable to recover (the journal off or not written) the Gate is the only answer left (Phase 3R minor).
+    if (gating || keepsRecovery()) return
     // The reconciler decides instead (Phase 3R); it opens this Gate itself for an attempt the journal never saw.
     if (d.recovery?.owns()) return
     gating = true
     try {
       for (const seed of lostWithNobody(d.orch.state())) {
-        if (!mayStart() || d.server.hasApp()) return
-        const question = t(d.checks.langNow(), 'jobs.gate.workerLostNoApp', { dispatch: seed.dispatch.id })
-        const r = await d.orch.handle('gate-create', { task: seed.taskId, question })
-        if (r.status >= 400) log(`lost worker task=${seed.taskId}: the Gate was refused (${r.status} ${JSON.stringify(r.body)})`)
-        else log(`lost worker task=${seed.taskId} dispatch=${seed.dispatch.id}: no Astera is open to recover it — gated`)
+        if (!mayStart() || keepsRecovery()) return
+        if (!guard.claim(seed.taskId)) continue
+        try {
+          const question = t(d.checks.langNow(), 'jobs.gate.workerLostNoApp', { dispatch: seed.dispatch.id })
+          const r = await d.orch.handle('gate-create', { task: seed.taskId, question })
+          if (r.status >= 400) log(`lost worker task=${seed.taskId}: the Gate was refused (${r.status} ${JSON.stringify(r.body)})`)
+          else log(`lost worker task=${seed.taskId} dispatch=${seed.dispatch.id}: no Astera is open to recover it — gated`)
+        } finally {
+          guard.release(seed.taskId)
+        }
       }
     } finally {
       gating = false

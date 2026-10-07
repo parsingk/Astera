@@ -25,6 +25,7 @@ import { HOST_YIELD_DISPATCH, type HostMessage } from '../core/host/protocol'
 import { createHostChecks, type HostChecks } from './checks'
 import { createHostDriving, type HostDriving } from './driving'
 import { createHostRecovery, type HostRecovery } from './recovery'
+import { createLostGateGuard } from './lostGateGuard'
 import type { HostJournal } from './hostJournal'
 import type { HostOrch } from './orch'
 import type { PtyRegistry } from './registry'
@@ -110,7 +111,10 @@ export function composeHostDriving(a: {
 
   /** The driving's own `mayStart`, asked through the driving once it exists: drives, not leaving, loaded. */
   let mayStart = (): boolean => false
+  /** One guard for both lost-worker Gates (lostGateGuard.ts). */
+  const guard = createLostGateGuard()
   const recovery = createHostRecovery({
+    guard,
     journal: a.journal ?? {
       writes: () => false,
       reconcilerJournal: {
@@ -141,6 +145,7 @@ export function composeHostDriving(a: {
   const driving = createHostDriving({
     profileDir: a.profileDir,
     recovery,
+    guard,
     // C5: every member is read at the call.
     orch: {
       handle: (cmd, args) => a.orch().handle(cmd, args),

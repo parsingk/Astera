@@ -324,9 +324,11 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     start: async () => {
       settings = await readSettings()
     },
+    // Only asks (Phase 3R minor): it opens nothing and pays no baseline, since the driving asks it on every pass. A file
+    // not opened yet counts as written; one a newer build wrote does not, since no write lands in it.
     writes: () => {
       try {
-        return writing() !== null
+        return !shut && settings.enabled && isWriter() && !openFailed && (open === null || open.journal.writable)
       } catch (err) {
         d.log(`continuity: could not tell whether the journal is written: ${String(err)}`)
         return false

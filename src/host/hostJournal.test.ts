@@ -668,4 +668,29 @@ describe('the reconciler port (remote runtime design §2.6, Phase 3R)', () => {
     await j.start()
     expect(j.writes()).toBe(false)
   })
+
+  // Phase 3R minor: writes() only asks; it opens nothing and pays no baseline.
+  it('writes() opens no file', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    expect(j.writes()).toBe(true)
+    expect(existsSync(journalFile())).toBe(false)
+  })
+  // Phase 3R minor: a journal a newer build wrote takes no writes here, so the Host does not own recovery over it.
+  it('writes() is false for a journal whose writes land nothing (a newer schema)', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    j.committed({ prev: on(), next: paused(), version: 1, actor: cli })
+    j.close()
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(journalFile())
+    db.exec('UPDATE schema_meta SET version = 999')
+    db.close()
+    const { j: again } = make()
+    await again.start()
+    again.committed({ prev: on(), next: paused(), version: 2, actor: cli })
+    expect(again.writes()).toBe(false)
+  })
 })
