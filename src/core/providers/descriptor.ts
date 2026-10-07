@@ -4,6 +4,7 @@ import os from 'node:os'
 import { execFile } from 'node:child_process'
 import type { DetectCandidate } from '../types'
 import { buildClaudeCommand, buildCodexCommand, type CommandBuilder } from '../sessions/commands'
+import { codexNoDaemonProbe } from '../sessions/codexNoDaemon'
 import { readAccountEmail, detectConfigDirs } from '../accounts/detect'
 import { readCodexEmail, detectCodexConfigDirs } from '../accounts/detectCodex'
 import { syncClaudeSettings, syncCodexSettings, type SyncResult } from '../accounts/settingsSync'
@@ -96,7 +97,10 @@ export function makeDescriptors(
   platform: NodeJS.Platform,
   /** A seam for swapping in the keychain lookup in tests. Real wiring just uses the default. */
   homeDir: string = os.homedir(),
-  keychainHas = makeSecurityKeychainHas(runSecurity)
+  keychainHas = makeSecurityKeychainHas(runSecurity),
+  /** Whether codex takes `--no-daemon` (sessions/codexNoDaemon.ts). A seam for the same reason: the
+   *  real one runs the codex on this machine's PATH. */
+  codexNoDaemon: () => boolean = codexNoDaemonProbe(platform)
 ): Record<Provider, ProviderDescriptor> {
   const claudeIsLoggedIn = claudeLoginProbe({
     platform,
@@ -128,7 +132,7 @@ export function makeDescriptors(
       ambientDirName: '.codex',
       isLoggedIn: fileMarkerProbe('auth.json'),
       accountsRootName: '.codex-accounts',
-      buildCommand: buildCodexCommand(platform),
+      buildCommand: buildCodexCommand(platform, undefined, codexNoDaemon),
       // readCodexEmail takes only configDir — this just wraps it to fit the descriptor shape (the original function is unchanged)
       readEmail: (configDir) => readCodexEmail(configDir),
       detect: detectCodexConfigDirs,
