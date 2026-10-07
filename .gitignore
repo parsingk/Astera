@@ -24,6 +24,8 @@ docs/*
 !docs/cli.md
 # Published deliberately: `astera mcp serve` is a public interface, and the README links to it.
 !docs/mcp.md
+# Published deliberately: `--runtime` and MCP's `runtimeId` are public interfaces, and cli.md and mcp.md link to it.
+!docs/remote-runtime.md
 # Published deliberately: a design brief that outlives the branch it was written on, because the work
 # it describes is picked up in another session and often another worktree, where an ignored file does
 # not exist. It says on its face that nothing in it is decided yet.

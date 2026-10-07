@@ -167,9 +167,15 @@ If the client cannot find `astera`, give `command` the full path of the installe
 
 ## The tools
 
-The server offers 34 tools: 19 for projects, accounts and Jobs, four for sessions, two that read
-a Task's output, six for GitHub, two that read How It Works records and one that regenerates one. What a client may call is
-set by [MCP access](#mcp-access).
+The server offers 36 tools: 19 for projects, accounts and Jobs, four for sessions, two that read
+a Task's output, six for GitHub, two that read How It Works records and one that regenerates one, and two that list
+the Runtimes this machine is paired with. What a client may call is set by [MCP access](#mcp-access).
+
+**Every tool takes an optional `runtimeId`**: an id or a name from `list_runtimes`, to run the tool on a paired
+Runtime instead of this machine ([remote-runtime.md](remote-runtime.md)). Such a call passes this machine's MCP
+access first, then the list of what a Runtime offers (a tool without a remote form answers
+`RUNTIME_CAPABILITY_MISSING`), then the Runtime's own pairing of this machine. For a remote call, an MCP access
+value Astera does not recognize counts as off. Leave `runtimeId` out for this machine.
 
 | Tool | What it does |
 | --- | --- |
@@ -207,6 +213,8 @@ set by [MCP access](#mcp-access).
 | `list_work_records` | A project's [How It Works](#how-it-works) records (`projectId`), newest first: `id`, `at`, `title` (`null` before the write-up has one), `request`, `status`, `reason`, `source`, `changedFiles` (how many) and `verification` (its `status`, or `null`). |
 | `get_work_record` | One How It Works record in full (`projectId` and `recordId`): the request, source, changed files, git heads and commits, verification (`validation` on an older record), Job tasks, status, reason and the write-up (`explanation`). |
 | `regenerate_work_record` | Start a new write-up of one How It Works record (`projectId` and `recordId`) in the background, as the app's regenerate button does: it overwrites the current write-up. It answers at once with the record's `id` and `status: "generating"`; read `get_work_record` for the result. While an older Astera app is the one writing the records, it is refused with `CONFLICT`. Needs "Read and control". |
+| `list_runtimes` | The machines this one is paired with (`astera runtimes add`): `runtimeId`, name, address, port and permission. Read from this machine; no Host is asked. |
+| `get_runtime` | One paired Runtime, by `runtimeId` or name; `RUNTIME_NOT_FOUND` for none. |
 
 `create_job` takes a `projectId` from `list_projects` and an `objective`. The coordinator is a
 `coordinatorAccountId` from `list_accounts`, or, without one, the default account of
@@ -560,7 +568,7 @@ a field with nothing left.
 ## MCP over HTTP
 
 An agent on another device, or a client that speaks MCP only over HTTP, can use this computer's
-Astera through an HTTP entrance the Host runs. It offers the same 34 tools as `astera mcp serve`,
+Astera through an HTTP entrance the Host runs. It offers the same 36 tools as `astera mcp serve`,
 under the same [MCP access](#mcp-access) settings, with the same redaction, and the Job Journal
 records its calls as surface `mcp` like any other client.
 

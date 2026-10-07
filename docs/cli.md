@@ -490,7 +490,8 @@ installed Astera instead.
 
 ### Remote Runtime
 
-Another machine can run Jobs on this one through Remote Runtime. On the machine that does the work:
+Another machine can run Jobs on this one through Remote Runtime ([remote-runtime.md](remote-runtime.md) covers both
+sides). On the machine that does the work:
 
 ```text
 astera runtime start --listen 100.64.0.5     listen on that address (default 127.0.0.1, port 47831)
@@ -1454,6 +1455,13 @@ astera: verbose: call jobs-list took 11ms: status 200
 | 8 | A `wait` stopped before the work ended: a question is open, the run is paused, or every worker is waiting for a usage limit to reset; or `sessions send --wait` stopped at a permission prompt or a question |
 | 9 | The command exists here but not in the running build |
 | 10 | A `wait` ended with the Job or run in failure |
+
+A command sent to a paired Runtime (`--runtime`) can also end with one of the remote codes in `error.code`, each
+with the exit of its nearest code above: `RUNTIME_NOT_FOUND` 4, `RUNTIME_OFFLINE` 3, `RUNTIME_AUTH_FAILED` 5,
+`RUNTIME_IDENTITY_CHANGED` 5, `RUNTIME_PROTOCOL_MISMATCH` 9, `RUNTIME_PROJECT_NOT_FOUND` 4,
+`RUNTIME_ACCOUNT_NOT_FOUND` 4, `RUNTIME_CAPABILITY_MISSING` 9, `RUNTIME_BUSY` 6, `RUNTIME_PERMISSION_DENIED` 5,
+`RUNTIME_OUTCOME_UNKNOWN` 6, `REMOTE_TIMEOUT` 7, `REMOTE_OPERATION_CONFLICT` 6 and `REMOTE_REPLY_TOO_LARGE` 1
+([remote-runtime.md](remote-runtime.md#error-codes) says what each means).
 
 **3 and 4 are different questions.** 3 means nothing answered; 4 means something answered and does
 not know that id. Do not retry a 4.
