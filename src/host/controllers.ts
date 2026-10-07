@@ -70,6 +70,9 @@ const sameHash = (a: string, b: string): boolean => {
   return x.length === y.length && timingSafeEqual(x, y)
 }
 
+/** How often a client's lastSeenAt is saved at most (design §4.5). */
+export const LAST_SEEN_EVERY_MS = 60_000
+
 export function createControllerRegistry(
   deps: { now?: () => number; random?: (bytes: number) => Buffer; records?: ControllerRecordsFile } = {}
 ): ControllerRegistry {
@@ -168,7 +171,16 @@ export function createControllerRegistry(
       return { ok: true, clientId, token }
     },
     authenticate: (tokenHash) => {
-      for (const r of records.values()) if (sameHash(r.tokenHash, tokenHash)) return r
+      for (const r of records.values()) {
+        if (!sameHash(r.tokenHash, tokenHash)) continue
+        // §4.5: kept at most once a minute (Phase 3 minor), so a controller that signs in often costs one save a minute.
+        const seen = r.lastSeenAt === null ? null : Date.parse(r.lastSeenAt)
+        if (seen !== null && now() - seen < LAST_SEEN_EVERY_MS) return r
+        const touched = { ...r, lastSeenAt: new Date(now()).toISOString() }
+        records.set(r.clientId, touched)
+        void persist().catch(() => undefined)
+        return touched
+      }
       return null
     },
     bind: (linkGen, conn, clientId) => {

@@ -70,6 +70,16 @@ describe('answerRemote (remote runtime design §2.8, X1-14)', () => {
     expect(h.targets[0]).toEqual({ runtimeId: 'rt_a', address: '10.0.0.2', port: 47831, fingerprint: FP, token: 'tok-a' })
   })
 
+  // Phase 3 minor (design §4.5): a call that reached the Runtime records when, at most once a minute.
+  it('records lastSeenAt on a call that reached the Runtime, and not on one that did not', async () => {
+    await ask('jobs-list', {}, deps(() => new RemoteError('RUNTIME_OFFLINE', 'down')).d)
+    expect((await (await controllerRegistry(dir)).list())[0].lastSeenAt).toBeNull()
+    await ask('jobs-list', {}, deps().d)
+    const seen = (await (await controllerRegistry(dir)).list())[0].lastSeenAt
+    expect(seen).not.toBeNull()
+    await ask('jobs-list', {}, deps().d)
+    expect((await (await controllerRegistry(dir)).list())[0].lastSeenAt).toBe(seen)
+  })
   it('an unknown Runtime is RUNTIME_NOT_FOUND', async () => {
     expect(await ask('jobs-list', {}, deps().d, 'nope')).toMatchObject({ error: { code: 'RUNTIME_NOT_FOUND' } })
   })

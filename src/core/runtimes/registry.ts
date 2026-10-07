@@ -21,6 +21,8 @@ export interface RuntimeRegistry {
   add(p: RuntimeProfile, token: string): Promise<void>
   remove(runtimeId: string): Promise<boolean>
   token(runtimeId: string): Promise<string | null>
+  /** When this machine last reached the Runtime (design §4.5). An id with no profile changes nothing. */
+  touch(runtimeId: string, at: string): Promise<void>
 }
 
 const REGISTRY = 'runtimes.json'
@@ -69,6 +71,12 @@ export async function openRuntimeRegistry(store: SecretStore): Promise<RuntimeRe
         return true
       })
     },
+    touch: (id, at) =>
+      store.withLock(async (tx) => {
+        const list = await readAll(tx)
+        if (!list.some((r) => r.runtimeId === id)) return
+        await writeAll(tx, list.map((r) => (r.runtimeId === id ? { ...r, lastSeenAt: at } : r)))
+      }),
     token: async (id) => {
       const text = await store.read(tokenFile(id))
       return text === null ? null : text.trim()

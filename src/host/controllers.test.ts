@@ -202,4 +202,22 @@ describe('client records: final review fixes', () => {
     await expect(r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')).rejects.toThrow('disk full')
     expect(r.list()).toEqual([])
   })
+
+  // Phase 3 minor (design §4.5): lastSeenAt is kept, at most once a minute, so a busy controller costs no save per call.
+  it('keeps lastSeenAt on each sign-in, saving it at most once a minute', async () => {
+    const c = clock()
+    let saves = 0
+    const r = createControllerRegistry({ now: c.now, records: { load: async () => [], save: async () => void saves++ } as never })
+    const p = await r.redeem(r.createPairing({ permission: 'read-only' }).code, 'laptop')
+    if (!p.ok) throw new Error('redeem')
+    const hash = sha256Base64url(p.token)
+    const after = saves
+    expect(r.authenticate(hash)?.lastSeenAt).toBe(new Date(c.now()).toISOString())
+    c.advance(30_000)
+    expect(r.authenticate(hash)?.lastSeenAt).toBe(new Date(c.now() - 30_000).toISOString())
+    c.advance(31_000)
+    expect(r.authenticate(hash)?.lastSeenAt).toBe(new Date(c.now()).toISOString())
+    await new Promise((x) => setTimeout(x, 10))
+    expect(saves - after).toBe(2)
+  })
 })

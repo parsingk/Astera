@@ -71,4 +71,15 @@ describe('runtime ids and case (Phase 2 review)', () => {
     await expect(r.add(p('RT_AB'), 'theirs')).rejects.toThrow(/runtime id/)
     expect(await r.token('rt_ab')).toBe('mine')
   })
+
+  // Phase 3 minor (design §4.5): the controller keeps when it last reached each Runtime.
+  it('touch sets lastSeenAt and keeps the token; an unknown id changes nothing', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'tok-a')
+    await r.touch('rt_a', '2026-10-08T00:00:00.000Z')
+    expect((await r.list())[0].lastSeenAt).toBe('2026-10-08T00:00:00.000Z')
+    expect(await r.token('rt_a')).toBe('tok-a')
+    await r.touch('rt_b', 'x')
+    expect((await r.list()).map((x) => x.runtimeId)).toEqual(['rt_a'])
+  })
 })

@@ -86,6 +86,12 @@ export async function answerRemote(a: {
   if (token === null)
     return { error: { code: 'RUNTIME_NOT_FOUND', message: `${found.name} has no token on this machine; pair it again with \`astera runtimes add\`` } }
   const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
+  /** The Runtime answered (design §4.5, Phase 3 minor): kept at most once a minute, and never at the cost of the answer. */
+  const reached = async (): Promise<void> => {
+    const last = found.lastSeenAt === null ? null : Date.parse(found.lastSeenAt)
+    if (last !== null && Date.now() - last < 60_000) return
+    await registry.touch(found.runtimeId, new Date().toISOString()).catch(() => undefined)
+  }
   const link = (a.deps?.link ?? ((t: RemoteTarget) => openRemoteLink({ target: t, client: { name: 'astera cli', version: a.version, surface: 'cli' } })))(target)
   try {
     if (a.cmd === 'runs-follow') {
@@ -104,14 +110,21 @@ export async function answerRemote(a: {
           return r
         }
       })
-      if ('ended' in followed) return { status: 200, body: followed.ended }
-      if ('refused' in followed) return followed.refused
+      if ('ended' in followed) {
+        await reached()
+        return { status: 200, body: followed.ended }
+      }
+      if ('refused' in followed) {
+        await reached()
+        return followed.refused
+      }
       return refusalOf(lost ?? new RemoteError('RUNTIME_OFFLINE', 'stuck' in followed ? followed.stuck : followed.unreachable), found.runtimeId, undefined)
     }
     // §3.9: only a change carries the request id, so a resend of it is a retry the Runtime can answer from its receipt.
     const request = remoteMutation(a.cmd) ? a.request : undefined
     const r = await link.call(a.cmd, a.args, { ...(request !== undefined ? { request } : {}), timeoutMs: clientTimeoutMs({ cmd: a.cmd, args: a.args }) })
     if (r instanceof RemoteError) return refusalOf(r, found.runtimeId, request)
+    await reached()
     if (r.status >= 200 && r.status < 300) return r
     // A refusal from the Runtime names that Runtime (review I2), so its next steps point there and not here.
     const code = remoteCodeOf(r.body) ?? codeForStatus(r.status)
