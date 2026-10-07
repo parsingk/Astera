@@ -50,6 +50,12 @@ export interface ExecuteDeps {
    *  question. Required, not optional: a Gate nobody can read is worse than no Gate. */
   lang(): Lang
   log(m: string): void
+  /** Why the caller no longer wants this attempt carried out, or null. Asked before the new Dispatch is committed,
+   *  right before the start, and when a start fails: the Host's recovery stops owning recovery when it begins to
+   *  leave or an app takes recovery back (remote runtime design §2.6). An abandoned attempt starts nothing, rolls
+   *  back the Dispatch it opened, and opens no Gate, so the Task stays lost for whoever recovers next. The app
+   *  passes none. */
+  abandoned?(): string | null
 }
 
 interface ExecuteInput {
@@ -61,6 +67,8 @@ interface ExecuteInput {
 
 export async function executeRecovery(a: ExecuteInput, deps: ExecuteDeps): Promise<ExecuteResult> {
   const { decision } = a
+  const gone = deps.abandoned?.() ?? null
+  if (gone !== null) return { ok: false, error: gone }
   switch (decision.strategy) {
     case 'resume-native':
     case 'redispatch':
@@ -167,6 +175,21 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
     })
   }
 
+  /** The Dispatch opened above, removed again: no worker may be left without one, and none was started. */
+  const rollBack = async (): Promise<void> => {
+    const latest = deps.getState()
+    await deps.setState({
+      ...latest,
+      dispatches: latest.dispatches.filter((d) => d.id !== dispatchId)
+    })
+  }
+  const goneBeforeStart = deps.abandoned?.() ?? null
+  if (goneBeforeStart !== null) {
+    await rollBack()
+    deps.log(`recovery: the start of task ${attempt.taskId} was abandoned: ${goneBeforeStart}`)
+    return { ok: false, error: goneBeforeStart }
+  }
+
   let started: { sessionId: string; cwd: string; specPath: string }
   try {
     started = await deps.startWorker({
@@ -187,12 +210,12 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
     // removal is committed before the Gate is opened. A lost worker that could not be restarted is a
     // question for a person, not a silently stuck Task.
     const message = e instanceof Error ? e.message : String(e)
-    const latest = deps.getState()
-    await deps.setState({
-      ...latest,
-      dispatches: latest.dispatches.filter((d) => d.id !== dispatchId)
-    })
+    await rollBack()
     deps.log(`recovery: startWorker failed for task ${attempt.taskId}: ${message}`)
+    // A start that failed because the caller let go of it meanwhile (a leaving Host's spawner refuses) is not a
+    // question for a person: the next owner recovers the Task.
+    const goneNow = deps.abandoned?.() ?? null
+    if (goneNow !== null) return { ok: false, error: goneNow }
     return review(a, deps, message, message)
   }
 

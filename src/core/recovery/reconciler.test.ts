@@ -697,3 +697,30 @@ describe('RecoveryReconciler, a sweep that never holds the thread for long (stag
     expect(reads).toBeGreaterThanOrEqual(3)
   })
 })
+
+// Phase 3R final review C1: a candidate left for lack of room must be told, so the Host can ask again once room
+// frees; a Host has no app boot to be the "next trigger".
+describe('onLeftForLater', () => {
+  const full = (): OrchState =>
+    state({
+      runs: [run({ concurrency: 1 })],
+      tasks: [task(), task({ id: 'tsk_2' })],
+      dispatches: [dispatch(), dispatch({ id: 'dsp_open', taskId: 'tsk_2', sessionId: 'sess-2', endedAt: undefined, workerState: 'ready' })]
+    })
+  it('is told about a candidate whose Run has no room, from a sweep and from reconcileOne', async () => {
+    const h = harness()
+    const left: string[] = []
+    const r = new RecoveryReconciler({ ...(h.r as unknown as { deps: object }).deps, getState: full, onLeftForLater: (s: { dispatch: { id: string } }) => left.push(s.dispatch.id) } as never)
+    expect(await r.reconcileAll()).toBe(0)
+    await r.reconcileOne('dsp_1')
+    expect(left).toEqual(['dsp_1', 'dsp_1'])
+    expect(h.executed).toEqual([])
+  })
+  it('is told about a candidate the pass budget deferred', async () => {
+    const left: string[] = []
+    const h = harness({ busyReads: Infinity })
+    const r = new RecoveryReconciler({ ...(h.r as unknown as { deps: object }).deps, clock: (() => { let t = 0; return () => (t += RECOVERY_PASS_BUDGET_MS) })(), onLeftForLater: (s: { dispatch: { id: string } }) => left.push(s.dispatch.id) } as never)
+    await r.reconcileAll()
+    expect(left).toContain('dsp_1')
+  })
+})

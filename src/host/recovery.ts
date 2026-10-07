@@ -13,6 +13,12 @@
 // (`onDispatchLost`). Never on every commit or tick: a recovery that failed is asked again at the next trigger, as
 // in the app, not in a loop.
 //
+// **Before the scheduler fills a slot** (final review C1) the driving's pass awaits `catchUp()`: the recovery work in
+// flight, then the candidates the reconciler left for a later pass (no room in their Run, or a pass out of its
+// busy-journal budget), each asked again. Otherwise the loop fills the lost worker's slot from the ready queue while
+// the sweep reads git, the reconciler finds no room, and the Task waits with nothing running and no Gate. Only
+// those candidates: one whose recovery failed was journalled and is not asked again until the next trigger.
+//
 // Imports only core modules and node builtins: this bundles into the Host.
 import path from 'node:path'
 import { t } from '../core/i18n'
@@ -20,7 +26,7 @@ import { HOST_YIELD_RECOVERY } from '../core/host/protocol'
 import { RecoveryReconciler } from '../core/recovery/reconciler'
 import { executeRecovery as realExecuteRecovery } from '../core/recovery/execute'
 import { readGitFacts as realReadGitFacts } from '../core/recovery/git'
-import type { LostAttemptSeed } from '../core/recovery/candidates'
+import { candidates, type LostAttemptSeed } from '../core/recovery/candidates'
 import type { GitFacts } from '../core/recovery/types'
 import { lostWithNobody } from '../core/orchestration/lostGate'
 import { readGitSummary } from '../core/orchestration/exec/gitSummary'
@@ -59,6 +65,10 @@ export interface HostRecovery {
   sweep(why: string): Promise<void>
   /** One worker found lost (`onDispatchLost`). Does nothing when this Host does not own recovery. Never throws. */
   lost(dispatchId: string): void
+  /** Waits for the recovery work in flight, then asks again about the candidates left for a later pass. The driving's
+   *  pass awaits it before the scheduler fills a slot. Nothing is asked while this Host does not own recovery.
+   *  Never rejects. */
+  catchUp(): Promise<void>
 }
 
 export function createHostRecovery(d: HostRecoveryDeps): HostRecovery {
@@ -88,6 +98,16 @@ export function createHostRecovery(d: HostRecoveryDeps): HostRecovery {
     }
   }
   const execute = d.executeRecovery ?? realExecuteRecovery
+  /** The candidates the reconciler left for a later pass, by Dispatch id. */
+  const waiting = new Set<string>()
+  /** The recovery work in flight: every sweep and lost-worker start, so `catchUp` can wait for them all. */
+  const inFlight = new Set<Promise<void>>()
+  const track = (p: Promise<void>): Promise<void> => {
+    const held = p.catch((err) => log(`recovery: ${String(err)}`))
+    inFlight.add(held)
+    void held.finally(() => inFlight.delete(held))
+    return held
+  }
 
   /** The lost-worker Gate for an attempt the journal never saw, which the reconciler leaves alone: with no app
    *  attached nobody else would ever look at it. The same Gate, on the same Tasks, as the driving's `gateLost`. */
@@ -120,39 +140,68 @@ export function createHostRecovery(d: HostRecoveryDeps): HostRecovery {
         readGitSummary: (cwd) => readGitSummary(cwd),
         knowledge: (cwd) => knowledgeIn(cwd, log),
         lang: () => d.checks.langNow(),
-        log
+        log,
+        // Asked before the commit, before the start and when a start fails (final review I2): a Host that began to
+        // leave, or met an app that took recovery back, starts nothing and opens no Gate.
+        abandoned: () => (owns() ? null : 'the Host no longer recovers (it stopped driving, is leaving, or an app took recovery back)')
       })
     },
     log,
     now: () => d.now(),
     onUnwitnessed: (seed) => {
       void gateUnwitnessed(seed).catch((err) => log(`recovery: the lost-worker Gate failed: ${String(err)}`))
+    },
+    onLeftForLater: (seed) => {
+      waiting.add(seed.dispatch.id)
     }
   })
 
   return {
     owns,
-    sweep: async (why) => {
-      try {
-        if (!owns()) return
-        await readStrategy()
-        if (!owns()) return
-        const n = await reconciler.reconcileAll()
-        if (n > 0) log(`recovery: ${why}: acted on ${n} lost attempt(s)`)
-      } catch (err) {
-        log(`recovery: the sweep (${why}) failed: ${String(err)}`)
-      }
+    sweep: (why) => {
+      if (!owns()) return Promise.resolve()
+      return track(
+        (async () => {
+          await readStrategy()
+          if (!owns()) return
+          const n = await reconciler.reconcileAll()
+          if (n > 0) log(`recovery: ${why}: acted on ${n} lost attempt(s)`)
+        })().catch((err) => log(`recovery: the sweep (${why}) failed: ${String(err)}`))
+      )
     },
     lost: (dispatchId) => {
       try {
         if (!owns()) return
-        void (async () => {
-          await readStrategy()
-          if (!owns()) return
-          await reconciler.reconcileOne(dispatchId)
-        })().catch((err) => log(`recovery: reconcileOne failed dispatch=${dispatchId}: ${String(err)}`))
+        void track(
+          (async () => {
+            await readStrategy()
+            if (!owns()) return
+            await reconciler.reconcileOne(dispatchId)
+          })().catch((err) => log(`recovery: reconcileOne failed dispatch=${dispatchId}: ${String(err)}`))
+        )
       } catch (err) {
         log(`recovery: reconcileOne failed dispatch=${dispatchId}: ${String(err)}`)
+      }
+    },
+    catchUp: async () => {
+      try {
+        while (inFlight.size > 0) await Promise.all([...inFlight])
+        if (waiting.size === 0 || !owns()) return
+        const lostNow = new Set(candidates(d.orch.state()).map((c) => c.dispatch.id))
+        const asked = [...waiting]
+        waiting.clear()
+        await readStrategy()
+        for (const id of asked) {
+          if (!lostNow.has(id)) continue
+          if (!owns()) {
+            waiting.add(id)
+            continue
+          }
+          // reconcileOne tells onLeftForLater again when there is still no room.
+          await track(reconciler.reconcileOne(id))
+        }
+      } catch (err) {
+        log(`recovery: catching up failed: ${String(err)}`)
       }
     }
   }

@@ -252,3 +252,32 @@ describe('executeRecovery', () => {
     expect(h.state.tasks[0].status).toBe('blocked') // the person is told rather than left with a stuck Task
   })
 })
+
+// Phase 3R final review I2: the Host stops owning recovery (it began to leave, or an app took recovery back) between
+// the decision and the start. Nothing is started, the new Dispatch is rolled back, and no Gate is opened: the Task
+// stays lost for whoever recovers next.
+describe('executeRecovery when the caller abandons the attempt', () => {
+  it('starts nothing and opens no Gate when abandoned before the start', async () => {
+    const h = deps({ abandoned: () => 'the Host is leaving' })
+    const r = await executeRecovery({ attempt: attempt(), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(r).toEqual({ ok: false, error: 'the Host is leaving' })
+    expect(h.started).toEqual([])
+    expect(h.state.dispatches.map((d) => d.id)).toEqual(['dsp_1'])
+    expect(h.state.gates).toEqual([])
+    expect(h.state.tasks[0].status).toBe('dispatched')
+  })
+  it('a start that failed because the caller abandoned it meanwhile is rolled back with no Gate', async () => {
+    let leaving = false
+    const h = deps({
+      abandoned: () => (leaving ? 'the Host is leaving' : null),
+      startWorker: async () => {
+        leaving = true
+        throw new Error('HostRetiring')
+      }
+    })
+    const r = await executeRecovery({ attempt: attempt(), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(r).toEqual({ ok: false, error: 'the Host is leaving' })
+    expect(h.state.dispatches.map((d) => d.id)).toEqual(['dsp_1'])
+    expect(h.state.gates).toEqual([])
+  })
+})

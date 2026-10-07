@@ -118,7 +118,7 @@ export function createHostDriving(d: {
   interruptStalled?: typeof interruptStalledTask
   /** The Host's own recovery (remote runtime design §2.6): swept at every handover and app-left, and while it owns
    *  recovery the lost-worker Gate opens nothing. Absent: the Gate as before. */
-  recovery?: { owns(): boolean; sweep(why: string): Promise<void> }
+  recovery?: { owns(): boolean; sweep(why: string): Promise<void>; catchUp(): Promise<void> }
   /** Test seam (B6); defaults to readDispatchGate. */
   readGate?(settingsPath: string): Promise<DispatchGate>
   /** Told every change of `report()` (limits pass L3), in the same turn as the change. A throw is
@@ -407,6 +407,12 @@ export function createHostDriving(d: {
   const pass = async (): Promise<void> => {
     await handover
     if (!mayStart()) return
+    // Recovery first (Phase 3R final review C1): a lost worker holds no slot, so a loop that ran while its recovery
+    // read git would fill that slot from the ready queue and leave the lost Task with no room, no worker and no Gate.
+    if (d.recovery) {
+      await d.recovery.catchUp()
+      if (!mayStart()) return
+    }
     await gateLost()
     await loop.run()
   }

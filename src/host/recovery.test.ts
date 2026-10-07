@@ -32,8 +32,9 @@ function rig(over: {
   gitGate?: Promise<void>
   strategy?: () => ResumeStrategy
   dirty?: boolean
+  state?: OrchState
 } = {}) {
-  let current = lostState()
+  let current = over.state ?? lostState()
   const appended: Array<{ type: string }> = []
   const executed: Array<{ dispatchId: string; strategy: string }> = []
   const handled: Array<{ cmd: string; args: Record<string, unknown> }> = []
@@ -72,7 +73,7 @@ function rig(over: {
       return { ok: true as const, newDispatchId: 'dsp_2' }
     }
   }
-  return { r: createHostRecovery(deps), box, appended, executed, handled, logs }
+  return { r: createHostRecovery(deps), box, appended, executed, handled, logs, set: (f: (s: OrchState) => OrchState) => { current = f(current) } }
 }
 
 describe('createHostRecovery (remote runtime design §2.6, Phase 3R)', () => {
@@ -144,5 +145,53 @@ describe('createHostRecovery (remote runtime design §2.6, Phase 3R)', () => {
     strategy = 'smart'
     await h.r.sweep('a test')
     expect(h.executed).toEqual([{ dispatchId: 'dsp_1', strategy: 'smart-resume' }])
+  })
+
+  // Final review C1: the scheduler may fill the lost worker's slot first; the Host asks again once room frees.
+  it('a candidate left for lack of room is recovered at a later catch-up, once its Run has room', async () => {
+    const busy = stateFromLegacy({
+      runs: [run({ concurrency: 1 })],
+      tasks: [task(), task({ id: 'tsk_2' })],
+      dispatches: [lost(), lost({ id: 'dsp_open', taskId: 'tsk_2', sessionId: 'sess-9', endedAt: undefined, workerState: 'ready' })]
+    })
+    const h = rig({ state: busy })
+    await h.r.sweep('a test')
+    expect(h.executed).toEqual([])
+    await h.r.catchUp()
+    expect(h.executed).toEqual([])
+    h.set((s) => ({ ...s, dispatches: s.dispatches.map((d) => (d.id === 'dsp_open' ? { ...d, endedAt: NOW, outcome: 'succeeded' } : d)) }))
+    await h.r.catchUp()
+    expect(h.executed).toEqual([{ dispatchId: 'dsp_1', strategy: 'redispatch' }])
+    await h.r.catchUp()
+    expect(h.executed).toHaveLength(1)
+  })
+
+  it('catchUp waits for a recovery in flight, so the scheduler fills no slot before it', async () => {
+    let release!: () => void
+    const gitGate = new Promise<void>((r) => (release = r))
+    const h = rig({ gitGate })
+    void h.r.sweep('a test')
+    h.r.lost('dsp_1')
+    let caught = false
+    const c = h.r.catchUp().then(() => (caught = true))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(caught).toBe(false)
+    release()
+    await c
+    expect(h.executed).toHaveLength(1)
+  })
+
+  it('catchUp does nothing while the Host does not own recovery', async () => {
+    const busy = stateFromLegacy({
+      runs: [run({ concurrency: 1 })],
+      tasks: [task(), task({ id: 'tsk_2' })],
+      dispatches: [lost(), lost({ id: 'dsp_open', taskId: 'tsk_2', sessionId: 'sess-9', endedAt: undefined, workerState: 'ready' })]
+    })
+    const h = rig({ state: busy })
+    await h.r.sweep('a test')
+    h.set((s) => ({ ...s, dispatches: s.dispatches.map((d) => (d.id === 'dsp_open' ? { ...d, endedAt: NOW, outcome: 'succeeded' } : d)) }))
+    h.box.keeps = true
+    await h.r.catchUp()
+    expect(h.executed).toEqual([])
   })
 })

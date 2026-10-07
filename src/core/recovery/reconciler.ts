@@ -43,6 +43,11 @@ export interface ReconcilerDeps {
    *  attached (remote runtime design §2.6, Phase 3R), as it did before it recovered; the app passes none.
    *  Never told about "cannot say" or a deferred read. A throw is logged. */
   onUnwitnessed?(seed: LostAttemptSeed): void
+  /** Told about a candidate left for a later pass with nothing decided: its Run had no room, or the pass spent its
+   *  busy-journal budget before reading it. The app's later passes are its next boot and its next live loss; the
+   *  Host has neither on a schedule, so it keeps these and asks again once room frees (Phase 3R final review C1).
+   *  A throw is logged. */
+  onLeftForLater?(seed: LostAttemptSeed): void
 }
 
 /**
@@ -172,6 +177,10 @@ export class RecoveryReconciler {
 
   /** Carries one seed all the way through, or returns false having done nothing at all — the caller
    *  counts only what it acted on. */
+  private leftForLater(seed: LostAttemptSeed): void {
+    this.note('onLeftForLater', undefined, () => this.deps.onLeftForLater?.(seed))
+  }
+
   private async recoverOne(seed: LostAttemptSeed, pass?: PassBudget): Promise<boolean> {
     if (this.inFlight.has(seed.dispatch.id)) return false
     this.inFlight.add(seed.dispatch.id)
@@ -191,7 +200,10 @@ export class RecoveryReconciler {
     // here as positive evidence that the prompt never left the app; null is "we cannot say".
     const found = await this.evidenceFor(runId, dispatch.id, pass)
     // Not read in full this pass: nothing is decided or journaled, and it stays a candidate.
-    if (found === 'deferred') return false
+    if (found === 'deferred') {
+      this.leftForLater(seed)
+      return false
+    }
     const evidence = found
     const promptConfirmed = evidence === null ? null : evidence.promptConfirmed
 
@@ -257,6 +269,7 @@ export class RecoveryReconciler {
     }
     if (!hasRoom(after, runId)) {
       this.deps.log(`recovery: run ${runId} filled up while dispatch ${dispatch.id}'s evidence was read, left for the next trigger`)
+      this.leftForLater(seed)
       return false
     }
     const decision = decideRecovery({ attempt, git, smartResume: this.deps.smartResume() })
@@ -383,7 +396,10 @@ export class RecoveryReconciler {
       if (!fresh) continue
       // The concurrency limit binds recovery too (hasRoom above) — a candidate with no room is left
       // for the next trigger, not counted as acted on.
-      if (!hasRoom(this.deps.getState(), fresh.runId)) continue
+      if (!hasRoom(this.deps.getState(), fresh.runId)) {
+        this.leftForLater(fresh)
+        continue
+      }
       try {
         if (await this.recoverOne(fresh, pass)) count++
       } catch (err) {
@@ -401,7 +417,10 @@ export class RecoveryReconciler {
     if (!seed) return
     // Same concurrency gate as reconcileAll — a single lost worker found live is still a second
     // door into starting one, and the Run it belongs to may already be at its limit.
-    if (!hasRoom(this.deps.getState(), seed.runId)) return
+    if (!hasRoom(this.deps.getState(), seed.runId)) {
+      this.leftForLater(seed)
+      return
+    }
     await this.recoverOne(seed)
   }
 }

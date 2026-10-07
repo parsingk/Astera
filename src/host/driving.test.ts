@@ -99,7 +99,7 @@ interface RigOpts {
    *  last hello pid answers. */
   realAppPid?: boolean
   /** Phase 3R: a Host recovery (remote runtime design §2.6); none means the journal is off. */
-  recovery?: { owns(): boolean; sweep(why: string): Promise<void> }
+  recovery?: { owns(): boolean; sweep(why: string): Promise<void>; catchUp(): Promise<void> }
 }
 
 /** Under the test's own folder (review m7): never a literal path, should the fake ever resolve one. */
@@ -584,7 +584,7 @@ describe('createHostDriving', () => {
   // Phase 3R (remote runtime design §2.6): the Host's own reconciler decides, at the load's handover.
   it('with a Host recovery that owns recovery, the handover sweeps and no lost-worker Gate opens', async () => {
     const sweeps: string[] = []
-    const h = await rig({ lostDispatch: true, recovery: { owns: () => true, sweep: async (w) => { sweeps.push(w) } } })
+    const h = await rig({ lostDispatch: true, recovery: { owns: () => true, sweep: async (w) => { sweeps.push(w) }, catchUp: async () => {} } })
     await h.load()
     await vi.waitFor(() => expect(sweeps.length).toBeGreaterThan(0))
     h.driving.kick('test')
@@ -592,9 +592,20 @@ describe('createHostDriving', () => {
     expect(h.taskStatus()).toBe('dispatched')
   })
   it('with a Host recovery that does not own recovery (the journal not written), the Gate opens as before', async () => {
-    const h = await rig({ lostDispatch: true, recovery: { owns: () => false, sweep: async () => {} } })
+    const h = await rig({ lostDispatch: true, recovery: { owns: () => false, sweep: async () => {}, catchUp: async () => {} } })
     await h.load()
     await vi.waitFor(() => expect(h.taskStatus()).toBe('blocked'))
+  })
+  // Final review C1: recovery first, so the scheduler does not fill a lost worker's slot while it is decided.
+  it('the pass waits for the Host recovery to catch up before it fills a slot', async () => {
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    const h = await rig({ readyTasks: 1, recovery: { owns: () => true, sweep: async () => {}, catchUp: () => held } })
+    await h.orch.call({ cmd: 'jobs-list', args: {}, sessionId: '' })
+    await h.settle()
+    expect(h.workerStarts()).toBe(0)
+    release()
+    await vi.waitFor(() => expect(h.workerStarts()).toBe(1))
   })
   it('leaves that Task to the app’s reconciler while an app is attached (D8)', async () => {
     const h = await rig({ lostDispatch: true })

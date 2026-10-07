@@ -310,12 +310,13 @@ const journalRows = (profileDir: string, runId: string) => {
 }
 
 /** A Job with one Task, run by the first Host until its worker is started; that Host is then killed. */
-async function lostWorker(o: { settings?: Record<string, unknown>; validate?: string[]; convergence?: boolean; coordinator?: boolean } = {}) {
+async function lostWorker(o: { settings?: Record<string, unknown>; validate?: string[]; convergence?: boolean; coordinator?: boolean; tasks?: number } = {}) {
   const p = await profile({ jobContinuityEnabled: true, ...o.settings })
   const server = { app: false, keeps: new Set<string>() }
   const first = await boot(p, '2026-10-08T01:00:00.000Z', server)
   const job = await first.ok('jobs-create', { objective: 'the rig', cwd: p.repo, concurrency: 1, ...(o.convergence ? { convergence: true, maxFixAttempts: 1 } : {}) })
   const task = await first.ok('tasks-add', { job: job.id, title: 'task 1', spec: 'do it', account: p.accountId, ...(o.validate ? { validate: o.validate.join(',') } : {}) })
+  for (let i = 2; i <= (o.tasks ?? 1); i++) await first.ok('tasks-add', { job: job.id, title: `task ${i}`, spec: 'do it too', account: p.accountId })
   await first.ok('jobs-run', { id: job.id, ...(o.coordinator ? { coordinator: p.accountId } : {}) })
   await until(() => expect(first.spawns()).toHaveLength(1))
   // The Run's own Task (jobs-run copies the Job's definition Task into the Run under a new id).
@@ -342,13 +343,25 @@ describe('Host-owned recovery after a restart, with no app (remote runtime desig
     expect(existsSync(path.join(lostSpawn.cwd, 'half-done.txt'))).toBe(true)
     const s = second.state()
     expect(s.dispatches.find((d) => d.id === again.dispatchId)?.retryOf).toBe(lostSpawn.dispatchId)
-    const runId = s.tasks.find((t) => t.id === taskId)!.runId
+    const runId = s.tasks.find((t) => t.id === taskId)!.runId!
     const rows = journalRows(p.profileDir, runId).filter((r) => r.dispatchId === lostSpawn.dispatchId && r.type.startsWith('RECOVERY_'))
     expect(rows.map((r) => r.type)).toEqual(expect.arrayContaining(['RECOVERY_DETECTED', 'RECOVERY_STRATEGY_SELECTED', 'RECOVERY_COMPLETED']))
     for (const r of rows) expect(r.actor).toEqual({ surface: 'host' })
     expect(recoveryActionsIn(path.join(p.profileDir, 'orch', 'continuity.sqlite'), runId)).toEqual([
       expect.objectContaining({ dispatchId: lostSpawn.dispatchId, status: 'completed' })
     ])
+  })
+
+  // Final review C1: with a ready Task waiting, the scheduler must not take the lost worker's slot first.
+  it('a lost worker beside a ready Task in a Run of one slot: the lost one is recovered first, and nothing is stranded', async () => {
+    const { p, server, first, taskId } = await lostWorker({ settings: { resumeStrategy: 'smart' }, tasks: 2 })
+    first.kill()
+    const second = await boot(p, '2026-10-08T02:00:00.000Z', server)
+    await second.cli('jobs-list', {})
+    await until(() => expect(second.spawns()).toHaveLength(1))
+    await second.settle()
+    expect(second.spawns()).toHaveLength(1)
+    expect(second.spawns()[0].taskId).toBe(taskId)
   })
 
   it('with Smart Resume off and unfinished work, the restarted Host asks a person, as the app does', async () => {
@@ -361,7 +374,7 @@ describe('Host-owned recovery after a restart, with no app (remote runtime desig
     await second.settle()
     expect(second.spawns()).toHaveLength(0)
     // The reconciler's own review, not the journal-off Gate: its decision is journalled, as the Host.
-    const runId = second.state().tasks.find((t) => t.id === taskId)!.runId
+    const runId = second.state().tasks.find((t) => t.id === taskId)!.runId!
     const review = journalRows(p.profileDir, runId).find((r) => r.type === 'RECOVERY_REQUIRES_REVIEW')
     expect(review?.actor).toEqual({ surface: 'host' })
   })
