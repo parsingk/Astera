@@ -912,7 +912,7 @@ describe('pairing and clients (local only)', () => {
     const pair = await orch.call({ cmd: 'pair-create', args: { permission: 'read-only' }, sessionId: '', from: cli })
     expect(pair.status).toBe(200)
     const { code } = pair.body as { code: string }
-    const got = controllers.redeem(code, 'laptop')
+    const got = await controllers.redeem(code, 'laptop')
     if (!got.ok) throw new Error('redeem')
     const listed = await orch.call({ cmd: 'clients-list', args: {}, sessionId: '', from: cli })
     expect(listed.body).toMatchObject({ clients: [{ clientId: got.clientId, name: 'laptop', permission: 'read-only' }] })

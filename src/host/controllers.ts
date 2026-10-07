@@ -1,9 +1,11 @@
 // The Host's paired controllers (remote runtime design §3.3, §4.4, §4.5; N18). The Host owns them because revocation
-// must close live connections at once and the Gateway restarts by design, so it cannot hold the only copy. In memory
-// for now; Phase 2 moves the records into a SecretStore file (design §6). Pairing codes stay in memory for good:
-// they live ten minutes and die with the Host.
+// must close live connections at once and the Gateway restarts by design, so it cannot hold the only copy. Records
+// live in memory and in `<profile>/remote/clients.json` in the secret store (design §4.6); memory changes first, so a
+// revoked client is refused before its file write lands. Pairing codes stay in memory for good: they live ten
+// minutes and die with the Host.
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { ControllerPermission, ControllerPrincipal } from '../core/host/orchProtocol'
+import type { SecretStore } from '../core/secrets/secretStore'
 
 /** 32 symbols, so 10 of them are 50 bits (DC-11). */
 const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
@@ -22,11 +24,31 @@ export interface ControllerRecord {
   lastSeenAt: string | null
 }
 
+export interface ControllerRecordsFile {
+  load(): Promise<ControllerRecord[]>
+  save(records: ControllerRecord[]): Promise<void>
+}
+
+/** `clients.json` (design §4.6): one file, so no cross-file order. Written under the store's lock. */
+export function controllerRecordsFile(store: SecretStore): ControllerRecordsFile {
+  return {
+    load: async () => {
+      const text = await store.read('clients.json')
+      if (text === null) return []
+      const parsed = JSON.parse(text) as { clients?: unknown }
+      return Array.isArray(parsed.clients) ? (parsed.clients as ControllerRecord[]) : []
+    },
+    save: (records) => store.withLock((tx) => tx.write('clients.json', JSON.stringify({ clients: records }, null, 2)))
+  }
+}
+
 export interface ControllerRegistry {
+  /** Reads the records file into memory. Writes wait for it, so none can save a set missing the loaded clients. */
+  load(): Promise<void>
   /** A one-time code for `astera runtime pair`. Only its hash is kept; the code itself goes to the caller alone. */
   createPairing(a: { permission: ControllerPermission; name?: string }): { code: string; expiresAt: string }
   /** The code a controller sent over the pinned link. A right one makes a client record and its token, once. */
-  redeem(code: string, name: string): { ok: true; clientId: string; token: string } | { ok: false; reason: 'unknown' | 'expired' | 'burned' }
+  redeem(code: string, name: string): Promise<{ ok: true; clientId: string; token: string } | { ok: false; reason: 'unknown' | 'expired' | 'burned' }>
   /** The record whose token hashes to this, compared in constant time; null for none. */
   authenticate(tokenHash: string): ControllerRecord | null
   bind(linkGen: number, conn: string, clientId: string): void
@@ -38,7 +60,7 @@ export interface ControllerRegistry {
   /** A Gateway generation is gone: every binding it held goes with it. */
   dropLink(linkGen: number): void
   /** Deletes the record and every binding to it, and names the connections to close (design §3.3's order). */
-  revoke(clientId: string): { revoked: boolean; conns: Array<{ linkGen: number; conn: string }> }
+  revoke(clientId: string): Promise<{ revoked: boolean; conns: Array<{ linkGen: number; conn: string }> }>
   list(): Array<Omit<ControllerRecord, 'tokenHash'>>
 }
 
@@ -48,10 +70,22 @@ const sameHash = (a: string, b: string): boolean => {
   return x.length === y.length && timingSafeEqual(x, y)
 }
 
-export function createControllerRegistry(deps: { now?: () => number; random?: (bytes: number) => Buffer } = {}): ControllerRegistry {
+export function createControllerRegistry(
+  deps: { now?: () => number; random?: (bytes: number) => Buffer; records?: ControllerRecordsFile } = {}
+): ControllerRegistry {
   const now = deps.now ?? Date.now
   const random = deps.random ?? randomBytes
   const records = new Map<string, ControllerRecord>()
+  /** The load while it runs, so writes wait for it; null once it settled, so a revocation then lands in memory in the
+   *  same step it is asked for. */
+  let loading: Promise<void> | null = null
+  /** A failed load, kept: every later write fails the same way instead of saving a set missing what it could not read. */
+  let loadFailed: unknown = null
+  // Every save writes the whole set as memory holds it then; the store's lock orders the writes on disk.
+  const persist = async (): Promise<void> => {
+    if (loadFailed !== null) throw loadFailed
+    if (deps.records) await deps.records.save([...records.values()])
+  }
   /** Pending pairing codes by hash: what a redeem needs, and the attempts wrong guesses have spent. */
   const codes = new Map<string, { expiresAt: number; attempts: number; permission: ControllerPermission; name?: string }>()
   // A name reaches error text and the client list, so it is one printable line.
@@ -68,13 +102,29 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
   }
 
   return {
+    load: () => {
+      const run = (async () => {
+        if (!deps.records) return
+        for (const r of await deps.records.load()) if (!records.has(r.clientId)) records.set(r.clientId, r)
+      })()
+      loading = run
+      return run.then(
+        () => void (loading = null),
+        (e: unknown) => {
+          loading = null
+          loadFailed = e
+          throw e
+        }
+      )
+    },
     createPairing: ({ permission, name }) => {
       const code = newCode()
       const expiresAt = now() + CODE_TTL_MS
       codes.set(sha256Base64url(code), { expiresAt, attempts: 0, permission, ...(name ? { name } : {}) })
       return { code, expiresAt: new Date(expiresAt).toISOString() }
     },
-    redeem: (code, name) => {
+    redeem: async (code, name) => {
+      if (loading) await loading.catch(() => {})
       const hash = sha256Base64url(code.trim().toUpperCase())
       const held = codes.get(hash)
       if (!held) {
@@ -101,6 +151,7 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
         createdAt: new Date(now()).toISOString(),
         lastSeenAt: null
       })
+      await persist()
       return { ok: true, clientId, token }
     },
     authenticate: (tokenHash) => {
@@ -122,7 +173,9 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
     dropLink: (linkGen) => {
       for (const k of [...bindings.keys()]) if (k.startsWith(`${linkGen}\u0000`)) bindings.delete(k)
     },
-    revoke: (clientId) => {
+    revoke: async (clientId) => {
+      // After the load, or a record still being read would come back after its revocation.
+      if (loading) await loading.catch(() => {})
       const revoked = records.delete(clientId)
       const conns: Array<{ linkGen: number; conn: string }> = []
       for (const [k, id] of [...bindings]) {
@@ -131,6 +184,7 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
         const [gen, conn] = k.split('\u0000')
         conns.push({ linkGen: Number(gen), conn })
       }
+      if (revoked) await persist()
       return { revoked, conns }
     },
     list: () => [...records.values()].map(({ tokenHash: _hidden, ...rest }) => rest)

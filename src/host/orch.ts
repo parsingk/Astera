@@ -1692,7 +1692,7 @@ export function createHostOrch(a: {
           if (cmd === 'clients-list') return { status: 200, body: { clients: a.controllers.list() } }
           const id = args.id
           if (typeof id !== 'string' || id === '') return { status: 400, body: { error: 'clients-revoke needs --id' } }
-          const out = a.controllers.revoke(id)
+          const out = await a.controllers.revoke(id)
           // Phase 3's link closes `out.conns` (design §3.3's revocation order: record gone, bindings dropped, then
           // close-conn). Until a link exists there is nothing open to close.
           return out.revoked ? { status: 200, body: { revoked: true, clientId: id } } : { status: 404, body: { error: `unknown client: ${id}` } }

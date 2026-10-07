@@ -21,7 +21,8 @@ import { openHostLog, logUnhandledRejections } from './log'
 import { flushAll, flushAllLogsSync } from '../core/log/logWriter'
 import { startHostServer } from './server'
 import { HOST_EXIT, listenExitCode } from './exitCodes'
-import { createControllerRegistry } from './controllers'
+import { controllerRecordsFile, createControllerRegistry } from './controllers'
+import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
 import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
@@ -535,8 +536,13 @@ async function main(): Promise<void> {
   })
 
   // The paired remote controllers (remote runtime design §3.3): one registry for this Host's life, which Phase 3's
-  // Gateway link will authenticate and bind against.
-  const controllers = createControllerRegistry()
+  // Gateway link will authenticate and bind against. Their records live in `remote/clients.json` in the secret store.
+  // A file that is unsafe or broken leaves the registry empty and says why in the log; nothing falls back to an
+  // unchecked read, and every later write fails the same way (design §4.6).
+  const controllers = createControllerRegistry({
+    records: controllerRecordsFile(openSecretStore({ dir: path.join(profileDir, 'remote'), profileDir }))
+  })
+  controllers.load().catch((e: unknown) => log.write(`remote clients: ${e instanceof Error ? e.message : String(e)}`))
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,

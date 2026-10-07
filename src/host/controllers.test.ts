@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { createControllerRegistry, sha256Base64url } from './controllers'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { controllerRecordsFile, createControllerRegistry, sha256Base64url, type ControllerRecord } from './controllers'
+import { openSecretStore } from '../core/secrets/secretStore'
 
 const clock = () => {
   let t = Date.parse('2026-10-07T00:00:00Z')
@@ -7,78 +11,145 @@ const clock = () => {
 }
 
 describe('ControllerRegistry (remote runtime design §3.3, §4.4, §4.5)', () => {
-  it('a right code works exactly once and yields a token whose hash authenticates', () => {
+  it('a right code works exactly once and yields a token whose hash authenticates', async () => {
     const c = clock()
     const r = createControllerRegistry({ now: c.now })
     const { code } = r.createPairing({ permission: 'read-only', name: 'laptop' })
     expect(code).toMatch(/^[A-Z2-7]{10}$/)
-    const got = r.redeem(code, 'laptop')
+    const got = await r.redeem(code, 'laptop')
     expect(got.ok).toBe(true)
     if (!got.ok) return
     expect(r.authenticate(sha256Base64url(got.token))?.permission).toBe('read-only')
-    expect(r.redeem(code, 'laptop')).toEqual({ ok: false, reason: 'unknown' })
+    expect(await r.redeem(code, 'laptop')).toEqual({ ok: false, reason: 'unknown' })
   })
-  it('burns a code after five wrong guesses, so the sixth guess fails even when right', () => {
+  it('burns a code after five wrong guesses, so the sixth guess fails even when right', async () => {
     const r = createControllerRegistry()
     const { code } = r.createPairing({ permission: 'full-control' })
     const wrong = code.slice(0, 9) + (code[9] === 'A' ? 'B' : 'A')
-    for (let i = 0; i < 5; i++) expect(r.redeem(wrong, 'x').ok).toBe(false)
-    expect(r.redeem(code, 'x')).toEqual({ ok: false, reason: 'burned' })
+    for (let i = 0; i < 5; i++) expect((await r.redeem(wrong, 'x')).ok).toBe(false)
+    expect(await r.redeem(code, 'x')).toEqual({ ok: false, reason: 'burned' })
   })
-  it('names the client as the pairing said, and cleans a name the redeemer sent', () => {
+  it('names the client as the pairing said, and cleans a name the redeemer sent', async () => {
     const r = createControllerRegistry()
-    const named = r.redeem(r.createPairing({ permission: 'read-only', name: 'office pc' }).code, 'other')
-    const sent = r.redeem(r.createPairing({ permission: 'read-only' }).code, 'lap\u0000top\n')
+    const named = await r.redeem(r.createPairing({ permission: 'read-only', name: 'office pc' }).code, 'other')
+    const sent = await r.redeem(r.createPairing({ permission: 'read-only' }).code, 'lap\u0000top\n')
     if (!named.ok || !sent.ok) throw new Error('redeem')
     const names = Object.fromEntries(r.list().map((c) => [c.clientId, c.name]))
     expect(names[named.clientId]).toBe('office pc')
     expect(names[sent.clientId]).toBe('lap top')
   })
-  it('never gives a new client the id of an existing one', () => {
+  it('never gives a new client the id of an existing one', async () => {
     let calls = 0
     // Calls 1 to 3 are the first pairing (code, token, id); call 6 is the second id, made to collide with the first.
     const random = (n: number): Buffer => Buffer.alloc(n, ++calls <= 3 || calls === 6 ? 0 : calls)
     const r = createControllerRegistry({ random })
-    const a = r.redeem(r.createPairing({ permission: 'read-only' }).code, 'a')
-    const b = r.redeem(r.createPairing({ permission: 'full-control' }).code, 'b')
+    const a = await r.redeem(r.createPairing({ permission: 'read-only' }).code, 'a')
+    const b = await r.redeem(r.createPairing({ permission: 'full-control' }).code, 'b')
     if (!a.ok || !b.ok) throw new Error('redeem')
     expect(b.clientId).not.toBe(a.clientId)
     expect(r.list().find((c) => c.clientId === a.clientId)?.permission).toBe('read-only')
   })
-  it('refuses a right code after ten minutes', () => {
+  it('refuses a right code after ten minutes', async () => {
     const c = clock()
     const r = createControllerRegistry({ now: c.now })
     const { code } = r.createPairing({ permission: 'full-control' })
     c.advance(10 * 60 * 1000 + 1)
-    expect(r.redeem(code, 'x')).toEqual({ ok: false, reason: 'expired' })
+    expect(await r.redeem(code, 'x')).toEqual({ ok: false, reason: 'expired' })
   })
-  it('binds a link connection to a client and answers its principal from the record, not from the link', () => {
+  it('binds a link connection to a client and answers its principal from the record, not from the link', async () => {
     const r = createControllerRegistry()
-    const got = r.redeem(r.createPairing({ permission: 'read-only', name: 'laptop' }).code, 'laptop')
+    const got = await r.redeem(r.createPairing({ permission: 'read-only', name: 'laptop' }).code, 'laptop')
     if (!got.ok) throw new Error('redeem')
     r.bind(1, 'c1', got.clientId)
     expect(r.principalFor(1, 'c1')).toEqual({ clientId: got.clientId, name: 'laptop', permission: 'read-only' })
     expect(r.principalFor(2, 'c1')).toBeNull()
   })
-  it('revocation drops every binding at once, so a queued frame is admitted nowhere and its reply has nowhere to go', () => {
+  it('revocation drops every binding at once, so a queued frame is admitted nowhere and its reply has nowhere to go', async () => {
     const r = createControllerRegistry()
-    const got = r.redeem(r.createPairing({ permission: 'full-control' }).code, 'laptop')
+    const got = await r.redeem(r.createPairing({ permission: 'full-control' }).code, 'laptop')
     if (!got.ok) throw new Error('redeem')
     r.bind(1, 'c1', got.clientId)
     r.bind(1, 'c2', got.clientId)
-    const out = r.revoke(got.clientId)
+    const out = await r.revoke(got.clientId)
     expect(out).toEqual({ revoked: true, conns: [{ linkGen: 1, conn: 'c1' }, { linkGen: 1, conn: 'c2' }] })
     expect(r.principalFor(1, 'c1')).toBeNull()
     expect(r.stillBound(1, 'c1', got.clientId)).toBe(false)
     expect(r.authenticate(sha256Base64url(got.token))).toBeNull()
   })
-  it('lists clients without their token hash, and forgets a link generation whole', () => {
+  it('lists clients without their token hash, and forgets a link generation whole', async () => {
     const r = createControllerRegistry()
-    const got = r.redeem(r.createPairing({ permission: 'full-control', name: 'desk' }).code, 'desk')
+    const got = await r.redeem(r.createPairing({ permission: 'full-control', name: 'desk' }).code, 'desk')
     if (!got.ok) throw new Error('redeem')
     expect(r.list()[0]).not.toHaveProperty('tokenHash')
     r.bind(3, 'c1', got.clientId)
     r.dropLink(3)
     expect(r.principalFor(3, 'c1')).toBeNull()
+  })
+})
+
+describe('client records on disk (remote runtime design §4.6, N8)', () => {
+  const memoryFile = () => {
+    let saved: ControllerRecord[] = []
+    return { load: async () => saved, save: async (r: ControllerRecord[]) => void (saved = r) }
+  }
+  it('a redeemed client survives a new registry, and a revoked one does not', async () => {
+    const f = memoryFile()
+    const r1 = createControllerRegistry({ records: f })
+    await r1.load()
+    const got = await r1.redeem(r1.createPairing({ permission: 'read-only' }).code, 'laptop')
+    if (!got.ok) throw new Error('redeem')
+    const r2 = createControllerRegistry({ records: f })
+    await r2.load()
+    expect(r2.authenticate(sha256Base64url(got.token))?.clientId).toBe(got.clientId)
+    await r2.revoke(got.clientId)
+    const r3 = createControllerRegistry({ records: f })
+    await r3.load()
+    expect(r3.list()).toEqual([])
+  })
+  it('refuses a revoked client at once, before its file write lands', async () => {
+    const releases: Array<() => void> = []
+    const slow = { load: async (): Promise<ControllerRecord[]> => [], save: () => new Promise<void>((r) => releases.push(r)) }
+    const r = createControllerRegistry({ records: slow })
+    await r.load()
+    const redeeming = r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')
+    await new Promise((x) => setImmediate(x))
+    releases.shift()!()
+    const got = await redeeming
+    if (!got.ok) throw new Error('redeem')
+    r.bind(1, 'c', got.clientId)
+    const revoking = r.revoke(got.clientId)
+    expect(r.principalFor(1, 'c')).toBeNull()
+    await new Promise((x) => setImmediate(x))
+    releases.shift()!()
+    expect((await revoking).revoked).toBe(true)
+  })
+  it('a client redeemed while the file is still loading keeps the loaded ones', async () => {
+    const f = memoryFile()
+    const first = createControllerRegistry({ records: f })
+    const old = await first.redeem(first.createPairing({ permission: 'read-only' }).code, 'old')
+    if (!old.ok) throw new Error('redeem')
+    const r = createControllerRegistry({ records: f })
+    const loading = r.load()
+    const fresh = await r.redeem(r.createPairing({ permission: 'read-only' }).code, 'new')
+    await loading
+    if (!fresh.ok) throw new Error('redeem')
+    const again = createControllerRegistry({ records: f })
+    await again.load()
+    expect(again.list().map((c) => c.clientId).sort()).toEqual([old.clientId, fresh.clientId].sort())
+  })
+  it('writes clients.json through a real store, without the token', async () => {
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-clients-'))
+    try {
+      const store = openSecretStore({ dir: path.join(profile, 'remote'), profileDir: profile })
+      const r = createControllerRegistry({ records: controllerRecordsFile(store) })
+      await r.load()
+      const got = await r.redeem(r.createPairing({ permission: 'full-control', name: 'desk' }).code, 'x')
+      if (!got.ok) throw new Error('redeem')
+      const onDisk = JSON.parse((await store.read('clients.json'))!) as { clients: ControllerRecord[] }
+      expect(onDisk.clients.map((c) => [c.clientId, c.name, c.permission])).toEqual([[got.clientId, 'desk', 'full-control']])
+      expect(JSON.stringify(onDisk)).not.toContain(got.token)
+    } finally {
+      await fs.rm(profile, { recursive: true, force: true })
+    }
   })
 })
