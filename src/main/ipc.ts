@@ -205,6 +205,8 @@ import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFr
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
 import { resolveWindowsExecutable, windowsSpawn } from '../core/sessions/windowsExecutable'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
+import { claudeCliRunner, claudeResumeTarget } from '../core/sessions/claudeBackground'
+import { cliEnvFor } from '../core/sessions/cliEnv'
 import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { copyTree, removeTree, removeWithSnapshot } from '../core/files/fsTree'
@@ -1865,7 +1867,45 @@ export function registerIpc(
   ipcMain.handle('accounts.syncSettings', (_e, id) => core.accountSyncSettings(id))
 
   // sessions (resolving accountId to an Account is a plain lookup)
+
+  /** A Claude resume, pointed at where the conversation actually is: the copy it continued in after
+   *  being sent to the background, and never one a background session still holds — that throws
+   *  `CLAUDE_IN_BACKGROUND`, which the renderer turns into a take-over offer that comes back here with
+   *  `takeOverBackground` (core/sessions/claudeBackground.ts). A chat resume names the conversation
+   *  with `resumeThreadId`, which for claude is the same session id. */
+  async function claudeResumeOpts(opts: any): Promise<any> {
+    const asked: string | undefined = opts.resumeSessionId ?? (opts.kind === 'chat' ? opts.resumeThreadId : undefined)
+    if (!asked) return opts
+    let account: Account
+    try {
+      account = core.accounts.get(opts.accountId)
+    } catch {
+      return opts // the spawn below reports the missing account
+    }
+    if (providerOf(account) !== 'claude') return opts
+    const descriptor = descriptorOf(core.descriptors, account)
+    const target = await claudeResumeTarget({
+      sessionId: asked,
+      transcriptPath:
+        typeof opts.resumeTranscriptPath === 'string' && opts.resumeTranscriptPath ? opts.resumeTranscriptPath : undefined,
+      takeOver: opts.takeOverBackground === true,
+      run: claudeCliRunner(
+        descriptor.cliFile,
+        cliEnvFor({ base: process.env, account, descriptor, homeDir: os.homedir() })
+      )
+    })
+    if (target.sessionId === asked) return opts
+    orchLog(`history resume — ${asked} continued in ${target.sessionId} (sent to the background), resuming that`)
+    return {
+      ...opts,
+      ...(opts.resumeSessionId ? { resumeSessionId: target.sessionId } : { resumeThreadId: target.sessionId }),
+      resumeTranscriptPath: target.transcriptPath
+    }
+  }
+
   async function spawnSession(opts: any): Promise<SessionInfo> {
+    // First, so the guards below look for a live tab on the conversation that will actually be resumed.
+    opts = await claudeResumeOpts(opts)
     // Reopening the conversation of an active rolling chain from history returns the existing tab info
     // instead of spawning — this prevents a fork off the old transcript that the next relay overwrite
     // would erase.

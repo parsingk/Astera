@@ -1612,6 +1612,7 @@ export default function App(): React.JSX.Element {
     resumeSessionId?: string
     resumeTranscriptPath?: string
     resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
+    takeOverBackground?: boolean // stop the Claude background session holding the conversation first
     roll?: boolean
     rollPrompt?: string
     slackNotify?: boolean
@@ -1659,6 +1660,7 @@ export default function App(): React.JSX.Element {
         resumeSessionId: opts.resumeSessionId,
         resumeTranscriptPath: opts.resumeTranscriptPath, // the transcript copy source when resuming under a different account
         resumeThreadId: opts.resumeThreadId, // chat only: resume this protocol thread instead of starting one
+        takeOverBackground: opts.takeOverBackground,
         rollAccountIds: rolling ? opts.accountIds : undefined,
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
@@ -1719,6 +1721,20 @@ export default function App(): React.JSX.Element {
         return
       }
       const msg = spawnErrorMessage(raw)
+      // A Claude background session holds the conversation: say so, and offer to take it over —
+      // the same spawn again, stopping that session first.
+      if (msg.key.startsWith('session.spawn.inBackground')) {
+        const id = toast.error(t(msg.key, msg.params), {
+          action: {
+            label: t('session.spawn.inBackground.takeOver'),
+            onClick: () => {
+              dismiss(id)
+              void spawn({ ...opts, takeOverBackground: true })
+            }
+          }
+        })
+        return
+      }
       const message = t(msg.key, msg.params)
       // On a failure after the worktree was created, the user is also told that it remains, unrolled-back
       toast.error(

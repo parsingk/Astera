@@ -372,6 +372,13 @@ export const ko = {
   // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
   'session.spawn.smartResume':
     '스마트 재개: 대화를 다시 싣는 대신, 지금까지의 작업 브리핑을 들려 새 세션으로 시작했습니다.',
+  // The conversation was sent to the Claude background and lives on in a copy; that copy was opened
+  'session.spawn.resumeFollowed': '이 대화는 background 로 옮겨진 뒤 이어진 대화가 있어서, 그 대화를 열었습니다.',
+  // A Claude background session still holds the conversation; the toast's button takes it over
+  'session.spawn.inBackground': '이 대화는 Claude background 세션에서 열려 있습니다. 가져오면 그 세션을 끄고 여기서 이어 갑니다.',
+  'session.spawn.inBackgroundBusy':
+    '이 대화는 Claude background 세션에서 지금 작업 중입니다. 가져오면 진행 중인 작업이 멈추고 여기서 이어 갑니다.',
+  'session.spawn.inBackground.takeOver': '가져오기',
   'session.placeholder.start': '+ 새 세션으로 시작하세요',
   'session.usage.contextTitleWithTokens': '컨텍스트 사용률 ({used} / {window} 토큰)',
   'session.usage.contextTitle': '컨텍스트 사용률',

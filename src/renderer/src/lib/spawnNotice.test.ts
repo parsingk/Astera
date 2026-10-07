@@ -47,6 +47,19 @@ describe('spawnNotice — 세션 생성 뒤 사용자에게 알릴 것', () => {
     ).toBe('smartResume')
   })
 
+  // A conversation sent to the Claude background lives on in a copy under a new id, and main resumes
+  // that copy (core/history/continuedIn.ts). The person picked the old entry, so the id they see on
+  // the tab changing has to be explained.
+  it('says so when the conversation was resumed from the copy it continued in', () => {
+    expect(
+      spawnNotice({
+        requestedResumeSessionId: 'conv-1',
+        returnedResumeSessionId: 'conv-2',
+        returnedTabAlreadyOpen: false
+      })
+    ).toBe('resumeFollowed')
+  })
+
   // 두 신호가 겹칠 수 있는 조합에서 가드가 이긴다: 돌려받은 것이 **다른 세션의 탭**이라면 이번
   // 재개는 일어나지도 않았으므로, 백지 재개를 알리는 것은 거짓말이 된다.
   it('가드가 걸린 탭이 재개 세션을 안 들고 있어도 백지 재개로 보지 않는다', () => {

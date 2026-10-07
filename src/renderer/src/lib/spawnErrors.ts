@@ -10,7 +10,13 @@ const CWD_MISSING = /CWD_MISSING:\s*([\s\S]+?)(?:\s+does not exist)?\s*$/
 // pathProbe.ts writes `CWD_UNREACHABLE: folder not reachable: <path>`.
 const CWD_UNREACHABLE = /CWD_UNREACHABLE:\s*(?:folder not reachable:\s*)?([\s\S]+?)\s*$/
 
+// core/sessions/claudeBackground.ts writes `CLAUDE_IN_BACKGROUND: busy` or `: idle`.
+const IN_BACKGROUND = /CLAUDE_IN_BACKGROUND:\s*(busy|idle)/
+
 export function spawnErrorMessage(raw: string): Message {
+  const background = IN_BACKGROUND.exec(raw)
+  if (background)
+    return { key: background[1] === 'busy' ? 'session.spawn.inBackgroundBusy' : 'session.spawn.inBackground' }
   const missing = CWD_MISSING.exec(raw)
   if (missing) return { key: 'session.spawn.cwdMissing', params: { path: missing[1] } }
   const unreachable = CWD_UNREACHABLE.exec(raw)

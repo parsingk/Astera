@@ -6,7 +6,7 @@
 // 그 대화가 아니면, 그 사실을 말해 주지 않는 한 사용자는 대화가 사라졌다고 읽는다.
 
 /** 알릴 것. 값은 i18n 키의 `session.spawn.` 뒤쪽과 같다 — 부르는 쪽이 그대로 이어 붙인다. */
-export type SpawnNotice = 'resumeLiveIgnored' | 'smartResume' | null
+export type SpawnNotice = 'resumeLiveIgnored' | 'smartResume' | 'resumeFollowed' | null
 
 export function spawnNotice(a: {
   /** 모달이 재개하려던 대화의 id — 터미널은 `resumeSessionId`, 채팅은 `resumeThreadId` 다. 새
@@ -26,5 +26,8 @@ export function spawnNotice(a: {
   // 가드가 먼저다. 돌려받은 것이 이번에 띄운 세션이 아니라 원래 있던 탭이면 이번 재개는 일어나지도
   // 않았으므로, 아래 백지 판정을 그대로 적용하면 일어나지 않은 일을 알리게 된다.
   if (a.returnedTabAlreadyOpen) return 'resumeLiveIgnored'
-  return a.returnedResumeSessionId === undefined ? 'smartResume' : null
+  if (a.returnedResumeSessionId === undefined) return 'smartResume'
+  // main followed the conversation to the copy it continued in after it was sent to the Claude
+  // background (core/history/continuedIn.ts) — the only reason the two ids part.
+  return a.returnedResumeSessionId !== a.requestedResumeSessionId ? 'resumeFollowed' : null
 }

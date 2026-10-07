@@ -272,6 +272,13 @@ export const es: Catalog = {
   // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
   'session.spawn.smartResume':
     'Reanudación inteligente: se inició una sesión nueva con un resumen del trabajo hecho hasta ahora, en lugar de recargar la conversación.',
+  'session.spawn.resumeFollowed':
+    'Esta conversación continuó en otra después de pasar a segundo plano, así que se abrió esa conversación.',
+  'session.spawn.inBackground':
+    'Esta conversación está abierta en una sesión de Claude en segundo plano. Al tomarla se detiene esa sesión y se continúa aquí.',
+  'session.spawn.inBackgroundBusy':
+    'Esta conversación está trabajando ahora en una sesión de Claude en segundo plano. Al tomarla se detiene el trabajo en curso y se continúa aquí.',
+  'session.spawn.inBackground.takeOver': 'Tomar',
   'session.placeholder.start': '+ Empiece con una sesión nueva',
   'session.usage.contextTitleWithTokens': 'Uso del contexto ({used} / {window} tokens)',
   'session.usage.contextTitle': 'Uso del contexto',

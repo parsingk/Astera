@@ -348,6 +348,13 @@ export const en: Record<keyof typeof ko, string> = {
   // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
   'session.spawn.smartResume':
     'Smart Resume: started a fresh session with a briefing of the work so far, instead of reloading the conversation.',
+  // The conversation was sent to the Claude background and lives on in a copy; that copy was opened
+  'session.spawn.resumeFollowed': 'This conversation continued elsewhere after it was sent to the background, so that conversation was opened.',
+  // A Claude background session still holds the conversation; the toast's button takes it over
+  'session.spawn.inBackground': 'This conversation is open in a Claude background session. Taking it over stops that session and continues here.',
+  'session.spawn.inBackgroundBusy':
+    'This conversation is working in a Claude background session right now. Taking it over stops the work in progress and continues here.',
+  'session.spawn.inBackground.takeOver': 'Take over',
   'session.placeholder.start': '+ Start a new session',
   'session.usage.contextTitleWithTokens': 'Context usage ({used} / {window} tokens)',
   'session.usage.contextTitle': 'Context usage',

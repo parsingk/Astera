@@ -1057,6 +1057,9 @@ export interface CoreApi {
       schedule?: ScheduleConfig // recurring command schedule
       kind?: SessionKind // default 'terminal'
       resumeThreadId?: string // chat only: resume this protocol thread instead of starting one
+      /** Stop the Claude background session holding the conversation, then resume it here — the
+       *  answer to a `CLAUDE_IN_BACKGROUND` refusal (core/sessions/claudeBackground.ts). */
+      takeOverBackground?: boolean
       /** chat takeover P8: the new chat session's unattended-permission policy (hold, the default, or
        *  deny after 60 s). Ignored for a terminal session, which has no such policy. */
       unattendedPermission?: UnattendedPermission

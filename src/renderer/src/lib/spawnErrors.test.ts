@@ -23,6 +23,14 @@ describe('spawnErrorMessage', () => {
     })
   })
 
+  // 2026-10-07: a conversation sent to the Claude background closed its tab with exit 1 on resume.
+  it('says a Claude background session holds the conversation, and whether it is working', () => {
+    expect(
+      spawnErrorMessage("Error invoking remote method 'sessions.spawn': Error: CLAUDE_IN_BACKGROUND: busy")
+    ).toEqual({ key: 'session.spawn.inBackgroundBusy' })
+    expect(spawnErrorMessage('Error: CLAUDE_IN_BACKGROUND: idle')).toEqual({ key: 'session.spawn.inBackground' })
+  })
+
   it('그 밖의 오류는 worktree 오류 해석에 맡긴다', () => {
     expect(spawnErrorMessage("Error invoking remote method 'worktrees.create': Error: NO_BASE: x")).toEqual({
       key: 'worktree.error.noBase'

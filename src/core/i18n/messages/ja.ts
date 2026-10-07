@@ -269,6 +269,12 @@ export const ja: Catalog = {
   // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
   'session.spawn.smartResume':
     'スマート再開: 会話を読み込み直す代わりに、これまでの作業の要約を渡して新しいセッションで始めました。',
+  'session.spawn.resumeFollowed': 'この会話はバックグラウンドに移ったあと別の会話として続いていたため、そちらを開きました。',
+  'session.spawn.inBackground':
+    'この会話は Claude のバックグラウンドセッションで開かれています。引き継ぐとそのセッションを止めて、ここで続けます。',
+  'session.spawn.inBackgroundBusy':
+    'この会話は Claude のバックグラウンドセッションで作業中です。引き継ぐと進行中の作業が止まり、ここで続けます。',
+  'session.spawn.inBackground.takeOver': '引き継ぐ',
   'session.placeholder.start': '+ 新しいセッションを開始',
   'session.usage.contextTitleWithTokens': 'コンテキスト使用率 ({used} / {window} トークン)',
   'session.usage.contextTitle': 'コンテキスト使用率',
