@@ -23,6 +23,8 @@ export interface RuntimeCommandDeps {
   sleep(ms: number): Promise<void>
   /** A private address of this machine, for a pairing string while listening on every interface. */
   privateAddress(): string | null
+  /** This machine's name: the pairing string's hint when it listens everywhere and has no private address. */
+  hostname(): string
 }
 
 const START_WAIT_MS = 10_000
@@ -56,8 +58,9 @@ export async function runRuntimeCommand(cmd: string, args: Record<string, unknow
         if (!Number.isInteger(port) || port < 1 || port > 65535) return failure('INVALID_ARGUMENTS', '--port needs a whole number from 1 to 65535')
         patch.port = port
       }
+      // The identity first (Phase 3 minor): a start that cannot make one must not leave Remote on with no key to serve.
+      const id = await d.ensureIdentity(patch.listen ?? (await d.readSettings()).listen)
       const s = await d.writeSettings(patch)
-      const id = await d.ensureIdentity(s.listen)
       const reload = await d.hostCall('runtime-reload', {}, { start: true })
       if ('error' in reload) return { ok: false, error: reload.error }
       if ('down' in reload) return failure('HOST_NOT_RUNNING', 'a Host could not be started for this profile')
@@ -97,16 +100,21 @@ export async function runRuntimeCommand(cmd: string, args: Record<string, unknow
     }
     case 'runtime-pair': {
       const permission = args.readOnly === true ? 'read-only' : 'full-control'
+      // Everything a pairing string needs is checked before a code is made (Phase 3 minor): a code nobody can redeem,
+      // while Remote is off, is not handed out.
+      const s = await d.readSettings()
+      if (!s.enabled) return failure('CONFLICT', 'Remote Runtime is off, so nothing could redeem a code; run `astera runtime start` first')
+      const id = await d.loadIdentity()
+      if (!id) return failure('FAILED', 'this machine has no Runtime identity yet; run `astera runtime start` first')
       const r = await d.hostCall('pair-create', { permission, ...(typeof args.name === 'string' ? { name: args.name } : {}) }, { start: false })
       if ('error' in r) return { ok: false, error: r.error }
       if ('down' in r) return hostDown()
       const done = answered(r)
       if (!done.ok) return done
-      const s = await d.readSettings()
-      const id = await d.loadIdentity()
-      if (!id) return failure('FAILED', 'this machine has no Runtime identity yet; run `astera runtime start` first')
       const everywhere = s.listen === '0.0.0.0' || s.listen === '::'
-      const address = everywhere ? (d.privateAddress() ?? s.listen) : s.listen
+      // Never 0.0.0.0 in the string: with no private address found, this machine's name is the hint (`runtimes add
+      // --address` overrides it on the other side).
+      const address = everywhere ? (d.privateAddress() ?? d.hostname()) : s.listen
       const code = String(done.body.code)
       return {
         ok: true,

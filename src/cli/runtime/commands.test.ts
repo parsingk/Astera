@@ -5,7 +5,7 @@ import type { RemoteSettings } from '../../core/remote/settings'
 const FP = 'F'.repeat(43)
 
 /** A fake machine: settings in memory, an identity once made, and a Host that answers what the test says. */
-const machine = (o: { hostUp?: boolean; gateway?: Array<Record<string, unknown>> } = {}) => {
+const machine = (o: { hostUp?: boolean; gateway?: Array<Record<string, unknown>>; noPrivate?: boolean } = {}) => {
   let settings: RemoteSettings = { enabled: false, listen: '127.0.0.1', port: 47831 }
   let identity: { runtimeId: string; spkiSha256: string; displayName: string } | null = null
   let hostUp = o.hostUp ?? false
@@ -35,7 +35,8 @@ const machine = (o: { hostUp?: boolean; gateway?: Array<Record<string, unknown>>
       return { status: 404, body: { error: 'no' } }
     },
     sleep: async () => {},
-    privateAddress: () => '192.168.0.7'
+    privateAddress: () => o.noPrivate ? null : '192.168.0.7',
+    hostname: () => 'desk.local'
   }
   return { deps, order, settings: () => settings, hostUp: () => hostUp }
 }
@@ -44,7 +45,8 @@ describe('astera runtime (remote runtime design §2.9)', () => {
   it('start writes the setting, makes the identity, starts a Host, reloads, and answers ready', async () => {
     const m = machine()
     const r = await runRuntimeCommand('runtime-start', { listen: '100.64.0.5', port: '50000' }, m.deps)
-    expect(m.order.slice(0, 3)).toEqual(['write:{"enabled":true,"listen":"100.64.0.5","port":50000}', 'identity:100.64.0.5', 'call:runtime-reload:start'])
+    // The identity first (Phase 3 minor): a start that cannot make one leaves Remote off.
+    expect(m.order.slice(0, 3)).toEqual(['identity:100.64.0.5', 'write:{"enabled":true,"listen":"100.64.0.5","port":50000}', 'call:runtime-reload:start'])
     expect(r).toMatchObject({ ok: true, body: { enabled: true, gateway: { state: 'ready' }, fingerprint: FP } })
   })
   it('start waits through starting, and is a failure naming the Gateway’s code when it fails', async () => {
@@ -72,6 +74,8 @@ describe('astera runtime (remote runtime design §2.9)', () => {
   })
   it('pair needs a running Host, and prints the pairing string with a private address when listening on all', async () => {
     const down = machine()
+    await down.deps.writeSettings({ enabled: true })
+    await down.deps.ensureIdentity('127.0.0.1')
     expect(await runRuntimeCommand('runtime-pair', {}, down.deps)).toMatchObject({ ok: false, error: { code: 'HOST_NOT_RUNNING' } })
     const m = machine({ hostUp: true })
     await m.deps.writeSettings({ enabled: true, listen: '0.0.0.0' })
@@ -81,6 +85,22 @@ describe('astera runtime (remote runtime design §2.9)', () => {
       ok: true,
       body: { pairing: `astera-pair:v1:192.168.0.7:47831:ABCDE23456:${FP}`, address: '192.168.0.7', port: 47831, code: 'ABCDE23456', fingerprint: FP, permission: 'read-only' }
     })
+  })
+  // Phase 3 minor: no code is made while Remote is off, since nobody could redeem it.
+  it('pair refuses while Remote is off, and makes no code', async () => {
+    const m = machine({ hostUp: true })
+    await m.deps.ensureIdentity('127.0.0.1')
+    const r = await runRuntimeCommand('runtime-pair', {}, m.deps)
+    expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT', message: expect.stringMatching(/runtime start/) } })
+    expect(m.order).not.toContain('call:pair-create')
+  })
+  // Phase 3 minor: listening on every interface with no private address found, the hint is this machine's name, never 0.0.0.0.
+  it('pair names this machine when it listens everywhere and has no private address', async () => {
+    const m = machine({ hostUp: true, noPrivate: true })
+    await m.deps.writeSettings({ enabled: true, listen: '0.0.0.0' })
+    await m.deps.ensureIdentity('0.0.0.0')
+    const r = await runRuntimeCommand('runtime-pair', {}, m.deps)
+    expect(r).toMatchObject({ ok: true, body: { address: 'desk.local' } })
   })
   it('clients and revoke ask the Host; revoke needs --id and answers 4 for an unknown one', async () => {
     const m = machine({ hostUp: true })

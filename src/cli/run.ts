@@ -729,7 +729,8 @@ const runtimeDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; hom
       }
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    privateAddress
+    privateAddress,
+    hostname: () => os.hostname()
   }
 }
 

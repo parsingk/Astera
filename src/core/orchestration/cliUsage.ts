@@ -124,7 +124,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runtime-start': {
     summary: 'turn Remote Runtime on: other machines may pair with this one',
     detail:
-      'Writes remote-runtime.json, makes this machine’s identity the first time, starts a Host if none runs, and waits until the Gateway listens. It listens on 127.0.0.1 until --listen names an address; use a private network, a VPN or Tailscale, never a port forwarded to the internet. 0 when listening, 1 when the Gateway failed (the code says why).',
+      'Writes remote-runtime.json, makes this machine’s identity the first time, starts a Host if none runs, and waits until the Gateway listens. It listens on 127.0.0.1 until --listen names an address; use a private network, a VPN or Tailscale, never a port forwarded to the internet. 0 when listening, 1 when the Gateway failed (the code says why), 7 when it was not listening within 10 seconds.',
     flags: [
       { name: 'listen', value: '<addr>', about: 'the address to listen on (default 127.0.0.1)' },
       { name: 'port', value: '<n>', about: 'the TCP port (default 47831)' }
