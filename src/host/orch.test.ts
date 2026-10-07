@@ -50,6 +50,7 @@ import { EXIT_DEFER_MS } from '../core/orchestration/exec/exitOwner'
 import type { HostJournal } from './hostJournal'
 import { createHostUnderstanding, NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
 import { runRecordInputOf } from '../core/orchestration/runRecord'
+import { createControllerRegistry } from './controllers'
 
 const NOW = '2026-09-22T00:00:00.000Z'
 /** 이 Host 가 선 시각. `now` 보다 **앞**이어야 하는 값이다 — `requests show` 가 이것을 실어 주는
@@ -803,6 +804,39 @@ describe('createHostOrch', () => {
 // **이 묶음이 세는 것은 답이 아니라 효과다.** 바이트가 같은 답을 돌려주면서 의존을 두 번 부른 재시도가
 // 이 설계가 막으려는 실패 그 자체이므로, 답만 보는 시험은 없는 것보다 나쁘다 — 앱으로 나간 행동의
 // 횟수와 상태에 남은 것을 함께 센다.
+describe('pairing and clients (local only)', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  it('pair-create answers a code to the CLI, and clients-list and clients-revoke see the redeemed client', async () => {
+    const controllers = createControllerRegistry()
+    const orch = orchOver({ controllers })
+    const pair = await orch.call({ cmd: 'pair-create', args: { permission: 'read-only' }, sessionId: '', from: cli })
+    expect(pair.status).toBe(200)
+    const { code } = pair.body as { code: string }
+    const got = controllers.redeem(code, 'laptop')
+    if (!got.ok) throw new Error('redeem')
+    const listed = await orch.call({ cmd: 'clients-list', args: {}, sessionId: '', from: cli })
+    expect(listed.body).toMatchObject({ clients: [{ clientId: got.clientId, name: 'laptop', permission: 'read-only' }] })
+    const revoked = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: cli })
+    expect(revoked.body).toMatchObject({ revoked: true })
+  })
+  it('refuses all three to an MCP caller and to a controller', async () => {
+    const orch = orchOver({ controllers: createControllerRegistry() })
+    for (const cmd of ['pair-create', 'clients-list', 'clients-revoke']) {
+      const mcp = await orch.call({ cmd, args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })
+      expect(mcp.status).toBe(403)
+      const ctl = await orch.call({ cmd, args: {}, sessionId: '', from: { role: 'controller', principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' }, toOthers: () => {} } })
+      expect(ctl.status).toBe(403)
+    }
+  })
+  it('never writes a pairing code into the log', async () => {
+    const orch = orchOver({ controllers: createControllerRegistry() })
+    const pair = await orch.call({ cmd: 'pair-create', args: {}, sessionId: '', from: cli })
+    const { code } = pair.body as { code: string }
+    expect(code).toMatch(/^[A-Z2-7]{10}$/)
+    expect(logs.join('\n')).not.toContain(code)
+  })
+})
+
 describe('요청 영수증', () => {
   /** 앱으로 나가는 행동을 이름별로 세는 대역. 어느 의존이 몇 번 불렸는지가 이 묶음의 판정 기준이다. */
   const counting = (

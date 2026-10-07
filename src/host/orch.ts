@@ -15,6 +15,7 @@ import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
+import type { ControllerRegistry } from './controllers'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
 import { readMcpGithubWrite } from '../core/settings/mcpGithubWrite'
@@ -432,6 +433,9 @@ export function createHostOrch(a: {
    *  through `handleCommand` (R1: the app is their only caller). Absent exactly when there is no
    *  spawner (R5): with no spawner nothing built here ever reaches `worktrees`, so the four answer 501. */
   worktrees?: Pick<HostWorktrees, 'call'>
+  /** Paired remote controllers (src/host/controllers.ts, remote runtime design §3.3). Absent: this Host pairs nobody,
+   *  and `pair-create`, `clients-list` and `clients-revoke` answer 501. */
+  controllers?: ControllerRegistry
   /** The Host's own checks and whether it drives now (orchDeps' HOST_DRIVES), passed through to
    *  `hostOrchDeps`. Absent: validation, review and repair take their pre-S5 routes. */
   drive?: { owns(): boolean; checks: HostChecks } | null
@@ -1499,6 +1503,9 @@ export function createHostOrch(a: {
             cmd === 'workspace-stop' ||
             cmd === 'workspace-close' ||
             cmd === 'workspace-size' ||
+            cmd === 'pair-create' ||
+            cmd === 'clients-list' ||
+            cmd === 'clients-revoke' ||
             WORKTREE_CALLS.has(cmd)) &&
           request !== undefined
         )
@@ -1624,6 +1631,25 @@ export function createHostOrch(a: {
         if (WORK_UNITS_CALLS.has(cmd)) return await workUnitsCall(cmd, args, from)
         // **Beside journal-append, for its reason (agent workspace design).** The mirror tab's reads and
         // its two buttons. Never a command layer command, never a receipt.
+        // **The Host's controllers, for local callers only** (remote runtime design §3.3, N18): the app and the CLI on
+        // this machine. A controller is refused by its gate before this; MCP by its allowlist; anything else here.
+        if (cmd === 'pair-create' || cmd === 'clients-list' || cmd === 'clients-revoke') {
+          if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
+          if (!a.controllers) return { status: 501, body: { error: 'this Host pairs no remote controllers' } }
+          if (cmd === 'pair-create') {
+            const permission = args.permission === 'read-only' ? 'read-only' : 'full-control'
+            const name = typeof args.name === 'string' ? args.name : undefined
+            // The code goes to the caller and nowhere else: never into a log line (design §4.4).
+            return { status: 200, body: { ...a.controllers.createPairing({ permission, ...(name ? { name } : {}) }), permission } }
+          }
+          if (cmd === 'clients-list') return { status: 200, body: { clients: a.controllers.list() } }
+          const id = args.id
+          if (typeof id !== 'string' || id === '') return { status: 400, body: { error: 'clients-revoke needs --id' } }
+          const out = a.controllers.revoke(id)
+          // Phase 3's link closes `out.conns` (design §3.3's revocation order: record gone, bindings dropped, then
+          // close-conn). Until a link exists there is nothing open to close.
+          return out.revoked ? { status: 200, body: { revoked: true, clientId: id } } : { status: 404, body: { error: `unknown client: ${id}` } }
+        }
         if (cmd === 'workspace-list' || cmd === 'workspace-stop' || cmd === 'workspace-close' || cmd === 'workspace-size') {
           if (from?.role !== 'app') return { status: 403, body: { error: `${cmd} is the app’s to send` } }
           if (!a.workspaces) return { status: 501, body: { error: 'this Host has no agent app workspace' } }

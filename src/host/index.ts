@@ -21,6 +21,7 @@ import { openHostLog, logUnhandledRejections } from './log'
 import { flushAll, flushAllLogsSync } from '../core/log/logWriter'
 import { startHostServer } from './server'
 import { HOST_EXIT, listenExitCode } from './exitCodes'
+import { createControllerRegistry } from './controllers'
 import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
@@ -532,9 +533,13 @@ async function main(): Promise<void> {
     log: (m) => log.write(m)
   })
 
+  // The paired remote controllers (remote runtime design §3.3): one registry for this Host's life, which Phase 3's
+  // Gateway link will authenticate and bind against.
+  const controllers = createControllerRegistry()
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
+    controllers,
     now: () => new Date().toISOString(),
     // The handshake's own string, not a second one taken here: `requests show` answers with it so a
     // caller can tell "this Host never saw my request" from "it never arrived" (request receipts

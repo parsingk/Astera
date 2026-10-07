@@ -1,0 +1,131 @@
+// The Host's paired controllers (remote runtime design §3.3, §4.4, §4.5; N18). The Host owns them because revocation
+// must close live connections at once and the Gateway restarts by design, so it cannot hold the only copy. In memory
+// for now; Phase 2 moves the records into a SecretStore file (design §6). Pairing codes stay in memory for good:
+// they live ten minutes and die with the Host.
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import type { ControllerPermission, ControllerPrincipal } from '../core/host/orchProtocol'
+
+/** 32 symbols, so 10 of them are 50 bits (DC-11). */
+const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+const CODE_LENGTH = 10
+const CODE_TTL_MS = 10 * 60 * 1000
+const CODE_ATTEMPTS = 5
+
+export const sha256Base64url = (text: string): string => createHash('sha256').update(text, 'utf8').digest('base64url')
+
+export interface ControllerRecord {
+  clientId: string
+  name: string
+  tokenHash: string
+  permission: ControllerPermission
+  createdAt: string
+  lastSeenAt: string | null
+}
+
+export interface ControllerRegistry {
+  /** A one-time code for `astera runtime pair`. Only its hash is kept; the code itself goes to the caller alone. */
+  createPairing(a: { permission: ControllerPermission; name?: string }): { code: string; expiresAt: string }
+  /** The code a controller sent over the pinned link. A right one makes a client record and its token, once. */
+  redeem(code: string, name: string): { ok: true; clientId: string; token: string } | { ok: false; reason: 'unknown' | 'expired' | 'burned' }
+  /** The record whose token hashes to this, compared in constant time; null for none. */
+  authenticate(tokenHash: string): ControllerRecord | null
+  bind(linkGen: number, conn: string, clientId: string): void
+  /** Who a link connection is, from this registry's own binding and record (X1-08); null once unbound or revoked. */
+  principalFor(linkGen: number, conn: string): ControllerPrincipal | null
+  /** Whether a reply may still go to this connection: its binding still names this client and the client still exists. */
+  stillBound(linkGen: number, conn: string, clientId: string): boolean
+  unbind(linkGen: number, conn: string): void
+  /** A Gateway generation is gone: every binding it held goes with it. */
+  dropLink(linkGen: number): void
+  /** Deletes the record and every binding to it, and names the connections to close (design §3.3's order). */
+  revoke(clientId: string): { revoked: boolean; conns: Array<{ linkGen: number; conn: string }> }
+  list(): Array<Omit<ControllerRecord, 'tokenHash'>>
+}
+
+const sameHash = (a: string, b: string): boolean => {
+  const x = Buffer.from(a)
+  const y = Buffer.from(b)
+  return x.length === y.length && timingSafeEqual(x, y)
+}
+
+export function createControllerRegistry(deps: { now?: () => number; random?: (bytes: number) => Buffer } = {}): ControllerRegistry {
+  const now = deps.now ?? Date.now
+  const random = deps.random ?? randomBytes
+  const records = new Map<string, ControllerRecord>()
+  /** Pending pairing codes by hash: what a redeem needs, and the attempts wrong guesses have spent. */
+  const codes = new Map<string, { expiresAt: number; attempts: number; permission: ControllerPermission }>()
+  /** `${linkGen}\u0000${conn}` to clientId. */
+  const bindings = new Map<string, string>()
+  const bindKey = (linkGen: number, conn: string): string => `${linkGen}\u0000${conn}`
+
+  const newCode = (): string => {
+    const bytes = random(CODE_LENGTH)
+    let code = ''
+    for (let i = 0; i < CODE_LENGTH; i++) code += CODE_ALPHABET[bytes[i] % 32]
+    return code
+  }
+
+  return {
+    createPairing: ({ permission }) => {
+      const code = newCode()
+      const expiresAt = now() + CODE_TTL_MS
+      codes.set(sha256Base64url(code), { expiresAt, attempts: 0, permission })
+      return { code, expiresAt: new Date(expiresAt).toISOString() }
+    },
+    redeem: (code, name) => {
+      const hash = sha256Base64url(code.trim().toUpperCase())
+      const held = codes.get(hash)
+      if (!held) {
+        // A wrong guess spends one attempt of every live code: the limit is per code, and a guesser does not say
+        // which code it is guessing at.
+        for (const c of codes.values()) c.attempts++
+        return { ok: false, reason: 'unknown' }
+      }
+      codes.delete(hash)
+      if (held.attempts >= CODE_ATTEMPTS) return { ok: false, reason: 'burned' }
+      if (now() > held.expiresAt) return { ok: false, reason: 'expired' }
+      const token = random(32).toString('base64url')
+      const clientId = `cli_${random(6).toString('hex')}`
+      records.set(clientId, {
+        clientId,
+        name: name.trim().slice(0, 64) || 'controller',
+        tokenHash: sha256Base64url(token),
+        permission: held.permission,
+        createdAt: new Date(now()).toISOString(),
+        lastSeenAt: null
+      })
+      return { ok: true, clientId, token }
+    },
+    authenticate: (tokenHash) => {
+      for (const r of records.values()) if (sameHash(r.tokenHash, tokenHash)) return r
+      return null
+    },
+    bind: (linkGen, conn, clientId) => {
+      if (records.has(clientId)) bindings.set(bindKey(linkGen, conn), clientId)
+    },
+    principalFor: (linkGen, conn) => {
+      const clientId = bindings.get(bindKey(linkGen, conn))
+      const r = clientId === undefined ? undefined : records.get(clientId)
+      return r ? { clientId: r.clientId, name: r.name, permission: r.permission } : null
+    },
+    stillBound: (linkGen, conn, clientId) => bindings.get(bindKey(linkGen, conn)) === clientId && records.has(clientId),
+    unbind: (linkGen, conn) => {
+      bindings.delete(bindKey(linkGen, conn))
+    },
+    dropLink: (linkGen) => {
+      for (const k of [...bindings.keys()]) if (k.startsWith(`${linkGen}\u0000`)) bindings.delete(k)
+    },
+    revoke: (clientId) => {
+      const revoked = records.delete(clientId)
+      const conns: Array<{ linkGen: number; conn: string }> = []
+      for (const [k, id] of [...bindings]) {
+        if (id !== clientId) continue
+        bindings.delete(k)
+        const [gen, conn] = k.split('\u0000')
+        conns.push({ linkGen: Number(gen), conn })
+      }
+      return { revoked, conns }
+    },
+    list: () => [...records.values()].map(({ tokenHash: _hidden, ...rest }) => rest)
+  }
+}
