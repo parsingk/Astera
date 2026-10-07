@@ -92,6 +92,12 @@ export function upsertProjectTrust(
   const eol = content.includes('\r\n') ? '\r\n' : '\n'
   const trustLine = `trust_level = "${level}"`
   const want = trustKey(projectPath, platform)
+  // **On win32 the block is written under backslashes, and one under forward slashes is rewritten.**
+  // Codex 0.160 reads a Windows project block only under backslashes, case aside: measured 2026-10-07,
+  // `C:/…` and `c:/…` left the trust menu up while `C:\…` and `c:\…` took it down. A path reaches here
+  // with forward slashes when a Run was created with `--cwd C:/…` (CLI, MCP), and this module wrote it
+  // that way until now, so a block it left earlier is corrected the next time its folder comes by.
+  const header = `[projects."${escapeTomlBasicString(platform === 'win32' ? projectPath.replace(/\//g, '\\') : projectPath)}"]`
 
   const lines = content.split(/\r?\n/)
   let multiline: '"""' | "'''" | null = null
@@ -102,6 +108,7 @@ export function upsertProjectTrust(
       const found = projectHeaderPath(line)
       if (found !== null && trustKey(found, platform) === want) {
         headerIdx = i
+        if (platform === 'win32' && found.includes('/')) lines[i] = header
         break
       }
     }
@@ -109,7 +116,7 @@ export function upsertProjectTrust(
   }
 
   if (headerIdx === -1) {
-    const block = `[projects."${escapeTomlBasicString(projectPath)}"]${eol}${trustLine}${eol}`
+    const block = `${header}${eol}${trustLine}${eol}`
     if (content.length === 0) return block
     const gap = content.endsWith(eol + eol) ? '' : content.endsWith(eol) ? eol : eol + eol
     return `${content}${gap}${block}`

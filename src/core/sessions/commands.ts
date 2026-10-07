@@ -23,6 +23,9 @@ export type CommandBuilder = (opts: {
    *  sanitizeResumePrompt is not applied — the caller (the coordinator) checks for forbidden characters and
    *  rejects them up front, so stripping characters here would silently break that path. */
   initialPrompt?: string
+  /** codex only: what Astera tells the session at start, carried as `-c developer_instructions=…`
+   *  (sessionContext.ts, codexDeveloperInstructions — Claude gets the same lines from a hook). */
+  developerInstructions?: string
 }) => SpawnCommand
 
 export function buildClaudeCommand(platform: NodeJS.Platform, resolve: ResolveExecutable = resolveWindowsExecutable): CommandBuilder {
@@ -100,8 +103,18 @@ export function buildCodexCommand(
   resolve: ResolveExecutable = resolveWindowsExecutable,
   noDaemon: () => boolean = () => false
 ): CommandBuilder {
-  return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt }) => {
-    const args: string[] = []
+  return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt, developerInstructions }) => {
+    // **No update check, ever.** With an update out, codex opens on "Update available … 1. Update now
+    // 2. Skip" (measured 2026-10-07, 0.160.0 with 0.160.1 out), and a worker, a coordinator or a roll's
+    // respawn has nobody in front of it to answer: the Job just stops. Settled for every session Astera
+    // starts, a person's own tabs included; codex run outside Astera still says so. Ahead of `resume`,
+    // where a root option reaches that subcommand too (measured: the menu without it, the session picker
+    // with it). Not gated like --no-daemon: codex takes an unknown `-c` key and starts as usual.
+    const args: string[] = ['-c', 'check_for_update_on_startup=false']
+    // Ahead of `resume` for the same reason. A value holding cmd.exe syntax is left out rather than
+    // carried: it would break the launch itself, and a briefing is not worth a session that never starts.
+    if (developerInstructions && !LAUNCH_FORBIDDEN.test(developerInstructions))
+      args.push('-c', `developer_instructions=${developerInstructions}`)
     if (resumeSessionId) {
       args.push('resume', resumeSessionId)
       const safe = resumePrompt ? sanitizeResumePrompt(resumePrompt) : ''
