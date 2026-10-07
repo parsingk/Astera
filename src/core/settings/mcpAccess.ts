@@ -8,6 +8,13 @@ export function mcpAccessOf(value: unknown): McpAccess {
   return value === 'off' || value === 'read' ? value : 'control'
 }
 
+/** The same setting for a call to a paired Runtime (remote runtime design §2.8, DC-4): a value that is none of the
+ *  three is off, since a controller is default deny; an absent one keeps the default, as the local read does. */
+export function mcpAccessForRemote(value: unknown): McpAccess {
+  if (value === undefined) return mcpAccessOf(undefined)
+  return value === 'off' || value === 'read' || value === 'control' ? value : 'off'
+}
+
 /** Missing file: 'control'. Unreadable file: throws, because it may have said 'off' (the
  *  readAgentPermissionMode rule). */
 export async function readMcpAccess(filePath: string): Promise<McpAccess> {

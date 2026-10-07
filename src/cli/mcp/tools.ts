@@ -1,4 +1,4 @@
-// The thirty-four MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D, E1). Each is one Host command; `args` maps the
+// The thirty-six MCP tools (MCP design §4, P1 design §4, P2-B design, P2-C, P2-D, E1, remote runtime §2.8). Each but the two Runtime tools is one Host command; `args` maps the
 // tool's input to the command's arguments exactly as the CLI's parser would produce them: flag names
 // camel-cased (cliArgs.ts `camel`), so `--coordinator-account` arrives as `coordinatorAccount`.
 import { z } from 'zod'
@@ -154,7 +154,20 @@ export interface ToolDef {
   args(input: Record<string, unknown>): Record<string, unknown>
 }
 
-export const TOOLS: ToolDef[] = [
+/** The tools that have no Host command: the paired Runtimes of this machine (remote runtime design §2.8). server.ts
+ *  answers them from the controller registry. */
+export const RUNTIME_TOOLS = new Set(['list_runtimes', 'get_runtime'])
+
+const RUNTIME_ID = z
+  .string()
+  .min(1)
+  .max(MCP_LIMITS.id)
+  .optional()
+  .describe(
+    'A paired Runtime (an id or a name from list_runtimes): run this on that machine instead of this one. Only the tools a Runtime offers take it; the others answer RUNTIME_CAPABILITY_MISSING. Leave it out for this machine.'
+  )
+
+const LISTED_TOOLS: ToolDef[] = [
   {
     name: 'list_projects',
     title: 'List projects',
@@ -628,5 +641,31 @@ export const TOOLS: ToolDef[] = [
       'Start a new write-up of one How It Works record in the background. It overwrites the current write-up, as the regenerate button in the Astera app does, and answers at once with the record id and status generating. The agent takes a minute or more: read get_work_record for the result, whose status leaves generating when it is done. While an older Astera app is the one writing How It Works records, this is refused with CONFLICT. Needs MCP access "Read and control".',
     inputSchema: { projectId: id, recordId: id.describe('A record id from list_work_records.'), requestId },
     args: (i) => ({ project: i.projectId, recordId: i.recordId })
+  },
+  // Remote runtime design §2.8: the paired Runtimes of this machine, answered from its own registry.
+  {
+    name: 'list_runtimes',
+    title: 'List paired Runtimes',
+    readOnly: true,
+    cmd: 'runtimes-list',
+    description:
+      'The other machines this one is paired with (`astera runtimes add`): runtimeId, name, address, port and permission (read-only or full-control). Pass a runtimeId to another tool to run it there.',
+    inputSchema: {},
+    args: () => ({})
+  },
+  {
+    name: 'get_runtime',
+    title: 'Get a paired Runtime',
+    readOnly: true,
+    cmd: 'runtimes-get',
+    description: 'One paired Runtime, by id or name.',
+    inputSchema: { runtimeId: id.describe('A runtimeId or a name from list_runtimes.') },
+    args: (i) => ({ id: i.runtimeId })
   }
 ]
+
+/** Every tool takes `runtimeId`, so a tool with no remote form can refuse it rather than drop it and act here
+ *  (X1-14). The two Runtime tools keep their own. */
+export const TOOLS: ToolDef[] = LISTED_TOOLS.map((t) =>
+  RUNTIME_TOOLS.has(t.name) ? t : { ...t, inputSchema: { ...t.inputSchema, runtimeId: RUNTIME_ID } }
+)

@@ -10,6 +10,7 @@ import {
   dataFor,
   nextStepsFor,
   refusalDetailsOf,
+  remoteCodeOf,
   type CliErrorCode
 } from '../../core/orchestration/cliOutput'
 import type { JobEvent } from '../../core/types'
@@ -19,10 +20,13 @@ import { publicEvent, publicFor } from '../../core/orchestration/cliPublic'
 import { sanitize } from '../../core/orchestration/checkpoint'
 import { cliHostTarget, runHostCommand } from '../host'
 import { openHostLink, type HostLink } from './hostLink'
+import { openMcpRuntimes, type McpRuntimes } from './remoteLink'
+import { remoteTarget } from '../../core/remote/targets'
+import { resolveRuntime } from '../runtimes'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
 import { registerPrompts, registerResources } from './resources'
 import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
-import { MCP_LIMITS, TOOLS, convergenceRefusal, githubTargetRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
+import { MCP_LIMITS, RUNTIME_TOOLS, TOOLS, convergenceRefusal, githubTargetRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
@@ -261,7 +265,7 @@ export async function hostRead(link: HostLink, cmd: string, tool: string, args: 
   const r = await link.call(cmd, args, request)
   if ('code' in r) return { ok: false, code: r.code, message: r.message }
   if (r.status < 200 || r.status >= 300)
-    return { ok: false, code: codeForStatus(r.status), message: refusalMessage(r.status, r.body), body: r.body }
+    return { ok: false, code: remoteCodeOf(r.body) ?? codeForStatus(r.status), message: refusalMessage(r.status, r.body), body: r.body }
   return { ok: true, shaped: redactOutput(tool, redact(dropCheckOutput(publicFor(cmd, r.body)))), replayed: r.replayed === true }
 }
 
@@ -407,7 +411,38 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
   }
 }
 
-export function createMcpServer(a: { link: HostLink; version: string; log(m: string): void; debug?: boolean }): McpServer {
+const isLink = (x: HostLink | CallToolResult): x is HostLink => typeof (x as HostLink).call === 'function'
+
+/** list_runtimes and get_runtime: this machine's registry, never a Host. */
+async function runtimeTool(runtimes: McpRuntimes | undefined, t: ToolDef, input: Record<string, unknown>): Promise<CallToolResult> {
+  const list = (await runtimes?.list()) ?? []
+  const shown = list.map((r) => ({ runtimeId: r.runtimeId, name: r.name, address: r.address, port: r.port, permission: r.permission, lastSeenAt: r.lastSeenAt }))
+  if (t.name === 'list_runtimes') {
+    const data = { runtimes: shown }
+    return { content: textResult(`${t.title} (${shown.length}).`, data), structuredContent: data }
+  }
+  const found = resolveRuntime(list, String(input.runtimeId))
+  if ('code' in found) return errorResult(found.code, found.message)
+  const data = shown.find((r) => r.runtimeId === found.runtimeId) ?? {}
+  return { content: textResult(`${t.title}.`, data), structuredContent: data }
+}
+
+/** The link a tool call goes through: this machine's Host, or the paired Runtime its `runtimeId` names, after the
+ *  laptop's own settings and the remote target table (remote runtime design §2.8, X1-07). The Runtime's controller gate
+ *  is the third check, there. */
+async function linkForCall(a: { link: HostLink; runtimes?: McpRuntimes }, t: ToolDef, input: Record<string, unknown>): Promise<HostLink | CallToolResult> {
+  if (typeof input.runtimeId !== 'string') return a.link
+  if (remoteTarget(t.cmd) === 'no')
+    return errorResult('RUNTIME_CAPABILITY_MISSING', `${t.name} works on this machine only; leave runtimeId out`)
+  if (!a.runtimes) return errorResult('RUNTIME_CAPABILITY_MISSING', 'this MCP server reaches no paired Runtime')
+  const refused = await a.runtimes.refusal(t.cmd)
+  if (refused !== null) return errorResult('PERMISSION_DENIED', refused)
+  const link = await a.runtimes.linkFor(input.runtimeId)
+  if ('code' in link) return errorResult(link.code, link.message)
+  return link
+}
+
+export function createMcpServer(a: { link: HostLink; version: string; log(m: string): void; debug?: boolean; runtimes?: McpRuntimes }): McpServer {
   const server = new McpServer(
     { name: 'astera', version: a.version },
     {
@@ -427,7 +462,13 @@ export function createMcpServer(a: { link: HostLink; version: string; log(m: str
         annotations: { readOnlyHint: t.readOnly, destructiveHint: false, idempotentHint: t.readOnly, openWorldHint: false }
       },
       async (input: Record<string, unknown>) => {
-        const result = await runTool(a.link, t, input, memory)
+        const chosen = RUNTIME_TOOLS.has(t.name) ? null : await linkForCall(a, t, input)
+        const result =
+          chosen === null
+            ? await runtimeTool(a.runtimes, t, input)
+            : isLink(chosen)
+              ? await runTool(chosen, t, input, memory)
+              : chosen
         if (a.debug) a.log(`${t.name}: ${result.isError ? errorCodeOf(result) : 'ok'}`)
         return result
       }
@@ -509,7 +550,13 @@ export async function serveMcp(a: {
     close: () => inner.close()
   }
 
-  const server = createMcpServer({ link, version: a.version, log, debug: a.env.ASTERA_MCP_LOG_LEVEL === 'debug' })
+  // The paired Runtimes of this profile, for the tools given a runtimeId (remote runtime design §2.8).
+  const runtimes = openMcpRuntimes({
+    profileDir: cliHostTarget({ env: a.env, platform: a.platform, home: a.home }).profileDir,
+    version: a.version,
+    client: () => server.server.getClientVersion()
+  })
+  const server = createMcpServer({ link, version: a.version, log, debug: a.env.ASTERA_MCP_LOG_LEVEL === 'debug', runtimes })
   // The transport's own onclose belongs to the SDK (Protocol.connect chains it); the server's hook
   // fires on every close, ours below or one the transport makes on a broken stream.
   const closed = new Promise<void>((resolve) => (server.server.onclose = resolve))
@@ -539,4 +586,5 @@ export async function serveMcp(a: {
   await server.close()
   await closed
   link.close()
+  runtimes.close()
 }

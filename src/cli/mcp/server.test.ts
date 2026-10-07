@@ -18,7 +18,8 @@ const TOOLS = [
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
   'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
-  'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record'
+  'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record',
+  'list_runtimes', 'get_runtime'
 ]
 
 async function connected(link: HostLink) {
@@ -79,7 +80,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-four tools', async () => {
+  it('lists exactly the thirty-six tools', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -511,7 +512,8 @@ describe('the MCP server', () => {
   it('every list tool takes a limit of 1 to 200', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
-    for (const t of tools.filter((t) => t.name.startsWith('list_')))
+    // list_runtimes answers this machine's few pairings whole, with no paging (remote runtime design §2.8).
+    for (const t of tools.filter((t) => t.name.startsWith('list_') && t.name !== 'list_runtimes'))
       expect(t.inputSchema.properties?.limit, t.name).toMatchObject({ minimum: 1, maximum: 200 })
     expect((await client.callTool({ name: 'list_jobs', arguments: { limit: 201 } })).isError).toBe(true)
     expect((await client.callTool({ name: 'list_jobs', arguments: { limit: 0 } })).isError).toBe(true)
@@ -535,7 +537,7 @@ describe('the MCP server', () => {
     const { link, calls } = answering({ 'jobs-list': { status: 200, body: jobs } })
     const client = await connected(link)
     const { tools } = await client.listTools()
-    for (const t of tools.filter((t) => t.name.startsWith('list_'))) {
+    for (const t of tools.filter((t) => t.name.startsWith('list_') && t.name !== 'list_runtimes')) {
       expect(t.inputSchema.properties?.cursor, t.name).toMatchObject({ type: 'string' })
       // What an agent reads to know when to stop paging, and what truncated and total mean.
       const limitText = String((t.inputSchema.properties?.limit as { description?: string }).description)
@@ -1269,9 +1271,9 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-four tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-six tools, six of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(34)
+    expect(tools).toHaveLength(36)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
     for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)

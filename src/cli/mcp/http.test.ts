@@ -127,11 +127,11 @@ const INIT = JSON.stringify({
 const JSON_HEADERS = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
 
 describe('serveMcpHttp', () => {
-  it('serves initialize, the 34 tools and a tool call to a client with the token', async () => {
+  it('serves initialize, the 36 tools and a tool call to a client with the token', async () => {
     const s = await start()
     const { client } = await connect(s.url, TOKEN, 'alpha')
     const { tools } = await client.listTools()
-    expect(tools).toHaveLength(34)
+    expect(tools).toHaveLength(36)
     const r = await client.callTool({ name: 'list_projects', arguments: {} })
     expect(r.isError).toBeFalsy()
     expect(s.links).toHaveLength(1)
@@ -192,7 +192,7 @@ describe('serveMcpHttp', () => {
     await a.transport.terminateSession()
     expect(s.links.map((l) => l.closed)).toEqual([true, false])
     // The other session still answers.
-    expect((await b.client.listTools()).tools).toHaveLength(34)
+    expect((await b.client.listTools()).tools).toHaveLength(36)
   })
 
   it('closes a session unseen for the idle time, and its link with it', async () => {
@@ -306,7 +306,7 @@ describe('serveMcpHttp', () => {
     expect(s.links[1].closed).toBe(true)
     // Still serving.
     const c = await connect(s.url, TOKEN, 'gamma')
-    expect((await c.client.listTools()).tools).toHaveLength(34)
+    expect((await c.client.listTools()).tools).toHaveLength(36)
     expect(s.logs.some((l) => l.includes('link close failed'))).toBe(true)
   })
 

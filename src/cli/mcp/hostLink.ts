@@ -5,8 +5,11 @@
 import type { ConnectFailure, HostConnection } from '../../core/host/connect'
 import { HOST_FEATURE_MCP, HOST_FEATURE_ORCH } from '../../core/host/protocol'
 import type { HostAnswer } from '../run'
+import type { CliErrorCode } from '../../core/orchestration/cliOutput'
 
-export type LinkFailure = { code: 'HOST_NOT_RUNNING' | 'VERSION_MISMATCH' | 'PERMISSION_DENIED' | 'TIMEOUT'; message: string }
+/** A call that got no answer. The local link names the four codes below; a paired Runtime's link (remoteLink.ts) names
+ *  the remote ones (remote runtime design §3.10). */
+export type LinkFailure = { code: CliErrorCode; message: string }
 
 export interface HostLink {
   call(cmd: string, args: Record<string, unknown>, request?: string): Promise<HostAnswer | LinkFailure>
