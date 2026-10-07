@@ -46,6 +46,15 @@ export async function loadOrCreateIdentity(
   })
 }
 
+/**
+ * The committed identity, or null when there is none, creating nothing (the Gateway's read, Phase 3). No lock: the
+ * commit point is written last, so once `identity.json` is there the key and certificate it names are too.
+ */
+export async function loadIdentity(store: SecretStore): Promise<RuntimeIdentity | null> {
+  const committed = await store.read(COMMIT)
+  return committed === null ? null : load(committed, await store.read(KEY), await store.read(CERT))
+}
+
 function load(json: string, keyPem: string | null, certPem: string | null): RuntimeIdentity {
   const fail = (why: string): never => {
     throw new IdentityUnreadable(`the Runtime identity does not load (${why}); stop the Runtime and remove the identity files to pair again`)

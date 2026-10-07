@@ -22,6 +22,7 @@ import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
+import { runRuntimeGateway } from './runtime/gateway'
 import { mcpStatus } from './mcp/status'
 import { hfProxy } from './hfProxy'
 import {
@@ -1021,6 +1022,24 @@ export async function main(): Promise<void> {
   // command table either; docs/mcp.md ("MCP over HTTP") says the Host runs it and a person does not.
   if (argv[0] === 'mcp' && argv[1] === 'http') {
     const code = await runMcpHttp({ argv: argv.slice(2), env: process.env, platform: process.platform, home: homedir(), version: CLI_VERSION })
+    await new Promise((r) => process.stdout.write('', () => r(undefined)))
+    process.exit(code)
+  }
+  // **`runtime gateway` answers before usage and the parser too** (remote runtime design §2.3): the Host spawns it and
+  // its stdout is the link to the Host, so nothing but link frames may reach it. Not in the public command table.
+  if (argv[0] === 'runtime' && argv[1] === 'gateway') {
+    const profileDir = process.env.ASTERA_PROFILE_DIR
+    if (!profileDir) process.exit(2)
+    const code = await runRuntimeGateway({
+      argv: argv.slice(2),
+      profileDir,
+      stdin: process.stdin,
+      stdout: process.stdout,
+      onStop: (stop) => {
+        process.once('SIGTERM', stop)
+        process.once('SIGINT', stop)
+      }
+    })
     await new Promise((r) => process.stdout.write('', () => r(undefined)))
     process.exit(code)
   }

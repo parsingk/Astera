@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { openSecretStore } from '../secrets/secretStore'
 import { runChild } from '../secrets/runChild.testutil'
-import { loadOrCreateIdentity } from './identity'
+import { loadIdentity, loadOrCreateIdentity } from './identity'
 import { spkiSha256 } from './cert'
 
 let profile: string
@@ -60,4 +60,16 @@ describe('loadOrCreateIdentity (remote runtime design §4.1)', () => {
     expect(a.out).toBe(b.out)
     expect(JSON.parse((await store().read('identity.json'))!).spkiSha256).toBe(a.out)
   }, 60_000)
+})
+
+describe('loadIdentity (remote runtime Phase 3: the Gateway never makes one)', () => {
+  it('answers null when there is no identity, and creates nothing', async () => {
+    const s = store()
+    expect(await loadIdentity(s)).toBeNull()
+    expect(await s.read('identity.key')).toBeNull()
+  })
+  it('answers the committed identity', async () => {
+    const id = await loadOrCreateIdentity(store(), { displayName: 'desk' })
+    expect(await loadIdentity(store())).toEqual(id)
+  })
 })
