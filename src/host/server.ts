@@ -116,6 +116,8 @@ export interface HostServerDeps {
   /** The longest line a client may send, in characters; INBOUND_LINE_CAP when left out. A test passes a
    *  small one rather than writing 64 MiB. */
   maxLine?: number
+  /** The Host process's boot id, in every hello; made once in index.ts (remote runtime design §3.2, N11). */
+  bootId?: string
 }
 
 /** What the `orch-state` throttle measures gaps with and waits on. `after` returns its cancel. */
@@ -571,7 +573,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             // A nonce longer than any client sends is not worth hashing.
             ...(deps.hostKey && typeof m.nonce === 'string' && m.nonce.length > 0 && m.nonce.length <= 256
               ? { proof: hostProof(deps.hostKey, m.nonce) }
-              : {})
+              : {}),
+            ...(deps.bootId ? { bootId: deps.bootId } : {})
           })
           if (roles.get(socket) === 'app') {
             try {

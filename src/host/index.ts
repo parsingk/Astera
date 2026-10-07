@@ -22,6 +22,7 @@ import { flushAll, flushAllLogsSync } from '../core/log/logWriter'
 import { startHostServer } from './server'
 import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { createControllerRegistry } from './controllers'
+import { randomBytes } from 'node:crypto'
 import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
@@ -685,6 +686,8 @@ async function main(): Promise<void> {
     server = await startHostServer({
       address: addr.address,
       hostKey,
+      // Made once for this process (remote runtime design §3.2, N11): a client comparing it learns the Host restarted.
+      bootId: randomBytes(16).toString('hex'),
       dirToPrepare: addr.dirToPrepare,
       version: hostVersion,
       idleMs: IDLE_MS,

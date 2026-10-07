@@ -465,6 +465,9 @@ export type HostMessage =
       /** HMAC of the client's `nonce` under the profile's Host key (core/host/hostKey.ts). Sent only
        *  in answer to a nonce. */
       proof?: string
+      /** A random 128-bit value this Host process made once at start (remote runtime design §3.2, N11): a client that
+       *  sees it change knows every counter it holds came from a Host that is gone. Absent from an older Host. */
+      bootId?: string
     }
   | { t: 'protocol-mismatch'; protocol: number }
   /** Answered instead of leaving, to a `{ t: 'retire', reason: 'user' }` while something is holding

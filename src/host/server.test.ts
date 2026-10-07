@@ -43,6 +43,7 @@ const server = async (
     stateClock?: HostServerDeps['stateClock']
     hostKey?: HostServerDeps['hostKey']
     maxLine?: HostServerDeps['maxLine']
+    bootId?: HostServerDeps['bootId']
   } = {}
 ): Promise<{
   s: HostServer
@@ -78,6 +79,7 @@ const server = async (
     stateClock: over.stateClock,
     hostKey: over.hostKey,
     maxLine: over.maxLine,
+    bootId: over.bootId,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -483,6 +485,17 @@ describe('startHostServer', () => {
   // MCP design §2: a socket that said role 'mcp' may send hello, ping and orch-call, and nothing else.
   // Remote runtime Phase 0 (design §5.1, N12 as amended): the Host's own holes, closed before any of it
   // is reachable from a network.
+  // Remote runtime design §3.2, N11: a reconnecting controller compares it to know whether every cursor it holds
+  // belongs to a Host that is gone.
+  it('carries its boot id in the hello, and none when it was given none', async () => {
+    const h = await server({ bootId: 'b'.repeat(32) })
+    const [hello] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
+    expect(hello).toMatchObject({ t: 'hello', bootId: 'b'.repeat(32) })
+    const plain = await server({ profile: 'other' })
+    const [noId] = await talk(plain.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }])
+    expect(noId).not.toHaveProperty('bootId')
+  })
+
   describe('hardening', () => {
     it('hands nothing from a socket that has not said hello to onMessage, while a greeted one still reaches it', async () => {
       const seen: string[] = []
