@@ -149,14 +149,29 @@ describe('Remote Runtime end to end (design §6 Phase 3 acceptance)', () => {
   })
   it('revoking a client closes its live connection and its next call reaches nothing (Review Focus 3)', async () => {
     const rt = await runtime()
-    const { link: l, clientId } = await rt.paired()
+    const { link: l, clientId, token } = await rt.paired()
     expect((await l.call('jobs-list', {})).status).toBe(200)
     const before = rt.orchCalls()
     const r = await rt.orch.call({ cmd: 'clients-revoke', args: { id: clientId }, sessionId: '', from: rt.cli })
     expect(r.status).toBe(200)
     expect(await l.closed).toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
     await expect(l.call('jobs-list', {})).rejects.toBeTruthy()
+    // Phase 3 minor: the call above is refused by this side's closed socket; the Runtime's own refusal is a new
+    // connection with the same token, which signs in to nothing.
+    const again = await rt.connect()
+    await expect(again.auth(token, { surface: 'cli' })).rejects.toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
     expect(rt.orchCalls()).toBe(before)
+  })
+
+  // Phase 3 minor: the in-flight budget, through the real Host: 32 long polls hold, the 33rd is RUNTIME_BUSY.
+  it('a controller with 32 calls waiting gets RUNTIME_BUSY for the next, through the real Host', async () => {
+    const rt = await runtime()
+    const { link: l } = await rt.paired()
+    const runId = ((await l.call('runs-list', {})).body as Array<{ id: string }>)[0].id
+    const waits = Array.from({ length: 32 }, () => l.call('runs-wait', { id: runId, timeoutMs: 3000 }).catch((e: unknown) => e))
+    await new Promise((r) => setTimeout(r, 200))
+    await expect(l.call('jobs-list', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
+    await Promise.all(waits)
   })
   it('never writes the pairing code or the token to a log', async () => {
     const rt = await runtime()

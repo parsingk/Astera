@@ -61,7 +61,7 @@ interface Conn {
   announced: boolean
 }
 
-const bindCode = (e: NodeJS.ErrnoException): string => {
+export const bindCode = (e: NodeJS.ErrnoException): string => {
   if (e.code === 'EADDRINUSE') return 'BIND_IN_USE'
   if (e.code === 'EACCES' || e.code === 'EPERM') return 'BIND_DENIED'
   return 'BIND_ADDRESS'

@@ -5,7 +5,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { buildCertificate, certificatePem, spkiSha256 } from '../../core/remote/cert'
 import { connectRuntime, type RuntimeLink } from '../../core/remote/client'
 import { sha256Base64url } from '../../host/controllers'
-import { startGateway, type GatewayHandle, type GatewayLimits } from './gateway'
+import { bindCode, startGateway, type GatewayHandle, type GatewayLimits } from './gateway'
 
 const identity = (() => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
@@ -167,6 +167,22 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     g.reply({ t: 'close-conn', conn, code: 'RUNTIME_AUTH_FAILED' })
     expect(await l.closed).toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
     await until(() => g.seen.some((f) => f.t === 'conn-closed' && f.conn === conn))
+  })
+  // Phase 3 minor: every bind failure has its code, not only a port in use.
+  it('names each bind failure: in use, denied, and an address this machine does not have', () => {
+    expect(bindCode(Object.assign(new Error('x'), { code: 'EADDRINUSE' }))).toBe('BIND_IN_USE')
+    expect(bindCode(Object.assign(new Error('x'), { code: 'EACCES' }))).toBe('BIND_DENIED')
+    expect(bindCode(Object.assign(new Error('x'), { code: 'EPERM' }))).toBe('BIND_DENIED')
+    expect(bindCode(Object.assign(new Error('x'), { code: 'EADDRNOTAVAIL' }))).toBe('BIND_ADDRESS')
+  })
+  it('reports an address this machine does not have as gateway-failed BIND_ADDRESS', async () => {
+    const toHost = new PassThrough()
+    const lines: string[] = []
+    toHost.on('data', (d: Buffer) => lines.push(d.toString()))
+    // 192.0.2.1 is TEST-NET-1 (RFC 5737): never an address of this machine.
+    const gw = await startGateway({ identity, listen: '192.0.2.1', port: 0, link: { input: new PassThrough(), output: toHost } })
+    expect(gw).toMatchObject({ error: { code: 'BIND_ADDRESS' } })
+    expect(JSON.parse(lines.join(''))).toMatchObject({ t: 'gateway-failed', code: 'BIND_ADDRESS' })
   })
   it('reports a port in use as gateway-failed BIND_IN_USE', async () => {
     const blocker = net.createServer()
