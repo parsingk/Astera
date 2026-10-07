@@ -26,6 +26,8 @@ import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { controllerRegistry, runRuntimesCommand } from './runtimes'
+import { answerRemote } from './remote'
+import { remoteTarget } from '../core/remote/targets'
 import { connectRuntime } from '../core/remote/client'
 import { runServe, type ServeDeps } from './runtime/serve'
 import { readValidHold } from '../core/remote/updateHold'
@@ -38,6 +40,7 @@ import {
   CLI_PROTOCOL,
   askTimeoutBody,
   codeForStatus,
+  remoteCodeOf,
   dataFor,
   waitEnd,
   errEnvelope,
@@ -1296,6 +1299,12 @@ export async function main(): Promise<void> {
   const presented = lifted.request !== undefined
   const request = lifted.request ?? mintRequestId()
 
+  // **`--runtime` refuses a local-only command here, before any branch below can read this machine** (remote runtime
+  // design §2.8, X1-14): the state file, the report queue, `host`, `skills`, `higgsfield` and `mcp` all live below, and
+  // none of them has a remote form. What a Runtime does offer is answered at the top of the answer step further down.
+  if (parsed.runtime !== undefined && remoteTarget(parsed.cmd) === 'no')
+    fail({ code: 'RUNTIME_CAPABILITY_MISSING', message: `${spelledCommand(parsed.cmd)} works on this machine only; it has no --runtime form` })
+
   /** The Host could not be reached at all, and the command is not one the state file can answer.
    *  A report is written down and the agent is told so; everything else fails exactly as it did.
    *
@@ -1533,6 +1542,22 @@ export async function main(): Promise<void> {
   // is exactly that — so the assignment must not be something a later edit can move past them.
   // Defining `reply` *from* `answer` is what makes that impossible rather than merely unlikely.
   answer = await (async (): Promise<HostAnswer> => {
+    // A paired Runtime instead of this machine's Host (cli/remote.ts): no local connection, no file fallback.
+    if (parsed.runtime !== undefined) {
+      verbose.say(`sending ${spelledCommand(parsed.cmd)} to the paired Runtime ${parsed.runtime}`)
+      const remote = await answerRemote({
+        cmd: parsed.cmd,
+        args,
+        runtime: parsed.runtime,
+        request,
+        profileDir,
+        mode,
+        write: out,
+        version: CLI_VERSION
+      })
+      if ('error' in remote) fail(remote.error)
+      return remote
+    }
     const connectStarted = Date.now()
     const conn = await connectHost({ address, profileDir, app: CLI_VERSION, log: logToStderr })
     verbose.say(
@@ -1688,7 +1713,8 @@ export async function main(): Promise<void> {
   // Host 는 501 로 답한다. CLI 가 확실히 아는 것은 그대로 나가고, 무엇이 잘못됐는지는 다음 명령이
   // 제 코드로 분명하게 말한다.
   if (parsed.cmd === 'version') versionWithoutHost()
-  const code = codeForStatus(reply.status)
+  // A Runtime's refusal names its own code (remote runtime design §3.10); read from the field, never the sentence.
+  const code = remoteCodeOf(reply.body) ?? codeForStatus(reply.status)
   fail({
     code,
     message: messageFrom(reply.body, `the Host answered ${reply.status}`),
