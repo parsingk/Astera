@@ -119,11 +119,41 @@ export function openSecretStore(a: {
     return fs.readFile(file, 'utf8')
   }
 
+  /**
+   * Makes the store directory already secured. On Windows the ACL is set on a private sibling, which is then renamed
+   * into place: a directory made at its real name and secured after would be visible, unprotected, to a second
+   * process starting at the same moment (and to anyone else, for that window; X1-12). A rename that loses to another
+   * process's leaves that one, which the caller then checks.
+   */
+  const createDir = async (): Promise<void> => {
+    const parent = path.dirname(dir)
+    await fs.mkdir(parent, { recursive: true })
+    if (platform !== 'win32') {
+      await fs.mkdir(dir, { mode: 0o700 }).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== 'EEXIST') throw e
+      })
+      return
+    }
+    const tmp = path.join(parent, `.${path.basename(dir)}-${randomBytes(6).toString('hex')}`)
+    await fs.mkdir(tmp)
+    try {
+      await winAcl().secureDir(tmp)
+      await fs.rename(tmp, dir)
+    } catch (e) {
+      await fs.rm(tmp, { recursive: true, force: true })
+      const exists = await fs.lstat(dir).then(() => true, () => false)
+      if (!exists) throw e
+    }
+  }
+
+  /** Only a directory made here is secured here. One that already existed is checked, never silently tightened. */
   const ensureDir = async (): Promise<void> => {
-    // `recursive` answers the first directory it made, or undefined when the store already existed: only a
-    // directory made here is secured here. One that already existed is checked, never silently tightened.
-    const made = await fs.mkdir(dir, { recursive: true, mode: 0o700 })
-    if (made !== undefined && platform === 'win32') await winAcl().secureDir(dir)
+    try {
+      await fs.lstat(dir)
+    } catch (e) {
+      if (!missing(e)) throw e
+      await createDir()
+    }
     await check(null)
   }
 
