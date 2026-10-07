@@ -27,15 +27,18 @@ export function symlinkProblem(chain: string[], lstat: (p: string) => StatLike):
   return null
 }
 
-/** The file and the store directory: nobody else at all. Directories above them: nobody else may write. */
-export function posixProblem(chain: string[], lstat: (p: string) => StatLike, uid: number): string | null {
+/**
+ * The file and the store directory (the first `strict` entries; 1 when the chain starts at the directory): nobody
+ * else at all. Directories above them: nobody else may write.
+ */
+export function posixProblem(chain: string[], lstat: (p: string) => StatLike, uid: number, strict = 2): string | null {
   for (const [i, p] of chain.entries()) {
     const st = lstat(p)
     if (st.isSymbolicLink()) return `${p} is a symbolic link`
     if (st.uid !== uid) return `${p} is owned by uid ${st.uid}, not this user`
-    const forbidden = i < 2 ? 0o077 : 0o022
+    const forbidden = i < strict ? 0o077 : 0o022
     if ((st.mode & forbidden) !== 0)
-      return `${p} has mode ${(st.mode & 0o777).toString(8)}, which ${i < 2 ? 'lets other users in' : 'is group or other writable'}`
+      return `${p} has mode ${(st.mode & 0o777).toString(8)}, which ${i < strict ? 'lets other users in' : 'is group or other writable'}`
   }
   return null
 }

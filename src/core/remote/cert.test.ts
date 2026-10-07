@@ -25,7 +25,7 @@ describe('buildCertificate (remote runtime design §4.2)', () => {
   })
   it('pins the SPKI: the hash matches one computed independently, survives a reissue, and changes with the key', () => {
     const a = pair()
-    const independent = createHash('sha256').update(createPublicKey(a.privateKey).export({ type: 'spki', format: 'der' })).digest('base64url')
+    const independent = createHash('sha256').update(createPublicKey(a.privateKey.export({ type: 'pkcs8', format: 'pem' })).export({ type: 'spki', format: 'der' })).digest('base64url')
     expect(spkiSha256(a.publicKey)).toBe(independent)
     const first = new X509Certificate(buildCertificate({ ...a, runtimeId: 'r', now }))
     const again = new X509Certificate(buildCertificate({ ...a, runtimeId: 'r', now: new Date('2027-01-01T00:00:00Z') }))
