@@ -77,4 +77,15 @@ describe('createOrchRouter (remote runtime design §2.7, D1.1, D1.6, D1.7)', () 
     expect(await r.command('/p', 'jobs-run', {}, 'rt_a')).toMatchObject({ status: 503, body: { code: 'RUNTIME_OFFLINE' } })
     expect(l.calls).toEqual([])
   })
+
+  // Phase 5 review M-1: a runtimeId that is not a string names no Runtime.
+  it('a runtimeId that is not a string is RUNTIME_NOT_FOUND, and asks no client', async () => {
+    const l = recordingLocal()
+    let asked = 0
+    const r = createOrchRouter({ local: l.local, remote: { client: async () => (asked++, fakeClient()) } })
+    expect(await r.command('/p', 'jobs-run', {}, 42 as never)).toMatchObject({ status: 404, body: { code: 'RUNTIME_NOT_FOUND' } })
+    expect((await r.list('/p', {} as never)).runtime).toMatchObject({ runtimeId: '', offline: true })
+    expect(asked).toBe(0)
+    expect(l.calls).toEqual([])
+  })
 })

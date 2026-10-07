@@ -743,6 +743,8 @@ export interface RuntimeView {
   /** The data is the last state read, not the Runtime's current one. */
   stale: boolean
   version: number
+  /** The Runtime answered and refused the read (its Host down, say): never an empty, healthy Runtime. */
+  error?: { status: number; code?: string }
 }
 
 export interface CoreEvents {

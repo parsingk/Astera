@@ -15,9 +15,11 @@ export interface OrchHandlers {
 
 export const LOCAL_RUNTIME = 'local'
 export const isLocalRuntime = (runtimeId?: unknown): boolean => runtimeId === undefined || runtimeId === null || runtimeId === LOCAL_RUNTIME
+/** A runtimeId from the renderer that is not a string names no Runtime (review M-1): it is never looked up. */
+const NOT_A_RUNTIME = { code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
 
 const EMPTY_DETAIL: RunDetail = { events: [], layers: [], deps: {}, cyclic: [] }
-const offlineView = (runtimeId: string): RuntimeView => ({ runtimeId, offline: true, stale: false, version: 0 })
+const offlineView = (runtimeId: unknown): RuntimeView => ({ runtimeId: typeof runtimeId === 'string' ? runtimeId : '', offline: true, stale: false, version: 0 })
 
 export function createOrchRouter(a: {
   local: OrchHandlers
@@ -33,6 +35,7 @@ export function createOrchRouter(a: {
   }
   /** The client, or null with the reason logged: a Runtime nobody paired, or one whose client failed. */
   const clientOf = async (runtimeId: string): Promise<RemoteRuntimeClient | { code: string; message: string }> => {
+    if (typeof runtimeId !== 'string') return NOT_A_RUNTIME
     try {
       return await a.remote.client(runtimeId)
     } catch (e) {
@@ -56,9 +59,9 @@ export function createOrchRouter(a: {
         : guarded<OrchSnapshot>(
             runtimeId!,
             'list',
-            { runs: [], projectFolderBusy: false, runtime: offlineView(runtimeId!) } as OrchSnapshot,
+            { runs: [], projectFolderBusy: false, runtime: offlineView(runtimeId) },
             (c) => c.list(projectPath),
-            () => ({ runs: [], projectFolderBusy: false, runtime: offlineView(runtimeId!) }) as OrchSnapshot
+            () => ({ runs: [], projectFolderBusy: false, runtime: offlineView(runtimeId) })
           ),
     runDetail: (projectPath, runId, opts, runtimeId) =>
       isLocalRuntime(runtimeId)

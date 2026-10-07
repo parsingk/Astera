@@ -54,4 +54,13 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     r.close()
     expect(o.closed).toEqual(['tok-a', 'tok-b'])
   })
+
+  // Phase 5 review I-1: two first calls at once share one client and one link.
+  it('two first calls at once open one link', async () => {
+    const o = opener()
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: o.open })
+    const [a, b] = await Promise.all([r.client('rt_a'), r.client('rt_a')])
+    expect(a).toBe(b)
+    expect(o.opened).toHaveLength(1)
+  })
 })

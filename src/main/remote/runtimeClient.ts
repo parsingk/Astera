@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
 import type { RemoteLink } from '../../core/remote/link'
-import { remoteMutation } from '../../core/remote/targets'
+import { remoteMutation, remoteTarget } from '../../core/remote/targets'
 import { resolveRunId, type OrchState } from '../../core/orchestration/state'
 import { snapshotFor } from '../../core/orchestration/view'
 import { layersOf } from '../../core/orchestration/graph'
@@ -28,6 +28,8 @@ export interface RemoteMirror {
   stale: boolean
   /** When the state was last read (epoch ms), or null. */
   at: number | null
+  /** The Runtime refused the last read (review I-3). */
+  error?: { status: number; code?: string }
 }
 
 export type { RuntimeView }
@@ -47,8 +49,18 @@ const EMPTY_DETAIL: RunDetail = { events: [], layers: [], deps: {}, cyclic: [] }
 
 /** A link failure as a command's reply: the Runtime may or may not have run it, so it is a 409 then, and a 503 when
  *  the Runtime could not be asked at all. */
-const replyOf = (e: RemoteError): { status: number; body: { error: string; code: string } } => ({
-  status: e.code === 'RUNTIME_OUTCOME_UNKNOWN' || e.code === 'REMOTE_TIMEOUT' ? 409 : e.code === 'RUNTIME_PERMISSION_DENIED' ? 403 : 503,
+const replyOf = (e: RemoteError, change: boolean): { status: number; body: { error: string; code: string } } => ({
+  // A change whose answer was lost may have run: 409. A read that timed out changed nothing (review M-3): 504.
+  status:
+    e.code === 'RUNTIME_OUTCOME_UNKNOWN'
+      ? 409
+      : e.code === 'REMOTE_TIMEOUT'
+        ? change
+          ? 409
+          : 504
+        : e.code === 'RUNTIME_PERMISSION_DENIED'
+          ? 403
+          : 503,
   body: { error: e.message, code: e.code }
 })
 
@@ -62,22 +74,35 @@ export function createRemoteRuntimeClient(a: {
   const mint = a.mintRequest ?? (() => `desk_${randomUUID()}`)
   let m: RemoteMirror = { state: null, version: 0, bootId: null, offline: false, stale: false, at: null }
 
-  const view = (): RuntimeView => ({ runtimeId: a.runtimeId, offline: m.offline, stale: m.stale, version: m.version })
+  const view = (): RuntimeView => ({ runtimeId: a.runtimeId, offline: m.offline, stale: m.stale, version: m.version, ...(m.error ? { error: m.error } : {}) })
 
+  /** Each refresh's number, and the newest one that has finished: an older one finishing later never marks the mirror
+   *  offline or stale over a newer success (review I-2). */
+  let asked = 0
+  let settled = 0
   const refresh = async (): Promise<RemoteMirror> => {
+    const mine = ++asked
     const r = await a.link.call('state-get', {})
-    if (r instanceof RemoteError || r.status !== 200) {
-      m = { ...m, offline: r instanceof RemoteError, stale: m.state !== null }
+    if (mine < settled) return m
+    settled = mine
+    if (r instanceof RemoteError) {
+      m = { ...m, offline: true, stale: m.state !== null, error: undefined }
       return m
     }
-    const body = r.body as { state?: OrchState; version?: number }
+    if (r.status !== 200) {
+      // Refused (review I-3): offline for the view, with the refusal named, so it never reads as no Jobs at all.
+      const code = (r.body as { code?: unknown } | null)?.code
+      m = { ...m, offline: true, stale: m.state !== null, error: { status: r.status, ...(typeof code === 'string' ? { code } : {}) } }
+      return m
+    }
+    const body = (r.body ?? {}) as { state?: OrchState; version?: number }
     const bootId = a.link.hello()?.bootId ?? null
     const version = typeof body.version === 'number' ? body.version : 0
     // Newer only (§3.6): a new boot replaces whatever is held; on the same boot a lower or equal version is a slow
     // reply that a newer one already overtook.
     const newer = bootId !== m.bootId || version > m.version || m.state === null
     if (newer && body.state) m = { state: body.state, version, bootId, offline: false, stale: false, at: now() }
-    else m = { ...m, offline: false, stale: false }
+    else m = { ...m, offline: false, stale: false, error: undefined }
     return m
   }
 
@@ -110,10 +135,15 @@ export function createRemoteRuntimeClient(a: {
       return id === undefined ? null : completionForTaskOf(state.tasks, id, taskId)
     },
     command: async (cmd, args) => {
-      const request = remoteMutation(cmd) ? mint() : undefined
+      // What a Runtime does not offer is refused here, as the CLI and MCP refuse it (review M-4).
+      if (remoteTarget(cmd) === 'no')
+        return { status: 501, body: { error: `${cmd} is not available on a remote Runtime`, code: 'RUNTIME_CAPABILITY_MISSING' } }
+      const change = remoteMutation(cmd)
+      const request = change ? mint() : undefined
       const r = await a.link.call(cmd, args, request !== undefined ? { request } : {})
-      if (r instanceof RemoteError) return replyOf(r)
-      if (r.status >= 200 && r.status < 300 && request !== undefined) await refresh()
+      if (r instanceof RemoteError) return replyOf(r, change)
+      // The change ran: a refresh that fails after it must not turn its answer into "could not be asked" (review M-2).
+      if (r.status >= 200 && r.status < 300 && change) await refresh().catch(() => undefined)
       return { status: r.status, body: r.body }
     },
     close: () => a.link.close()

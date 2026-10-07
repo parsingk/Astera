@@ -127,4 +127,52 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
     expect(await c.runDetail('run_nope')).toEqual({ events: [], layers: [], deps: {}, cyclic: [] })
     expect(await c.completion('run_nope', a.taskId)).toBeNull()
   })
+
+  // Phase 5 review I-2: an old refresh that fails after a newer one succeeded does not mark the fresh mirror offline.
+  it('a failure that lands after a newer success leaves the mirror current', async () => {
+    const a = seeded()
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    let n = 0
+    const f = fakeLink(async () => {
+      n++
+      if (n === 1) {
+        await held
+        return new RemoteError('REMOTE_TIMEOUT', 'slow')
+      }
+      return { status: 200, body: { state: a.state, version: 7 } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    const slow = c.refresh()
+    await c.refresh()
+    release()
+    await slow
+    expect(c.mirror()).toMatchObject({ version: 7, offline: false, stale: false })
+  })
+  // Phase 5 review I-3: a refused state-get is never an empty, healthy Runtime.
+  it('a refused state-get with no mirror is offline with the refusal named', async () => {
+    const f = fakeLink(() => ({ status: 503, body: { error: 'the Host is down', code: 'RUNTIME_OFFLINE' } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    const snap = await c.list('/srv/repo')
+    expect(snap.runtime).toMatchObject({ offline: true, error: { status: 503, code: 'RUNTIME_OFFLINE' } })
+  })
+  // Phase 5 review M-2: a change that ran is reported as run even when the refresh after it fails.
+  it('a 2xx change whose refresh fails still answers with its own reply', async () => {
+    const f = fakeLink((cmd) => (cmd === 'state-get' ? { status: 200, body: null } : { status: 200, body: { id: 'job_1' } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect(await c.command('jobs-run', { id: 'job_1' })).toEqual({ status: 200, body: { id: 'job_1' } })
+  })
+  // Phase 5 review M-3: a slow read did not change anything, so it is not "may have run".
+  it('a timeout on a read is 504, on a change 409', async () => {
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: fakeLink(() => new RemoteError('REMOTE_TIMEOUT', 'slow')).link })
+    expect((await c.command('dispatch-show', { task: 't' })).status).toBe(504)
+    expect((await c.command('jobs-run', { id: 'j' })).status).toBe(409)
+  })
+  // Phase 5 review M-4: what a Runtime does not offer is refused here, as the CLI and MCP refuse it.
+  it('a command the Runtime does not offer is RUNTIME_CAPABILITY_MISSING, sent nowhere', async () => {
+    const f = fakeLink(() => ({ status: 200, body: {} }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect(await c.command('state-put', {})).toMatchObject({ status: 501, body: { code: 'RUNTIME_CAPABILITY_MISSING' } })
+    expect(f.calls).toEqual([])
+  })
 })
