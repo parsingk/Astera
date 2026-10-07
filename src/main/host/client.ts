@@ -2,7 +2,7 @@
 // `status()`: nothing else in slice 1 depends on the Host being there, and every failure ends here,
 // as a sentence somebody can read, rather than reaching a caller.
 import net from 'node:net'
-import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_SLACK, type ClientMessage, type HostMessage } from '../../core/host/protocol'
+import { HOST_PROTOCOL, HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_SLACK, HOST_YIELD_RECOVERY, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { HOST_UNRESPONSIVE_MS, PING_MS } from '../../core/host/unresponsive'
 import { hostIsOutdated, hostSpeaksPing } from './outdated'
 import { encodeLine, createLineReader } from '../../host/framing'
@@ -624,7 +624,7 @@ export class HostClient {
       // arrives, and its commit hook diffs against the last one it took, so a push a newer one replaced
       // is never missed. The one reader that needs every commit — the app's own journal recorder — is
       // idle while the Host announces `journal`, and every Host that reads this name does.
-      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])],
+      yields: [HOST_YIELD_WORKTREES, HOST_YIELD_DISPATCH, HOST_YIELD_ROLLING, HOST_YIELD_CHAT_TAKEOVER, HOST_YIELD_JOURNAL, HOST_YIELD_UNDERSTANDING, HOST_YIELD_WORKSPACE, HOST_YIELD_ORCH_STATE_LATEST, HOST_YIELD_WORK_UNITS, HOST_YIELD_RECOVERY, ...(keepsSlack ? [] : [HOST_YIELD_SLACK])],
       nonce
     })
   }

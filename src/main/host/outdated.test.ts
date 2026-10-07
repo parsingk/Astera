@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal, hostSpeaksUnderstanding, hostSpeaksWorkUnits, hostSpeaksMcpHttp } from './outdated'
+import { hostIsOutdated, hostSpeaksProcs, hostSpeaksPing, hostSpeaksSpawn, hostSpeaksWorktrees, hostSpeaksDispatch, hostSpeaksRolling, hostSpeaksBlocks, hostSpeaksRollJournal, hostSpeaksChatTakeover, hostSpeaksSlackOwner, hostSpeaksJournal, hostSpeaksUnderstanding, hostSpeaksWorkUnits, hostSpeaksMcpHttp, hostSpeaksRecovery } from './outdated'
 import { HOST_FEATURE_CHAT_TAKEOVER, HOST_FEATURE_SLACK_OWNER } from '../../core/host/protocol'
 
 describe('hostIsOutdated', () => {
@@ -146,6 +146,15 @@ describe('hostSpeaksJournal (Host journal J2)', () => {
     expect(hostSpeaksJournal({ connected: false, unresponsive: true, features: ['journal'] })).toBe(true)
     expect(hostSpeaksJournal({ connected: false, features: ['journal'] })).toBe(false)
     expect(hostSpeaksJournal({ connected: true, features: ['spawn'] })).toBe(false)
+  })
+})
+
+describe('hostSpeaksRecovery (remote runtime design §2.6)', () => {
+  it('holds for a connected or unresponsive Host that announced recovery, and nothing else', () => {
+    expect(hostSpeaksRecovery({ connected: true, features: ['recovery'] })).toBe(true)
+    expect(hostSpeaksRecovery({ connected: false, unresponsive: true, features: ['recovery'] })).toBe(true)
+    expect(hostSpeaksRecovery({ connected: false, features: ['recovery'] })).toBe(false)
+    expect(hostSpeaksRecovery({ connected: true, features: ['journal'] })).toBe(false)
   })
 })
 

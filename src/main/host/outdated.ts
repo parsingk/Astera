@@ -17,7 +17,7 @@ import {
   HOST_FEATURE_COORDINATOR_IDLE,
   HOST_FEATURE_CHAT_TAKEOVER,
   HOST_FEATURE_SLACK_OWNER,
-  HOST_FEATURE_JOURNAL,
+  HOST_FEATURE_JOURNAL, HOST_FEATURE_RECOVERY,
   HOST_FEATURE_UNDERSTANDING,
   HOST_FEATURE_WORK_UNITS,
   HOST_FEATURE_MCP_HTTP
@@ -129,6 +129,16 @@ export function hostSpeaksJournal(status: {
   features: readonly string[]
 }): boolean {
   return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_JOURNAL)
+}
+
+/** The connected Host recovers lost workers itself (remote runtime design §2.6). Read by hostSpeaksJournal's rule;
+ *  recoveryOwner.ts keeps the last answer. */
+export function hostSpeaksRecovery(status: {
+  connected: boolean
+  unresponsive?: boolean
+  features: readonly string[]
+}): boolean {
+  return (status.connected || status.unresponsive === true) && status.features.includes(HOST_FEATURE_RECOVERY)
 }
 
 /** The connected Host writes How It Works records (E1 §2). Read by hostSpeaksJournal's rule, at each

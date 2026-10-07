@@ -103,6 +103,7 @@ import { readGitSummary } from '../core/orchestration/exec/gitSummary'
 import { RecoveryReconciler } from '../core/recovery/reconciler'
 import { executeRecovery } from '../core/recovery/execute'
 import { readGitFacts } from '../core/recovery/git'
+import { createRecoveryOwner } from './host/recoveryOwner'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles } from '../core/workUnit/gitProbe'
@@ -1343,6 +1344,9 @@ export function registerIpc(
    *  outside it (openContinuity, and the settings toggle). Same convention as releaseCoordinator. */
   let recovery: RecoveryReconciler | null = null
   let buildRecovery: (() => void) | null = null
+  /** Remote runtime design §2.6: a Host that announces `recovery` recovers, and this app's reconciler then acts on
+   *  nothing (its three doors below ask this). Read per ask; the last answer stands while the Host is away. */
+  const recoveryOwner = createRecoveryOwner(() => hostClient?.status() ?? { connected: false, features: [] })
   /** Turns journaling on. Nothing is opened here: appJournal opens its reader, or its own writer, at
    *  the first use that needs one, and a writer that cannot open is logged there and never stops
    *  orchestration. Not yet assigned on the very first call (bootOrch turns it on before it builds the
@@ -3468,6 +3472,7 @@ export function registerIpc(
       onDispatchLost: (a) =>
         void (
           recovery &&
+          recoveryOwner.appRecovers() &&
           recovery.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
         )
     }
@@ -3526,6 +3531,7 @@ export function registerIpc(
         execute: async (a) => {
           if (recovery !== mine)
             return { ok: false, error: 'recovery was turned off while this attempt was being decided' }
+          if (!recoveryOwner.appRecovers()) return { ok: false, error: 'the Host recovers now, so this app starts nothing' }
           return executeRecovery(a, {
             getState: deps.getState,
             setState: deps.setState,
@@ -3740,8 +3746,9 @@ export function registerIpc(
     // null. A worker recovered in that window would come up with no astera CLI and no
     // ASTERA_SESSION: stranded with a spec file telling it to run commands it does not have — the
     // exact failure this feature exists to prevent.
-    if (recovery)
+    if (recovery && recoveryOwner.appRecovers())
       void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
+    else if (recovery) orchLog('recovery — the Host recovers lost workers, so this app runs no boot sweep')
     // 완료 수렴 Run 이 재시작으로 멈춘 validating·reviewing Task. 시작은 deps 가 다 갖춰지고 orch 가
     // 선 뒤인 여기다 — startValidation 은 큐에, startReview 는 세션 spawn 에 닿는다.
     //

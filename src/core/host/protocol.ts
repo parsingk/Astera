@@ -177,6 +177,10 @@ export const HOST_FEATURE_MCP_HTTP = 'mcp-http'
  *  the Remote Gateway while `remote-runtime.json` enables it, and pushes `gateway-state`. Announced by every Host that
  *  has it, like `mcp-http`: one without the CLI paths reports the Gateway failed. */
 export const HOST_FEATURE_REMOTE = 'remote-runtime'
+/** Host-owned recovery (remote runtime design §2.6, DC-3): this Host decides and carries out the recovery of lost
+ *  workers itself, while it drives, writes the Job Journal and no attached app keeps HOST_YIELD_RECOVERY. An app in
+ *  front of a Host that announces it runs no reconciler of its own. Announced with `spawn`: recovery starts workers. */
+export const HOST_FEATURE_RECOVERY = 'recovery'
 
 /** The MCP HTTP entrance as the Host runs it (MCP HTTP design §3): answered by the app-only orch-call
  *  `mcp-http-status` (and `mcp-http-reload`, after it re-read the setting) and pushed as `mcp-http-state` on
@@ -261,6 +265,10 @@ export const HOST_YIELD_WORKSPACE = 'workspace'
  *  an `orch-act` or a `pty-opened` never arrives ahead of the state it follows. An older app sends
  *  none and is pushed every commit, as before: it may still diff consecutive pushes for its journal. */
 export const HOST_YIELD_ORCH_STATE_LATEST = 'orch-state-latest'
+/** `hello.yields` value: this app leaves the recovery of lost workers to a Host that announces HOST_FEATURE_RECOVERY
+ *  (remote runtime design §2.6, DC-3). An older app sends none and keeps recovering, and the Host then recovers
+ *  nothing while it is attached. */
+export const HOST_YIELD_RECOVERY = 'recovery'
 /** The shortest gap between two `orch-state` pushes to one client that reads the latest (above): about
  *  ten a second. The first push after a quiet spell goes out at once. */
 export const ORCH_STATE_PUSH_MS = 100
