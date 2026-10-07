@@ -125,6 +125,20 @@ describe('createHostOrch', () => {
       expect(r.status).toBe(200)
       expect(actors).toContainEqual({ surface: 'controller', controller: { clientId: 'cli_ab12', name: 'laptop' } })
     })
+    it('a read-only controller is refused a control command before any receipt is taken', async () => {
+      await seed()
+      const orch = orchOver()
+      const create = (from: ReturnType<typeof controller>) =>
+        orch.call({ cmd: 'jobs-create', args: { objective: 'x', cwd: 'D:/p' }, sessionId: '', from, request: 'r-1' })
+      expect(await create(controller('read-only'))).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+      const again = await create(controller('full-control'))
+      expect(again.status).toBe(200)
+      expect(again.replayed).not.toBe(true)
+    })
+    it('is refused a local-only command even at full control', async () => {
+      const r = await orchOver().call({ cmd: 'state-put', args: { state: emptyState() }, sessionId: '', from: controller() })
+      expect(r).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+    })
   })
 
   describe('MCP access gate', () => {

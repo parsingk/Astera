@@ -14,6 +14,7 @@ import { sweepStaleSpecFiles } from '../core/orchestration/exec/specFiles'
 import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
+import { controllerRefusal } from '../core/host/controllerGate'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
 import { readMcpGithubWrite } from '../core/settings/mcpGithubWrite'
@@ -1442,6 +1443,13 @@ export function createHostOrch(a: {
             await readMcpSessions(settingsFile),
             await readMcpGithubWrite(settingsFile)
           )
+          if (refused) return refused
+        }
+        // **Controllers pass their gate first too** (remote runtime design §3.4, N15), with the permission the Host
+        // bound them to (`from.principal`, X1-08), before receipts and before any command, so a refused call leaves
+        // no receipt and reaches nothing.
+        if (from?.role === 'controller') {
+          const refused = controllerRefusal(cmd, from.principal)
           if (refused) return refused
         }
         // **A key presented on these two is refused, not dropped.** They answer above the receipt
