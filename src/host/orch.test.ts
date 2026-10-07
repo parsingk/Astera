@@ -804,6 +804,32 @@ describe('createHostOrch', () => {
 // **이 묶음이 세는 것은 답이 아니라 효과다.** 바이트가 같은 답을 돌려주면서 의존을 두 번 부른 재시도가
 // 이 설계가 막으려는 실패 그 자체이므로, 답만 보는 시험은 없는 것보다 나쁘다 — 앱으로 나간 행동의
 // 횟수와 상태에 남은 것을 함께 센다.
+describe('projects-add (remote runtime N5)', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  it('registers an existing folder once, and answers the same project the second time', async () => {
+    const folder = path.join(dir, 'repo')
+    await fs.mkdir(folder)
+    const orch = orchOver()
+    const first = await orch.call({ cmd: 'projects-add', args: { path: folder }, sessionId: '', from: cli })
+    const second = await orch.call({ cmd: 'projects-add', args: { path: folder }, sessionId: '', from: cli })
+    expect(first.status).toBe(200)
+    expect((second.body as { id: string }).id).toBe((first.body as { id: string }).id)
+    expect(orch.state().projects).toHaveLength(1)
+  })
+  it('refuses a folder that does not exist, a relative path, and a registered worktree', async () => {
+    const wt = path.join(dir, 'wt')
+    await fs.mkdir(wt)
+    const orch = orchOver({ worktrees: { call: async () => ({ status: 501, body: {} }), isRegistered: (p: string) => p === wt } as never })
+    expect((await orch.call({ cmd: 'projects-add', args: { path: path.join(dir, 'nope') }, sessionId: '', from: cli })).status).toBe(400)
+    expect((await orch.call({ cmd: 'projects-add', args: { path: 'relative/dir' }, sessionId: '', from: cli })).status).toBe(400)
+    expect((await orch.call({ cmd: 'projects-add', args: { path: wt }, sessionId: '', from: cli })).status).toBe(400)
+  })
+  it('is refused to a controller', async () => {
+    const r = await orchOver().call({ cmd: 'projects-add', args: { path: dir }, sessionId: '', from: { role: 'controller', principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' }, toOthers: () => {} } })
+    expect(r.status).toBe(403)
+  })
+})
+
 describe('pairing and clients (local only)', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   it('pair-create answers a code to the CLI, and clients-list and clients-revoke see the redeemed client', async () => {
@@ -1283,7 +1309,7 @@ describe('요청 영수증', () => {
     const orch = orchOver({ act, hasApp: () => false })
     const list = await orch.call({ cmd: 'accounts-list', args: {}, sessionId: '' })
     expect(list.status).toBe(200)
-    expect(list.body).toEqual([{ id: 'acc1', label: '일', provider: 'claude' }])
+    expect(list.body).toEqual([{ id: 'acc1', label: '일', provider: 'claude', signedIn: false }])
     const job = await orch.call({
       cmd: 'jobs-create',
       args: { objective: 'o', cwd: 'D:/p', coordinatorAccount: 'acc1' },

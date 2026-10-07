@@ -143,8 +143,9 @@ type _question = NothingLeft<Unlisted<Gate, typeof QUESTION, []>>
 
 /** 계정은 앱이 이미 이 셋으로만 내보낸다(ipc.ts 의 listAccounts). 그래도 적는 이유는 이 파일의
  *  머리말 그대로다 — 앱 쪽이 칸을 하나 더하는 순간 그것이 공개 API 가 되지 않게 한다.
- *  `default` is the fourth: it is there only on its provider's default account (OrchAccount.default). */
-const ACCOUNT = ['id', 'label', 'provider', 'default'] as const
+ *  `default` is the fourth: it is there only on its provider's default account (OrchAccount.default).
+ *  `signedIn` is the fifth (remote runtime N5): whether the account can run now, on every listed account. */
+const ACCOUNT = ['id', 'label', 'provider', 'default', 'signedIn'] as const
 type _account = NothingLeft<Unlisted<OrchAccount, typeof ACCOUNT, []>>
 
 /** 구성의 명령·env·cwd 는 앱에 남는다 — env 값은 비밀일 수 있다. 앱도 Host 도 이미 셋으로 추려

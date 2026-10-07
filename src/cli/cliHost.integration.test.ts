@@ -1634,7 +1634,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const { h, projectId } = await projectRig()
       const mcp = await mcpClient(h)
       const accounts = await mcp.call('list_accounts', {})
-      expect(accounts.structuredContent).toEqual({ accounts: [{ id: h.accountId, label: 'a', provider: 'claude', default: true }] })
+      expect(accounts.structuredContent).toEqual({ accounts: [{ id: h.accountId, label: 'a', provider: 'claude', default: true, signedIn: true }] })
       const created = await mcp.call('create_job', { projectId, objective: 'default coordinator' })
       expect(created.isError, created.content[0]?.text).toBeFalsy()
       expect(h.state().jobs.find((j) => j.objective === 'default coordinator')?.coordinatorAccountId).toBe(h.accountId)

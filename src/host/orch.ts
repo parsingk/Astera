@@ -3,6 +3,7 @@
 // `OrchCall.call` and did not change when it did.
 import { createHash } from 'node:crypto'
 import path from 'node:path'
+import { stat } from 'node:fs/promises'
 import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -39,7 +40,7 @@ import { WORKTREE_CALLS, type HostWorktrees } from './worktrees'
 import type { HostJournal } from './hostJournal'
 import { NOT_WRITER, type HostUnderstanding } from './hostUnderstanding'
 import type { HostWorkUnits } from './hostWorkUnits'
-import { findProject } from '../core/orchestration/projects'
+import { ensureProject, findProject } from '../core/orchestration/projects'
 import type { SessionWorkUnit } from '../core/workUnit/types'
 import { justFinished, runRecordInputOf } from '../core/orchestration/runRecord'
 import type { WorkspaceManager } from './workspace/manager'
@@ -432,7 +433,7 @@ export function createHostOrch(a: {
    *  `worktree-*` names, answered on this side of the request-receipt line because none of them goes
    *  through `handleCommand` (R1: the app is their only caller). Absent exactly when there is no
    *  spawner (R5): with no spawner nothing built here ever reaches `worktrees`, so the four answer 501. */
-  worktrees?: Pick<HostWorktrees, 'call'>
+  worktrees?: Pick<HostWorktrees, 'call'> & Partial<Pick<HostWorktrees, 'isRegistered'>>
   /** Paired remote controllers (src/host/controllers.ts, remote runtime design §3.3). Absent: this Host pairs nobody,
    *  and `pair-create`, `clients-list` and `clients-revoke` answer 501. */
   controllers?: ControllerRegistry
@@ -1715,6 +1716,37 @@ export function createHostOrch(a: {
         if (cmd === 'requests-show') {
           const shown = requestsShow(args, receiptCaller(sessionId, from))
           return claimed === null ? shown : settleRequest(claimed, cmd, marks, shown)
+        }
+        // **One folder, registered by the person on the Runtime machine** (remote runtime N5): `astera runtime projects
+        // add <path>`. Answered and committed by the Host itself, like the other local management commands, because what
+        // decides it is the Runtime machine's own: the folder is there, it is absolute, and it is not one of this
+        // Host's worktrees. Idempotent like the app's own registration (ensureProject). Below the receipt line: it commits.
+        if (cmd === 'projects-add') {
+          if (from?.role !== 'app' && from?.role !== 'cli') {
+            const refused = { status: 403, body: { error: 'projects-add is for this machine’s app and CLI only' } }
+            return claimed === null ? refused : settleRequest(claimed, cmd, marks, refused)
+          }
+          const p = args.path
+          const isDir = typeof p === 'string' && path.isAbsolute(p) && (await stat(p).then((st) => st.isDirectory(), () => false))
+          const refusal =
+            typeof p !== 'string' || !path.isAbsolute(p)
+              ? 'projects-add needs an absolute --path'
+              : !isDir
+                ? `not a folder on this machine: ${p}`
+                : a.worktrees?.isRegistered?.(p)
+                  ? `${p} is one of Astera's worktrees; add the repository it belongs to`
+                  : null
+          if (refusal !== null) {
+            const refused = { status: 400, body: { error: refusal } }
+            return claimed === null ? refused : settleRequest(claimed, cmd, marks, refused)
+          }
+          await ready()
+          const before = store.get()
+          const { state, project } = ensureProject(before, { path: p as string, now: a.now() })
+          if (state !== before)
+            await depsFor(marks, actorOf({ sessionId, role: from?.role, state: before })).setState(state)
+          const added = { status: 200, body: project }
+          return claimed === null ? added : settleRequest(claimed, cmd, marks, added)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
         await ready()

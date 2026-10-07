@@ -75,9 +75,11 @@ async function withDefaultMarks(
       if (await loggedIn(a).catch(() => false)) ids.add(a.id)
     })
   )
-  return accounts.map((a) =>
-    defaultAccountIdOf(providerOf(a), accounts, ids) === a.id ? { ...orchAccountOf(a), default: true as const } : orchAccountOf(a)
-  )
+  return accounts.map((a) => ({
+    ...orchAccountOf(a),
+    ...(defaultAccountIdOf(providerOf(a), accounts, ids) === a.id ? { default: true as const } : {}),
+    signedIn: ids.has(a.id)
+  }))
 }
 
 /** The same read, with every account whole — `configDir` included. For `astera skills`, which runs

@@ -122,6 +122,9 @@ export interface OrchAccount {
   /** Its provider's default account (defaultAccountIdOf). Only when the list was asked for
    *  `withDefault`: deciding it probes every account's login, so the other callers do not pay for it. */
   default?: true
+  /** Whether the account can run right now, by the same probe that decides `default` (remote runtime N5). Only when
+   *  the list was asked `withDefault`, for the same reason. */
+  signedIn?: boolean
 }
 
 /** One run configuration as this layer sees it: what `--validate` takes and what `run-configs`

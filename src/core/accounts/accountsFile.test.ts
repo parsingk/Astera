@@ -111,17 +111,17 @@ describe('readAccountsFile with a login probe', () => {
     )
     const loggedIn = async (a: { id: string }): Promise<boolean> => a.id !== 'cl1'
     expect(await readAccountsFile(file, undefined, loggedIn)).toEqual([
-      { id: 'cl1', label: '일', provider: 'claude' },
-      { id: 'cl2', label: '일', provider: 'claude', default: true },
-      { id: 'cx1', label: '일', provider: 'codex', default: true }
+      { id: 'cl1', label: '일', provider: 'claude', signedIn: false },
+      { id: 'cl2', label: '일', provider: 'claude', default: true, signedIn: true },
+      { id: 'cx1', label: '일', provider: 'codex', default: true, signedIn: true }
     ])
-    expect(await readAccountsFile(file, 'codex', loggedIn)).toEqual([{ id: 'cx1', label: '일', provider: 'codex', default: true }])
+    expect(await readAccountsFile(file, 'codex', loggedIn)).toEqual([{ id: 'cx1', label: '일', provider: 'codex', default: true, signedIn: true }])
   })
 
   it('a probe that fails counts as logged out', async () => {
     await fs.writeFile(file, JSON.stringify({ accounts: [account({ id: 'cl1' })] }), 'utf8')
     expect(await readAccountsFile(file, undefined, async () => Promise.reject(new Error('keychain')))).toEqual([
-      { id: 'cl1', label: '일', provider: 'claude' }
+      { id: 'cl1', label: '일', provider: 'claude', signedIn: false }
     ])
   })
 })
@@ -131,9 +131,16 @@ describe('orchAccountsFor', () => {
   it('a null provider is no filter, as an omitted one is', async () => {
     const all = [account({ id: 'cl1' }), account({ id: 'cx1', provider: 'codex' })] as never[]
     expect(await orchAccountsFor(all, null, async () => true)).toEqual([
-      { id: 'cl1', label: '일', provider: 'claude', default: true },
-      { id: 'cx1', label: '일', provider: 'codex', default: true }
+      { id: 'cl1', label: '일', provider: 'claude', default: true, signedIn: true },
+      { id: 'cx1', label: '일', provider: 'codex', default: true, signedIn: true }
     ])
     expect(orchAccountsFor(all, 'codex')).toEqual([{ id: 'cx1', label: '일', provider: 'codex' }])
+  })
+  // Remote runtime N5: a controller's Job form needs to know which of the Runtime's accounts can run, and it cannot
+  // probe the Runtime's login itself.
+  it('says which accounts are signed in when it probed them', async () => {
+    const all = [account({ id: 'a' }), account({ id: 'b' })] as never[]
+    const listed = await orchAccountsFor(all, undefined, async (x) => x.id === 'a')
+    expect(listed.map((x) => [x.id, x.signedIn])).toEqual([['a', true], ['b', false]])
   })
 })
