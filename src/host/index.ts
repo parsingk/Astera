@@ -19,7 +19,8 @@ import { hideForkedConsoleWindows } from './childWindows'
 import { trustSystemCa } from './systemCa'
 import { openHostLog, logUnhandledRejections } from './log'
 import { flushAll, flushAllLogsSync } from '../core/log/logWriter'
-import { startHostServer, ADDRESS_TAKEN } from './server'
+import { startHostServer } from './server'
+import { HOST_EXIT, listenExitCode } from './exitCodes'
 import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
@@ -99,7 +100,7 @@ async function main(): Promise<void> {
   const profileDir = process.env.ASTERA_HOST_PROFILE_DIR
   if (!profileDir) {
     process.stderr.write('astera-host: ASTERA_HOST_PROFILE_DIR is required\n')
-    process.exit(2)
+    process.exit(HOST_EXIT.noProfile)
   }
   const log = openHostLog({ path: process.env.ASTERA_HOST_LOG ?? path.join(profileDir, 'host', 'host.log') })
   // Path probes that time out (an offline drive on PATH, or a session folder on one) are told here.
@@ -673,7 +674,7 @@ async function main(): Promise<void> {
     hostKey = await ensureHostKey(profileDir)
   } catch (err) {
     log.write(`could not make the Host key: ${String(err)} — not serving`)
-    process.exit(2)
+    process.exit(HOST_EXIT.keyFailure)
   }
   try {
     server = await startHostServer({
@@ -761,10 +762,11 @@ async function main(): Promise<void> {
     })
   } catch (err) {
     // Losing the bind race is the normal outcome of two apps starting at once, and it is not a
-    // failure: the other Host serves them both.
-    const taken = err instanceof Error && err.message === ADDRESS_TAKEN
-    log.write(taken ? 'another Host already serves this profile — leaving' : `could not listen: ${String(err)}`)
-    process.exit(0)
+    // failure: the other Host serves them both. Any other listen failure is one, and says so in its
+    // exit code (exitCodes.ts), which a supervisor reads.
+    const code = listenExitCode(err)
+    log.write(code === HOST_EXIT.lostBindRace ? 'another Host already serves this profile — leaving' : `could not listen: ${String(err)}`)
+    process.exit(code)
   }
 
   // Written only once the address is ours: a Host that lost the bind race has nothing to say about

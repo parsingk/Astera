@@ -66,4 +66,37 @@ describe('framing', () => {
     expect(c.bad).toEqual([])
     expect(c.seen).toEqual([{ n: 4 }])
   })
+
+  // A sender that never ends its line would otherwise grow the buffer without bound (remote runtime
+  // design §3.1): past the cap the reader gives up on the connection, once, and reads nothing more.
+  describe('with a line cap', () => {
+    const capped = (maxLine: number) => {
+      const seen: unknown[] = []
+      let overflows = 0
+      const feed = createLineReader({ onMessage: (v) => seen.push(v), onBadLine: () => {}, onHandlerError: () => {}, maxLine, onOverflow: () => overflows++ })
+      return { seen, feed, overflows: () => overflows }
+    }
+    it('gives up on an unfinished line longer than the cap, once', () => {
+      const c = capped(10)
+      c.feed('x'.repeat(6))
+      expect(c.overflows()).toBe(0)
+      c.feed('x'.repeat(6))
+      c.feed(encodeLine({ n: 1 }))
+      expect(c.overflows()).toBe(1)
+      expect(c.seen).toEqual([])
+    })
+    it('refuses a finished line longer than the cap that arrived in one chunk', () => {
+      const c = capped(10)
+      c.feed(encodeLine({ s: '0123456789' }))
+      expect(c.overflows()).toBe(1)
+      expect(c.seen).toEqual([])
+    })
+    it('reads a line exactly at the cap', () => {
+      const line = encodeLine({ s: '012' }) // {"s":"012"} is 11 characters before the newline
+      const c = capped(11)
+      c.feed(line)
+      expect(c.overflows()).toBe(0)
+      expect(c.seen).toEqual([{ s: '012' }])
+    })
+  })
 })

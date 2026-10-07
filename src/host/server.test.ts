@@ -42,6 +42,7 @@ const server = async (
     pidLives?: HostServerDeps['pidLives']
     stateClock?: HostServerDeps['stateClock']
     hostKey?: HostServerDeps['hostKey']
+    maxLine?: HostServerDeps['maxLine']
   } = {}
 ): Promise<{
   s: HostServer
@@ -76,6 +77,7 @@ const server = async (
     pidLives: over.pidLives ?? ((): boolean => true),
     stateClock: over.stateClock,
     hostKey: over.hostKey,
+    maxLine: over.maxLine,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -472,12 +474,72 @@ describe('startHostServer', () => {
         return true
       }
     })
-    const [reply] = await talk(h.address, [{ t: 'pty-list' } as never])
+    // After a hello: a socket that has not said one reaches no handler at all (Phase 0, `hardening` below).
+    const [, reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' }, { t: 'pty-list' } as never], 2)
     expect(reply).toEqual({ t: 'pty-listed', entries: [] })
     expect(seen).toContain('pty-list')
   })
 
   // MCP design §2: a socket that said role 'mcp' may send hello, ping and orch-call, and nothing else.
+  // Remote runtime Phase 0 (design §5.1, N12 as amended): the Host's own holes, closed before any of it
+  // is reachable from a network.
+  describe('hardening', () => {
+    it('hands nothing from a socket that has not said hello to onMessage, while a greeted one still reaches it', async () => {
+      const seen: string[] = []
+      const h = await start({ onMessage: (m) => { seen.push(m.t); return true } })
+      const silent = await h.connectSilent()
+      silent.write(encodeLine({ t: 'pty-list' }) + encodeLine({ t: 'proc-list' }) + encodeLine({ t: 'pty-write', id: 'p', data: 'x' }))
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual([])
+      const cli = await h.connect('cli')
+      cli.send({ t: 'pty-list' } as never)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual(['pty-list'])
+      silent.destroy()
+    })
+
+    // An MCP socket that says hello again as the app would be sent orch-act and count as attached.
+    it('keeps a socket at the role its first hello named', async () => {
+      const seen: string[] = []
+      const h = await start({ onMessage: (m) => { seen.push(m.t); return true } })
+      const mcp = await h.connect('mcp')
+      mcp.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' })
+      expect(await mcp.next(300)).toBeUndefined()
+      expect(h.s.hasApp()).toBe(false)
+      mcp.send({ t: 'pty-list' } as never)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual([])
+    })
+    it('answers a second hello that names the same role, as before', async () => {
+      const h = await start()
+      const cli = await h.connect('cli')
+      cli.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'cli' })
+      expect(await cli.next()).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL })
+    })
+
+    // X1-10 measured a whole-state `state-put` of 9,005,354 bytes on a real profile; the default cap must
+    // let one through, which is why it is 64 MiB and not the 8 MiB first proposed.
+    it('reads a 9 MB line under the default cap, as a large profile sends', async () => {
+      const sizes: number[] = []
+      const h = await start({ onMessage: (m) => { sizes.push(JSON.stringify(m).length); return true } })
+      const cli = await h.connect('cli')
+      cli.send({ t: 'blocks', records: {}, cleared: [], pad: 'x'.repeat(9_100_000) } as never)
+      await vi.waitFor(() => expect(sizes).toHaveLength(1), { timeout: 5000 })
+      expect(sizes[0]).toBeGreaterThan(9_000_000)
+      expect(cli.socket.destroyed).toBe(false)
+    })
+
+    it('closes a connection whose line runs past the inbound cap', async () => {
+      const h = await server({ maxLine: 64 })
+      const sock = net.connect(h.address)
+      await new Promise((r) => sock.once('connect', r))
+      const closed = new Promise((r) => sock.once('close', r))
+      sock.write('x'.repeat(65))
+      await closed
+      expect(h.logs.some((l) => l.includes('past the inbound cap'))).toBe(true)
+    })
+  })
+
   describe('an MCP socket reaches only hello, ping and orch-call', () => {
     it("its retire does not stop the Host", async () => {
       const h = await start({ liveCounts: () => ({ sessions: 0, runs: 0 }) })
@@ -1040,7 +1102,9 @@ describe('startHostServer', () => {
       expect(h.s.lastAppPid()).toBe(4242)
     })
 
-    it('tells onMessage whether the sender has said hello (review of Task 1)', async () => {
+    // Review of Task 1 told onMessage whether the sender had said hello. Since Phase 0 a socket that has
+    // not reaches onMessage not at all, so what it is told is always yes.
+    it('hands onMessage only what a greeted socket sent, and says so', async () => {
       const seen: boolean[] = []
       const h = await server({
         onMessage: (m, _send, from) => {
@@ -1052,12 +1116,13 @@ describe('startHostServer', () => {
       await new Promise((r) => sock.once('connect', r))
       const ch = messageChannel(sock)
       ch.send({ t: 'pty-list' })
-      await vi.waitFor(() => expect(seen).toHaveLength(1))
+      await new Promise((r) => setTimeout(r, 150))
+      expect(seen).toEqual([])
       ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' } as ClientMessage)
       await ch.next()
       ch.send({ t: 'pty-list' })
-      await vi.waitFor(() => expect(seen).toHaveLength(2))
-      expect(seen).toEqual([false, true])
+      await vi.waitFor(() => expect(seen).toHaveLength(1))
+      expect(seen).toEqual([true])
       sock.end()
     })
 

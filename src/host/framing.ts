@@ -17,6 +17,12 @@ export function createLineReader(a: {
    *  same line in the log. Reporting a handler's throw as a malformed line sends whoever is
    *  debugging the Host after the sender when the fault is here. */
   onHandlerError(v: unknown, err: unknown): void
+  /** The longest line read, in characters (UTF-16 units, about bytes for this JSON). A line that runs
+   *  past it, finished or not, calls `onOverflow` once and the reader reads nothing after it: a sender
+   *  that never ends its line would otherwise grow the buffer without bound. No cap when absent, which
+   *  is what every reader of the Host's own messages wants (remote runtime design §3.1). */
+  maxLine?: number
+  onOverflow?(): void
 }): (chunk: string) => void {
   const deliver = (line: string): void => {
     let value: unknown
@@ -33,14 +39,23 @@ export function createLineReader(a: {
     }
   }
   let buffer = ''
+  let overflowed = false
+  const overflow = (): void => {
+    overflowed = true
+    buffer = ''
+    a.onOverflow?.()
+  }
   return (chunk: string): void => {
+    if (overflowed) return
     buffer += chunk
     let index = buffer.indexOf('\n')
     while (index !== -1) {
       const line = buffer.slice(0, index)
+      if (a.maxLine !== undefined && line.length > a.maxLine) return overflow()
       buffer = buffer.slice(index + 1)
       if (line.trim() !== '') deliver(line)
       index = buffer.indexOf('\n')
     }
+    if (a.maxLine !== undefined && buffer.length > a.maxLine) overflow()
   }
 }

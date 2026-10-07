@@ -113,6 +113,9 @@ export interface HostServerDeps {
   /** The profile's Host key (core/host/hostKey.ts), made before this binds. A hello that carries a
    *  `nonce` is answered with its proof; without a key (tests that do not ask) no proof is sent. */
   hostKey?: string
+  /** The longest line a client may send, in characters; INBOUND_LINE_CAP when left out. A test passes a
+   *  small one rather than writing 64 MiB. */
+  maxLine?: number
 }
 
 /** What the `orch-state` throttle measures gaps with and waits on. `after` returns its cancel. */
@@ -218,6 +221,11 @@ export const LEGACY_APP_NOTICE = 'Astera 1.3.25 or older is attached; update it'
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
 const HANDSHAKE_MS = 10_000
+
+/** The longest line a local client may send (remote runtime design §3.1, DC-5). Large enough for a
+ *  whole-state `state-put` of a big profile (measured above 9 MB, X1-10), small enough that a sender
+ *  that never ends its line cannot grow the Host's memory without bound. Over it the socket is closed. */
+export const INBOUND_LINE_CAP = 64 * 1024 * 1024
 
 /** Whether something is answering at this address right now. Used to tell a stale socket file from a
  *  live one — unlinking a path someone is listening on would take a working Host's address away.
@@ -496,6 +504,16 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             send({ t: 'protocol-mismatch', protocol: HOST_PROTOCOL })
             return
           }
+          // **A socket keeps the role its first hello named** (remote runtime Phase 0, N12). A second hello
+          // naming another one is refused, unanswered: an MCP socket that turned itself into the app would
+          // be sent `orch-act`, count as attached and reach the pty messages its role keeps it from. One
+          // naming the same role is answered as it always was.
+          const named = m.role === 'app' ? 'app' : m.role === 'mcp' ? 'mcp' : m.role === undefined ? 'legacy-app' : 'cli'
+          const had = greetedSockets.has(socket) ? roles.get(socket) : undefined
+          if (had !== undefined && had !== named) {
+            deps.log.write(`a second hello asked to change this socket's role from ${had} to ${named} — refused`)
+            return
+          }
           deps.log.write(`client ${String(m.app)} connected`)
           // Only here, past the protocol check: a client on another protocol has been told so and is
           // owed nothing else. The address's version suffix exists to keep this protocol's messages
@@ -509,7 +527,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // forever (protocol.ts's `hello` has the whole reason). A role that is neither is a CLI.
           const wasApp = isApp(socket)
           const wasLegacy = roles.get(socket) === 'legacy-app'
-          roles.set(socket, m.role === 'app' ? 'app' : m.role === 'mcp' ? 'mcp' : m.role === undefined ? 'legacy-app' : 'cli')
+          roles.set(socket, named)
           if (roles.get(socket) === 'legacy-app' && !wasLegacy) deps.log.write(LEGACY_APP_NOTICE)
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
@@ -649,12 +667,25 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           waiting.settle({ ok: m.ok, value: m.value, error: m.error, fromApp: true })
           return
         }
-        if (deps.onMessage?.(m, send, { role: outwardRole(socket), socket: socketNo, greeted: greetedSockets.has(socket) }) === true) return
+        // **Nothing past this point for a socket that has not said hello** (remote runtime Phase 0, N12).
+        // `orch-call` and `orch-acted` above already refused it; the pty and proc messages `onMessage`
+        // serves did not, so a peer that never greeted could write into a terminal or spawn one. `retire`
+        // stays above on purpose: protocol-mismatch replacement sends it with no hello (X1-04).
+        if (!greetedSockets.has(socket)) {
+          deps.log.write(`a socket that has not said hello sent ${String(m?.t)} — dropped`)
+          return
+        }
+        if (deps.onMessage?.(m, send, { role: outwardRole(socket), socket: socketNo, greeted: true }) === true) return
         deps.log.write(`unknown message: ${JSON.stringify(v).slice(0, 200)}`)
       },
       onBadLine: (raw) => deps.log.write(`line that is not JSON, ignored: ${raw.slice(0, 200)}`),
       onHandlerError: (v, err) =>
-        deps.log.write(`message failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
+        deps.log.write(`message failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`),
+      maxLine: deps.maxLine ?? INBOUND_LINE_CAP,
+      onOverflow: () => {
+        deps.log.write(`a line ran past the inbound cap of ${deps.maxLine ?? INBOUND_LINE_CAP} characters — closing that connection`)
+        socket.destroy()
+      }
     })
     socket.on('data', read)
     const gone = (): void => {
