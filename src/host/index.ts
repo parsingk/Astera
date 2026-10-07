@@ -72,6 +72,10 @@ import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { isCleanWorktree } from '../core/worktrees/git'
 import { createMcpHttpSupervisor } from './mcpHttp'
+import { createGatewaySupervisor } from './gatewaySupervisor'
+import { attachGatewayLink } from './gatewayLink'
+import { readRemoteSettings } from '../core/remote/settings'
+import { loadIdentity, type RuntimeIdentity } from '../core/remote/identity'
 import { readMcpHttp } from '../core/settings/mcpHttp'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
@@ -215,6 +219,8 @@ async function main(): Promise<void> {
     // The MCP HTTP entrance stops with the Host (MCP HTTP §3): its stdin ends, which is its way out, and
     // a Host that exits before the kill's grace still ends that pipe. Never rejects.
     void mcpHttp.stop()
+    // The Remote Gateway stops with the Host the same way: its stdin ends (remote runtime design §2.3). Never rejects.
+    void gateway.stop()
     // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
@@ -275,6 +281,9 @@ async function main(): Promise<void> {
   // Shared with `orch` below so the version the handshake reports and the version `orch-call status`
   // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
+  // Made once for this process (remote runtime design §3.2, N11): a client comparing it learns the Host restarted. The
+  // local hello and the Gateway's hello carry the same value.
+  const bootId = randomBytes(16).toString('hex')
 
   /** Session work units (E2 §4): built below, once `orch` exists, and only with a spawner. Declared here
    *  because the worktrees' `git-op` and the rolling's events reach it, and both are built first. */
@@ -543,6 +552,54 @@ async function main(): Promise<void> {
     records: controllerRecordsFile(openSecretStore({ dir: path.join(profileDir, 'remote'), profileDir }))
   })
   controllers.load().catch((e: unknown) => log.write(`remote clients: ${e instanceof Error ? e.message : String(e)}`))
+
+  // The Remote Gateway (remote runtime design §2.3, §2.4): started, watched and stopped by remote-runtime.json, read
+  // once the server listens, at each app greeting and on `runtime-reload`. Each generation's pipes become a link
+  // (gatewayLink.ts) to the same registry and orchestration local clients use. Reading the settings also refreshes
+  // two things the rest of the Host reads synchronously: whether Remote holds the Host up (N3), and the identity the
+  // link's hello names.
+  const remoteStore = openSecretStore({ dir: path.join(profileDir, 'remote'), profileDir })
+  let remoteEnabled = false
+  let remoteIdentity: RuntimeIdentity | null = null
+  const gateway = createGatewaySupervisor({
+    settings: async () => {
+      const s = await readRemoteSettings(profileDir)
+      remoteEnabled = s.enabled
+      if (s.enabled) remoteIdentity = await loadIdentity(remoteStore).catch(() => null)
+      return s
+    },
+    cli: ((): HostCliPaths | null => {
+      const p = hostCliPaths(process.env, existsSync)
+      return 'missing' in p ? null : p
+    })(),
+    profileDir,
+    env: process.env,
+    push: (state) => server.broadcast({ t: 'gateway-state', state }),
+    attach: (child, linkGen, events) =>
+      attachGatewayLink({
+        linkGen,
+        input: child.stdout,
+        output: child.stdin,
+        controllers,
+        orch,
+        hello: () => ({
+          runtimeId: remoteIdentity?.runtimeId ?? '',
+          displayName: remoteIdentity?.displayName ?? os.hostname(),
+          asteraVersion: hostVersion,
+          hostProtocol: HOST_PROTOCOL,
+          gatewayProtocol: 1,
+          bootId,
+          platform: process.platform,
+          pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
+          capabilities: ['remote.jobs', 'remote.retry']
+        }),
+        log: (m) => log.write(m),
+        onReady: events.ready,
+        onFailed: events.failed,
+        onHardCap: events.hardCap
+      }),
+    log: (m) => log.write(m)
+  })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
@@ -631,7 +688,10 @@ async function main(): Promise<void> {
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
     slack: slackWiring ?? undefined,
     // `mcp-http-reload` and `mcp-http-status` (MCP HTTP §3).
-    mcpHttp
+    mcpHttp,
+    // `runtime-reload` and `runtime-status`, and revocation closing live connections (remote runtime design §2.9, §3.3).
+    gateway,
+    closeControllerConns: (conns) => gateway.link()?.closeConns(conns)
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
@@ -692,8 +752,7 @@ async function main(): Promise<void> {
     server = await startHostServer({
       address: addr.address,
       hostKey,
-      // Made once for this process (remote runtime design §3.2, N11): a client comparing it learns the Host restarted.
-      bootId: randomBytes(16).toString('hex'),
+      bootId,
       dirToPrepare: addr.dirToPrepare,
       version: hostVersion,
       idleMs: IDLE_MS,
@@ -739,7 +798,9 @@ async function main(): Promise<void> {
       // `astera host start` started stays while a run is in flight, and still leaves holding nothing.
       liveCounts: () => ({
         sessions: registry.liveCount() + procs.liveCount(),
-        runs: orch.runningRuns()
+        runs: orch.runningRuns(),
+        // Remote on: the Host waits for controllers instead of leaving idle (remote runtime N3).
+        remote: remoteEnabled
       }),
       orch,
       // Announced only when there is a spawner, so an app can tell a Host that starts sessions itself,
@@ -771,6 +832,8 @@ async function main(): Promise<void> {
         void hostWorkUnits?.reload()
         // MCP HTTP §3: and the entrance reads its setting again, for an mcp-http-reload that never arrived.
         void mcpHttp.reload()
+        // Remote runtime §2.3: and the Gateway, for a runtime-reload that never arrived.
+        void gateway.reload()
       },
       log
     })
@@ -801,6 +864,8 @@ async function main(): Promise<void> {
   void hostWorkUnits?.writerMayHaveChanged()
   // And the MCP HTTP entrance, once this Host is the one that serves the profile (MCP HTTP §3).
   void mcpHttp.reload()
+  // And the Remote Gateway (remote runtime design §2.3: every Host start reads remote-runtime.json).
+  void gateway.reload()
 
   handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

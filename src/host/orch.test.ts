@@ -4526,3 +4526,30 @@ describe('clients-revoke closes the client’s live connections (remote runtime 
     expect(closed).toEqual([{ linkGen: 3, conn: 'c7' }])
   })
 })
+
+describe('runtime-reload and runtime-status (remote runtime design §2.9)', () => {
+  const gateway = (state: object = { state: 'ready', listen: '127.0.0.1', port: 47831, fingerprint: 'fp' }) => {
+    let reloads = 0
+    return { reloads: () => reloads, dep: { reload: async () => void reloads++, status: () => state as never } }
+  }
+  it('answers the app and the CLI with the Gateway state and the paired clients', async () => {
+    const g = gateway()
+    const controllers = createControllerRegistry()
+    await controllers.redeem(controllers.createPairing({ permission: 'read-only', name: 'laptop' }).code, 'x')
+    const orch = orchOver({ gateway: g.dep, controllers })
+    const r = await orch.call({ cmd: 'runtime-reload', args: {}, sessionId: '', from: { role: 'cli', toOthers: () => {} } })
+    expect(r.status).toBe(200)
+    expect(g.reloads()).toBe(1)
+    expect(r.body).toMatchObject({ gateway: { state: 'ready', fingerprint: 'fp' }, clients: [{ name: 'laptop', permission: 'read-only' }] })
+    const s = await orch.call({ cmd: 'runtime-status', args: {}, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(s.status).toBe(200)
+    expect(g.reloads()).toBe(1)
+  })
+  it('refuses MCP and controllers, takes no request id, and is 501 on a Host without a Gateway', async () => {
+    const orch = orchOver({ gateway: gateway().dep })
+    for (const from of [{ role: 'mcp' as const, toOthers: () => {} }, { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }])
+      expect((await orch.call({ cmd: 'runtime-reload', args: {}, sessionId: '', from })).status).toBe(403)
+    expect((await orch.call({ cmd: 'runtime-status', args: {}, sessionId: '', from: { role: 'cli', toOthers: () => {} }, request: 'r-1' })).status).toBe(400)
+    expect((await orchOver().call({ cmd: 'runtime-status', args: {}, sessionId: '', from: { role: 'cli', toOthers: () => {} } })).status).toBe(501)
+  })
+})

@@ -10,6 +10,7 @@ import { hostWorkerBaseEnv, type HostCliPaths } from '../core/host/spawn'
 import type { RemoteSettings } from '../core/remote/settings'
 import { redactSecrets } from '../core/remote/redact'
 import type { GatewayLinkFrame } from '../core/remote/frames'
+import type { GatewayState } from '../core/remote/gatewayState'
 import { openHostLog } from './log'
 
 export const GATEWAY_BACKOFF_MS = [1_000, 2_000, 5_000]
@@ -18,11 +19,7 @@ const STABLE_MS = 30_000
 const STOP_GRACE_MS = 5_000
 const CLOSE_GRACE_MS = 1_000
 
-export type GatewayState =
-  | { state: 'disabled' }
-  | { state: 'starting'; listen: string; port: number }
-  | { state: 'ready'; listen: string; port: number; fingerprint: string }
-  | { state: 'failed'; code: string; message: string; listen?: string; port?: number }
+export type { GatewayState }
 
 export interface GatewayChild {
   pid?: number

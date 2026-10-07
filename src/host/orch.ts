@@ -17,6 +17,7 @@ import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
 import { sanitizeForController } from '../core/remote/sanitize'
+import type { GatewayState } from '../core/remote/gatewayState'
 import type { ControllerRegistry } from './controllers'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
@@ -444,6 +445,9 @@ export function createHostOrch(a: {
   /** Closes a revoked client's live connections: the Gateway link's `closeConns` (design §3.3's last revocation step).
    *  Absent before a Gateway runs, when there is nothing open to close. */
   closeControllerConns?(conns: Array<{ linkGen: number; conn: string }>): void
+  /** The Remote Gateway's supervisor (remote runtime design §2.3): `runtime-reload` and `runtime-status`. Absent on a
+   *  Host built without one; both then answer 501. */
+  gateway?: { reload(): Promise<void>; status(): GatewayState }
   /** The Host's own checks and whether it drives now (orchDeps' HOST_DRIVES), passed through to
    *  `hostOrchDeps`. Absent: validation, review and repair take their pre-S5 routes. */
   drive?: { owns(): boolean; checks: HostChecks } | null
@@ -1550,6 +1554,8 @@ export function createHostOrch(a: {
             cmd === 'workspace-stop' ||
             cmd === 'workspace-close' ||
             cmd === 'workspace-size' ||
+            cmd === 'runtime-reload' ||
+            cmd === 'runtime-status' ||
             cmd === 'pair-create' ||
             cmd === 'clients-list' ||
             cmd === 'clients-revoke' ||
@@ -1680,6 +1686,14 @@ export function createHostOrch(a: {
         // its two buttons. Never a command layer command, never a receipt.
         // **The Host's controllers, for local callers only** (remote runtime design §3.3, N18): the app and the CLI on
         // this machine. A controller is refused by its gate before this; MCP by its allowlist; anything else here.
+        // **Remote Runtime on this machine, for local callers only** (design §2.9, §3.3): the CLI's `runtime start` and
+        // `stop` write remote-runtime.json and then ask for a reload; `status` reads. The link never routes these.
+        if (cmd === 'runtime-reload' || cmd === 'runtime-status') {
+          if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
+          if (!a.gateway) return { status: 501, body: { error: 'this Host does not run the Remote Gateway' } }
+          if (cmd === 'runtime-reload') await a.gateway.reload()
+          return { status: 200, body: { gateway: a.gateway.status(), clients: a.controllers?.list() ?? [] } }
+        }
         if (cmd === 'pair-create' || cmd === 'clients-list' || cmd === 'clients-revoke') {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
           if (!a.controllers) return { status: 501, body: { error: 'this Host pairs no remote controllers' } }

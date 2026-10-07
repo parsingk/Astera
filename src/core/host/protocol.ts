@@ -4,6 +4,7 @@
 // Newline-delimited JSON, one object per line. Terminal data is not here yet — slice 2 adds it, and
 // JSON string escaping is what will carry it, the same way the app already ships PTY output to the
 // renderer.
+import type { GatewayState } from '../remote/gatewayState'
 import type { OrchState } from '../orchestration/state'
 import type { HostDriverReport, RollStateEvent, SessionInfo, WorktreeInfo } from '../types'
 import type { SlackForwardedEvent } from '../slack/forwarded'
@@ -172,6 +173,10 @@ export const HOST_FEATURE_WORKSPACE_SIZE = 'workspace-size'
  *  the CLI paths answers its state as failed. An app sends neither call to a Host without it. Additive, so
  *  HOST_PROTOCOL stays 4. */
 export const HOST_FEATURE_MCP_HTTP = 'mcp-http'
+/** Remote Runtime (remote runtime design §2.3, §2.9): this Host answers `runtime-reload` and `runtime-status`, supervises
+ *  the Remote Gateway while `remote-runtime.json` enables it, and pushes `gateway-state`. Announced by every Host that
+ *  has it, like `mcp-http`: one without the CLI paths reports the Gateway failed. */
+export const HOST_FEATURE_REMOTE = 'remote-runtime'
 
 /** The MCP HTTP entrance as the Host runs it (MCP HTTP design §3): answered by the app-only orch-call
  *  `mcp-http-status` (and `mcp-http-reload`, after it re-read the setting) and pushed as `mcp-http-state` on
@@ -563,6 +568,9 @@ export type HostMessage =
   /** The MCP HTTP entrance's state changed (MCP HTTP design §3; host/mcpHttp.ts): the same value the app-only
    *  `mcp-http-status` answers. An older app ignores it. */
   | { t: 'mcp-http-state'; state: McpHttpState }
+  /** The Remote Gateway's state changed (remote runtime design §2.3): the value `runtime-status` answers. An older app
+   *  ignores it. */
+  | { t: 'gateway-state'; state: GatewayState }
   /** A goal a session declared opened nothing, because a unit was already open there (the collector's
    *  onGoalIgnored): the app shows the notice its renderer shows today. An older app ignores it. */
   | { t: 'work-units-goal-ignored'; projectPath: string; objective: string; blockingUnitId: string }

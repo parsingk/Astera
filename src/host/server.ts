@@ -97,7 +97,8 @@ export interface HostServerDeps {
    *  separate `holdsWork` that counted only terminals, and a Host `astera host start` had started
    *  left after `idleMs` with a run in flight while `host stop` would have refused to stop it
    *  (conformance audit #100). A Host holding nothing still leaves. */
-  liveCounts?(): { sessions: number; runs: number }
+  /** `remote`: Remote is on, so the Host waits for controllers rather than leave idle (remote runtime N3). */
+  liveCounts?(): { sessions: number; runs: number; remote?: boolean }
   /** Answers `orch-call` (design §5). Optional here only so a caller that never sends `orch-call`
    *  does not have to supply one; `host/index.ts` always does, because it always advertises
    *  HOST_FEATURE_ORCH below. */
@@ -457,7 +458,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
       const held = deps.liveCounts?.() ?? { sessions: 0, runs: 0 }
-      if (live === 0 && held.sessions === 0 && held.runs === 0) {
+      if (live === 0 && held.sessions === 0 && held.runs === 0 && held.remote !== true) {
         deps.log.write(`idle for ${deps.idleMs}ms with no client — leaving`)
         deps.onIdle()
         return

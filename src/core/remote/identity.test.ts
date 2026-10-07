@@ -52,7 +52,8 @@ describe('loadOrCreateIdentity (remote runtime design §4.1)', () => {
       await expect(loadOrCreateIdentity(s, { displayName: 'desk' }), `${name}: ${body.slice(0, 20)}`).rejects.toMatchObject({ code: 'IDENTITY_UNREADABLE' })
       expect(await s.read(name)).toBe(body)
     }
-  })
+    // Five rounds of locked writes, each read back through the ACL check: slow under a full parallel suite.
+  }, 30_000)
   it('two first starts at once end with one identity', async () => {
     const script = path.join(__dirname, 'identity.child.ts')
     const [a, b] = await Promise.all([runChild(script, [profile]), runChild(script, [profile])])

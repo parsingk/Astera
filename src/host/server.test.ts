@@ -645,6 +645,23 @@ describe('startHostServer', () => {
     expect(idle).toBe(true)
   })
 
+  // Remote runtime N3: a Runtime with Remote on is waiting for controllers, and an idle exit would take its Gateway with it.
+  it('does not leave on the idle timer while Remote is on, with no session and no run', async () => {
+    let idle = false
+    let remote = true
+    const h = await server({
+      idleMs: 50,
+      onIdle: () => { idle = true },
+      liveCounts: () => ({ sessions: 0, runs: 0, remote })
+    })
+    await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(false)
+    remote = false
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(true)
+  })
+
   // Advertising a feature and being able to serve it must be the same fact. `server()`'s default
   // always supplies a working `orch`, which is right for the orch-call tests below but would hide
   // this one — so this test goes straight to `startHostServer`, the way the address-taken and
