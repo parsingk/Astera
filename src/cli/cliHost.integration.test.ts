@@ -1100,7 +1100,7 @@ describe('the public CLI against a real Host (§48, §49)', { timeout: 60_000 },
   // §49 "spaces/non-ASCII user directory", "path quoting": a profile and a Job folder with a space and
   // Hangul in their names, through the address, `projects find`, `jobs create --cwd` and `--project`.
   it('a profile and a Job folder with spaces and Hangul work end to end', async () => {
-    const project = await tempDir('astera 한글 프로젝트-')
+    const project = await tempDir('astera-한글 프로젝트-')
     cleanups.push(() => rmrf(project))
     const sub = path.join(project, '하위 폴더', 'src')
     await fs.mkdir(sub, { recursive: true })

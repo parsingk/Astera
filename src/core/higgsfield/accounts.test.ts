@@ -9,7 +9,7 @@ import {
 
 let profile: string
 beforeEach(async () => {
-  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hf-acc-'))
+  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hf-acc-'))
 })
 
 describe('higgsfield accounts store', () => {
@@ -33,7 +33,7 @@ describe('higgsfield accounts store', () => {
   })
 
   it('imports by copying, leaving the source in place', async () => {
-    const src = await fs.mkdtemp(path.join(os.tmpdir(), 'hf-src-'))
+    const src = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hf-src-'))
     await fs.writeFile(path.join(src, 'credentials.json'), '{"access_token":"x"}')
     await fs.writeFile(path.join(src, 'config.json'), '{}')
     const a = await importHfAccount(profile, 'Main', src)
@@ -42,7 +42,7 @@ describe('higgsfield accounts store', () => {
   })
 
   it('refuses an import with no credentials file', async () => {
-    const src = await fs.mkdtemp(path.join(os.tmpdir(), 'hf-src-'))
+    const src = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hf-src-'))
     await expect(importHfAccount(profile, 'Main', src)).rejects.toThrow(/credentials\.json/)
     expect((await readHfAccounts(profile)).accounts).toEqual([])
   })

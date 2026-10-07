@@ -47,7 +47,7 @@ describe('assets', () => {
   })
 
   it('keeps a download extension only when it is a plain one', async () => {
-    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfd-'))
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfd-'))
     const f = async () => new Response(new Uint8Array([1]))
     expect(path.extname(await downloadAsset(profile, 'j1', 'https://cdn.x/a.mp4', f))).toBe('.mp4')
     expect(path.extname(await downloadAsset(profile, 'j2', 'https://cdn.x/a.mp4:x', f))).toBe('.bin')
@@ -55,7 +55,7 @@ describe('assets', () => {
   })
 
   it('gives up on a download that does not answer in time, leaving no file', async () => {
-    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfd-'))
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfd-'))
     const hang = ((_u: string, init?: RequestInit) => new Promise<Response>((_res, rej) => {
       init?.signal?.addEventListener('abort', () => rej(init.signal!.reason))
     })) as unknown as typeof fetch
@@ -66,7 +66,7 @@ describe('assets', () => {
 
 describe('recordAfter / readLedger', () => {
   let profile: string
-  beforeEach(async () => { profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfa-')) })
+  beforeEach(async () => { profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfa-')) })
 
   it('reads an empty ledger when the file is missing or bad', async () => {
     expect(await readLedger(profile)).toEqual({ uploads: {}, jobs: {} })

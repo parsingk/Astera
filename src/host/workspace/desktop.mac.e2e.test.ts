@@ -52,7 +52,7 @@ describe.runIf(enabled)('the agent app workspace on a real macOS session', () =>
   it(
     'launches in the background, drives the page, refuses the native helpers, and leaves nothing',
     async () => {
-      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera 맥 e2e-'))
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-맥 e2e-'))
       const profile = path.join(dir, 'profile')
       await fs.mkdir(profile, { recursive: true })
       const udd = path.join(dir, 'electron-profile')

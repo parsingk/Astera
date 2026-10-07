@@ -7,8 +7,8 @@ import { hfEnvFor, patchHfAccount, readHfAccounts } from '../core/higgsfield/acc
 
 let profile: string, home: string
 beforeEach(async () => {
-  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfm-p-'))
-  home = await fs.mkdtemp(path.join(os.tmpdir(), 'hfm-h-'))
+  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfm-p-'))
+  home = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfm-h-'))
 })
 // runLogin stands in for the real CLI: like it, it leaves a credentials file in the account's folder.
 const loginOk = (profileDir: string) => async (id: string) => {

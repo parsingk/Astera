@@ -11,7 +11,7 @@ import {
 
 let dir: string
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'conv-'))
+  dir = await mkdtemp(path.join(tmpdir(), 'astera-conv-'))
 })
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true })

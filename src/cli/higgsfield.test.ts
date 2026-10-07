@@ -7,7 +7,7 @@ import { addHfAccount, hfAccountDir, patchHfAccount, readHfAccounts } from '../c
 import type { HfRunner } from './hfProxy'
 
 let profile: string
-beforeEach(async () => { profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfc-')) })
+beforeEach(async () => { profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfc-')) })
 const run = async (id: string) => ({ email: `${id}@x.com`, credits: 10 })
 
 describe('astera higgsfield', () => {

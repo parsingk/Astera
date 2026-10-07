@@ -181,7 +181,7 @@ describe.runIf(enabled)('the agent app workspace on a real desktop', () => {
   }, 60_000)
 
   const tempDir = async (): Promise<string> => {
-    if (!dir) dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera 데스크톱 e2e-'))
+    if (!dir) dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-데스크톱 e2e-'))
     return dir
   }
 
