@@ -70,6 +70,26 @@ describe('upsertProjectTrust', () => {
     expect(after.indexOf('trust_level')).toBeGreaterThan(after.indexOf('"""\n', 10))
   })
 
+  // Codex 0.160 on Windows reads a project block only under backslashes (measured 2026-10-07: `C:/…`
+  // and `c:/…` left the trust menu up, `C:\…` and `c:\…` took it down). `--cwd C:/…` reaches here as is.
+  it('writes a win32 path with forward slashes in the backslash form codex reads', () => {
+    expect(upsertProjectTrust('', 'C:/Users/me/repo', 'trusted', 'win32')).toBe(
+      '[projects."C:\\\\Users\\\\me\\\\repo"]\ntrust_level = "trusted"\n'
+    )
+  })
+  it('rewrites a forward-slash block written earlier, keeping one block', () => {
+    const before = 'model = "gpt-5"\n\n[projects."C:/Users/me/repo"]\ntrust_level = "trusted"\n'
+    const after = upsertProjectTrust(before, 'C:\\Users\\me\\repo', 'trusted', 'win32')
+    expect(after).toBe('model = "gpt-5"\n\n[projects."C:\\\\Users\\\\me\\\\repo"]\ntrust_level = "trusted"\n')
+  })
+  it('leaves a block codex wrote itself as it is', () => {
+    const before = "[projects.'c:\\users\\me\\repo']\ntrust_level = \"trusted\"\n"
+    expect(upsertProjectTrust(before, 'C:/Users/me/repo', 'trusted', 'win32')).toBe(before)
+  })
+  it('keeps forward slashes on posix', () => {
+    expect(upsertProjectTrust('', '/home/u/repo', 'trusted', 'linux')).toBe('[projects."/home/u/repo"]\ntrust_level = "trusted"\n')
+  })
+
   it('keeps CRLF files on CRLF', () => {
     const after = upsertProjectTrust('model = "gpt-5"\r\n', 'D:\\p\\x')
     expect(after).toContain('\r\n[projects."D:\\\\p\\\\x"]\r\ntrust_level = "trusted"\r\n')
