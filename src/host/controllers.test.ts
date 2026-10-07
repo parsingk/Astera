@@ -25,6 +25,26 @@ describe('ControllerRegistry (remote runtime design §3.3, §4.4, §4.5)', () =>
     for (let i = 0; i < 5; i++) expect(r.redeem(wrong, 'x').ok).toBe(false)
     expect(r.redeem(code, 'x')).toEqual({ ok: false, reason: 'burned' })
   })
+  it('names the client as the pairing said, and cleans a name the redeemer sent', () => {
+    const r = createControllerRegistry()
+    const named = r.redeem(r.createPairing({ permission: 'read-only', name: 'office pc' }).code, 'other')
+    const sent = r.redeem(r.createPairing({ permission: 'read-only' }).code, 'lap\u0000top\n')
+    if (!named.ok || !sent.ok) throw new Error('redeem')
+    const names = Object.fromEntries(r.list().map((c) => [c.clientId, c.name]))
+    expect(names[named.clientId]).toBe('office pc')
+    expect(names[sent.clientId]).toBe('lap top')
+  })
+  it('never gives a new client the id of an existing one', () => {
+    let calls = 0
+    // Calls 1 to 3 are the first pairing (code, token, id); call 6 is the second id, made to collide with the first.
+    const random = (n: number): Buffer => Buffer.alloc(n, ++calls <= 3 || calls === 6 ? 0 : calls)
+    const r = createControllerRegistry({ random })
+    const a = r.redeem(r.createPairing({ permission: 'read-only' }).code, 'a')
+    const b = r.redeem(r.createPairing({ permission: 'full-control' }).code, 'b')
+    if (!a.ok || !b.ok) throw new Error('redeem')
+    expect(b.clientId).not.toBe(a.clientId)
+    expect(r.list().find((c) => c.clientId === a.clientId)?.permission).toBe('read-only')
+  })
   it('refuses a right code after ten minutes', () => {
     const c = clock()
     const r = createControllerRegistry({ now: c.now })

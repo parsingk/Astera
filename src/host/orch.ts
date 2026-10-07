@@ -381,8 +381,8 @@ export interface HostOrch extends OrchCall {
   internalDeps(): OrchServerDeps
   /** Whether the state is in memory: the load finished, or the app pushed a whole one. */
   loaded(): boolean
-  /** Hears every commit after the snapshot it returns (remote runtime design §3.6). Null before the
-   *  state is in memory: there is no version yet to hand back, and subscribing must not trigger a load. */
+  /** Hears every commit after the snapshot it returns, as a controller sees it: sanitized (remote runtime
+   *  design §3.6). Null before the state is in memory: there is no version yet to hand back, and subscribing must not trigger a load. */
   subscribe(deliver: (s: OrchState, version: number) => void): { state: OrchState; version: number; unsubscribe(): void } | null
   /** Runs the drain once, if it has not run in this Host's life (C6): for a Host that was `'app'` at
    *  its load and becomes `'host'` later. Re-reads the queue. Answers whether it ran. */
@@ -700,9 +700,12 @@ export function createHostOrch(a: {
         // would let a retry re-run a command whose effect the next command can already see.
         // A rollback of this call's own earlier commit takes that one back instead (A36).
         marks.commits += how?.rollsBack ? -1 : 1
-        await store.save(next)
-        a.onState(next, committed)
+        // Published as memory moves, not after the disk: `subscribe` snapshots memory and `version`, which move
+        // together right here, so a push taken any later could reach a subscriber older than its snapshot.
+        const saving = store.save(next)
         publish(next, committed)
+        await saving
+        a.onState(next, committed)
         // J1: journaled after the commit landed (the spec's accepted crash window), with who made it (J4,
         // P5) and its version under this Host's life as the key (J6, P1).
         journalSafely('recording a commit', () => a.journal?.committed({ prev, next, version: committed, actor }))
@@ -906,12 +909,14 @@ export function createHostOrch(a: {
     const prev = store.get()
     // Taken here, not after the write lands — the whole of `reserveVersion`'s note.
     const committed = reserveVersion()
-    await store.save(state)
+    // Published as memory moves, for the reason in `depsFor`'s setState.
+    const saving = store.save(state)
     loaded = true
+    publish(state, committed)
+    await saving
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state, version: committed })
-    publish(state, committed)
     // P15: a put that stood in for the load has no base to diff against.
     // Not recorded either without one: every Run the put carries would read as just finished.
     if (hadState) {
@@ -970,14 +975,18 @@ export function createHostOrch(a: {
 
   /**
    * Who hears every commit, with its version (remote runtime design §3.6). Both commit paths call
-   * `publish` right where they tell the app: the Host's own commits after `a.onState`, an accepted
-   * `state-put` after `toOthers`. A subscriber's throw is logged and the others still hear it.
+   * `publish` in the same synchronous step that moves memory and takes the version, which is what lets
+   * `subscribe` snapshot both without a push older than the snapshot ever following it. Subscribers are
+   * controllers, so they hear the sanitized state, made once per commit. A subscriber's throw is logged
+   * and the others still hear it.
    */
   const subscribers = new Set<(s: OrchState, version: number) => void>()
   const publish = (s: OrchState, v: number): void => {
+    if (subscribers.size === 0) return
+    const view = sanitizeForController(s)
     for (const deliver of subscribers) {
       try {
-        deliver(s, v)
+        deliver(view, v)
       } catch (e) {
         a.log(`a state subscriber threw: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -1386,7 +1395,7 @@ export function createHostOrch(a: {
     subscribe: (deliver) => {
       if (!loaded) return null
       subscribers.add(deliver)
-      return { state: store.get(), version, unsubscribe: () => void subscribers.delete(deliver) }
+      return { state: sanitizeForController(store.get()), version, unsubscribe: () => void subscribers.delete(deliver) }
     },
     sessionExited: async (e) => {
       await ready()
@@ -1488,6 +1497,9 @@ export function createHostOrch(a: {
         // **A controller has no session** (remote runtime design §2.5, D2.1): whatever it named is dropped, so
         // COORDINATOR_ONLY, chats-answer and actorOf never read it as one, and its receipts are keyed by its principal.
         if (from?.role === 'controller') sessionId = ''
+        // A retry names the request it retries (§3.9). Without one there is no receipt to look for, and running it
+        // as a fresh call is exactly what `retry` exists to prevent.
+        if (retry === true && request === undefined) return { status: 400, body: { error: 'retry needs the request id it retries' } }
         // **MCP callers pass the allowlist first** (MCP design §2), before receipts and before the
         // app-only commands, so a refused call leaves no receipt and reaches nothing. Read per call, as
         // `app js` reads its toggle: the app may change it while the Host runs. A settings file that
@@ -1669,6 +1681,9 @@ export function createHostOrch(a: {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
           if (!a.controllers) return { status: 501, body: { error: 'this Host pairs no remote controllers' } }
           if (cmd === 'pair-create') {
+            // An unknown level is refused, not widened: the gate denies one, so pairing must not grant one.
+            if (args.permission !== undefined && args.permission !== 'read-only' && args.permission !== 'full-control')
+              return { status: 400, body: { error: 'permission must be read-only or full-control' } }
             const permission = args.permission === 'read-only' ? 'read-only' : 'full-control'
             const name = typeof args.name === 'string' ? args.name : undefined
             // The code goes to the caller and nowhere else: never into a log line (design §4.4).

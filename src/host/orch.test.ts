@@ -833,6 +833,49 @@ describe('state for a controller (remote runtime design §3.6)', () => {
     await orch.call({ cmd: 'runs-resume', args: { id: runId }, sessionId: '' })
     expect(seen).toHaveLength(2)
   })
+  it('never pushes a subscriber a version at or below its snapshot, however the subscription meets commits in flight', async () => {
+    const { jobId } = await seed()
+    const orch = orchOver()
+    await orch.ready()
+    const runId = orch.state().runs.find((x) => x.jobId === jobId)!.id
+    const subs: Array<{ at: number; seen: number[] }> = []
+    const work = (async () => {
+      await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: '' })
+      await orch.call({ cmd: 'runs-resume', args: { id: runId }, sessionId: '' })
+    })()
+    let done = false
+    void work.then(() => (done = true))
+    // One subscription per microtask turn, so some land while a commit's disk write is still pending.
+    while (!done) {
+      const seen: number[] = []
+      const sub = orch.subscribe((_s, v) => seen.push(v))!
+      subs.push({ at: sub.version, seen })
+      await new Promise((r) => setImmediate(r))
+    }
+    await work
+    const last = orch.subscribe(() => {})!.version
+    for (const { at, seen } of subs) {
+      expect(seen.every((v, i) => v > at && (i === 0 || v > seen[i - 1]))).toBe(true)
+      expect(seen.length === 0 ? at : seen[seen.length - 1]).toBe(last)
+    }
+  })
+  it('pushes the sanitized state', async () => {
+    await seed()
+    const orch = orchOver()
+    await orch.ready()
+    const pushed: string[] = []
+    orch.subscribe((s) => pushed.push(JSON.stringify(s)))
+    const s = orch.state()
+    const withTail = { ...s, tasks: s.tasks.map((t) => ({ ...t, checks: [{ configId: 'c', name: 'test', status: 'failed' as const, outputTail: 'secret output' }] })) }
+    await orch.call({ cmd: 'state-put', args: { state: withTail }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0]).not.toContain('secret output')
+  })
+  it('refuses a retry that names no request', async () => {
+    const orch = orchOver()
+    const r = await orch.call({ cmd: 'runs-list', args: {}, sessionId: '', from: controller, retry: true })
+    expect(r.status).toBe(400)
+  })
 })
 
 describe('projects-add (remote runtime N5)', () => {
@@ -875,6 +918,11 @@ describe('pairing and clients (local only)', () => {
     expect(listed.body).toMatchObject({ clients: [{ clientId: got.clientId, name: 'laptop', permission: 'read-only' }] })
     const revoked = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: cli })
     expect(revoked.body).toMatchObject({ revoked: true })
+  })
+  it('pair-create refuses a permission it does not know rather than granting full control', async () => {
+    const orch = orchOver({ controllers: createControllerRegistry() })
+    const r = await orch.call({ cmd: 'pair-create', args: { permission: 'readonly' }, sessionId: '', from: cli })
+    expect(r.status).toBe(400)
   })
   it('refuses all three to an MCP caller and to a controller', async () => {
     const orch = orchOver({ controllers: createControllerRegistry() })

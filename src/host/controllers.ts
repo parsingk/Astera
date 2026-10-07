@@ -53,7 +53,9 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
   const random = deps.random ?? randomBytes
   const records = new Map<string, ControllerRecord>()
   /** Pending pairing codes by hash: what a redeem needs, and the attempts wrong guesses have spent. */
-  const codes = new Map<string, { expiresAt: number; attempts: number; permission: ControllerPermission }>()
+  const codes = new Map<string, { expiresAt: number; attempts: number; permission: ControllerPermission; name?: string }>()
+  // A name reaches error text and the client list, so it is one printable line.
+  const cleanName = (n: string): string => n.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64)
   /** `${linkGen}\u0000${conn}` to clientId. */
   const bindings = new Map<string, string>()
   const bindKey = (linkGen: number, conn: string): string => `${linkGen}\u0000${conn}`
@@ -66,16 +68,18 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
   }
 
   return {
-    createPairing: ({ permission }) => {
+    createPairing: ({ permission, name }) => {
       const code = newCode()
       const expiresAt = now() + CODE_TTL_MS
-      codes.set(sha256Base64url(code), { expiresAt, attempts: 0, permission })
+      codes.set(sha256Base64url(code), { expiresAt, attempts: 0, permission, ...(name ? { name } : {}) })
       return { code, expiresAt: new Date(expiresAt).toISOString() }
     },
     redeem: (code, name) => {
       const hash = sha256Base64url(code.trim().toUpperCase())
       const held = codes.get(hash)
       if (!held) {
+        // Expired codes go here, so a stale one does not soak up attempts or sit in memory.
+        for (const [h, c] of codes) if (now() > c.expiresAt) codes.delete(h)
         // A wrong guess spends one attempt of every live code: the limit is per code, and a guesser does not say
         // which code it is guessing at.
         for (const c of codes.values()) c.attempts++
@@ -85,10 +89,13 @@ export function createControllerRegistry(deps: { now?: () => number; random?: (b
       if (held.attempts >= CODE_ATTEMPTS) return { ok: false, reason: 'burned' }
       if (now() > held.expiresAt) return { ok: false, reason: 'expired' }
       const token = random(32).toString('base64url')
-      const clientId = `cli_${random(6).toString('hex')}`
+      // Never over an existing record: its bindings would inherit this client's permission.
+      let clientId = `cli_${random(6).toString('hex')}`
+      while (records.has(clientId)) clientId = `cli_${random(6).toString('hex')}`
       records.set(clientId, {
         clientId,
-        name: name.trim().slice(0, 64) || 'controller',
+        // The name the person gave on this machine wins over the one the redeemer sent.
+        name: cleanName(held.name ?? '') || cleanName(name) || 'controller',
         tokenHash: sha256Base64url(token),
         permission: held.permission,
         createdAt: new Date(now()).toISOString(),

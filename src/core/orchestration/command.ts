@@ -4212,9 +4212,12 @@ export async function handleCommand(
       // follows a symlink before the `..` (`<root>/link/..` lands outside), and a relative spelling
       // resolves against the Host's own folder.
       let cwd = asked
-      if (caller.role === 'mcp') {
+      // A remote controller is held to the same rule (remote runtime design §4.8): it spawns only on the Runtime's
+      // own registered paths.
+      if (caller.role === 'mcp' || caller.role === 'controller') {
         const project = findProjectByPath(s, asked)
-        if (!project) return denied('MCP clients start sessions only in a registered project')
+        if (!project)
+          return denied(`${caller.role === 'mcp' ? 'MCP clients' : 'Remote controllers'} start sessions only in a registered project`)
         cwd = project.path
       }
       const kind = enumFilter('kind', args.kind, ['terminal', 'chat'] as const)

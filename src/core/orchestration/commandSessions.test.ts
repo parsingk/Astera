@@ -497,6 +497,16 @@ describe('sessions create — an MCP client starts sessions only in a project', 
     expect(createSession).not.toHaveBeenCalled()
   })
 
+  // Remote runtime design §4.8: a controller spawns only on the Runtime's registered paths, as MCP does.
+  it('holds a remote controller to the same rule', async () => {
+    const createSession = vi.fn(async () => row())
+    const deps = await withProjects(createSession)
+    const r = await handleCommand(deps, { sessionId: '', role: 'controller' }, 'sessions-create', { account: 'acc_c', cwd: 'D:/elsewhere' })
+    expect(r.status).toBe(403)
+    expect(error(r)).toContain('Remote controllers start sessions only in a registered project')
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
   it('takes a project root, compared with isSamePath (a trailing separator is the same root)', async () => {
     const createSession = vi.fn(async () => row())
     const deps = await withProjects(createSession)

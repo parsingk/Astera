@@ -5,9 +5,9 @@ import type { CheckResult } from '../orchestration/types'
 export type ControllerCheck = Omit<CheckResult, 'outputTail'> & { outputTailLength?: number }
 
 /**
- * The state a controller is shown (remote runtime design §3.6, D10.2). A check's output tail is the
- * one body in the state that carries raw process output, and output can carry whatever the check
- * printed, secrets included. A controller is told how long it was, not what it said.
+ * The state a controller is shown (remote runtime design §3.6, D10.2). A check's output tail is up to
+ * 4,000 characters per check, carried on every push of the whole state. Keeping it out keeps pushes
+ * small; a controller that wants the output asks for it (`tasks-check-output`). It is told the length.
  *
  * Pure and copying: the Host's own state is never touched, so the one object the store holds stays
  * the one every local caller reads. Typed as an OrchState because every other field is unchanged;

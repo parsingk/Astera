@@ -15,6 +15,7 @@ export const CONTROLLER_READ_COMMANDS = [
   'tasks-get',
   'dispatch-show',
   'runs-completion',
+  'runs-checks',
   'tasks-check-output',
   'tasks-output',
   'runs-follow',
