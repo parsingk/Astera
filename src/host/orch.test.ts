@@ -4512,3 +4512,17 @@ describe('clients-revoke when clients.json cannot be written (remote runtime Pha
     expect(controllers.list()).toEqual([])
   })
 })
+
+describe('clients-revoke closes the client’s live connections (remote runtime design §3.3)', () => {
+  it('hands the revoked bindings to closeControllerConns', async () => {
+    const closed: Array<{ linkGen: number; conn: string }> = []
+    const controllers = createControllerRegistry()
+    const orch = orchOver({ controllers, closeControllerConns: (conns) => closed.push(...conns) })
+    const got = await controllers.redeem(controllers.createPairing({ permission: 'read-only' }).code, 'x')
+    if (!got.ok) throw new Error('redeem')
+    controllers.bind(3, 'c7', got.clientId)
+    const r = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: { role: 'cli', toOthers: () => {} } })
+    expect(r.status).toBe(200)
+    expect(closed).toEqual([{ linkGen: 3, conn: 'c7' }])
+  })
+})

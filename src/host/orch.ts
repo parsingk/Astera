@@ -441,6 +441,9 @@ export function createHostOrch(a: {
   /** Paired remote controllers (src/host/controllers.ts, remote runtime design §3.3). Absent: this Host pairs nobody,
    *  and `pair-create`, `clients-list` and `clients-revoke` answer 501. */
   controllers?: ControllerRegistry
+  /** Closes a revoked client's live connections: the Gateway link's `closeConns` (design §3.3's last revocation step).
+   *  Absent before a Gateway runs, when there is nothing open to close. */
+  closeControllerConns?(conns: Array<{ linkGen: number; conn: string }>): void
   /** The Host's own checks and whether it drives now (orchDeps' HOST_DRIVES), passed through to
    *  `hostOrchDeps`. Absent: validation, review and repair take their pre-S5 routes. */
   drive?: { owns(): boolean; checks: HostChecks } | null
@@ -1693,8 +1696,8 @@ export function createHostOrch(a: {
           const id = args.id
           if (typeof id !== 'string' || id === '') return { status: 400, body: { error: 'clients-revoke needs --id' } }
           const out = await a.controllers.revoke(id)
-          // Phase 3's link closes `out.conns` (design §3.3's revocation order: record gone, bindings dropped, then
-          // close-conn). Until a link exists there is nothing open to close.
+          // Design §3.3's order: the record and its bindings are gone (inside `revoke`), then its connections close.
+          a.closeControllerConns?.(out.conns)
           if (out.saveError !== undefined)
             return { status: 500, body: { error: `revoked until this Host stops, but clients.json could not be written: ${out.saveError}`, clientId: id } }
           return out.revoked ? { status: 200, body: { revoked: true, clientId: id } } : { status: 404, body: { error: `unknown client: ${id}` } }
