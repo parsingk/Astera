@@ -3,7 +3,7 @@
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import type { OrchState } from '../orchestration/state'
 
-export type JournalSurface = 'desktop' | 'cli' | 'agent' | 'host' | 'mcp'
+export type JournalSurface = 'desktop' | 'cli' | 'agent' | 'host' | 'mcp' | 'controller'
 
 /** The MCP client that acted, as its `initialize` request named itself (MCP spec §29). */
 export interface McpClient {
@@ -20,9 +20,12 @@ export interface JournalActor {
   /** Only on surface `mcp`, and only when the call came over HTTP: the caller's address as the HTTP
    *  process saw it (MCP HTTP design §5). Stored as given; nothing is looked up. */
   remote?: string
+  /** Only on surface `controller`: the paired client the Host bound the call to (remote runtime design §2.5). The
+   *  Host's own binding names it, never the frame, so it is stored as given after cleaning. */
+  controller?: { clientId: string; name: string }
 }
 
-const SURFACES: ReadonlySet<string> = new Set<JournalSurface>(['desktop', 'cli', 'agent', 'host', 'mcp'])
+const SURFACES: ReadonlySet<string> = new Set<JournalSurface>(['desktop', 'cli', 'agent', 'host', 'mcp', 'controller'])
 
 const CLIENT_NAME_MAX = 64
 const CLIENT_VERSION_MAX = 32
@@ -53,6 +56,17 @@ export function mcpRemoteOf(v: unknown): string | undefined {
   return kept === '' ? undefined : kept
 }
 
+const CLIENT_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+/** A controller's identity as the journal keeps it: an id the Host minted, and the name the person gave at pairing,
+ *  cleaned like an MCP client's name. Anything else is undefined. */
+export function controllerOf(v: unknown): { clientId: string; name: string } | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const o = v as Record<string, unknown>
+  if (typeof o.clientId !== 'string' || !CLIENT_ID.test(o.clientId)) return undefined
+  return { clientId: o.clientId, name: cleanText(o.name, CLIENT_NAME_MAX) }
+}
+
 export function isJournalActor(v: unknown): v is JournalActor {
   if (typeof v !== 'object' || v === null) return false
   const o = v as Record<string, unknown>
@@ -60,6 +74,12 @@ export function isJournalActor(v: unknown): v is JournalActor {
   if (o.sessionId !== undefined && typeof o.sessionId !== 'string') return false
   // A remote only on mcp, and only one already in its kept form.
   if (o.remote !== undefined && (o.surface !== 'mcp' || mcpRemoteOf(o.remote) !== o.remote)) return false
+  // A controller only on controller, and only one already in its kept form.
+  if (o.controller !== undefined) {
+    const kept = controllerOf(o.controller)
+    const given = o.controller as Record<string, unknown>
+    if (o.surface !== 'controller' || kept === undefined || kept.clientId !== given.clientId || kept.name !== given.name) return false
+  }
   // A client only on mcp, and only one already in its kept form.
   if (o.client === undefined) return true
   // Field by field: the order the keys were written in says nothing.
@@ -79,15 +99,17 @@ export function actorFromJson(text: string | null | undefined): JournalActor | n
     return null
   }
   if (typeof v !== 'object' || v === null) return null
-  const { client: raw, remote: rawRemote, ...rest } = v as Record<string, unknown>
+  const { client: raw, remote: rawRemote, controller: rawController, ...rest } = v as Record<string, unknown>
   if (!isJournalActor(rest)) return null
   const client = rest.surface === 'mcp' ? mcpClientOf(raw) : undefined
   const remote = rest.surface === 'mcp' ? mcpRemoteOf(rawRemote) : undefined
+  const controller = rest.surface === 'controller' ? controllerOf(rawController) : undefined
   return {
     surface: rest.surface,
     ...(rest.sessionId === undefined ? {} : { sessionId: rest.sessionId }),
     ...(client === undefined ? {} : { client }),
-    ...(remote === undefined ? {} : { remote })
+    ...(remote === undefined ? {} : { remote }),
+    ...(controller === undefined ? {} : { controller })
   }
 }
 
@@ -107,11 +129,13 @@ export const DESKTOP_ACTOR: JournalActor = { surface: 'desktop' }
  *  role. Anyone else claiming one is the CLI. */
 export function actorOf(a: {
   sessionId: string
-  role?: 'app' | 'cli' | 'mcp'
+  role?: 'app' | 'cli' | 'mcp' | 'controller'
   /** The MCP client its connection's hello named; read only for role `mcp`. */
   client?: McpClient
   /** The HTTP caller's address its connection's hello named; read only for role `mcp`. */
   remote?: string
+  /** Who the Host bound a controller's call to; read only for role `controller` (remote runtime design §2.5). */
+  principal?: { clientId: string; name: string }
   state: OrchState | null
 }): JournalActor {
   if (a.role === 'app') return DESKTOP_ACTOR
@@ -121,6 +145,12 @@ export function actorOf(a: {
     const client = mcpClientOf(a.client)
     const remote = mcpRemoteOf(a.remote)
     return { surface: 'mcp', ...(client === undefined ? {} : { client }), ...(remote === undefined ? {} : { remote }) }
+  }
+  // A controller is never a worker or a coordinator either: its session is forced empty and who it is comes from the
+  // Host's binding (remote runtime design §2.5, X1-08).
+  if (a.role === 'controller') {
+    const controller = controllerOf(a.principal)
+    return { surface: 'controller', ...(controller === undefined ? {} : { controller }) }
   }
   if (a.sessionId === '') return { surface: 'cli' }
   if (a.sessionId === HOST_CALLER || a.sessionId === APP_CALLER) return { surface: 'cli', sessionId: a.sessionId }

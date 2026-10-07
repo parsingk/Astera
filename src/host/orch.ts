@@ -1427,6 +1427,9 @@ export function createHostOrch(a: {
        *  observed replay resumes the question the receipt names rather than asking a new one. */
       let runArgs = args
       try {
+        // **A controller has no session** (remote runtime design §2.5, D2.1): whatever it named is dropped, so
+        // COORDINATOR_ONLY, chats-answer and actorOf never read it as one, and its receipts are keyed by its principal.
+        if (from?.role === 'controller') sessionId = ''
         // **MCP callers pass the allowlist first** (MCP design §2), before receipts and before the
         // app-only commands, so a refused call leaves no receipt and reaches nothing. Read per call, as
         // `app js` reads its toggle: the app may change it while the Host runs. A settings file that
@@ -1662,7 +1665,7 @@ export function createHostOrch(a: {
         await ready()
         // P5: judged on the state the call found, so a worker's report that closes its own Dispatch is
         // still the agent's.
-        const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, state: store.get() })
+        const actor = actorOf({ sessionId, role: from?.role, client: from?.client, remote: from?.remote, principal: from?.principal, state: store.get() })
         const r = await handleCommand(depsFor(marks, actor), { sessionId, role: from?.role }, cmd, runArgs)
         const answered = answerOf(r, marks)
         // **Who drives, on `status`, from the Host and not from `handleCommand`** (R6): the two fields

@@ -1174,7 +1174,7 @@ export async function handleCommand(
   deps: OrchServerDeps,
   /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
    *  `'mcp'` changes an answer: an MCP client calls with an empty session id, as a shell does. */
-  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' },
+  caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' },
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {

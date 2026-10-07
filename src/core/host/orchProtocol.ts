@@ -83,12 +83,27 @@ export function leftNothingBehind(err: unknown): boolean {
   )
 }
 
+/** A remote controller's permission level (remote runtime design §3.4, N15). Set at pairing. */
+export type ControllerPermission = 'read-only' | 'full-control'
+
+/** Who a remote controller's call is, as the Host derived it from its own binding of the link connection (remote
+ *  runtime design §3.3, X1-08). */
+export interface ControllerPrincipal {
+  clientId: string
+  name: string
+  permission: ControllerPermission
+}
+
 /** The client behind one `orch-call`. Supplied by `server.ts`, which is the only place that knows
  *  which socket asked — the command table cannot work it out from `{cmd, args}`. */
 export interface OrchCaller {
   /** What this client called itself in its `hello`. Absent there means `'cli'` (protocol.ts's
-   *  `hello` says why the careful default is that one and not the other). */
-  role: 'app' | 'cli' | 'mcp'
+   *  `hello` says why the careful default is that one and not the other). `controller` comes only from the Host's
+   *  own link to the Remote Gateway, never from a hello (remote runtime design §2.4). */
+  role: 'app' | 'cli' | 'mcp' | 'controller'
+  /** Only on role `controller`: who the Host bound this call to, from its own binding of the link connection (remote
+   *  runtime design §3.3, X1-08). Never a value a frame carried. */
+  principal?: ControllerPrincipal
   /** The MCP client an `mcp` socket's hello named, already cleaned (MCP spec §29). Only on role
    *  `mcp`, and only when the hello named one. */
   client?: { name: string; version?: string }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { emptyState, type OrchState } from '../orchestration/state'
-import { actorFromJson, actorOf, commitStamp, isJournalActor, mcpClientOf, mcpRemoteOf } from './actor'
+import { actorFromJson, actorOf, commitStamp, controllerOf, isJournalActor, mcpClientOf, mcpRemoteOf } from './actor'
 
 describe('the journal actor (J4)', () => {
   it('reads the four surfaces, with or without a session', () => {
@@ -140,5 +140,22 @@ describe('the remote address on the actor', () => {
     expect(isJournalActor({ surface: 'mcp', remote: 7 })).toBe(false)
     expect(isJournalActor({ surface: 'mcp', remote: 'a\nb' })).toBe(false)
     expect(isJournalActor({ surface: 'cli', remote: '10.0.0.2' })).toBe(false)
+  })
+})
+
+describe('a controller (remote runtime design §2.5)', () => {
+  it('is attributed to its client, never to the session it named', () => {
+    const st = { ...emptyState(), runs: [{ coordinatorSessionId: 'ses-coord' }] } as unknown as OrchState
+    expect(actorOf({ sessionId: 'ses-coord', role: 'controller', principal: { clientId: 'cli_ab12', name: 'laptop' }, state: st }))
+      .toEqual({ surface: 'controller', controller: { clientId: 'cli_ab12', name: 'laptop' } })
+  })
+  it('reads back from journal JSON, and a controller field on another surface is refused', () => {
+    const json = JSON.stringify({ surface: 'controller', controller: { clientId: 'cli_ab12', name: 'laptop' } })
+    expect(actorFromJson(json)).toEqual({ surface: 'controller', controller: { clientId: 'cli_ab12', name: 'laptop' } })
+    expect(isJournalActor({ surface: 'cli', controller: { clientId: 'cli_ab12', name: 'x' } })).toBe(false)
+  })
+  it('cleans what it keeps: a client id outside [A-Za-z0-9_-] is dropped', () => {
+    expect(controllerOf({ clientId: 'cli ab;rm', name: 'laptop' })).toBeUndefined()
+    expect(controllerOf({ clientId: 'cli_ab12', name: 'lap\ntop<script>' })).toEqual({ clientId: 'cli_ab12', name: 'laptopscript' })
   })
 })

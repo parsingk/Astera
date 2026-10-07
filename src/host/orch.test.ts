@@ -106,6 +106,27 @@ describe('createHostOrch', () => {
     expect((r.body as { id: string }[]).map((j) => j.id)).toEqual([jobId])
   })
 
+  describe('a controller caller (remote runtime Phase 1)', () => {
+    const controller = (permission: 'read-only' | 'full-control' = 'full-control') => ({
+      role: 'controller' as const,
+      principal: { clientId: 'cli_ab12', name: 'laptop', permission },
+      toOthers: () => {}
+    })
+    it('commits under its own name, with the session it named ignored', async () => {
+      const { jobId } = await seed()
+      const actors: unknown[] = []
+      const noop = (() => {}) as never
+      const orch = orchOver({
+        journal: { committed: ((e: { actor: unknown }) => { actors.push(e.actor) }) as never, loaded: noop, append: noop, reload: (async () => {}) as never, timeline: noop }
+      })
+      await orch.ready()
+      const runId = orch.state().runs.find((r) => r.jobId === jobId)!.id
+      const r = await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: 'ses-forged', from: controller() })
+      expect(r.status).toBe(200)
+      expect(actors).toContainEqual({ surface: 'controller', controller: { clientId: 'cli_ab12', name: 'laptop' } })
+    })
+  })
+
   describe('MCP access gate', () => {
     const settings = (text: string): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), text)
     const caller = (role: 'mcp' | 'cli'): { role: 'mcp' | 'cli'; toOthers: () => void } => ({ role, toOthers: () => {} })
