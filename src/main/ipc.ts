@@ -689,6 +689,18 @@ export function liveChatOnThread(threadId: string, sessions: SessionInfo[]): Ses
   return sessions.find((s) => s.status === 'running' && s.threadId === threadId) ?? null
 }
 
+/**
+ * Whether a claude chat session's stored transcript survives a `ready`. A `ready` naming a new thread
+ * is a `/clear`, whose file does not exist yet, so the old one goes. One naming the thread the file
+ * already belongs to is a resumed session coming up: its file was found at spawn so the conversation
+ * view could read it from its first look, and dropping it would put that view back to "no record yet"
+ * until the lookup lands again. Claude names a transcript `<session id>.jsonl`, which is what ties the
+ * two. Pure for the same reason as `liveChatOnThread`.
+ */
+export function keepsChatTranscriptOnReady(stored: string | undefined, threadId: string): boolean {
+  return stored !== undefined && path.basename(stored) === `${threadId}.jsonl`
+}
+
 export { coordinatorBriefName, staleSpecFiles } from '../core/orchestration/exec/specFiles'
 
 /**
@@ -1657,10 +1669,10 @@ export function registerIpc(
    *  and, worse, disarm the retry: the `status` branch looks again only while the map has nothing for
    *  this session. The comparison is sound because the manager assigns `info.threadId` before it calls
    *  its subscribers, so by the time any lookup resolves it already names the newest thread. */
-  const findClaudeChatTranscript = (sessionId: string, accountId: string, threadId: string): void => {
-    if (findingChatTranscript.has(sessionId)) return
+  const findClaudeChatTranscript = (sessionId: string, accountId: string, threadId: string): Promise<void> => {
+    if (findingChatTranscript.has(sessionId)) return Promise.resolve()
     findingChatTranscript.add(sessionId)
-    core.history
+    return core.history
       .transcriptPathById(accountId, threadId)
       .then((p) => {
         if (p && core.chat.info(sessionId)?.threadId === threadId) {
@@ -1766,19 +1778,25 @@ export function registerIpc(
         // written with that conversation's first turn. Dropping the old entry is what re-arms the
         // retry, since the `status` branch below looks again only while the map has nothing for this
         // session, and the pane's follow re-seats itself onto the new file through `sourceFor`.
-        chatTranscripts.delete(sessionId)
+        // A resumed session's file, found at spawn, is this same thread's and stays
+        // (keepsChatTranscriptOnReady).
+        const kept = chatTranscripts.get(sessionId)
+        if (!keepsChatTranscriptOnReady(kept, event.threadId)) chatTranscripts.delete(sessionId)
         // The chain is told the thread id now and the transcript path when the lookup below lands —
         // `applyMeta` applies whichever half it is given and ignores the other, so the two calls
-        // complete the pair between them. The path is null here rather than read from the map because
-        // the line above just dropped it: at `ready` the file this conversation will be written to
-        // does not exist yet. On a `/clear` this same call re-points the chain at the new thread.
-        rolling?.onChatMeta(sessionId, { claudeSessionId: event.threadId, transcriptPath: null })
+        // complete the pair between them. The path is null here unless the file was kept just above:
+        // otherwise at `ready` the file this conversation will be written to does not exist yet. On a
+        // `/clear` this same call re-points the chain at the new thread.
+        rolling?.onChatMeta(sessionId, {
+          claudeSessionId: event.threadId,
+          transcriptPath: chatTranscripts.get(sessionId) ?? null
+        })
         // A `/clear` gives the conversation a new id; the schedule is keyed by the old one, so it is
         // re-keyed here for every ready (a codex thread id never changes, so the scheduler's own
         // same-key guard makes this a no-op there — but claude is the only provider that reaches this
         // branch anyway).
         scheduler?.relearn(sessionId, event.threadId)
-        findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
+        void findClaudeChatTranscript(sessionId, info.accountId, event.threadId)
       }
     } else if (event.type === 'status') {
       attention.set(sessionId, event.status)
@@ -1791,7 +1809,7 @@ export function registerIpc(
       codexRolling?.onChatStatus(sessionId, event.status)
       if (!chatTranscripts.has(sessionId) && core.chat.state(sessionId)?.provider === 'claude') {
         const info = core.chat.info(sessionId)
-        if (info?.threadId) findClaudeChatTranscript(sessionId, info.accountId, info.threadId)
+        if (info?.threadId) void findClaudeChatTranscript(sessionId, info.accountId, info.threadId)
       }
     } else if (event.type === 'rateLimit') {
       // What the limit phrase on a screen is to a pty chain. Only the claude coordinator is told, and
@@ -2126,6 +2144,12 @@ export function registerIpc(
         unattendedPermission: isUnattendedPermission(opts.unattendedPermission) ? opts.unattendedPermission : 'hold',
         bypassSignal
       })
+      // A claude chat resume's transcript already exists, so it is found now rather than at `ready`:
+      // the conversation view asks for it the moment the tab appears, and an empty answer there reads
+      // "no record yet" until its next retry, two seconds on (measured 2026-10-07). A miss changes
+      // nothing — `ready` and `status` look again as they always did.
+      if (providerOf(account) === 'claude' && opts.resumeThreadId)
+        await findClaudeChatTranscript(chatInfo.id, account.id, opts.resumeThreadId)
       // The schedule is the one feature this slice attaches to a chat session (chat-sessions slice 4
       // design §5.2 / §6). Same call, same provider argument as the pty branch below.
       if (chatInfo.schedule) {

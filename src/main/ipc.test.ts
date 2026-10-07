@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import path from 'node:path'
 import {
   accountRemovalBlockers,
   closeConversationOnExit,
@@ -9,6 +10,7 @@ import {
   hostHandshakeMeans,
   hostHoldings,
   hostReplaceDue,
+  keepsChatTranscriptOnReady,
   replacementLogLine,
   liveChatOnThread,
   parseAllowedExternalUrl,
@@ -764,5 +766,25 @@ describe('replacementLogLine', () => {
   it('says the replacement did not come up once the old Host is gone', () => {
     expect(replacementLogLine({ now: down, oldPid: 10, oldAlive: false })).toBe('host: the replacement did not come up: no answer')
     expect(replacementLogLine({ now: down, oldPid: null, oldAlive: false })).toBe('host: the replacement did not come up: no answer')
+  })
+})
+
+describe('keepsChatTranscriptOnReady', () => {
+  const file = (id: string): string => path.join('C:', 'u', '.claude', 'projects', 'D--work', `${id}.jsonl`)
+
+  // A chat session resumed from history has its transcript found at spawn, so the conversation view
+  // has something to read from its first look. The first `ready` names the same thread and must not
+  // throw that away (2026-10-07: the view said "no record yet" for two seconds on every chat resume).
+  it('keeps the file of the thread the ready names', () => {
+    expect(keepsChatTranscriptOnReady(file('abc'), 'abc')).toBe(true)
+  })
+
+  // `/clear` starts a new conversation under a new id, whose file does not exist yet.
+  it('drops the file of a thread the session has left', () => {
+    expect(keepsChatTranscriptOnReady(file('abc'), 'def')).toBe(false)
+  })
+
+  it('has nothing to keep when nothing was found', () => {
+    expect(keepsChatTranscriptOnReady(undefined, 'abc')).toBe(false)
   })
 })
