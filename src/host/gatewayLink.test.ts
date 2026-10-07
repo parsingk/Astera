@@ -110,6 +110,17 @@ describe('attachGatewayLink (remote runtime design §2.4, §3.3)', () => {
     expect(s.logs.join('\n')).not.toContain(code)
     expect(s.logs.join('\n')).not.toContain(ok.token as string)
   })
+  // Phase 3 minor: nobody is left to receive the token, so the record it would unlock is removed again.
+  it('removes the client record of a pairing that completed after its connection closed', async () => {
+    const s = await setup()
+    const code = s.controllers.createPairing({ permission: 'read-only' }).code
+    s.input.write(`${JSON.stringify({ t: 'redeem', conn: 'c9', code, name: 'laptop' })}
+${JSON.stringify({ t: 'conn-closed', conn: 'c9' })}
+`)
+    await s.settle()
+    expect(s.controllers.list()).toEqual([])
+    expect(s.frames.some((f) => f.t === 'redeemed')).toBe(false)
+  })
   it('closes the connections it is told to, and forgets a closed one', async () => {
     const s = await setup()
     const c = await s.pairClient()

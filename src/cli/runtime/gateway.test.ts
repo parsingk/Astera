@@ -39,7 +39,7 @@ afterEach(async () => {
 })
 
 /** A Gateway on 127.0.0.1:0 whose link is two in-memory streams, with a fake Host that records what reaches it. */
-const start = async (limits: Partial<GatewayLimits> = {}, host?: (f: Record<string, unknown>, reply: (m: unknown) => void) => void) => {
+const start = async (limits: Partial<GatewayLimits> = {}, host?: (f: Record<string, unknown>, reply: (m: unknown) => void) => void, now?: () => number) => {
   const toHost = new PassThrough()
   const fromHost = new PassThrough()
   const seen: Array<Record<string, unknown>> = []
@@ -59,7 +59,7 @@ const start = async (limits: Partial<GatewayLimits> = {}, host?: (f: Record<stri
       else if (f.t === 'call') reply({ t: 'result', conn: f.conn, id: f.id, status: 200, body: { cmd: f.cmd } })
     }
   })
-  const gw = await startGateway({ identity, listen: '127.0.0.1', port: 0, link: { input: fromHost, output: toHost }, limits })
+  const gw = await startGateway({ identity, listen: '127.0.0.1', port: 0, link: { input: fromHost, output: toHost }, limits, ...(now ? { now } : {}) })
   if ('error' in gw) throw new Error(gw.error.message)
   const entry = { gw, links: [] as RuntimeLink[] }
   open.push(entry)
@@ -199,5 +199,18 @@ describe('the Gateway before the handshake (Phase 3 review)', () => {
     await l.auth('good-token', {})
     await new Promise((r) => setTimeout(r, 400))
     expect((await l.call('jobs-list', {})).status).toBe(200)
+  })
+
+  // Phase 3 minor: the per-address redeem record forgets an address whose attempts are all over a minute old.
+  it('forgets the redeem attempts of an address once they are a minute old', async () => {
+    let t = 1_000_000
+    const g = await start({}, undefined, () => t)
+    const c = await g.connect()
+    void c.redeem('AAAAAAAAAA', 'x', {}).catch(() => {})
+    await until(() => g.seen.some((f) => f.t === 'redeem'))
+    expect(g.gw.stats().redeemAddresses).toBe(1)
+    t += 61_000
+    await g.connect()
+    await until(() => g.gw.stats().redeemAddresses === 0)
   })
 })

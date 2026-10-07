@@ -39,6 +39,8 @@ export interface GatewayHandle {
   address: string
   port: number
   close(): Promise<void>
+  /** What the Gateway is holding, for tests: how many addresses it keeps redeem attempts for. */
+  stats(): { redeemAddresses: number }
 }
 
 export interface GatewayIdentity {
@@ -258,6 +260,9 @@ export async function startGateway(o: {
   server.on('tlsClientError', () => {})
   server.maxConnections = lim.connections * 4
   server.on('connection', (raw) => {
+    // An address whose attempts are all over a minute old is forgotten (Phase 3 minor), so a stream of addresses that
+    // each try once does not grow the record for the Gateway's whole life.
+    for (const [addr, times] of redeems) if (times.every((t) => now() - t >= 60_000)) redeems.delete(addr)
     const key = peerKey(raw)
     const t = setTimeout(() => {
       handshaking.delete(key)
@@ -290,7 +295,8 @@ export async function startGateway(o: {
           new Promise<void>((done) => {
             for (const c of conns.values()) c.sock.destroy()
             server.close(() => done())
-          })
+          }),
+        stats: () => ({ redeemAddresses: redeems.size })
       })
     })
   })
@@ -330,6 +336,12 @@ export async function runRuntimeGateway(o: {
   let broken = false
   let stop = (): void => {}
   const stopped = new Promise<void>((resolve) => (stop = resolve))
+  // A Host that is gone closes the pipe, and the next write fails with EPIPE (Phase 3 minor): the Gateway leaves with 1
+  // instead of crashing on an unhandled 'error'.
+  o.stdout.on('error', () => {
+    broken = true
+    stop()
+  })
   const gw = await startGateway({
     identity,
     listen,

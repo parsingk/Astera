@@ -62,6 +62,9 @@ export function attachGatewayLink(o: {
     for (const c of chunksOf(`h${++ref}`, line)) out.control(`${JSON.stringify({ ...c, conn: f.conn })}\n`)
   }
 
+  /** Connections with a pairing being saved, and those of them that closed meanwhile. */
+  const redeeming = new Set<string>()
+  const closedConns = new Set<string>()
   const onFrame = async (f: GatewayLinkFrame): Promise<void> => {
     switch (f.t) {
       case 'gateway-ready':
@@ -75,12 +78,23 @@ export function attachGatewayLink(o: {
         return send({ t: 'authed', conn: f.conn, ok: true, hello: { t: 'hello', ...o.hello(), permission: r.permission } })
       }
       case 'redeem': {
+        redeeming.add(f.conn)
         // Neither the code nor the token is logged, here or anywhere (§4.7).
         const r = await o.controllers.redeem(f.code, f.name).catch((e: unknown) => {
           o.log(`remote: a pairing could not be saved: ${e instanceof Error ? e.message : String(e)}`)
           return { ok: false as const, reason: 'unsaved' as const }
         })
+        redeeming.delete(f.conn)
+        if (!r.ok) closedConns.delete(f.conn)
         if (r.ok) {
+          // The connection closed while this was saved (Phase 3 minor): nobody can receive the token, so the record it
+          // would unlock is taken back rather than left as a pairing nobody holds.
+          if (closedConns.has(f.conn)) {
+            closedConns.delete(f.conn)
+            await o.controllers.revoke(r.clientId).catch(() => undefined)
+            o.log(`remote: a pairing finished after its connection closed and was taken back (client ${r.clientId})`)
+            return
+          }
           o.log(`remote: paired client ${r.clientId}`)
           return send({ t: 'redeemed', conn: f.conn, ok: true, clientId: r.clientId, token: r.token })
         }
@@ -111,6 +125,8 @@ export function attachGatewayLink(o: {
         })
       }
       case 'conn-closed':
+        // Only a connection with a pairing in flight is remembered, and only until that pairing ends.
+        if (redeeming.has(f.conn)) closedConns.add(f.conn)
         return o.controllers.unbind(o.linkGen, f.conn)
     }
   }

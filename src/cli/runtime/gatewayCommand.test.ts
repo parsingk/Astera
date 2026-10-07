@@ -40,3 +40,21 @@ describe('runRuntimeGateway leaves with its Host (Phase 3 review)', () => {
     expect(code).toBe(0)
   })
 })
+
+// Phase 3 minor: a Host that is gone closes the pipe, and the Gateway's next write fails with EPIPE. That ends it with
+// 1 rather than crashing on an unhandled 'error'.
+describe('runRuntimeGateway and a broken link', () => {
+  it('exits 1 when writing to its Host fails', async () => {
+    await loadOrCreateIdentity(openSecretStore({ dir: path.join(profile, 'remote'), profileDir: profile }), { displayName: 't' })
+    const { Writable } = await import('node:stream')
+    const stdout = new Writable({
+      write: (_c, _e, cb) => cb(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    })
+    const stdin = new PassThrough()
+    const code = await Promise.race([
+      runRuntimeGateway({ argv: ['--listen', '127.0.0.1', '--port', '0'], profileDir: profile, stdin, stdout }),
+      new Promise<string>((r) => setTimeout(() => r('still running'), 3000))
+    ])
+    expect(code).toBe(1)
+  })
+})
