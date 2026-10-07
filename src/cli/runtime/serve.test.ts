@@ -67,11 +67,12 @@ describe('astera runtime serve (remote runtime design §2.9, X1-13)', () => {
     expect(r.children()).toBe(4)
     expect(r.waits).toEqual([1_000, 2_000, 5_000, 30_000])
   })
-  it('a Host child that lost the bind race (exit 0) is followed by watching, with no backoff', async () => {
-    const r = rig({ exits: [0], hostAnswers: [false, true], stopAfter: 1 })
+  it('a Host child that left with 0 is followed by a 10 s wait, so a Host it cannot see is not raced in a loop (review I3)', async () => {
+    // Something answers the Host's address but not this CLI's handshake: every child leaves with 0 at once.
+    const r = rig({ exits: [0, 0, 0], hostAnswers: [false, false, false], stopAfter: 2 })
     await runServe(r.deps)
-    expect(r.children()).toBe(1)
-    expect(r.waits).toEqual([10_000])
+    expect(r.children()).toBe(2)
+    expect(r.waits).toEqual([10_000, 10_000])
   })
   it('starts no Host while an update hold is valid', async () => {
     const r = rig({ hold: true, stopAfter: 2 })

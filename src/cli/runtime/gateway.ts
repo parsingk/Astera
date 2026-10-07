@@ -10,7 +10,7 @@ import type { Readable, Writable } from 'node:stream'
 import { createLineReader } from '../../host/framing'
 import { sha256Base64url } from '../../host/controllers'
 import { createLaneWriter, type LaneWriter } from '../../core/remote/lanes'
-import { CHUNK_THRESHOLD, chunksOf } from '../../core/remote/chunks'
+import { CHUNK_THRESHOLD, chunksOf, createReassembler } from '../../core/remote/chunks'
 import { FRAME_CAP, parseControllerFrame, parseLinkFrame, type HostLinkFrame } from '../../core/remote/frames'
 
 export interface GatewayLimits {
@@ -72,6 +72,8 @@ export async function startGateway(o: {
   link: { input: Readable; output: Writable }
   limits?: Partial<GatewayLimits>
   now?(): number
+  /** The link can no longer be read (an over-cap line). The command exits non-zero; the supervisor restarts it. */
+  onLinkBroken?(): void
 }): Promise<GatewayHandle | { error: { code: string; message: string } }> {
   const lim = { ...GATEWAY_LIMITS, ...o.limits }
   const now = o.now ?? Date.now
@@ -163,6 +165,23 @@ export async function startGateway(o: {
         return sendTo(c, { t: 'result', id: f.id, status: f.status, body: f.body, ...(f.replayed ? { replayed: true } : {}), ...(f.observed ? { observed: true } : {}) })
       case 'close-conn':
         return closeConn(c, f.code)
+      case 'chunk':
+        return
+    }
+  }
+
+  /** The Host's large results arrive in pieces (§3.1); put back together, each is handled like any other frame. */
+  const fromHost = createReassembler()
+  const onHostLine = (v: unknown): void => {
+    const f = parseLinkFrame(v, 'host')
+    if ('error' in f) return
+    if (f.t !== 'chunk') return onHostFrame(f)
+    const whole = fromHost.add(f)
+    if (typeof whole !== 'string') return
+    try {
+      onHostLine(JSON.parse(whole))
+    } catch {
+      /* a broken reassembly is dropped; its call stays unanswered until the controller gives up on it */
     }
   }
 
@@ -171,17 +190,24 @@ export async function startGateway(o: {
     'data',
     createLineReader({
       maxLine: FRAME_CAP + 1024,
-      onMessage: (v) => {
-        const f = parseLinkFrame(v, 'host')
-        if (!('error' in f)) onHostFrame(f)
-      },
+      onMessage: onHostLine,
       onBadLine: () => {},
       onHandlerError: () => {},
-      onOverflow: () => {}
+      // The reader stops for good after an overflow, so a Gateway that cannot hear its Host must not stay up: it
+      // exits and the supervisor starts a fresh one.
+      onOverflow: () => o.onLinkBroken?.()
     })
   )
 
-  const server = tls.createServer({ key: o.identity.keyPem, cert: o.identity.certPem, minVersion: 'TLSv1.3' }, (sock) => {
+  // A peer that never finishes the handshake holds no connection slot (those are taken after it), so it is bounded
+  // here instead: the same time as a first frame, and a ceiling on open sockets of any kind. `handshakeTimeout` alone
+  // does not do it: measured, it never fires for a peer that sends nothing at all.
+  const handshaking = new Map<string, ReturnType<typeof setTimeout>>()
+  const peerKey = (s: { remoteAddress?: string; remotePort?: number }): string => `${s.remoteAddress ?? '?'}|${s.remotePort ?? 0}`
+  const server = tls.createServer({ key: o.identity.keyPem, cert: o.identity.certPem, minVersion: 'TLSv1.3', handshakeTimeout: lim.firstFrameMs }, (sock) => {
+    const pending = handshaking.get(peerKey(sock))
+    if (pending) clearTimeout(pending)
+    handshaking.delete(peerKey(sock))
     sock.setEncoding('utf8')
     sock.on('error', () => {})
     const c: Conn = {
@@ -230,6 +256,20 @@ export async function startGateway(o: {
     })
   })
   server.on('tlsClientError', () => {})
+  server.maxConnections = lim.connections * 4
+  server.on('connection', (raw) => {
+    const key = peerKey(raw)
+    const t = setTimeout(() => {
+      handshaking.delete(key)
+      raw.destroy()
+    }, lim.firstFrameMs)
+    t.unref()
+    handshaking.set(key, t)
+    raw.once('close', () => {
+      clearTimeout(t)
+      if (handshaking.get(key) === t) handshaking.delete(key)
+    })
+  })
 
   return new Promise((resolve) => {
     const onError = (e: NodeJS.ErrnoException): void => {
@@ -287,14 +327,27 @@ export async function runRuntimeGateway(o: {
     return failed('IDENTITY_UNREADABLE', e instanceof Error ? e.message : String(e))
   }
   if (!identity) return failed('IDENTITY_UNREADABLE', 'this machine has no Runtime identity yet; run `astera runtime start`')
-  const gw = await startGateway({ identity, listen, port, link: { input: o.stdin, output: o.stdout } })
-  if ('error' in gw) return 1
-  await new Promise<void>((resolve) => {
-    o.stdin.once('end', resolve)
-    o.stdin.once('close', resolve)
-    o.onStop?.(resolve)
-    o.stdin.resume()
+  let broken = false
+  let stop = (): void => {}
+  const stopped = new Promise<void>((resolve) => (stop = resolve))
+  const gw = await startGateway({
+    identity,
+    listen,
+    port,
+    link: { input: o.stdin, output: o.stdout },
+    onLinkBroken: () => {
+      broken = true
+      stop()
+    }
   })
+  if ('error' in gw) return 1
+  // The Host may already be gone by now: its end of stdin closed while this was still binding.
+  if (o.stdin.readableEnded || o.stdin.destroyed) stop()
+  o.stdin.once('end', stop)
+  o.stdin.once('close', stop)
+  o.onStop?.(stop)
+  o.stdin.resume()
+  await stopped
   await gw.close()
-  return 0
+  return broken ? 1 : 0
 }

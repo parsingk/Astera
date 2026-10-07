@@ -4,6 +4,8 @@ import { PassThrough } from 'node:stream'
 import os from 'node:os'
 import path from 'node:path'
 import { runRuntimeGateway } from './gateway'
+import { loadOrCreateIdentity } from '../../core/remote/identity'
+import { openSecretStore } from '../../core/secrets/secretStore'
 
 let profile: string
 beforeEach(async () => {
@@ -23,5 +25,18 @@ describe('runRuntimeGateway (the hidden `astera runtime gateway`)', () => {
   it('refuses arguments it cannot use with exit 2', async () => {
     const stdout = new PassThrough()
     expect(await runRuntimeGateway({ argv: ['--port', 'x'], profileDir: profile, stdin: new PassThrough(), stdout })).toBe(2)
+  })
+})
+
+describe('runRuntimeGateway leaves with its Host (Phase 3 review)', () => {
+  it('exits 0 even when its stdin had already ended by the time it was listening', async () => {
+    await loadOrCreateIdentity(openSecretStore({ dir: path.join(profile, 'remote'), profileDir: profile }), { displayName: 't' })
+    const stdin = new PassThrough()
+    stdin.end()
+    const code = await Promise.race([
+      runRuntimeGateway({ argv: ['--listen', '127.0.0.1', '--port', '0'], profileDir: profile, stdin, stdout: new PassThrough() }),
+      new Promise<string>((r) => setTimeout(() => r('still running'), 3000))
+    ])
+    expect(code).toBe(0)
   })
 })

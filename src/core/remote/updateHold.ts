@@ -1,7 +1,9 @@
 // The update hold (remote runtime design §2.9): before an installer replaces files, the app writes
 // `<profile>/host/update-hold` and retires the Host; `astera runtime serve` starts no Host while the hold is valid, so it
-// does not race the installer for the files it is replacing. The new app removes it at boot. A hold whose writer is
-// gone, or whose time has passed, holds nothing: an installer that died must not keep the Runtime down for good.
+// does not race the installer for the files it is replacing. The new app removes it at boot. A hold whose time has
+// passed holds nothing, so an installer that died does not keep the Runtime down for good. Its writer's pid is kept
+// for a person reading the file, and deliberately not checked: the app that writes it quits at once so the installer
+// can run, so "holder alive" would end the hold exactly when it is needed (Phase 3 review; design §2.9 amended).
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
@@ -21,7 +23,7 @@ export function writeUpdateHold(profileDir: string, hold: UpdateHold): void {
   writeFileSync(holdPath(profileDir), JSON.stringify(hold), 'utf8')
 }
 
-export function readValidHold(profileDir: string, now: number, pidLives: (pid: number) => boolean): UpdateHold | null {
+export function readValidHold(profileDir: string, now: number): UpdateHold | null {
   let parsed: Partial<UpdateHold>
   try {
     parsed = JSON.parse(readFileSync(holdPath(profileDir), 'utf8')) as Partial<UpdateHold>
@@ -29,7 +31,7 @@ export function readValidHold(profileDir: string, now: number, pidLives: (pid: n
     return null
   }
   if (typeof parsed.pid !== 'number' || typeof parsed.until !== 'number') return null
-  if (now > parsed.until || !pidLives(parsed.pid)) return null
+  if (now > parsed.until) return null
   return { pid: parsed.pid, until: parsed.until }
 }
 

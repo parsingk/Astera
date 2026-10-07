@@ -62,6 +62,8 @@ export type HostLinkFrame =
   | { t: 'redeemed'; conn: string; ok: boolean; clientId?: string; token?: string; reason?: string }
   | { t: 'result'; conn: string; id: string; status: number; body: unknown; replayed?: true; observed?: true }
   | { t: 'close-conn'; conn: string; code: string }
+  /** A piece of a result too large for one link line (§3.1): the Gateway puts the pieces together. */
+  | { t: 'chunk'; conn: string; ref: string; i: number; n: number; data: string }
 
 type Fail = { error: string }
 const fail = (error: string): Fail => ({ error })
@@ -189,6 +191,9 @@ export function parseLinkFrame(v: unknown, from: 'gateway' | 'host'): GatewayLin
     case 'close-conn':
       if (!conn || !str(v.code, 64)) return fail('bad close-conn')
       return { t: 'close-conn', conn, code: v.code }
+    case 'chunk':
+      if (!conn || !str(v.ref, ID_MAX) || !Number.isInteger(v.i) || !Number.isInteger(v.n) || !str(v.data, FRAME_CAP)) return fail('bad chunk')
+      return { t: 'chunk', conn, ref: v.ref, i: v.i as number, n: v.n as number, data: v.data }
     default:
       return fail(`unknown link frame ${JSON.stringify(String(v.t)).slice(0, 40)}`)
   }

@@ -11,6 +11,7 @@ import type { ControllerRegistry } from './controllers'
 import type { OrchCall } from '../core/host/orchProtocol'
 import { createLaneWriter } from '../core/remote/lanes'
 import { FRAME_CAP, parseLinkFrame, type GatewayLinkFrame, type HelloFrame, type HostLinkFrame } from '../core/remote/frames'
+import { CHUNK_THRESHOLD, REASSEMBLED_CAP, chunksOf } from '../core/remote/chunks'
 
 /** The control lane's hard cap (§3.1, DC-2): past it the Gateway is not reading, and it is killed. */
 export const LINK_HARD_CAP = 8 << 20
@@ -43,8 +44,22 @@ export function attachGatewayLink(o: {
     o.onHardCap()
   }
   const out = createLaneWriter(o.output, { hardCap: o.hardCap ?? LINK_HARD_CAP, onHardCap: hardCap })
+  let ref = 0
+  /** One frame, or a large one in pieces (§3.1): a link line over the Gateway's cap would stop its reader for good. */
   const send = (f: HostLinkFrame): void => {
-    if (!detached) out.control(`${JSON.stringify(f)}\n`)
+    if (detached) return
+    const line = JSON.stringify(f)
+    const bytes = Buffer.byteLength(line)
+    if (bytes <= CHUNK_THRESHOLD) return out.control(`${line}\n`)
+    if (f.t === 'result' && bytes > REASSEMBLED_CAP)
+      return send({
+        t: 'result',
+        conn: f.conn,
+        id: f.id,
+        status: 500,
+        body: { error: `the reply is ${bytes} bytes, over the 64 MiB a remote reply may be`, code: 'REMOTE_REPLY_TOO_LARGE' }
+      })
+    for (const c of chunksOf(`h${++ref}`, line)) out.control(`${JSON.stringify({ ...c, conn: f.conn })}\n`)
   }
 
   const onFrame = async (f: GatewayLinkFrame): Promise<void> => {

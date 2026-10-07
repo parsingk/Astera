@@ -181,3 +181,23 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     expect(JSON.parse(lines.join(''))).toMatchObject({ t: 'gateway-failed', code: 'BIND_IN_USE' })
   })
 })
+
+describe('the Gateway before the handshake (Phase 3 review)', () => {
+  it('drops a TCP peer that never finishes the TLS handshake after the first-frame time', async () => {
+    const g = await start({ firstFrameMs: 150 })
+    const raw = net.connect(g.gw.port, '127.0.0.1')
+    raw.on('error', () => {})
+    const closedAt = await new Promise<number>((resolve) => {
+      const t0 = Date.now()
+      raw.once('close', () => resolve(Date.now() - t0))
+    })
+    expect(closedAt).toBeLessThan(2000)
+  })
+  it('leaves a connection that finished its handshake alone after that time', async () => {
+    const g = await start({ firstFrameMs: 150 })
+    const l = await g.connect()
+    await l.auth('good-token', {})
+    await new Promise((r) => setTimeout(r, 400))
+    expect((await l.call('jobs-list', {})).status).toBe(200)
+  })
+})

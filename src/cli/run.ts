@@ -27,7 +27,6 @@ import { runRuntimeGateway } from './runtime/gateway'
 import { runRuntimeCommand, type RuntimeCommandDeps } from './runtime/commands'
 import { runServe, type ServeDeps } from './runtime/serve'
 import { readValidHold } from '../core/remote/updateHold'
-import { pidLives } from '../core/host/pidFile'
 import { readRemoteSettings, writeRemoteSettings } from '../core/remote/settings'
 import { loadIdentity, loadOrCreateIdentity } from '../core/remote/identity'
 import { openSecretStore } from '../core/secrets/secretStore'
@@ -702,7 +701,7 @@ const serveDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; home:
   let wake = (): void => {}
   return {
     settings: () => readRemoteSettings(profileDir),
-    hold: () => readValidHold(profileDir, Date.now(), pidLives) !== null,
+    hold: () => readValidHold(profileDir, Date.now()) !== null,
     hostAnswers: async () => {
       const conn = await connectHost({ address, profileDir, app: CLI_VERSION, log: () => {} })
       if ('error' in conn) return false

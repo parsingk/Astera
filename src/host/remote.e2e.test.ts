@@ -169,3 +169,18 @@ describe('Remote Runtime end to end (design §6 Phase 3 acceptance)', () => {
     expect(all).not.toContain(p.token)
   })
 })
+
+describe('a reply over the frame cap end to end (Phase 3 review C1)', () => {
+  it('reaches the controller whole, and the Gateway keeps answering afterwards', async () => {
+    const rt = await runtime()
+    const { link: l } = await rt.paired()
+    // A Task spec of 1.5 MiB of plain ASCII: the whole state is well over the 1 MiB frame cap.
+    const s = (await rt.orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: { role: 'app', toOthers: () => {} } })).body as { state: { tasks: Array<{ spec: string }> } }
+    const state = { ...s.state, tasks: s.state.tasks.map((t) => ({ ...t, spec: 'x'.repeat(1_500_000) })) }
+    expect((await rt.orch.call({ cmd: 'state-put', args: { state }, sessionId: '', from: { role: 'app', toOthers: () => {} } })).status).toBe(200)
+    const big = await l.call('state-get', {})
+    expect(big.status).toBe(200)
+    expect(JSON.stringify(big.body).length).toBeGreaterThan(1_500_000)
+    expect((await l.call('jobs-list', {})).status).toBe(200)
+  })
+})

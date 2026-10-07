@@ -157,3 +157,19 @@ describe('attachGatewayLink (remote runtime design §2.4, §3.3)', () => {
     expect(s.controllers.principalFor(1, 'c1')).toBeNull()
   })
 })
+
+describe('large replies on the link (Phase 3 review C1)', () => {
+  it('sends a result over 512 KiB as chunk frames that each fit the link cap', async () => {
+    const body = { big: 'a'.repeat(1_600_000) }
+    const s = await setup({ orch: async () => ({ status: 200, body }) })
+    const c = await s.pairClient()
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    s.send({ t: 'call', conn: 'c1', id: '1', cmd: 'state-get', args: {} })
+    await new Promise((r) => setTimeout(r, 100))
+    const chunks = s.frames.filter((f) => f.t === 'chunk')
+    expect(chunks.length).toBeGreaterThanOrEqual(3)
+    for (const f of chunks) expect(JSON.stringify(f).length).toBeLessThan(1 << 20)
+    expect(chunks.every((f) => f.conn === 'c1')).toBe(true)
+    expect(s.frames.some((f) => f.t === 'result')).toBe(false)
+  })
+})
