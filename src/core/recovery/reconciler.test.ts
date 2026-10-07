@@ -93,6 +93,7 @@ function harness(
   const executed: Array<{ dispatchId: string; strategy: string }> = []
   const logs: string[] = []
   const sleeps: number[] = []
+  const unwitnessed: string[] = []
   const pages: Array<EventsPage | undefined> = []
   let busyLeft = over.busyReads ?? 0
   let checkpointBusyLeft = over.checkpointBusyReads ?? 0
@@ -141,9 +142,10 @@ function harness(
     },
     log: (m: string) => logs.push(m),
     now: () => NOW,
-    sleep: async (ms: number) => { sleeps.push(ms) }
+    sleep: async (ms: number) => { sleeps.push(ms) },
+    onUnwitnessed: (s: { dispatch: { id: string } }) => unwitnessed.push(s.dispatch.id)
   } as never)
-  return { r, appended, actions, executed, logs, sleeps, pages, get state() { return current } }
+  return { r, appended, actions, executed, logs, sleeps, pages, unwitnessed, get state() { return current } }
 }
 
 describe('RecoveryReconciler', () => {
@@ -171,6 +173,21 @@ describe('RecoveryReconciler', () => {
     expect(h.executed).toEqual([])
     expect(h.appended).toEqual([])
     expect(h.actions).toEqual([])
+    // Phase 3R: the Host opens its lost-worker Gate for exactly this case, so it is told.
+    expect(h.unwitnessed).toEqual(['dsp_1'])
+  })
+
+  it('does not call onUnwitnessed when the journal could not say', async () => {
+    const h = harness({ eventsThrow: true })
+    await h.r.reconcileAll()
+    expect(h.unwitnessed).toEqual([])
+  })
+
+  it('a throw from onUnwitnessed is logged and the pass goes on', async () => {
+    const h = harness({ events: [] })
+    const r = new RecoveryReconciler({ ...(h.r as unknown as { deps: object }).deps, onUnwitnessed: () => { throw new Error('boom') } } as never)
+    await expect(r.reconcileAll()).resolves.toBe(0)
+    expect(h.logs.some((l) => l.includes('onUnwitnessed failed'))).toBe(true)
   })
 
   it('a failed execution is journaled as failed', async () => {

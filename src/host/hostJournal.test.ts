@@ -635,3 +635,37 @@ describe('createHostJournal', () => {
     })
   })
 })
+
+describe('the reconciler port (remote runtime design §2.6, Phase 3R)', () => {
+  const ev = (key: string) => ({ runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'RECOVERY_DETECTED' as const, at: NOW, idempotencyKey: key, payload: {} })
+  it('writes the reconciler rows as the Host, and reads them back through the writer', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j } = make()
+    await j.start()
+    expect(j.writes()).toBe(true)
+    expect(j.reconcilerJournal.append([ev('k1')])).toBe(1)
+    expect(rows().find((r) => r.idempotencyKey === 'k1')?.actor).toEqual({ surface: 'host' })
+    expect(j.reconcilerJournal.eventsFor('run_1').some((r) => r.idempotencyKey === 'k1')).toBe(true)
+    const row = j.reconcilerJournal.startRecoveryAction({ runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', strategy: 'redispatch', class: 'c', reason: 'r', at: NOW })
+    expect(row.recoveryActionId).toMatch(/^rca_/)
+    j.reconcilerJournal.finishRecoveryAction(row.recoveryActionId, 'completed', NOW, { newDispatchId: 'dsp_2' })
+    expect(recoveryActionsIn(journalFile(), 'run_1')).toEqual([expect.objectContaining({ recoveryActionId: row.recoveryActionId, status: 'completed' })])
+  })
+
+  it('answers reads with a throw and writes with nothing while it is not the writer', async () => {
+    await settings({ jobContinuityEnabled: true })
+    const { j, box } = make()
+    await j.start()
+    box.writer = false
+    expect(j.writes()).toBe(false)
+    expect(() => j.reconcilerJournal.eventsFor('run_1')).toThrow(/does not write/)
+    expect(j.reconcilerJournal.append([ev('k2')])).toBe(0)
+    expect(existsSync(journalFile())).toBe(false)
+  })
+
+  it('does not write while Job Continuity is off', async () => {
+    const { j } = make()
+    await j.start()
+    expect(j.writes()).toBe(false)
+  })
+})

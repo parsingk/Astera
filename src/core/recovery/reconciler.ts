@@ -38,6 +38,11 @@ export interface ReconcilerDeps {
   sleep?(ms: number): Promise<void>
   /** A monotonic clock in ms, for the pass budget; performance.now when left out. Tests pass one of their own. */
   clock?(): number
+  /** Told about a lost attempt the journal answered for and no row of it names (an attempt older than the
+   *  journal), which this reconciler leaves alone. The Host opens its lost-worker Gate for it with no app
+   *  attached (remote runtime design §2.6, Phase 3R), as it did before it recovered; the app passes none.
+   *  Never told about "cannot say" or a deferred read. A throw is logged. */
+  onUnwitnessed?(seed: LostAttemptSeed): void
 }
 
 /**
@@ -201,6 +206,7 @@ export class RecoveryReconciler {
       this.deps.log(
         `recovery: no journal rows for dispatch ${dispatch.id} — the attempt predates this journal, leaving it alone`
       )
+      this.note('onUnwitnessed', undefined, () => this.deps.onUnwitnessed?.(seed))
       return false
     }
 

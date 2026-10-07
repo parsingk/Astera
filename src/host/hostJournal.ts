@@ -4,6 +4,7 @@
 // attached app yields `journal`. Every entry point swallows into the log: a journal problem must never
 // stop a Job (continuity design §6), and nothing here may reject (R3).
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { ContinuityJournal, isBusyError, type JournalEventRow } from '../core/continuity/journal'
 import { ContinuityRecorder } from '../core/continuity/recorder'
@@ -19,6 +20,8 @@ import type { OrchState } from '../core/orchestration/state'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import type { GitSummaryDeps } from '../core/orchestration/exec/gitSummary'
 import type { ContinuityEvent } from '../core/continuity/events'
+import type { RecoveryActionRow } from '../core/continuity/journal'
+import type { ReconcilerJournal } from '../core/recovery/reconciler'
 
 export interface HostJournalDeps {
   profileDir: string
@@ -55,6 +58,13 @@ export interface HostJournal {
    *  while this Host holds no state yet; a baseline turning on owes is then paid at the first write.
    *  Never rejects. */
   appGreeted(state: () => OrchState | null): Promise<void>
+  /** Whether a write now lands: Job Continuity on, this Host the writer, and the file open (the gate every
+   *  write passes). The Host recovers only while this is true (remote runtime design §2.6). Never throws. */
+  writes(): boolean
+  /** The Host reconciler's journal (§2.6, Phase 3R): reads through the writer's own handle, writes stamped
+   *  with the Host as the actor. While `writes()` is false a read throws, which the reconciler reads as
+   *  "cannot say", and a write lands nothing. A failed write is logged and answers its empty value. */
+  reconcilerJournal: ReconcilerJournal
   /** J7: the rows the timeline shows, read through a JournalReader; [] when off. Never throws. */
   timeline(runId: string, state: OrchState): JobEvent[]
   close(): void
@@ -274,10 +284,55 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
     return { status: 200, body: { applied, failed } }
   }
 
+  /** The writer for the reconciler's reads, or a throw: a read nobody can answer is "cannot say". */
+  const readable = (): ContinuityJournal => {
+    const w = writing()
+    if (!w) throw new Error('the Host does not write the journal now')
+    return w.journal
+  }
+  const reconcilerJournal: ReconcilerJournal = {
+    eventsFor: (runId, page) => readable().eventsFor(runId, page),
+    firstCheckpointFor: (dispatchId) => readable().firstCheckpointFor(dispatchId),
+    append: (events) => {
+      let n = 0
+      guarded('recording recovery rows', () => {
+        const w = writing()
+        if (w) n = w.journal.append(events.map((e) => ({ ...e, actor: HOST_ACTOR })))
+      })
+      return n
+    },
+    startRecoveryAction: (row) => {
+      // Minted here, as the app mints its own (P14), so a row that could not be written still has the id
+      // the reconciler finishes it under.
+      const minted = { ...row, recoveryActionId: row.recoveryActionId ?? `rca_${randomUUID()}` }
+      let stored: RecoveryActionRow | null = null
+      guarded('starting a recovery action', () => {
+        stored = writing()?.journal.startRecoveryAction(minted) ?? null
+      })
+      return (
+        stored ?? {
+          recoveryActionId: minted.recoveryActionId, runId: row.runId, taskId: row.taskId, dispatchId: row.dispatchId,
+          strategy: row.strategy, class: row.class, reason: row.reason, status: 'selected', startedAt: row.at, completedAt: null, details: null
+        }
+      )
+    },
+    finishRecoveryAction: (id, status, at, details) =>
+      guarded('finishing a recovery action', () => writing()?.journal.finishRecoveryAction(id, status, at, details))
+  }
+
   return {
     start: async () => {
       settings = await readSettings()
     },
+    writes: () => {
+      try {
+        return writing() !== null
+      } catch (err) {
+        d.log(`continuity: could not tell whether the journal is written: ${String(err)}`)
+        return false
+      }
+    },
+    reconcilerJournal,
     committed: ({ prev, next, version, actor }) =>
       guarded('recording a commit', () => {
         const w = writing()
