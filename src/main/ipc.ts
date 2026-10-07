@@ -63,7 +63,7 @@ import { hostRollConfigPath, readRollConfigKey } from '../core/rolling/config'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import { isOnlyTerminalReports } from '../core/terminal/reports'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, HostHoldings, HostStatus, OrchHostGate, OrchSnapshot, RunDetail, CompletionDetail, Provider, RateLimitWindow, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { orchAccountsFor } from '../core/accounts/accountsFile'
 import { descriptorOf } from '../core/providers/descriptor'
@@ -104,6 +104,8 @@ import { RecoveryReconciler } from '../core/recovery/reconciler'
 import { executeRecovery } from '../core/recovery/execute'
 import { readGitFacts } from '../core/recovery/git'
 import { createRecoveryOwner } from './host/recoveryOwner'
+import { createRemoteRuntimes } from './remote/runtimes'
+import { createOrchRouter } from './remote/orchRouter'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles } from '../core/workUnit/gitProbe'
@@ -4386,7 +4388,7 @@ export function registerIpc(
   // renderer only asks for with a project open cannot carry it (ruling F41). `orch.hostGate` answers
   // it instead, and is answered whether or not anything here has ever run.
   ipcMain.handle('orch.hostGate', () => orchHostGate)
-  ipcMain.handle('orch.list', async (_e, projectPath: string) => {
+  const orchLocalList = async (projectPath: string): Promise<OrchSnapshot> => {
     const request = ++orchRequest
     // The guard runs on the path as sent — it decides what the renderer is allowed to name, and the
     // mapping below must not be able to widen that. The mapped value never reaches the filesystem;
@@ -4422,10 +4424,10 @@ export function registerIpc(
     // correct across a project switch instead of comparing against the previous project's fold.
     orchSent = snapshot
     return snapshot
-  })
+  }
   // 스냅샷에 태우지 않고 따로 읽는 이유는 크기다 — Message.body 에는 검증 출력 꼬리가 실리므로
   // 프로젝트의 모든 Run 의 모든 이벤트를 매 쓰기마다 미는 것은 불가능하다. 모달이 열릴 때만 온다.
-  ipcMain.handle('orch.runDetail', async (_e, projectPath: string, runId: string, opts?: { journalPages?: unknown }) => {
+  const orchLocalRunDetail = async (projectPath: string, runId: string, opts?: { journalPages?: unknown }): Promise<RunDetail> => {
     // orch.list 와 같은 가드, 같은 이유 — 경로가 어느 Run 을 볼 수 있는지를 정한다
     await assertAllowedPath(projectPath)
     if (!orch) return { events: [], layers: [], deps: {}, cyclic: [] }
@@ -4455,14 +4457,14 @@ export function registerIpc(
       a.at.localeCompare(b.at)
     )
     return { events, layers, deps, cyclic, journal: { busy: journal.busy, older: journal.older, capped: journal.capped } }
-  })
+  }
   /** 한 Task 가 왜 완료 정책을 못 넘었는가 — 화면이 블록을 펼칠 때 한 번 부른다(설계 §2.2).
    *
    *  `orch.runDetail` 과 같은 소유 가드를, 같은 이유로, 같은 함수(runsForProject)로 쓴다. 그리고
    *  **Task 가 그 Run 의 것인지 한 번 더 본다** — Run 소유만 보고 taskId 를 믿으면 이 문이 남의
    *  Run 의 Task 를 읽는 우회로가 된다. 두 판정 중 하나라도 어긋나면 null 이다: 이유를 구분해 돌려
    *  주면 그 차이가 "그 Task 는 있다" 를 알려 주는 신호가 된다. */
-  ipcMain.handle('orch.completion', async (_e, projectPath: string, runId: string, taskId: string) => {
+  const orchLocalCompletion = async (projectPath: string, runId: string, taskId: string): Promise<CompletionDetail | null> => {
     await assertAllowedPath(projectPath)
     if (!orch) return null
     const project = repoPathOf(core.worktrees.list(), projectPath)
@@ -4474,7 +4476,7 @@ export function registerIpc(
     const completionRunId = resolveRunId(state, runId)
     if (completionRunId === undefined) return null
     return completionForTaskOf(state.tasks, completionRunId, taskId)
-  })
+  }
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·
   // run-merge 는 args.run, run-delete 는 args.id, task-update 는
@@ -4570,9 +4572,7 @@ export function registerIpc(
   // Dispatch id 가 **그 projectPath 의 것인지**는 별개의 질문이고, 여기까지는 그것을 아무도 묻지
   // 않았다. orch.runDetail(위)은 정확히 같은 질문을 runId 에 대해 이미 묻고 있고("소유 판정을
   // 복제하지 않는다"는 그 주석), 그 판정을 orchOwnerMismatch 가 그대로 재사용한다.
-  ipcMain.handle(
-    'orch.command',
-    async (_e, projectPath: string, cmd: string, args: Record<string, unknown>) => {
+  const orchLocalCommand = async (projectPath: string, cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
       await assertAllowedPath(projectPath)
       // The server is not up — a boot that failed, or one still in flight. Not 'orchestration is
       // off': there is no such state any more, and a person told that would go looking for a switch.
@@ -4617,7 +4617,31 @@ export function registerIpc(
         }
         throw err
       }
-    }
+  }
+  // **Which Host each orchestration call goes to** (remote runtime design §2.7, D1.1): no runtimeId, or 'local', runs
+  // the four bodies above exactly as before; a paired Runtime's id goes to its client in main/remote, so none of the
+  // guards, fallbacks or writes above can run for it (D1.6, D1.7), and its replies never reach 'orch:state'.
+  const remoteRuntimes = createRemoteRuntimes({ profileDir: app.getPath('userData'), version: app.getVersion() })
+  app.once('will-quit', () => remoteRuntimes.close())
+  const orchRouter = createOrchRouter({
+    local: {
+      list: (projectPath) => orchLocalList(projectPath),
+      runDetail: (projectPath, runId, opts) => orchLocalRunDetail(projectPath, runId, opts),
+      completion: (projectPath, runId, taskId) => orchLocalCompletion(projectPath, runId, taskId),
+      command: (projectPath, cmd, args) => orchLocalCommand(projectPath, cmd, args)
+    },
+    remote: remoteRuntimes,
+    log: orchLog
+  })
+  ipcMain.handle('orch.list', (_e, projectPath: string, runtimeId?: string) => orchRouter.list(projectPath, runtimeId))
+  ipcMain.handle('orch.runDetail', (_e, projectPath: string, runId: string, opts?: { journalPages?: unknown }, runtimeId?: string) =>
+    orchRouter.runDetail(projectPath, runId, opts, runtimeId)
+  )
+  ipcMain.handle('orch.completion', (_e, projectPath: string, runId: string, taskId: string, runtimeId?: string) =>
+    orchRouter.completion(projectPath, runId, taskId, runtimeId)
+  )
+  ipcMain.handle('orch.command', (_e, projectPath: string, cmd: string, args: Record<string, unknown>, runtimeId?: string) =>
+    orchRouter.command(projectPath, cmd, args, runtimeId)
   )
   // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
   // and without this main goes on folding a snapshot and sending it to nobody on every orchestration

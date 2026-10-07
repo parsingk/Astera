@@ -175,8 +175,9 @@ describe('createAppJournal', () => {
     }
     // …and the handler asks appJournal once per call, not once per kind of row.
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'ipc.ts'), 'utf8')
-    const handler = src.slice(src.indexOf("ipcMain.handle('orch.runDetail'"))
-    expect(handler.slice(0, handler.indexOf('ipcMain.handle(', 10)).match(/appJournal\.\w+\(/g)).toEqual(['appJournal.timeline('])
+    // The local body of orch.runDetail (remote runtime Phase 5 moved it behind the router, unchanged).
+    const handler = src.slice(src.indexOf('const orchLocalRunDetail = async'))
+    expect(handler.slice(0, handler.indexOf('const orchLocalCompletion = async')).match(/appJournal\.\w+\(/g)).toEqual(['appJournal.timeline('])
   })
 
   it('turning on in front of a journal Host asks it to reload and writes no baseline itself', async () => {

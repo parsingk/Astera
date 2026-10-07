@@ -730,6 +730,19 @@ export interface OrchSnapshot {
    *  **혼자** 일하고 있으면 그 Run 의 sharesProjectFolder 는 거짓인데 상한 1 짜리를 하나 더 만드는
    *  순간 둘이 얽힌다. 그 경우를 놓치지 않으려고 폴더 사실을 따로 싣는다. */
   projectFolderBusy: boolean
+  /** Which paired Runtime this snapshot is from, on a remote one only (remote runtime design §2.7): its view marks a
+   *  stale or offline state. Absent for the local Host, whose snapshot is unchanged. */
+  runtime?: RuntimeView
+}
+
+/** What a remote reply says about its Runtime beside the data (remote runtime design §2.7, §3.6). */
+export interface RuntimeView {
+  runtimeId: string
+  /** The Runtime could not be reached for this reply. */
+  offline: boolean
+  /** The data is the last state read, not the Runtime's current one. */
+  stale: boolean
+  version: number
 }
 
 export interface CoreEvents {
@@ -1757,7 +1770,9 @@ export interface AppControlApi {
  * comparison suppresses.
  */
 export interface OrchApi {
-  list(projectPath: string): Promise<OrchSnapshot>
+  /** `runtimeId` (remote runtime design §2.7, D1.1): a paired Runtime instead of this machine's Host, `'local'` or
+   *  absent for this one. The same on `runDetail`, `completion` and `command`. */
+  list(projectPath: string, runtimeId?: string): Promise<OrchSnapshot>
   /** Why the Jobs sidebar has nothing to draw, when the Host is the reason — null in the ordinary
    *  case. **Its own call rather than a field on `list`** (ruling F41): `list` names a project and is
    *  only ever made with one open, while this is one fact about the app's Host — and the window with
@@ -1767,14 +1782,14 @@ export interface OrchApi {
   /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. `journalPages` 는 저널 줄을
    *  가장 최근 몇 쪽까지 읽을지다(없으면 1, "이전 기록 더 보기" 가 하나씩 늘린다). */
-  runDetail(projectPath: string, runId: string, opts?: { journalPages?: number }): Promise<RunDetail>
+  runDetail(projectPath: string, runId: string, opts?: { journalPages?: number }, runtimeId?: string): Promise<RunDetail>
   /** 한 Task 가 왜 완료 정책을 못 넘었는가 — 실패한 검사의 출력 꼬리, 막는 리뷰 이슈, 의심
    *  파일. 이것도 **펼칠 때만** 온다: 스냅숏이 이 셋을 싣지 않는 이유(변경마다 푸시된다)가
    *  한 번 가져가는 이 호출에는 걸리지 않는다(UI 2조각 설계 W1).
    *
    *  `null` 은 둘 중 하나다 — 보여 줄 것이 없거나, 이 프로젝트가 볼 수 없는 Run·Task 다.
    *  구분해 주지 않는 것이 의도다(ipc.ts 의 orch.completion). */
-  completion(projectPath: string, runId: string, taskId: string): Promise<CompletionDetail | null>
+  completion(projectPath: string, runId: string, taskId: string, runtimeId?: string): Promise<CompletionDetail | null>
   /** UI 가 오케스트레이션 상태를 바꾸는 유일한 통로 — server.ts 의 명령 표면을 그대로 부른다.
    *  cmd 는 CLI 와 같은 이름이고(`task-create`, `worker-start`, …) args 도 같은 키를 쓴다.
    *
@@ -1784,7 +1799,8 @@ export interface OrchApi {
   command(
     projectPath: string,
     cmd: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    runtimeId?: string
   ): Promise<{ status: number; body: unknown }>
   unwatch(): Promise<void>
 }

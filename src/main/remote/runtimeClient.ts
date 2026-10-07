@@ -17,7 +17,7 @@ import { snapshotFor } from '../../core/orchestration/view'
 import { layersOf } from '../../core/orchestration/graph'
 import { timelineFor } from '../../core/orchestration/timeline'
 import { completionForTaskOf } from '../../core/orchestration/completion'
-import type { CompletionDetail, OrchSnapshot, RunDetail } from '../../core/types'
+import type { CompletionDetail, OrchSnapshot, RunDetail, RuntimeView } from '../../core/types'
 
 export interface RemoteMirror {
   state: OrchState | null
@@ -30,13 +30,7 @@ export interface RemoteMirror {
   at: number | null
 }
 
-/** What a remote reply says about its Runtime, beside the data (the renderer marks a stale or offline view). */
-export interface RuntimeView {
-  runtimeId: string
-  offline: boolean
-  stale: boolean
-  version: number
-}
+export type { RuntimeView }
 
 export interface RemoteRuntimeClient {
   runtimeId: string
