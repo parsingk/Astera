@@ -161,6 +161,12 @@ export const HOST_FEATURE_WORK_UNITS = 'work-units'
  *  sends none of the three calls to a Host without it. Additive, so HOST_PROTOCOL stays 3. */
 export const HOST_FEATURE_WORKSPACE = 'workspace'
 
+/** The Host sizes a workspace's app window to its mirror tab: the app orch-calls `workspace-size` with
+ *  `{ sessionId, size: { width, height } | null }`, the tab's CSS pixels (src/core/workspace/size.ts).
+ *  Announced beside HOST_FEATURE_WORKSPACE by a Host that has it; an app sends no `workspace-size` to a
+ *  Host without it (an older Host answers an unknown call). Additive, so HOST_PROTOCOL stays as it is. */
+export const HOST_FEATURE_WORKSPACE_SIZE = 'workspace-size'
+
 /** The Host supervises the MCP HTTP entrance (MCP HTTP design §3): it answers the app-only orch-calls
  *  `mcp-http-reload` and `mcp-http-status` and pushes `mcp-http-state`. Announced by every Host: one without
  *  the CLI paths answers its state as failed. An app sends neither call to a Host without it. Additive, so

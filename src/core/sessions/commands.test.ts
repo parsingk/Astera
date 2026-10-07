@@ -67,6 +67,29 @@ describe('claude --add-dir', () => {
   })
 })
 
+// A codex 0.160 TUI attached to the shared app-server daemon runs its shell in the daemon's environment,
+// not its own (codexNoDaemon.ts). The builder asks whether this codex knows `--no-daemon`.
+describe('codex --no-daemon', () => {
+  it('runs its own server when the binary knows the flag', () => {
+    expect(buildCodexCommand('linux', undefined, () => true)({}).args).toEqual(['--no-daemon'])
+  })
+  it('keeps the flag on a resume, after the resume arguments', () => {
+    const { args } = buildCodexCommand('linux', undefined, () => true)({ resumeSessionId: 'sid', resumePrompt: 'go on' })
+    expect(args).toEqual(['resume', 'sid', 'go on', '--no-daemon'])
+  })
+  it('leaves the prompt last', () => {
+    const { args } = buildCodexCommand('linux', undefined, () => true)({ bypassPermissions: true, initialPrompt: 'do it' })
+    expect(args).toEqual(['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', 'do it'])
+  })
+  it('goes inside the cmd.exe wrapper on win32', () => {
+    expect(buildCodexCommand('win32', shim, () => true)({}).args).toEqual(['/d', '/c', 'call', SHIMS.codex, '--no-daemon'])
+  })
+  it('is left out for a binary that does not know it, and by default', () => {
+    expect(buildCodexCommand('linux', undefined, () => false)({}).args).toEqual([])
+    expect(buildCodexCommand('linux')({}).args).toEqual([])
+  })
+})
+
 describe('buildCodexAppServerCommand', () => {
   it('wraps through cmd.exe on win32, by the shim’s absolute path', () => {
     expect(buildCodexAppServerCommand('win32', shim)).toEqual({

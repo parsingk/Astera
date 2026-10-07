@@ -134,6 +134,17 @@ describe('launch', () => {
     expect(r.deps.changed).toHaveBeenCalled()
   })
 
+  it('asks the manager to size the window once the page has settled, and when the port never opens', async () => {
+    const order: string[] = []
+    const r = rig({ started: vi.fn(async () => void order.push('started')) })
+    r.cdp.answers.set('Runtime.evaluate', () => (order.push('settled?'), { result: { value: true } }))
+    await r.h.launch({ command: 'app.exe' })
+    expect(order).toEqual(['settled?', 'started'])
+    const noPort = rig({ started: vi.fn(async () => {}), connectCdp: vi.fn(async () => null) })
+    await expect(noPort.h.launch({ command: 'app.exe' })).rejects.toThrow('nothing answered')
+    expect(noPort.deps.started).toHaveBeenCalledTimes(1)
+  })
+
   it('is refused once launched, and says to relaunch', async () => {
     const r = rig()
     await r.h.launch({ command: 'app.exe' })

@@ -804,3 +804,14 @@ describe('the Linux desk: real deps', () => {
     expect(Date.now() - t0).toBeLessThan(1_000)
   })
 })
+
+describe('the Linux desk: fit', () => {
+  it('moves the largest titled window to the top left, sizes it, never past the display, and answers its geometry', async () => {
+    const r = rig()
+    threeWindows(r)
+    const desk = await r.desks.start('a')
+    expect(await desk.fit!({ width: 2400, height: 900 })).toEqual({ width: 900, height: 700 })
+    expect(r.runs.find((x) => x.args[0] === 'windowmove')!.args).toEqual(['windowmove', '41', '0', '0', 'windowsize', '41', '1920', '900'])
+    await expect(desk.fit!({ title: 'nothing like it', width: 800, height: 600 })).rejects.toThrow('no window titled "nothing like it"')
+  })
+})

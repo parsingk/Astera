@@ -70,7 +70,7 @@ describe('shuttleFiles', () => {
 
 describe('writeShuttle', () => {
   it('writes the higgsfield shims beside the session shuttle', async () => {
-    const d = await fs.mkdtemp(path.join(os.tmpdir(), 'shuttle-hf-'))
+    const d = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-shuttle-hf-'))
     await writeShuttle({ dir: d, execPath: 'C:/e/electron.exe', entryPath: 'C:/e/cli.js', platform: 'win32', hfShims: true })
     expect(await fs.readFile(path.join(d, 'higgsfield.cmd'), 'utf8')).toContain('hf-proxy')
   })

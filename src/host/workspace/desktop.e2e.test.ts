@@ -113,8 +113,8 @@ const setClipboardText = (text: string | null): Promise<string> =>
       (text === null || text === '' ? '[Windows.Forms.Clipboard]::Clear()' : `[Windows.Forms.Clipboard]::SetDataObject(${psString(text)}, $true, 10, 100)`)
   )
 
-const commandFor = (udd: string): string =>
-  `"${electronExe()}" "${path.join(here, 'fixtures', 'app', 'main.cjs')}" --remote-debugging-port=%ASTERA_APP_CDP_PORT% --user-data-dir="${udd}"`
+const commandFor = (udd: string, extra = ''): string =>
+  `"${electronExe()}" "${path.join(here, 'fixtures', 'app', 'main.cjs')}" --remote-debugging-port=%ASTERA_APP_CDP_PORT% --user-data-dir="${udd}"${extra}`
 
 interface Harness {
   m: WorkspaceManager
@@ -181,7 +181,7 @@ describe.runIf(enabled)('the agent app workspace on a real desktop', () => {
   }, 60_000)
 
   const tempDir = async (): Promise<string> => {
-    if (!dir) dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera 데스크톱 e2e-'))
+    if (!dir) dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-데스크톱 e2e-'))
     return dir
   }
 
@@ -307,6 +307,51 @@ describe.runIf(enabled)('the agent app workspace on a real desktop', () => {
       expect(await foreground()).toBe(before)
     },
     180_000
+  )
+
+  it(
+    'lays out the page of a window that maximized itself at the mirror tab size, so the page, its metrics and the capture agree',
+    async () => {
+      const base = await tempDir()
+      const profile = path.join(base, 'profile-3')
+      const udd = path.join(base, 'electron-profile-3')
+      udds.push(udd)
+      const h = await harness(profile)
+      managers.push(h.m)
+      const before = await foreground()
+      const page = 'JSON.stringify({ w: innerWidth, h: innerHeight, cw: document.documentElement.clientWidth, ch: document.documentElement.clientHeight, dpr: devicePixelRatio })'
+      type Page = { w: number; h: number; cw: number; ch: number; dpr: number }
+
+      expect(h.m.resize('s-e2e-3', { width: 1200, height: 750 })).toBe(true)
+      const first = await h.m.run('s-e2e-3', `log(await launch({ command: ${JSON.stringify(commandFor(udd, ' --maximize'))} })); log(await screenshot())`)
+      const firstBody = first.body as { log: string[]; error?: unknown }
+      expect(firstBody.error).toBeUndefined()
+      const port = (JSON.parse(firstBody.log[0]) as { port: number }).port
+      const shot = JSON.parse(firstBody.log[1]) as { width: number; height: number }
+      const p1 = JSON.parse(String(await read2(port, page))) as Page
+      console.log(`a self-maximizing launch sized for 1200x750: page ${JSON.stringify(p1)}, screenshot ${shot.width}x${shot.height}; ${h.log.filter((l) => l.includes('the app was given')).join(' | ')}`)
+      expect([p1.w, p1.h, p1.cw, p1.ch]).toEqual([1200, 750, 1200, 750])
+      expect([shot.width, shot.height]).toEqual([Math.round(1200 * p1.dpr), Math.round(750 * p1.dpr)])
+
+      // The tab resized: the running app follows.
+      expect(h.m.resize('s-e2e-3', { width: 1000, height: 640 })).toBe(true)
+      await vi.waitFor(async () => expect(JSON.parse(String(await read2(port, page)))).toMatchObject({ w: 1000, h: 640, cw: 1000, ch: 640 }), { timeout: 10_000, interval: 300 })
+      // The capture follows the page's new layout within a frame or two (measured: under 500 ms).
+      await vi.waitFor(
+        async () => {
+          const again = await h.m.run('s-e2e-3', 'log(await screenshot())')
+          expect(JSON.parse((again.body as { log: string[] }).log[0])).toMatchObject({ width: Math.round(1000 * p1.dpr), height: Math.round(640 * p1.dpr) })
+        },
+        { timeout: 10_000, interval: 500 }
+      )
+      expect(await foreground()).toBe(before)
+      expect(await windowsOnMyDesktop(await fixturePids(udd))).toBe(0)
+
+      expect(((await h.m.run('s-e2e-3', 'await close()')).body as { error?: unknown }).error).toBeUndefined()
+      await h.m.dispose()
+      expect(await fixturePids(udd)).toEqual([])
+    },
+    120_000
   )
 
   it(

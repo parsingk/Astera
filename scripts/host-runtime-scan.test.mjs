@@ -13,7 +13,7 @@ afterEach(() => {
 
 /** A bundle laid out as electron-vite emits it: host.js at the root, chunks beside it. */
 function bundle(files) {
-  dir = mkdtempSync(join(tmpdir(), 'host-runtime-scan-'))
+  dir = mkdtempSync(join(tmpdir(), 'astera-runtime-scan-'))
   mkdirSync(join(dir, 'chunks'))
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text)
   return join(dir, 'host.js')
@@ -50,7 +50,7 @@ describe('bundlePackages', () => {
 
 /** A node_modules tree under a temp root: { 'a': { dependencies: {…} }, 'a/node_modules/b': {…} }. */
 function tree(pkgs, extra = {}) {
-  dir = mkdtempSync(join(tmpdir(), 'host-runtime-closure-'))
+  dir = mkdtempSync(join(tmpdir(), 'astera-runtime-closure-'))
   for (const [rel, manifest] of Object.entries(pkgs)) {
     const at = join(dir, 'node_modules', ...rel.split('/'))
     mkdirSync(at, { recursive: true })

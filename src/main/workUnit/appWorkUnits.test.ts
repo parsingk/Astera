@@ -90,7 +90,7 @@ function rig(over: Partial<AppWorkUnitsDeps> = {}): Rig {
 }
 
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'app-work-units-'))
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-app-work-units-'))
   file = path.join(dir, 'workUnits.json')
   root = path.join(dir, 'proj')
   transcript = path.join(dir, 't1.jsonl')

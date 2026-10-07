@@ -92,8 +92,14 @@ export function sanitizeResumePrompt(prompt: string): string {
 
 /** The codex CLI command builder. settingsFile (Claude statusLine only) is ignored.
  *  resumePrompt is an optional argument of codex resume — unlike Claude's, it does not need to be typed into
- *  the PTY. */
-export function buildCodexCommand(platform: NodeJS.Platform, resolve: ResolveExecutable = resolveWindowsExecutable): CommandBuilder {
+ *  the PTY. `noDaemon` says whether this codex takes `--no-daemon` (codexNoDaemon.ts: without it a session's
+ *  shell runs in another session's environment); the default asks nothing and leaves the flag out, so only
+ *  the real wiring (providers/descriptor.ts) runs a binary to find out. */
+export function buildCodexCommand(
+  platform: NodeJS.Platform,
+  resolve: ResolveExecutable = resolveWindowsExecutable,
+  noDaemon: () => boolean = () => false
+): CommandBuilder {
   return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt }) => {
     const args: string[] = []
     if (resumeSessionId) {
@@ -101,6 +107,7 @@ export function buildCodexCommand(platform: NodeJS.Platform, resolve: ResolveExe
       const safe = resumePrompt ? sanitizeResumePrompt(resumePrompt) : ''
       if (safe) args.push(safe) // a prompt that was nothing but metacharacters is not carried as an empty argument
     }
+    if (noDaemon()) args.push('--no-daemon')
     // Starts without permission prompts — the counterpart to Claude's --dangerously-skip-permissions (measured on codex 0.143)
     if (bypassPermissions) args.push('--dangerously-bypass-approvals-and-sandbox')
     if (initialPrompt) args.push(initialPrompt)

@@ -33,7 +33,7 @@ and `astera tasks add --job` plan work a person starts later. `astera sessions l
 skill. **`sessions send` types into whatever the other session shows**, a permission prompt or a
 first-run screen included, so `sessions read` it right before you send.
 
-- Higgsfield: when a balance looks too low for the next job (from `higgsfield account status` or any short-credits message), do not stop or ask for a top-up first: run `astera higgsfield list`, then ask the user which account to use with choices (AskUserQuestion) and run `astera higgsfield use --account <account>`. Never switch on your own. For an expired Higgsfield login, ask the user to log in in Astera Settings > Higgsfield; never suggest `hf auth login` (on this computer `hf` may be another program).
+- Higgsfield: when a balance looks too low for the next job (from `higgsfield account status` or any short-credits message), do not stop or ask for a top-up first: run `astera higgsfield list`, then ask the user which account to use with choices (AskUserQuestion) and run `astera higgsfield use --account <account>`. Never switch on your own. For an expired Higgsfield login, ask the user to log in in Astera Settings > Creative Hub > Higgsfield; never suggest `hf auth login` (on this computer `hf` may be another program).
 
 ## When not to use this
 

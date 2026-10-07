@@ -131,7 +131,7 @@ export function HiggsfieldSettings(): React.JSX.Element {
         <div className="settings-warn-box" role="alert">{t('higgsfield.binaryMissing', { path: data.cliIssue.path })}</div>
       )}
       {data !== null && !data.cliFound && <span className="settings-hint">{t('higgsfield.cliMissing')}</span>}
-      {current && <div className="settings-row"><span>{t('higgsfield.current', { label: current.label })}</span></div>}
+      {current && <div className="settings-field-label">{t('higgsfield.current', { label: current.label })}</div>}
       <span className="settings-hint">{t('higgsfield.hint')}</span>
       <ul>
         {data?.accounts.map((a) => {

@@ -107,7 +107,7 @@ describe('upsertClaudeTrust', () => {
 
 describe('markClaudeProjectTrusted', () => {
   const tmpDir = async (): Promise<string> =>
-    fs.mkdtemp(path.join(os.tmpdir(), 'claude-trust-'))
+    fs.mkdtemp(path.join(os.tmpdir(), 'astera-claude-trust-'))
 
   it('파일이 없으면 만든다', async () => {
     const dir = await tmpDir()

@@ -66,7 +66,7 @@ const client = async (address: string, hello: Record<string, unknown>) => {
 }
 
 const host = async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera ws 통합-'))
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-ws 통합-'))
   cleanups.push(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }))
   const profileDir = path.join(dir, 'profile')
   await fs.mkdir(profileDir, { recursive: true })

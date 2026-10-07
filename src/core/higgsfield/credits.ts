@@ -85,5 +85,5 @@ export function otherAccountsLine(others: OtherAccount[]): string {
 }
 
 export const expiredLoginMessage = (label: string): string =>
-  `higgsfield: the Higgsfield login of account "${label}" has expired. Ask the user to log in again in Astera Settings > Higgsfield. Do not suggest \`hf auth login\` — on this computer \`hf\` may be another program.
+  `higgsfield: the Higgsfield login of account "${label}" has expired. Ask the user to log in again in Astera Settings > Creative Hub > Higgsfield. Do not suggest \`hf auth login\` — on this computer \`hf\` may be another program.
 `

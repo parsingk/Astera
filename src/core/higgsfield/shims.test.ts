@@ -179,7 +179,7 @@ describe('higgsfieldVendorBinary', () => {
   it('works on a real npm layout on disk', async () => {
     const { promises: fs } = await import('node:fs')
     const os = await import('node:os')
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hfv-'))
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfv-'))
     const pkg = path.join(dir, 'node_modules', '@higgsfield', 'cli')
     await fs.mkdir(path.join(pkg, 'bin'), { recursive: true })
     await fs.writeFile(path.join(pkg, 'bin', 'higgsfield.js'), '')

@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url'
 import type { Cdp, DeskHandle } from '../../core/workspace/helpers'
 import type { DeskShot, DeskWindow } from '../../core/workspace/protocol'
 import type { DesktopHelper } from './desktopHelper'
-import { DISPOSE_CAP_MS, FRAME_EVERY_MS, createWorkspaceManager, disposeWithin, type WorkspaceEvent, type WorkspaceManager, type WorkspaceManagerDeps } from './manager'
+import { DEFAULT_APP_SIZE } from '../../core/workspace/size'
+import { DISPOSE_CAP_MS, FRAME_EVERY_MS, OVERRIDE_TRIES, REFIT_AFTER_MS, REFIT_TRIES, createWorkspaceManager, disposeWithin, type WorkspaceEvent, type WorkspaceManager, type WorkspaceManagerDeps } from './manager'
 
 // Records the child processes the script runner spawns (scriptWorker.ts), delegating to the real spawn.
 const spawned = vi.hoisted(() => ({ children: [] as import('node:child_process').ChildProcess[] }))
@@ -59,6 +60,11 @@ class FakeDesk implements DesktopHelper {
     return { data: '/9j/', width: 10, height: 10, title: 'T' }
   }
   async keys() {}
+  fits: Array<{ title?: string; width: number; height: number }> = []
+  async fit(a: { title?: string; width: number; height: number }) {
+    this.fits.push(a)
+    return { width: a.width, height: a.height }
+  }
   closes = 0
   async close() {
     this.closes += 1
@@ -70,13 +76,21 @@ class FakeDesk implements DesktopHelper {
   }
 }
 
-const fakeCdp = (): Cdp & { closed: boolean; calls: string[] } => {
+const fakeCdp = (o: { viewport?: { width: number; height: number }; dpr?: number; pageReads?: Array<[number, number]>; pageAfter?: [number, number]; inner?: [number, number] } = {}): Cdp & { closed: boolean; calls: string[]; sent: Array<{ method: string; params?: Record<string, unknown> }>; viewport: { width: number; height: number } } => {
   const c = {
     closed: false,
     calls: [] as string[],
-    send: async (method: string) => {
+    sent: [] as Array<{ method: string; params?: Record<string, unknown> }>,
+    viewport: o.viewport ?? { width: 1920, height: 1080 },
+    send: async (method: string, params?: Record<string, unknown>) => {
       c.calls.push(method)
-      if (method === 'Page.getLayoutMetrics') return { cssVisualViewport: { clientWidth: 1920, clientHeight: 1080 } }
+      c.sent.push({ method, params })
+      if (method === 'Page.getLayoutMetrics') return { cssVisualViewport: { clientWidth: c.viewport.width, clientHeight: c.viewport.height } }
+      if (method === 'Runtime.evaluate' && params?.expression === 'window.devicePixelRatio') return { result: { value: o.dpr ?? 1 } }
+      // The page's own size, read while an override is checked: the reads given, then `pageAfter`.
+      if (method === 'Runtime.evaluate' && params?.expression === '[window.innerWidth, window.innerHeight]' && o.pageReads)
+        return { result: { value: o.pageReads.shift() ?? o.pageAfter } }
+      if (method === 'Runtime.evaluate' && params?.expression === '[window.innerWidth, window.innerHeight]' && o.inner) return { result: { value: o.inner } }
       if (method === 'Page.captureScreenshot') return { data: '/9j/frame' }
       return {}
     },
@@ -946,5 +960,154 @@ describe('disposeWithin (the Host leaving)', () => {
     expect(leave.slice(at, leave.indexOf('spawner.closeAndSettle'))).toMatch(/workspaces\.dispose\(\)[\s\S]*DISPOSE_CAP_MS/)
     expect(at).toBeLessThan(leave.indexOf('spawner.closeAndSettle'))
     expect(leave).not.toMatch(/await workspaces\.dispose\(\)/)
+  })
+})
+
+describe('the app size (the mirror tab fills with the app)', () => {
+  const overrides = (cdp: ReturnType<typeof fakeCdp>) => cdp.sent.filter((x) => x.method === 'Emulation.setDeviceMetricsOverride').map((x) => x.params)
+  const at = (size: { width: number; height: number }) => ({ ...size, deviceScaleFactor: 0, mobile: false })
+
+  it('on Windows a launch lays the page out at the default size when no mirror tab has said how big it is, and leaves the window alone', async () => {
+    const cdp = fakeCdp()
+    const { m } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    expect(overrides(cdp)).toEqual([at(DEFAULT_APP_SIZE)])
+    expect(FakeDesk.made[0].fits).toEqual([])
+  })
+
+  it('a launch takes the mirror tab size, in CSS pixels whatever the page devicePixelRatio', async () => {
+    const cdp = fakeCdp({ dpr: 1.5 })
+    const { m } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    expect(m.resize('s1', { width: 1000.4, height: 600 })).toBe(true)
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    expect(overrides(cdp)).toEqual([at({ width: 1000, height: 600 })])
+  })
+
+  it('a resized mirror tab resizes the running app, once per size; null forgets the size', async () => {
+    const cdp = fakeCdp()
+    const { m, settle } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    expect(m.resize('s1', { width: 1400, height: 900 })).toBe(true)
+    expect(m.resize('s1', { width: 1400, height: 900 })).toBe(true)
+    await settle()
+    expect(overrides(cdp)).toEqual([at(DEFAULT_APP_SIZE), at({ width: 1400, height: 900 })])
+    expect(m.resize('s1', { width: 0, height: 0 })).toBe(false)
+    expect(m.resize('s1', null)).toBe(true)
+    await settle()
+    expect(overrides(cdp)).toHaveLength(2)
+  })
+
+  it('an override the page does not keep is set again (measured on the hidden desktop: undone about 300 ms after launch)', async () => {
+    const reads: Array<[number, number]> = [[1200, 750], [1200, 750], [3840, 2028]]
+    const cdp = fakeCdp({ pageReads: reads, pageAfter: [1200, 750] })
+    const { m, deps } = await rig({ connectCdp: vi.fn(async () => cdp), log: vi.fn() })
+    m.resize('s1', { width: 1200, height: 750 })
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    expect(overrides(cdp)).toEqual([at({ width: 1200, height: 750 }), at({ width: 1200, height: 750 })])
+    expect(vi.mocked(deps.log).mock.calls.map((c) => c[0]).join(' | ')).toContain('the page lays out at that size (set 2 times)')
+  }, 20_000)
+
+  it('a frame whose page is another size than it was given sizes it again, a few times at most', STARTS_A_SCRIPT, async () => {
+    // The page measured on the hidden desktop: maximized by the app itself to 3840x2088.
+    const cdp = fakeCdp({ viewport: { width: 3840, height: 2088 } })
+    const { m, tick, settle } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    const run = m.run('s1', "await launch({ command: 'app.exe' }); await waitFor(1500)")
+    await vi.waitFor(() => expect(overrides(cdp)).toHaveLength(1), reachesHelper)
+    tick(FRAME_EVERY_MS)
+    await settle()
+    expect(overrides(cdp)).toHaveLength(1)
+    for (let i = 0; i < (REFIT_TRIES + 2) * (REFIT_AFTER_MS / FRAME_EVERY_MS); i++) {
+      tick(FRAME_EVERY_MS)
+      await settle()
+    }
+    expect(overrides(cdp)).toHaveLength(REFIT_TRIES)
+    // A page that took the size asks for nothing more.
+    cdp.viewport = { width: 1200, height: 700 }
+    m.resize('s1', { width: 1200, height: 700 })
+    await settle()
+    for (let i = 0; i < 2 * (REFIT_AFTER_MS / FRAME_EVERY_MS); i++) {
+      tick(FRAME_EVERY_MS)
+      await settle()
+    }
+    expect(overrides(cdp)).toHaveLength(REFIT_TRIES + 1)
+    expect(overrides(cdp).at(-1)).toEqual(at({ width: 1200, height: 700 }))
+    expect(body(await run).error).toBeUndefined()
+  })
+
+  it('a page with a vertical scrollbar is at its size: no refit, and the frame takes the scrollbar too', STARTS_A_SCRIPT, async () => {
+    // Page.getLayoutMetrics leaves the 15 px scrollbar out; innerWidth counts it.
+    const cdp = fakeCdp({ viewport: { width: DEFAULT_APP_SIZE.width - 15, height: DEFAULT_APP_SIZE.height }, inner: [DEFAULT_APP_SIZE.width, DEFAULT_APP_SIZE.height] })
+    const { m, tick, settle } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    const run = m.run('s1', "await launch({ command: 'app.exe' }); await waitFor(1500)")
+    await vi.waitFor(() => expect(overrides(cdp)).toHaveLength(1), reachesHelper)
+    for (let i = 0; i < 3 * (REFIT_AFTER_MS / FRAME_EVERY_MS); i++) {
+      tick(FRAME_EVERY_MS)
+      await settle()
+    }
+    expect(overrides(cdp)).toHaveLength(1)
+    const shot = cdp.sent.filter((x) => x.method === 'Page.captureScreenshot').at(-1)!
+    expect(shot.params).toMatchObject({ clip: { width: DEFAULT_APP_SIZE.width, height: DEFAULT_APP_SIZE.height } })
+    expect(body(await run).error).toBeUndefined()
+  })
+
+  it('a page that reached its size refills the refit budget: the cap is for fits that fail in a row', STARTS_A_SCRIPT, async () => {
+    const cdp = fakeCdp({ viewport: { width: 3840, height: 2088 } })
+    const { m, tick, settle } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    const run = m.run('s1', "await launch({ command: 'app.exe' }); await waitFor(2500)")
+    await vi.waitFor(() => expect(overrides(cdp)).toHaveLength(1), reachesHelper)
+    const frames = async (n: number): Promise<void> => {
+      for (let i = 0; i < n; i++) {
+        tick(FRAME_EVERY_MS)
+        await settle()
+      }
+    }
+    await frames((REFIT_TRIES + 1) * (REFIT_AFTER_MS / FRAME_EVERY_MS))
+    expect(overrides(cdp)).toHaveLength(REFIT_TRIES)
+    cdp.viewport = { ...DEFAULT_APP_SIZE }
+    await frames(1)
+    cdp.viewport = { width: 3840, height: 2088 }
+    await frames((REFIT_TRIES + 1) * (REFIT_AFTER_MS / FRAME_EVERY_MS))
+    expect(overrides(cdp)).toHaveLength(2 * REFIT_TRIES)
+    expect(body(await run).error).toBeUndefined()
+  })
+
+  it('only the first fit after a launch watches the override; a tab resize sets it once', async () => {
+    // A page that never keeps the override: the launch sets it OVERRIDE_TRIES times, a resize once.
+    const cdp = fakeCdp({ pageReads: [], pageAfter: [3840, 2028] })
+    const { m, settle } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    expect(overrides(cdp)).toHaveLength(OVERRIDE_TRIES)
+    m.resize('s1', { width: 1000, height: 640 })
+    await settle()
+    expect(overrides(cdp)).toHaveLength(OVERRIDE_TRIES + 1)
+    expect(overrides(cdp).at(-1)).toEqual(at({ width: 1000, height: 640 }))
+  })
+
+  it('on Linux the window is sized, in the page device pixels, and the page is not overridden; on macOS only the page', async () => {
+    const linuxCdp = fakeCdp({ dpr: 1.5 })
+    const { m: linux } = await rig({ platform: 'linux', linuxTools: async () => ({ missing: [], installLine: '' }), connectCdp: vi.fn(async () => linuxCdp) })
+    linux.resize('s1', { width: 1000, height: 600 })
+    await linux.run('s1', "await launch({ command: 'app' })")
+    expect(FakeDesk.made[0].fits).toEqual([{ width: 1500, height: 900 }])
+    expect(overrides(linuxCdp)).toEqual([])
+    const macCdp = fakeCdp()
+    const { m: mac } = await rig({
+      platform: 'darwin',
+      connectCdp: vi.fn(async () => macCdp),
+      startDesk: vi.fn(async (name: string) => Object.assign(new FakeDesk(name), { fit: undefined }))
+    })
+    await mac.run('s1', "await launch({ command: 'app' })")
+    expect(overrides(macCdp)).toEqual([at(DEFAULT_APP_SIZE)])
+  })
+
+  it('the frame is the page viewport, scaled down only to the frame width', async () => {
+    const cdp = fakeCdp({ viewport: { width: 1578, height: 989 } })
+    const { m, events } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    await vi.waitFor(() => expect(events.some((e) => e.kind === 'frame')).toBe(true))
+    const shot = cdp.sent.find((x) => x.method === 'Page.captureScreenshot')!
+    expect(shot.params).toMatchObject({ format: 'jpeg', clip: { x: 0, y: 0, width: 1578, height: 989, scale: 960 / 1578 } })
+    const f = events.find((e) => e.kind === 'frame') as Extract<WorkspaceEvent, { kind: 'frame' }>
+    expect(f.frame).toMatchObject({ width: 960, height: 602 })
   })
 })

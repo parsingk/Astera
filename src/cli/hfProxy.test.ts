@@ -19,7 +19,9 @@ const env = (extra: Record<string, string> = {}) => ({ ...process.env, ASTERA_PR
 const calls = async () => (await fs.readFile(logFile, 'utf8')).trim().split('\n').map((l) => JSON.parse(l))
 
 beforeEach(async () => {
-  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'hfp-'))
+  // The `astera-` prefix is what vitest.globalSetup.ts sweeps. The cmd-shim test copies node.exe (~87 MB)
+  // in here, and under the old `hfp-` prefix every run of this file left one behind for good.
+  profile = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfp-'))
   logFile = path.join(profile, 'calls.log')
   msgs = []
 })
@@ -571,7 +573,7 @@ describe('hfProxy: no workspace selected', () => {
     const run: HfRunner = async () => ({ code: 4, stdout: '', stderr: 'Error: No workspace selected.\nHint: Run: hf workspace set <workspace_id>\n' })
     const code = await hfProxy({ args: ['model', 'list'], env: env(), platform: process.platform, home: profile, run, write: (s) => msgs.push(s) })
     expect(code).toBe(4)
-    expect(msgs).toEqual(['higgsfield: Higgsfield account "Main" has no workspace selected. Ask the user to pick one in Astera Settings > Higgsfield; do not run workspace commands yourself.\n'])
+    expect(msgs).toEqual(['higgsfield: Higgsfield account "Main" has no workspace selected. Ask the user to pick one in Astera Settings > Creative Hub > Higgsfield; do not run workspace commands yourself.\n'])
     expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBeFalsy()
   })
 })
@@ -665,7 +667,7 @@ describe('hfProxy: hints for the agent', () => {
       expect(code).toBe(1)
       expect(n).toBe(1)
       expect((await readHfAccounts(profile)).accounts[0].needsLogin).toBe(true)
-      expect(msgs).toEqual(['higgsfield: the Higgsfield login of account "A" has expired. Ask the user to log in again in Astera Settings > Higgsfield. Do not suggest `hf auth login` — on this computer `hf` may be another program.\n'])
+      expect(msgs).toEqual(['higgsfield: the Higgsfield login of account "A" has expired. Ask the user to log in again in Astera Settings > Creative Hub > Higgsfield. Do not suggest `hf auth login` — on this computer `hf` may be another program.\n'])
     }
   })
 

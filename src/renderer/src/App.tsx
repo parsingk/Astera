@@ -19,7 +19,7 @@ import { invalidateImageCache } from './components/MarkdownPreview'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
-import { applyWorkspaceEvent, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './lib/workspaceMirror'
+import { applyWorkspaceEvent, createSessionSizeReporters, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './lib/workspaceMirror'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
@@ -42,7 +42,7 @@ import { CliSettings } from './components/CliSettings'
 import { McpSettings } from './components/McpSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
-import { HiggsfieldSettings } from './components/HiggsfieldSettings'
+import { CreativeHubSettings } from './components/CreativeHubSettings'
 import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import { CliMissingScreen } from './components/CliMissingScreen'
@@ -640,7 +640,7 @@ export default function App(): React.JSX.Element {
     | 'general'
     | 'appearance'
     | 'accounts'
-    | 'higgsfield'
+    | 'creativeHub'
     | 'agent'
     | 'cli'
     | 'hiw'
@@ -672,6 +672,9 @@ export default function App(): React.JSX.Element {
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   const [agentAppEnabled, setAgentAppEnabled] = useState(false) // the agent app workspace toggle
+  // The mirror panes' sizes, one reporter per session however many panes show it. A size the Host
+  // could not take leaves the app at its own size: nothing to tell the person.
+  const [mirrorSizes] = useState(() => createSessionSizeReporters((id, size) => void window.api.workspace.size(id, size).catch(() => undefined)))
   // Which kind the new-session and resume dialogs open on. Needed outside the settings modal — both
   // dialogs seed their own selection from it — so it is loaded at mount rather than only while the
   // modal is open.
@@ -3080,6 +3083,8 @@ export default function App(): React.JSX.Element {
             })
             .catch(fail)
         }
+        sessionId={ref.id}
+        sizes={mirrorSizes}
       />
     )
   }
@@ -4589,7 +4594,7 @@ export default function App(): React.JSX.Element {
                     ['general', t('settings.tab.general')],
                     ['appearance', t('settings.tab.appearance')],
                     ['accounts', t('settings.tab.accounts')],
-                    ['higgsfield', t('settings.tab.higgsfield')],
+                    ['creativeHub', t('settings.tab.creativeHub')],
                     // 에이전트와 How It Works — 둘 다 일반에서 갈라져 나왔고, 계정 바로 뒤가
                     // 제자리다: 어느 계정으로 무엇을 띄울지 정한 다음에 오는 이야기다.
                     // How It Works 의 이름은 사이드바·탭과 같은 키를 쓴다(새 문구를 만들지 않는다).
@@ -4809,7 +4814,7 @@ export default function App(): React.JSX.Element {
                   </>
                 )}
                 {settingsTab === 'accounts' && <AccountSettings accounts={accounts} />}
-                {settingsTab === 'higgsfield' && <HiggsfieldSettings />}
+                {settingsTab === 'creativeHub' && <CreativeHubSettings />}
                 {settingsTab === 'info' && (
                   <>
                     <div className="settings-row">

@@ -538,6 +538,17 @@ export function createLinuxDesks(d: LinuxDeskDeps): { start(name: string): Promi
         if (size.width === 0) throw new Error(`import returned no ${o.format} image`)
         return { data: bytes.toString('base64'), width: size.width, height: size.height, title: w?.title ?? '' }
       },
+      // Xvfb runs no window manager, so nothing is maximized to restore: the window is moved to the
+      // display's top left and sized, never past the display (XVFB_SCREEN), and its geometry read back.
+      fit: async (o) => {
+        const w = pickWindow(await windows(), o.title)
+        if (!w) throw o.title !== undefined ? noWindow(o.title) : new Error('no window with a title is showing on this desktop')
+        const [sw, sh] = XVFB_SCREEN.split('x').map(Number)
+        const id = String(w.hwnd)
+        await xdotool(['windowmove', id, '0', '0', 'windowsize', id, String(Math.min(o.width, sw)), String(Math.min(o.height, sh))])
+        const g = parseGeometry((await xdotool(['getwindowgeometry', '--shell', id])).toString('utf8'))
+        return { width: g.width, height: g.height }
+      },
       pointer,
       keys: async (o) => {
         const w = pickWindow(await windows(), o.title)

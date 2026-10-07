@@ -2754,7 +2754,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .app-mirror-stage { position: relative; flex: 1; min-height: 0; margin: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden; border: 3px solid var(--agent-accent); border-radius: 6px; }
 .app-mirror-stage.running { box-shadow: inset 0 0 40px 6px rgba(139, 92, 246, 0.45); }
 .app-mirror-stage.closed { border-color: var(--line-soft); opacity: 0.6; }
-.app-mirror-frame { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; user-select: none; }
+/* The frame fills the stage: the Host sizes the app's window to the stage (AppMirrorPane reports it), so
+   the picture has the stage's shape; contain keeps it whole while a resize is on its way. */
+.app-mirror-frame { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; }
 .app-mirror-empty { color: var(--text-dim); font-size: 13px; }
 .bp-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
   border-top-color: var(--accent); animation: cm-spin .6s linear infinite; }

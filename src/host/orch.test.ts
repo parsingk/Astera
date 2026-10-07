@@ -2717,7 +2717,8 @@ describe('Host-local spawn (S2)', () => {
       run: vi.fn(async (_s: string, _script: string) => ({ status: 200, body: { log: ['ok'] } })),
       stop: vi.fn((_s: string) => true),
       close: vi.fn(async (_s: string) => true),
-      list: vi.fn(() => [{ sessionId: 's1', running: false, helper: null, frame: null }])
+      list: vi.fn(() => [{ sessionId: 's1', running: false, helper: null, frame: null }]),
+      resize: vi.fn((_s: string, size: unknown) => size === null || (typeof size === 'object' && size !== null && 'width' in size))
     })
 
     it('answers app-js from the session that asked, and refuses what cannot run', async () => {
@@ -2762,6 +2763,20 @@ describe('Host-local spawn (S2)', () => {
       expect((await orch.call({ cmd: 'workspace-stop', args: {}, sessionId: '', from: app })).status).toBe(400)
       expect((await orch.call({ cmd: 'workspace-list', args: {}, sessionId: '', from: app, request: 'q' })).status).toBe(400)
       expect((await orchOver().call({ cmd: 'workspace-list', args: {}, sessionId: '', from: app })).status).toBe(501)
+    })
+
+    it('answers workspace-size for the app only: a size, or null when the tab closed', async () => {
+      const workspaces = fakeWorkspaces()
+      const orch = orchOver({ workspaces })
+      const size = { width: 1400, height: 900 }
+      expect(await orch.call({ cmd: 'workspace-size', args: { sessionId: 's1', size }, sessionId: '', from: app })).toEqual({ status: 200, body: { sized: true } })
+      expect(workspaces.resize).toHaveBeenCalledWith('s1', size)
+      expect((await orch.call({ cmd: 'workspace-size', args: { sessionId: 's1', size: null }, sessionId: '', from: app })).status).toBe(200)
+      expect(workspaces.resize).toHaveBeenLastCalledWith('s1', null)
+      expect((await orch.call({ cmd: 'workspace-size', args: { sessionId: 's1' }, sessionId: '', from: app })).status).toBe(400)
+      expect((await orch.call({ cmd: 'workspace-size', args: { size }, sessionId: '', from: app })).status).toBe(400)
+      expect((await orch.call({ cmd: 'workspace-size', args: { sessionId: 's1', size }, sessionId: '', from: cli })).status).toBe(403)
+      expect((await orch.call({ cmd: 'workspace-size', args: { sessionId: 's1', size }, sessionId: '', from: app, request: 'q' })).status).toBe(400)
     })
   })
 

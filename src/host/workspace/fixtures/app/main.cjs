@@ -45,6 +45,9 @@ app.whenReady().then(() => {
     paintWhenInitiallyHidden: true,
     webPreferences: { backgroundThrottling: false }
   })
+  // --maximize: what the Astera app does at start (src/main/index.ts), which on a hidden desktop
+  // maximizes the window to the person's work area while the page keeps its first size (size.ts).
+  if (process.argv.includes('--maximize')) w.maximize()
   w.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(HTML))
 })
 app.on('window-all-closed', () => app.quit())
