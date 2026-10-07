@@ -16,6 +16,7 @@ import { coordinatorReleaseOf } from '../core/orchestration/exec/releaseDefer'
 import type { OrchCall, OrchCaller } from '../core/host/orchProtocol'
 import { mcpRefusal } from '../core/host/mcpGate'
 import { controllerRefusal } from '../core/host/controllerGate'
+import { sanitizeForController } from '../core/remote/sanitize'
 import type { ControllerRegistry } from './controllers'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
@@ -380,6 +381,9 @@ export interface HostOrch extends OrchCall {
   internalDeps(): OrchServerDeps
   /** Whether the state is in memory: the load finished, or the app pushed a whole one. */
   loaded(): boolean
+  /** Hears every commit after the snapshot it returns (remote runtime design §3.6). Null before the
+   *  state is in memory: there is no version yet to hand back, and subscribing must not trigger a load. */
+  subscribe(deliver: (s: OrchState, version: number) => void): { state: OrchState; version: number; unsubscribe(): void } | null
   /** Runs the drain once, if it has not run in this Host's life (C6): for a Host that was `'app'` at
    *  its load and becomes `'host'` later. Re-reads the queue. Answers whether it ran. */
   drainOnce(): Promise<boolean>
@@ -698,6 +702,7 @@ export function createHostOrch(a: {
         marks.commits += how?.rollsBack ? -1 : 1
         await store.save(next)
         a.onState(next, committed)
+        publish(next, committed)
         // J1: journaled after the commit landed (the spec's accepted crash window), with who made it (J4,
         // P5) and its version under this Host's life as the key (J6, P1).
         journalSafely('recording a commit', () => a.journal?.committed({ prev, next, version: committed, actor }))
@@ -906,6 +911,7 @@ export function createHostOrch(a: {
     // To the others and not back to the sender: the state came from there, and an app that received
     // its own push would write its own state back over itself.
     from.toOthers({ t: 'orch-state', state, version: committed })
+    publish(state, committed)
     // P15: a put that stood in for the load has no base to diff against.
     // Not recorded either without one: every Run the put carries would read as just finished.
     if (hadState) {
@@ -963,6 +969,22 @@ export function createHostOrch(a: {
   const reserveVersion = (): number => ++version
 
   /**
+   * Who hears every commit, with its version (remote runtime design §3.6). Both commit paths call
+   * `publish` right where they tell the app: the Host's own commits after `a.onState`, an accepted
+   * `state-put` after `toOthers`. A subscriber's throw is logged and the others still hear it.
+   */
+  const subscribers = new Set<(s: OrchState, version: number) => void>()
+  const publish = (s: OrchState, v: number): void => {
+    for (const deliver of subscribers) {
+      try {
+        deliver(s, v)
+      } catch (e) {
+        a.log(`a state subscriber threw: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+  }
+
+  /**
    * The app filling its mirror (design §5, §6). Not part of `handleCommand` for the same reasons
    * `state-put` is not: nobody types it, and it answers with the whole state rather than a view of it.
    *
@@ -989,6 +1011,8 @@ export function createHostOrch(a: {
     from: OrchCaller | undefined
   ): Promise<{ status: number; body: unknown }> => {
     await ready()
+    // A controller gets the sanitized state and never the boot findings (remote runtime design §3.6).
+    if (from?.role === 'controller') return { status: 200, body: { state: sanitizeForController(store.get()), boot: null, version } }
     // Not a 403: asking for the state is allowed, and this caller is getting it. What it is not
     // getting is the boot findings, and the honest way to say so is the same `boot: null` an app
     // that arrived second is told — there is nothing here for you.
@@ -1357,6 +1381,13 @@ export function createHostOrch(a: {
     ready,
     runningRuns: () => runningRunCount(store.get()),
     state: () => store.get(),
+    // Atomic: the snapshot and the registration happen in one synchronous step, so no commit falls
+    // between the version handed back and the first one delivered.
+    subscribe: (deliver) => {
+      if (!loaded) return null
+      subscribers.add(deliver)
+      return { state: store.get(), version, unsubscribe: () => void subscribers.delete(deliver) }
+    },
     sessionExited: async (e) => {
       await ready()
       // S6 R7: a session some live pty says it was rolled from is not dead work — an app that died

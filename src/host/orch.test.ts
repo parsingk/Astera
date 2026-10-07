@@ -804,6 +804,37 @@ describe('createHostOrch', () => {
 // **이 묶음이 세는 것은 답이 아니라 효과다.** 바이트가 같은 답을 돌려주면서 의존을 두 번 부른 재시도가
 // 이 설계가 막으려는 실패 그 자체이므로, 답만 보는 시험은 없는 것보다 나쁘다 — 앱으로 나간 행동의
 // 횟수와 상태에 남은 것을 함께 센다.
+describe('state for a controller (remote runtime design §3.6)', () => {
+  const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'read-only' as const }, toOthers: () => {} }
+  it('state-get answers the sanitized state with its version', async () => {
+    await seed()
+    const orch = orchOver()
+    await orch.ready()
+    const s = orch.state()
+    const withTail = { ...s, tasks: s.tasks.map((t) => ({ ...t, checks: [{ configId: 'c', name: 'test', status: 'failed' as const, outputTail: 'secret output' }] })) }
+    await orch.call({ cmd: 'state-put', args: { state: withTail }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    const r = await orch.call({ cmd: 'state-get', args: {}, sessionId: '', from: controller })
+    expect(r.status).toBe(200)
+    expect(JSON.stringify(r.body)).not.toContain('secret output')
+    expect(r.body).toMatchObject({ version: expect.any(Number), boot: null })
+  })
+  it('a subscriber sees every commit after the snapshot it was handed, from the Host and from the app', async () => {
+    const { jobId } = await seed()
+    const orch = orchOver()
+    await orch.ready()
+    const seen: number[] = []
+    const sub = orch.subscribe((_s, v) => seen.push(v))
+    expect(sub).not.toBeNull()
+    const runId = orch.state().runs.find((x) => x.jobId === jobId)!.id
+    await orch.call({ cmd: 'runs-stop', args: { id: runId }, sessionId: '' })
+    await orch.call({ cmd: 'state-put', args: { state: orch.state(), version: sub!.version + 1 }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+    expect(seen).toEqual([sub!.version + 1, sub!.version + 2])
+    sub!.unsubscribe()
+    await orch.call({ cmd: 'runs-resume', args: { id: runId }, sessionId: '' })
+    expect(seen).toHaveLength(2)
+  })
+})
+
 describe('projects-add (remote runtime N5)', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   it('registers an existing folder once, and answers the same project the second time', async () => {
