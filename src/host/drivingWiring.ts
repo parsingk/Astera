@@ -24,6 +24,8 @@ import type { DispatchGate, Driver } from '../core/host/driver'
 import { HOST_YIELD_DISPATCH, type HostMessage } from '../core/host/protocol'
 import { createHostChecks, type HostChecks } from './checks'
 import { createHostDriving, type HostDriving } from './driving'
+import { createHostRecovery, type HostRecovery } from './recovery'
+import type { HostJournal } from './hostJournal'
 import type { HostOrch } from './orch'
 import type { PtyRegistry } from './registry'
 import type { HostSpawner } from './spawner'
@@ -41,6 +43,8 @@ export interface HostDrivingWiring {
     driverStatus(): { driver: Driver; appAttached: boolean }
     validationStop(runId: string): boolean
     dispatchTask(taskId: string): Promise<{ status: number; body: unknown }>
+    /** The Host's own recovery (remote runtime design §2.6): `onDispatchLost` while it owns recovery. */
+    recovery: HostRecovery
   }
   /** Spread into startHostServer's deps. */
   serverHooks: { onAppsChanged(): void }
@@ -64,6 +68,9 @@ export function composeHostDriving(a: {
   log(m: string): void
   now(): string
   nowMs(): number
+  /** The Host's Job Journal (remote runtime design §2.6): the recovery reads and writes through it, and recovers
+   *  only while it is written. Absent (test rigs): the journal is off, and the lost-worker Gate stands. */
+  journal?: Pick<HostJournal, 'reconcilerJournal' | 'writes'>
   /** Test seams, passed through to createHostDriving. */
   every?(ms: number, fn: () => void): () => void
   after?(ms: number, fn: () => void): () => void
@@ -101,8 +108,39 @@ export function composeHostDriving(a: {
     ...(a.killRunner ? { killRunner: a.killRunner } : {})
   })
 
+  /** The driving's own `mayStart`, asked through the driving once it exists: drives, not leaving, loaded. */
+  let mayStart = (): boolean => false
+  const recovery = createHostRecovery({
+    journal: a.journal ?? {
+      writes: () => false,
+      reconcilerJournal: {
+        eventsFor: () => {
+          throw new Error('this Host has no journal')
+        },
+        firstCheckpointFor: () => null,
+        append: () => 0,
+        startRecoveryAction: () => {
+          throw new Error('this Host has no journal')
+        },
+        finishRecoveryAction: () => {}
+      }
+    },
+    server: { hasApp: () => a.server().hasApp(), appsKeep: (duty) => a.server().appsKeep(duty) },
+    mayStart: () => mayStart(),
+    orch: {
+      internalDeps: () => a.orch().internalDeps(),
+      handle: (cmd, args) => a.orch().handle(cmd, args),
+      state: () => a.orch().state()
+    },
+    checks,
+    profileDir: a.profileDir,
+    log,
+    now: () => a.now()
+  })
+
   const driving = createHostDriving({
     profileDir: a.profileDir,
+    recovery,
     // C5: every member is read at the call.
     orch: {
       handle: (cmd, args) => a.orch().handle(cmd, args),
@@ -142,10 +180,13 @@ export function composeHostDriving(a: {
     onReport: (r) => a.server().broadcast({ t: 'driver', ...r }, (yields) => yields.has(HOST_YIELD_DISPATCH))
   })
 
+  mayStart = () => !disposed && !a.spawner.isRetiring() && driving.drives() && a.orch().loaded()
+
   return {
     checks,
     driving,
     orchHooks: {
+      recovery,
       // False from dispose on (review of Task 13, I1): `driving.drives()` keeps the last driver, and a
       // leaving Host must start none of the three.
       drive: { owns: () => !disposed && driving.drives(), checks },

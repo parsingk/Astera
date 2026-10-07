@@ -459,6 +459,9 @@ export function createHostOrch(a: {
    *  `forceRoll` answer `roll-state`/`roll-force`, and `has` is `roll-force`'s 404 check for a session
    *  this Host holds no chain for. Absent: `unregisterRolling` only forwards to the app, as before. */
   rolling?: Pick<HostRolling, 'unregister' | 'stateOf' | 'forceRoll' | 'has'> | null
+  /** The Host's own recovery (remote runtime design §2.6), passed through to `hostOrchDeps` (HOST_RECOVERS). Absent:
+   *  `onDispatchLost` only forwards to the app, as before. */
+  recovery?: { owns(): boolean; lost(dispatchId: string): void } | null
   /** The Host's own chat sessions (chat takeover Task 8), passed through to `hostOrchDeps`: its
    *  HOST_CHATS and the Host-writer routes of `chatPending` and `chatSend` (P10). Absent: the Host
    *  answers no chat prompt of its own and forwards both names to the app. */
@@ -738,6 +741,7 @@ export function createHostOrch(a: {
       drive: a.drive ?? null,
       resolveProjectRoot: a.resolveProjectRoot,
       rolling: a.rolling ?? null,
+      recovery: a.recovery ?? null,
       chats: a.chats ?? null,
       chatAppAnswers: a.chatAppAnswers,
       ...(a.dispatchTask ? { dispatchTask: a.dispatchTask } : {}),

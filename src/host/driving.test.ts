@@ -98,6 +98,8 @@ interface RigOpts {
   /** Leftovers Task 1: no appPid seam, so the real liveAppPid over the profile's app.pid and the server's
    *  last hello pid answers. */
   realAppPid?: boolean
+  /** Phase 3R: a Host recovery (remote runtime design §2.6); none means the journal is off. */
+  recovery?: { owns(): boolean; sweep(why: string): Promise<void> }
 }
 
 /** Under the test's own folder (review m7): never a literal path, should the fake ever resolve one. */
@@ -298,6 +300,7 @@ async function rig(o: RigOpts = {}) {
     nowMs: () => clock.now,
     ...(o.realAppPid ? {} : { appPid: () => appPid.value }),
     onReport: (r) => reports.push(r),
+    ...(o.recovery ? { recovery: o.recovery } : {}),
     ...(o.refuseGates
       ? { interruptStalled: (st: OrchState) => ({ state: st, interrupted: null, resume: null, stuck: true }) }
       : {}),
@@ -570,13 +573,28 @@ describe('createHostDriving', () => {
     expect(h.lang).toHaveBeenCalled()
     expect(h.openGateQuestion()).toContain('Astera 가 열려 있지 않은 동안')
   })
-  // Review Focus 3, D6/R16.
-  it('gates a Task whose worker was lost, when no app is attached and its Run has no coordinator', async () => {
+  // Review Focus 3, D6/R16. Since Phase 3R this is the journal-off case: no Host recovery owns it.
+  it('gates a Task whose worker was lost, when no app is attached and its Run has no coordinator, with the journal off', async () => {
     const h = await rig({ lostDispatch: true })
     await h.load()
     await vi.waitFor(() => expect(h.taskStatus()).toBe('blocked'))
     expect(h.openGateQuestion()).toMatch(/lost/i)
     expect(h.openGateQuestion()).toContain('dsp_lost')
+  })
+  // Phase 3R (remote runtime design §2.6): the Host's own reconciler decides, at the load's handover.
+  it('with a Host recovery that owns recovery, the handover sweeps and no lost-worker Gate opens', async () => {
+    const sweeps: string[] = []
+    const h = await rig({ lostDispatch: true, recovery: { owns: () => true, sweep: async (w) => { sweeps.push(w) } } })
+    await h.load()
+    await vi.waitFor(() => expect(sweeps.length).toBeGreaterThan(0))
+    h.driving.kick('test')
+    await h.settle()
+    expect(h.taskStatus()).toBe('dispatched')
+  })
+  it('with a Host recovery that does not own recovery (the journal not written), the Gate opens as before', async () => {
+    const h = await rig({ lostDispatch: true, recovery: { owns: () => false, sweep: async () => {} } })
+    await h.load()
+    await vi.waitFor(() => expect(h.taskStatus()).toBe('blocked'))
   })
   it('leaves that Task to the app’s reconciler while an app is attached (D8)', async () => {
     const h = await rig({ lostDispatch: true })

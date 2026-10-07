@@ -35,8 +35,10 @@
 // Host's checks: in between, the Host's own worker_done may sit between its commit and its check's
 // start.
 //
-// **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached: an app
-// has its own reconciler, which reads the journal the Host cannot (D8).
+// **The lost-worker Gate** (D6, R16, N5) is asked on every pass, only while no app is attached and no Host
+// recovery owns recovery: an app has its own reconciler, and since Phase 3R so does this Host
+// (`host/recovery.ts`, remote runtime design §2.6), which sweeps at the handover below. The Gate is left for the
+// journal off, where neither reconciler can act.
 //
 // Imports only core modules and node builtins: this bundles into the Host.
 import path from 'node:path'
@@ -114,6 +116,9 @@ export function createHostDriving(d: {
   appPid?(): number | null
   /** Test seam; defaults to interruptStalledTask. */
   interruptStalled?: typeof interruptStalledTask
+  /** The Host's own recovery (remote runtime design §2.6): swept at every handover and app-left, and while it owns
+   *  recovery the lost-worker Gate opens nothing. Absent: the Gate as before. */
+  recovery?: { owns(): boolean; sweep(why: string): Promise<void> }
   /** Test seam (B6); defaults to readDispatchGate. */
   readGate?(settingsPath: string): Promise<DispatchGate>
   /** Told every change of `report()` (limits pass L3), in the same turn as the change. A throw is
@@ -255,6 +260,8 @@ export function createHostDriving(d: {
     }
     startStrandedRepairs(label, goneAt !== undefined)
     armStalled(why)
+    // Phase 3R: the load's handover is the Host's boot sweep, and an app leaving hands its recovery here.
+    if (d.recovery) void d.recovery.sweep(why).catch((err) => log(`the recovery sweep failed: ${String(err)}`))
   }
 
   const takeOver = async (why: string, drain: boolean): Promise<void> => {
@@ -381,6 +388,8 @@ export function createHostDriving(d: {
    *  (an app's reconciler decides then, journal in hand, D8). Asked again before each Gate. */
   const gateLost = async (): Promise<void> => {
     if (gating || d.server.hasApp()) return
+    // The reconciler decides instead (Phase 3R); it opens this Gate itself for an attempt the journal never saw.
+    if (d.recovery?.owns()) return
     gating = true
     try {
       for (const seed of lostWithNobody(d.orch.state())) {

@@ -1057,6 +1057,33 @@ describe('HOST_RESOLVES', () => {
   })
 })
 
+describe('HOST_RECOVERS (remote runtime design §2.6, Phase 3R)', () => {
+  const build = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): ReturnType<typeof hostOrchDeps> => hostOrchDeps(base(over))
+  it('onDispatchLost goes to the Host recovery while it owns recovery, and is not forwarded', async () => {
+    const lost = vi.fn()
+    const act = vi.fn().mockResolvedValue(undefined)
+    const deps = build({ hasApp: () => true, act, recovery: { owns: () => true, lost } })
+    expect(deps.onDispatchLost?.({ dispatchId: 'd1' })).toBeUndefined()
+    expect(lost).toHaveBeenCalledWith('d1')
+    await new Promise((r) => setImmediate(r))
+    expect(act).not.toHaveBeenCalled()
+  })
+  it('onDispatchLost is forwarded to the app while the Host does not own recovery', async () => {
+    const lost = vi.fn()
+    const act = vi.fn().mockResolvedValue(undefined)
+    const deps = build({ hasApp: () => true, act, recovery: { owns: () => false, lost } })
+    deps.onDispatchLost?.({ dispatchId: 'd2' })
+    expect(lost).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(act).toHaveBeenCalledWith('onDispatchLost', [{ dispatchId: 'd2' }]))
+  })
+  it('a throw from the Host recovery is logged and throws nothing into the command', () => {
+    const logs: string[] = []
+    const deps = build({ hasApp: () => false, act: vi.fn(), log: (m) => logs.push(m), recovery: { owns: () => true, lost: () => { throw new Error('boom') } } })
+    expect(() => deps.onDispatchLost?.({ dispatchId: 'd3' })).not.toThrow()
+    expect(logs.some((l) => l.includes('onDispatchLost') && l.includes('boom'))).toBe(true)
+  })
+})
+
 describe('HOST_ROLLS (S6 R8)', () => {
   const build = (over: Partial<Parameters<typeof hostOrchDeps>[0]> = {}): ReturnType<typeof hostOrchDeps> => hostOrchDeps(base(over))
   it('unregisterRolling disposes the Host’s own chain, then forwards to an attached app (S6 R8)', async () => {

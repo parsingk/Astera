@@ -396,7 +396,9 @@ async function main(): Promise<void> {
         server: () => server,
         log: (m) => log.write(m),
         now: () => new Date().toISOString(),
-        nowMs: () => Date.now()
+        nowMs: () => Date.now(),
+        // Host-owned recovery (remote runtime design §2.6) reads and writes the journal this Host writes.
+        journal: hostJournal
       })
     : null
 

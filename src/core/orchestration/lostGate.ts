@@ -8,8 +8,8 @@
 // coordinator slot**. A Run with a coordinator is left to it: it sees the closed Dispatch and starts
 // again with `--retry-of`.
 //
-// The caller decides *when* (only while the Host drives and no app is attached, N5); this decides
-// *which*. Pure.
+// The caller decides *when* (only while the Host drives and no app is attached, N5, and since Phase 3R only
+// while no Host recovery owns recovery: the journal off, remote runtime design §2.6); this decides *which*. Pure.
 import { candidates, type LostAttemptSeed } from '../recovery/candidates'
 import type { OrchState } from './state'
 
