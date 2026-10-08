@@ -156,6 +156,17 @@ describe('createLaneWriter replies (SEC-1)', () => {
     expect(w.reply(['b'.repeat(30) + '\n'])).toBe(false)
     expect(w.replyQueued()).toBe(31)
   })
+  // Final review M-1: turns by line gave a stream one 3-byte line for every 700 KB reply line, so live output starved
+  // while a large reply went out. Turns are by bytes.
+  it('takes turns by bytes, so a stream is not starved by long reply lines', async () => {
+    const s = stalled()
+    const w = createLaneWriter(s.out, { hardCap: 1 << 20, onHardCap: () => {}, replyCap: 1 << 20 })
+    w.control('first\n')
+    w.reply(['R'.repeat(39) + '\n', 'Q'.repeat(39) + '\n'])
+    for (let i = 1; i <= 8; i++) w.stream('p', `S${i}xxxxxxx\n`, i)
+    await settle(s)
+    expect(s.got.slice(1).map((l) => l[0])).toEqual(['R', 'S', 'S', 'S', 'S', 'Q', 'S', 'S', 'S', 'S'])
+  })
   it('control goes before a reply waiting, and stream lines go between reply lines', async () => {
     const s = stalled()
     const w = createLaneWriter(s.out, { hardCap: 1 << 20, onHardCap: () => {}, replyCap: 1 << 20 })

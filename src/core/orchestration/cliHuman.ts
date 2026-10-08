@@ -147,6 +147,12 @@ export function terminalSafe(text: string): string {
   return text.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
 }
 
+/** JSON text with DEL and the C1 controls escaped too (final review M-6): JSON.stringify leaves them as they are, and a
+ *  terminal reads U+009B as the start of an escape sequence. The text parses to the same value. */
+export function jsonSafe(json: string): string {
+  return json.replace(/[\u007f-\u009f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
 export function humanFor(cmd: string, data: Record<string, unknown>): string | null {
   switch (cmd) {
     case 'projects-list':

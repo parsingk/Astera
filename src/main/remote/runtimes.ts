@@ -128,7 +128,8 @@ export function createRemoteRuntimes(a: {
         connect: (o) => connectRuntime(o),
         hostname: () => os.hostname(),
         now: () => new Date().toISOString(),
-        version: a.version
+        version: a.version,
+        surface: 'app'
       })
       return done.ok ? { ok: true, runtime: done.body as Record<string, unknown> } : { ok: false, code: done.error.code, message: done.error.message }
     },

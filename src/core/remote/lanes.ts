@@ -51,8 +51,9 @@ export function createLaneWriter(
   /** Reply lines waiting, in order, and their bytes. */
   const replies: string[] = []
   let replyHeld = 0
-  /** Whose turn it is after control and bulk: a reply line, then a stream line, so neither starves the other. */
-  let replyTurn = true
+  /** Reply bytes written less stream bytes written, after control and bulk: a reply line goes when it is not ahead, so
+   *  turns are by bytes and a stream is not starved by 700 KB reply lines (final review M-1). */
+  let balance = 0
   let waiting = false
   let capped = false
   let dead = false
@@ -75,14 +76,14 @@ export function createLaneWriter(
       }
       // Replies and streams last, taking turns; streams one line from each in turn: no stream starves another.
       const next = streams.entries().next()
-      if (replies.length > 0 && (replyTurn || next.done)) {
-        replyTurn = false
+      if (replies.length > 0 && (balance <= 0 || next.done)) {
         const r = replies.shift() as string
-        replyHeld -= Buffer.byteLength(r)
+        const n = Buffer.byteLength(r)
+        replyHeld -= n
+        balance = next.done ? 0 : balance + n
         out.write(r)
         continue
       }
-      replyTurn = true
       if (next.done) break
       const [key, st] = next.value
       const head = st.lines.shift() as { line: string; seq: number; bytes: number }
@@ -90,6 +91,7 @@ export function createLaneWriter(
       streamHeld -= head.bytes
       streams.delete(key)
       if (st.lines.length > 0) streams.set(key, st)
+      balance = replies.length > 0 ? balance - head.bytes : 0
       out.write(head.line)
     }
     if (!dead && (control.length > 0 || bulk.size > 0 || replies.length > 0 || streams.size > 0) && !waiting) {

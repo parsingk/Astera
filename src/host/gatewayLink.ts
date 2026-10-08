@@ -22,9 +22,21 @@ import type { PtyEvent } from './ptyRing'
 
 /** The control lane's hard cap (§3.1, DC-2): past it the Gateway is not reading, and it is killed. */
 export const LINK_HARD_CAP = 8 << 20
-/** Connections one paired client may have signed in at once (security audit SEC-2): a CLI, an MCP server and the app
- *  each hold one, with room for a few commands; past it, one client cannot take every slot the Gateway has. */
-export const CONNS_PER_CLIENT = 8
+/** Connections one paired client may have signed in at once (security audit SEC-2): the app, an MCP server per agent
+ *  session using it (an idle link closes after two minutes, link.ts DEFAULT_IDLE_MS) and a few commands (final review
+ *  I-3); past it, one client cannot take every slot the Gateway has. */
+export const CONNS_PER_CLIENT = 12
+/** The answer in place of a result the replies' budget refused (final review I-2): a call that carried a request id is
+ *  a change that ran, and RUNTIME_BUSY would read as "not done" and be sent again as a new one; it is told the outcome is
+ *  unknown, and asking again with the same request id replays it. A read is just busy. */
+export const refusedAnswer = (asked: boolean): { error: string; code: string } =>
+  asked
+    ? {
+        error: 'the Runtime ran this but could not send its answer now (too many large replies at once); ask again with the same request id to read it',
+        code: 'RUNTIME_OUTCOME_UNKNOWN'
+      }
+    : { error: 'the Runtime is sending too many large replies at once; ask again shortly', code: 'RUNTIME_BUSY' }
+
 /** Subscriptions one connection may hold (§3.1). */
 export const SUBS_PER_CONN = 64
 /** Output one pty stream may have waiting on the link (§3.1, N2). */
@@ -134,14 +146,15 @@ export function attachGatewayLink(o: {
       })
     const lines = bytes <= CHUNK_THRESHOLD ? [`${line}\n`] : chunksOf(`h${++ref}`, line).map((c) => `${JSON.stringify({ ...c, conn: f.conn })}\n`)
     if (f.t !== 'result' && lines.length === 1) return out.control(lines[0])
+    const asked = f.t === 'result' && requested.delete(keyOf(f.conn, f.id))
     if (out.reply(lines)) return
-    if (f.t === 'result') {
-      const busy = { error: 'the Runtime is sending too many large replies at once; ask again shortly', code: 'RUNTIME_BUSY' }
-      return out.control(`${JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 503, body: busy })}\n`)
-    }
+    if (f.t === 'result') return out.control(`${JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 503, body: refusedAnswer(asked) })}\n`)
     o.log(`remote: a ${bytes}-byte ${f.t} frame was dropped, over the large replies' budget`)
   }
 
+  /** Calls that carried a request id, by connection and call id, until their result is sent: a change whose answer is
+   *  refused for the budget ran, and is told so (final review I-2). */
+  const requested = new Set<string>()
   /** Connections with a pairing being saved, and those of them that closed meanwhile. */
   const redeeming = new Set<string>()
   const closedConns = new Set<string>()
@@ -185,6 +198,7 @@ export function attachGatewayLink(o: {
         return send({ t: 'redeemed', conn: f.conn, ok: false, reason: r.reason })
       }
       case 'call': {
+        if (f.request !== undefined) requested.add(keyOf(f.conn, f.id))
         const principal = o.controllers.principalFor(o.linkGen, f.conn)
         if (!principal)
           return send({ t: 'result', conn: f.conn, id: f.id, status: 401, body: { error: 'this connection is not authenticated', code: 'RUNTIME_AUTH_FAILED' } })

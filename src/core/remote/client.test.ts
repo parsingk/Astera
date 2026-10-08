@@ -2,7 +2,9 @@ import { describe, it, expect, afterEach } from 'vitest'
 import tls from 'node:tls'
 import { generateKeyPairSync } from 'node:crypto'
 import { buildCertificate, certificatePem, spkiSha256 } from './cert'
-import { connectRuntime, RemoteError } from './client'
+import { CONTROLLER_REASSEMBLY_MAX, connectRuntime, RemoteError } from './client'
+import { GATEWAY_LIMITS } from '../../cli/runtime/gateway'
+import { REMOTE_RESET_MAX } from '../../main/remote/remoteStreams'
 
 const identity = (() => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })
@@ -80,6 +82,14 @@ describe('connectRuntime subscriptions', () => {
 
 // Security audit SEC-4: the controller took a Runtime's hello and paired frames as they came. A capabilities field that
 // was not a list threw later in the link and ended the CLI or MCP process; a runtimeId that was not an id was kept.
+// Final review M-3: the Gateway lets one connection hold up to 96 MiB of reply pieces (about 72 MiB once decoded), and
+// a checkpoint can be arriving beside it; the controller's total must hold both, or a legitimate large reply cuts the link.
+describe('the controller’s reassembly total', () => {
+  it('holds the largest reply a Gateway lets one connection have, beside the checkpoints of a few tabs reconnecting', () => {
+    expect(CONTROLLER_REASSEMBLY_MAX).toBeGreaterThanOrEqual(Math.ceil((GATEWAY_LIMITS.replyPerConn * 3) / 4) + 4 * REMOTE_RESET_MAX)
+  })
+})
+
 describe('connectRuntime checks what a Runtime says about itself', () => {
   /** A TLS server that answers the first frame with `answer`. */
   async function answering(answer: unknown): Promise<number> {

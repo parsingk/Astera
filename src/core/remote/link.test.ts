@@ -104,6 +104,26 @@ describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
     expect(link.hello()).toMatchObject({ runtimeId: 'rt_a', bootId: 'boot1' })
   })
 
+  // Final review I-3: an MCP server keeps its link for its whole life, and one starts per agent session, so a few idle
+  // sessions held a pairing's connections and the next was refused. An idle connection is closed, and opened again
+  // when it is next needed.
+  it('closes a connection idle for idleMs with no call and no stream, and opens one again when asked', async () => {
+    const rt = fakeRuntime({})
+    const { link } = fastLink(rt, { idleMs: 40 })
+    await link.call('jobs-list', {})
+    await new Promise((r) => setTimeout(r, 150))
+    await link.call('jobs-list', {})
+    expect(rt.conns()).toBe(2)
+  })
+  it('keeps a connection with a call still in flight', async () => {
+    let first = true
+    const rt = fakeRuntime({ answer: (s) => (s.cmd === 'runs-wait' && first ? ((first = false), 'hang') : { status: 200, body: {} }) })
+    const { link } = fastLink(rt, { idleMs: 40 })
+    void link.call('runs-wait', {}, { timeoutMs: 10_000 })
+    await new Promise((r) => setTimeout(r, 150))
+    await link.call('jobs-list', {})
+    expect(rt.conns()).toBe(1)
+  })
   it('refuses a Runtime of another remote protocol before any call, naming both', async () => {
     const rt = fakeRuntime({ hello: hello({ gatewayProtocol: 2 }) })
     const { link } = fastLink(rt)

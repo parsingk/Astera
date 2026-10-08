@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import net from 'node:net'
+import tls from 'node:tls'
 import { PassThrough } from 'node:stream'
 import { generateKeyPairSync } from 'node:crypto'
 import { buildCertificate, certificatePem, spkiSha256 } from '../../core/remote/cert'
@@ -226,6 +227,73 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     await l.auth('t', {})
     await expect(l.call('state-get', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
     expect(await l.call('jobs-list', {}).then(() => 'answered', (e: { code: string }) => e.code)).toBe('RUNTIME_BUSY')
+  })
+  // Final review I-1: results left the hard cap, and nothing replaced it. One paired controller that asked and never read
+  // filled the replies' budget, and every other controller's answers were refused RUNTIME_BUSY until it was revoked.
+  const bigHost = (f: Record<string, unknown>, reply: (m: unknown) => void): void => {
+    if (f.t === 'auth') reply({ t: 'authed', conn: f.conn, ok: true, hello: HELLO })
+    if (f.t !== 'call') return
+    const body = f.cmd === 'state-get' ? { big: 'z'.repeat(4 << 20) } : { small: true }
+    for (const c of chunksOf(`h${String(f.conn)}${String(f.id)}`, JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 200, body }))) reply({ ...c, conn: f.conn })
+  }
+  /** A signed-in controller that asks and never reads what comes back. */
+  const deaf = async (port: number, calls: number): Promise<tls.TLSSocket> => {
+    const s = tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false })
+    s.on('error', () => {})
+    await new Promise((r) => s.once('secureConnect', r))
+    s.write(`${JSON.stringify({ t: 'auth', token: 't' })}\n`)
+    await new Promise((r) => setTimeout(r, 50))
+    s.pause()
+    for (let i = 0; i < calls; i++) s.write(`${JSON.stringify({ t: 'call', id: `d${i}`, cmd: 'state-get', args: {} })}\n`)
+    return s
+  }
+  it('a controller that fills the replies’ budget and reads nothing is closed, and the others are answered', async () => {
+    const g = await start({ replyTotal: 8 << 20, replyPerConn: 64 << 20 }, bigHost)
+    const d = await deaf(g.gw.port, 12)
+    const l = await g.connect()
+    await l.auth('t', {})
+    await until(() => g.seen.filter((f) => f.t === 'call').length >= 12)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(((await l.call('state-get', {})).body as { big: string }).big.length).toBe(4 << 20)
+    // The Gateway closed the deaf one (a paused socket hears no close of its own): the Host was told.
+    await until(() => g.seen.some((f) => f.t === 'conn-closed'), 5000)
+    d.destroy()
+  })
+  it('a connection whose output has not moved for silenceMs is closed, though it still pings', async () => {
+    const g = await start({ pingMs: 50, silenceMs: 400 }, bigHost)
+    const d = await deaf(g.gw.port, 4)
+    const pinging = setInterval(() => d.write(`${JSON.stringify({ t: 'ping' })}\n`), 50)
+    await until(() => g.seen.some((f) => f.t === 'conn-closed'), 5000)
+    clearInterval(pinging)
+    d.destroy()
+  })
+  // Final review I-2: a change that ran but whose answer could not be sent was refused RUNTIME_BUSY, which reads as
+  // "not done": sent again under a new request id, it ran twice. A change is told its outcome is unknown instead.
+  it('a refused answer to a change is RUNTIME_OUTCOME_UNKNOWN, to a read RUNTIME_BUSY', async () => {
+    const g = await start({ replyPerConn: 1 << 20 }, (f, reply) => {
+      if (f.t === 'auth') reply({ t: 'authed', conn: f.conn, ok: true, hello: HELLO })
+      if (f.t === 'call')
+        for (const c of chunksOf(`h${String(f.id)}`, JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 200, body: { big: 'b'.repeat(1 << 20) } }))) reply({ ...c, conn: f.conn })
+    })
+    const l = await g.connect()
+    await l.auth('t', {})
+    await expect(l.call('jobs-create', {}, { request: 'req-1' })).rejects.toMatchObject({ code: 'RUNTIME_OUTCOME_UNKNOWN' })
+    await expect(l.call('jobs-list', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
+  })
+  // Final review M-2: replies now come in pieces between checkpoint pieces, and the Gateway held 16 unfinished replies
+  // from its Host at most: 16 large checkpoints arriving at once pushed a reply out, and its call was never answered.
+  it('a reply arriving among many unfinished checkpoints is still put together', async () => {
+    const g = await start({}, (f, reply) => {
+      if (f.t === 'auth') reply({ t: 'authed', conn: f.conn, ok: true, hello: HELLO })
+      if (f.t !== 'call') return
+      const rep = chunksOf('rep', JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 200, body: { big: 'r'.repeat(1 << 20) } }))
+      reply({ ...rep[0], conn: f.conn })
+      for (let i = 0; i < 20; i++) reply({ ...chunksOf(`cp${i}`, 'c'.repeat(1 << 20))[0], conn: f.conn })
+      for (const c of rep.slice(1)) reply({ ...c, conn: f.conn })
+    })
+    const l = await g.connect()
+    await l.auth('t', {})
+    expect(((await l.call('state-get', {})).body as { big: string }).big.length).toBe(1 << 20)
   })
   it('closes a connection the Host says to close, with the Host’s code, and tells the Host it closed', async () => {
     const g = await start()

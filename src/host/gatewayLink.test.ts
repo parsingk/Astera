@@ -295,6 +295,34 @@ describe('large replies on the link (Phase 3 review C1)', () => {
     expect(busy.length).toBeGreaterThan(0)
     expect(busy[0]).toMatchObject({ body: { code: 'RUNTIME_BUSY' } })
   })
+  // Final review I-2: a change that ran and whose answer was refused must not read as "not done".
+  it('a refused answer to a call that carried a request id is RUNTIME_OUTCOME_UNKNOWN', async () => {
+    const lines: Array<Record<string, unknown>> = []
+    const held: Array<() => void> = []
+    let carry = ''
+    const out = new Writable({
+      highWaterMark: 1,
+      write: (chunk: Buffer, _e, cb) => {
+        const parts = (carry + chunk.toString()).split(String.fromCharCode(10))
+        carry = parts.pop() ?? ''
+        parts.filter(Boolean).forEach((l) => lines.push(JSON.parse(l)))
+        held.push(cb)
+      }
+    })
+    const s = await setup({ output: out, replyMax: 2 << 20, orch: async () => ({ status: 200, body: { big: 'c'.repeat(1 << 20) } }) })
+    const c = await s.pairClient('full-control')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    for (let i = 0; i < 4; i++) s.send({ t: 'call', conn: 'c1', id: String(i), cmd: 'jobs-create', args: {}, request: `req-${i}` })
+    await s.settle()
+    for (let i = 0; i < 40; i++) {
+      held.splice(0).forEach((cb) => cb())
+      await new Promise((r) => setImmediate(r))
+    }
+    const refused = lines.filter((f) => f.t === 'result' && f.status === 503)
+    expect(refused.length).toBeGreaterThan(0)
+    for (const f of refused) expect(f).toMatchObject({ body: { code: 'RUNTIME_OUTCOME_UNKNOWN' } })
+  })
 })
 
 // Remote runtime design §3.7 (Phase 8): a paired controller subscribes to a pty and gets a checkpoint or the events

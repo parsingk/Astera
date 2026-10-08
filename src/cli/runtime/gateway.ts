@@ -9,6 +9,7 @@ import { openSecretStore, SecretFileUnsafe } from '../../core/secrets/secretStor
 import type { Readable, Writable } from 'node:stream'
 import { createLineReader } from '../../host/framing'
 import { sha256Base64url } from '../../host/controllers'
+import { refusedAnswer } from '../../host/gatewayLink'
 import { createLaneWriter, type LaneWriter } from '../../core/remote/lanes'
 import { CHUNK_THRESHOLD, chunksOf, createReassembler } from '../../core/remote/chunks'
 import { FRAME_CAP, parseControllerFrame, parseLinkFrame, type HostLinkFrame } from '../../core/remote/frames'
@@ -40,7 +41,8 @@ export const GATEWAY_LIMITS: GatewayLimits = {
   connections: 16,
   unauthed: 8,
   unauthedPerAddress: 2,
-  perAddress: 8,
+  // A machine's app, its MCP servers and its commands share one address (final review I-3).
+  perAddress: 32,
   inFlight: 32,
   firstFrameMs: 10_000,
   answerMs: 30_000,
@@ -73,7 +75,12 @@ interface Conn {
   sock: TLSSocket
   state: 'new' | 'authing' | 'redeeming' | 'ready' | 'closing'
   inFlight: Set<string>
+  /** In-flight calls that carried a request id (final review I-2). */
+  requested: Set<string>
   heard: number
+  /** The socket's bytesWritten at the last beat, and when it last moved or had nothing waiting (final review I-1). */
+  wrote: number
+  movedAt: number
   out: LaneWriter
   timers: Array<ReturnType<typeof setTimeout>>
   /** Whether the Host has been told about this connection, so it must be told when it closes. */
@@ -124,10 +131,25 @@ export async function startGateway(o: {
     // Results on their own lane and budget (security audit SEC-1): on control a reply of a few MiB passed the hard cap
     // and the controller was cut off. Past the budget it is refused, and the connection stays.
     const bytes = lines.reduce((n, l) => n + Buffer.byteLength(l), 0)
+    const asked = c.requested.delete(result.id)
     let waiting = 0
-    for (const x of conns.values()) waiting += x.out.replyQueued()
-    if (waiting + bytes > lim.replyTotal || !c.out.reply(lines))
-      c.out.control(`${JSON.stringify({ t: 'error', code: 'RUNTIME_BUSY', message: 'the Runtime is sending too many large replies at once; ask again shortly', id: result.id })}\n`)
+    let largest: Conn | null = null
+    const held = (x: Conn): number => x.out.queued() + x.out.replyQueued()
+    for (const x of conns.values()) {
+      waiting += x.out.replyQueued()
+      if (x !== c && x.state !== 'closing' && x.out.replyQueued() > 0 && (!largest || held(x) > held(largest))) largest = x
+    }
+    // Past the budget the connection holding the most goes, as with the queue total (final review I-1): one controller
+    // that asks and never reads must not have every other one's answers refused. Its bytes go when its socket does.
+    if (waiting + bytes > lim.replyTotal && largest) closeConn(largest, 'RUNTIME_BUSY')
+    else if (waiting + bytes > lim.replyTotal) return refuseResult(c, result.id, asked)
+    if (!c.out.reply(lines)) return refuseResult(c, result.id, asked)
+    checkTotal()
+  }
+
+  const refuseResult = (c: Conn, id: string, asked: boolean): void => {
+    const a = refusedAnswer(asked)
+    c.out.control(`${JSON.stringify({ t: 'error', code: a.code, message: a.error, id })}\n`)
     checkTotal()
   }
 
@@ -214,6 +236,7 @@ export async function startGateway(o: {
       if (c.inFlight.size >= lim.inFlight)
         return sendTo(c, { t: 'error', code: 'RUNTIME_BUSY', message: `at most ${lim.inFlight} calls in flight per connection`, id: f.id })
       c.inFlight.add(f.id)
+      if (f.request) c.requested.add(f.id)
       return toHost({ t: 'call', conn: c.id, id: f.id, cmd: f.cmd, args: f.args, ...(f.request ? { request: f.request } : {}), ...(f.retry ? { retry: true } : {}) })
     }
     return refuse(c, 'REMOTE_BAD_FRAME', `${f.t} is not expected now`)
@@ -269,7 +292,9 @@ export async function startGateway(o: {
   }
 
   /** The Host's large results arrive in pieces (§3.1); put back together, each is handled like any other frame. */
-  const fromHost = createReassembler()
+  // Unfinished checkpoints of many subscriptions now arrive between a reply's pieces (final review M-2): more may be open
+  // than the default 16, held to a total instead.
+  const fromHost = createReassembler({ maxOpen: 256, totalCap: 192 << 20 })
   const onHostLine = (v: unknown): void => {
     const f = parseLinkFrame(v, 'host')
     if ('error' in f) return
@@ -313,7 +338,10 @@ export async function startGateway(o: {
       sock,
       state: 'new',
       inFlight: new Set(),
+      requested: new Set(),
       heard: now(),
+      wrote: 0,
+      movedAt: now(),
       timers: [],
       announced: false,
       ended: new Set(),
@@ -350,6 +378,13 @@ export async function startGateway(o: {
     )
     const beat = setInterval(() => {
       if (now() - c.heard > lim.silenceMs) return refuse(c, 'REMOTE_TIMEOUT', 'the controller stopped answering')
+      // A controller that pings but reads nothing (final review I-1): its output has not moved for silenceMs with
+      // something waiting, and it goes, as one that stops answering does.
+      const wrote = sock.bytesWritten
+      if (wrote !== c.wrote || c.out.queued() + c.out.replyQueued() === 0) {
+        c.wrote = wrote
+        c.movedAt = now()
+      } else if (now() - c.movedAt > lim.silenceMs) return void sock.destroy()
       if (c.state === 'ready') sendTo(c, { t: 'ping' })
     }, lim.pingMs)
     beat.unref()

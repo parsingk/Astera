@@ -321,7 +321,8 @@ export class PtyRegistry {
       // Only an unclean exit: a 0 is the ordinary end of a session, and its screen belongs to the
       // person who was reading it, not to a log that outlives them.
       if (exitCode !== 0 && this.now() - openedAt <= LAST_SCREEN_WITHIN_MS)
-        this.deps.log(`pty ${a.id} last screen: ${redactSecrets(lastScreen(entry.ring?.text() ?? ''))}`)
+        // Redacted whole, then cut (final review M-8): a cut inside the word "token" would leave the secret after it.
+        this.deps.log(`pty ${a.id} last screen: ${lastScreen(redactSecrets(entry.ring?.text() ?? ''))}`)
       // The scrollback goes with the session. The Host outlives the app, so an entry kept for the rest
       // of the Host's life is a quarter of a million characters kept for the rest of the Host's life,
       // and a project that runs a build every minute would leave a great many of them. The entry

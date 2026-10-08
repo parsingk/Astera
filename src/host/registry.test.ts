@@ -519,6 +519,18 @@ describe('the last screen of a session that ended badly', () => {
     p.exit(1)
     expect(logs.find((l) => l.includes('last screen'))).toContain('[redacted]')
   })
+  // Final review M-8: the screen was cut to its last characters before it was redacted, so a cut that fell inside the
+  // word "token" left the secret after it whole.
+  it('redacts before it cuts the screen to its tail', () => {
+    const p = fakePty()
+    const { r, logs } = registry({ pty: p })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    const secret = 'S'.repeat(43)
+    p.emit(`token=${secret} ${'x'.repeat(400 - 44)}`)
+    p.exit(1)
+    const line = logs.find((l) => l.includes('last screen')) ?? ''
+    expect(line).not.toContain(secret)
+  })
   it('says so when the session ended badly with nothing on screen', () => {
     const p = fakePty()
     const { r, logs } = registry({ pty: p })

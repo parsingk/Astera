@@ -43,8 +43,8 @@ export class RemoteError extends Error {
 }
 
 /** What a controller holds of replies still arriving in pieces, all together (security audit SEC-5): the largest reply
- *  and a checkpoint or two beside it. */
-export const CONTROLLER_REASSEMBLY_MAX = 96 << 20
+ *  one connection may be sent (final review M-3), and the checkpoints of a few tabs reconnecting beside it. */
+export const CONTROLLER_REASSEMBLY_MAX = 160 << 20
 
 /** The controller's heartbeat (design §3.1, N14): a ping every 15 s, and a link with nothing heard for 45 s is dropped. */
 export const HEARTBEAT = { everyMs: 15_000, silenceMs: 45_000 }

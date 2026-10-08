@@ -90,10 +90,10 @@ or pipe it in. Prefer it to `--pair '<string>'`: a value on the command line is 
 of the machine can read it and redeem the code first, and in your shell history. `--code -` and `--fingerprint -` work
 the same way.
 
-A Runtime names itself with an id. If a Runtime paired here already has that id under another key, the pairing is
-refused with `CONFLICT` and the paired one is left as it was: another machine cannot take its place. If it is the same
-machine with a new key (reinstalled, its profile replaced), remove it first, or run `astera runtimes add` again with
-`--replace`.
+A Runtime names itself with an id, and makes a new id whenever it makes a new key, so a reinstalled Runtime pairs as a
+new one. If a Runtime paired here already has that id under another key, another machine is claiming to be it: the
+pairing is refused with `CONFLICT` and the paired one is left as it was. Only if you know why, `astera runtimes add`
+with `--replace` lets it take that place.
 
 The controller checks the Runtime's key against the fingerprint in the string **before** it sends the code. A different
 key is refused with `RUNTIME_IDENTITY_CHANGED` and nothing is sent. `--address` reaches the Runtime at another address
@@ -298,7 +298,16 @@ renames and Unicode names included.
   control only a controller you would trust with that user account; pair the rest read-only.
 - Logs on both sides never carry tokens, pairing codes or terminal output.
 - Connections that have not signed in have a budget of their own, and few from one address, so sockets that say nothing
-  cannot hold paired controllers off; one pairing holds at most eight connections at once.
+  cannot hold paired controllers off. One pairing holds at most twelve connections at once, and a controller closes a
+  connection it has not used for two minutes, so idle agent sessions with Astera MCP do not hold them. More than 32
+  sockets from one address are dropped before TLS, which the controller reports as `RUNTIME_OFFLINE`.
+- A controller that asks and never reads its answers is closed: once its output has not moved for 45 seconds, or when
+  answers waiting for every controller pass their budget and it holds the most. An answer that cannot be sent for that
+  budget is `RUNTIME_BUSY` for a read, and `RUNTIME_OUTCOME_UNKNOWN` for a change, which ran: ask again with the same
+  request id to read its answer.
+- `astera runtime start`, `astera runtime pair` and `astera projects add` are refused inside an agent session Astera
+  started (`ASTERA_SESSION` is set): opening this machine to the network is for a person, at their own shell or in the
+  app.
 - `astera runtime status` and `astera runtime clients` carry `health`. `burnedCodes` counts pairing codes that wrong
   guesses used up since the Host started: if it is not 0 and you did not mistype, someone who can reach the port is
   guessing. `unsavedRevocations` names controllers revoked here whose revocation could not be written to disk yet; the

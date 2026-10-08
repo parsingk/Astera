@@ -20,6 +20,8 @@ export interface RuntimesDeps {
   version: string
   /** How long one step of a pairing (connect and redeem, then connect and sign in) may take; PAIR_STEP_MS when left out. */
   timeoutMs?: number
+  /** Who asks: the app has no --replace to point at (final review M-4). */
+  surface?: 'app' | 'cli'
 }
 
 /** Second pass RR-5: a mistyped or firewalled address held a pairing for the OS's connect wait (two minutes on Linux), and
@@ -170,10 +172,14 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
   try {
     await (await d.registry()).add(profile, paired.token, { replace: args.replace === true })
   } catch (e) {
+    // A Runtime makes a new id with every new key (identity.ts), so the same id under another key is another machine
+    // claiming to be the paired one (final review M-4).
     if ((e as { code?: unknown }).code === 'RUNTIME_ALREADY_PAIRED')
       return failure(
         'CONFLICT',
-        `${messageOf(e)}. If this is the same machine with a new key, remove the old pairing first, or run astera runtimes add again with --replace; otherwise do not. ${LEFT_BEHIND}`
+        `${messageOf(e)}. A Runtime makes a new id with every new key, so another machine is claiming to be it, and this pairing was not kept.${
+          d.surface === 'app' ? '' : ' If you know why and want it to take that place, run astera runtimes add again with --replace.'
+        } ${LEFT_BEHIND}`
       )
     return failure('FAILED', `paired, but this machine could not keep the pairing: ${messageOf(e)}`)
   }

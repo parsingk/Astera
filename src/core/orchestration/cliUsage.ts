@@ -124,7 +124,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runtime-start': {
     summary: 'turn Remote Runtime on: other machines may pair with this one',
     detail:
-      'Writes remote-runtime.json, makes this machine’s identity the first time, starts a Host if none runs, and waits until the Gateway listens. It listens on 127.0.0.1 until --listen names an address; use a private network, a VPN or Tailscale, never a port forwarded to the internet. 0 when listening, 1 when the Gateway failed (the code says why), 7 when it was not listening within 10 seconds.',
+      'Writes remote-runtime.json, makes this machine’s identity the first time, starts a Host if none runs, and waits until the Gateway listens. It listens on 127.0.0.1 until --listen names an address; use a private network, a VPN or Tailscale, never a port forwarded to the internet. 0 when listening, 1 when the Gateway failed (the code says why), 7 when it was not listening within 10 seconds. Refused with 5 inside an agent session (ASTERA_SESSION is set): opening this machine to the network is for a person.',
     flags: [
       { name: 'listen', value: '<addr>', about: 'the address to listen on (default 127.0.0.1)' },
       { name: 'port', value: '<n>', about: 'the TCP port (default 47831)' }
@@ -143,7 +143,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runtime-pair': {
     summary: 'a one-time pairing string for another machine (valid 10 minutes)',
     detail:
-      'Prints astera-pair:v1:<address>:<port>:<code>:<fingerprint> and its parts. It carries a secret code: give it to the other machine directly and do not paste it anywhere else. Five wrong codes burn it.',
+      'Prints astera-pair:v1:<address>:<port>:<code>:<fingerprint> and its parts. It carries a secret code: give it to the other machine directly and do not paste it anywhere else. Five wrong codes burn it. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
     flags: [
       { name: 'read-only', about: 'the controller may read but not change anything' },
       { name: 'name', value: '<n>', about: 'what to call the controller in `runtime clients`' }
@@ -183,7 +183,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'projects-add': {
     summary: 'register a folder of this machine as a project',
     detail:
-      'For the person at this machine, or a script on it: a remote controller cannot. The path must be an absolute path to an existing folder that is not a worktree. Adding a folder already registered answers that project.',
+      'For the person at this machine, or a script on it: a remote controller cannot, nor an agent session (ASTERA_SESSION is set; refused with 5). The path must be an absolute path to an existing folder that is not a worktree. Adding a folder already registered answers that project.',
     flags: [{ name: 'path', value: '<path>', required: true, about: 'the folder to register' }]
   },
   'projects-get': {

@@ -39,7 +39,9 @@ describe('docs/remote-runtime.md', () => {
     // Security audit fixes: what the person does differently because of them.
     ['the pairing string from stdin', /astera runtimes add --pair -/],
     ['replacing a Runtime under its id', /--replace/],
-    ['what runtime status says about pairing', /burnedCodes[\s\S]{0,400}unsavedRevocations/]
+    ['what runtime status says about pairing', /burnedCodes[\s\S]{0,400}unsavedRevocations/],
+    ['that agent sessions cannot open Remote', /refused inside an agent session/],
+    ['what a change refused for the budget means', /`RUNTIME_OUTCOME_UNKNOWN` for a change, which ran/]
   ]
   for (const [what, re] of says) it(`says ${what}`, () => expect(doc).toMatch(re))
 

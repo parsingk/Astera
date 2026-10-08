@@ -11,7 +11,7 @@ import os, { homedir } from 'node:os'
 import { leadingGlobals, parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
 import { spelledCommand, unknownFlagError, usageFor } from '../core/orchestration/cliUsage'
-import { humanFor, quietFor, terminalSafe } from '../core/orchestration/cliHuman'
+import { humanFor, jsonSafe, quietFor, terminalSafe } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
@@ -183,7 +183,7 @@ export function connectFailureEnd(a: {
 /** 모드에 맞춘 성공 출력. **사람용이 없는 명령은 JSON 으로 되돌린다** — 코디네이터의
  *  명령들에 억지로 표를 씨우면 가이드가 시키는 것을 못 읽게 된다. */
 export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: ReplayMark = null): string {
-  if (mode === 'json') return okEnvelope(cmd, body, mark)
+  if (mode === 'json') return jsonSafe(okEnvelope(cmd, body, mark))
   const data = dataFor(cmd, body)
   // What a person's terminal shows carries no control characters (security audit SEC-9); JSON escapes them already.
   if (mode === 'quiet') return terminalSafe(quietFor(data))
@@ -201,7 +201,7 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: Rep
  * 질문은 언제나 "그래서 뭘 치지" 다. JSON 쪽은 봉투가 이미 싣고 있으므로 **한 번만** 나간다.
  */
 export function renderErr(e: CliError, mode: OutputMode, cmd?: string, mark: ReplayMark = null): string {
-  if (mode === 'json') return errEnvelope(e, cmd, mark)
+  if (mode === 'json') return jsonSafe(errEnvelope(e, cmd, mark))
   const steps = nextStepsFor({ code: e.code, cmd, details: e.details })
   return terminalSafe(
     [`error: ${e.message}`, ...(steps.length === 0 ? [] : ['try:', ...steps.map((s) => `  ${s}`)])].join('\n')

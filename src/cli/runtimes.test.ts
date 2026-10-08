@@ -98,6 +98,18 @@ describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
     const again = await runRuntimesCommand('runtimes-add', { pair, replace: true }, h.d)
     expect(again).toMatchObject({ ok: true, body: { runtimeId: 'rt_office', address: '10.0.0.2' } })
   })
+  // Final review M-4: the app has no --replace, and a Runtime makes a new id with every new key, so the same id under
+  // another key is another machine claiming to be the paired one: the app says that, with no CLI flag in it.
+  it('in the app, a Runtime claiming a paired id is refused without pointing at a command-line flag', async () => {
+    const reg = await controllerRegistry(dir)
+    await reg.add(profile({ runtimeId: 'rt_office', fingerprint: 'B'.repeat(43) }), 'old-token')
+    const h = deps({ surface: 'app' })
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    const r = await runRuntimesCommand('runtimes-add', { pair }, h.d)
+    expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(JSON.stringify(r)).not.toContain('--replace')
+    expect(JSON.stringify(r)).toContain('another machine')
+  })
   // Security audit SEC-6: a pairing string on the command line is in the process list for anyone on the machine to
   // read and redeem first. `--pair -` reads it from stdin; a value read that way ends in a newline.
   it('pairs with values read from stdin, their newline and all', async () => {

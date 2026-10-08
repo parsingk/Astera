@@ -60,6 +60,9 @@ export const DEFAULT_CALL_TIMEOUT_MS = 60_000
 export const DEFAULT_RECONNECT_FOR_MS = 60_000
 /** How long one connect and sign-in may take before the Runtime counts as not answering. */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
+/** How long a connection with no call in flight and no stream is kept before it is closed (final review I-3): an MCP
+ *  server lives as long as its agent session, and a pairing holds a few connections at most. The next call opens one. */
+export const DEFAULT_IDLE_MS = 2 * 60_000
 
 /** Codes after which another try cannot help: the Runtime said who it is not, or that it does not know this
  *  controller, or speaks another protocol. */
@@ -81,6 +84,8 @@ export function openRemoteLink(a: {
   reconnectForMs?: number
   /** How long one connect and sign-in may take; DEFAULT_CONNECT_TIMEOUT_MS when left out. */
   connectTimeoutMs?: number
+  /** How long an idle connection is kept; DEFAULT_IDLE_MS when left out. */
+  idleMs?: number
   now?(): number
 }): RemoteLink {
   const connect = a.connect ?? connectRuntime
@@ -90,6 +95,20 @@ export function openRemoteLink(a: {
   const reconnectForMs = a.reconnectForMs ?? DEFAULT_RECONNECT_FOR_MS
   const connectTimeoutMs = a.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
   const { target } = a
+  const idleMs = a.idleMs ?? DEFAULT_IDLE_MS
+  /** Calls in flight, and the timer that closes the connection once none is and no stream is kept. */
+  let busy = 0
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  const armIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = null
+    if (closed || busy > 0 || streams.size > 0 || current === null) return
+    idleTimer = setTimeout(() => {
+      idleTimer = null
+      if (!closed && busy === 0 && streams.size === 0 && current !== null) drop(current)
+    }, idleMs)
+    idleTimer.unref?.()
+  }
 
   let live: Promise<RuntimeLink | RemoteError> | null = null
   let lastHello: HelloFrame | null = null
@@ -348,6 +367,69 @@ export function openRemoteLink(a: {
       )
     })
 
+  const callOnce = async (cmd: string, args: Record<string, unknown>, o: { request?: string; timeoutMs?: number }): Promise<RemoteAnswer | RemoteError> => {
+    const request = o.request
+    const timeoutMs = o.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
+    /** Set at each loss (review I1): the window to reach the Runtime again runs from when it was lost. */
+    let deadline = 0
+    /** Whether this change may have reached the Runtime: then a lost reply is OUTCOME_UNKNOWN, never OFFLINE. */
+    let sent = false
+    /** Whether this call lost a connection. Until it has, a Runtime that cannot be reached is OFFLINE at once
+     *  (review I3): there is nothing in flight to recover, and a person waits on the answer. */
+    let losses = 0
+    let tries = 0
+    const unknown = (why: string): RemoteError =>
+      new RemoteError('RUNTIME_OUTCOME_UNKNOWN', `the answer to ${cmd} was lost and the Runtime cannot say whether it ran: ${why}`)
+    for (;;) {
+      if (closed) return new RemoteError('RUNTIME_OFFLINE', 'the link to the Runtime is closed')
+      const link = await ensure()
+      if (link instanceof RemoteError) {
+        if (FINAL.has(link.code) || losses === 0) return sent && request !== undefined && !FINAL.has(link.code) ? unknown(link.message) : link
+        if (now() >= deadline) return sent && request !== undefined ? unknown(link.message) : link
+        await sleep(backoff(tries++))
+        continue
+      }
+      const co = request === undefined ? undefined : { request, ...(sent ? { retry: true as const } : {}) }
+      let r: CallReply | 'timeout'
+      const wasSent: boolean = sent
+      try {
+        sent = sent || request !== undefined
+        r = await withDeadline(co ? link.call(cmd, args, co) : link.call(cmd, args), timeoutMs)
+      } catch (e) {
+        const err = asRemoteError(e, 'RUNTIME_OFFLINE')
+        // The Runtime's own refusal of this call (busy, too large) is its answer (review C1: told apart by `lost`,
+        // never by the code, since a connection the Gateway closes carries the code it closed with).
+        if (!err.lost) return err
+        if (err.unsent) sent = wasSent
+        drop(link)
+        // A revocation closes the connection: final, and a change sent on it keeps its request id for the person.
+        if (err.code === 'RUNTIME_AUTH_FAILED') return err
+        if (losses++ === 0) {
+          deadline = now() + reconnectForMs
+          continue
+        }
+        if (now() >= deadline)
+          return request !== undefined ? unknown('the connection kept closing') : new RemoteError('RUNTIME_OFFLINE', `the connection to the Runtime kept closing during ${cmd}`)
+        await sleep(backoff(tries++))
+        continue
+      }
+      if (r === 'timeout') {
+        // The connection stays (second pass RR-8): one slow call closed it, resetting every stream on it. A link that is
+        // half-open is the heartbeat's to find (client.ts).
+        return new RemoteError('REMOTE_TIMEOUT', `the Runtime did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; it may still finish`)
+      }
+      // A retry that finds its own first attempt still running (§3.9: 409, naming this request) asks again until that
+      // attempt is done and its receipt can be replayed, within the window the loss opened.
+      const b = r.body as { requestId?: unknown; code?: unknown } | null
+      // The "may or may not have run" 409 names the request too, with its code: that one is an answer.
+      if (co?.retry === true && r.status === 409 && b?.requestId === request && b?.code === undefined && now() < deadline) {
+        await sleep(backoff(tries++))
+        continue
+      }
+      return r
+    }
+  }
+
   return {
     hello: () => lastHello,
     subscribe: (pty, h) => {
@@ -359,72 +441,21 @@ export function openRemoteLink(a: {
         if (!streams.delete(s.id)) return
         s.on?.unsubscribe?.(s.id)
         s.on = null
+        armIdle()
       }
     },
     call: async (cmd, args, o = {}) => {
-      const request = o.request
-      const timeoutMs = o.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS
-      /** Set at each loss (review I1): the window to reach the Runtime again runs from when it was lost. */
-      let deadline = 0
-      /** Whether this change may have reached the Runtime: then a lost reply is OUTCOME_UNKNOWN, never OFFLINE. */
-      let sent = false
-      /** Whether this call lost a connection. Until it has, a Runtime that cannot be reached is OFFLINE at once
-       *  (review I3): there is nothing in flight to recover, and a person waits on the answer. */
-      let losses = 0
-      let tries = 0
-      const unknown = (why: string): RemoteError =>
-        new RemoteError('RUNTIME_OUTCOME_UNKNOWN', `the answer to ${cmd} was lost and the Runtime cannot say whether it ran: ${why}`)
-      for (;;) {
-        if (closed) return new RemoteError('RUNTIME_OFFLINE', 'the link to the Runtime is closed')
-        const link = await ensure()
-        if (link instanceof RemoteError) {
-          if (FINAL.has(link.code) || losses === 0) return sent && request !== undefined && !FINAL.has(link.code) ? unknown(link.message) : link
-          if (now() >= deadline) return sent && request !== undefined ? unknown(link.message) : link
-          await sleep(backoff(tries++))
-          continue
-        }
-        const co = request === undefined ? undefined : { request, ...(sent ? { retry: true as const } : {}) }
-        let r: CallReply | 'timeout'
-        const wasSent: boolean = sent
-        try {
-          sent = sent || request !== undefined
-          r = await withDeadline(co ? link.call(cmd, args, co) : link.call(cmd, args), timeoutMs)
-        } catch (e) {
-          const err = asRemoteError(e, 'RUNTIME_OFFLINE')
-          // The Runtime's own refusal of this call (busy, too large) is its answer (review C1: told apart by `lost`,
-          // never by the code, since a connection the Gateway closes carries the code it closed with).
-          if (!err.lost) return err
-          if (err.unsent) sent = wasSent
-          drop(link)
-          // A revocation closes the connection: final, and a change sent on it keeps its request id for the person.
-          if (err.code === 'RUNTIME_AUTH_FAILED') return err
-          if (losses++ === 0) {
-            deadline = now() + reconnectForMs
-            continue
-          }
-          if (now() >= deadline)
-            return request !== undefined ? unknown('the connection kept closing') : new RemoteError('RUNTIME_OFFLINE', `the connection to the Runtime kept closing during ${cmd}`)
-          await sleep(backoff(tries++))
-          continue
-        }
-        if (r === 'timeout') {
-          // The connection stays (second pass RR-8): one slow call closed it, resetting every stream on it. A link that is
-          // half-open is the heartbeat's to find (client.ts).
-          return new RemoteError('REMOTE_TIMEOUT', `the Runtime did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; it may still finish`)
-        }
-        // A retry that finds its own first attempt still running (§3.9: 409, naming this request) asks again until that
-        // attempt is done and its receipt can be replayed, within the window the loss opened.
-        const b = r.body as { requestId?: unknown; code?: unknown } | null
-        // The "may or may not have run" 409 names the request too, with its code: that one is an answer.
-        if (co?.retry === true && r.status === 409 && b?.requestId === request && b?.code === undefined && now() < deadline) {
-          await sleep(backoff(tries++))
-          continue
-        }
-        return r
+      busy++
+      try {
+        return await callOnce(cmd, args, o)
+      } finally {
+        busy--
+        armIdle()
       }
     },
     close: () => {
       closed = true
+      if (idleTimer) clearTimeout(idleTimer)
       const l = live
       live = null
       void l?.then((x) => {

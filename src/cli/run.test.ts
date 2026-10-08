@@ -826,6 +826,15 @@ describe('renderOk / renderErr', () => {
     expect(renderErr({ code: 'FAILED', message: `no ${E}]8;;http://x${BEL}link` }, 'human')).toBe('error: no ]8;;http://xlink')
     expect(renderOk('jobs-list', evil, 'json')).toContain('\\u001b')
   })
+  // Final review M-6: JSON.stringify leaves DEL and the C1 controls as they are, and a terminal reads U+009B as CSI.
+  it('json 도 DEL 과 C1 제어 문자를 이스케이프한다', () => {
+    const evil = [{ id: 'job_1', objective: `a${String.fromCharCode(0x9b)}31mb${String.fromCharCode(0x7f)}`, outcome: 'running', progress: { done: 0, total: 1 } }]
+    const json = renderOk('jobs-list', evil, 'json')
+    expect(json).not.toMatch(/[\u007f-\u009f]/)
+    expect(JSON.parse(json)).toEqual({ ok: true, data: { jobs: evil } })
+    const err = renderErr({ code: 'FAILED', message: `x${String.fromCharCode(0x9b)}` }, 'json')
+    expect(err).not.toMatch(/[\u007f-\u009f]/)
+  })
 
   // 사람용이 없는 명령은 JSON 으로 되돌린다 — 억지로 표를 씨우면 가이드가 시키는 것을 못 읽는다
   it('사람용이 없는 명령은 human 에서도 JSON 이다', () => {

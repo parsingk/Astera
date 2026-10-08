@@ -232,6 +232,22 @@ describe('client records: final review fixes', () => {
       vi.useRealTimers()
     }
   })
+  // Final review M-7 asked whether an unreadable clients file retries a revocation forever. It cannot start one: with the
+  // file unreadable no client is in memory (a redeem's save fails too and is taken back), so nothing is revoked.
+  it('with an unreadable clients file there is no client to revoke, and no save is retried', async () => {
+    vi.useFakeTimers()
+    try {
+      const r = createControllerRegistry({ records: { load: async () => { throw new Error('unreadable') }, save: async () => {} } })
+      await r.load().catch(() => undefined)
+      await expect(r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')).rejects.toThrow('unreadable')
+      expect(r.list()).toEqual([])
+      expect(await r.revoke('cli_anything')).toEqual({ revoked: false, conns: [] })
+      expect(vi.getTimerCount()).toBe(0)
+      expect(r.health().unsavedRevocations).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('a redeem whose save fails leaves no client behind', async () => {
     const r = createControllerRegistry({ records: { load: async () => [], save: async () => Promise.reject(new Error('disk full')) } })
     await expect(r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')).rejects.toThrow('disk full')
