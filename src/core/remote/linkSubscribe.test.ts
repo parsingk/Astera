@@ -15,7 +15,7 @@ const cp = (watermark: number): RemoteCheckpoint => ({ watermark, cols: 80, rows
 const data = (seq: number): RemotePtyEvent => ({ seq, kind: 'data', data: `d${seq}` })
 
 /** A Runtime whose connections record subscriptions and let the test push frames to them, or drop. */
-function fakeRuntime() {
+function fakeRuntime(o: { capabilities?: string[] } = {}) {
   const asked: Array<{ conn: number; t: 'subscribe' | 'unsubscribe'; sub: string; pty?: string; fromSeq?: number; bootId?: string }> = []
   const conns: Array<{ push(f: SubscriptionFrame): void; drop(): void }> = []
   const connect = async (): Promise<RuntimeLink> => {
@@ -28,7 +28,7 @@ function fakeRuntime() {
       drop: () => closeIt({})
     })
     return {
-      auth: async () => hello,
+      auth: async () => (o.capabilities ? { ...hello, capabilities: o.capabilities } : hello),
       redeem: async () => ({ clientId: 'c', token: 't' }),
       call: async () => ({ status: 200, body: {} }),
       subscribe: (sub, pty, o, onFrame) => {
@@ -48,8 +48,8 @@ function fakeRuntime() {
 
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 5))
 
-const watch = (rt: ReturnType<typeof fakeRuntime>) => {
-  const link = openRemoteLink({ target, client: {}, connect: rt.connect, sleep: async () => {}, random: () => 0.5 })
+const watch = (rt: ReturnType<typeof fakeRuntime>, slept: number[] = []) => {
+  const link = openRemoteLink({ target, client: {}, connect: rt.connect, sleep: async (ms) => void slept.push(ms), random: () => 0.5 })
   const seen: string[] = []
   const stop = link.subscribe('p1', {
     onReset: (c) => seen.push(`reset@${c.watermark}`),
@@ -132,6 +132,31 @@ describe('RemoteLink.subscribe', () => {
     rt.conns[0].drop()
     await settle()
     expect(rt.asked.filter((a) => a.t === 'subscribe')).toHaveLength(1)
+    w.link.close()
+  })
+
+  // Phase 8 review I4: a Runtime from before Phase 8 has no subscriptions; asking anyway would close the connection
+  // and loop. The capability is checked first, and repeated drops wait longer each time.
+  it('a Runtime without pty.seq and pty.checkpoint is gone at once, with nothing sent', async () => {
+    const rt = fakeRuntime({ capabilities: ['remote.jobs'] })
+    const w = watch(rt)
+    await settle()
+    expect(w.seen).toEqual(['gone:RUNTIME_CAPABILITY_MISSING'])
+    expect(rt.asked).toEqual([])
+    w.link.close()
+  })
+
+  it('a connection that keeps dropping before the subscription is answered waits longer each time', async () => {
+    const rt = fakeRuntime()
+    const slept: number[] = []
+    const w = watch(rt, slept)
+    for (let i = 0; i < 4; i++) {
+      await settle()
+      rt.conns.at(-1)?.drop()
+    }
+    await settle()
+    expect(slept.length).toBeGreaterThanOrEqual(3)
+    expect(slept[2]).toBeGreaterThan(slept[0])
     w.link.close()
   })
 })

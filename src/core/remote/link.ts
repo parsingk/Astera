@@ -90,6 +90,8 @@ export function openRemoteLink(a: {
   type Stream = { id: string; pty: string; h: PtyStreamHandlers; lastSeq: number | null; bootId: string | null; on: RuntimeLink | null }
   const streams = new Map<string, Stream>()
   let streamN = 0
+  /** Connections that closed before any stream on them was answered, in a row: each waits longer (review I4). */
+  let dropStreak = 0
 
   const open = async (): Promise<RuntimeLink | RemoteError> => {
     let link: RuntimeLink
@@ -132,7 +134,7 @@ export function openRemoteLink(a: {
       }
       // Every stream on this connection subscribes again from where it was, on the next one (§3.7, N11).
       for (const s of streams.values()) if (s.on === link) s.on = null
-      if (!closed && streams.size > 0) void resubscribeAll(0)
+      if (!closed && streams.size > 0) void resubscribeAll(++dropStreak)
     })
     return link
   }
@@ -163,6 +165,7 @@ export function openRemoteLink(a: {
     switch (f.t) {
       case 'subscribed':
         s.bootId = f.bootId
+        dropStreak = 0
         return
       case 'checkpoint':
         s.lastSeq = f.checkpoint.watermark
@@ -202,9 +205,20 @@ export function openRemoteLink(a: {
     if (resubscribing) return
     resubscribing = true
     try {
+      // After a drop, wait first: a connection that closes as soon as it is subscribed must not spin.
+      if (i > 0) await sleep(backoff(i - 1))
       for (let tries = i; !closed && [...streams.values()].some((s) => s.on === null); tries++) {
         const link = await ensure()
         if (!(link instanceof RemoteError)) {
+          // A Runtime from before Phase 8 has no subscriptions, and an unknown frame would close the connection.
+          const caps = lastHello?.capabilities ?? []
+          if (!caps.includes('pty.seq') || !caps.includes('pty.checkpoint')) {
+            for (const s of [...streams.values()]) {
+              streams.delete(s.id)
+              s.h.onGone?.('RUNTIME_CAPABILITY_MISSING', 'this Runtime does not stream pty output; update Astera there')
+            }
+            return
+          }
           for (const s of streams.values()) if (s.on === null) start(s, link)
           return
         }
