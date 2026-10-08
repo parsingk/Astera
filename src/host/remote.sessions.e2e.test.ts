@@ -215,6 +215,10 @@ describe('Remote Runtime Phase 9a acceptance (remote sessions over the link)', {
     expect(await link.call('sessions-input', { id: 'claude-1', data: 'do it\r' })).toMatchObject({ status: 200 })
     expect(pty.sent).toEqual(['do it\r'])
 
+    // A hook lands well after the input that caused it. The state reads the hook file's mtime against the input's time,
+    // and Linux stamps an mtime from a coarse clock (CI run 37731101776: a line appended at once read as before the
+    // input, so unknown), so the test lets a few of its ticks pass first.
+    await new Promise((r) => setTimeout(r, 50))
     rt.hook('claude-1', { hook_event_name: 'UserPromptSubmit' })
     await eventually(async () => expect(body<{ status: string }>(await link.call('sessions-facts', { id: 'claude-1' })).status).toBe('working'))
     rt.hook('claude-1', { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'needs permission' })
