@@ -214,7 +214,7 @@ export async function startGateway(o: {
       case 'subscribed':
       case 'output-gap':
       case 'sub-error': {
-        if (f.t === 'subscribed' || f.t === 'sub-error') c.awaiting.delete(f.sub)
+        if (f.t === 'subscribed' || f.t === 'sub-error' || f.t === 'output-gap') c.awaiting.delete(f.sub)
         if (f.t === 'output-gap' || f.t === 'sub-error') c.out.dropStream(f.sub)
         const { conn: _conn, ...frame } = f
         return sendTo(c, frame)

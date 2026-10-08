@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type RegistryPty } from './registry'
+import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 import { RING_EVENT_COST } from './ptyRing'
 
@@ -743,7 +743,7 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
     const p = open('a')
     p.emit('one')
     p.emit('two')
-    const got = await r.replayFrom('a', { fromSeq: 2, bootId: 'boot-a' })
+    const got = (await r.replayFrom('a', { fromSeq: 2, bootId: 'boot-a' })) as PtyReplay | null
     expect(got?.gap).toBeNull()
     expect(got?.checkpoint).toBeNull()
     expect(got?.events.map((e) => e.seq)).toEqual([2])
@@ -755,7 +755,7 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
     p.emit('one')
     p.emit('two')
     for (const ask of [{}, { fromSeq: 1, bootId: 'boot-b' }, { fromSeq: 99, bootId: 'boot-a' }]) {
-      const got = await r.replayFrom('a', ask)
+      const got = (await r.replayFrom('a', ask)) as PtyReplay | null
       expect(got?.gap).not.toBeNull()
       expect(got?.checkpoint?.watermark).toBe(2)
       expect(got?.events).toEqual([])
@@ -834,7 +834,7 @@ describe('PtyRegistry under an output flood', () => {
       for (let i = 0; i < 800; i++) p.emit(piece)
     }).not.toThrow()
     p.emit('end of the flood')
-    const replay = await r.replayFrom('p1', {})
+    const replay = (await r.replayFrom('p1', {})) as PtyReplay | null
     expect(replay?.checkpoint).not.toBeNull()
     const screen = await r.readScreen('p1', 10)
     expect(screen?.screen.join('')).toContain('end of the flood')

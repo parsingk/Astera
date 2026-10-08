@@ -335,4 +335,18 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     await new Promise((r) => setTimeout(r, 100))
     expect(frames.slice(gap).some((f) => f.t === 'pty-out' && JSON.stringify(f).includes('after the gap'))).toBe(false)
   })
+
+  // Phase 8 review M5: a terminal that cannot catch up with the output is not "no such pty": the stream ends with a gap
+  // and the controller subscribes again.
+  it('a replay that stays behind the output ends the stream with output-gap, never RUNTIME_NOT_FOUND', async () => {
+    const ptys = { bootId: 'b', onEvent: () => () => {}, replayFrom: async () => 'behind' as const }
+    const s = await setup({ ptys: ptys as never })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await s.settle()
+    expect(of(s.frames, 'sub-error')).toEqual([])
+    expect(of(s.frames, 'output-gap')).toMatchObject([{ sub: 's1', code: 'OUTPUT_GAP' }])
+  })
 })

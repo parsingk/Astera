@@ -207,7 +207,7 @@ async function controller(rt: Awaited<ReturnType<typeof runtime>>) {
 }
 
 const lastSeqOf = (rt: Awaited<ReturnType<typeof runtime>>): Promise<number> =>
-  rt.registry.replayFrom('p1', {}).then((r) => (r ? Math.max(r.checkpoint?.watermark ?? 0, r.events.at(-1)?.seq ?? 0) : 0))
+  rt.registry.replayFrom('p1', {}).then((r) => (r && r !== 'behind' ? Math.max(r.checkpoint?.watermark ?? 0, r.events.at(-1)?.seq ?? 0) : 0))
 
 describe('Remote Runtime Phase 8 acceptance (design §6 Phase 8, X1-02)', { timeout: 60_000 }, () => {
   it('a header painted before the ring’s first event is on the subscribed screen', async () => {

@@ -75,6 +75,9 @@ export const EXITED_RING_BYTES_MAX = 64 << 20
 export const EXITED_TERMINAL_BYTES = 4 << 20
 /** How often an exited pty past its time is cleared while any is held: an idle Host frees them without being asked. */
 const SWEEP_EVERY_MS = 60_000
+/** A replay's tries for a checkpoint with no hole after it, and the wait between them for the terminal to catch up. */
+const REPLAY_TRIES = 8
+const REPLAY_WAIT_MS = 50
 
 interface Entry {
   id: string
@@ -394,8 +397,9 @@ export class PtyRegistry {
   /** What a subscriber is sent (§3.7). With a `fromSeq` the ring still holds and the same `bootId`: the events from
    *  it. Otherwise a gap, a checkpoint of the live terminal, and every event after its watermark. null for a pty
    *  never here or whose exited retention ended. Never a checkpoint with a hole after it: if the ring no longer holds
-   *  the event after the watermark (the terminal lagged that far), a newer checkpoint is taken. */
-  async replayFrom(id: string, a: { fromSeq?: number; bootId?: string }): Promise<PtyReplay | null> {
+   *  the event after the watermark (the terminal lagged that far), it waits for the terminal to catch up and takes a
+   *  newer one; `'behind'` when it never does in REPLAY_TRIES (output faster than the terminal parses, review M5). */
+  async replayFrom(id: string, a: { fromSeq?: number; bootId?: string }): Promise<PtyReplay | null | 'behind'> {
     this.sweepExited()
     const e = this.entries.get(id)
     if (!e?.ring || !e.term) return null
@@ -403,7 +407,8 @@ export class PtyRegistry {
       const events = e.ring.since(a.fromSeq)
       if (events) return { gap: null, checkpoint: null, events }
     }
-    for (let tries = 0; tries < 8; tries++) {
+    for (let tries = 0; tries < REPLAY_TRIES; tries++) {
+      if (tries > 0) await new Promise((r) => setTimeout(r, REPLAY_WAIT_MS))
       const ring = e.ring
       if (!ring) return null
       const checkpoint = await this.withTerminal(e, (t) => t.checkpoint())
@@ -411,8 +416,8 @@ export class PtyRegistry {
       const events = ring.since(checkpoint.watermark + 1)
       if (events) return { gap: { firstSeq: a.bootId === this.bootId && a.fromSeq !== undefined ? a.fromSeq : 1, lastSeq: checkpoint.watermark }, checkpoint, events }
     }
-    this.deps.log(`pty ${id}: no checkpoint without a hole after it in 8 tries`)
-    return null
+    this.deps.log(`pty ${id}: the live terminal stayed behind the output; the subscriber is told to ask again`)
+    return 'behind'
   }
 
   /** The live terminal's screen and up to `lines` rows above it, or null for a pty never here or cleared. */

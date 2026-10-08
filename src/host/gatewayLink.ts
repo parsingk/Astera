@@ -196,6 +196,12 @@ export function attachGatewayLink(o: {
         subs.set(key, s)
         const r = await o.ptys.replayFrom(f.pty, { ...(f.fromSeq !== undefined ? { fromSeq: f.fromSeq } : {}), ...(f.bootId !== undefined ? { bootId: f.bootId } : {}) })
         if (subs.get(key) !== s) return
+        if (r === 'behind') {
+          // The terminal could not catch up with the output (review M5): not "no such pty". The stream ends with a gap
+          // and the controller asks again.
+          subs.delete(key)
+          return send({ t: 'output-gap', conn: f.conn, sub: f.sub, firstSeq: f.fromSeq ?? 1, lastSeq: f.fromSeq ?? 1, code: 'OUTPUT_GAP' })
+        }
         if (!r) {
           subs.delete(key)
           return refuse('RUNTIME_NOT_FOUND', `no pty ${f.pty} on this Runtime (or its output is no longer kept)`)
