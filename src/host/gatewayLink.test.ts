@@ -234,6 +234,32 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     expect(of(s.frames, 'pty-out')).toEqual([{ t: 'pty-out', conn: 'c1', sub: 's1', events: [{ seq: 2, kind: 'data', data: 'after' }] }])
   })
 
+  // Phase 8 review I3: a checkpoint is stream output, not control: a large one never trips the link's hard cap.
+  it('a checkpoint larger than the control cap goes on the stream lane and arrives whole', async () => {
+    const p = ptyRig()
+    // A Gateway that takes each line slowly, so what waits on the link is counted against the caps.
+    const out = new Writable({ highWaterMark: 1, write: (_c, _e, cb) => void setTimeout(cb, 5) })
+    const lines: Array<Record<string, unknown>> = []
+    const write = out.write.bind(out)
+    out.write = ((chunk: string, ...rest: unknown[]) => {
+      String(chunk).split(String.fromCharCode(10)).filter(Boolean).forEach((l) => lines.push(JSON.parse(l)))
+      return (write as (c: string, ...r: unknown[]) => boolean)(chunk, ...rest)
+    }) as typeof out.write
+    const s = await setup({ ptys: p.registry, hardCap: 64 * 1024, output: out })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    // A colour change on every cell: the serialized screen carries an SGR per cell, well over the 64 KiB cap.
+    const E = String.fromCharCode(27)
+    const row = Array.from({ length: 35 }, (_, x) => `${E}[3${x % 8}mw`).join('')
+    for (let i = 0; i < 1000; i++) p.emit(row + String.fromCharCode(13, 10))
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(s.events).not.toContain('hardcap')
+    const [cp] = of(lines, 'checkpoint') as Array<{ checkpoint: { state: string } }>
+    expect(cp.checkpoint.state.length).toBeGreaterThan(64 * 1024)
+  })
+
   it('a held fromSeq on the same boot replays the events and no checkpoint', async () => {
     const s = await ready()
     s.emit('one')

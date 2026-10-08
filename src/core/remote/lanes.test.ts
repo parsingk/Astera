@@ -109,3 +109,18 @@ describe('createLaneWriter streams (Phase 8)', () => {
     expect(s.got).not.toContain('a1\n')
   })
 })
+
+// Phase 8 review I3: a checkpoint goes on its stream's lane, admitted whole even when it alone is over the stream's
+// share; what follows it is held to the share as usual.
+describe('createLaneWriter admitted stream lines', () => {
+  it('an admitted line over the share is kept; the next line past the share is not', () => {
+    const s = stalled()
+    const over: string[] = []
+    const w = createLaneWriter(s.out, { hardCap: 1 << 20, onHardCap: () => {}, streamPerKey: 30, streamTotal: 1000, onStreamOverflow: (k) => over.push(k) })
+    w.control('first\n')
+    w.stream('a', `${'c'.repeat(100)}\n`, 5, { admit: true })
+    expect(over).toEqual([])
+    w.stream('a', 'next\n', 6)
+    expect(over).toEqual(['a'])
+  })
+})

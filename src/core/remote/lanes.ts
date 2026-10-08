@@ -9,8 +9,9 @@ export interface LaneWriter {
   control(line: string): void
   bulk(key: string, line: string): void
   /** A stream's next line (pty output, §3.7): kept in order per key, written after control and bulk. `seq` is what
-   *  the line carries, so an overflow can say which seqs it lost. */
-  stream(key: string, line: string, seq: number): void
+   *  the line carries, so an overflow can say which seqs it lost. `admit`: kept even when it alone is over the stream's
+   *  share (a checkpoint, Phase 8 review I3); what follows it is held to the share as usual. */
+  stream(key: string, line: string, seq: number, o?: { admit?: boolean }): void
   /** Forgets what a stream has waiting (an unsubscribe). */
   dropStream(key: string): void
   /** Bytes waiting here plus bytes the stream has not finished writing. */
@@ -100,7 +101,7 @@ export function createLaneWriter(
       if (!waiting) flush()
       check()
     },
-    stream: (key, line, seq) => {
+    stream: (key, line, seq, so = {}) => {
       if (dead) return
       const bytes = Buffer.byteLength(line)
       const st = streams.get(key) ?? { lines: [], bytes: 0 }
@@ -115,8 +116,10 @@ export function createLaneWriter(
         streamHeld -= gone.bytes
         o.onStreamOverflow?.(k, { firstSeq: gone.lines[0].seq, lastSeq: gone.lines[gone.lines.length - 1].seq })
       }
-      if (st.bytes > perKey) lose(key)
-      else if (streamHeld > total) for (const k of [...streams.keys()]) lose(k)
+      if (!so.admit) {
+        if (st.bytes > perKey) lose(key)
+        else if (streamHeld + held > total) for (const k of [...streams.keys()]) lose(k)
+      }
       if (!waiting) flush()
     },
     dropStream: (key) => {

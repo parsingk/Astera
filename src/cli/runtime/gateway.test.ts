@@ -291,6 +291,51 @@ describe('the Gateway and pty subscriptions (Phase 8)', () => {
     c.sock.destroy()
   })
 
+  // Phase 8 review I3: a checkpoint is stream output: a large one never closes the connection as a control backlog would.
+  it('a checkpoint larger than the connection queue reaches the controller, which stays connected', async () => {
+    const h = hostThatStreams()
+    const g = await start({ queuePerConn: 64 * 1024 }, h.host)
+    const c = await raw(g.gw.port)
+    c.send({ t: 'auth', token: 'good-token', client: {} })
+    await until(() => c.got.some((f) => f.t === 'hello'))
+    c.send({ t: 'subscribe', sub: 's1', pty: 'p1' })
+    await until(() => h.subs.length === 1)
+    const conn = h.subs[0].conn as string
+    h.reply({ t: 'subscribed', conn, sub: 's1', pty: 'p1', bootId: 'b' })
+    const state = 'z'.repeat(200 * 1024)
+    h.reply({ t: 'checkpoint', conn, sub: 's1', checkpoint: { watermark: 3, cols: 80, rows: 24, state, pending: '' }, gap: { firstSeq: 1, lastSeq: 3 } })
+    await until(() => c.got.some((f) => f.t === 'checkpoint'), 5_000)
+    expect((c.got.find((f) => f.t === 'checkpoint') as { checkpoint: { state: string } }).checkpoint.state).toBe(state)
+    expect(c.got.some((f) => f.t === 'closing')).toBe(false)
+    expect(c.sock.destroyed).toBe(false)
+    c.sock.destroy()
+  })
+
+  // Phase 8 review M8: stream output counts in the whole Gateway's budget too; past it the fullest connection goes.
+  it('stream output past the Gateway total closes the connection holding the most', async () => {
+    const h = hostThatStreams()
+    const g = await start({ queuePerConn: 8 << 20, queueTotal: 512 * 1024 }, h.host)
+    const c = await raw(g.gw.port)
+    c.send({ t: 'auth', token: 'good-token', client: {} })
+    await until(() => c.got.some((f) => f.t === 'hello'))
+    c.send({ t: 'subscribe', sub: 's1', pty: 'p1' })
+    await until(() => h.subs.length === 1)
+    const conn = h.subs[0].conn as string
+    c.sock.pause()
+    const chunk = 'q'.repeat(32 * 1024)
+    // More than the operating system buffers for a socket that is not read (tens of MB on Windows loopback).
+    for (let seq = 1; seq <= 1500; seq++) {
+      h.reply({ t: 'pty-out', conn, sub: 's1', events: [{ seq, kind: 'data', data: chunk }] })
+      if (seq % 50 === 0) await new Promise((r) => setTimeout(r, 1))
+    }
+    c.sock.resume()
+    // The connection goes (its `closing` frame waits behind the output already queued, so it may not be read before
+    // the socket is ended). One stream past its own share would only end that stream and keep the connection.
+    await until(() => c.sock.destroyed, 10_000)
+    expect(c.got.some((f) => f.t === 'output-gap')).toBe(false)
+    c.sock.destroy()
+  }, 30_000)
+
   it('refuses a subscription before auth', async () => {
     const h = hostThatStreams()
     const g = await start({}, h.host)

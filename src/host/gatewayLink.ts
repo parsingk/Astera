@@ -202,7 +202,12 @@ export function attachGatewayLink(o: {
         }
         send({ t: 'subscribed', conn: f.conn, sub: f.sub, pty: f.pty, bootId: o.ptys.bootId })
         if (r.checkpoint && r.gap) {
-          send({ t: 'checkpoint', conn: f.conn, sub: f.sub, checkpoint: r.checkpoint, gap: r.gap })
+          // Stream output, not control (Phase 8 review I3): a checkpoint of a thousand rows is hundreds of KB, and on
+          // the control lane a few of them would trip the link's hard cap. Admitted whole on its stream, in chunks
+          // when it is large; the Gateway puts them together.
+          const line = JSON.stringify({ t: 'checkpoint', conn: f.conn, sub: f.sub, checkpoint: r.checkpoint, gap: r.gap })
+          const parts = Buffer.byteLength(line) <= CHUNK_THRESHOLD ? [line] : chunksOf(`h${++ref}`, line).map((c) => JSON.stringify({ ...c, conn: f.conn }))
+          for (const part of parts) out.stream(key, `${part}${String.fromCharCode(10)}`, r.checkpoint.watermark, { admit: true })
           s.last = r.checkpoint.watermark
         } else s.last = (f.fromSeq ?? 1) - 1
         for (const e of [...r.events, ...s.held]) push(s, e)

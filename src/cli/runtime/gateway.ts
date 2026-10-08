@@ -95,7 +95,21 @@ export async function startGateway(o: {
     const line = JSON.stringify(m)
     if (Buffer.byteLength(line) > CHUNK_THRESHOLD) for (const f of chunksOf(`r${++seq}`, line)) c.out.control(`${JSON.stringify(f)}\n`)
     else c.out.control(`${line}\n`)
-    // The whole Gateway's budget: past it, the connection holding the most goes.
+    checkTotal()
+  }
+
+  /** A subscription's frame on the connection's stream lane (§3.7): output, and a checkpoint admitted whole (Phase 8
+   *  review I3), in chunks when it is large. Nothing goes to a connection that is closing. */
+  const streamTo = (c: Conn, sub: string, m: unknown, last: number, admit: boolean): void => {
+    if (c.sock.destroyed || c.state === 'closing') return
+    const line = JSON.stringify(m)
+    const parts = Buffer.byteLength(line) > CHUNK_THRESHOLD ? chunksOf(`r${++seq}`, line).map((f) => JSON.stringify(f)) : [line]
+    for (const part of parts) c.out.stream(sub, `${part}\n`, last, { admit })
+    checkTotal()
+  }
+
+  /** The whole Gateway's budget, control and streams alike: past it, the connection holding the most goes. */
+  const checkTotal = (): void => {
     let total = 0
     let largest: Conn | null = null
     for (const x of conns.values()) {
@@ -182,13 +196,16 @@ export async function startGateway(o: {
       // A subscription's frames (§3.7) go to that connection alone, without the connection id. Output goes on the
       // connection's stream lane, so one controller that stops reading fills only its own queue.
       case 'pty-out': {
-        if (c.ended.has(f.sub) || c.sock.destroyed) return
+        if (c.ended.has(f.sub)) return
         const { conn: _conn, ...frame } = f
-        const last = f.events[f.events.length - 1]?.seq ?? 0
-        return c.out.stream(f.sub, `${JSON.stringify(frame)}\n`, last)
+        return streamTo(c, f.sub, frame, f.events[f.events.length - 1]?.seq ?? 0, false)
+      }
+      case 'checkpoint': {
+        if (c.ended.has(f.sub)) return
+        const { conn: _conn, ...frame } = f
+        return streamTo(c, f.sub, frame, f.checkpoint.watermark, true)
       }
       case 'subscribed':
-      case 'checkpoint':
       case 'output-gap':
       case 'sub-error': {
         if (f.t === 'output-gap' || f.t === 'sub-error') c.out.dropStream(f.sub)
