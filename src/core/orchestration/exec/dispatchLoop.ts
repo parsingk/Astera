@@ -368,6 +368,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    * `worker-stop` would rewrite a closed Dispatch's ending. Driving process only, asked before each one;
    * a failure is logged and never thrown (R14).
    */
+  /** Worktrees a reap failed to remove, by path: when to try again (audit OR-4). */
+  const reapRetry = new Map<string, Retry>()
   const releaseIdleWorkers = async (): Promise<void> => {
     /** Whether `dispatchId` is, in `s`, an idle worker of the finished Run `runId`. Asked of one pair only, on the
      *  state after an await; the pass itself reads idleWorkersOf's one sweep (audit OR-1). */
@@ -891,8 +893,25 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       await tidyCoordinators()
       if (!c.mayStart()) return
       // 앱이 등록한 워크트리인가 — 앱에서는 core.worktrees, Host 에서는 자기 레지스트리다(c.isRegisteredWorktree).
-      for (const r of reapableChildRuns(c.getState(), (p) => c.isRegisteredWorktree(p)))
-        for (const w of r.worktrees) await c.reap(w)
+      // A worktree that will not go (a file Windows keeps locked) is tried again after a growing wait, and given up
+      // on after the waits reach their cap a few times (audit OR-4): it was a kill, a 5 s poll and a failed git
+      // remove on every pass.
+      const reapable = reapableChildRuns(c.getState(), (p) => c.isRegisteredWorktree(p))
+      const stillThere = new Set(reapable.flatMap((r) => r.worktrees))
+      for (const p of [...reapRetry.keys()]) if (!stillThere.has(p)) reapRetry.delete(p)
+      for (const r of reapable)
+        for (const w of r.worktrees) {
+          const nowMs = c.nowMs()
+          const retry = reapRetry.get(w)
+          if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
+          if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+            retry.gaveUp = true
+            log(`run=${r.runId}: gave up removing its worktree ${w} after ${retry.tries} attempts`)
+            continue
+          }
+          if (await c.reap(w)) reapRetry.delete(w)
+          else reapRetry.set(w, nextTry(retry, nowMs).entry)
+        }
     } finally {
       // finally 여야 한다 — 위의 `if (!c.mayStart()) return` 도, handleCommand 안에서 올라오는 예외(디스크가
       // 찬 store.save 가 그것이다)도 이 자리를 지나간다. 한 번이라도 놓치면 scheduling 이 true 로

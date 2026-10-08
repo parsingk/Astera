@@ -78,6 +78,8 @@ interface RigOpts {
   runWithoutWorktree?: boolean
   /** 끝난 예약 회차 하나 — 워크트리를 걷을 대상이다(reapableChildRuns). */
   reapableChild?: boolean
+  /** The reap fails, as a locked worktree on Windows does. */
+  reapFails?: boolean
 }
 
 const TEMPLATE_ID = 'job_sched'
@@ -227,7 +229,7 @@ function rig(o: RigOpts = {}) {
     integrate: async () => ({ kind: 'clean' }) as never,
     reap: async (p) => {
       reaped.push(p)
-      return true
+      return !o.reapFails
     },
     isRegisteredWorktree: (p) => p === '/wt-child',
     sessionAlive: () => true,
@@ -513,6 +515,31 @@ describe('createDispatchLoop', () => {
     await h.loop.run()
     await h.settle()
     expect(h.reaped).toEqual(['/wt-child'])
+  })
+
+  // Audit OR-4: a worktree Windows keeps locked failed its reap on every pass (a kill, a 5 s poll, a failed git
+  // remove), for as long as the app ran. It is tried again after a growing wait, and given up on in the end.
+  it('a worktree that could not be removed is tried again after a growing wait, then given up', async () => {
+    const h = rig({ reapableChild: true, reapFails: true })
+    const pass = async (): Promise<void> => {
+      await h.loop.run()
+      await h.settle()
+    }
+    await pass()
+    await pass()
+    expect(h.reaped).toEqual(['/wt-child'])
+    h.clock += COORDINATOR_STOP_RETRY_MS
+    await pass()
+    expect(h.reaped).toHaveLength(2)
+    for (let i = 0; i < 40; i++) {
+      h.clock += COORDINATOR_STOP_RETRY_MAX_MS
+      await pass()
+    }
+    const tried = h.reaped.length
+    h.clock += COORDINATOR_STOP_RETRY_MAX_MS
+    await pass()
+    expect(h.reaped).toHaveLength(tried)
+    expect(h.logs.some((l) => l.includes('gave up removing'))).toBe(true)
   })
 
   // Review m5: a process that stopped driving mid-pass does not go on to the reap — the new driver's

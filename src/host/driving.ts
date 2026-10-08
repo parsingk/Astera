@@ -185,7 +185,13 @@ export function createHostDriving(d: {
   const armStalled = (why: string): void => {
     if (d.server.hasApp()) return
     const at = d.nowMs()
-    for (const t of unchecked(d.orch.state()))
+    // A refusal is kept only while its Task exists (audit OR-9).
+    const s = d.orch.state()
+    if (refused.size > 0) {
+      const ids = new Set(s.tasks.map((t) => t.id))
+      for (const id of [...refused.keys()]) if (!ids.has(id)) refused.delete(id)
+    }
+    for (const t of unchecked(s))
       if (!suspects.has(t.id) && refused.get(t.id) !== seenAs(t)) {
         suspects.set(t.id, { status: t.status, updatedAt: t.updatedAt, armedAt: at })
         log(`task=${t.id} is ${t.status} with nothing checking it (${why}) — its restart Gate opens at a later tick if it stays so`)
@@ -432,11 +438,27 @@ export function createHostDriving(d: {
     await loop.run()
   }
 
+  /** A kick's pass while it runs, and whether another kick came meanwhile (audit OR-5): a burst of commits ran that
+   *  many passes side by side, each reading the settings twice. They are joined into one more pass. */
+  let kicking = false
+  let kickAgain = false
   const kick = (why: string): void => {
+    if (kicking) {
+      kickAgain = true
+      return
+    }
+    kicking = true
     void (async () => {
-      await compute()
-      await pass()
-    })().catch((err) => log(`the driver's pass (${why}) failed: ${String(err)}`))
+      do {
+        kickAgain = false
+        await compute()
+        await pass()
+      } while (kickAgain)
+    })()
+      .catch((err) => log(`the driver's pass (${why}) failed: ${String(err)}`))
+      .finally(() => {
+        kicking = false
+      })
   }
 
   /** The live session ids this Host's registry holds — the spec sweep's live set. */
@@ -446,7 +468,11 @@ export function createHostDriving(d: {
     return ids
   }
 
+  /** Whether a tick runs (audit OR-5): one that takes longer than the interval is not overlapped by the next. */
+  let ticking = false
   const tick = async (): Promise<void> => {
+    if (ticking) return
+    ticking = true
     try {
       // **Forget a gone app's pid promptly** (final review I1): the server's `lastAppPid` probes the pid
       // and forgets it once dead. Asked here while no app is attached, so the forgetting happens within a
@@ -486,6 +512,8 @@ export function createHostDriving(d: {
       }
     } catch (err) {
       log(`tick failed: ${String(err)}`)
+    } finally {
+      ticking = false
     }
   }
 

@@ -448,6 +448,32 @@ describe('createHostDriving', () => {
     await h.tickNow()
     await vi.waitFor(() => expect(h.workerStarts()).toBe(1))
   })
+  // Audit OR-5: every commit's kick read the settings twice and ran a whole pass of its own, so a burst of commits ran
+  // that many passes side by side; and a tick that took longer than the interval overlapped the next one.
+  it('kicks that come while a pass runs are joined into one more pass', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    h.gateReads.hold = true
+    for (let i = 0; i < 5; i++) h.driving.kick('test')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(h.heldReads()).toBe(1)
+    h.gateReads.hold = false
+    h.releaseRead(0)
+    await h.settle()
+    expect(h.heldReads()).toBe(1)
+  })
+  it('a tick that comes while one runs does nothing', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    h.gateReads.hold = true
+    void h.tickNow()
+    void h.tickNow()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(h.heldReads()).toBe(1)
+    h.gateReads.hold = false
+    h.releaseRead(0)
+    await h.settle()
+  })
   it('ticks every ORCH_FIRE_TICK_MS through its timer, and stops it at dispose', async () => {
     const h = await rig({ readyTasks: 0 })
     expect(h.everyMs()).toBe(ORCH_FIRE_TICK_MS)
