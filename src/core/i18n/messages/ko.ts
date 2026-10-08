@@ -1953,5 +1953,11 @@ export const ko = {
   // Host holds the process as its writer.
   'chat.unattended.heading': '자리에 아무도 없을 때',
   'chat.unattended.hold': '질문을 붙잡아 둔다',
-  'chat.unattended.deny60': '60초 뒤 거절한다'
+  'chat.unattended.deny60': '60초 뒤 거절한다',
+  'remote.session.readOnly': '읽기 전용으로 짝지은 Runtime 이라 이 세션에 입력할 수 없습니다.',
+  'remote.session.reconnecting': 'Runtime 에 다시 연결하는 중입니다. 세션은 그쪽에서 계속 돌고 있습니다.',
+  'remote.session.gone': '이 세션의 출력을 받을 수 없습니다: {message}',
+  'remote.session.ended': '세션이 끝났습니다 (종료 코드 {code})',
+  'remote.session.sizeHeld': '그 컴퓨터에서 이 세션을 보고 있어 터미널 크기는 그쪽에 맞춰집니다.',
+  'remote.session.noPty': 'Runtime 이 이 세션의 터미널을 아직 알려 주지 않았습니다'
 } as const

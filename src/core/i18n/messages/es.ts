@@ -1534,5 +1534,11 @@ export const es: Catalog = {
   'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta',
   // Tarea 7 — hay que decir siempre que se usó el bypass de toolchain (diseño F5); no es un estado
   // estable, así que se traduce aunque el resto de chat.notice.* todavía no esté aquí
-  'chat.notice.bypassed': 'Iniciada omitiendo la configuración de toolchain de esta carpeta — puede no ser la versión que fijaste'
+  'chat.notice.bypassed': 'Iniciada omitiendo la configuración de toolchain de esta carpeta — puede no ser la versión que fijaste',
+  'remote.session.readOnly': 'Este Runtime está emparejado en solo lectura, así que esta sesión no acepta entrada desde aquí.',
+  'remote.session.reconnecting': 'Reconectando con el Runtime. La sesión sigue en marcha allí.',
+  'remote.session.gone': 'No se puede recibir la salida de esta sesión: {message}',
+  'remote.session.ended': 'La sesión terminó (código {code})',
+  'remote.session.sizeHeld': 'Alguien está viendo esta sesión en ese equipo, así que el tamaño del terminal sigue al suyo.',
+  'remote.session.noPty': 'el Runtime aún no ha indicado el terminal de esta sesión'
 }

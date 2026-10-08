@@ -1706,5 +1706,11 @@ export const en: Record<keyof typeof ko, string> = {
   // Host holds the process as its writer.
   'chat.unattended.heading': 'With nobody there',
   'chat.unattended.hold': 'Hold the prompt',
-  'chat.unattended.deny60': 'Deny after 60 s'
+  'chat.unattended.deny60': 'Deny after 60 s',
+  'remote.session.readOnly': 'This Runtime is paired read-only, so this session takes no input from here.',
+  'remote.session.reconnecting': 'Reconnecting to the Runtime. The session keeps running there.',
+  'remote.session.gone': 'This session\'s output cannot be received: {message}',
+  'remote.session.ended': 'The session ended (exit code {code})',
+  'remote.session.sizeHeld': 'Someone is viewing this session on that computer, so its terminal size follows theirs.',
+  'remote.session.noPty': 'the Runtime has not named this session\'s terminal yet'
 }

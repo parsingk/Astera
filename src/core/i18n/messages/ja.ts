@@ -1508,5 +1508,11 @@ export const ja: Catalog = {
   'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません',
   // Task 7 — toolchain バイパスで再起動したことは必ず伝える(design F5)。落ち着いた状態ではなく
   // 新しい知らせなので、他の chat.notice.* キーがまだここに無くても訳す
-  'chat.notice.bypassed': 'このフォルダーの toolchain 設定を飛ばして起動しました — 固定したバージョンと違う可能性があります'
+  'chat.notice.bypassed': 'このフォルダーの toolchain 設定を飛ばして起動しました — 固定したバージョンと違う可能性があります',
+  'remote.session.readOnly': 'この Runtime は読み取り専用でペアリングされているため、ここからは入力できません。',
+  'remote.session.reconnecting': 'Runtime に再接続しています。セッションはそちらで動き続けています。',
+  'remote.session.gone': 'このセッションの出力を受け取れません: {message}',
+  'remote.session.ended': 'セッションが終了しました (終了コード {code})',
+  'remote.session.sizeHeld': 'そのコンピューターでこのセッションが表示されているため、端末のサイズはそちらに合わせられます。',
+  'remote.session.noPty': 'Runtime がこのセッションの端末をまだ知らせていません'
 }
