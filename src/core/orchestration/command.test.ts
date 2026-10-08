@@ -4185,6 +4185,17 @@ describe('run-pause', () => {
     return { deps, templateId, released }
   }
 
+  // Audit OR-3: releasing each worker waits up to 5 s, and the pause then committed the state it read before those
+  // waits: a worker report, a message or a rolling record that landed meanwhile was erased.
+  it('keeps a commit made while the workers were being released', async () => {
+    const { deps, templateId } = await runningSchedule()
+    deps.releaseWorker = async () => {
+      await deps.setState({ ...deps.getState(), messages: [...deps.getState().messages, { id: 'msg_late', runId: 'run_kid', from: 'worker', body: 'late', at: NOW } as never] })
+    }
+    expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)
+    expect(deps.getState().messages.map((m) => m.id)).toContain('msg_late')
+    expect(deps.getState().dispatches[0].workerState).toBe('stopped')
+  })
   it('도는 세션을 닫고 Dispatch 를 stopped 로 남긴다', async () => {
     const { deps, templateId, released } = await runningSchedule()
     expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)

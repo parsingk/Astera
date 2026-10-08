@@ -2541,7 +2541,11 @@ export async function handleCommand(
       // 세션을 닫는 것은 부수 효과이고 상태를 쓰지 않는다 — 상태에서 닫히는 것은 아래
       // pauseSchedule 이 한꺼번에 한다(run-delete 가 releaseWorker 를 쓰는 순서와 같다).
       for (const d of open.filter(releases)) await deps.releaseWorker({ dispatchId: d.id })
-      return commit(pauseSchedule(s, id, now))
+      // On the state as it is now (audit OR-3): each release waits up to 5 s, and what landed meanwhile (a worker's
+      // report, a message, a rolling record) is kept, as runs-stop and run-delete keep it.
+      const latest = deps.getState()
+      if (!latest.jobs.some((j) => j.id === id)) return notFound(`unknown job: ${id}`)
+      return commit(pauseSchedule(latest, id, now))
     }
     case 'run-resume': {
       const id = str(args.run)
