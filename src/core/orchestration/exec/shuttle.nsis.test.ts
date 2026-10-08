@@ -25,7 +25,8 @@ describe('installer.nsh customUnInstall', () => {
   })
 })
 
-describe.runIf(process.platform === 'win32')('installer.nsh customUnInstall (PowerShell)', () => {
+// Real PowerShell: a loaded run took 13 s for one test (2026-10-08), past the 10 s default.
+describe.runIf(process.platform === 'win32')('installer.nsh customUnInstall (PowerShell)', { timeout: 30_000 }, () => {
   let local: string
   let bin: string
   beforeEach(async () => {

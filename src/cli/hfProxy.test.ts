@@ -332,7 +332,8 @@ describe('hfProxy', () => {
     const r = await realRunner(shim, 'win32')(['a&b'], process.env, false)
     expect(r.code).toBe(2)
     expect(r.stderr).toMatch(/cmd/)
-  })
+    // A real cmd.exe: a loaded run took 10.1 s (2026-10-08), past the 10 s default.
+  }, 30_000)
 
   describe('assets across accounts', () => {
     const U = '11111111-1111-4111-8111-111111111111'
