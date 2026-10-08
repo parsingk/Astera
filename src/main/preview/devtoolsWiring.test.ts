@@ -5,8 +5,28 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { wireDevtoolsWindow } from './devtoolsWiring'
 
-const fakeHost = () => Object.assign(new EventEmitter(), { destroyed: false, isDestroyed() { return this.destroyed }, close() { this.emit('closed') } })
-const fakeGuest = () => Object.assign(new EventEmitter(), { open: true, isDestroyed: () => false, isDevToolsOpened() { return this.open }, closeDevTools() { this.open = false } })
+class FakeHost extends EventEmitter {
+  isDestroyed(): boolean {
+    return false
+  }
+  close(): void {
+    this.emit('closed')
+  }
+}
+class FakeGuest extends EventEmitter {
+  open = true
+  isDestroyed(): boolean {
+    return false
+  }
+  isDevToolsOpened(): boolean {
+    return this.open
+  }
+  closeDevTools(): void {
+    this.open = false
+  }
+}
+const fakeHost = (): FakeHost => new FakeHost()
+const fakeGuest = (): FakeGuest => new FakeGuest()
 
 describe('wireDevtoolsWindow', () => {
   it('a window the person closes takes its listeners off the guest', () => {
