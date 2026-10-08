@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
+import { cachedByStamp } from '../core/stampCache'
 import { promises as fs, existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -4809,7 +4810,8 @@ export function registerIpc(
     localPipeline: understandingPipeline,
     hostAnnounces: () => hostWritesUnderstanding,
     orchCall: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
-    readFile: () => readUnderstandingFile(understandingFile),
+    // Kept while the file is unchanged (audit U-3): a reader read and parsed the whole store on every get.
+    readFile: cachedByStamp(understandingFile, () => readUnderstandingFile(understandingFile)),
     notify: (root) => send('understanding:changed', root),
     log: orchLog
   })
@@ -4943,7 +4945,8 @@ export function registerIpc(
     collector: workUnitCollector,
     tracking: () => core.appSettings.getWorkUnitTrackingEnabled(),
     orchCall: (cmd, args) => orchCall({ cmd, args, sessionId: '' }),
-    readFile: () => readWorkUnitsFile(workUnitsFile),
+    // Kept while the file is unchanged (audit U-3): a reader read and parsed the whole store on every list.
+    readFile: cachedByStamp(workUnitsFile, () => readWorkUnitsFile(workUnitsFile)),
     notify: (root) => send('sessionTasks:changed', root),
     goalIgnored: (info) => send('sessionTasks:goalIgnored', info),
     log: orchLog
