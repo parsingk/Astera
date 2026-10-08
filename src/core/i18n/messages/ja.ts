@@ -1543,5 +1543,6 @@ export const ja: Catalog = {
   'remote.sessions.sessionTitle': '名前(任意)',
   'remote.sessions.prompt': '最初の依頼(任意)',
   'remote.sessions.start': 'そこで開始',
-  'remote.sessions.starting': '開始中…'
+  'remote.sessions.starting': '開始中…',
+  'remote.session.inputLost': '今入力した内容は Runtime に届きませんでした。接続が戻ったらもう一度入力してください。'
 }

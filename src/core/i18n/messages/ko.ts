@@ -1980,7 +1980,7 @@ export const ko = {
   'remote.sessions.loading': '불러오는 중…',
   'remote.sessions.none': '돌고 있는 세션이 없습니다.',
   'remote.sessions.new': '새 세션',
-  'remote.sessions.readOnly': '읽기 전용으로 짝지어서 이 컴퓨터에서 세션을 시작할 수 없습니다. 돌고 있는 세션은 열어 볼 수 있습니다.',
+  'remote.sessions.readOnly': '읽기 전용으로 짝지어서 그 컴퓨터에서 세션을 시작할 수 없습니다. 돌고 있는 세션은 열어 볼 수 있습니다.',
   'remote.sessions.account': '계정 (그 컴퓨터의 계정)',
   'remote.sessions.signedOut': '로그인 안 됨',
   'remote.sessions.folder': '폴더 (그 컴퓨터에 등록된 프로젝트)',
@@ -1988,5 +1988,6 @@ export const ko = {
   'remote.sessions.sessionTitle': '이름 (선택)',
   'remote.sessions.prompt': '첫 요청 (선택)',
   'remote.sessions.start': '그 컴퓨터에서 시작',
-  'remote.sessions.starting': '시작하는 중…'
+  'remote.sessions.starting': '시작하는 중…',
+  'remote.session.inputLost': '방금 입력한 내용이 Runtime 에 전달되지 않았습니다. 연결이 돌아오면 다시 입력하세요.'
 } as const

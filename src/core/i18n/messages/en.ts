@@ -1741,5 +1741,6 @@ export const en: Record<keyof typeof ko, string> = {
   'remote.sessions.sessionTitle': 'Name (optional)',
   'remote.sessions.prompt': 'First prompt (optional)',
   'remote.sessions.start': 'Start there',
-  'remote.sessions.starting': 'Starting…'
+  'remote.sessions.starting': 'Starting…',
+  'remote.session.inputLost': 'What you just typed did not reach the Runtime. Type it again once the connection is back.'
 }

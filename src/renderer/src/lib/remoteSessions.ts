@@ -49,12 +49,16 @@ export class InputCoalescer {
   private sending = false
   private disposed = false
   private readonly delayMs: number
+  private readonly onDelivery?: (ok: boolean) => void
 
+  /** `onDelivery`: each send's outcome, so input the Runtime did not take is said (review I1): delivered when it
+   *  resolves to a 2xx `{ status }`, or to anything without one; not when it throws or answers otherwise. */
   constructor(
     private readonly send: (data: string) => Promise<unknown>,
-    o: { delayMs?: number } = {}
+    o: { delayMs?: number; onDelivery?: (ok: boolean) => void } = {}
   ) {
     this.delayMs = o.delayMs ?? 16
+    this.onDelivery = o.onDelivery
   }
 
   push(data: string): void {
@@ -76,7 +80,14 @@ export class InputCoalescer {
       while (!this.disposed && this.queue !== '') {
         const chunk = this.queue.slice(0, SESSION_INPUT_MAX)
         this.queue = this.queue.slice(chunk.length)
-        await this.send(chunk).catch(() => undefined)
+        const ok = await this.send(chunk).then(
+          (r) => {
+            const status = (r as { status?: unknown } | null)?.status
+            return typeof status !== 'number' || (status >= 200 && status < 300)
+          },
+          () => false
+        )
+        if (!this.disposed) this.onDelivery?.(ok)
       }
     } finally {
       this.sending = false
@@ -102,4 +113,107 @@ export function createSessionArgs(f: {
   const title = f.title.trim()
   const prompt = f.prompt.trim()
   return { kind: f.kind, account: f.accountId, cwd: f.cwd, ...(title ? { title } : {}), ...(prompt ? { prompt } : {}) }
+}
+
+/** Codes after which subscribing again cannot help: core/remote/link.ts FINAL, a Runtime that cannot stream, and one
+ *  that is no longer paired here (review M1: removed in Settings, its tab must not say "reconnecting" forever). */
+const FINAL_GONE = new Set([
+  'RUNTIME_IDENTITY_CHANGED',
+  'RUNTIME_AUTH_FAILED',
+  'RUNTIME_PROTOCOL_MISMATCH',
+  'RUNTIME_CAPABILITY_MISSING',
+  'RUNTIME_NOT_FOUND'
+])
+
+/** What a remote terminal tab does when its stream is given up: a session already ended stays ended (its pty may be
+ *  gone after a reconnect), a final code is shown as such, anything else is tried again while the tab is open. */
+export function goneOutcome(code: string, o: { ended: boolean }): 'ended' | 'final' | 'retry' {
+  if (o.ended) return 'ended'
+  return FINAL_GONE.has(code) ? 'final' : 'retry'
+}
+
+/** A tab's status from a `sessions-facts` reply: anything but an answer is `unknown`, so a Runtime that cannot be
+ *  reached does not leave the tab showing its last status as current (review I1). */
+export function factsStatus(r: { status: number; body: unknown }): RemoteFacts['status'] {
+  const status = (r.body as { status?: unknown } | null)?.status
+  return r.status === 200 && (status === 'working' || status === 'waiting' || status === 'idle' || status === 'unknown') ? status : 'unknown'
+}
+
+type Call = (runtimeId: string, cmd: string, args: Record<string, unknown>) => Promise<{ status: number; body: unknown }>
+
+/** One session's `sessions-facts`, shared by everything that shows it (review M5: a visible remote chat and the tab
+ *  watch read it on their own clocks): a read in flight is joined, and an answer younger than `freshMs` is reused. */
+export function createFactsReader(
+  call: Call,
+  o: { now?: () => number; freshMs?: number } = {}
+): (runtimeId: string, sessionId: string) => Promise<{ status: number; body: unknown }> {
+  const now = o.now ?? Date.now
+  const freshMs = o.freshMs ?? 1_000
+  const kept = new Map<string, { at: number; reply: Promise<{ status: number; body: unknown }> }>()
+  return (runtimeId, sessionId) => {
+    const key = `${runtimeId}:${sessionId}`
+    const k = kept.get(key)
+    if (k && now() - k.at < freshMs) return k.reply
+    const reply = call(runtimeId, 'sessions-facts', { id: sessionId })
+    const entry = { at: now(), reply }
+    kept.set(key, entry)
+    // A failed read is not kept: the next one asks again. Old answers go once they are stale.
+    void reply.then(
+      (r) => {
+        if (r.status !== 200 && kept.get(key) === entry) kept.delete(key)
+      },
+      () => {
+        if (kept.get(key) === entry) kept.delete(key)
+      }
+    )
+    for (const [k2, e] of kept) if (now() - e.at >= freshMs && k2 !== key) kept.delete(k2)
+    return reply
+  }
+}
+
+/** The app's facts reader, over the orchestration router. */
+export const readFacts = createFactsReader((runtimeId, cmd, args) => remoteCall(runtimeId, cmd, args))
+
+/** Forgets the notification baseline of tabs that are closed (review M3): a session opened again starts a new one. */
+export function pruneBaseline(last: Map<string, unknown>, openKeys: string[]): void {
+  const open = new Set(openKeys)
+  for (const k of [...last.keys()]) if (!open.has(k)) last.delete(k)
+}
+
+/** What a tab does when its session was rolled into `toKey` (review M4): it becomes the new session's tab, or, when the
+ *  person already opened that session in a tab of its own, it goes, so the tree never holds the same session twice. */
+export function followAction(openKeys: string[], _fromKey: string, toKey: string): 'replace' | 'drop' {
+  return openKeys.includes(toKey) ? 'drop' : 'replace'
+}
+
+/** What a remote chat tab lets the person do (review M7): its facts decide once they arrive, its row before. A card is
+ *  answered from the tab, or shown as a note to a read-only pairing; the composer is shut while a card waits, for a
+ *  read-only pairing and once the chat ended. */
+export function remoteChatState(o: { facts: RemoteFacts | null; sessionAlive: boolean; readOnly: boolean }): {
+  alive: boolean
+  request: { id: string; [k: string]: unknown } | null
+  composerDisabled: boolean
+  card: 'answer' | 'note' | null
+  canStop: boolean
+  status: RemoteFacts['status']
+} {
+  const alive = o.facts?.alive ?? o.sessionAlive
+  const request = o.facts?.requests?.[0] ?? null
+  return {
+    alive,
+    request,
+    composerDisabled: o.readOnly || !alive || request !== null,
+    card: request === null ? null : o.readOnly ? 'note' : 'answer',
+    canStop: !o.readOnly && alive,
+    status: o.facts?.status ?? 'unknown'
+  }
+}
+
+/** A remote chat card's answer, as the Runtime's `sessions-answer`; a refusal is thrown with its message, which the
+ *  card shows (review M7). */
+export function createRemoteAnswer(call: Call, runtimeId: string, sessionId: string): (request: string, answer: unknown) => Promise<void> {
+  return async (request, answer) => {
+    const r = await call(runtimeId, 'sessions-answer', { id: sessionId, request, answer })
+    if (r.status !== 200) throw new Error(String((r.body as { error?: unknown } | null)?.error ?? r.status))
+  }
 }

@@ -24,6 +24,7 @@ const EVENT_CHANNELS = [
   'session:remote-size',
   'session:remote-exit',
   'session:remote-gone',
+  'session:remote-link',
   'session:exit',
   'session:created',
   'session:rolled',

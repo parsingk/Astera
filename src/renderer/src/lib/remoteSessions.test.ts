@@ -1,7 +1,7 @@
 // A remote session as the renderer holds it (remote runtime design Phase 9b): its ref from a Runtime's row, the roll it
 // follows, when its facts call for a notification, the pages of its conversation, and its input batched for the link.
 import { describe, it, expect } from 'vitest'
-import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, type RemoteFacts } from './remoteSessions'
+import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, goneOutcome, factsStatus, createFactsReader, pruneBaseline, followAction, remoteChatState, createRemoteAnswer, type RemoteFacts } from './remoteSessions'
 import { SESSION_INPUT_MAX } from '../../../core/remote/sessions'
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -128,5 +128,131 @@ describe('createSessionArgs', () => {
       title: 'fix',
       prompt: 'go'
     })
+  })
+})
+
+// Phase 9b review I1: input the Runtime did not take is reported, not dropped in silence.
+describe('InputCoalescer delivery', () => {
+  it('reports each send as delivered or not: a refusal, a lost Runtime and a throw are not', async () => {
+    const replies = [{ status: 200 }, { status: 503 }, { status: 403 }]
+    const seen: boolean[] = []
+    const c = new InputCoalescer(
+      async () => {
+        const r = replies.shift()
+        if (!r) throw new Error('offline')
+        return r
+      },
+      { delayMs: 0, onDelivery: (ok) => seen.push(ok) }
+    )
+    for (const d of ['a', 'b', 'c', 'd']) {
+      c.push(d)
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(seen).toEqual([true, false, false, false])
+  })
+})
+
+// Phase 9b review M1: what a tab does when its stream is given up.
+describe('goneOutcome', () => {
+  it('an ended session stays ended', () => {
+    expect(goneOutcome('RUNTIME_PTY_NOT_FOUND', { ended: true })).toBe('ended')
+  })
+  it('a Runtime that was removed, or one that cannot stream, is final', () => {
+    expect(goneOutcome('RUNTIME_NOT_FOUND', { ended: false })).toBe('final')
+    expect(goneOutcome('RUNTIME_AUTH_FAILED', { ended: false })).toBe('final')
+    expect(goneOutcome('RUNTIME_CAPABILITY_MISSING', { ended: false })).toBe('final')
+  })
+  it('anything else is tried again', () => {
+    expect(goneOutcome('RUNTIME_PTY_NOT_FOUND', { ended: false })).toBe('retry')
+    expect(goneOutcome('RUNTIME_OFFLINE', { ended: false })).toBe('retry')
+  })
+})
+
+// Phase 9b review I1: a tab whose facts cannot be read stops showing the last status as current.
+describe('factsStatus', () => {
+  it('is the facts status on an answer and unknown on anything else', () => {
+    expect(factsStatus({ status: 200, body: { status: 'working' } })).toBe('working')
+    expect(factsStatus({ status: 503, body: { error: 'offline' } })).toBe('unknown')
+    expect(factsStatus({ status: 200, body: null })).toBe('unknown')
+  })
+})
+
+// Phase 9b review M5: a visible remote chat and the tab watch read one session's facts once between them.
+describe('createFactsReader', () => {
+  it('shares a read in flight and a fresh answer, and asks again once it is old', async () => {
+    let now = 0
+    const asked: string[] = []
+    const read = createFactsReader(async (runtimeId, cmd, args) => {
+      asked.push(`${runtimeId}/${cmd}/${(args as { id: string }).id}`)
+      return { status: 200, body: { status: 'idle' } }
+    }, { now: () => now, freshMs: 1000 })
+    const [a, b] = await Promise.all([read('rt', 's1'), read('rt', 's1')])
+    expect(a).toBe(b)
+    now = 500
+    await read('rt', 's1')
+    await read('rt', 's2')
+    expect(asked).toEqual(['rt/sessions-facts/s1', 'rt/sessions-facts/s2'])
+    now = 1600
+    await read('rt', 's1')
+    expect(asked.length).toBe(3)
+  })
+})
+
+// Phase 9b review M3: a closed tab's baseline is forgotten, so reopening a waiting session does not notify at once.
+describe('pruneBaseline', () => {
+  it('drops the keys of tabs that are no longer open', () => {
+    const last = new Map<string, RemoteFacts>([
+      ['rt:a', { id: 'a', alive: true, status: 'idle', prompt: null, usage: null, model: null }],
+      ['rt:b', { id: 'b', alive: true, status: 'idle', prompt: null, usage: null, model: null }]
+    ])
+    pruneBaseline(last, ['rt:b'])
+    expect([...last.keys()]).toEqual(['rt:b'])
+  })
+})
+
+// Phase 9b review M4: a roll whose new session the person already opened in its own tab closes the old tab instead of
+// putting a second tab of the same session in the tree.
+describe('followAction', () => {
+  it('replaces the old tab, or drops it when the new session is already open', () => {
+    expect(followAction(['rt:a'], 'rt:a', 'rt:b')).toBe('replace')
+    expect(followAction(['rt:a', 'rt:b'], 'rt:a', 'rt:b')).toBe('drop')
+  })
+})
+
+// Phase 9b review M7: what a remote chat tab lets the person do, from its facts and pairing.
+describe('remoteChatState', () => {
+  const facts = (over: Partial<RemoteFacts> = {}): RemoteFacts => ({ id: 'c1', alive: true, status: 'idle', prompt: null, usage: null, model: null, ...over })
+  const card = { id: 'r1', kind: 'approval' }
+  it('a live chat with full control: the composer is open, it can be stopped, no card', () => {
+    expect(remoteChatState({ facts: facts(), sessionAlive: true, readOnly: false })).toEqual({
+      alive: true, request: null, composerDisabled: false, card: null, canStop: true, status: 'idle'
+    })
+  })
+  it('an open card is answered from the tab and shuts the composer meanwhile', () => {
+    const s = remoteChatState({ facts: facts({ status: 'waiting', requests: [card] }), sessionAlive: true, readOnly: false })
+    expect(s).toMatchObject({ request: card, composerDisabled: true, card: 'answer', status: 'waiting' })
+  })
+  it('a read-only pairing sees the card as a note, and cannot send or stop', () => {
+    const s = remoteChatState({ facts: facts({ requests: [card] }), sessionAlive: true, readOnly: true })
+    expect(s).toMatchObject({ composerDisabled: true, card: 'note', canStop: false })
+  })
+  it('an ended chat shuts everything; before its facts arrive the row decides', () => {
+    expect(remoteChatState({ facts: facts({ alive: false }), sessionAlive: true, readOnly: false })).toMatchObject({ alive: false, composerDisabled: true, canStop: false })
+    expect(remoteChatState({ facts: null, sessionAlive: false, readOnly: false })).toMatchObject({ alive: false, status: 'unknown' })
+  })
+})
+
+describe('createRemoteAnswer', () => {
+  it('sends the card’s answer to the Runtime and throws its refusal for the card to show', async () => {
+    const asked: unknown[] = []
+    let status = 200
+    const answer = createRemoteAnswer(async (runtimeId, cmd, args) => {
+      asked.push([runtimeId, cmd, args])
+      return { status, body: status === 200 ? {} : { error: 'no such request' } }
+    }, 'rt', 'c1')
+    await answer('r1', { kind: 'approval', decision: 'accept' } as never)
+    expect(asked).toEqual([['rt', 'sessions-answer', { id: 'c1', request: 'r1', answer: { kind: 'approval', decision: 'accept' } }]])
+    status = 404
+    await expect(answer('r1', { kind: 'approval', decision: 'accept' } as never)).rejects.toThrow('no such request')
   })
 })

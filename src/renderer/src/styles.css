@@ -1329,6 +1329,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    for the same reason as above — the trigger and the menu have to move together. */
 .sel.dense { font-size: 11px; }
 .sel.dense .sel-trigger { height: 24px; padding: 0 8px; }
+.sel-trigger:disabled { opacity: .5; cursor: default; }
 .sel.dense .sel-option { padding: 4px 8px; }
 /* the schedule-mode picker sits in a row with number inputs, so it does not stretch */
 .sched-kind { flex: 0 0 150px; }

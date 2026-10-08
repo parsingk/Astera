@@ -249,17 +249,20 @@ describe('Remote Runtime Phase 9b acceptance (remote session tabs from the app)'
     expect(pty.sent).toEqual(['go\r'])
   })
 
-  it('a dropped and restored connection carries on with each output once', async () => {
+  it('a dropped and restored connection is said to the tab, and carries on with each output once', async () => {
     const rt = await runtime()
     const a = await app(rt)
     const pty = rt.open('t1', 'cl')
     await a.streams.attach('rt_p9b', 't1', 'pty-t1')
     pty.emit('ONE ')
     await eventually(() => expect(a.shown('rt_p9b:t1')).toContain('ONE'))
+    const link = (): unknown[] => a.sent.filter((s) => s.channel === 'session:remote-link').map((s) => s.payload.state)
     await a.offline()
+    // While it is down the tab hears so (review I1), and nothing says it is back.
+    await eventually(() => expect(link()).toEqual(['down']))
     pty.emit('TWO ')
     a.online()
-    await new Promise((r) => setTimeout(r, 50))
+    await eventually(() => expect(link()).toEqual(['down', 'up']))
     pty.emit('THREE')
     await eventually(() => expect(a.shown('rt_p9b:t1')).toContain('THREE'))
     const text = a.shown('rt_p9b:t1')

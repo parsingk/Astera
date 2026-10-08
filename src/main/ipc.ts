@@ -968,12 +968,17 @@ export function registerIpc(
   // where only those arrive. isMainFrame excludes a sub-frame's own navigation; isSameDocument excludes
   // an in-page navigation (a hash change), which does not tear anything down and is not this app's own
   // reload.
+  // Phase 9b: remote session tab streams, made below with the Runtime clients; declared here for the reload observer.
+  let remoteStreams: RemoteStreams | null = null
   win.webContents.on('did-start-navigation', (...args: unknown[]) => {
     const first = typeof args[0] === 'object' && args[0] !== null ? (args[0] as Record<string, unknown>) : null
     const isMainFrame = typeof first?.isMainFrame === 'boolean' ? first.isMainFrame : args[3]
     const isSameDocument = typeof first?.isSameDocument === 'boolean' ? first.isSameDocument : args[2]
     if (isMainFrame !== true || isSameDocument === true) return
     conversationSessions.closeAll()
+    // The new document has no remote session tabs (Phase 9b review I2): their streams would keep the Runtime sending
+    // output nobody shows, and a tab opened again would get its tail with no checkpoint before it.
+    remoteStreams?.close()
   })
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
@@ -4629,7 +4634,6 @@ export function registerIpc(
   // guards, fallbacks or writes above can run for it (D1.6, D1.7), and its replies never reach 'orch:state'.
   // Phase 9b: a remote session tab's output, subscribed through its Runtime's client and sent on the session bus under
   // the tab's key (remoteStreams.ts). A re-paired or removed Runtime's streams subscribe again or are reported gone.
-  let remoteStreams: RemoteStreams | null = null
   const remoteRuntimes = createRemoteRuntimes({
     profileDir: app.getPath('userData'),
     version: app.getVersion(),

@@ -10,6 +10,8 @@
 // - `session:remote-exit { sessionId, code }`: the pty ended.
 // - `session:remote-gone { sessionId, code, message }`: the stream was given up (no such pty, a Runtime that cannot
 //   stream, a pairing that is gone).
+// - `session:remote-link { sessionId, state }`: its connection dropped (`down`, the link is reconnecting) or is back
+//   (`up`), for the tab to say it is reconnecting meanwhile.
 //
 // The link does not tell its streams when it is closed, so a re-paired or removed Runtime is `rebind`'s to handle.
 import type { PtyStreamHandlers } from '../../core/remote/link'
@@ -72,6 +74,10 @@ export function createRemoteStreams(a: {
       onGone: (code, message) => {
         if (!live()) return
         a.send('session:remote-gone', { sessionId: key, code, message })
+      },
+      onLinkState: (state) => {
+        if (!live()) return
+        a.send('session:remote-link', { sessionId: key, state })
       }
     }
   }
@@ -101,8 +107,8 @@ export function createRemoteStreams(a: {
   return {
     attach: (runtimeId, sessionId, ptyId) => {
       const key = remoteSessionKey(runtimeId, sessionId)
-      const kept = streams.get(key)
-      if (kept && kept.ptyId === ptyId) return Promise.resolve(true)
+      // Always afresh, even for the same pty (review I2): a view attaching again has nothing on screen, and only a new
+      // subscription starts it from a checkpoint.
       drop(key)
       streams.set(key, { runtimeId, sessionId, ptyId, gen: ++gen, stop: null })
       return subscribe(key)

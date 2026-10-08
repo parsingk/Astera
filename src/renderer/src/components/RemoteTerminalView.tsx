@@ -14,10 +14,8 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { copyTextFor } from '../../../core/terminal/copy'
-import { InputCoalescer, remoteCall, type RemoteSessionRef } from '../lib/remoteSessions'
+import { goneOutcome, InputCoalescer, remoteCall, type RemoteSessionRef } from '../lib/remoteSessions'
 
-/** Codes after which subscribing again cannot help (core/remote/link.ts FINAL, and a Runtime that cannot stream). */
-const FINAL_CODES = new Set(['RUNTIME_IDENTITY_CHANGED', 'RUNTIME_AUTH_FAILED', 'RUNTIME_PROTOCOL_MISMATCH', 'RUNTIME_CAPABILITY_MISSING'])
 const RETRY_MS = 5_000
 
 type Banner = { kind: 'reconnecting' } | { kind: 'gone'; message: string } | { kind: 'ended'; code: number } | null
@@ -41,6 +39,10 @@ export function RemoteTerminalView({
   readOnlyRef.current = readOnly
   const [banner, setBanner] = useState<Banner>(null)
   const [held, setHeld] = useState(false)
+  /** The last input did not reach the Runtime (review I1): said until one does. */
+  const [inputLost, setInputLost] = useState(false)
+  const aliveRef = useRef(session.alive)
+  aliveRef.current = session.alive
   const { key, runtimeId, sessionId, ptyId } = session
 
   useEffect(() => {
@@ -60,7 +62,11 @@ export function RemoteTerminalView({
     let ptySize: Dims | null = null
     let lastSent: Dims | null = null
     let sizeHeld = false
-    const input = new InputCoalescer((data) => remoteCall(runtimeId, 'sessions-input', { id: sessionId, data }))
+    const input = new InputCoalescer((data) => remoteCall(runtimeId, 'sessions-input', { id: sessionId, data }), {
+      onDelivery: (ok) => !disposed && setInputLost(!ok)
+    })
+    /** The session ended: a stream given up after that is not a reason to reconnect (review M1). */
+    let ended = false
 
     const fit = (): void => {
       if (host.clientWidth === 0 || host.clientHeight === 0) return
@@ -92,6 +98,7 @@ export function RemoteTerminalView({
       term.resize(c.cols, c.rows)
       term.write(c.state)
       term.write(c.pending)
+      ended = c.exitCode !== undefined
       setBanner(c.exitCode !== undefined ? { kind: 'ended', code: c.exitCode } : null)
       // Drawn at the pty's size; now fitted to this pane, unless that machine holds the size.
       fit()
@@ -106,7 +113,15 @@ export function RemoteTerminalView({
       if (sizeHeld) term.resize(e.cols, e.rows)
     })
     const offExit = window.api.on('session:remote-exit', (e) => {
-      if (e.sessionId === key) setBanner({ kind: 'ended', code: e.code })
+      if (e.sessionId !== key) return
+      ended = true
+      setBanner({ kind: 'ended', code: e.code })
+    })
+    // The connection dropped while the stream lives on: the link reconnects it, and the tab says so meanwhile (I1).
+    const offLink = window.api.on('session:remote-link', (e) => {
+      if (e.sessionId !== key) return
+      if (e.state === 'down') setBanner((b) => (b === null || b.kind === 'reconnecting' ? { kind: 'reconnecting' } : b))
+      else setBanner((b) => (b?.kind === 'reconnecting' ? null : b))
     })
     let retry: ReturnType<typeof setTimeout> | undefined
     const attach = (): void => {
@@ -114,7 +129,9 @@ export function RemoteTerminalView({
     }
     const offGone = window.api.on('session:remote-gone', (e) => {
       if (e.sessionId !== key) return
-      if (FINAL_CODES.has(e.code)) {
+      const outcome = goneOutcome(e.code, { ended: ended || !aliveRef.current })
+      if (outcome === 'ended') return
+      if (outcome === 'final') {
         setBanner({ kind: 'gone', message: e.message })
         return
       }
@@ -182,6 +199,7 @@ export function RemoteTerminalView({
       offSize()
       offExit()
       offGone()
+      offLink()
       void window.api.remoteSessions.detach(key)
       sessionBus.discard(key)
       blinkGuard.dispose()
@@ -211,12 +229,13 @@ export function RemoteTerminalView({
   return (
     <div className="terminal-wrap">
       <div className="terminal-host" ref={hostRef} />
-      {(readOnly || held || banner) && (
+      {(readOnly || held || banner || inputLost) && (
         <div className="remote-session-banners">
           {banner?.kind === 'reconnecting' && <div className="remote-session-banner">{t('remote.session.reconnecting')}</div>}
           {banner?.kind === 'gone' && <div className="remote-session-banner is-error">{t('remote.session.gone', { message: banner.message })}</div>}
           {readOnly && <div className="remote-session-banner">{t('remote.session.readOnly')}</div>}
           {held && <div className="remote-session-banner">{t('remote.session.sizeHeld')}</div>}
+          {inputLost && !readOnly && <div className="remote-session-banner is-error">{t('remote.session.inputLost')}</div>}
         </div>
       )}
       {banner?.kind === 'ended' && (

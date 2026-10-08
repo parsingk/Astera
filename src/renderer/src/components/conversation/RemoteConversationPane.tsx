@@ -13,7 +13,7 @@ import { toast } from "../../lib/toast";
 import { confirmModal } from "../../lib/confirm";
 import type { ChatRequest } from "../../../../core/chat/types";
 import type { ConvTurn } from "../../../../core/history/convTypes";
-import { mergeTurns, remoteCall, type RemoteFacts, type RemoteSessionRef } from "../../lib/remoteSessions";
+import { createRemoteAnswer, mergeTurns, remoteCall, remoteChatState, type RemoteFacts, type RemoteSessionRef, readFacts } from "../../lib/remoteSessions";
 
 const MemoThread = memo(Thread);
 /** How often an open remote chat reads its conversation and facts. */
@@ -62,7 +62,8 @@ export function RemoteConversationPane({
     const tick = async (): Promise<void> => {
       const [conv, f] = await Promise.all([
         remoteCall(runtimeId, "sessions-conversation", { id: sessionId }),
-        remoteCall(runtimeId, "sessions-facts", { id: sessionId })
+        // Shared with the tab watch (review M5): one read of the facts serves both.
+        readFacts(runtimeId, sessionId)
       ]);
       if (stopped) return;
       setOffline(conv.status >= 500 || f.status >= 500);
@@ -105,13 +106,7 @@ export function RemoteConversationPane({
     [runtimeId, sessionId, t]
   );
 
-  const answer = useCallback(
-    async (request: string, a: unknown) => {
-      const r = await remoteCall(runtimeId, "sessions-answer", { id: sessionId, request, answer: a });
-      if (r.status !== 200) throw new Error(errorOf(r));
-    },
-    [runtimeId, sessionId]
-  );
+  const answer = useMemo(() => createRemoteAnswer(remoteCall, runtimeId, sessionId), [runtimeId, sessionId]);
 
   const stop = useCallback(async () => {
     const ok = await confirmModal({ title: t("remote.session.stopTitle"), body: t("remote.session.stopBody"), confirmLabel: t("remote.session.stop") });
@@ -120,11 +115,12 @@ export function RemoteConversationPane({
     if (r.status !== 200) toast.error(t("remote.session.failed", { message: errorOf(r) }));
   }, [runtimeId, sessionId, t]);
 
-  const alive = facts?.alive ?? session.alive;
-  const request = (facts?.requests?.[0] as ChatRequest | undefined) ?? null;
+  const view = remoteChatState({ facts, sessionAlive: session.alive, readOnly });
+  const { alive, status } = view;
+  const request = view.request as ChatRequest | null;
   const messages = useMemo(() => toThreadMessages(turns), [turns]);
   const banner = request ? (
-    readOnly ? (
+    view.card === "note" ? (
       <div className="remote-chat-note">{t("remote.session.readOnlyAnswer")}</div>
     ) : (
       <ChatRequestCard sessionId={key} request={request} provider={session.provider ?? "claude"} answer={answer} />
@@ -147,12 +143,11 @@ export function RemoteConversationPane({
     messages,
     convertMessage: (m: ThreadMessageLike) => m,
     // Shut for a read-only pairing, an ended chat, and while a card waits for its answer.
-    isDisabled: readOnly || !alive || request !== null,
+    isDisabled: view.composerDisabled,
     isRunning: false,
     onNew
   });
 
-  const status = facts?.status ?? "unknown";
   return (
     // No file opening from a sent file's row: its path is the Runtime's (D8.2).
     <SentFileOpenContext.Provider value={null}>
@@ -168,7 +163,7 @@ export function RemoteConversationPane({
               {t("remote.session.earlier")}
             </button>
           )}
-          {!readOnly && alive && (
+          {view.canStop && (
             <button type="button" className="remote-chat-button is-danger" onClick={() => void stop()}>
               {t("remote.session.stop")}
             </button>

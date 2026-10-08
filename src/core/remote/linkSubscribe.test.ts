@@ -175,4 +175,24 @@ describe('RemoteLink.subscribe', () => {
     expect(rt.asked.at(-1)).toMatchObject({ t: 'subscribe', sub, fromSeq: 3 })
     w.link.close()
   })
+
+  // Phase 9b review I1: a tab says it is reconnecting while its connection is down, and stops saying so once the stream
+  // is answered again. The first subscription is not a reconnect.
+  it('tells the stream when its connection drops and when it is subscribed again', async () => {
+    const rt = fakeRuntime()
+    const link = openRemoteLink({ target, client: {}, connect: rt.connect, sleep: async () => {}, random: () => 0.5 })
+    const states: string[] = []
+    link.subscribe('p1', { onReset: () => {}, onEvents: () => {}, onLinkState: (st) => states.push(st) })
+    await settle()
+    const sub = rt.asked[0].sub
+    rt.conns[0].push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    expect(states).toEqual([])
+    rt.conns[0].drop()
+    await settle()
+    await settle()
+    expect(states).toEqual(['down'])
+    rt.conns[1].push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    expect(states).toEqual(['down', 'up'])
+    link.close()
+  })
 })

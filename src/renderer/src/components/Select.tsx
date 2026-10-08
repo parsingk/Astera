@@ -78,7 +78,8 @@ export function Select({
   placeholder,
   className,
   noCheck = false,
-  ariaLabel
+  ariaLabel,
+  disabled = false
 }: {
   items: SelectOption[]
   value: string
@@ -91,6 +92,8 @@ export function Select({
    *  still shows in the label colour. */
   noCheck?: boolean
   ariaLabel?: string
+  /** Shown but not opened: a choice the form cannot use right now. */
+  disabled?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -205,6 +208,7 @@ export function Select({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        disabled={disabled}
         onClick={() => (open ? setOpen(false) : openList())}
         onKeyDown={onKeyDown}
       >

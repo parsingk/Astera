@@ -1,6 +1,8 @@
 // A remote session tab's output (remote runtime design Phase 9b): main subscribes to the Runtime's pty through that
 // Runtime's client and forwards it to the renderer under the tab's key, `<runtimeId>:<sessionId>`.
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { createRemoteStreams } from './remoteStreams'
 import type { PtyStreamHandlers } from '../../core/remote/link'
 
@@ -64,13 +66,19 @@ describe('createRemoteStreams', () => {
     expect(r.sent).toEqual([['session:remote-gone', { sessionId: 'rt_1:s1', code: 'RUNTIME_PTY_NOT_FOUND', message: 'no such pty' }]])
   })
 
-  it('attaching the same pty again keeps one subscription; another pty (a roll) replaces it', async () => {
+  // Phase 9b review I2: a stream kept past a renderer reload must not hand the new view a tail with no checkpoint before
+  // it. Attaching again subscribes afresh, so a checkpoint comes first; one subscription stays live.
+  it('attaching the same pty again subscribes afresh with one live; another pty (a roll) replaces it', async () => {
     const r = rig()
     await r.streams.attach('rt_1', 's1', 'pty-1')
     await r.streams.attach('rt_1', 's1', 'pty-1')
-    expect(r.rt().subs.length).toBe(1)
+    expect(r.rt().subs.map((s) => [s.pty, s.stopped])).toEqual([
+      ['pty-1', true],
+      ['pty-1', false]
+    ])
     await r.streams.attach('rt_1', 's1', 'pty-2')
     expect(r.rt().subs.map((s) => [s.pty, s.stopped])).toEqual([
+      ['pty-1', true],
       ['pty-1', true],
       ['pty-2', false]
     ])
@@ -107,5 +115,24 @@ describe('createRemoteStreams', () => {
     r.streams.detach('rt_1:s1')
     expect(await attaching).toBe(false)
     expect(r.rt().subs.every((s) => s.stopped)).toBe(true)
+  })
+
+  it('forwards a dropped and a restored connection as the tab’s link state', async () => {
+    const r = rig()
+    await r.streams.attach('rt_1', 's1', 'pty-1')
+    r.rt().subs[0].h.onLinkState?.('down')
+    r.rt().subs[0].h.onLinkState?.('up')
+    expect(r.sent).toEqual([
+      ['session:remote-link', { sessionId: 'rt_1:s1', state: 'down' }],
+      ['session:remote-link', { sessionId: 'rt_1:s1', state: 'up' }]
+    ])
+  })
+
+  // Phase 9b review I2: a reload drops every remote tab from the new renderer, so their streams are closed with the
+  // old document, as the conversation sessions are.
+  it('ipc closes the remote streams when the window starts a new document', () => {
+    const ipc = readFileSync(path.join(__dirname, '../ipc.ts'), 'utf8')
+    const nav = ipc.slice(ipc.indexOf("win.webContents.on('did-start-navigation'"))
+    expect(nav.slice(0, nav.indexOf('\n  })'))).toContain('remoteStreams?.close()')
   })
 })

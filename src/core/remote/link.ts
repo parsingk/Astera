@@ -40,6 +40,9 @@ export interface PtyStreamHandlers {
   onReset(c: RemoteCheckpoint): void
   onEvents(events: RemotePtyEvent[]): void
   onGone?(code: string, message: string): void
+  /** The stream's connection dropped (`down`; the link is reconnecting it) or it is answered again (`up`). Not called
+   *  for the first subscription (Phase 9b review I1: a tab says it is reconnecting meanwhile). */
+  onLinkState?(state: 'down' | 'up'): void
 }
 
 /** The waits before each reconnect (N14): 1 s, 2 s, 5 s, 10 s, then 30 s, each with jitter of plus or minus half. */
@@ -87,7 +90,7 @@ export function openRemoteLink(a: {
   let closed = false
   /** Each subscription: its pty, the last seq handed on (null before a checkpoint or a replay), the boot it was on,
    *  and the connection it is subscribed on now. */
-  type Stream = { id: string; pty: string; h: PtyStreamHandlers; lastSeq: number | null; bootId: string | null; on: RuntimeLink | null }
+  type Stream = { id: string; pty: string; h: PtyStreamHandlers; lastSeq: number | null; bootId: string | null; on: RuntimeLink | null; down?: boolean }
   const streams = new Map<string, Stream>()
   let streamN = 0
   /** Connections that closed before any stream on them was answered, in a row: each waits longer (review I4). */
@@ -133,7 +136,14 @@ export function openRemoteLink(a: {
         live = null
       }
       // Every stream on this connection subscribes again from where it was, on the next one (§3.7, N11).
-      for (const s of streams.values()) if (s.on === link) s.on = null
+      for (const s of streams.values())
+        if (s.on === link) {
+          s.on = null
+          if (!closed && !s.down) {
+            s.down = true
+            s.h.onLinkState?.('down')
+          }
+        }
       if (!closed && streams.size > 0) void resubscribeAll(++dropStreak)
     })
     return link
@@ -166,6 +176,10 @@ export function openRemoteLink(a: {
       case 'subscribed':
         s.bootId = f.bootId
         dropStreak = 0
+        if (s.down) {
+          s.down = false
+          s.h.onLinkState?.('up')
+        }
         return
       case 'checkpoint':
         s.lastSeq = f.checkpoint.watermark

@@ -1569,5 +1569,6 @@ export const es: Catalog = {
   'remote.sessions.sessionTitle': 'Nombre (opcional)',
   'remote.sessions.prompt': 'Primera petición (opcional)',
   'remote.sessions.start': 'Iniciar allí',
-  'remote.sessions.starting': 'Iniciando…'
+  'remote.sessions.starting': 'Iniciando…',
+  'remote.session.inputLost': 'Lo que acabas de escribir no llegó al Runtime. Vuelve a escribirlo cuando vuelva la conexión.'
 }

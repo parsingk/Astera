@@ -127,7 +127,7 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { remoteCall, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
+import { followAction, remoteCall, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
@@ -2691,7 +2691,14 @@ export default function App(): React.JSX.Element {
     // A roll replaced the session while this tab watched it, or while the link was down (X1-11): the tab moves to
     // the new session in its place, and its view starts again from the new pty's checkpoint.
     onFollow: (fromKey, to) => {
-      setRemoteSessions((prev) => (prev.some((r) => r.key === to.key) ? prev.filter((r) => r.key !== fromKey) : prev.map((r) => (r.key === fromKey ? to : r))))
+      // The new session already has a tab of its own (opened meanwhile): the old tab goes rather than becoming a second
+      // tab of it (review M4).
+      if (followAction(remoteSessions.map((r) => r.key), fromKey, to.key) === 'drop') {
+        setRemoteSessions((prev) => prev.filter((r) => r.key !== fromKey))
+        dropTabFromTree(sessionTab(fromKey))
+        return
+      }
+      setRemoteSessions((prev) => prev.map((r) => (r.key === fromKey ? to : r)))
       setLayout((cur) => (cur ? replaceTabId(cur, sessionTab(fromKey), sessionTab(to.key)) : cur))
     },
     onStatus: (key, status) => setRemoteStatus((prev) => (prev[key] === status ? prev : { ...prev, [key]: status })),

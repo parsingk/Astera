@@ -121,6 +121,7 @@ export function RemoteSessionsDialog({
               ...runtimes.map((r) => ({ value: r.runtimeId, label: r.name }))
             ]}
             value={runtimeId}
+            disabled={starting}
             onChange={(v) => (v === 'local' ? onLocal() : onRuntime(v))}
           />
         </div>
@@ -161,7 +162,7 @@ export function RemoteSessionsDialog({
                 key={k}
                 type="button"
                 className={`segmented${kind === k ? ' active' : ''}`}
-                disabled={readOnly}
+                disabled={readOnly || starting}
                 onClick={() => setKind(k)}
               >
                 {t(k === 'chat' ? 'session.kind.chat' : 'session.kind.terminal')}
@@ -178,6 +179,7 @@ export function RemoteSessionsDialog({
               meta: a.signedIn === false ? t('remote.sessions.signedOut') : a.provider
             }))}
             value={accountId}
+            disabled={readOnly || starting}
             onChange={setAccountId}
           />
         </div>
@@ -189,6 +191,7 @@ export function RemoteSessionsDialog({
             <Select
               items={projects.map((p) => ({ value: p.path, label: p.name ?? p.path, meta: p.name ? p.path : undefined }))}
               value={cwd}
+              disabled={readOnly || starting}
               onChange={setCwd}
             />
           )}

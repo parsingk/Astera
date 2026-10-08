@@ -769,6 +769,8 @@ export interface CoreEvents {
   'session:remote-size': { sessionId: string; cols: number; rows: number }
   'session:remote-exit': { sessionId: string; code: number }
   'session:remote-gone': { sessionId: string; code: string; message: string }
+  /** A remote tab's connection dropped (`down`, reconnecting) or is back (`up`) (Phase 9b review I1). */
+  'session:remote-link': { sessionId: string; state: 'down' | 'up' }
   'session:exit': { sessionId: string; exitCode: number }
   // main created a session without the renderer asking — an orchestration worker. The whole
   // SessionInfo is carried so the renderer can build the tab (the same value sessions.spawn returns).

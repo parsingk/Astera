@@ -4,7 +4,7 @@
 // session that began waiting is reported for a notification. Polled, not pushed (ledger ruling): the Host's facts are
 // read on demand there.
 import { useEffect, useRef } from 'react'
-import { factsTransition, followRolls, refOf, remoteCall, type RemoteFacts, type RemoteSessionRef, type RemoteSessionRow } from '../lib/remoteSessions'
+import { factsStatus, factsTransition, followRolls, pruneBaseline, readFacts, refOf, remoteCall, type RemoteFacts, type RemoteSessionRef, type RemoteSessionRow } from '../lib/remoteSessions'
 
 export const REMOTE_WATCH_MS = 3_000
 
@@ -30,6 +30,7 @@ export function useRemoteSessionWatch(o: {
     const last = new Map<string, RemoteFacts>()
     const tick = async (): Promise<void> => {
       const { refs } = latest.current
+      pruneBaseline(last, refs.map((r) => r.key))
       const byRuntime = new Map<string, RemoteSessionRef[]>()
       for (const r of refs) byRuntime.set(r.runtimeId, [...(byRuntime.get(r.runtimeId) ?? []), r])
       await Promise.all(
@@ -49,10 +50,12 @@ export function useRemoteSessionWatch(o: {
       )
       await Promise.all(
         refs.map(async (ref) => {
-          const r = await remoteCall(ref.runtimeId, 'sessions-facts', { id: ref.sessionId })
-          if (stopped || r.status !== 200) return
+          const r = await readFacts(ref.runtimeId, ref.sessionId).catch(() => ({ status: 0, body: null }))
+          if (stopped) return
+          // Not read: the tab stops showing its last status as current (review I1).
+          latest.current.onStatus(ref.key, factsStatus(r))
+          if (r.status !== 200) return
           const facts = r.body as RemoteFacts
-          latest.current.onStatus(ref.key, facts.status)
           if (factsTransition(last.get(ref.key) ?? null, facts) === 'waiting') latest.current.onWaiting(ref, facts)
           last.set(ref.key, facts)
         })
