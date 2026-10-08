@@ -100,3 +100,27 @@ describe('framing', () => {
     })
   })
 })
+
+// Second pass C2-5: each chunk was appended to the held text and the whole of it searched again for a newline, so one
+// long line (a large state or a relayed read) cost time quadratic in its length: 858 ms for 20 MB measured.
+describe('createLineReader on a long line', () => {
+  it('reads a 40 MB line in 64 KB chunks in linear time', () => {
+    const got: unknown[] = []
+    const feed = createLineReader({ onMessage: (v) => got.push(v), onBadLine: () => {}, onHandlerError: () => {} })
+    const body = JSON.stringify({ pad: 'x'.repeat(40 * 1024 * 1024) }) + '\n'
+    const t0 = performance.now()
+    for (let i = 0; i < body.length; i += 64 * 1024) feed(body.slice(i, i + 64 * 1024))
+    expect(performance.now() - t0).toBeLessThan(1500)
+    expect(got).toHaveLength(1)
+  })
+
+  it('still finds every line, in order, when chunks split them anywhere', () => {
+    const got: unknown[] = []
+    const feed = createLineReader({ onMessage: (v) => got.push(v), onBadLine: () => {}, onHandlerError: () => {} })
+    const text = [1, 2, 3, 4].map((n) => JSON.stringify({ n })).join('\n') + '\n'
+    for (const c of text) feed(c)
+    feed('{"n":5}\n{"n"')
+    feed(':6}\n')
+    expect(got).toEqual([1, 2, 3, 4, 5, 6].map((n) => ({ n })))
+  })
+})

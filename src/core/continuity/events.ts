@@ -321,8 +321,11 @@ function endingOf(d: Dispatch): ContinuityEventType {
 
 function dispatchEvents(prev: OrchState, next: OrchState, now: string, stamp: string): ContinuityEvent[] {
   const before = new Map(prev.dispatches.map((d) => [d.id, d]))
-  const runOf = (taskId: string): string | undefined =>
-    (next.tasks.find((t) => t.id === taskId) ?? prev.tasks.find((t) => t.id === taskId))?.runId
+  // One map per commit (second pass C2-3): a find over every Task per Dispatch grew with the whole retained history.
+  const runByTask = new Map<string, string | undefined>()
+  for (const t of prev.tasks) runByTask.set(t.id, t.runId)
+  for (const t of next.tasks) runByTask.set(t.id, t.runId)
+  const runOf = (taskId: string): string | undefined => runByTask.get(taskId)
   const out: ContinuityEvent[] = []
   for (const d of next.dispatches) {
     const runId = runOf(d.taskId)

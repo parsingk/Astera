@@ -4,7 +4,7 @@
 import { watch, readdirSync, statSync, type FSWatcher } from 'node:fs'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { dirIdentity, namesAPath } from '../files/watchedDir'
+import { dirIdentity, dirIdentityAsync, namesAPath } from '../files/watchedDir'
 
 /**
  * How often the reconciliation sweep runs. See `sweep` for why there is one at all.
@@ -41,12 +41,13 @@ export class HookEventWatcher {
     private opts: { startAtEnd?: boolean; watch?: typeof watch } = {}
   ) {}
 
-  /** Arms the folder's watch, when it is not running and the folder is there. Never throws. */
-  private arm(): void {
+  /** Arms the folder's watch, when it is not running and the folder is there. Never throws. `known`: the folder's id
+   *  as the caller just read it (the sweep, asynchronously); read here, synchronously, when left out. */
+  private arm(known?: bigint | null): void {
     if (this.watcher) return
     // Read before the watch opens: a folder replaced in between leaves this id older than the folder
     // watched, which the next check reads as replaced and arms again, rather than an id that passes.
-    const id = dirIdentity(this.dir)
+    const id = known === undefined ? dirIdentity(this.dir) : known
     if (id === null) return
     if (this.armedId !== null && id !== this.armedId) this.offsets.clear() // a new folder: its files start from 0
     this.armedId = id
@@ -73,12 +74,14 @@ export class HookEventWatcher {
     }
   }
 
-  /** Closes the watch when its folder is no longer the one it was armed on, then arms again. */
-  private recheck(): void {
-    if (!this.watcher || dirIdentity(this.dir) === this.armedId) return
+  /** Closes the watch when its folder is no longer the one it was armed on, then arms again. `known` as in `arm`. */
+  private recheck(known?: bigint | null): void {
+    if (!this.watcher) return
+    const id = known === undefined ? dirIdentity(this.dir) : known
+    if (id === this.armedId) return
     this.log(`hook watcher: ${this.dir} was removed or replaced; the watch is closed until the folder is back`)
     this.drop()
-    if (!this.stopped) this.arm()
+    if (!this.stopped) this.arm(known)
   }
 
   private drop(): void {
@@ -141,9 +144,11 @@ export class HookEventWatcher {
     // The watch's identity, once a sweep (one access and one stat): the event path above is not the only
     // guard, since a folder replaced without a storm would otherwise pass for good. A watch dropped
     // because its folder went, or one that could not start, is armed again here.
+    // Read off the thread (second pass C2-7), as every other watcher's sweep is.
+    const id = await dirIdentityAsync(this.dir)
     if (!this.stopped) {
-      this.recheck()
-      this.arm()
+      this.recheck(id)
+      this.arm(id)
     }
     let names: string[]
     try {

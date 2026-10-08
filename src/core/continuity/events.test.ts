@@ -30,6 +30,25 @@ const task = (over: Partial<Task> = {}): Task => ({
 const withRun = (r: LegacyRun, tasks: Task[] = []): OrchState => stateFromLegacy({ runs: [r], tasks })
 const withRuns = (rs: LegacyRun[], tasks: Task[] = []): OrchState => stateFromLegacy({ runs: rs, tasks })
 
+// Second pass C2-3: every Dispatch looked its Task up with a find over every Task, on every commit.
+describe('deriveEvents cost', () => {
+  it('walks the task lists a fixed number of times, however many Dispatches there are', () => {
+    const tasks = Array.from({ length: 200 }, (_, i) => ({ id: `t${i}`, runId: 'r1', status: 'completed', consecutiveFailures: 0 }))
+    const dispatches = tasks.map((t, i) => ({ id: `d${i}`, taskId: t.id, sessionId: 's', startedAt: '2026-10-08T00:00:00.000Z' }))
+    let walks = 0
+    const watch = <T extends object>(a: T[]): T[] =>
+      new Proxy(a, {
+        get(target, key, recv) {
+          if (key === 'find' || key === 'filter') walks++
+          return Reflect.get(target, key, recv)
+        }
+      })
+    const s = { ...emptyState(), tasks: watch(tasks), dispatches } as unknown as OrchState
+    deriveEvents(s, { ...s, tasks: watch(tasks) } as unknown as OrchState, '2026-10-08T00:00:00.000Z')
+    expect(walks).toBeLessThan(50)
+  })
+})
+
 describe('deriveEvents — runs', () => {
   it('a run appearing without pendingStart has started', () => {
     const ev = deriveEvents(emptyState(), withRun(run()), NOW)

@@ -133,6 +133,29 @@ describe('HistoryIndex (lazy)', () => {
     expect(await index.transcriptPathById('acc-a', 'no-such-session')).toBeNull()
   })
 
+  // Second pass C2-2: one transcript growing (a session writing) re-parsed every transcript in its folder, a 50-line
+  // head and a 256 KB tail each, once a second while the history panel was open. A file that did not change keeps its
+  // entry.
+  it('a folder read again builds only the transcripts that changed', async () => {
+    const a = account('acc-a')
+    await writeTranscript(a, 'p', 'one.jsonl', 'one')
+    await writeTranscript(a, 'p', 'two.jsonl', 'two')
+    const live = await writeTranscript(a, 'p', 'three.jsonl', 'three')
+    const d = makeDescriptors(process.platform)
+    const built: string[] = []
+    const history = { ...d.claude.history, buildEntry: (...args: Parameters<typeof d.claude.history.buildEntry>) => (built.push(path.basename(args[1])), d.claude.history.buildEntry(...args)) }
+    index = new HistoryIndex(() => [a], { ...d, claude: { ...d.claude, history } })
+    expect(await sessionIds()).toEqual(['one', 'three', 'two'])
+    expect(built.sort()).toEqual(['one.jsonl', 'three.jsonl', 'two.jsonl'])
+    built.length = 0
+    await fs.appendFile(live, '\n' + JSON.stringify({ type: 'user', sessionId: 'three', message: { role: 'user', content: 'more' } }), 'utf8')
+    const later = new Date(Date.now() + 5_000)
+    await fs.utimes(live, later, later)
+    ;(index as unknown as { onFileEvent(p: string): void }).onFileEvent(live)
+    expect(await sessionIds()).toEqual(['one', 'three', 'two'])
+    expect(built).toEqual(['three.jsonl'])
+  })
+
   it('워쳐가 새 transcript를 감지해 onUpdated를 발화하고 이후 page에 반영된다', async () => {
     const a = account('acc-a')
     await writeTranscript(a, 'p', 'first.jsonl', 'first')

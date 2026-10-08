@@ -59,6 +59,9 @@ interface Entry {
    *  rollout folders; the walk itself is cheap when nothing is newer, since findRollout stats before it
    *  parses and a cutoff of `mappedAt` leaves it nothing to parse. */
   rescanAt: number
+  /** While nothing is mapped: the next tick the locate may run on, and the files it turned away (second pass C2-9). */
+  locateAt: number
+  rejected: Set<string>
   disposed: boolean
   /** Whether turn completion is reported. Every codex session is watched (the usage chips need it);
    *  only the ones that asked for Slack notifications get the callback. */
@@ -151,6 +154,15 @@ function isTaskComplete(line: string): boolean {
   return (p as Record<string, unknown>).type === 'task_complete'
 }
 
+/** How long a tab with no rollout found waits before looking again (second pass C2-9): every tick for its first
+ *  minute, when codex writes its file; then every five seconds; past ten minutes every thirty. A tab that never wrote
+ *  one was looked for every second for as long as it was open. */
+export function locateGap(age: number): number {
+  if (age < 60_000) return 0
+  if (age < 10 * 60_000) return 5_000
+  return 30_000
+}
+
 export class CodexRolloutWatcher {
   private entries = new Map<string, Entry>()
   private ticker: ReturnType<typeof setInterval> | null = null
@@ -198,6 +210,8 @@ export class CodexRolloutWatcher {
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
       mappedAt: rolloutPath ? this.now() : null,
       rescanAt: this.now() + RESCAN_MS,
+      locateAt: 0,
+      rejected: new Set(),
       disposed: false,
       notifyTurns: opts?.notifyTurns ?? info.slackNotify === true,
       limits: null,
@@ -383,15 +397,21 @@ export class CodexRolloutWatcher {
       const account = this.deps.getAccount(entry.accountId)
       if (!account) return
       if (!this.mayClaim(entry)) return // a session that started more recently is waiting for this file
+      if (this.now() < entry.locateAt) return
       const found = await findRollout({
         configDir: account.configDir,
         cwd: entry.cwd,
         since: entry.since,
         now: this.now,
         excludePaths: this.claimed(entry),
-        sessionId: entry.codexSessionId ?? undefined
+        sessionId: entry.codexSessionId ?? undefined,
+        rejected: entry.rejected
       })
-      if (entry.disposed || !found) return
+      if (entry.disposed) return
+      if (!found) {
+        entry.locateAt = this.now() + locateGap(this.now() - entry.since)
+        return
+      }
       // Another session can claim it first across the await — re-check so one rollout ends up owned by exactly one
       // session (mirroring codexRolling's re-check for the same reason). Both paths were built by findRollout, so the strings match.
       if (this.claimed(entry).includes(found.path)) return

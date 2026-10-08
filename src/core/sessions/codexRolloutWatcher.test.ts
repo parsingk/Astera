@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mkdtemp, rm, mkdir, writeFile, appendFile } from 'node:fs/promises'
 import { promises as fsPromises } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -85,6 +85,35 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   await rm(dir, { recursive: true, force: true })
+})
+
+// Second pass C2-9: a codex tab that never wrote a rollout was looked for every second for as long as it was open.
+describe('CodexRolloutWatcher locate pace', () => {
+  it('looks every second for the first minute, then less often', async () => {
+    const cwd = path.join(dir, 'proj')
+    await mkdir(path.join(dir, 'sessions'), { recursive: true })
+    const readdir = vi.spyOn(fsPromises, 'readdir')
+    onTestFinished(() => readdir.mockRestore())
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    const looks = (): number => readdir.mock.calls.filter((c) => String(c[0]).includes(path.join(dir, 'sessions'))).length
+    // Twelve seconds at the start, then twelve seconds two minutes on: the session's clock is what sets the pace.
+    for (let i = 0; i < 12; i++) {
+      now += TICK
+      await advance(TICK)
+    }
+    const early = looks()
+    now += 2 * 60_000
+    const before = looks()
+    for (let i = 0; i < 12; i++) {
+      now += TICK
+      await advance(TICK)
+    }
+    const later = looks() - before
+    w.stop()
+    expect(early).toBeGreaterThanOrEqual(12)
+    expect(later).toBeLessThanOrEqual(early / 3)
+  }, 30_000)
 })
 
 describe('CodexRolloutWatcher', () => {

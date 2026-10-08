@@ -126,6 +126,10 @@ export async function findRollout(opts: {
   // the moment the spawn's own locate would have given up, so a session started later in the same
   // folder is not taken for it. Absent keeps every file born after since, which is every live locate.
   bornBefore?: number
+  /** Files this caller turned away for what their first line says (another folder, an exec run, a child thread, another
+   *  session's id), by comparable path: not parsed again (second pass C2-9). The first line of a rollout does not
+   *  change once written; one not written yet is not remembered. Only for a caller whose cwd and sessionId stay. */
+  rejected?: Set<string>
 }): Promise<{ path: string; sessionId: string } | null> {
   const now = (opts.now ?? Date.now)()
   const root = path.join(opts.configDir, 'sessions')
@@ -135,8 +139,10 @@ export async function findRollout(opts: {
   }
   const excluded = new Set((opts.excludePaths ?? []).map((p) => comparablePath(p)))
   let best: { path: string; sessionId: string; bornAt: number } | null = null
+  const turnAway = (file: string): void => void opts.rejected?.add(comparablePath(file))
   for (const file of files) {
     if (excluded.has(comparablePath(file))) continue
+    if (opts.rejected?.has(comparablePath(file))) continue
     let bornAt: number
     try {
       bornAt = createdAt(await fs.stat(file))
@@ -151,19 +157,32 @@ export async function findRollout(opts: {
     } catch {
       continue
     }
-    if (!meta.cwd || comparablePath(meta.cwd) !== comparablePath(opts.cwd)) continue
+    if (!meta.cwd) continue
+    if (comparablePath(meta.cwd) !== comparablePath(opts.cwd)) {
+      turnAway(file)
+      continue
+    }
     // This app's own `codex exec` runs land in the same account and folder and are newer than the
     // session that is looking for its file, so without this they win the "newest wins" contest below
     // (see isExecRollout). A session is never spawned through exec, so no real candidate is lost.
-    if (isExecRollout(meta)) continue
+    if (isExecRollout(meta)) {
+      turnAway(file)
+      continue
+    }
     // A child thread codex opens for the session (see isChildThreadRollout) is newer too, and repeats
     // the session's own id, so neither the contest below nor `sessionId` would turn it away.
-    if (isChildThreadRollout(meta)) continue
+    if (isChildThreadRollout(meta)) {
+      turnAway(file)
+      continue
+    }
     // if session_meta has no session_id, fall back to the uuid in the filename (mirrors buildEntry in history/strategies/codex.ts)
     const sessionId = meta.sessionId ?? file.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) continue
     const wantId = opts.sessionId
-    if (wantId && sessionId !== wantId) continue
+    if (wantId && sessionId !== wantId) {
+      turnAway(file)
+      continue
+    }
     if (!best || bornAt > best.bornAt) best = { path: file, sessionId, bornAt }
   }
   return best ? { path: best.path, sessionId: best.sessionId } : null

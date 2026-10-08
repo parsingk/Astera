@@ -540,3 +540,26 @@ describe('locateSince 로부터 며칠 뒤의 인계 (L5)', () => {
     expect(r).toBeNull()
   })
 })
+
+// Second pass C2-9: a codex tab with no rollout yet looked every second, and parsed the head of every candidate born
+// since its spawn each time, Astera's own `codex exec` runs included. A file turned away for what its first line says
+// (another folder, an exec run) is remembered and not parsed again.
+describe('findRollout remembers what it turned away', () => {
+  it('does not parse again a file it turned away for its folder', async () => {
+    const other = await makeRollout({ y: '2026', m: '07', d: '09', uuid: '019f4524-e0ac-7571-a8af-5585504f0d33', cwd: 'D:\\work\\other', mtimeMs: NOW - 1_000 })
+    const rejected = new Set<string>()
+    expect(await findRollout({ configDir: home, cwd: 'D:\\work\\p', since: NOW - 5_000, now: () => NOW, rejected })).toBeNull()
+    expect(rejected.size).toBe(1)
+    // Were it parsed again it would now match; remembered, it is not looked at.
+    await fs.writeFile(other, JSON.stringify({ type: 'session_meta', payload: { session_id: 'x', cwd: 'D:\\work\\p' } }) + '\n', 'utf8')
+    expect(await findRollout({ configDir: home, cwd: 'D:\\work\\p', since: NOW - 5_000, now: () => NOW, rejected })).toBeNull()
+  })
+
+  it('does not remember a file whose first line is not there yet', async () => {
+    const early = await makeRollout({ y: '2026', m: '07', d: '09', uuid: '019f4524-e0ac-7571-a8af-5585504f0d34', cwd: null, mtimeMs: NOW - 1_000 })
+    await fs.writeFile(early, '', 'utf8')
+    const rejected = new Set<string>()
+    expect(await findRollout({ configDir: home, cwd: 'D:\\work\\p', since: NOW - 5_000, now: () => NOW, rejected })).toBeNull()
+    expect(rejected.size).toBe(0)
+  })
+})

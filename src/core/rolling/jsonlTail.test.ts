@@ -130,3 +130,22 @@ describe('JsonlTail', () => {
     expect((await u.read())?.lines).toEqual(['{"b":1}'])
   })
 })
+
+// Second pass C2-6: each read was decoded on its own, so a read that ended inside a multi-byte character (Korean text,
+// commonly) turned both halves into U+FFFD, and the position counted the carried text in its decoded length, pointing
+// at the wrong byte.
+describe('JsonlTail across a character cut by a read', () => {
+  it('keeps the character whole and reports the line start as its position', async () => {
+    const file = path.join(dir, 'ko.jsonl')
+    const line = Buffer.from(JSON.stringify({ text: '안녕하세요' }) + '\n', 'utf8')
+    const cut = line.indexOf(Buffer.from('녕', 'utf8')) + 1
+    await writeFile(file, line.subarray(0, cut))
+    const tail = new JsonlTail(file)
+    expect(await tail.read()).toEqual({ lines: [], restarted: false })
+    expect(tail.position).toBe(0)
+    await appendFile(file, line.subarray(cut))
+    const r = await tail.read()
+    expect(r?.lines.map((l) => JSON.parse(l))).toEqual([{ text: '안녕하세요' }])
+    expect(tail.position).toBe(line.length)
+  })
+})

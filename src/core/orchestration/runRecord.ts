@@ -4,7 +4,7 @@
 // is asked (see its comment in view.ts) — so "this Run is finished" is true on every round after the
 // last task lands. Recording on the state would write the same record forever; recording on the edge
 // writes it once.
-import { outcomeOf } from './view'
+import { outcomeOf, outcomeOfTasks } from './running'
 import { jobOf, type OrchState } from './state'
 import type { Job, JobRun, Task } from './types'
 import { runRootOf } from './integrate'
@@ -16,13 +16,33 @@ export function justFinished(
   after: OrchState
 ): { runId: string; outcome: 'completed' | 'failed' }[] {
   const out: { runId: string; outcome: 'completed' | 'failed' }[] = []
+  // Each state's Tasks grouped by owner once (second pass C2-3): `outcomeOf` per Run walked every Task, twice a Run, on
+  // every commit. The same owners `tasksOwnedBy` reads: the Run's id, or the Job's.
+  const afterTasks = tasksByOwner(after)
+  const beforeTasks = tasksByOwner(before)
   for (const run of after.runs) {
-    const now = outcomeOf(after, run.id)
+    const now = outcomeOfTasks(afterTasks.get(run.id) ?? [])
     if (now === 'running') continue
-    if (outcomeOf(before, run.id) !== 'running') continue
+    if (outcomeOfTasks(beforeTasks.get(run.id) ?? []) !== 'running') continue
     out.push({ runId: run.id, outcome: now })
   }
   return out
+}
+
+/** `tasksOwnedBy` for every owner at once: a Task under its Run's id and, when different, its Job's. */
+function tasksByOwner(state: OrchState): Map<string, Task[]> {
+  const by = new Map<string, Task[]>()
+  const add = (k: string | undefined, t: Task): void => {
+    if (k === undefined) return
+    const l = by.get(k)
+    if (l) l.push(t)
+    else by.set(k, [t])
+  }
+  for (const t of state.tasks) {
+    add(t.runId, t)
+    if (t.jobId !== t.runId) add(t.jobId, t)
+  }
+  return by
 }
 
 /**

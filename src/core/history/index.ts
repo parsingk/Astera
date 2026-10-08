@@ -80,6 +80,10 @@ const byUpdatedDesc = (x: { updatedAt: string }, y: { updatedAt: string }): numb
 export class HistoryIndex {
   // Parse cache for project (slug) directories: dirKey → { entries before grouping, file mtime signature }
   private dirCache = new Map<string, { entries: HistoryEntry[]; sig: string }>()
+  /** Each folder's transcripts as last built, by name with the mtime and size they were built at (second pass C2-2): a
+   *  folder read again after one transcript grew builds that one, not every file in it. Replaced whole per read, so a
+   *  removed file goes with it. */
+  private fileCache = new Map<string, Map<string, { mtimeMs: number; size: number; entry: HistoryEntry | null }>>()
   // projectPath(cwd) → slug directory (projectsPage fills it so page does not re-resolve directories)
   private dirByProject = new Map<string, string>()
   // The inverse: dirKey → projectPath. A changed directory has to be able to say which row it used to
@@ -189,6 +193,7 @@ export class HistoryIndex {
   private invalidate(): void {
     this.generation++
     this.dirCache.clear()
+    this.fileCache.clear()
     this.dirByProject.clear()
     this.projectByDir.clear()
     this.entryById.clear()
@@ -390,9 +395,16 @@ export class HistoryIndex {
     // Per-file parsing (meta + a 256KB tail) in parallel up to the concurrency ceiling — sequential
     // parsing was what made the first expand slow. The input is in descending mtime order so the
     // results are too, but page() does the final sort, so the order itself does not matter.
-    const built = await mapWithConcurrency(files, 24, (f) =>
-      this.buildEntry(account, path.join(dir, f.name), f.mtimeMs)
-    )
+    const before = this.fileCache.get(cacheKey)
+    const now = new Map<string, { mtimeMs: number; size: number; entry: HistoryEntry | null }>()
+    const built = await mapWithConcurrency(files, 24, async (f) => {
+      const was = before?.get(f.name)
+      const entry =
+        was && was.mtimeMs === f.mtimeMs && was.size === f.size ? was.entry : await this.buildEntry(account, path.join(dir, f.name), f.mtimeMs)
+      now.set(f.name, { mtimeMs: f.mtimeMs, size: f.size, entry })
+      return entry
+    })
+    this.fileCache.set(cacheKey, now)
     const entries = built.filter((e): e is HistoryEntry => e !== null)
     for (const e of entries) this.entryById.set(e.id, e)
     this.dirCache.set(cacheKey, { entries, sig })

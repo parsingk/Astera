@@ -9,6 +9,32 @@ const state = (tasks: { runId: string; status: string; consecutiveFailures?: num
     tasks: tasks.map((t, i) => ({ id: `t${i}`, consecutiveFailures: 0, ...t }))
   }) as unknown as OrchState
 
+/** `tasks` behind a proxy that counts how often the list is walked (filter, find, iteration). */
+const counted = (s: OrchState): { state: OrchState; walks: () => number } => {
+  let walks = 0
+  const tasks = new Proxy(s.tasks, {
+    get(target, key, recv) {
+      if (key === 'filter' || key === 'find' || key === 'some' || key === 'every' || key === Symbol.iterator || key === 'forEach' || key === 'map') walks++
+      return Reflect.get(target, key, recv)
+    }
+  })
+  return { state: { ...s, tasks }, walks: () => walks }
+}
+
+// Second pass C2-3: on every commit the Host asked each Run's outcome twice, each a walk over every Task, so the work
+// grew with runs × tasks of the whole retained history. The tasks are grouped once per state.
+describe('justFinished cost', () => {
+  it('walks each state\'s task list a fixed number of times, however many Runs there are', () => {
+    const runs = Array.from({ length: 200 }, (_, i) => ({ id: `r${i}` }))
+    const tasks = runs.map((r, i) => ({ id: `t${i}`, runId: r.id, status: 'completed', consecutiveFailures: 0 }))
+    const before = counted({ runs, tasks } as unknown as OrchState)
+    const after = counted({ runs, tasks } as unknown as OrchState)
+    justFinished(before.state, after.state)
+    expect(before.walks()).toBeLessThanOrEqual(2)
+    expect(after.walks()).toBeLessThanOrEqual(2)
+  })
+})
+
 describe('justFinished', () => {
   it('돌고 있던 Run 이 끝나면 그것을 알린다', () => {
     const before = state([{ runId: 'r1', status: 'dispatched' }])
