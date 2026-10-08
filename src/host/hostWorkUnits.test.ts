@@ -579,13 +579,14 @@ describe('createHostWorkUnits', () => {
     await hw.settled()
     const count = (): number => statePushes(r).length
     let n = count()
-    // a transcript line with nothing in it for a unit: the cursor moves on disk, nothing is pushed
+    // a transcript line with nothing in it for a unit: nothing is pushed, and a cursor that only moved is not written
+    // yet (second pass C2-1: it is saved at most every CURSOR_SAVE_MS)
     const cursorBefore = onDisk().projects[project].cursors.find((c) => c.sessionId === 's1')!.offset
     await fs.appendFile(t1, '{"type":"user","message":{"role":"user","content":"just talking"}}\n')
     r.transcripts().onChange(t1)
     await hw.flush()
     await hw.settled()
-    expect(onDisk().projects[project].cursors.find((c) => c.sessionId === 's1')!.offset).toBeGreaterThan(cursorBefore)
+    expect(onDisk().projects[project].cursors.find((c) => c.sessionId === 's1')!.offset).toBe(cursorBefore)
     expect(count()).toBe(n)
     // start, cancel, complete and an exit's interruption each push
     await hw.sessionTasks.start('s1', 'One')

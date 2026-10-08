@@ -241,7 +241,7 @@ export class WorkUnitStore {
   }
 
   private save(): Promise<void> {
-    const snapshot = JSON.stringify(this.state, null, 2)
+    const snapshot = JSON.stringify(this.state)
     const run = async (): Promise<void> => {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true })
       // Its own temp file (E2 §3, as UnderstandingStore's): the Host and an app can both hold a store

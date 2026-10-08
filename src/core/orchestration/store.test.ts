@@ -51,6 +51,21 @@ const withOpenDispatch = (): OrchState =>
   ]
 })
 
+// Second pass C2-4: a rename that failed (on Windows, the file held open for a moment) left its temp file, the whole
+// state, in the profile folder for good, one per failure.
+describe('OrchestrationStore write failure', () => {
+  it('a save whose rename fails leaves no temp file behind', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    // A folder where the file goes: the rename can never succeed.
+    await fs.mkdir(file, { recursive: true })
+    await fs.writeFile(path.join(file, 'x'), '')
+    await expect(store.save(emptyState())).rejects.toThrow()
+    expect((await fs.readdir(dir)).filter((n) => n.endsWith('.tmp'))).toEqual([])
+  })
+})
+
 describe('OrchestrationStore', () => {
   it('상태를 저장하고 새 인스턴스가 다시 읽는다', async () => {
     const file = path.join(dir, 'orchestration.json')

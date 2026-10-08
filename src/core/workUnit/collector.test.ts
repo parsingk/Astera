@@ -20,7 +20,9 @@ import {
   type CollectorDeps,
   type CollectorGit,
   type CollectorSession,
-  GIT_COALESCE_MS
+  GIT_COALESCE_MS,
+  UNREFERENCED_GIT_CHANGES_KEPT,
+  CURSOR_SAVE_MS
 } from './collector'
 import { OPERATION_GRACE_MS } from '../git/provenance'
 import type { GitRef } from '../git/types'
@@ -1017,6 +1019,52 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
   // fast-forward 밖에서는 커밋과 마찬가지로 뜻이 없다(EG §6·§7).
   // 범위를 읽지 못했을 때(null) 빈 목록만 남기면 큰 pull 이 "아무 것도 안 바뀐 이동"으로 기록된다.
   // 기록은 남기되 모른다는 표지를 단다.
+  // Second pass C2-1: every outside HEAD move was kept for good, encountered by a unit or not, and the whole file is
+  // rewritten as a session works; on one machine a project held 137 of them tied to nothing. One no unit encountered is
+  // read by nothing, so only the newest UNREFERENCED_GIT_CHANGES_KEPT of those stay.
+  it('keeps only the newest outside changes no unit encountered', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+    collector.onGitChanged()
+    await collector.flush()
+    for (let i = 1; i <= UNREFERENCED_GIT_CHANGES_KEPT + 5; i++) {
+      fake.git.range = { commits: [`c${i}`], changedFiles: [] }
+      fake.git.ref = { branch: 'main', head: `c${i}` }
+      collector.onGitChanged()
+      await collector.flush()
+    }
+    const changes = store.get(projectPath)!.externalGitChanges
+    expect(changes).toHaveLength(UNREFERENCED_GIT_CHANGES_KEPT)
+    expect(changes.at(-1)!.after.head).toBe(`c${UNREFERENCED_GIT_CHANGES_KEPT + 5}`)
+  })
+
+  // Second pass C2-1: a transcript that only grew (no write, no unit change) moved its cursor and rewrote the whole file
+  // about once a second per busy session. A start takes every cursor afresh at the file's end (`seed`), so a cursor that
+  // only moved is saved at most every CURSOR_SAVE_MS.
+  it('a cursor that only moved is not saved on every round', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+    collector.onTranscriptChanged()
+    await collector.flush()
+    const saves = vi.spyOn(store, 'set')
+    for (let i = 0; i < 3; i++) {
+      await fs.appendFile(transcript, human(`hello ${i}`), 'utf8')
+      fake.clock += 1_000
+      collector.onTranscriptChanged()
+      await collector.flush()
+    }
+    expect(saves).toHaveBeenCalledTimes(0)
+    fake.clock += CURSOR_SAVE_MS
+    await fs.appendFile(transcript, human('later'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(saves).toHaveBeenCalledTimes(1)
+  })
+
   it('범위를 읽지 못한 외부 변경은 rangeUnknown 표지를 달고 기록된다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]

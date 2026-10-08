@@ -10,6 +10,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { renameRetrying } from '../renameRetry'
 import {
   deleteRuns,
   detachCoordinator,
@@ -550,6 +551,13 @@ export class OrchestrationStore {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     const tmp = `${this.filePath}.${randomUUID()}.tmp`
     await fs.writeFile(tmp, JSON.stringify(next), 'utf8')
-    await fs.rename(tmp, this.filePath)
+    // Retried, and the temp file removed when it still fails (second pass C2-4): on Windows a rename over a file another
+    // process holds open for a moment is refused, and each failure left the whole state behind in a temp file.
+    try {
+      await renameRetrying(tmp, this.filePath)
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => {})
+      throw err
+    }
   }
 }

@@ -203,8 +203,29 @@ const emptyState = (): WorkUnitState => ({
 const snapshotRef = (s: ProjectGitSnapshot | undefined): GitRef | undefined =>
   s === undefined ? undefined : { branch: s.branch, head: s.head }
 
+/** How often a cursor that only moved is saved (second pass C2-1). A transcript that grew moved its cursor and rewrote
+ *  the whole store about once a second per busy session; nothing reads a cursor across a start, since `seed` takes every
+ *  one afresh at the file's end. */
+export const CURSOR_SAVE_MS = 30_000
+
+/** Outside git changes no unit encountered, kept per project (second pass C2-1). Such a change is read by nothing (a
+ *  unit reads the ones its `encounteredExternalGitChangeIds` names), and every one was kept for good. */
+export const UNREFERENCED_GIT_CHANGES_KEPT = 32
+
+/** Drops the outside changes no unit names, past the newest UNREFERENCED_GIT_CHANGES_KEPT. */
+function pruneGitChanges(state: WorkUnitState): void {
+  const named = new Set(state.units.flatMap((u) => u.encounteredExternalGitChangeIds))
+  let unnamed = state.externalGitChanges.filter((c) => !named.has(c.id)).length
+  if (unnamed <= UNREFERENCED_GIT_CHANGES_KEPT) return
+  state.externalGitChanges = state.externalGitChanges.filter((c) => named.has(c.id) || unnamed-- <= UNREFERENCED_GIT_CHANGES_KEPT)
+}
+
 export class WorkUnitCollector {
   /** 기능이 켜져 있는가. 꺼져 있으면 어떤 방아쇠도 저장소를 건드리지 않는다 */
+  /** Project states whose cursors moved since their last save (second pass C2-1). */
+  private readonly cursorsMoved = new Set<WorkUnitState>()
+  /** When each project was last saved, by this collector's clock. */
+  private readonly cursorSavedAt = new Map<string, number>()
   private running = false
   /** 커서를 잡았는가 (스펙 §16.1). 잡기 전에는 트랜스크립트를 한 줄도 읽지 않는다 */
   private seeded = false
@@ -1119,7 +1140,8 @@ export class WorkUnitCollector {
       let dirty = false
       for (const s of group) dirty = (await this.tail(state, s)) || dirty
       if (doGit) dirty = (await this.gitRound(state, projectPath, reads)) || dirty
-      if (dirty) await this.persist(projectPath, state)
+      const cursorDue = this.cursorsMoved.has(state) && this.deps.now() - (this.cursorSavedAt.get(projectPath) ?? -Infinity) >= CURSOR_SAVE_MS
+      if (dirty || cursorDue) await this.persist(projectPath, state)
     }
   }
 
@@ -1295,10 +1317,9 @@ export class WorkUnitCollector {
 
     let dirty = false
     if (cursor) {
-      dirty =
-        cursor.filePath !== s.transcriptPath ||
-        cursor.offset !== r.offset ||
-        cursor.sizeAtRead !== r.sizeAtRead
+      // A cursor that only moved is saved on its own clock (second pass C2-1, `CURSOR_SAVE_MS`); a new file is a change.
+      dirty = cursor.filePath !== s.transcriptPath
+      if (cursor.offset !== r.offset || cursor.sizeAtRead !== r.sizeAtRead) this.cursorsMoved.add(state)
       cursor.filePath = s.transcriptPath
       cursor.offset = r.offset
       cursor.sizeAtRead = r.sizeAtRead
@@ -1971,6 +1992,9 @@ export class WorkUnitCollector {
    *  설정이 프로세스를 죽인다 — 저장소 리뷰에서 나온 지적이다. */
   private async persist(projectPath: string, state: WorkUnitState): Promise<void> {
     this.touched.add(projectPath)
+    this.cursorsMoved.delete(state)
+    this.cursorSavedAt.set(projectPath, this.deps.now())
+    pruneGitChanges(state)
     await this.deps.store.set(projectPath, state)
   }
 

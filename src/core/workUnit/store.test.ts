@@ -234,6 +234,15 @@ describe('WorkUnitStore', () => {
     expect(await fs.readdir(dir)).toEqual(['workUnits.json'])
   })
 
+  // Second pass C2-1: the whole store is rewritten as sessions work, and indentation made each rewrite a good third
+  // larger for no reader (every reader is a plain JSON.parse), as the orchestration store found.
+  it('writes the file compact, on one line', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    await s.set('D:\\p', sample)
+    expect((await fs.readFile(file, 'utf8')).includes('\n')).toBe(false)
+  })
+
   it('rides out a rename refused while another process reads the file (EPERM on win32)', async () => {
     const s = new WorkUnitStore(file)
     await s.load()
