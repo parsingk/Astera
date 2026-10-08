@@ -18,6 +18,11 @@ import { openHostLog } from './log'
 export const MCP_HTTP_BACKOFF_MS: readonly number[] = [1_000, 2_000, 5_000]
 /** The steady retry: past the backoff, and at once for a port already in use. */
 export const MCP_HTTP_RETRY_MS = 30_000
+/** The waits once the short tries are spent, and for a port that stays taken (second pass H2-1): a flat 30 s started a
+ *  new process every 30 s for the Host's whole life. */
+export const MCP_HTTP_SLOW_RETRY_MS: readonly number[] = [MCP_HTTP_RETRY_MS, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000]
+/** Longest child output line kept whole; a longer one is logged in pieces, as the Gateway's stderr. */
+const LINE_MAX = 64 * 1024
 /** A child that stayed up this long after its ready line starts the backoff over when it exits. */
 const STABLE_MS = 30_000
 /** How long a stop waits after ending stdin before it kills, and again after the kill before it gives up. */
@@ -155,7 +160,13 @@ export function createMcpHttpSupervisor(d: {
       })
     }, retryMs)
   }
-  const nextBackoff = (): number => MCP_HTTP_BACKOFF_MS[failures++] ?? MCP_HTTP_RETRY_MS
+  const slow = (n: number): number => MCP_HTTP_SLOW_RETRY_MS[Math.min(n, MCP_HTTP_SLOW_RETRY_MS.length - 1)]
+  const nextBackoff = (): number => {
+    const n = failures++
+    return MCP_HTTP_BACKOFF_MS[n] ?? slow(n - MCP_HTTP_BACKOFF_MS.length)
+  }
+  /** Port-taken ends in a row; a child that came up, or a new setting, starts it again. */
+  let portTaken = 0
 
   const watch = (proc: McpHttpChild, s: McpHttpSettings): void => {
     let errorLine: { code: string; message: string } | null = null
@@ -176,7 +187,7 @@ export function createMcpHttpSupervisor(d: {
         for (const f of r.onEnd.splice(0)) f()
         if (r.stopping || left) return
         if (r.readyAt !== null && now() - r.readyAt >= STABLE_MS) failures = 0
-        if (errorLine?.code === 'EADDRINUSE') return failed(`EADDRINUSE: ${errorLine.message}`, MCP_HTTP_RETRY_MS)
+        if (errorLine?.code === 'EADDRINUSE') return failed(`EADDRINUSE: ${errorLine.message}`, slow(portTaken++))
         failed(
           errorLine ? `${errorLine.code}: ${errorLine.message}` : spawnError ? `could not start the HTTP entrance: ${spawnError}` : `the HTTP entrance ${how}`,
           nextBackoff()
@@ -197,6 +208,7 @@ export function createMcpHttpSupervisor(d: {
       if (o.ready === true && typeof o.port === 'number') {
         if (r.ended || r.stopping) return
         r.readyAt = now()
+        portTaken = 0
         d.log(`mcp http: listening on port ${o.port} (pid ${proc.pid ?? '?'})`)
         // The URLs other devices can use, only while they are allowed and only from a child that named its hosts.
         const addresses = Array.isArray(o.addresses) && o.addresses.every((x) => typeof x === 'string') ? (o.addresses as string[]) : null
@@ -216,6 +228,11 @@ export function createMcpHttpSupervisor(d: {
           const line = buffered.slice(0, i).trim()
           buffered = buffered.slice(i + 1)
           if (line !== '') each(line)
+        }
+        // A child printing with no newline is not held whole (second pass H2-1).
+        while (buffered.length > LINE_MAX) {
+          each(buffered.slice(0, LINE_MAX))
+          buffered = buffered.slice(LINE_MAX)
         }
       })
     }
@@ -312,6 +329,7 @@ export function createMcpHttpSupervisor(d: {
         await stopChild()
         applied = s
         failures = 0
+        portTaken = 0
         await start()
       }),
     status: () => state,

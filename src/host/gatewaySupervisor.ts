@@ -130,7 +130,12 @@ export function createGatewaySupervisor(d: {
     queue = run
     return run
   }
-  const nextBackoff = (): number => GATEWAY_BACKOFF_MS[failures++] ?? GATEWAY_RETRY_MS
+  // Past the short tries, an unnamed exit climbs the named waits too (second pass H2-1): a Gateway that crashes at every
+  // start was started again every 30 s for the Host's whole life.
+  const nextBackoff = (): number => {
+    const n = failures++
+    return GATEWAY_BACKOFF_MS[n] ?? GATEWAY_NAMED_RETRY_MS[Math.min(n - GATEWAY_BACKOFF_MS.length, GATEWAY_NAMED_RETRY_MS.length - 1)]
+  }
   let namedFailures = 0
   const nextNamedWait = (): number => GATEWAY_NAMED_RETRY_MS[Math.min(namedFailures++, GATEWAY_NAMED_RETRY_MS.length - 1)]
   const argsFor = (s: RemoteSettings): string[] => ['runtime', 'gateway', '--listen', s.listen, '--port', String(s.port)]

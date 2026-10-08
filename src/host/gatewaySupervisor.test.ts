@@ -162,6 +162,27 @@ describe('the Gateway supervisor (remote runtime design §2.3)', () => {
     for (let i = 1; i < waits.length; i++) expect(waits[i]).toBeGreaterThanOrEqual(waits[i - 1])
     expect(Math.max(...waits)).toBe(10 * 60_000)
   })
+  // Second pass H2-1: an exit the Gateway does not name settled at a flat 30 s for good, so a Gateway that crashed at
+  // every start was started again every 30 s for the Host's whole life.
+  it('an unnamed exit that keeps happening waits longer each time past the short tries, up to ten minutes', async () => {
+    const r = rig()
+    await r.sup.reload()
+    const waits: number[] = []
+    for (let i = 0; i < 10; i++) {
+      r.last().exit(1)
+      await settle()
+      const before = r.children.length
+      let waited = 0
+      while (r.children.length === before && waited < 20 * 60_000) {
+        await r.clock.advance(1_000)
+        waited += 1_000
+      }
+      waits.push(waited)
+    }
+    expect(waits.slice(0, 4)).toEqual([1_000, 2_000, 5_000, 30_000])
+    for (let i = 1; i < waits.length; i++) expect(waits[i]).toBeGreaterThanOrEqual(waits[i - 1])
+    expect(Math.max(...waits)).toBe(10 * 60_000)
+  })
   // Final review M5: the person changing the port starts the count again; their new setting is not made to wait the
   // ten minutes the old one earned.
   it('a changed setting starts the named-failure waits again', async () => {

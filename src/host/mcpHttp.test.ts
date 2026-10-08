@@ -263,7 +263,7 @@ describe('the MCP HTTP supervisor', () => {
     expect(r.logs.some((l) => l.includes('astera mcp http:'))).toBe(false)
   })
 
-  it('restarts an unexpected exit after 1 s, 2 s, 5 s and then every 30 s', async () => {
+  it('restarts an unexpected exit after 1 s, 2 s, 5 s, then 30 s and longer', async () => {
     const r = rig()
     await r.sup.reload()
     r.last().ready(7871)
@@ -282,7 +282,7 @@ describe('the MCP HTTP supervisor', () => {
       await vi.waitFor(() => expect(r.children).toHaveLength(before + 1))
       expect(r.sup.status().state).toBe('starting')
     }
-    expect(delays).toEqual([1000, 2000, 5000, 30_000, 30_000])
+    expect(delays).toEqual([1000, 2000, 5000, 30_000, 60_000])
   })
 
   it('starts the backoff over once a child has stayed up', async () => {
@@ -305,7 +305,51 @@ describe('the MCP HTTP supervisor', () => {
     expect(r.clock.pending()).toEqual([1000])
   })
 
-  it('reports a port in use as failed and retries every 30 s, not in a tight loop', async () => {
+  // Second pass H2-1: a port that stays taken was tried every 30 s for the Host's whole life, each try a new process.
+  it('reports a port in use as failed and waits longer each time it is still taken, up to ten minutes', async () => {
+    const r = rig()
+    await r.sup.reload()
+    const waits: number[] = []
+    for (let i = 0; i < 7; i++) {
+      r.last().fail('EADDRINUSE', 'in use')
+      await settle()
+      waits.push(r.clock.pending()[0])
+      await r.clock.advance(r.clock.pending()[0])
+      await vi.waitFor(() => expect(r.children).toHaveLength(i + 2))
+    }
+    expect(waits.slice(0, 5)).toEqual([30_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000])
+    expect(waits[6]).toBe(10 * 60_000)
+  })
+
+  it('an unnamed exit that keeps happening waits longer each time past the short tries', async () => {
+    const r = rig()
+    await r.sup.reload()
+    const waits: number[] = []
+    for (let i = 0; i < 9; i++) {
+      r.last().exit(1)
+      await settle()
+      waits.push(r.clock.pending()[0])
+      await r.clock.advance(r.clock.pending()[0])
+      await vi.waitFor(() => expect(r.children).toHaveLength(i + 2))
+    }
+    expect(waits).toEqual([1_000, 2_000, 5_000, 30_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 10 * 60_000])
+  })
+
+  it('a child that came up starts the port-taken waits again', async () => {
+    const r = rig()
+    await r.sup.reload()
+    r.last().fail('EADDRINUSE', 'in use')
+    await settle()
+    await r.clock.advance(MCP_HTTP_RETRY_MS)
+    await vi.waitFor(() => expect(r.children).toHaveLength(2))
+    r.last().ready(7871)
+    await settle()
+    r.last().fail('EADDRINUSE', 'in use')
+    await settle()
+    expect(r.clock.pending()).toEqual([MCP_HTTP_RETRY_MS])
+  })
+
+  it('reports a port in use as failed, not in a tight loop', async () => {
     const r = rig()
     await r.sup.reload()
     r.last().fail('EADDRINUSE', 'listen EADDRINUSE: address already in use 127.0.0.1:7871')
@@ -321,7 +365,7 @@ describe('the MCP HTTP supervisor', () => {
     await vi.waitFor(() => expect(r.children).toHaveLength(2))
     r.last().fail('EADDRINUSE', 'again')
     await settle()
-    expect(r.clock.pending()).toEqual([MCP_HTTP_RETRY_MS])
+    expect(r.clock.pending()).toEqual([2 * MCP_HTTP_RETRY_MS])
   })
 
   it('stops the child when disabled, by ending its stdin', async () => {
@@ -401,6 +445,15 @@ describe('the MCP HTTP supervisor', () => {
     crash.last().exit(1)
     await settle()
     expect(crash.clock.pending()).toEqual([1000])
+  })
+
+  // Second pass H2-1: output with no newline was held whole for as long as the child printed.
+  it('logs a line with no newline in pieces instead of holding it whole', async () => {
+    const r = rig()
+    await r.sup.reload()
+    r.last().stderr.write('x'.repeat(200_000))
+    await settle()
+    expect(r.output.filter((l) => l.includes('x'.repeat(64 * 1024)))).toHaveLength(3)
   })
 
   it('keeps a stderr line whole across chunks', async () => {
