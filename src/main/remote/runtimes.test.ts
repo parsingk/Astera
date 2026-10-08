@@ -22,7 +22,7 @@ const opener = () => {
   const closed: string[] = []
   const open = (t: RemoteTarget): RemoteLink => {
     opened.push(t)
-    return { hello: () => null, call: async () => ({ status: 200, body: {} }), close: () => void closed.push(t.token) }
+    return { hello: () => null, call: async () => ({ status: 200, body: {} }), subscribe: () => () => {}, close: () => void closed.push(t.token) }
   }
   return { open, opened, closed }
 }
@@ -76,7 +76,7 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     const r = createRemoteRuntimes({
       profileDir: dir,
       version: '1.4.8',
-      open: () => ({ hello: () => null, call: async () => ({ status: 200, body: [] }), close: () => {} })
+      open: () => ({ hello: () => null, call: async () => ({ status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
     })
     const c = await r.client('rt_a')
     if ('code' in c) throw new Error(c.code)

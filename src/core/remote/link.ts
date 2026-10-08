@@ -12,7 +12,7 @@
 //
 // Nothing here throws: every failure is a RemoteError value with its §3.10 code.
 import { connectRuntime, RemoteError, type CallReply, type RuntimeLink } from './client'
-import { GATEWAY_PROTOCOL, type ClientInfo, type HelloFrame } from './frames'
+import { GATEWAY_PROTOCOL, type ClientInfo, type HelloFrame, type RemoteCheckpoint, type RemotePtyEvent, type SubscriptionFrame } from './frames'
 
 export interface RemoteTarget {
   runtimeId: string
@@ -29,7 +29,17 @@ export interface RemoteLink {
   hello(): HelloFrame | null
   /** `request` makes the call a change (§3.9). Never rejects. */
   call(cmd: string, args: Record<string, unknown>, o?: { request?: string; timeoutMs?: number }): Promise<RemoteAnswer | RemoteError>
+  /** A pty's output (§3.7), kept going across gaps and reconnects. `onReset` gets a checkpoint: the view resets, writes
+   *  `state`, then `pending`. `onEvents` gets each event once, in seq order. `onGone` says the Runtime refused it (no such
+   *  pty, a missing capability, the subscription budget) or the link ended for good. Returns the unsubscribe. */
+  subscribe(pty: string, h: PtyStreamHandlers): () => void
   close(): void
+}
+
+export interface PtyStreamHandlers {
+  onReset(c: RemoteCheckpoint): void
+  onEvents(events: RemotePtyEvent[]): void
+  onGone?(code: string, message: string): void
 }
 
 /** The waits before each reconnect (N14): 1 s, 2 s, 5 s, 10 s, then 30 s, each with jitter of plus or minus half. */
@@ -75,6 +85,11 @@ export function openRemoteLink(a: {
   let live: Promise<RuntimeLink | RemoteError> | null = null
   let lastHello: HelloFrame | null = null
   let closed = false
+  /** Each subscription: its pty, the last seq handed on (null before a checkpoint or a replay), the boot it was on,
+   *  and the connection it is subscribed on now. */
+  type Stream = { id: string; pty: string; h: PtyStreamHandlers; lastSeq: number | null; bootId: string | null; on: RuntimeLink | null }
+  const streams = new Map<string, Stream>()
+  let streamN = 0
 
   const open = async (): Promise<RuntimeLink | RemoteError> => {
     let link: RuntimeLink
@@ -115,6 +130,9 @@ export function openRemoteLink(a: {
         current = null
         live = null
       }
+      // Every stream on this connection subscribes again from where it was, on the next one (§3.7, N11).
+      for (const s of streams.values()) if (s.on === link) s.on = null
+      if (!closed && streams.size > 0) void resubscribeAll(0)
     })
     return link
   }
@@ -140,6 +158,70 @@ export function openRemoteLink(a: {
       live = null
     }
   }
+  const onStreamFrame = (s: Stream, link: RuntimeLink, f: SubscriptionFrame): void => {
+    if (streams.get(s.id) !== s || s.on !== link) return
+    switch (f.t) {
+      case 'subscribed':
+        s.bootId = f.bootId
+        return
+      case 'checkpoint':
+        s.lastSeq = f.checkpoint.watermark
+        s.h.onReset(f.checkpoint)
+        return
+      case 'pty-out': {
+        // Nothing at or below what was handed on: a replay can overlap what came before it.
+        const fresh = s.lastSeq === null ? f.events : f.events.filter((e) => e.seq > (s.lastSeq as number))
+        if (fresh.length === 0) return
+        s.lastSeq = fresh[fresh.length - 1].seq
+        s.h.onEvents(fresh)
+        return
+      }
+      case 'output-gap':
+        // The stream ended behind its budget: again from the last seq handed on, on the same connection.
+        return start(s, link)
+      case 'sub-error':
+        streams.delete(s.id)
+        s.h.onGone?.(f.code, f.message)
+        return
+    }
+  }
+  const start = (s: Stream, link: RuntimeLink): void => {
+    if (!link.subscribe) {
+      streams.delete(s.id)
+      s.h.onGone?.('RUNTIME_CAPABILITY_MISSING', 'this connection does not stream pty output')
+      return
+    }
+    s.on = link
+    link.subscribe(s.id, s.pty, { ...(s.lastSeq !== null ? { fromSeq: s.lastSeq + 1 } : {}), ...(s.bootId !== null ? { bootId: s.bootId } : {}) }, (f) =>
+      onStreamFrame(s, link, f)
+    )
+  }
+  /** Subscribes every stream that has no connection, waiting out the reconnect backoff; gives up as calls do. */
+  let resubscribing = false
+  const resubscribeAll = async (i: number): Promise<void> => {
+    if (resubscribing) return
+    resubscribing = true
+    try {
+      for (let tries = i; !closed && [...streams.values()].some((s) => s.on === null); tries++) {
+        const link = await ensure()
+        if (!(link instanceof RemoteError)) {
+          for (const s of streams.values()) if (s.on === null) start(s, link)
+          return
+        }
+        if (FINAL.has(link.code)) {
+          for (const s of [...streams.values()]) {
+            streams.delete(s.id)
+            s.h.onGone?.(link.code, link.message)
+          }
+          return
+        }
+        await sleep(backoff(tries))
+      }
+    } finally {
+      resubscribing = false
+    }
+  }
+
   const backoff = (i: number): number =>
     Math.min(RECONNECT_CAP_MS, Math.round(RECONNECT_STEPS_MS[Math.min(i, RECONNECT_STEPS_MS.length - 1)] * (0.5 + random())))
 
@@ -160,6 +242,16 @@ export function openRemoteLink(a: {
 
   return {
     hello: () => lastHello,
+    subscribe: (pty, h) => {
+      const s: Stream = { id: `s${++streamN}`, pty, h, lastSeq: null, bootId: null, on: null }
+      streams.set(s.id, s)
+      void resubscribeAll(0)
+      return () => {
+        if (!streams.delete(s.id)) return
+        s.on?.unsubscribe?.(s.id)
+        s.on = null
+      }
+    },
     call: async (cmd, args, o = {}) => {
       const request = o.request
       const timeoutMs = o.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS

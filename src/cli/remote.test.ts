@@ -35,7 +35,7 @@ function deps(answer: (cmd: string, args: Record<string, unknown>, o?: { request
           calls.push({ cmd, args, ...(o ? { o } : {}) })
           return answer(cmd, args, o)
         },
-        close: () => {}
+        subscribe: () => () => {}, close: () => {}
       }
     }
   }

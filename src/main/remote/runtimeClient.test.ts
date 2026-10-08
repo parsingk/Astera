@@ -31,7 +31,7 @@ function fakeLink(answer: (cmd: string, args: Record<string, unknown>, o?: { req
       calls.push({ cmd, args, ...(o?.request ? { request: o.request } : {}) })
       return answer(cmd, args, o)
     },
-    close: () => {}
+    subscribe: () => () => {}, close: () => {}
   }
   return { link, calls, reboot: (b: string) => void (boot = b) }
 }

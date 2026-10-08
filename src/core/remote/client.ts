@@ -5,7 +5,7 @@ import type { TLSSocket } from 'node:tls'
 import { createLineReader } from '../../host/framing'
 import { connectPinned } from './pin'
 import { createReassembler, type ChunkFrame } from './chunks'
-import { FRAME_CAP, type ClientInfo, type HelloFrame, type ServerFrame } from './frames'
+import { FRAME_CAP, type ClientInfo, type HelloFrame, type ServerFrame, type SubscriptionFrame } from './frames'
 
 export interface CallReply {
   status: number
@@ -18,6 +18,10 @@ export interface RuntimeLink {
   auth(token: string, client: ClientInfo): Promise<HelloFrame>
   redeem(code: string, name: string, client: ClientInfo): Promise<{ clientId: string; token: string }>
   call(cmd: string, args: Record<string, unknown>, o?: { request?: string; retry?: true }): Promise<CallReply>
+  /** A pty's output on this connection (§3.7): every frame for `sub` goes to `onFrame`. Optional, so a test double
+   *  need not have it; this module's own link always does. */
+  subscribe?(sub: string, pty: string, o: { fromSeq?: number; bootId?: string }, onFrame: (f: SubscriptionFrame) => void): void
+  unsubscribe?(sub: string): void
   close(): void
   /** Settles when the connection is gone, with the code the Runtime closed it with, if it said one. */
   closed: Promise<{ code?: string }>
@@ -60,6 +64,8 @@ export async function connectRuntime(o: {
     if (!sock.destroyed) sock.write(`${JSON.stringify(m)}\n`)
   }
   const reassemble = createReassembler()
+  /** Each subscription's frame handler, by its id. */
+  const streams = new Map<string, (f: SubscriptionFrame) => void>()
 
   const failAll = (e: RemoteError): void => {
     handshake?.reject(e)
@@ -109,6 +115,13 @@ export async function connectRuntime(o: {
       }
       case 'closing':
         closeCode ??= f.code
+        return
+      case 'subscribed':
+      case 'pty-out':
+      case 'checkpoint':
+      case 'output-gap':
+      case 'sub-error':
+        streams.get(f.sub)?.(f)
         return
       default:
         return
@@ -172,6 +185,14 @@ export async function connectRuntime(o: {
         pending.set(id, { resolve, reject })
         send({ t: 'call', id, cmd, args, ...co })
       }),
+    subscribe: (sub, pty, so, onFrame) => {
+      streams.set(sub, onFrame)
+      send({ t: 'subscribe', sub, pty, ...(so.fromSeq !== undefined ? { fromSeq: so.fromSeq } : {}), ...(so.bootId !== undefined ? { bootId: so.bootId } : {}) })
+    },
+    unsubscribe: (sub) => {
+      streams.delete(sub)
+      send({ t: 'unsubscribe', sub })
+    },
     close: () => sock.end(),
     closed
   }

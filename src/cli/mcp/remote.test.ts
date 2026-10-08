@@ -146,7 +146,7 @@ describe('MCP tools with runtimeId (remote runtime design §2.8, X1-07)', () => 
 describe('openMcpRuntimes', () => {
   const write = (o: Record<string, unknown>) => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify(o))
   const opened: RemoteTarget[] = []
-  const fakeLink = (): RemoteLink => ({ hello: () => null, call: async () => ({ status: 200, body: [] }), close: () => {} })
+  const fakeLink = (): RemoteLink => ({ hello: () => null, call: async () => ({ status: 200, body: [] }), subscribe: () => () => {}, close: () => {} })
   const rts = () => openMcpRuntimes({ profileDir: dir, version: '1.4.8', client: () => undefined, open: (t) => (opened.push(t), fakeLink()) })
 
   it('refuses by the laptop settings: read only refuses a change, an unknown value refuses a read (DC-4), none refuses nothing', async () => {
@@ -184,7 +184,7 @@ describe('openMcpRuntimes', () => {
 describe('remoteHostLink', () => {
   it('a change is sent with a request id, minted when the tool gave none; a read with none', async () => {
     const seen: Array<{ cmd: string; request?: string }> = []
-    const link = remoteHostLink({ hello: () => null, call: async (cmd, _a, o) => (seen.push({ cmd, ...(o?.request ? { request: o.request } : {}) }), { status: 200, body: {} }), close: () => {} })
+    const link = remoteHostLink({ hello: () => null, call: async (cmd, _a, o) => (seen.push({ cmd, ...(o?.request ? { request: o.request } : {}) }), { status: 200, body: {} }), subscribe: () => () => {}, close: () => {} })
     await link.call('jobs-run', { id: 'j' })
     await link.call('jobs-run', { id: 'j' }, 'mine')
     await link.call('jobs-list', {})
@@ -193,7 +193,7 @@ describe('remoteHostLink', () => {
     expect(seen[2].request).toBeUndefined()
   })
   it('a link failure is its §3.10 code', async () => {
-    const link = remoteHostLink({ hello: () => null, call: async () => new RemoteError('RUNTIME_OUTCOME_UNKNOWN', 'lost'), close: () => {} })
+    const link = remoteHostLink({ hello: () => null, call: async () => new RemoteError('RUNTIME_OUTCOME_UNKNOWN', 'lost'), subscribe: () => () => {}, close: () => {} })
     expect(await link.call('jobs-run', { id: 'j' })).toMatchObject({ code: 'RUNTIME_OUTCOME_UNKNOWN' })
   })
 })
