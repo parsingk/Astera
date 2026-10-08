@@ -4,7 +4,8 @@ import { nodeProcSpawn } from './nodeProc'
 // A child that echoes each stdin line prefixed, and exits 3 when stdin closes.
 const ECHO = 'process.stdin.setEncoding("utf8"); process.stdin.on("data", (d) => process.stdout.write("echo:" + d)); process.stdin.on("end", () => process.exit(3))'
 
-const until = <T>(check: () => T | undefined, ms = 5000): Promise<T> =>
+// 20 s: a real child process on a loaded machine (the full suite took past 5 s once, 2026-10-08).
+const until = <T>(check: () => T | undefined, ms = 20_000): Promise<T> =>
   new Promise((resolve, reject) => {
     const t0 = Date.now()
     const tick = (): void => {
@@ -31,7 +32,7 @@ describe('nodeProcSpawn', () => {
     p.kill()
     const code = await until(() => (exit === null ? undefined : exit))
     expect(typeof code).toBe('number')
-  })
+  }, 45_000)
 
   it('a file that does not exist ends with exit code 1 and a log line', async () => {
     const logs: string[] = []

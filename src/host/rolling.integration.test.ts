@@ -495,7 +495,7 @@ describe('block records between the Host and the app (S6 Task 3)', () => {
     await h.spawnWorker('p1', 's1', ['a1', 'a2'])
     h.limit('p1', 's1')
     await h.settle()
-    await vi.waitFor(() => expect(blockPushes(h).length).toBeGreaterThan(0))
+    await vi.waitFor(() => expect(blockPushes(h).length).toBeGreaterThan(0), { timeout: 10_000 })
     for (const m of h.broadcasts) sync.pushed(m) // every push the app would hear, not only `blocks`
     expect(app.get('a1', h.now())).toEqual(h.blocks().get('a1', h.now()))
     expect(app.get('a1', h.now())).not.toBeNull()
