@@ -2,7 +2,7 @@ import { execFile, type ChildProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { BranchRef, RepoProbe } from '../types'
-import { treeKillCommand } from '../run/kill'
+import { killProcessTree } from '../run/kill'
 import { cancelledError } from './cancel'
 import { defaultCwdProbe, type Probe } from '../sessions/pathProbe'
 import { windowsExecutable } from '../sessions/windowsExecutable'
@@ -60,18 +60,7 @@ const ABORT_EXIT_WAIT_MS = 5_000
 /** Kills a git child and, on Windows, everything it started (a fetch's remote helper, a hook's shell).
  *  Never throws: the process may be gone already. */
 function killGitTree(child: ChildProcess): void {
-  const pid = child.pid
-  const cmd = pid !== undefined ? treeKillCommand(process.platform, pid) : null
-  try {
-    if (cmd) {
-      execFile(cmd.file, cmd.args, { windowsHide: true }, () => {
-        // taskkill failing means the tree is already gone — the child.kill below is the backstop
-      })
-    }
-    child.kill()
-  } catch {
-    // already exited
-  }
+  killProcessTree(child)
 }
 
 /** git execution adapter. No shell (avoids quoting problems); a failure does not throw, it returns ok=false —

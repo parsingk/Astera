@@ -80,3 +80,16 @@ function tryParse(s: string): unknown | undefined {
     return undefined
   }
 }
+
+/** `buf` with `chunk` appended, cut to its newest whole lines once it passes `max` characters (audit U-13): codex prints
+ *  every event for up to ten minutes, and only the last message is read. */
+export function keepTail(buf: string, chunk: string, max: number): string {
+  const all = buf + chunk
+  if (all.length <= max) return all
+  const cut = all.slice(all.length - max)
+  const nl = cut.indexOf('\n')
+  return nl < 0 ? '' : cut.slice(nl + 1)
+}
+
+/** How much of `codex exec --json`'s output is kept (audit U-13). */
+export const CODEX_OUTPUT_KEEP = 8 << 20

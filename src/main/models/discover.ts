@@ -11,7 +11,8 @@
 import { spawn } from 'node:child_process'
 import type { ModelListResult } from '../../core/models/types'
 import { parseClaudeModels, parseCodexModels } from '../../core/models/parse'
-import { windowsSpawn } from '../../core/sessions/windowsExecutable'
+import { warmWindowsExecutable, windowsSpawn } from '../../core/sessions/windowsExecutable'
+import { killProcessTree } from '../../core/run/kill'
 
 /** 이 왕복은 사용자가 설정 화면에서 기다리는 시간이다. 실측이 2초 안쪽이라 넉넉히 잡되,
  *  응답이 없는 CLI 에 무한히 매달리지 않는다. */
@@ -41,7 +42,10 @@ interface RunOpts {
 }
 
 /** 줄 단위 JSON 을 주고받아 첫 번째로 맞는 답을 돌려준다. 실패는 문자열 사유다 */
-function roundTrip(o: RunOpts): Promise<{ value: unknown } | { error: string }> {
+async function roundTrip(o: RunOpts): Promise<{ value: unknown } | { error: string }> {
+  // Looked up off the thread first (audit U-10): the wrap below then reads the kept answer instead of walking PATH
+  // synchronously on Electron main, which a dead drive on PATH held for 20 to 60 s.
+  if (process.platform === 'win32') await warmWindowsExecutable(o.file).catch(() => null)
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
@@ -63,7 +67,8 @@ function roundTrip(o: RunOpts): Promise<{ value: unknown } | { error: string }> 
       clearTimeout(timer)
       try {
         child.stdin?.end()
-        child.kill()
+        // The whole tree (audit U-4).
+        killProcessTree(child)
       } catch {
         /* 이미 죽었다 */
       }

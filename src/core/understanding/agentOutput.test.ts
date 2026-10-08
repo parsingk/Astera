@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { extractJson, readClaudeOutput, readCodexOutput } from './agentOutput'
+import { keepTail } from './agentOutput'
 
 describe('readClaudeOutput — -p --output-format json', () => {
   it('result 를 꺼낸다', () => {
@@ -80,5 +81,16 @@ describe('extractJson — 계약이 요구한 JSON 을 본문에서 꺼낸다', 
     const r = extractJson('설명을 만들 수 없었습니다.')
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toContain('JSON')
+  })
+})
+
+// Audit U-13: `codex exec --json` prints every event, tool output and file read included, for up to ten minutes, and all
+// of it was kept in memory. Only the last message is read, so only the tail is kept, cut at a line.
+describe('keepTail', () => {
+  it('keeps everything under the limit, and past it the newest whole lines', () => {
+    expect(keepTail('a\n', 'b\n', 100)).toBe('a\nb\n')
+    const kept = keepTail('x'.repeat(50) + '\n', 'second line\nthird\n', 20)
+    expect(kept).toBe('second line\nthird\n')
+    expect(kept.length).toBeLessThanOrEqual(20)
   })
 })

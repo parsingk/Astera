@@ -11,10 +11,11 @@ import { descriptorOf } from '../providers/descriptor'
 import type { Account, Provider } from '../types'
 import type { ProviderDescriptor } from '../providers/descriptor'
 import type { GeneratorSettings } from './generatorSettings'
-import { extractJson, readClaudeOutput, readCodexOutput } from './agentOutput'
+import { CODEX_OUTPUT_KEEP, extractJson, keepTail, readClaudeOutput, readCodexOutput } from './agentOutput'
+import { killProcessTree } from '../run/kill'
 import { agentArgs, codexMcpServerNames } from './agentArgs'
 import { defaultCwdProbe, type Probe } from '../sessions/pathProbe'
-import { windowsSpawn } from '../sessions/windowsExecutable'
+import { warmWindowsExecutable, windowsSpawn } from '../sessions/windowsExecutable'
 
 /** 한 번의 생성에 주는 시간.
  *
@@ -67,6 +68,9 @@ export async function runAgent(a: RunArgs): Promise<AgentRun> {
     codexMcpServers: codex ? readCodexMcpServers(a.account.configDir) : undefined
   })
 
+  // Looked up off the thread first (audit U-10): the wrap below reads the kept answer instead of walking PATH
+  // synchronously, which a dead drive on PATH held for 20 to 60 s.
+  if (process.platform === 'win32') await warmWindowsExecutable(d.cliFile).catch(() => null)
   const cmd = wrap(d.cliFile, args)
   const env = { ...process.env, [d.configDirEnv]: a.account.configDir }
 
@@ -100,16 +104,14 @@ export async function runAgent(a: RunArgs): Promise<AgentRun> {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      try {
-        child.kill()
-      } catch {
-        /* 이미 죽었다 */
-      }
+      // The whole tree (audit U-4): on win32 the shim's cmd.exe alone would go, and the agent would run on.
+      killProcessTree(child)
       resolve(r)
     }
     const timer = setTimeout(() => done({ error: `${TIMEOUT_MS / 1000}초 안에 끝나지 않았다` }), TIMEOUT_MS)
 
-    child.stdout?.on('data', (b: Buffer) => (stdout += b.toString('utf8')))
+    // codex's events are kept to their newest tail (audit U-13); claude prints one result, kept whole.
+    child.stdout?.on('data', (b: Buffer) => (stdout = codex ? keepTail(stdout, b.toString('utf8'), CODEX_OUTPUT_KEEP) : stdout + b.toString('utf8')))
     child.stderr?.on('data', (b: Buffer) => {
       if (stderr.length < 2000) stderr += b.toString('utf8')
     })
