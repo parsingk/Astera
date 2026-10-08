@@ -18,6 +18,7 @@ import {
   backupCredentials, copyBack, exists, guardCredentials, HfBinaryMissing, passThrough, readOrNull, realRunner, sideCall, stopOnMissingBinary,
   type HfRun, type HfRunner
 } from '../core/higgsfield/runner'
+import { SIDE_CALL_TIMEOUT_MS } from '../core/higgsfield/runner'
 
 // Kept importable from here: the runner and guard live in core/higgsfield/runner (the app uses them too).
 export { backupCredentials, guardCredentials, realRunner, sideCall }
@@ -98,7 +99,7 @@ export async function restoreOnce(a: {
   try {
     if (await exists(`${creds}.bak`)) {
       await copyBack(creds)
-      const check = await run(['account', 'status', '--json'], env, false)
+      const check = await run(['account', 'status', '--json'], env, false, { timeoutMs: SIDE_CALL_TIMEOUT_MS })
       if (check.code === 0 && (await exists(creds))) {
         if (noRerun) {
           await backupCredentials(creds)
@@ -202,7 +203,7 @@ async function bringIdsOver(a: {
 async function preCheck(run: HfRunner, env: NodeJS.ProcessEnv, args: string[], g: { profileDir: string; account: HfAccount; creds: string }) {
   // One after the other, never together: two token refreshes on the same credentials can rotate the
   // refresh token under each other and make the CLI delete the file.
-  const status = await run(['account', 'status', '--json'], env, false)
+  const status = await run(['account', 'status', '--json'], env, false, { timeoutMs: SIDE_CALL_TIMEOUT_MS })
   const cost = await run(costArgsFor(args), env, false)
   const loginLost = await guardCredentials({ run, env, ...g })
   return {

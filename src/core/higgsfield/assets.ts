@@ -5,6 +5,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { renameRetrying } from '../renameRetry'
+import { keepDamaged, readStoreFile } from '../storeFile'
 import { hfRoot } from './accounts'
 import { subIndex } from './credits'
 
@@ -38,7 +39,19 @@ export async function recordAfter(profileDir: string, account: string, args: str
   const ids = [...new Set(stdout.match(UUID) ?? [])].map((s) => s.toLowerCase())
   if (!ids.length) return
   const i = subIndex(args)
-  const l = await readLedger(profileDir)
+  // Read strictly before a write (audit U-8): a ledger that could not be read was taken for an empty one, and this write
+  // replaced every id it held. Nothing is recorded then; a damaged ledger is kept aside and started afresh.
+  const read = await readStoreFile(fileOf(profileDir))
+  if (read.kind === 'unreadable') return
+  let l: HfAssetLedger = { uploads: {}, jobs: {} }
+  if (read.kind === 'text') {
+    try {
+      const raw = JSON.parse(read.text) as Partial<HfAssetLedger> | null
+      l = { uploads: raw?.uploads ?? {}, jobs: raw?.jobs ?? {} }
+    } catch {
+      await keepDamaged(fileOf(profileDir), read.text)
+    }
+  }
   if (args[i] === 'upload' && args[i + 1] === 'create' && args[i + 2]) {
     for (const id of ids) l.uploads[id] = { account, path: path.resolve(args[i + 2]) }
   } else if (args[i] === 'generate' && (args[i + 1] === 'create' || args[i + 1] === 'workflow')) {

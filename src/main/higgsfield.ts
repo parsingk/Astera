@@ -11,6 +11,7 @@ import { findRealHiggsfield, higgsfieldVendorBinary, isHiggsfieldCli } from '../
 import { createRealCliFinder } from './realCliFinder'
 import { backupCredentials, realRunner } from '../core/higgsfield/runner'
 import { accountRun, higgsfieldCommand, listWorkspaces, statusRun, type AccountRun, type HfCliIssue, type StatusRun } from '../cli/higgsfield'
+import { SIDE_CALL_TIMEOUT_MS } from '../core/higgsfield/runner'
 import type { HfWorkspace } from '../core/higgsfield/display'
 
 export interface HfListResult {
@@ -291,7 +292,9 @@ export function registerHiggsfieldIpc(
   const runStatus: StatusRun = async (id) => {
     const real = await findReal()
     if (real === null) return null
-    return statusRun(profileDir, process.env, realRunner(real, process.platform, [], { stdin: 'ignore' }))(id)
+    // Bounded (audit U-7): the settings tab waited for good on a CLI stuck on the network.
+    const run = realRunner(real, process.platform, [], { stdin: 'ignore' })
+    return statusRun(profileDir, process.env, (args, env, tee) => run(args, env, tee, { timeoutMs: SIDE_CALL_TIMEOUT_MS }))(id)
   }
   const runCli: AccountRun = async (id, args) => {
     const real = await findReal()

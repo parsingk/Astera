@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter } from './assets'
+import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, writeLedger } from './assets'
 
 const U = '11111111-1111-4111-8111-111111111111'
 const J = '22222222-2222-4222-8222-222222222222'
@@ -89,5 +89,23 @@ describe('recordAfter / readLedger', () => {
   it('records nothing for other commands', async () => {
     await recordAfter(profile, 'a', ['model', 'list'], `{"id":"${J}"}`)
     await expect(fs.stat(path.join(profile, 'higgsfield', 'assets.json'))).rejects.toThrow()
+  })
+})
+
+// Audit U-8: a ledger the read could not open was taken for an empty one, and the next record wrote a ledger of a few new
+// ids over every id it held.
+describe('recordAfter with a ledger it could not read', () => {
+  it('records nothing rather than writing over it', async () => {
+    const A = '11111111-1111-4111-8111-111111111111'
+    const B = '22222222-2222-4222-8222-222222222222'
+    const prof = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfl-'))
+    await writeLedger(prof, { uploads: { [A]: { account: 'a1', path: 'C:/x.png' } }, jobs: {} })
+    const real = fs.readFile.bind(fs)
+    vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      String(p).endsWith('assets.json') ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+    await recordAfter(prof, 'a2', ['generate', 'create', 'x'], B)
+    vi.restoreAllMocks()
+    const l = await readLedger(prof)
+    expect(Object.keys(l.uploads)).toEqual([A])
   })
 })

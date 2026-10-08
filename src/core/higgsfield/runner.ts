@@ -9,10 +9,15 @@ import { cmdRefusal } from '../install/mcpClients'
 import { hfEnvFor, patchHfAccount, type HfAccount } from './accounts'
 import { npmShimTarget } from './shims'
 import { windowsSpawn } from '../sessions/windowsExecutable'
+import { killProcessTree } from '../run/kill'
 
 export interface HfRun { code: number; stdout: string; stderr: string }
 /** Runs the real CLI once. `tee`: forward stdout/stderr live to this process while collecting them. */
-export type HfRunner = (args: string[], env: NodeJS.ProcessEnv, tee: boolean) => Promise<HfRun>
+/** `o.timeoutMs`: end the run once it has taken this long (audit U-7); the side calls give one. */
+export type HfRunner = (args: string[], env: NodeJS.ProcessEnv, tee: boolean, o?: { timeoutMs?: number }) => Promise<HfRun>
+
+/** How long a side call (a status, another account's credits, a generation's state) may take (audit U-7). */
+export const SIDE_CALL_TIMEOUT_MS = 30_000
 
 export interface RealRunnerOptions {
   /** false shows the console window of a Windows child (an interactive login). Default true. */
@@ -60,7 +65,7 @@ export function passThrough(file: string, platform: NodeJS.Platform, args: strin
 }
 
 export function realRunner(file: string, platform: NodeJS.Platform, lead: string[] = [], opts: RealRunnerOptions = {}): HfRunner {
-  return (args, env, tee) =>
+  return (args, env, tee, ro = {}) =>
     new Promise((resolve) => {
       const cmd = commandFor(file, platform, [...lead, ...args], env)
       if ('refusal' in cmd) {
@@ -85,10 +90,21 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
         child.once('exit', (code) => finish(code))
         grace = setTimeout(() => finish(1, '\nhiggsfield: the process did not exit after the kill'), opts.killGraceMs ?? 5000)
       }
+      // A time limit ends it the way a cancel does (audit U-7), with the whole tree on Windows.
+      const limit =
+        ro.timeoutMs !== undefined
+          ? setTimeout(() => {
+              stderr += `\nhiggsfield: did not finish within ${Math.round((ro.timeoutMs as number) / 1000)} s`
+              killProcessTree(child)
+              child.once('exit', (code) => finish(code ?? 1))
+              grace = setTimeout(() => finish(1, '\nhiggsfield: the process did not exit after the kill'), opts.killGraceMs ?? 5000)
+            }, ro.timeoutMs)
+          : undefined
       const finish = (code: number | null, extra = ''): void => {
         if (settled) return
         settled = true
         clearTimeout(grace)
+        clearTimeout(limit)
         opts.signal?.removeEventListener('abort', onAbort)
         resolve({ code: code ?? 1, stdout, stderr: stderr + extra })
       }
@@ -184,7 +200,7 @@ export async function guardCredentials(a: {
 /** One side call under `account`, guarded. */
 export async function sideCall(run: HfRunner, args: string[], profileDir: string, base: NodeJS.ProcessEnv, account: HfAccount): Promise<HfRun> {
   const env = { ...base, ...hfEnvFor(profileDir, account.id) }
-  const r = await run(args, env, false)
+  const r = await run(args, env, false, { timeoutMs: SIDE_CALL_TIMEOUT_MS })
   await guardCredentials({ run, env, profileDir, account, creds: env.HIGGSFIELD_CREDENTIALS_PATH as string })
   return r
 }

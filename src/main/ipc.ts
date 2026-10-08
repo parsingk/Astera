@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
+import { killProcessTree } from '../core/run/kill'
 import { cachedByStamp } from '../core/stampCache'
 import { promises as fs, existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -7756,6 +7757,8 @@ export function registerIpc(
   }
 
   let installingCli = false
+  /** How long a CLI install may run (audit U-6). */
+  const INSTALL_CLI_TIMEOUT_MS = 15 * 60_000
   ipcMain.handle('system.installCli', async (_e, cli: unknown) => {
     if (cli !== 'claude' && cli !== 'codex') throw new Error(`INVALID_CLI: ${String(cli)}`)
     const plan = installCommandFor(cli, process.platform)
@@ -7766,11 +7769,25 @@ export function registerIpc(
 ` })
     return await new Promise((resolve) => {
       const child = spawn(plan.command, plan.args, { windowsHide: true })
+      // A time limit, and gone with the app (audit U-6): a hung installer kept `installingCli` true until a restart,
+      // and ran on after the app quit.
+      const limit = setTimeout(() => {
+        send('cli:install', { cli, kind: 'out', text: `the installer did not finish within ${INSTALL_CLI_TIMEOUT_MS / 60_000} minutes and was stopped\n` })
+        killProcessTree(child)
+      }, INSTALL_CLI_TIMEOUT_MS)
+      limit.unref?.()
+      const onQuit = (): void => killProcessTree(child)
+      app.once('will-quit', onQuit)
+      const settle = (): void => {
+        clearTimeout(limit)
+        app.removeListener('will-quit', onQuit)
+      }
       const stream = (buf: Buffer): void =>
         send('cli:install', { cli, kind: 'out', text: buf.toString() })
       child.stdout.on('data', stream)
       child.stderr.on('data', stream) // an installer says most of what matters here
       child.on('error', (err) => {
+        settle()
         installingCli = false
         send('cli:install', { cli, kind: 'out', text: `${err.message}
 ` })
@@ -7778,6 +7795,7 @@ export function registerIpc(
         resolve({ ok: false, code: null, error: err.message })
       })
       child.on('close', (code) => {
+        settle()
         installingCli = false
         send('cli:install', { cli, kind: 'done', code })
         if (code !== 0) return resolve({ ok: false, code })
