@@ -164,7 +164,8 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
       { name: 'port', value: '<n>', about: 'its port, without --pair (default 47831)' },
       { name: 'code', value: '<code>', about: 'the one-time code, without --pair' },
       { name: 'fingerprint', value: '<fp>', about: 'the key fingerprint, without --pair' },
-      { name: 'name', value: '<n>', about: 'what to call the Runtime here (default its own name)' }
+      { name: 'name', value: '<n>', about: 'what to call the Runtime here (default its own name)' },
+      { name: 'replace', about: 'take the place of a Runtime paired here under the same id with another key' }
     ]
   },
   'runtimes-list': { summary: 'the Runtimes this machine is paired with' },

@@ -5,7 +5,7 @@ import type { TLSSocket } from 'node:tls'
 import { createLineReader } from '../../host/framing'
 import { connectPinned } from './pin'
 import { createReassembler, type ChunkFrame } from './chunks'
-import { FRAME_CAP, parseSubscriptionFrame, type ClientInfo, type HelloFrame, type ServerFrame, type SubscriptionFrame } from './frames'
+import { FRAME_CAP, parseHelloFrame, parsePairedFrame, parseSubscriptionFrame, type ClientInfo, type HelloFrame, type ServerFrame, type SubscriptionFrame } from './frames'
 
 export interface CallReply {
   status: number
@@ -91,10 +91,20 @@ export async function connectRuntime(o: {
         return
       }
       case 'hello':
-      case 'paired':
-        if (handshake?.want === f.t) handshake.resolve(f)
+      case 'paired': {
+        const want = handshake?.want === f.t ? handshake : null
         handshake = null
+        if (!want) return
+        // Checked before anything reads it (security audit SEC-4): a Runtime is believed about itself only in shape.
+        const ok = f.t === 'hello' ? parseHelloFrame(f) : parsePairedFrame(f)
+        if ('error' in ok) {
+          want.reject(new RemoteError('REMOTE_BAD_FRAME', `the Runtime's ${f.t} could not be read: ${ok.error}`))
+          sock.destroy()
+          return
+        }
+        want.resolve(ok)
         return
+      }
       case 'result': {
         const p = pending.get(f.id)
         pending.delete(f.id)
@@ -177,8 +187,7 @@ export async function connectRuntime(o: {
 
   return {
     auth: async (token, client) => {
-      const { t: _t, ...hello } = await begin<HelloFrame>('hello', { t: 'auth', token, client })
-      return { t: 'hello', ...hello }
+      return begin<HelloFrame>('hello', { t: 'auth', token, client })
     },
     redeem: async (code, name, client) => {
       const p = await begin<{ clientId: string; token: string }>('paired', { t: 'redeem', code, name, client })

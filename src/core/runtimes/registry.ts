@@ -18,7 +18,8 @@ export interface RuntimeProfile {
 
 export interface RuntimeRegistry {
   list(): Promise<RuntimeProfile[]>
-  add(p: RuntimeProfile, token: string): Promise<void>
+  /** Refuses (RUNTIME_ALREADY_PAIRED) a profile whose id is already here under another key, unless `replace`. */
+  add(p: RuntimeProfile, token: string, o?: { replace?: boolean }): Promise<void>
   remove(runtimeId: string): Promise<boolean>
   token(runtimeId: string): Promise<string | null>
   /** When this machine last reached the Runtime (design §4.5). An id with no profile changes nothing. */
@@ -54,11 +55,19 @@ export async function openRuntimeRegistry(store: SecretStore): Promise<RuntimeRe
   })
   return {
     list: () => readAll(store),
-    add: async (p, token) => {
+    add: async (p, token, o = {}) => {
       const file = tokenFile(p.runtimeId)
       return store.withLock(async (tx) => {
+        const list = await readAll(tx)
+        // The id is the Runtime's word (security audit SEC-4): under another key it is another machine, and it does not
+        // take this one's place, its address and its token, unless the person says so.
+        const held = list.find((r) => r.runtimeId === p.runtimeId)
+        if (held && held.fingerprint !== p.fingerprint && !o.replace)
+          throw Object.assign(new Error(`a Runtime with the id ${p.runtimeId} is already paired here under another key (${held.name}, ${held.address})`), {
+            code: 'RUNTIME_ALREADY_PAIRED'
+          })
         await tx.write(file, token)
-        await writeAll(tx, [...(await readAll(tx)).filter((r) => r.runtimeId !== p.runtimeId), p])
+        await writeAll(tx, [...list.filter((r) => r.runtimeId !== p.runtimeId), p])
       })
     },
     remove: async (id) => {

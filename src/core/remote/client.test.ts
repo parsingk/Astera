@@ -76,3 +76,52 @@ describe('connectRuntime subscriptions', () => {
     ;(peer as unknown as tls.TLSSocket).destroy()
   })
 })
+
+
+// Security audit SEC-4: the controller took a Runtime's hello and paired frames as they came. A capabilities field that
+// was not a list threw later in the link and ended the CLI or MCP process; a runtimeId that was not an id was kept.
+describe('connectRuntime checks what a Runtime says about itself', () => {
+  /** A TLS server that answers the first frame with `answer`. */
+  async function answering(answer: unknown): Promise<number> {
+    const server = tls.createServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.3' }, (s) => {
+      s.on('error', () => {})
+      s.once('data', () => s.write(`${JSON.stringify(answer)}\n`))
+    })
+    servers.push(server)
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    return (server.address() as { port: number }).port
+  }
+  const HELLO = {
+    t: 'hello',
+    runtimeId: 'rt_ok',
+    displayName: 'office',
+    asteraVersion: '1.0.0',
+    hostProtocol: 4,
+    gatewayProtocol: 1,
+    bootId: 'b',
+    platform: 'win32',
+    pathStyle: 'windows',
+    permission: 'read-only',
+    capabilities: ['remote.jobs']
+  }
+  it('takes a well-formed hello', async () => {
+    const link = await connectRuntime({ host: '127.0.0.1', port: await answering(HELLO), pin: identity.pin })
+    await expect(link.auth('t', {})).resolves.toMatchObject({ runtimeId: 'rt_ok', capabilities: ['remote.jobs'] })
+    link.close()
+  })
+  for (const [what, bad] of [
+    ['capabilities that are not a list', { ...HELLO, capabilities: 7 }],
+    ['a runtimeId that is not an id', { ...HELLO, runtimeId: '../x' }],
+    ['a permission it does not know', { ...HELLO, permission: 'owner' }],
+    ['a display name that is not a short string', { ...HELLO, displayName: 'x'.repeat(5000) }]
+  ] as const)
+    it(`fails the sign-in on ${what}, and closes`, async () => {
+      const link = await connectRuntime({ host: '127.0.0.1', port: await answering(bad), pin: identity.pin })
+      await expect(link.auth('t', {})).rejects.toMatchObject({ code: 'REMOTE_BAD_FRAME' })
+      await link.closed
+    })
+  it('fails a pairing whose answer has no token', async () => {
+    const link = await connectRuntime({ host: '127.0.0.1', port: await answering({ t: 'paired', clientId: 'cli_1' }), pin: identity.pin })
+    await expect(link.redeem('CODE', 'me', {})).rejects.toMatchObject({ code: 'REMOTE_BAD_FRAME' })
+  })
+})

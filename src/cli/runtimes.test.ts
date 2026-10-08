@@ -85,6 +85,19 @@ describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
     expect(await reg.list()).toEqual([expect.objectContaining({ runtimeId: 'rt_office', fingerprint: FP })])
     expect(await reg.token('rt_office')).toBe('tok-secret-value')
   })
+  // Security audit SEC-4: the id comes from the Runtime; under another key it does not replace the Runtime paired here.
+  it('add refuses a Runtime that says the id of another one paired here, stores nothing, and --replace takes it', async () => {
+    const reg = await controllerRegistry(dir)
+    await reg.add(profile({ runtimeId: 'rt_office', fingerprint: 'B'.repeat(43), address: '10.0.0.9' }), 'old-token')
+    const h = deps()
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    const r = await runRuntimesCommand('runtimes-add', { pair }, h.d)
+    expect(r).toMatchObject({ ok: false, error: { code: 'CONFLICT' } })
+    expect(JSON.stringify(r)).toContain('--replace')
+    expect(await reg.token('rt_office')).toBe('old-token')
+    const again = await runRuntimesCommand('runtimes-add', { pair, replace: true }, h.d)
+    expect(again).toMatchObject({ ok: true, body: { runtimeId: 'rt_office', address: '10.0.0.2' } })
+  })
   it('add takes --address over the hint, and --name', async () => {
     const h = deps()
     const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })

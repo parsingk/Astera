@@ -62,6 +62,17 @@ describe('runtime registry (remote runtime design §4.6, N8)', () => {
     expect((await r.list()).map((x) => x.name)).toEqual(['renamed'])
     expect(await r.token('rt_a')).toBe('two')
   })
+  // Security audit SEC-4: a Runtime picks the id it says it has, so a hostile one paired here could say another paired
+  // Runtime's id and silently take its place: its address, its key, and every command and keystroke meant for it.
+  it('refuses another key under an id it already has, unless told to replace it', async () => {
+    const r = await openRuntimeRegistry(store())
+    await r.add(p('rt_a'), 'one')
+    await expect(r.add({ ...p('rt_a'), fingerprint: 'other', address: '10.6.6.6' }, 'evil')).rejects.toMatchObject({ code: 'RUNTIME_ALREADY_PAIRED' })
+    expect(await r.list()).toEqual([p('rt_a')])
+    expect(await r.token('rt_a')).toBe('one')
+    await r.add({ ...p('rt_a'), fingerprint: 'other' }, 'two', { replace: true })
+    expect((await r.list())[0].fingerprint).toBe('other')
+  })
 })
 
 describe('runtime ids and case (Phase 2 review)', () => {

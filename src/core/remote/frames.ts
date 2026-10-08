@@ -213,6 +213,42 @@ export function parseSubscriptionFrame(v: Record<string, unknown>): Subscription
 
 const SUBSCRIPTION_FRAMES = new Set(['subscribed', 'pty-out', 'checkpoint', 'output-gap', 'sub-error'])
 
+/** A runtime id names a file on the controller (core/runtimes/registry.ts `isRuntimeId`): the same rule. */
+const RUNTIME_ID = /^[a-z0-9_-]{1,64}$/
+const protocolOk = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000
+
+/** What a Runtime says about itself, checked on the controller before anything reads it (security audit SEC-4): a
+ *  hostile Runtime's capabilities that were not a list ended a CLI or MCP process later, in the link. */
+export function parseHelloFrame(v: unknown): HelloFrame | Fail {
+  if (!isObj(v) || v.t !== 'hello') return fail('not a hello')
+  if (!str(v.runtimeId) || !RUNTIME_ID.test(v.runtimeId)) return fail('hello needs a runtime id')
+  if (!str(v.displayName, 256) || !str(v.asteraVersion, 64) || !str(v.bootId, ID_MAX) || !str(v.platform, 64)) return fail('hello needs its names')
+  if (!protocolOk(v.hostProtocol) || !protocolOk(v.gatewayProtocol)) return fail('hello needs its protocols')
+  if (v.pathStyle !== 'posix' && v.pathStyle !== 'windows') return fail('hello needs a path style')
+  if (v.permission !== 'read-only' && v.permission !== 'full-control') return fail('hello needs a permission it knows')
+  if (!Array.isArray(v.capabilities) || v.capabilities.length > 256 || !v.capabilities.every((c) => str(c, 128))) return fail('hello needs a list of capabilities')
+  return {
+    t: 'hello',
+    runtimeId: v.runtimeId,
+    displayName: v.displayName,
+    asteraVersion: v.asteraVersion,
+    hostProtocol: v.hostProtocol,
+    gatewayProtocol: v.gatewayProtocol,
+    bootId: v.bootId,
+    platform: v.platform,
+    pathStyle: v.pathStyle,
+    permission: v.permission,
+    capabilities: [...(v.capabilities as string[])]
+  }
+}
+
+/** A pairing's answer, checked as a hello is (security audit SEC-4). */
+export function parsePairedFrame(v: unknown): { clientId: string; token: string } | Fail {
+  if (!isObj(v) || v.t !== 'paired') return fail('not a pairing answer')
+  if (!str(v.clientId, ID_MAX) || v.clientId === '' || !str(v.token, 256) || v.token === '') return fail('a pairing answer needs a client id and a token')
+  return { clientId: v.clientId, token: v.token }
+}
+
 export function parseControllerFrame(v: unknown): ControllerFrame | Fail {
   if (!isObj(v)) return fail('a frame is an object')
   switch (v.t) {

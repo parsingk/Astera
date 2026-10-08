@@ -167,8 +167,13 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
     lastSeenAt: d.now()
   }
   try {
-    await (await d.registry()).add(profile, paired.token)
+    await (await d.registry()).add(profile, paired.token, { replace: args.replace === true })
   } catch (e) {
+    if ((e as { code?: unknown }).code === 'RUNTIME_ALREADY_PAIRED')
+      return failure(
+        'CONFLICT',
+        `${messageOf(e)}. If this is the same machine with a new key, remove the old pairing first, or run astera runtimes add again with --replace; otherwise do not. ${LEFT_BEHIND}`
+      )
     return failure('FAILED', `paired, but this machine could not keep the pairing: ${messageOf(e)}`)
   }
   return { ok: true, body: shown(profile) }
