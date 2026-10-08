@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -126,6 +126,31 @@ describe('markClaudeProjectTrusted', () => {
     await markClaudeProjectTrusted(file, 'D:/wt/a')
     expect(await fs.readFile(file + '.bak', 'utf8')).toBe(before)
     expect(JSON.parse(await fs.readFile(file, 'utf8')).numStartups).toBe(5)
+  })
+
+  // Audit U-2: any read error was "no file", so a ~/.claude.json the read could not open (EBUSY while claude itself
+  // renames it) was replaced by one holding this worktree's trust alone: sign-in, MCP servers and onboarding gone.
+  it('a file it could not read is left as it was, and the call fails', async () => {
+    const dir = await tmpDir()
+    const file = path.join(dir, '.claude.json')
+    const before = JSON.stringify({ oauthAccount: { email: 'me@x' }, projects: {} })
+    await fs.writeFile(file, before, 'utf8')
+    const real = fs.readFile.bind(fs)
+    vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      String(p) === file ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+    await expect(markClaudeProjectTrusted(file, 'D:/wt/a')).rejects.toThrow()
+    vi.restoreAllMocks()
+    expect(await fs.readFile(file, 'utf8')).toBe(before)
+  })
+  // Two starts at once (a coordinator and its worker) each read the file before the other wrote, and one trust was lost.
+  it('two marks at once both land', async () => {
+    const dir = await tmpDir()
+    const file = path.join(dir, '.claude.json')
+    await fs.writeFile(file, JSON.stringify({ projects: {} }), 'utf8')
+    await Promise.all([markClaudeProjectTrusted(file, 'D:/wt/a'), markClaudeProjectTrusted(file, 'D:/wt/b')])
+    const out = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(out.projects['D:/wt/a']?.hasTrustDialogAccepted).toBe(true)
+    expect(out.projects['D:/wt/b']?.hasTrustDialogAccepted).toBe(true)
   })
 
   // 이미 신뢰인 워크트리에 워커가 또 뜰 때마다 남의 파일을 다시 쓰지 않는다

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -135,6 +135,23 @@ describe('codexTrustRoot', () => {
 })
 
 describe('markCodexProjectTrusted', () => {
+  // Audit U-2: a config.toml the read could not open was replaced by the trust block alone.
+  it('a config it could not read is left as it was, and the call fails', async () => {
+    const file = path.join(dir, 'config.toml')
+    await fs.writeFile(file, 'model = "gpt-5"\n', 'utf8')
+    const real = fs.readFile.bind(fs)
+    vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      String(p) === file ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+    await expect(markCodexProjectTrusted(dir, 'D:\\p\\x')).rejects.toThrow()
+    vi.restoreAllMocks()
+    expect(await fs.readFile(file, 'utf8')).toBe('model = "gpt-5"\n')
+  })
+  it('two marks at once both land', async () => {
+    await Promise.all([markCodexProjectTrusted(dir, 'D:\\p\\a'), markCodexProjectTrusted(dir, 'D:\\p\\b')])
+    const raw = await fs.readFile(path.join(dir, 'config.toml'), 'utf8')
+    expect(raw).toContain('D:\\\\p\\\\a')
+    expect(raw).toContain('D:\\\\p\\\\b')
+  })
   it('creates config.toml when the account has none', async () => {
     await markCodexProjectTrusted(dir, 'D:\\p\\x')
     const raw = await fs.readFile(path.join(dir, 'config.toml'), 'utf8')

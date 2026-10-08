@@ -26,6 +26,8 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { foldPathCase } from '../files/paths'
+import { readStoreFile } from '../storeFile'
+import { oneAtATime, writeThroughTmp } from './fileQueue'
 
 export type CodexTrustLevel = 'trusted' | 'untrusted'
 
@@ -195,17 +197,15 @@ export async function markCodexProjectTrusted(
 ): Promise<void> {
   const root = await codexTrustRoot(workspacePath)
   const file = path.join(configDir, 'config.toml')
-  let existing = ''
-  try {
-    existing = await fs.readFile(file, 'utf8')
-  } catch {
-    // absent is the empty file — upsertProjectTrust writes the whole block
-  }
-  const next = upsertProjectTrust(existing, root)
-  if (next === existing) return
-  await fs.mkdir(configDir, { recursive: true })
-  await fs.copyFile(file, file + '.bak').catch(() => {}) // ignored when the target is absent
-  const tmp = file + '.tmp'
-  await fs.writeFile(tmp, next, 'utf8')
-  await fs.rename(tmp, file)
+  // One at a time per file, and absent only on ENOENT (audit U-2), as markClaudeProjectTrusted.
+  return oneAtATime(file, async () => {
+    const read = await readStoreFile(file)
+    if (read.kind === 'unreadable') throw read.error
+    const existing = read.kind === 'text' ? read.text : ''
+    const next = upsertProjectTrust(existing, root)
+    if (next === existing) return
+    await fs.mkdir(configDir, { recursive: true })
+    await fs.copyFile(file, file + '.bak').catch(() => {}) // ignored when the target is absent
+    await writeThroughTmp(file, next)
+  })
 }
