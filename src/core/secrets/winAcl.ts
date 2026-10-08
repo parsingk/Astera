@@ -7,7 +7,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
-const run = promisify(execFile)
+const execRun = promisify(execFile)
+
+/** How long icacls or whoami may take (audit U-5): a lock holder waiting on one past the lock's stale age had its lock
+ *  broken by another process. */
+export const ACL_TOOL_TIMEOUT_MS = 10_000
+
+type Run = (file: string, args: string[], o: { windowsHide: boolean; timeout: number }) => Promise<{ stdout: string; stderr: string }>
+const defaultRun: Run = (file, args, o) => execRun(file, args, o) as Promise<{ stdout: string; stderr: string }>
 const SYSTEM = new Set(['SY', 'S-1-5-18'])
 const system32 = (exe: string): string => path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', exe)
 
@@ -85,25 +92,32 @@ export function othersIn(sddl: string, userSid: string): string[] {
   return [...out]
 }
 
-const sddlOf = async (p: string): Promise<string> => {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-acl-'))
-  try {
-    const out = path.join(tmp, 'acl')
-    await run(system32('icacls.exe'), [p, '/save', out], { windowsHide: true })
-    return parseIcaclsSave((await fs.readFile(out)).toString('utf16le'))
-  } finally {
-    await fs.rm(tmp, { recursive: true, force: true })
+export function systemWinAcl(exec: Run = defaultRun): WinAcl {
+  const run = (file: string, args: string[], o: { windowsHide: boolean }): Promise<{ stdout: string; stderr: string }> =>
+    exec(file, args, { ...o, timeout: ACL_TOOL_TIMEOUT_MS })
+  const sddlOf = async (p: string): Promise<string> => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-acl-'))
+    try {
+      const out = path.join(tmp, 'acl')
+      await run(system32('icacls.exe'), [p, '/save', out], { windowsHide: true })
+      return parseIcaclsSave((await fs.readFile(out)).toString('utf16le'))
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true })
+    }
   }
-}
-
-export function systemWinAcl(): WinAcl {
   let sid: Promise<string> | null = null
-  const userSid = (): Promise<string> =>
-    (sid ??= run(system32('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true }).then(({ stdout }) => {
+  const userSid = (): Promise<string> => {
+    sid ??= run(system32('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true }).then(({ stdout }) => {
       const found = /"(S-1-[0-9-]+)"/.exec(stdout)?.[1]
       if (!found) throw new Error('could not read this user’s SID from whoami')
       return found
-    }))
+    })
+    // A failure is not kept (audit U-5): kept, one failed whoami failed every later read and lock of the store.
+    sid.catch(() => {
+      sid = null
+    })
+    return sid
+  }
   return {
     userSid,
     // Removing inheritance and granting two entries is not enough: a new folder can carry explicit entries of its own

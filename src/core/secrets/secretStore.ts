@@ -160,6 +160,18 @@ export function openSecretStore(a: {
   }
 
   const lockFile = path.join(dir, LOCK)
+  let swept = false
+  /** Locks this store took and could not remove at release (audit U-5). */
+  const abandoned = new Set<string>()
+  /** A write's temp file older than an hour is one whose process died between creating and renaming it. */
+  const sweepTemps = async (): Promise<void> => {
+    const names = await fs.readdir(dir).catch(() => [] as string[])
+    for (const n of names) {
+      if (!n.startsWith(TMP)) continue
+      const st = await fs.stat(path.join(dir, n)).catch(() => null)
+      if (st && Date.now() - st.mtimeMs > 60 * 60_000) await fs.rm(path.join(dir, n), { force: true }).catch(() => {})
+    }
+  }
   const guardFile = path.join(dir, BREAK_GUARD)
   const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -207,6 +219,9 @@ export function openSecretStore(a: {
             if ((await removeIfUnchanged(mine)) !== 'busy') return
             await pause(25)
           }
+          // Left behind (audit U-5): this process's next lock would have waited on it as a live holder's. It is known
+          // as this process's own, and broken at once.
+          abandoned.add(mine)
         }
       } catch (e) {
         // A lock this call made but could not fill would look like a writer mid-fill to everyone else: take it back.
@@ -240,7 +255,11 @@ export function openSecretStore(a: {
             !lives(owner.pid) ||
             now() - owner.startedAt > staleMs
         }
-        if (stale && (await removeIfUnchanged(held)) === 'removed') continue
+        if (abandoned.has(held)) stale = true
+        if (stale && (await removeIfUnchanged(held)) === 'removed') {
+          abandoned.delete(held)
+          continue
+        }
       }
       if (now() >= deadline) throw new SecretStoreBusy(dir)
       await pause(25)
@@ -291,6 +310,11 @@ export function openSecretStore(a: {
     withLock: async (fn) => {
       await ensureDir()
       const release = await takeLock()
+      // Temp files of writes that died with their process, once per store and under the lock (audit U-5).
+      if (!swept) {
+        swept = true
+        await sweepTemps()
+      }
       try {
         return await fn(tx)
       } finally {

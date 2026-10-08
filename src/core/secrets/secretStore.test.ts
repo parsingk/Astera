@@ -62,6 +62,20 @@ describe('SecretStore (remote runtime design §4.6)', () => {
     await patient.withLock((tx) => tx.write('a', 'x'))
     expect(await patient.read('a')).toBe('x')
   })
+  // Audit U-5: a temp file of a write that died with its process stayed in the store for good.
+  it('removes temp files of writes that died, once they are old, when it first takes its lock', async () => {
+    const s = openSecretStore({ dir, profileDir: profile, pidLives: () => false })
+    await s.withLock(async () => {})
+    const old = path.join(dir, '.tmp-deadbeef')
+    const fresh = path.join(dir, '.tmp-cafebabe')
+    await fs.writeFile(old, 'x')
+    await fs.writeFile(fresh, 'y')
+    const hourAgo = new Date(Date.now() - 2 * 60 * 60_000)
+    await fs.utimes(old, hourAgo, hourAgo)
+    const again = openSecretStore({ dir, profileDir: profile, pidLives: () => false })
+    await again.withLock(async () => {})
+    expect((await fs.readdir(dir)).filter((n) => n.startsWith('.tmp-'))).toEqual(['.tmp-cafebabe'])
+  })
   it('refuses a store reached through a symlink or junction', async () => {
     const real = path.join(profile, 'real')
     await fs.mkdir(real)

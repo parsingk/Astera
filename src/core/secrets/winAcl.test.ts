@@ -75,3 +75,21 @@ describe.runIf(process.platform === 'win32')('systemWinAcl on this machine', () 
     }
   })
 })
+
+// Audit U-5: the SID was asked of whoami once and its promise kept, a rejection included, so one failed whoami made
+// every read and lock of a long-lived store fail until the Host restarted. And the tools had no time limit.
+describe('systemWinAcl with its tools injected', () => {
+  it('asks whoami again after a failure, and gives every call a time limit', async () => {
+    const calls: Array<{ file: string; timeout?: number }> = []
+    let fail = true
+    const acl = systemWinAcl(async (file, _args, o) => {
+      calls.push({ file, timeout: o.timeout })
+      if (fail) throw new Error('whoami failed')
+      return { stdout: '"me","S-1-5-21-1-2-3-1001"', stderr: '' }
+    })
+    await expect(acl.userSid()).rejects.toThrow('whoami failed')
+    fail = false
+    expect(await acl.userSid()).toBe('S-1-5-21-1-2-3-1001')
+    expect(calls.every((c) => typeof c.timeout === 'number' && c.timeout > 0)).toBe(true)
+  })
+})
