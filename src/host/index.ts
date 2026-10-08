@@ -724,6 +724,12 @@ async function main(): Promise<void> {
     // The rolling's hooks (rolling, rolledInto, rekeyRolled): absent with no spawner, and then
     // `unregisterRolling` only forwards to the app and a rolled-from exit closes as before.
     ...(rollingWiring?.orchHooks ?? {}),
+    // After the driver's own after-load pass: what the profile already held, so work under way when this Host started
+    // is recorded before anything changes (Phase 11). The load stays lazy; this only hears that it happened.
+    onLoaded: () => {
+      wiring?.orchHooks?.onLoaded?.()
+      runGit?.onState(orch.state())
+    },
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
     slack: slackWiring ?? undefined,
     // `mcp-http-reload` and `mcp-http-status` (MCP HTTP §3).

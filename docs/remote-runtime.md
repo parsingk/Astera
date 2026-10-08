@@ -160,15 +160,25 @@ starts a new Host after a stop.
 
 ### Windows
 
-A logon task for your own user, in PowerShell:
+A logon task for your own user that runs a hidden PowerShell loop around `astera runtime serve`, in PowerShell:
 
 ```powershell
-$action   = New-ScheduledTaskAction -Execute "$env:LOCALAPPDATA\astera\bin\astera.cmd" -Argument 'runtime serve'
+$loop     = "while (`$true) { & '$env:LOCALAPPDATA\astera\bin\astera.cmd' runtime serve; " +
+            "if (`$LASTEXITCODE -eq 0) { break }; Start-Sleep 5 }"
+$action   = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -Command `"$loop`""
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
-            -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
+            -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName 'Astera Runtime' -Action $action -Trigger $trigger -Settings $settings
 ```
+
+The loop is the restart: Task Scheduler's own "restart on failure" does not restart a task whose program exits with
+an error code, so the loop starts `serve` again 5 seconds after any non-zero exit (a crash, or 75 after an update) and
+ends when `serve` exits 0. A task for your own user needs no administrator. A task that runs before you log in (the
+"run whether the user is logged on or not" kind, S4U) needs an administrator to register, so this recipe starts at
+login. Measured on Windows 11 with a standard user: the task registers, runs with no window, `serve` brings a killed
+Host back within 20 seconds and the loop brings a killed `serve` back within 12.
 
 Remove it with `Unregister-ScheduledTask -TaskName 'Astera Runtime'`.
 
@@ -201,6 +211,8 @@ A LaunchAgent runs once you log in. Claude keeps its sign-in in your login keych
 so Claude sessions and workers on a macOS Runtime start only after a login. `PATH` must include the folders `claude`
 and `codex` are installed in. Remove it with `launchctl bootout gui/$(id -u)/run.astera.runtime` and delete the file.
 
+This recipe has not been measured on a Mac yet; the Windows and Linux ones have.
+
 ### Linux
 
 A systemd user unit, `~/.config/systemd/user/astera-runtime.service`:
@@ -226,7 +238,13 @@ loginctl enable-linger $USER      start it at boot, before you log in
 ```
 
 A user unit does not read your shell's profile: add to `PATH` the folders `claude` and `codex` are installed in (the
-npm global folder, for example), or they are not found. Remove it with `systemctl --user disable --now astera-runtime`.
+npm global folder, for example), or they are not found; the Host and its workers get exactly this `PATH`. Remove it with
+`systemctl --user disable --now astera-runtime` and `loginctl disable-linger $USER`.
+
+Measured on Ubuntu 22.04 with systemd: with linger on, the unit started at boot with no one logged in; systemd brought a
+killed `serve` back (`Restart=on-failure`) and `serve` brought a killed Host back within 20 seconds; a Windows
+controller paired with it listed its project, and each file's diff matched `git diff` on the Runtime, case-only
+renames and Unicode names included.
 
 ## Security
 

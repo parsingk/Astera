@@ -136,6 +136,15 @@ describe('createRunGitRecorder with work it did not see start', () => {
     r.rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }] }))
     await settle()
     expect(r.records).toEqual([])
+    expect(r.reads.filter((x) => x.startsWith('head W'))).toEqual([])
+  })
+  // Phase 11 measurement: a Run worktree the registry does not list (made outside it, or its entry lost) still forks
+  // from the project: where it parts from the project's HEAD.
+  it('a Run worktree the registry does not know forks where it parts from the project', async () => {
+    const r = rig({ heads: { P: 'p9' }, bases: { 'W p9': 'fork0' }, dirs: ['W', 'P'] })
+    r.rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }] }))
+    await settle()
+    expect(r.records).toEqual([{ runId: 'run1', base: 'fork0' }])
   })
   it('a read that failed is tried again on a later state', async () => {
     const r = rig({ dirs: ['D'] })
@@ -181,6 +190,13 @@ describe('the Host wires the recorder', () => {
     expect(index).toMatch(/onState: \(state, version\) => \{[\s\S]{0,200}?runGit\?\.onState\(state\)/)
     expect(index).toContain("record: (args) => orch.handle('runs-git-record', args)")
     expect(index).toContain('integrateHooks: () => runGit')
+  })
+  // Phase 11 measurement: a Host started on a profile with work under way records it before anything changes.
+  it('feeds it the loaded state once, when the Host first loads it', () => {
+    const index = read('index.ts')
+    expect(index).toMatch(/onLoaded: \(\) => \{\s*wiring\?\.orchHooks\?\.onLoaded\?\.\(\)\s*runGit\?\.onState\(orch\.state\(\)\)/)
+    // The load stays lazy (createHostOrch): index.ts never asks for it.
+    expect(index).not.toContain('orch.ready()')
   })
   it('the one merge path tells it before and after', () => {
     const wt = read('worktrees.ts')

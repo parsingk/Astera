@@ -2,8 +2,9 @@
 // happens: `runs-changed-files` and `runs-diff` read it, and nothing in state could rebuild it once a merge reaps the
 // worktree and deletes its branch.
 //
-// - A Run's base: where its own worktree forked from its base branch (`merge-base`); or, while one of its attempts is
-//   open, its root's HEAD (no base branch known, or a Run in the project folder).
+// - A Run's base: where its own worktree forked from its base branch (`merge-base`), or from the project's HEAD when
+//   the registry does not list that worktree; or, while one of its attempts is open, its root's HEAD (a Run in the
+//   project folder, or no fork point found).
 // - An attempt's base: its folder's HEAD while it is open; its head: that folder's HEAD once it ends, which also moves
 //   its Run's head to the Run root's HEAD.
 // - Around a merge: a Run whose worktree is merged gets the head it had before; a Run root merged into gets the head
@@ -89,14 +90,23 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
       const openRuns = new Set(s.dispatches.filter((x) => x.endedAt === undefined).map((x) => runOfTask.get(x.taskId)))
       for (const run of s.runs) {
         if (run.git?.base !== undefined) continue
+        const project = s.jobs.find((j) => j.id === run.jobId)?.cwd ?? ''
         const root = runRootOf(run, s.jobs.find((j) => j.id === run.jobId))
         const open = openRuns.has(run.id)
-        const ref = run.worktree !== undefined ? d.baseRefOf(run.worktree) : null
+        const wt = run.worktree !== undefined && !isSamePath(run.worktree, project) ? run.worktree : null
         // Where its worktree forked is true whenever it is read; a root's HEAD only while the work is under way.
-        if (!ref && !open) continue
+        if (!wt && !open) continue
         once(
           `run:${run.id}:base`,
-          async () => (ref ? ((await d.mergeBase(run.worktree!, ref)) ?? (open ? await headIfThere(root) : null)) : headIfThere(root)),
+          async () => {
+            if (wt) {
+              // The base branch it was forked from; a worktree the registry does not list parts from the project.
+              const ref = d.baseRefOf(wt) ?? (await headIfThere(project))
+              const fork = ref ? await d.mergeBase(wt, ref) : null
+              if (fork) return fork
+            }
+            return open ? headIfThere(root) : null
+          },
           (base) => ({ runId: run.id, base })
         )
       }
