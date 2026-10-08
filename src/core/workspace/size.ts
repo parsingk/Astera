@@ -13,7 +13,13 @@
 export interface AppSize {
   width: number
   height: number
+  /** The mirror tab's devicePixelRatio, when it said one: frames are captured at it, so a tab on a 150% screen shows
+   *  a picture of its own pixels instead of a smaller one stretched (and blurred). It never sizes the window. */
+  scale?: number
 }
+
+/** The densest screen a frame is captured for. */
+export const MAX_VIEW_SCALE = 3
 
 /** The window size when no mirror tab has said how big it is: the size the Astera app itself opens at. */
 export const DEFAULT_APP_SIZE: AppSize = { width: 1280, height: 800 }
@@ -36,7 +42,12 @@ export function clampAppSize(v: unknown): AppSize | null {
   const { width, height } = v as { width?: unknown; height?: unknown }
   if (!finite(width) || !finite(height) || width <= 0 || height <= 0) return null
   const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, Math.round(n)))
-  return { width: clamp(width, MIN_APP_SIZE.width, MAX_APP_SIZE.width), height: clamp(height, MIN_APP_SIZE.height, MAX_APP_SIZE.height) }
+  const scale = (v as { scale?: unknown }).scale
+  return {
+    width: clamp(width, MIN_APP_SIZE.width, MAX_APP_SIZE.width),
+    height: clamp(height, MIN_APP_SIZE.height, MAX_APP_SIZE.height),
+    ...(finite(scale) && scale > 0 ? { scale: Math.min(MAX_VIEW_SCALE, Math.max(1, Math.round(scale * 100) / 100)) } : {})
+  }
 }
 
 export function sameSize(a: AppSize | null, b: AppSize | null, tolerance = SIZE_TOLERANCE_PX): boolean {
@@ -46,9 +57,9 @@ export function sameSize(a: AppSize | null, b: AppSize | null, tolerance = SIZE_
 
 /** What the mirror tab sends after a resize settles: the clamped size, or null when there is nothing to
  *  send (not a size, or the size it last sent). */
-export function sizeToReport(last: AppSize | null, measured: { width: number; height: number }): AppSize | null {
+export function sizeToReport(last: AppSize | null, measured: { width: number; height: number; scale?: number }): AppSize | null {
   const next = clampAppSize(measured)
-  if (next === null || sameSize(last, next, 1)) return null
+  if (next === null || (sameSize(last, next, 1) && (last?.scale ?? 1) === (next.scale ?? 1))) return null
   return next
 }
 
@@ -61,7 +72,7 @@ export function deviceSize(css: AppSize, dpr: unknown): AppSize {
 export interface FrameClip {
   /** The page's viewport in CSS pixels with its scrollbars, which is what the size override sets. */
   css: AppSize
-  /** Page.captureScreenshot's clip: the whole viewport, scaled down to `maxWidth` at most. */
+  /** Page.captureScreenshot's clip: the whole viewport at the viewer's scale, `maxWidth` pixels wide at most. */
   clip: { x: 0; y: 0; width: number; height: number; scale: number }
   /** The frame's size in pixels. */
   frame: AppSize
@@ -71,13 +82,14 @@ export interface FrameClip {
  *  takes whatever the page has). `inner` is the page's window.innerWidth and innerHeight, which count
  *  its scrollbars; Page.getLayoutMetrics' client sizes leave a scrollbar out (a page with a 15 px
  *  vertical scrollbar reads 1265 wide at an override of 1280), so they are only the fallback. */
-export function frameClip(metrics: Record<string, unknown>, maxWidth: number, inner?: unknown): FrameClip | null {
+export function frameClip(metrics: Record<string, unknown>, maxWidth: number, inner?: unknown, viewScale = 1): FrameClip | null {
   const vp = (metrics.cssVisualViewport ?? metrics.cssLayoutViewport) as { clientWidth?: unknown; clientHeight?: unknown } | undefined
   const own = Array.isArray(inner) && finite(inner[0]) && finite(inner[1]) && inner[0] > 0 && inner[1] > 0 ? { w: inner[0], h: inner[1] } : null
   const w = own ? own.w : vp?.clientWidth
   const h = own ? own.h : vp?.clientHeight
   if (!finite(w) || !finite(h) || w <= 0 || h <= 0) return null
-  const scale = maxWidth > 0 && w > maxWidth ? maxWidth / w : 1
+  const want = finite(viewScale) && viewScale > 1 ? viewScale : 1
+  const scale = maxWidth > 0 && w * want > maxWidth ? maxWidth / w : want
   return {
     css: { width: w, height: h },
     clip: { x: 0, y: 0, width: w, height: h, scale },

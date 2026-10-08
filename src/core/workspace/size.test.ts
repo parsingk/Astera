@@ -21,6 +21,31 @@ describe('clampAppSize', () => {
   })
 })
 
+// The viewer's pixel density rides with the size, so the frames match the screen they are shown on (a 960 px
+// frame stretched over a 150% tab was blurred).
+describe('the viewer scale', () => {
+  it('rides with a size, kept between 1 and 3, and is left out when it is not a number', () => {
+    expect(clampAppSize({ width: 1200, height: 700, scale: 1.5 })).toEqual({ width: 1200, height: 700, scale: 1.5 })
+    expect(clampAppSize({ width: 1200, height: 700, scale: 0.5 })).toEqual({ width: 1200, height: 700, scale: 1 })
+    expect(clampAppSize({ width: 1200, height: 700, scale: 8 })).toEqual({ width: 1200, height: 700, scale: 3 })
+    expect(clampAppSize({ width: 1200, height: 700, scale: 'x' })).toEqual({ width: 1200, height: 700 })
+  })
+  it('a scale change at the same size is reported (the window moved to another screen)', () => {
+    expect(sizeToReport({ width: 1200, height: 700, scale: 1 }, { width: 1200, height: 700, scale: 2 })).toEqual({ width: 1200, height: 700, scale: 2 })
+    expect(sizeToReport({ width: 1200, height: 700, scale: 2 }, { width: 1200, height: 700, scale: 2 })).toBeNull()
+  })
+  it('the frame is captured at the viewer scale, up to the frame width', () => {
+    expect(frameClip({ cssVisualViewport: { clientWidth: 1200, clientHeight: 800 } }, 2560, undefined, 1.5)).toMatchObject({
+      clip: { width: 1200, height: 800, scale: 1.5 },
+      frame: { width: 1800, height: 1200 }
+    })
+    expect(frameClip({ cssVisualViewport: { clientWidth: 2000, clientHeight: 1000 } }, 2560, undefined, 2)).toMatchObject({
+      clip: { scale: 2560 / 2000 },
+      frame: { width: 2560, height: 1280 }
+    })
+  })
+})
+
 describe('sizeToReport', () => {
   it('sends the first size, and a size that changed', () => {
     expect(sizeToReport(null, { width: 1200, height: 700 })).toEqual({ width: 1200, height: 700 })

@@ -54,7 +54,7 @@ export function mirrorsFromList(list: WorkspaceSummary[]): Mirrors {
 
 export interface SizeReporter {
   /** The mirror stage's content box as measured now, in CSS pixels. */
-  measured(size: { width: number; height: number }): void
+  measured(size: { width: number; height: number; scale?: number }): void
   /** The tab is going: a size that was sent is taken back (`null`), so the next launch takes the
    *  default size rather than a tab nobody looks at. */
   dispose(): void
@@ -74,7 +74,7 @@ const realTimers: ReporterTimers = {
  *  changed (sizeToReport): a splitter dragged across the window resizes the app once, at the end. */
 export function createSizeReporter(send: (size: AppSize | null) => void, timers: ReporterTimers = realTimers, delayMs = SIZE_REPORT_DEBOUNCE_MS): SizeReporter {
   let last: AppSize | null = null
-  let pending: { width: number; height: number } | null = null
+  let pending: { width: number; height: number; scale?: number } | null = null
   let timer: unknown = null
   const flush = (): void => {
     timer = null
@@ -107,7 +107,7 @@ export interface SessionSizeReporters {
   /** A mirror pane for `sessionId` appeared: its measurements go to that session's one reporter, so
    *  the pane resized last sets the size. `release` when the pane goes; the session's size is taken
    *  back (null) only when its last pane goes. */
-  acquire(sessionId: string): { measured(size: { width: number; height: number }): void; release(): void }
+  acquire(sessionId: string): { measured(size: { width: number; height: number; scale?: number }): void; release(): void }
 }
 
 /** One size reporter per session, shared by every pane that mirrors it (a session's mirror tab can

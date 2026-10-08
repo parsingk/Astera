@@ -355,6 +355,48 @@ describe.runIf(enabled)('the agent app workspace on a real desktop', () => {
   )
 
   it(
+    "captures the mirror frame at the tab's pixel density: the JPEG is as wide as the frame says, the page times the scale",
+    async () => {
+      const base = await tempDir()
+      const profile = path.join(base, 'profile-density')
+      const udd = path.join(base, 'electron-profile-density')
+      udds.push(udd)
+      const h = await harness(profile)
+      managers.push(h.m)
+      expect(h.m.resize('s-e2e-d', { width: 1000, height: 640, scale: 1.5 })).toBe(true)
+      const r = await h.m.run('s-e2e-d', `log(await launch({ command: ${JSON.stringify(commandFor(udd, ''))} }))`)
+      const port = (JSON.parse((r.body as { log: string[] }).log[0]) as { port: number }).port
+      const dpr = Number(await read2(port, 'devicePixelRatio'))
+      // The JPEG's own size, read from its start-of-frame marker.
+      const jpegSize = (b64: string): { width: number; height: number } => {
+        const b = Buffer.from(b64, 'base64')
+        for (let i = 2; i + 9 < b.length; ) {
+          if (b[i] !== 0xff) break
+          const marker = b[i + 1]
+          const len = b.readUInt16BE(i + 2)
+          if (marker >= 0xc0 && marker <= 0xc3) return { width: b.readUInt16BE(i + 7), height: b.readUInt16BE(i + 5) }
+          i += 2 + len
+        }
+        return { width: 0, height: 0 }
+      }
+      await vi.waitFor(
+        () => {
+          const f = h.events.filter((e) => e.kind === 'frame').at(-1) as Extract<WorkspaceEvent, { kind: 'frame' }> | undefined
+          expect(f).toBeDefined()
+          const real = jpegSize(f!.frame.jpeg)
+          console.log(`density frame: page dpr ${dpr}, frame says ${f!.frame.width}x${f!.frame.height}, JPEG is ${real.width}x${real.height}`)
+          expect(real).toEqual({ width: f!.frame.width, height: f!.frame.height })
+          expect(real).toEqual({ width: 1500, height: 960 })
+        },
+        { timeout: 20_000, interval: 1_000 }
+      )
+      expect(((await h.m.run('s-e2e-d', 'await close()')).body as { error?: unknown }).error).toBeUndefined()
+      await h.m.dispose()
+    },
+    120_000
+  )
+
+  it(
     'ends the app still on the desktop when its helper dies',
     async () => {
       const base = await tempDir()

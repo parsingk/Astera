@@ -114,6 +114,15 @@ describe('createSizeReporter', () => {
     return { r, sent, fire }
   }
 
+  it("sends the viewer's pixel density with the size, and again when only it changes", () => {
+    const { r, sent, fire } = rigReporter()
+    r.measured({ width: 1200, height: 700, scale: 1 })
+    fire()
+    r.measured({ width: 1200, height: 700, scale: 1.5 })
+    fire()
+    expect(sent).toEqual([{ width: 1200, height: 700, scale: 1 }, { width: 1200, height: 700, scale: 1.5 }])
+  })
+
   it('sends the size once a resize has settled: the last of a burst, clamped', () => {
     const { r, sent, fire } = rigReporter()
     r.measured({ width: 900, height: 600 })

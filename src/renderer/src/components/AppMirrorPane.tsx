@@ -22,13 +22,33 @@ export function AppMirrorPane(props: {
     const el = stage.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const reporter = sizes.acquire(sessionId)
+    // The screen's pixel density goes with the size: the Host captures frames at it, so the picture is sharp.
+    let box: { width: number; height: number } | null = null
+    const report = (): void => {
+      if (box) reporter.measured({ width: box.width, height: box.height, scale: window.devicePixelRatio })
+    }
     const ro = new ResizeObserver((entries) => {
-      const box = entries[entries.length - 1]?.contentRect
-      if (box) reporter.measured({ width: box.width, height: box.height })
+      const r = entries[entries.length - 1]?.contentRect
+      if (!r) return
+      box = { width: r.width, height: r.height }
+      report()
     })
     ro.observe(el)
+    // A window moved to a screen of another density changes no size, so the density is watched on its own.
+    let mq: MediaQueryList | null = null
+    const onDensity = (): void => {
+      report()
+      watchDensity()
+    }
+    const watchDensity = (): void => {
+      mq?.removeEventListener('change', onDensity)
+      mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+      mq.addEventListener('change', onDensity)
+    }
+    watchDensity()
     return () => {
       ro.disconnect()
+      mq?.removeEventListener('change', onDensity)
       reporter.release()
     }
   }, [sizes, sessionId])

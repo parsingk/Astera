@@ -839,12 +839,12 @@ describe('long launches', () => {
 })
 
 describe('frames', () => {
-  it('a helper that changes the screen sends a scaled JPEG frame while an app watches', async () => {
+  it('a helper that changes the screen sends a JPEG frame while an app watches', async () => {
     const { m, events } = await rig()
     await m.run('s1', "await launch({ command: 'app.exe' })")
     await vi.waitFor(() => expect(events.some((e) => e.kind === 'frame')).toBe(true))
     const f = events.find((e) => e.kind === 'frame') as Extract<WorkspaceEvent, { kind: 'frame' }>
-    expect(f.frame).toMatchObject({ jpeg: '/9j/frame', width: 960, height: 540 })
+    expect(f.frame).toMatchObject({ jpeg: '/9j/frame', width: 1920, height: 1080 })
     expect(m.list()[0].frame?.jpeg).toBe('/9j/frame')
   })
 
@@ -1100,14 +1100,25 @@ describe('the app size (the mirror tab fills with the app)', () => {
     expect(overrides(macCdp)).toEqual([at(DEFAULT_APP_SIZE)])
   })
 
-  it('the frame is the page viewport, scaled down only to the frame width', async () => {
+  it('the frame is the page viewport at its own size when the tab has said no scale', async () => {
     const cdp = fakeCdp({ viewport: { width: 1578, height: 989 } })
     const { m, events } = await rig({ connectCdp: vi.fn(async () => cdp) })
     await m.run('s1', "await launch({ command: 'app.exe' })")
     await vi.waitFor(() => expect(events.some((e) => e.kind === 'frame')).toBe(true))
     const shot = cdp.sent.find((x) => x.method === 'Page.captureScreenshot')!
-    expect(shot.params).toMatchObject({ format: 'jpeg', clip: { x: 0, y: 0, width: 1578, height: 989, scale: 960 / 1578 } })
+    expect(shot.params).toMatchObject({ format: 'jpeg', quality: 80, clip: { x: 0, y: 0, width: 1578, height: 989, scale: 1 } })
     const f = events.find((e) => e.kind === 'frame') as Extract<WorkspaceEvent, { kind: 'frame' }>
-    expect(f.frame).toMatchObject({ width: 960, height: 602 })
+    expect(f.frame).toMatchObject({ width: 1578, height: 989 })
+  })
+
+  it("the frame is captured at the tab's pixel density, so a 150% screen is not shown a stretched picture", async () => {
+    const cdp = fakeCdp({ viewport: { width: 1200, height: 800 } })
+    const { m, events } = await rig({ connectCdp: vi.fn(async () => cdp) })
+    m.resize('s1', { width: 1200, height: 800, scale: 1.5 })
+    await m.run('s1', "await launch({ command: 'app.exe' })")
+    await vi.waitFor(() => expect(events.some((e) => e.kind === 'frame')).toBe(true))
+    const shot = cdp.sent.filter((x) => x.method === 'Page.captureScreenshot').at(-1)!
+    expect(shot.params).toMatchObject({ clip: { width: 1200, height: 800, scale: 1.5 } })
+    expect((events.filter((e) => e.kind === 'frame').at(-1) as Extract<WorkspaceEvent, { kind: 'frame' }>).frame).toMatchObject({ width: 1800, height: 1200 })
   })
 })

@@ -27,7 +27,8 @@ import type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary } from '../../cor
 export type { WorkspaceEvent, WorkspaceFrame, WorkspaceSummary }
 
 export const FRAME_EVERY_MS = 1_000
-export const FRAME_MAX_WIDTH = 960
+/** The widest frame, in pixels: a 1700 px tab on a 150% screen gets its own 2550. */
+export const FRAME_MAX_WIDTH = 2560
 export const IDLE_TICK_MS = 30_000
 /** How long after a window fit a frame whose page is another size asks for the fit again: the app may
  *  maximize itself after its page answered (an Electron app's `maximize()` on the hidden desktop). */
@@ -45,7 +46,8 @@ export const OVERRIDE_TRIES = 5
  *  replacing Host would wait behind it. Past the cap the Host goes on; the next Host's `sweepLeftovers`
  *  ends what is left (spec, Lifecycle). */
 export const DISPOSE_CAP_MS = 10_000
-const FRAME_QUALITY = 55
+/** 55 blurred text edges in the mirror tab; 80 keeps them at about twice the bytes. */
+const FRAME_QUALITY = 80
 
 /** Settles when `work` does or when `ms` passes, whichever is first, and calls `onCap` if the cap came
  *  first. `work` keeps running past the cap; the caller gives it its own `.catch` (R3). */
@@ -429,7 +431,7 @@ export function createWorkspaceManager(d: WorkspaceManagerDeps): WorkspaceManage
   const frameOf = async (e: Entry): Promise<WorkspaceFrame | null> => {
     const cdp = e.state.cdp
     if (cdp) {
-      const fc = frameClip(await cdp.send('Page.getLayoutMetrics'), FRAME_MAX_WIDTH, await innerSize(cdp))
+      const fc = frameClip(await cdp.send('Page.getLayoutMetrics'), FRAME_MAX_WIDTH, await innerSize(cdp), sizes.get(e.sessionId)?.scale)
       if (fc) checkFit(e, fc.css)
       const r = await cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: FRAME_QUALITY, ...(fc ? { clip: fc.clip } : {}) })
       if (typeof r.data !== 'string' || r.data === '') return null
