@@ -16,7 +16,9 @@ const headHash = (repo: string): string =>
 // 저장소에 없는 40자 hex — 실제 오브젝트가 아니다
 const MISSING_HASH = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
 
-describe('readRange', () => {
+// Every test here runs real git: a loaded Windows runner took 12.7 s for one (CI 2026-10-08), past the 10 s default.
+
+describe('readRange', { timeout: 30_000 }, () => {
   it('fast-forward 구간의 커밋과 파일이 들어 있다', async () => {
     const repo = await makeRepo()
     const before = headHash(repo)
@@ -115,7 +117,7 @@ describe('readRange', () => {
   })
 })
 
-describe('readRangeFiles', () => {
+describe('readRangeFiles', { timeout: 30_000 }, () => {
   it('gives the files of the range, unquoted, and null when git cannot answer', async () => {
     const repo = await makeRepo()
     const before = headHash(repo)
@@ -131,7 +133,7 @@ describe('readRangeFiles', () => {
   })
 })
 
-describe('readHeadSteps', () => {
+describe('readHeadSteps', { timeout: 30_000 }, () => {
   const commit = async (repo: string, name: string): Promise<void> => {
     await fs.writeFile(path.join(repo, name), name, 'utf8')
     run(repo, ['add', name])
