@@ -278,6 +278,10 @@ interface Chain {
   resumeSeedTranscriptPath: string | null
   lastOutputAt: number
   rolling: boolean // the re-trigger guard while a roll is running
+  /** Between the roll's own kill and the re-key: an exit then is the roll's (audit RL-1). */
+  killing?: boolean
+  /** The session exited while a roll ran, not by the roll's kill: the roll ends the chain (audit RL-1). */
+  exitedMidRoll?: boolean
   awaitingReady: boolean // true from a respawn until the automatic prompt (auto-accepting trust is limited to this window too)
   /** Which prompt the respawn awaiting it is owed (S6 Task 12, carry C-c): 'briefing' after a blank-slate
    *  roll, 'handover' otherwise. Read only while awaitingReady holds; written into the snapshot for it. */
@@ -875,7 +879,11 @@ export class RollingCoordinator {
    *  exit arriving after a failed spawn set rolling=false) → dispose the chain. */
   handleExit(e: { sessionId: string }): void {
     const chain = this.chains.get(e.sessionId)
-    if (chain && !chain.rolling) this.disposeChain(chain)
+    if (!chain) return
+    if (!chain.rolling) return this.disposeChain(chain)
+    // During a roll (audit RL-1): the roll's own kill is ignored, as before. Any other exit (the tab closed, the CLI
+    // died during the copy) is kept, and the roll ends the chain at its next check instead of respawning it.
+    if (!chain.killing) chain.exitedMidRoll = true
   }
 
   /** 세션은 살려 둔 채 그 세션의 체인만 버린다 — **kill 하지 않는다.**
@@ -1775,10 +1783,17 @@ export class RollingCoordinator {
       // by scheduleAutoPrompt once it is ready, the same channel every ordinary roll already uses.
       // Read before the kill, not after: the manager drops the session together with its process, and
       // the person's model choice is held there. Reading it afterwards returns null every time.
+      // The session ended during the awaits above (audit RL-1): nothing to carry on, and nobody to carry it on for.
+      if (chain.exitedMidRoll) {
+        this.deps.log(`roll dropped — the session exited during the roll session=${chain.liveId}`)
+        this.disposeChain(chain)
+        return
+      }
       const chosenModel = this.deps.chosenModelOf?.(chain.liveId) ?? null
       // design F5 fix round 1 (Important 3): same "read before the kill" rule, for the toolchain
       // bypass a person already consented to for this chain.
       const wasBypassed = this.deps.bypassedOf?.(chain.liveId) ?? false
+      chain.killing = true
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
@@ -1825,6 +1840,7 @@ export class RollingCoordinator {
         }
       })
       this.chains.delete(oldId)
+      chain.killing = false
       chain.liveId = info.id
       chain.liveInfo = info
       chain.scanner = new OutputScanner()
@@ -1920,6 +1936,12 @@ export class RollingCoordinator {
       this.rescheduleAbortedRoll(chain, 'roll failed')
     } finally {
       chain.rolling = false
+      chain.killing = false
+      // An abort above (a wait armed, a hold queued) is for a session that is gone (audit RL-1): the chain goes.
+      if (chain.exitedMidRoll && !chain.disposed) {
+        this.deps.log(`roll dropped — the session exited during the roll session=${chain.liveId}`)
+        this.disposeChain(chain)
+      }
     }
   }
 

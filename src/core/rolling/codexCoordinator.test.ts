@@ -306,6 +306,21 @@ afterEach(async () => {
 })
 
 describe('CodexRollingCoordinator', () => {
+  // Audit RL-1 (the codex side): an exit during the rollout copy was ignored, and the closed tab came back on the next
+  // account.
+  it('a session that exits while its roll copies the rollout is not respawned, and its chain goes', async () => {
+    let coord!: CodexRollingCoordinator
+    const h = harness({ copy: async () => coord.handleExit({ sessionId: 's1' }) })
+    coord = h.coord
+    const src = await writeRollout({ accountId: 'c1', uuid: 'cx-1', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    await appendLimitError(src)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events.filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
+    expect(h.coord.has('s1')).toBe(false)
+  })
   it('rollout을 찾아 매핑한 뒤 한도 문구+게이트로 복사→kill→resume 롤한다', async () => {
     const h = harness()
     const src = await writeRollout({ accountId: 'c1', uuid: 'cx-1', cwd: h.info1.cwd, primary: 95 })

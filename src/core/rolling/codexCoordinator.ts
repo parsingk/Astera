@@ -230,6 +230,10 @@ interface Chain {
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
   lastOutputAt: number
   rolling: boolean
+  /** Between the roll's own kill and the re-key: an exit then is the roll's (audit RL-1). */
+  killing?: boolean
+  /** The session exited while a roll ran, not by the roll's kill: the roll ends the chain (audit RL-1). */
+  exitedMidRoll?: boolean
   locateTimer: ReturnType<typeof setTimeout> | null
   /** When a spawn that has to look for its rollout started (a fresh spawn or a blank-slate roll), until
    *  that rollout is found (S6 Task 12 carry C-b, LP-4): written into the snapshot while rolloutPath is
@@ -728,7 +732,11 @@ export class CodexRollingCoordinator {
 
   handleExit(e: { sessionId: string }): void {
     const chain = this.chains.get(e.sessionId)
-    if (chain && !chain.rolling) this.disposeChain(chain)
+    if (!chain) return
+    if (!chain.rolling) return this.disposeChain(chain)
+    // During a roll (audit RL-1): the roll's own kill is ignored, as before. Any other exit (the tab closed, the CLI
+    // died during the copy) is kept, and the roll ends the chain at its next check instead of respawning it.
+    if (!chain.killing) chain.exitedMidRoll = true
   }
 
   /** 세션은 살려 둔 채 그 세션의 체인만 버린다 — **kill 하지 않는다.** claudeCoordinator.ts 의 같은 이름과
@@ -1720,7 +1728,14 @@ export class CodexRollingCoordinator {
       // never runs on this path.
       // design F5 fix round 1 (Important 3): same "read before the kill" rule claudeCoordinator.ts's own
       // comment gives — the manager drops the session together with its process.
+      // The session ended during the awaits above (audit RL-1): nothing to carry on, and nobody to carry it on for.
+      if (chain.exitedMidRoll) {
+        this.deps.log(`codex roll dropped — the session exited during the roll session=${chain.liveId}`)
+        this.disposeChain(chain)
+        return
+      }
       const wasBypassed = this.deps.bypassedOf?.(chain.liveId) ?? false
+      chain.killing = true
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const chat = chain.kind === 'chat'
@@ -1770,6 +1785,7 @@ export class CodexRollingCoordinator {
         }
       })
       this.chains.delete(oldId)
+      chain.killing = false
       chain.liveId = info.id
       chain.liveInfo = info
       chain.lastOutputAt = this.now()
@@ -1852,6 +1868,12 @@ export class CodexRollingCoordinator {
       this.rescheduleAbortedRoll(chain, 'roll failed')
     } finally {
       chain.rolling = false
+      chain.killing = false
+      // An abort above (a wait armed, a hold queued) is for a session that is gone (audit RL-1): the chain goes.
+      if (chain.exitedMidRoll && !chain.disposed) {
+        this.deps.log(`codex roll dropped — the session exited during the roll session=${chain.liveId}`)
+        this.disposeChain(chain)
+      }
     }
   }
 

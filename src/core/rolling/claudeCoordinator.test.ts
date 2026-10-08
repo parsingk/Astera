@@ -412,6 +412,36 @@ describe('RollingCoordinator', () => {
     expect(h.events).toEqual([])
   })
 
+  // Audit RL-1: an exit while a roll was running was ignored outright, so a tab closed (or a claude that died) during the
+  // transcript copy came back on the next account, typed into and unseen; a roll that then aborted left its chain for good.
+  it('a session that exits while its roll copies the transcript is not respawned, and its chain goes', async () => {
+    let coord!: RollingCoordinator
+    const h = harness({ copy: async () => coord.handleExit({ sessionId: 's1' }) })
+    coord = h.coord
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.events.filter((e) => !e.startsWith('copy'))).toEqual([])
+    expect(h.coord.has('s1')).toBe(false)
+  })
+  it('a session that exits during a roll that then aborts is not waited on', async () => {
+    let coord!: RollingCoordinator
+    const h = harness({
+      copy: async () => {
+        coord.handleExit({ sessionId: 's1' })
+        throw new Error('copy failed')
+      }
+    })
+    coord = h.coord
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.coord.has('s1')).toBe(false)
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60_000)
+    expect(h.events.filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
+  })
   it('kill()이 동기적으로 exit을 통지해도 롤 진행 중인 체인을 폐기하지 않는다 (handleExit rolling 가드)', async () => {
     // RollingDeps.kill(): void는 exit이 비동기라는 걸 강제하지 않는다. 실제 node-pty 어댑터는 항상
     // 비동기지만, 이 테스트는 kill() 콜백 안에서 곧바로 handleExit를 재호출하는 동기 어댑터를 흉내내
