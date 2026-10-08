@@ -30,9 +30,17 @@ export const REASSEMBLY_MAX_OPEN = 16
 /** Answers the whole JSON text when a ref completes, null while it is still arriving, or an error. A ref with no chunk
  *  for `staleMs`, or the oldest past `maxOpen`, is forgotten. */
 export function createReassembler(
-  o: { cap?: number; now?: () => number; staleMs?: number; maxOpen?: number } = {}
+  o: {
+    cap?: number
+    /** What every open ref together may hold (security audit SEC-5); unbounded when left out. */
+    totalCap?: number
+    now?: () => number
+    staleMs?: number
+    maxOpen?: number
+  } = {}
 ): { add(f: ChunkFrame): string | null | { error: string }; held(): number } {
   const cap = o.cap ?? REASSEMBLED_CAP
+  const totalCap = o.totalCap ?? Number.POSITIVE_INFINITY
   const now = o.now ?? Date.now
   const staleMs = o.staleMs ?? REASSEMBLY_STALE_MS
   const maxOpen = o.maxOpen ?? REASSEMBLY_MAX_OPEN
@@ -64,7 +72,9 @@ export function createReassembler(
       }
       const part = Buffer.from(f.data, 'base64')
       held.bytes += part.length
-      if (held.bytes > cap) {
+      let total = 0
+      for (const h of open.values()) total += h.bytes
+      if (held.bytes > cap || total > totalCap) {
         open.delete(f.ref)
         return { error: 'REMOTE_REPLY_TOO_LARGE' }
       }

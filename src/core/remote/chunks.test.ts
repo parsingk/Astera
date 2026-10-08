@@ -3,6 +3,19 @@ import { CHUNK_SIZE, chunksOf, createReassembler } from './chunks'
 import { FRAME_CAP } from './frames'
 
 describe('chunked replies (remote runtime design §3.1)', () => {
+  // Security audit SEC-5: each ref was held to the cap alone, and 16 refs were open at once: a hostile Runtime could
+  // make a controller hold about 1 GiB. Every open ref together is held to the total.
+  it('holds every open ref together to the total; past it the ref being added fails and the others go on', () => {
+    const r = createReassembler({ cap: 3 * CHUNK_SIZE, totalCap: 4 * CHUNK_SIZE })
+    const a = chunksOf('a', 'a'.repeat(3 * CHUNK_SIZE))
+    const b = chunksOf('b', 'b'.repeat(3 * CHUNK_SIZE))
+    expect(r.add(a[0])).toBeNull()
+    expect(r.add(a[1])).toBeNull()
+    expect(r.add(b[0])).toBeNull()
+    expect(r.add(b[1])).toBeNull()
+    expect(r.add(a[2])).toEqual({ error: 'REMOTE_REPLY_TOO_LARGE' })
+    expect(r.add(b[2])).toBe('b'.repeat(3 * CHUNK_SIZE))
+  })
   it('splits a 1.5 MiB body into frames under the frame cap and puts it back together', () => {
     const body = JSON.stringify({ text: 'é'.repeat(800 * 1024) })
     const frames = chunksOf('r1', body)

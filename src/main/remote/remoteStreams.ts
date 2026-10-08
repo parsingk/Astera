@@ -20,6 +20,12 @@ import { remoteSessionKey } from '../../core/panes/tabId'
 
 type Client = { subscribePty(ptyId: string, h: PtyStreamHandlers): () => void }
 
+/** Output one remote tab takes in a second (security audit SEC-5): more than a terminal can show. Past it the rest of
+ *  that second is dropped and the tab starts again from a checkpoint, which shows the right screen. */
+export const REMOTE_STREAM_BYTES_PER_S = 8 << 20
+/** The largest checkpoint a tab is handed (security audit SEC-5); a larger one ends the stream. */
+export const REMOTE_RESET_MAX = 16 << 20
+
 export interface RemoteStreams {
   /** Subscribes the tab to the pty; false when the Runtime cannot be reached for it (reported gone). */
   attach(runtimeId: string, sessionId: string, ptyId: string): Promise<boolean>
@@ -32,16 +38,30 @@ export interface RemoteStreams {
 export function createRemoteStreams(a: {
   clientOf(runtimeId: string): Promise<Client | { code: string; message: string }>
   send(channel: string, payload: unknown): void
+  /** Seams for tests: the bytes a second, the clock, and how a call is put off to the end of the second. */
+  bytesPerSecond?: number
+  now?: () => number
+  later?: (f: () => void, ms: number) => void
 }): RemoteStreams {
+  const perSecond = a.bytesPerSecond ?? REMOTE_STREAM_BYTES_PER_S
+  const now = a.now ?? Date.now
+  const later = a.later ?? ((f: () => void, ms: number) => void setTimeout(f, ms).unref?.())
   /** One per tab key. `gen` marks the subscription current: a replaced or detached one's late calls are dropped. */
   const streams = new Map<string, { runtimeId: string; sessionId: string; ptyId: string; gen: number; stop: (() => void) | null }>()
   let gen = 0
 
   const forward = (key: string, mine: number): PtyStreamHandlers => {
     const live = (): boolean => streams.get(key)?.gen === mine
+    /** This second's output, and whether it is cut until the stream starts again. */
+    const window = { start: now(), bytes: 0, cut: false }
     return {
       onReset: (c) => {
         if (!live()) return
+        if (c.state.length + c.pending.length > REMOTE_RESET_MAX) {
+          drop(key)
+          a.send('session:remote-gone', { sessionId: key, code: 'REMOTE_REPLY_TOO_LARGE', message: 'the Runtime sent a terminal screen too large to show' })
+          return
+        }
         a.send('session:reset', {
           sessionId: key,
           state: c.state,
@@ -52,7 +72,15 @@ export function createRemoteStreams(a: {
         })
       },
       onEvents: (events: RemotePtyEvent[]) => {
-        if (!live()) return
+        if (!live() || window.cut) return
+        const t = now()
+        if (t - window.start >= 1000) Object.assign(window, { start: t, bytes: 0 })
+        for (const e of events) if (e.kind === 'data') window.bytes += e.data.length
+        if (window.bytes > perSecond) {
+          window.cut = true
+          later(() => void again(key, mine), Math.max(0, window.start + 1000 - t))
+          return
+        }
         // Data runs between size and exit events are joined, so a batch is one message per run.
         let data = ''
         const flush = (): void => {
@@ -104,6 +132,15 @@ export function createRemoteStreams(a: {
     }
     s.stop = client.subscribePty(s.ptyId, forward(key, mine))
     return true
+  }
+
+  /** Subscribes a cut stream afresh, so it starts from a checkpoint; nothing if it was replaced or detached meanwhile. */
+  const again = (key: string, mine: number): Promise<boolean> => {
+    const s = streams.get(key)
+    if (!s || s.gen !== mine) return Promise.resolve(false)
+    s.stop?.()
+    streams.set(key, { ...s, gen: ++gen, stop: null })
+    return subscribe(key)
   }
 
   const drop = (key: string): void => {

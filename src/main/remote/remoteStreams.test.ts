@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
-import { createRemoteStreams } from './remoteStreams'
+import { REMOTE_RESET_MAX, createRemoteStreams } from './remoteStreams'
 import type { PtyStreamHandlers } from '../../core/remote/link'
 
 function fakeClient() {
@@ -52,6 +52,46 @@ describe('createRemoteStreams', () => {
     ])
   })
 
+  // Security audit SEC-5: a Runtime could send output without end, and the renderer's terminal took all of it. Past
+  // its bytes a second the stream is cut, and it starts again from a checkpoint when the second ends, which shows the
+  // right screen; a checkpoint too large to show ends the stream.
+  it('a flood is cut for the rest of its second, and the tab starts again from a checkpoint', async () => {
+    let t = 0
+    const later: Array<() => void> = []
+    const sent: Array<[string, unknown]> = []
+    const c = fakeClient()
+    const streams = createRemoteStreams({
+      clientOf: async () => c.client,
+      send: (channel, payload) => void sent.push([channel, payload]),
+      bytesPerSecond: 10,
+      now: () => t,
+      later: (f) => void later.push(f)
+    })
+    await streams.attach('rt_1', 's1', 'pty-1')
+    c.subs[0].h.onEvents([{ seq: 1, kind: 'data', data: '12345678' }])
+    c.subs[0].h.onEvents([{ seq: 2, kind: 'data', data: 'abcdefgh' }])
+    c.subs[0].h.onEvents([{ seq: 3, kind: 'data', data: 'more' }])
+    expect(sent).toEqual([['session:data', { sessionId: 'rt_1:s1', data: '12345678' }]])
+    expect(later).toHaveLength(1)
+    t = 1000
+    later[0]()
+    await new Promise((r) => setImmediate(r))
+    expect(c.subs[0].stopped).toBe(true)
+    expect(c.subs).toHaveLength(2)
+    c.subs[1].h.onReset({ watermark: 3, cols: 80, rows: 24, state: 'S', pending: '' })
+    c.subs[1].h.onEvents([{ seq: 4, kind: 'data', data: 'next' }])
+    expect(sent.slice(1)).toEqual([
+      ['session:reset', { sessionId: 'rt_1:s1', state: 'S', pending: '', cols: 80, rows: 24 }],
+      ['session:data', { sessionId: 'rt_1:s1', data: 'next' }]
+    ])
+  })
+  it('a checkpoint over REMOTE_RESET_MAX ends the stream as gone', async () => {
+    const r = rig()
+    await r.streams.attach('rt_1', 's1', 'pty-1')
+    r.rt().subs[0].h.onReset({ watermark: 3, cols: 80, rows: 24, state: 'x'.repeat(REMOTE_RESET_MAX + 1), pending: '' })
+    expect(r.sent).toEqual([['session:remote-gone', { sessionId: 'rt_1:s1', code: 'REMOTE_REPLY_TOO_LARGE', message: expect.any(String) }]])
+    expect(r.rt().subs[0].stopped).toBe(true)
+  })
   it('a checkpoint of an ended pty carries its exit code', async () => {
     const r = rig()
     await r.streams.attach('rt_1', 's1', 'pty-1')
