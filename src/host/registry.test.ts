@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, type RegistryPty } from './registry'
+import { describe, it, expect, vi } from 'vitest'
+import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 import { RING_EVENT_COST } from './ptyRing'
 
@@ -701,7 +701,7 @@ describe('PtyRegistry.onMeta (Slack in the Host, P7)', () => {
 // Remote runtime design §3.7 (N1, X1-02): every pty keeps a ring of seq'd events and a live terminal, and an exited one
 // is still readable for 10 minutes within the exited budget.
 describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
-  const made = (o: { now?: () => number; bootId?: string } = {}) => {
+  const made = (o: { now?: () => number; bootId?: string; exitedBudget?: { rings: number; bytes: number; terminal?: number } } = {}) => {
     const ptys: Array<ReturnType<typeof fakePty>> = []
     const r = new PtyRegistry({
       spawn: () => {
@@ -711,7 +711,8 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
       },
       log: () => {},
       now: o.now,
-      bootId: o.bootId ?? 'boot-a'
+      bootId: o.bootId ?? 'boot-a',
+      ...(o.exitedBudget ? { exitedBudget: o.exitedBudget } : {})
     })
     return { r, ptys, open: (id: string) => (r.open({ id, file: 'sh', args: [], opts }), ptys[ptys.length - 1]) }
   }
@@ -789,7 +790,8 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
 
   it('more exited rings than the budget allows clears the oldest first', async () => {
     let t = 0
-    const { r, open } = made({ now: () => t })
+    // Terminals counted at nothing here, so the count decides (the bytes are the next test's).
+    const { r, open } = made({ now: () => t, exitedBudget: { rings: EXITED_RINGS_MAX, bytes: EXITED_RING_BYTES_MAX, terminal: 0 } })
     for (let i = 0; i <= EXITED_RINGS_MAX; i++) {
       t = i
       const p = open(`p${i}`)
@@ -804,7 +806,7 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
     let t = 0
     // A small byte budget and a large count budget, so the bytes decide (EXITED_RING_BYTES_MAX in production).
     const ptys: Array<ReturnType<typeof fakePty>> = []
-    const r = new PtyRegistry({ spawn: () => (ptys.push(fakePty()), ptys[ptys.length - 1]), log: () => {}, now: () => t, exitedBudget: { rings: 1000, bytes: 1_000_000 } })
+    const r = new PtyRegistry({ spawn: () => (ptys.push(fakePty()), ptys[ptys.length - 1]), log: () => {}, now: () => t, exitedBudget: { rings: 1000, bytes: 1_000_000, terminal: 0 } })
     const open = (id: string) => (r.open({ id, file: 'sh', args: [], opts }), ptys[ptys.length - 1])
     expect(EXITED_RING_BYTES_MAX).toBe(64 << 20)
     const big = 'z'.repeat(200_000)
@@ -837,4 +839,40 @@ describe('PtyRegistry under an output flood', () => {
     const screen = await r.readScreen('p1', 10)
     expect(screen?.screen.join('')).toContain('end of the flood')
   }, 120_000)
+})
+
+// Phase 8 review I6: an exited pty keeps its live terminal (about 3.2 MiB, O5), so the exited budget counts it, and an
+// idle Host clears exited ptys on time without anyone asking.
+describe('PtyRegistry exited budget counts terminals, and clears on its own', () => {
+  it('a terminal counts EXITED_TERMINAL_BYTES against the exited byte budget', async () => {
+    let t = 0
+    const ptys: Array<ReturnType<typeof fakePty>> = []
+    const r = new PtyRegistry({ spawn: () => (ptys.push(fakePty()), ptys[ptys.length - 1]), log: () => {}, now: () => t })
+    // Each exited pty: its terminal's estimate and its ring (the exit event, RING_EVENT_COST units of two bytes).
+    const keep = Math.floor(EXITED_RING_BYTES_MAX / (EXITED_TERMINAL_BYTES + RING_EVENT_COST * 2))
+    for (let i = 0; i < keep + 4; i++) {
+      t = i
+      r.open({ id: `p${i}`, file: 'sh', args: [], opts })
+      ptys[ptys.length - 1].exit(0)
+    }
+    expect(r.exitedHeld()).toBe(keep)
+    r.stopSweeping()
+  })
+
+  it('an idle Host clears an exited pty after EXITED_RETAIN_MS, and keeps no timer once none is held', async () => {
+    vi.useFakeTimers()
+    try {
+      const p = fakePty()
+      const r = new PtyRegistry({ spawn: () => p, log: () => {} })
+      r.open({ id: 'p1', file: 'sh', args: [], opts })
+      expect(vi.getTimerCount()).toBe(0)
+      p.exit(0)
+      expect(r.exitedHeld()).toBe(1)
+      await vi.advanceTimersByTimeAsync(EXITED_RETAIN_MS + 60_000)
+      expect(r.exitedHeld()).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

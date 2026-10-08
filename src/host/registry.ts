@@ -70,6 +70,11 @@ export const EXITED_RETAIN_MS = 10 * 60 * 1000
 /** The exited-ring budget (§3.1): at most this many exited rings, and this many bytes of them; the oldest go first. */
 export const EXITED_RINGS_MAX = 64
 export const EXITED_RING_BYTES_MAX = 64 << 20
+/** What an exited pty's live terminal counts against that byte budget: about 3.2 MiB measured at 120x40 with 1,000 rows
+ *  (O5), rounded up (Phase 8 review I6). */
+export const EXITED_TERMINAL_BYTES = 4 << 20
+/** How often an exited pty past its time is cleared while any is held: an idle Host frees them without being asked. */
+const SWEEP_EVERY_MS = 60_000
 
 interface Entry {
   id: string
@@ -129,8 +134,8 @@ export interface PtyRegistryDeps {
   killTree?: (pid: number) => Promise<void>
   /** This Host process's boot id (hello's `bootId`): a replay asked with another one starts from a checkpoint. */
   bootId?: string
-  /** The exited-ring budget, for tests; EXITED_RINGS_MAX and EXITED_RING_BYTES_MAX otherwise. */
-  exitedBudget?: { rings: number; bytes: number }
+  /** The exited-ring budget, for tests; EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX and EXITED_TERMINAL_BYTES otherwise. */
+  exitedBudget?: { rings: number; bytes: number; terminal?: number }
 }
 
 /** A replay for a subscriber (§3.7): the events from its seq, or a gap, a checkpoint and the events after it. */
@@ -159,6 +164,8 @@ export class PtyRegistry {
   /** The ring's bound in UTF-16 units (SCROLLBACK_CHARS unless a test injects one); one at the least. */
   private readonly scrollback: number
   readonly bootId: string
+  /** The exited sweep's timer, only while an exited pty is held (none on a Host with nothing exited). */
+  private sweeper: ReturnType<typeof setInterval> | null = null
 
   constructor(deps: PtyRegistryDeps) {
     this.deps = deps
@@ -310,6 +317,7 @@ export class PtyRegistry {
       // (sweepExited); `buffer` already answers empty for an ended pty.
       this.record(entry, { kind: 'exit', code: typeof exitCode === 'number' ? exitCode : null })
       entry.exitedAt = this.now()
+      this.armSweep()
       this.deps.log(`pty ${a.id} exited ${exitCode}`)
       for (const cb of this.exitCbs) this.tell(cb, 'exit', a.id, () => cb(a.id, exitCode))
       // After the listeners, which read this entry's note. It is the newest ended one now, so it is
@@ -340,11 +348,11 @@ export class PtyRegistry {
     e.ring = null
   }
 
-  /** Clears exited rings past EXITED_RETAIN_MS, then the oldest exited ones while over the exited budget (§3.1). No
-   *  timer: it runs when a pty opens or exits and before every replay or read, so an expired ring is never served, and
-   *  the budget bounds what waits for the next of those. */
+  /** Clears exited rings past EXITED_RETAIN_MS, then the oldest exited ones while over the exited budget (§3.1). It runs
+   *  when a pty opens or exits, before every replay or read, and every SWEEP_EVERY_MS while an exited pty is held. */
   sweepExited(): void {
     const budget = this.deps.exitedBudget ?? { rings: EXITED_RINGS_MAX, bytes: EXITED_RING_BYTES_MAX }
+    const terminal = budget.terminal ?? EXITED_TERMINAL_BYTES
     const now = this.now()
     const exited: Entry[] = []
     for (const e of this.entries.values()) {
@@ -353,13 +361,34 @@ export class PtyRegistry {
       else exited.push(e)
     }
     exited.sort((x, y) => (x.exitedAt ?? 0) - (y.exitedAt ?? 0))
-    // UTF-16 units are two bytes each.
-    let bytes = exited.reduce((n, e) => n + (e.ring?.cost() ?? 0) * 2, 0)
+    // UTF-16 units are two bytes each; each kept terminal counts its estimate.
+    const cost = (e: Entry): number => (e.ring?.cost() ?? 0) * 2 + (e.term ? terminal : 0)
+    let bytes = exited.reduce((n, e) => n + cost(e), 0)
     while (exited.length > 0 && (exited.length > budget.rings || bytes > budget.bytes)) {
       const old = exited.shift() as Entry
-      bytes -= (old.ring?.cost() ?? 0) * 2
+      bytes -= cost(old)
       this.clearRing(old)
     }
+    if (exited.length === 0) this.stopSweeping()
+  }
+
+  /** How many exited ptys still keep their ring and terminal. */
+  exitedHeld(): number {
+    let n = 0
+    for (const e of this.entries.values()) if (!e.alive && e.ring) n++
+    return n
+  }
+
+  private armSweep(): void {
+    if (this.sweeper || this.exitedHeld() === 0) return
+    this.sweeper = setInterval(() => this.sweepExited(), SWEEP_EVERY_MS)
+    this.sweeper.unref?.()
+  }
+
+  /** Stops the exited sweep (a Host closing, and tests). */
+  stopSweeping(): void {
+    if (this.sweeper) clearInterval(this.sweeper)
+    this.sweeper = null
   }
 
   /** What a subscriber is sent (§3.7). With a `fromSeq` the ring still holds and the same `bootId`: the events from
