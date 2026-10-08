@@ -20,6 +20,10 @@ const fire =
 
 const EVENT_CHANNELS = [
   'session:data',
+  'session:reset',
+  'session:remote-size',
+  'session:remote-exit',
+  'session:remote-gone',
   'session:exit',
   'session:created',
   'session:rolled',
