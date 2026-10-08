@@ -23,6 +23,9 @@ export interface GatewayLimits {
   silenceMs: number
   queuePerConn: number
   queueTotal: number
+  /** Results waiting for one connection, and for all of them, in their pieces (security audit SEC-1). */
+  replyPerConn: number
+  replyTotal: number
   redeemPerMinute: number
 }
 
@@ -35,6 +38,9 @@ export const GATEWAY_LIMITS: GatewayLimits = {
   silenceMs: 45_000,
   queuePerConn: 8 << 20,
   queueTotal: 64 << 20,
+  // The largest reply (64 MiB) as base64 pieces, with room; all connections together, two of those.
+  replyPerConn: 96 << 20,
+  replyTotal: 128 << 20,
   redeemPerMinute: 10
 }
 
@@ -99,8 +105,19 @@ export async function startGateway(o: {
   const sendTo = (c: Conn, m: unknown): void => {
     if (c.sock.destroyed) return
     const line = JSON.stringify(m)
-    if (Buffer.byteLength(line) > CHUNK_THRESHOLD) for (const f of chunksOf(`r${++seq}`, line)) c.out.control(`${JSON.stringify(f)}\n`)
-    else c.out.control(`${line}\n`)
+    const lines = Buffer.byteLength(line) > CHUNK_THRESHOLD ? chunksOf(`r${++seq}`, line).map((f) => `${JSON.stringify(f)}\n`) : [`${line}\n`]
+    const result = (m as { t?: string; id?: string }).t === 'result' ? (m as { id: string }) : null
+    if (!result) {
+      for (const l of lines) c.out.control(l)
+      return checkTotal()
+    }
+    // Results on their own lane and budget (security audit SEC-1): on control a reply of a few MiB passed the hard cap
+    // and the controller was cut off. Past the budget it is refused, and the connection stays.
+    const bytes = lines.reduce((n, l) => n + Buffer.byteLength(l), 0)
+    let waiting = 0
+    for (const x of conns.values()) waiting += x.out.replyQueued()
+    if (waiting + bytes > lim.replyTotal || !c.out.reply(lines))
+      c.out.control(`${JSON.stringify({ t: 'error', code: 'RUNTIME_BUSY', message: 'the Runtime is sending too many large replies at once; ask again shortly', id: result.id })}\n`)
     checkTotal()
   }
 
@@ -292,6 +309,7 @@ export async function startGateway(o: {
       out: createLaneWriter(sock, {
         hardCap: lim.queuePerConn,
         onHardCap: () => sock.destroy(),
+        replyCap: lim.replyPerConn,
         streamPerKey: lim.queuePerConn,
         streamTotal: lim.queuePerConn,
         onStreamOverflow: (sub, lost) => {

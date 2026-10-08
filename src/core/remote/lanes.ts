@@ -12,9 +12,15 @@ export interface LaneWriter {
    *  the line carries, so an overflow can say which seqs it lost. `admit`: kept even when it alone is over the stream's
    *  share (a checkpoint, Phase 8 review I3); what follows it is held to the share as usual. */
   stream(key: string, line: string, seq: number, o?: { admit?: boolean }): void
+  /** One reply too large for a single line, in its pieces (security audit SEC-1): kept in order on a lane of its own,
+   *  outside the hard cap, under `replyCap`. False when it would pass that budget: nothing of it is queued, and the
+   *  caller answers with a refusal instead. */
+  reply(lines: string[]): boolean
+  /** Bytes of replies waiting here. */
+  replyQueued(): number
   /** Forgets what a stream has waiting (an unsubscribe). */
   dropStream(key: string): void
-  /** Bytes waiting here plus bytes the stream has not finished writing. */
+  /** Bytes waiting here plus bytes the stream has not finished writing, replies aside. */
   queued(): number
   destroy(): void
 }
@@ -30,6 +36,8 @@ export function createLaneWriter(
     streamTotal?: number
     /** A stream was dropped past its share or the total: the seqs it lost. The owner ends that stream with OUTPUT_GAP. */
     onStreamOverflow?(key: string, lost: { firstSeq: number; lastSeq: number }): void
+    /** What replies together may hold waiting; unbounded when left out. */
+    replyCap?: number
   }
 ): LaneWriter {
   const control: string[] = []
@@ -40,6 +48,11 @@ export function createLaneWriter(
   const total = o.streamTotal ?? Number.POSITIVE_INFINITY
   let streamHeld = 0
   let held = 0
+  /** Reply lines waiting, in order, and their bytes. */
+  const replies: string[] = []
+  let replyHeld = 0
+  /** Whose turn it is after control and bulk: a reply line, then a stream line, so neither starves the other. */
+  let replyTurn = true
   let waiting = false
   let capped = false
   let dead = false
@@ -60,8 +73,16 @@ export function createLaneWriter(
         out.write(line)
         continue
       }
-      // Streams last, one line from each in turn: no stream starves another.
+      // Replies and streams last, taking turns; streams one line from each in turn: no stream starves another.
       const next = streams.entries().next()
+      if (replies.length > 0 && (replyTurn || next.done)) {
+        replyTurn = false
+        const r = replies.shift() as string
+        replyHeld -= Buffer.byteLength(r)
+        out.write(r)
+        continue
+      }
+      replyTurn = true
       if (next.done) break
       const [key, st] = next.value
       const head = st.lines.shift() as { line: string; seq: number; bytes: number }
@@ -71,7 +92,7 @@ export function createLaneWriter(
       if (st.lines.length > 0) streams.set(key, st)
       out.write(head.line)
     }
-    if (!dead && (control.length > 0 || bulk.size > 0 || streams.size > 0) && !waiting) {
+    if (!dead && (control.length > 0 || bulk.size > 0 || replies.length > 0 || streams.size > 0) && !waiting) {
       waiting = true
       out.once('drain', flush)
     }
@@ -122,6 +143,16 @@ export function createLaneWriter(
       }
       if (!waiting) flush()
     },
+    reply: (lines) => {
+      if (dead) return true
+      const bytes = lines.reduce((n, l) => n + Buffer.byteLength(l), 0)
+      if (replyHeld + bytes > (o.replyCap ?? Number.POSITIVE_INFINITY)) return false
+      replies.push(...lines)
+      replyHeld += bytes
+      if (!waiting) flush()
+      return true
+    },
+    replyQueued: () => replyHeld,
     dropStream: (key) => {
       const st = streams.get(key)
       if (!st) return
@@ -136,6 +167,8 @@ export function createLaneWriter(
       streams.clear()
       streamHeld = 0
       held = 0
+      replies.length = 0
+      replyHeld = 0
     }
   }
 }

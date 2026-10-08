@@ -5,6 +5,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { buildCertificate, certificatePem, spkiSha256 } from '../../core/remote/cert'
 import { connectRuntime, type RuntimeLink } from '../../core/remote/client'
 import { sha256Base64url } from '../../host/controllers'
+import { chunksOf } from '../../core/remote/chunks'
 import { bindCode, startGateway, type GatewayHandle, type GatewayLimits } from './gateway'
 
 const identity = (() => {
@@ -177,6 +178,31 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     const l = await g.connect()
     await l.auth('t', {})
     expect(await l.call('state-get', {})).toEqual({ status: 200, body: { big } })
+  })
+  // Security audit SEC-1: the result went to the controller on the control lane, so a reply of 6 MiB or more passed the
+  // connection's 8 MiB hard cap and the controller was cut off instead of answered.
+  it('a 7 MiB result reaches the controller whole', async () => {
+    const big = 'a'.repeat(7 << 20)
+    const g = await start({}, (f, reply) => {
+      if (f.t === 'auth') reply({ t: 'authed', conn: f.conn, ok: true, hello: HELLO })
+      if (f.t === 'call')
+        for (const c of chunksOf(`h${String(f.id)}`, JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 200, body: { big } }))) reply({ ...c, conn: f.conn })
+    })
+    const l = await g.connect()
+    await l.auth('t', {})
+    expect(((await l.call('state-get', {})).body as { big: string }).big.length).toBe(7 << 20)
+  })
+  it('a result past the replies’ budget is answered RUNTIME_BUSY, and the connection stays', async () => {
+    const big = 'b'.repeat(1 << 20)
+    const g = await start({ replyPerConn: 1 << 20 }, (f, reply) => {
+      if (f.t === 'auth') reply({ t: 'authed', conn: f.conn, ok: true, hello: HELLO })
+      if (f.t === 'call')
+        for (const c of chunksOf(`h${String(f.id)}`, JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 200, body: { big } }))) reply({ ...c, conn: f.conn })
+    })
+    const l = await g.connect()
+    await l.auth('t', {})
+    await expect(l.call('state-get', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
+    expect(await l.call('jobs-list', {}).then(() => 'answered', (e: { code: string }) => e.code)).toBe('RUNTIME_BUSY')
   })
   it('closes a connection the Host says to close, with the Host’s code, and tells the Host it closed', async () => {
     const g = await start()

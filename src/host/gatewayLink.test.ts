@@ -19,7 +19,7 @@ const HELLO = {
 
 type Seen = { cmd: string; args: Record<string, unknown>; sessionId: string; from?: OrchCaller; request?: string; retry?: true }
 
-const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) => Promise<{ status: number; body: unknown }>; ptys?: PtyRegistry; streamPerKey?: number; controllers?: ReturnType<typeof createControllerRegistry> } = {}) => {
+const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) => Promise<{ status: number; body: unknown }>; ptys?: PtyRegistry; streamPerKey?: number; controllers?: ReturnType<typeof createControllerRegistry>; replyMax?: number } = {}) => {
   const input = new PassThrough()
   const output = o.output ?? new PassThrough()
   const frames: Array<Record<string, unknown>> = []
@@ -46,7 +46,8 @@ const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) 
     onHardCap: () => events.push('hardcap'),
     ...(o.hardCap ? { hardCap: o.hardCap } : {}),
     ...(o.ptys ? { ptys: o.ptys } : {}),
-    ...(o.streamPerKey ? { streamPerKey: o.streamPerKey } : {})
+    ...(o.streamPerKey ? { streamPerKey: o.streamPerKey } : {}),
+    ...(o.replyMax ? { replyMax: o.replyMax } : {})
   })
   const send = (m: unknown): void => void input.write(`${JSON.stringify(m)}\n`)
   const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 20))
@@ -172,7 +173,8 @@ ${JSON.stringify({ t: 'conn-closed', conn: 'c9' })}
   })
   it('asks for the Gateway to be killed when its output to it passes the hard cap (Review Focus 2)', async () => {
     const never = new Writable({ highWaterMark: 1, write: () => {} })
-    const s = await setup({ output: never, hardCap: 2000 })
+    // Results wait on their own lane up to its budget (SEC-1); past it their refusals fill the control lane.
+    const s = await setup({ output: never, hardCap: 2000, replyMax: 1000 })
     const c = await s.pairClient()
     s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
     for (let i = 0; i < 40; i++) s.send({ t: 'call', conn: 'c1', id: String(i), cmd: 'jobs-list', args: {} })
@@ -208,6 +210,76 @@ describe('large replies on the link (Phase 3 review C1)', () => {
     for (const f of chunks) expect(JSON.stringify(f).length).toBeLessThan(1 << 20)
     expect(chunks.every((f) => f.conn === 'c1')).toBe(true)
     expect(s.frames.some((f) => f.t === 'result')).toBe(false)
+  })
+
+  // Security audit SEC-1: the chunks went on the control lane, so a reply of 6 MiB or more, or 32 replies of 400 KiB at
+  // once, passed the 8 MiB hard cap and the Host killed its Gateway: every controller cut off, by a read-only one.
+  const slowGateway = () => {
+    const out = new Writable({ highWaterMark: 16 * 1024, write: (_c, _e, cb) => void setImmediate(cb) })
+    const lines: Array<Record<string, unknown>> = []
+    let carry = ''
+    const write = out.write.bind(out)
+    out.write = ((chunk: string, ...rest: unknown[]) => {
+      const parts = (carry + String(chunk)).split(String.fromCharCode(10))
+      carry = parts.pop() ?? ''
+      parts.filter(Boolean).forEach((l) => lines.push(JSON.parse(l)))
+      return (write as (c: string, ...r: unknown[]) => boolean)(chunk, ...rest)
+    }) as typeof out.write
+    return { out, lines }
+  }
+  const joined = (lines: Array<Record<string, unknown>>): Map<string, string> => {
+    const by = new Map<string, Buffer[]>()
+    for (const f of lines) if (f.t === 'chunk') by.set(f.ref as string, [...(by.get(f.ref as string) ?? []), Buffer.from(f.data as string, 'base64')])
+    return new Map([...by].map(([k, v]) => [k, Buffer.concat(v).toString('utf8')]))
+  }
+  it('a 7 MiB result arrives whole, and the Gateway is not killed', async () => {
+    const g = slowGateway()
+    const s = await setup({ output: g.out, orch: async () => ({ status: 200, body: { big: 'a'.repeat(7 << 20) } }) })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    s.send({ t: 'call', conn: 'c1', id: '1', cmd: 'state-get', args: {} })
+    await vi.waitFor(() => expect(g.lines.filter((f) => f.t === 'chunk').length).toBe(Math.ceil(((7 << 20) + 80) / (512 * 1024))), { timeout: 10_000, interval: 10 })
+    expect(s.events).not.toContain('hardcap')
+    const [whole] = [...joined(g.lines).values()]
+    expect((JSON.parse(whole) as { body: { big: string } }).body.big.length).toBe(7 << 20)
+  })
+  it('32 results of 400 KiB at once all arrive, and the Gateway is not killed', async () => {
+    const g = slowGateway()
+    const s = await setup({ output: g.out, orch: async () => ({ status: 200, body: { big: 'b'.repeat(400 * 1024) } }) })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    for (let i = 0; i < 32; i++) s.send({ t: 'call', conn: 'c1', id: String(i), cmd: 'jobs-list', args: {} })
+    await vi.waitFor(() => expect(g.lines.filter((f) => f.t === 'result' || f.t === 'chunk').length).toBeGreaterThanOrEqual(32), { timeout: 10_000, interval: 10 })
+    await new Promise((r) => setTimeout(r, 200))
+    expect(s.events).not.toContain('hardcap')
+  })
+  it('a result past the replies’ budget is answered RUNTIME_BUSY instead', async () => {
+    const lines: Array<Record<string, unknown>> = []
+    const held: Array<() => void> = []
+    let carry = ''
+    const out = new Writable({
+      highWaterMark: 1,
+      write: (chunk: Buffer, _e, cb) => {
+        const parts = (carry + chunk.toString()).split(String.fromCharCode(10))
+        carry = parts.pop() ?? ''
+        parts.filter(Boolean).forEach((l) => lines.push(JSON.parse(l)))
+        held.push(cb)
+      }
+    })
+    const s = await setup({ output: out, replyMax: 2 << 20, orch: async () => ({ status: 200, body: { big: 'c'.repeat(1 << 20) } }) })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    for (let i = 0; i < 4; i++) s.send({ t: 'call', conn: 'c1', id: String(i), cmd: 'jobs-list', args: {} })
+    await s.settle()
+    for (let i = 0; i < 40; i++) {
+      held.splice(0).forEach((cb) => cb())
+      await new Promise((r) => setImmediate(r))
+    }
+    expect(s.events).not.toContain('hardcap')
+    const busy = lines.filter((f) => f.t === 'result' && f.status === 503)
+    expect(busy.length).toBeGreaterThan(0)
+    expect(busy[0]).toMatchObject({ body: { code: 'RUNTIME_BUSY' } })
   })
 })
 

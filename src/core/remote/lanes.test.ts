@@ -124,3 +124,47 @@ describe('createLaneWriter admitted stream lines', () => {
     expect(over).toEqual(['a'])
   })
 })
+
+// Security audit SEC-1: a chunked reply went on the control lane whole, so one reply of a few MiB, or the 32 replies of
+// 400 KiB a connection may have in flight, passed the 8 MiB hard cap and the link was killed. Replies have a lane and a
+// budget of their own: past the budget a reply is refused, never a reason to kill the link.
+describe('createLaneWriter replies (SEC-1)', () => {
+  const settle = async (s: ReturnType<typeof stalled>, n = 64): Promise<void> => {
+    for (let i = 0; i < n; i++) {
+      s.release()
+      await new Promise((r) => setImmediate(r))
+    }
+  }
+  it('a reply of many lines is not held to the hard cap, and arrives whole and in order', async () => {
+    const s = stalled()
+    let fired = 0
+    const w = createLaneWriter(s.out, { hardCap: 100, onHardCap: () => fired++, replyCap: 1 << 20 })
+    const lines = Array.from({ length: 20 }, (_, i) => `R${String(i).padStart(2, '0')}${'x'.repeat(20)}\n`)
+    expect(w.reply(lines)).toBe(true)
+    expect(fired).toBe(0)
+    expect(w.queued()).toBeLessThan(100)
+    expect(w.replyQueued()).toBeGreaterThan(100)
+    await settle(s)
+    expect(s.got).toEqual(lines)
+    expect(w.replyQueued()).toBe(0)
+  })
+  it('a reply over its budget is refused and nothing of it is queued', () => {
+    const s = stalled()
+    const w = createLaneWriter(s.out, { hardCap: 1 << 20, onHardCap: () => {}, replyCap: 50 })
+    w.control('stalls the stream\n')
+    expect(w.reply(['a'.repeat(30) + '\n'])).toBe(true)
+    expect(w.reply(['b'.repeat(30) + '\n'])).toBe(false)
+    expect(w.replyQueued()).toBe(31)
+  })
+  it('control goes before a reply waiting, and stream lines go between reply lines', async () => {
+    const s = stalled()
+    const w = createLaneWriter(s.out, { hardCap: 1 << 20, onHardCap: () => {}, replyCap: 1 << 20 })
+    w.control('first\n')
+    w.reply(['R1\n', 'R2\n', 'R3\n'])
+    w.stream('p', 'S1\n', 1)
+    w.stream('p', 'S2\n', 2)
+    w.control('C\n')
+    await settle(s)
+    expect(s.got).toEqual(['first\n', 'C\n', 'R1\n', 'S1\n', 'R2\n', 'S2\n', 'R3\n'])
+  })
+})

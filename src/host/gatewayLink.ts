@@ -28,6 +28,9 @@ export const SUBS_PER_CONN = 64
 export const LINK_STREAM_MAX = 4 << 20
 /** Output every stream together may have waiting on the link (§3.1). */
 export const LINK_OUTPUT_MAX = 32 << 20
+/** Large replies together may have waiting on the link, in their pieces (security audit SEC-1): two of the largest a
+ *  reply may be, as base64. Past it a result is answered RUNTIME_BUSY, and the link stays up. */
+export const LINK_REPLY_MAX = 128 << 20
 
 export interface GatewayLinkHandle {
   /** Sends `close-conn` for the connections of this link's generation (revocation, §3.3). Others are ignored. */
@@ -53,6 +56,8 @@ export function attachGatewayLink(o: {
   /** The stream budgets, for tests; LINK_STREAM_MAX and LINK_OUTPUT_MAX otherwise. */
   streamPerKey?: number
   streamTotal?: number
+  /** The replies' budget, for tests; LINK_REPLY_MAX otherwise. */
+  replyMax?: number
 }): GatewayLinkHandle {
   let detached = false
   let capped = false
@@ -71,6 +76,7 @@ export function attachGatewayLink(o: {
     onHardCap: hardCap,
     streamPerKey: o.streamPerKey ?? LINK_STREAM_MAX,
     streamTotal: o.streamTotal ?? LINK_OUTPUT_MAX,
+    replyCap: o.replyMax ?? LINK_REPLY_MAX,
     // The stream is ended, not trimmed: a controller that applied later events after a hole would show a wrong screen.
     onStreamOverflow: (key, lost) => {
       const s = subs.get(key)
@@ -107,12 +113,14 @@ export function attachGatewayLink(o: {
     out.dropStream(key)
   }
   let ref = 0
-  /** One frame, or a large one in pieces (§3.1): a link line over the Gateway's cap would stop its reader for good. */
+  /** One frame, or a large one in pieces (§3.1): a link line over the Gateway's cap would stop its reader for good.
+   *  Results, whole or in pieces, go on the replies' lane, not control (security audit SEC-1): a few MiB of them there,
+   *  one large state or the 32 replies a connection may have in flight, passed the hard cap, and one read-only
+   *  controller got the Gateway killed for everyone. Past the replies' budget a result is refused with a small one. */
   const send = (f: HostLinkFrame): void => {
     if (detached) return
     const line = JSON.stringify(f)
     const bytes = Buffer.byteLength(line)
-    if (bytes <= CHUNK_THRESHOLD) return out.control(`${line}\n`)
     if (f.t === 'result' && bytes > REASSEMBLED_CAP)
       return send({
         t: 'result',
@@ -121,7 +129,14 @@ export function attachGatewayLink(o: {
         status: 500,
         body: { error: `the reply is ${bytes} bytes, over the 64 MiB a remote reply may be`, code: 'REMOTE_REPLY_TOO_LARGE' }
       })
-    for (const c of chunksOf(`h${++ref}`, line)) out.control(`${JSON.stringify({ ...c, conn: f.conn })}\n`)
+    const lines = bytes <= CHUNK_THRESHOLD ? [`${line}\n`] : chunksOf(`h${++ref}`, line).map((c) => `${JSON.stringify({ ...c, conn: f.conn })}\n`)
+    if (f.t !== 'result' && lines.length === 1) return out.control(lines[0])
+    if (out.reply(lines)) return
+    if (f.t === 'result') {
+      const busy = { error: 'the Runtime is sending too many large replies at once; ask again shortly', code: 'RUNTIME_BUSY' }
+      return out.control(`${JSON.stringify({ t: 'result', conn: f.conn, id: f.id, status: 503, body: busy })}\n`)
+    }
+    o.log(`remote: a ${bytes}-byte ${f.t} frame was dropped, over the large replies' budget`)
   }
 
   /** Connections with a pairing being saved, and those of them that closed meanwhile. */
