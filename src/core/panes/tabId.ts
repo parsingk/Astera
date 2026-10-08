@@ -7,6 +7,16 @@ export type TabKind = 'session' | 'file' | 'record' | 'browser' | 'app' | 'media
 export type TabRef = { kind: TabKind; id: string }
 
 export const sessionTab = (sessionId: string): string => `session:${sessionId}`
+/** A session on a paired Runtime (remote runtime design D1.4): the renderer knows it by `<runtimeId>:<sessionId>`, so
+ *  its tab is `sessionTab(key)` = `session:<runtimeId>:<sessionId>`. A local session's id has no colon, so the two never
+ *  meet, and a local tab id does not change. */
+export const remoteSessionKey = (runtimeId: string, sessionId: string): string => `${runtimeId}:${sessionId}`
+export function parseRemoteSessionKey(key: string): { runtimeId: string; sessionId: string } | null {
+  const i = key.indexOf(':')
+  if (i <= 0 || i === key.length - 1) return null
+  return { runtimeId: key.slice(0, i), sessionId: key.slice(i + 1) }
+}
+export const isRemoteSessionKey = (key: string): boolean => parseRemoteSessionKey(key) !== null
 export const fileTab = (path: string): string => `file:${path}`
 /** How It Works's record detail. Stands in the same row as a session or a file, and the tree does
  *  not tell the three apart. */

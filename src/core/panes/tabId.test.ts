@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { appTab, browserTab, recordTab, fileTab, parseTab, sessionTab } from './tabId'
+import { appTab, browserTab, recordTab, fileTab, parseTab, sessionTab, remoteSessionKey, parseRemoteSessionKey, isRemoteSessionKey } from './tabId'
 
 describe('tabId', () => {
   it('세션 탭 id를 만들고 되읽는다', () => {
@@ -50,5 +50,19 @@ describe('tabId', () => {
     expect(appTab('s-1')).toBe('app:s-1')
     expect(parseTab('app:s-1')).toEqual({ kind: 'app', id: 's-1' })
     expect(parseTab('app:')).toBeNull()
+  })
+
+  // Remote Runtime Phase 9b (D1.4): a remote session's key is `<runtimeId>:<sessionId>`, so its tab is
+  // `session:<runtimeId>:<sessionId>` and a local session's tab does not change.
+  it('a remote session key makes the remote tab id and reads back; a local id is not one', () => {
+    const key = remoteSessionKey('rt_1', 's1')
+    expect(sessionTab(key)).toBe('session:rt_1:s1')
+    expect(parseTab(sessionTab(key))).toEqual({ kind: 'session', id: 'rt_1:s1' })
+    expect(parseRemoteSessionKey(key)).toEqual({ runtimeId: 'rt_1', sessionId: 's1' })
+    expect(isRemoteSessionKey(key)).toBe(true)
+    expect(parseRemoteSessionKey('5f0c2a1e-1111-4222-8333-944445555666')).toBeNull()
+    expect(isRemoteSessionKey('term_1')).toBe(false)
+    expect(parseRemoteSessionKey(':s1')).toBeNull()
+    expect(parseRemoteSessionKey('rt_1:')).toBeNull()
   })
 })
