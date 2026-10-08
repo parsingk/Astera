@@ -155,6 +155,25 @@ export interface HostSession {
    *  `unknown` when there is no signal to read — a Codex or chat session, an ended one, no event yet,
    *  or input typed after the last event. */
   state: SessionState
+  /** The pty behind a terminal session (remote runtime Phase 9a): what a controller subscribes to. */
+  ptyId?: string
+  /** The line process behind a chat session. */
+  procId?: string
+  /** The session's account's provider; absent when the account is gone. */
+  provider?: 'claude' | 'codex'
+  /** The session this one replaced in an account roll (the note's `restore.rolledFrom`). */
+  rolledFrom?: string
+  /** Where the Host reads each fact of this session from (X1-06); `none` means the Host cannot say, and the fact is
+   *  shown as unknown, never as idle. */
+  sources?: SessionSources
+}
+
+/** The Host's source for each fact of a session, by provider and kind (remote runtime design Phase 9, X1-06). */
+export interface SessionSources {
+  status: 'hooks' | 'rollout' | 'chat' | 'none'
+  prompt: 'hooks' | 'chat' | 'none'
+  usage: 'statusline' | 'rollout' | 'chat' | 'none'
+  conversation: 'transcript' | 'rollout' | 'chat' | 'none'
 }
 
 /** What `sessions read` shows: a terminal session's scrollback replayed into a terminal at the size

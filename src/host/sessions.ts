@@ -28,7 +28,7 @@
 // `turn/start`). Whether the Host writes it at all, or the app does, is orchDeps' decision (`chatSend`).
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import type { HostSession, SessionScreen } from '../core/orchestration/command'
+import type { HostSession, SessionScreen, SessionSources } from '../core/orchestration/command'
 import { hookEventPrompt, hookEventsFileIn, latestEventLine, sessionStateOf, type SessionState } from '../core/hooks/sessionState'
 import { hookEventAt } from '../core/hooks/eventTime'
 import type { PtyEntry } from '../core/host/protocol'
@@ -77,16 +77,33 @@ export interface SessionTurn {
 /** A note key as the app wrote it, or `null` — the note is the app's, and nothing checks its keys. */
 const text = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 
-const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState): HostSession => {
+/** X1-06's matrix: where the Host reads each fact, by provider and kind. An unknown provider has no source. */
+export function sourcesOf(kind: HostSession['kind'], provider: 'claude' | 'codex' | undefined): SessionSources {
+  if (provider === undefined) return { status: 'none', prompt: 'none', usage: 'none', conversation: 'none' }
+  if (kind === 'chat') return { status: 'chat', prompt: 'chat', usage: provider === 'claude' ? 'chat' : 'none', conversation: 'chat' }
+  return provider === 'claude'
+    ? { status: 'hooks', prompt: 'hooks', usage: 'statusline', conversation: 'transcript' }
+    : { status: 'rollout', prompt: 'none', usage: 'rollout', conversation: 'rollout' }
+}
+
+const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState, providers: ReadonlyMap<string, 'claude' | 'codex'>): HostSession => {
   const restore = e.meta?.restore ?? {}
+  const accountId = text(restore.accountId)
+  const provider = accountId === null ? undefined : providers.get(accountId)
+  const rolledFrom = text(restore.rolledFrom)
   return {
     id: e.meta!.id,
     kind,
     title: text(restore.title),
-    accountId: text(restore.accountId),
+    accountId,
     cwd: text(restore.cwd),
     alive: e.alive,
-    state
+    state,
+    // Phase 9a (N13, X1-06): what a controller needs to show and drive the row.
+    ...(kind === 'terminal' ? { ptyId: e.id } : { procId: e.id }),
+    ...(provider ? { provider } : {}),
+    ...(rolledFrom !== null ? { rolledFrom } : {}),
+    sources: sourcesOf(kind, provider)
   }
 }
 
@@ -202,10 +219,12 @@ export function registrySessions(a: {
   return {
     listSessions: async () => {
       const terminals = a.ptys.list().filter((e) => e.meta?.kind === 'session')
-      const states = await Promise.all(terminals.map(stateOf))
+      const [states, accounts] = await Promise.all([Promise.all(terminals.map(stateOf)), a.accounts().catch(() => [] as Account[])])
+      // An account with no provider field is a Claude account (core/types.ts Account.provider).
+      const providers = new Map(accounts.map((x) => [x.id, x.provider ?? 'claude'] as const))
       const rows = [
-        ...terminals.map((e, i) => rowOf(e, 'terminal', states[i])),
-        ...a.procs.list().filter((e) => e.meta?.kind === 'chat').map((e) => rowOf(e, 'chat', 'unknown'))
+        ...terminals.map((e, i) => rowOf(e, 'terminal', states[i], providers)),
+        ...a.procs.list().filter((e) => e.meta?.kind === 'chat').map((e) => rowOf(e, 'chat', 'unknown', providers))
       ]
       // **One id, one row, and the live one.** `ChatManager.respawnWithBypass` spawns again under the
       // same note, so an ended process and its replacement can share an id.

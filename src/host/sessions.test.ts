@@ -57,7 +57,7 @@ const clock = { now: 0 }
  * and the app's session id travels in the note — so the id a person has (`ASTERA_SESSION`, a
  * Dispatch's `sessionId`) is `meta.id`, and every lookup here has to go through it.
  */
-const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, hookEventsDir = NO_HOOK_DIR) => {
+const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, hookEventsDir = NO_HOOK_DIR, accounts: Account[] = []) => {
   const made = new Map<string, ReturnType<typeof fakePty>>()
   const procsMade: ReturnType<typeof fakeProc>[] = []
   let next = ''
@@ -102,7 +102,7 @@ const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, 
       meta: { kind: 'chat', id: 'chat-1', restore: { accountId: 'acc2', cwd: 'D:/repo', title: '대화' } }
     })
   openChat('proc-a')
-  return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs, hookEventsDir, accounts: async () => [] }) }
+  return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs, hookEventsDir, accounts: async () => accounts }) }
 }
 
 describe('registrySessions — list', () => {
@@ -111,9 +111,36 @@ describe('registrySessions — list', () => {
   it('lists agent sessions and chat sessions by the app’s id, and nothing else', async () => {
     const { sessions } = harness()
     expect(await sessions.listSessions()).toEqual([
-      { id: 'ses-1', kind: 'terminal', title: 'repo', accountId: 'acc1', cwd: 'D:/repo', alive: true, state: 'unknown' },
-      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true, state: 'unknown' }
+      { id: 'ses-1', kind: 'terminal', title: 'repo', accountId: 'acc1', cwd: 'D:/repo', alive: true, state: 'unknown', ptyId: 'pty-a', sources: { status: 'none', prompt: 'none', usage: 'none', conversation: 'none' } },
+      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true, state: 'unknown', procId: 'proc-a', sources: { status: 'none', prompt: 'none', usage: 'none', conversation: 'none' } }
     ])
+  })
+
+  // Phase 9a (remote runtime N13, X1-06): what a controller needs to show a row: the pty or process behind it, the
+  // provider, what it was rolled from, and which facts the Host has a source for.
+  it('a row carries its pty or process, its provider, and the sources by provider and kind', async () => {
+    const acc = (id: string, provider: 'claude' | 'codex'): Account => ({ id, label: id, configDir: `D:/${id}`, color: '#000', createdAt: 'x', provider })
+    const { sessions } = harness(undefined, NO_HOOK_DIR, [acc('acc1', 'claude'), acc('acc2', 'codex')])
+    const rows = await sessions.listSessions()
+    expect(rows.find((r) => r.id === 'ses-1')).toMatchObject({
+      ptyId: 'pty-a',
+      provider: 'claude',
+      sources: { status: 'hooks', prompt: 'hooks', usage: 'statusline', conversation: 'transcript' }
+    })
+    expect(rows.find((r) => r.id === 'chat-1')).toMatchObject({
+      procId: 'proc-a',
+      provider: 'codex',
+      sources: { status: 'chat', prompt: 'chat', usage: 'none', conversation: 'chat' }
+    })
+  })
+
+  it('a Codex terminal is watched through its rollout; a rolled session says what it was rolled from', async () => {
+    const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
+    const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
+    ptys.open({ id: 'pty-x', file: 'codex', args: [], opts, meta: { kind: 'session', id: 'ses-2', restore: { accountId: 'cx', cwd: 'D:/repo', rolledFrom: 'ses-1' } } })
+    const accounts: Account[] = [{ id: 'cx', label: 'cx', configDir: 'D:/cx', color: '#000', createdAt: 'x', provider: 'codex' }]
+    const rows = await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => accounts }).listSessions()
+    expect(rows[0]).toMatchObject({ provider: 'codex', rolledFrom: 'ses-1', sources: { status: 'rollout', prompt: 'none', usage: 'rollout', conversation: 'rollout' } })
   })
 
   // The entry stays after the exit so `list` can say it ended (registry.ts) — and so does this one.
@@ -131,7 +158,7 @@ describe('registrySessions — list', () => {
     openChat('proc-b')
     const chats = (await sessions.listSessions()).filter((s) => s.id === 'chat-1')
     expect(chats).toEqual([
-      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true, state: 'unknown' }
+      { id: 'chat-1', kind: 'chat', title: '대화', accountId: 'acc2', cwd: 'D:/repo', alive: true, state: 'unknown', procId: 'proc-b', sources: { status: 'none', prompt: 'none', usage: 'none', conversation: 'none' } }
     ])
   })
 
@@ -143,7 +170,7 @@ describe('registrySessions — list', () => {
     // And a pty opened with no note at all (an older build, a hand-written client) is nobody.
     ptys.open({ id: 'q', file: 'sh', args: [], opts })
     expect(await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => [] }).listSessions()).toEqual([
-      { id: 's', kind: 'terminal', title: null, accountId: null, cwd: null, alive: true, state: 'unknown' }
+      { id: 's', kind: 'terminal', title: null, accountId: null, cwd: null, alive: true, state: 'unknown', ptyId: 'p', sources: { status: 'none', prompt: 'none', usage: 'none', conversation: 'none' } }
     ])
   })
 })

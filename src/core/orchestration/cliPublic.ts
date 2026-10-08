@@ -156,8 +156,10 @@ type _runConfig = NothingLeft<Unlisted<OrchRunConfig, typeof RUN_CONFIG, []>>
 /** 세션의 칸은 앱이 pty 에 남긴 note 에서 온다 — 앱이 자기에게 남긴 말이라 무엇이든 들 수 있고
  *  (재개 id, 롤링 계정, 우회 권한), 그것이 공개 API 가 되면 안 된다. Host 가 이미 여섯 칸으로
  *  추리지만(host/sessions.ts) 그래도 적는다 — ACCOUNT 와 같은 이유다. */
-const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state'] as const
-type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, []>>
+const SESSION = ['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state', 'provider', 'rolledFrom', 'sources'] as const
+/** The pty and process ids are the Host's own (remote runtime Phase 9a): a controller reads them from the raw reply
+ *  to subscribe, and a printed list leaves them out. */
+type _session = NothingLeft<Unlisted<HostSession, typeof SESSION, ['ptyId', 'procId']>>
 /** `sessions read` 는 두 모양이다(command.ts). 터미널은 SessionScreen 에 id·kind·alive 를 더한 것,
  *  대화는 id·kind·alive 에 턴과 열린 카드다. `sessions send` 는 명령 층이 짓는다. */
 const SESSION_READ = ['id', 'kind', 'alive', 'cols', 'rows', 'screen', 'scrollback', 'screenWrapped', 'scrollbackWrapped', 'turns', 'pending'] as const
