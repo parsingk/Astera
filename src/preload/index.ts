@@ -146,7 +146,8 @@ const api = {
     unsubscribe: fire('usage.unsubscribe')
   },
   notify: {
-    activeSession: fire('notify.activeSession')
+    activeSession: fire('notify.activeSession'),
+    remoteWaiting: fire('notify.remoteWaiting')
   },
   localHistory: {
     list: invoke('localHistory.list'),

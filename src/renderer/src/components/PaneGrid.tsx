@@ -24,6 +24,9 @@ import { browserSlotDraw } from './browserSlot'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
 import { ConversationPane } from './conversation/ConversationPane'
+import { RemoteTerminalView } from './RemoteTerminalView'
+import { RemoteConversationPane } from './conversation/RemoteConversationPane'
+import type { RemoteFacts, RemoteSessionRef } from '../lib/remoteSessions'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
@@ -44,6 +47,9 @@ import {
  *  session slots. There is **one editor per pane, not one per open file** — twenty open files would
  *  otherwise mean twenty CodeMirror instances, while a pane switching between its own file tabs reuses
  *  the one editor and lets App's EditorStateCache carry undo and scroll across. */
+/** A remote session tab's underline: no local account colours it, since its account is the Runtime's. */
+const REMOTE_TAB_COLOR = '#8a8f98'
+
 export function PaneGrid({
   layout,
   activePaneId,
@@ -81,8 +87,19 @@ export function PaneGrid({
   renderRecord,
   renderBrowser,
   appTabInfo,
-  renderApp
+  renderApp,
+  remoteSessions = [],
+  remoteStatus = {},
+  remoteReadOnly = () => false,
+  runtimeName = (id) => id
 }: {
+  /** Sessions on paired Runtimes (Phase 9b), each in the tab `sessionTab(ref.key)`. */
+  remoteSessions?: RemoteSessionRef[]
+  /** A remote session's status by key, from its Runtime's facts; absent is unknown. */
+  remoteStatus?: Record<string, RemoteFacts['status']>
+  /** Whether this app's pairing with that Runtime is read-only. */
+  remoteReadOnly?: (runtimeId: string) => boolean
+  runtimeName?: (runtimeId: string) => string
   layout: PaneNode | null
   activePaneId: string | null
   sessions: SessionInfo[]
@@ -193,6 +210,7 @@ export function PaneGrid({
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
+  const remoteOf = new Map(remoteSessions.map((r) => [r.key, r]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
   // Record tab id → that tab's record. Same shape as fileTabOf
   const recordTabOf = new Map(recordTabs.map((r) => [r.id, r]))
@@ -310,6 +328,41 @@ export function PaneGrid({
                 />
               </div>
             )}
+          </div>
+        )
+      })}
+      {/* Remote session slots (Phase 9b), by the session-slot rule above: a terminal stays mounted for the tab's
+          whole life (its xterm holds what the stream drew), a chat mounts only while it shows (it reads its
+          conversation from the Runtime on a timer, which nobody needs while it is hidden). */}
+      {remoteSessions.map((r) => {
+        const pane = paneOfSession.get(r.key)
+        const visible = pane != null && pane.activeTabId === sessionTab(r.key)
+        const rect = pane ? rects.get(pane.id) : undefined
+        const readOnly = remoteReadOnly(r.runtimeId)
+        return (
+          <div
+            key={r.key}
+            className="terminal-slot"
+            style={
+              visible && rect
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
+            }
+            onMouseDown={() => pane && onFocusPane(pane.id)}
+          >
+            <div className="session-slot-view" style={{ display: 'flex' }}>
+              {r.kind === 'chat' ? (
+                visible && <RemoteConversationPane session={r} readOnly={readOnly} />
+              ) : (
+                <RemoteTerminalView session={r} readOnly={readOnly} active={visible && pane != null && pane.id === activePaneId} />
+              )}
+            </div>
           </div>
         )
       })}
@@ -524,6 +577,19 @@ export function PaneGrid({
             const ref = parseTab(tabId)
             if (ref?.kind === 'session') {
               const s = sessionOf.get(ref.id)
+              const r = s ? undefined : remoteOf.get(ref.id)
+              if (r)
+                return {
+                  tabId,
+                  kind: 'session',
+                  sessionId: r.key,
+                  title: `${r.title ?? r.sessionId} · ${runtimeName(r.runtimeId)}`,
+                  color: REMOTE_TAB_COLOR,
+                  busy: remoteStatus[r.key] === 'working',
+                  exited: !r.alive,
+                  rollTooltip: null,
+                  remote: true
+                }
               if (!s) return null
               return {
                 tabId,
@@ -610,7 +676,7 @@ export function PaneGrid({
         const activeSessionRef = parseTab(l.activeTabId)
         const activeSession =
           activeSessionRef?.kind === 'session'
-            ? { kind: sessionKindOf(sessionOf.get(activeSessionRef.id) ?? {}) }
+            ? { kind: remoteOf.get(activeSessionRef.id)?.kind ?? sessionKindOf(sessionOf.get(activeSessionRef.id) ?? {}) }
             : null
         return (
           <div

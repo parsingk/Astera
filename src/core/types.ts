@@ -1259,6 +1259,8 @@ export interface CoreApi {
     // (design doc §7). null covers a file tab being focused, no pane having a session, and the panes
     // being empty — main cannot work any of that out on its own.
     activeSession(req: { sessionId: string | null }): void
+    /** A remote session tab began waiting (Phase 9b): `key` is `<runtimeId>:<sessionId>`, `title` the tab's. */
+    remoteWaiting(req: { key: string; title: string | null }): void
   }
   localHistory: {
     // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same

@@ -19,6 +19,7 @@ interface HarnessNotifier {
   onRollState: (ev: RollStateEvent) => void
   setActiveSession: (sessionId: string | null) => void
   announceOffline: (count: number, sessionId?: string) => void
+  remoteInputNeeded: (key: string, title: string | null) => void
 }
 
 interface Harness {
@@ -52,7 +53,8 @@ function harness(flags: Partial<DesktopNotifySettings> = {}, sessions = ['s1', '
     onHookEvent: (sessionId, payload) => attention.onHookEvent(sessionId, payload),
     onRollState: (ev) => real.onRollState(ev),
     setActiveSession: (sessionId) => real.setActiveSession(sessionId),
-    announceOffline: (count, sessionId) => real.announceOffline(count, sessionId)
+    announceOffline: (count, sessionId) => real.announceOffline(count, sessionId),
+    remoteInputNeeded: (key, title) => real.remoteInputNeeded(key, title)
   }
   return { notifier, shown, focused }
 }
@@ -391,5 +393,27 @@ describe('DesktopNotifier — the restored wait and the offline notice (S6 Task 
     const waitOnly = harness({ limitWaiting: true, accountSwitched: false })
     waitOnly.notifier.announceOffline(2)
     expect(waitOnly.shown.length).toBe(1)
+  })
+})
+
+// Phase 9b: a session on a paired Runtime began waiting, as the renderer read its facts there. It is gated as a local
+// one is, and a click opens its tab by its key.
+describe('DesktopNotifier — a remote session waiting', () => {
+  it('fires input needed under the remote tab key, with the title given', () => {
+    const h = harness()
+    h.notifier.remoteInputNeeded('rt_1:s9', 'fix the build · Office')
+    expect(h.shown).toEqual([{ event: 'inputNeeded', sessionId: 'rt_1:s9', title: 'fix the build · Office', body: expect.any(String) }])
+  })
+  it('is off with input needed off, and quiet while that tab is on screen in a focused window', () => {
+    const off = harness({ inputNeeded: false })
+    off.notifier.remoteInputNeeded('rt_1:s9', 't')
+    expect(off.shown).toEqual([])
+    const h = harness()
+    h.focused.value = true
+    h.notifier.setActiveSession('rt_1:s9')
+    h.notifier.remoteInputNeeded('rt_1:s9', 't')
+    expect(h.shown).toEqual([])
+    h.notifier.remoteInputNeeded('rt_1:other', null)
+    expect(h.shown.map((x) => x.sessionId)).toEqual(['rt_1:other'])
   })
 })

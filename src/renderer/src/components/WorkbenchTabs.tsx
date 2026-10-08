@@ -75,6 +75,8 @@ export type WorkbenchTab =
       /** 계정 롤링 체인의 툴팁. 롤링이 걸려 있지 않으면 null — 계정 목록은 PaneGrid가 갖고 있으므로
        *  문구를 거기서 만들어 넘긴다 */
       rollTooltip: string | null
+      /** A session on a paired Runtime (Phase 9b): its title is the Runtime's, so it is not renamed here. */
+      remote?: boolean
     }
   | {
       tabId: string
@@ -245,7 +247,7 @@ export function WorkbenchTabs({
           onClick={() => onSelect(tab.tabId)}
           // 세션 탭에만. 파일 탭의 라벨은 파일 이름이라 여기서 바꿀 것이 아니다
           onDoubleClick={
-            tab.kind === 'session' ? () => onRenameStart(tab.tabId) : undefined
+            tab.kind === 'session' && !tab.remote ? () => onRenameStart(tab.tabId) : undefined
           }
           onContextMenu={(e) => {
             e.preventDefault()

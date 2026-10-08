@@ -4170,6 +4170,11 @@ export function registerIpc(
     const id = typeof p?.sessionId === 'string' ? p.sessionId : null
     desktop?.setActiveSession(id)
   })
+  // Phase 9b: a remote session began waiting, as the renderer read its Runtime's facts.
+  ipcMain.on('notify.remoteWaiting', (_e, p: { key?: unknown; title?: unknown } | null) => {
+    if (typeof p?.key !== 'string' || p.key === '') return
+    desktop?.remoteInputNeeded(p.key, typeof p.title === 'string' ? p.title : null)
+  })
   ipcMain.handle('settings.getDesktopNotify', () => core.appSettings.getDesktopNotify())
   ipcMain.handle('settings.setDesktopNotify', async (_e, next: unknown) => {
     if (next === null || typeof next !== 'object' || Array.isArray(next))

@@ -131,7 +131,14 @@ export class DesktopNotifier {
     })
   }
 
-  private fire(event: DesktopNotifyEvent, sessionId: string, accountLabel?: string): void {
+  /** A session on a paired Runtime began waiting (Phase 9b): the renderer read it from that Runtime's facts, since
+   *  nothing of it reaches this process's attention state. `key` is its tab's key (`<runtimeId>:<sessionId>`), which a
+   *  click activates; `title` is the tab's, since this process has no row for it. Gated as a local session is. */
+  remoteInputNeeded(key: string, title: string | null): void {
+    this.fire('inputNeeded', key, undefined, title)
+  }
+
+  private fire(event: DesktopNotifyEvent, sessionId: string, accountLabel?: string, title?: string | null): void {
     if (!this.deps.settings.getDesktopNotify()[event]) return
     // Suppressed when the window is focused and this is the session on screen — you are already
     // looking at it (§7).
@@ -140,7 +147,7 @@ export class DesktopNotifier {
     this.deps.show({
       event,
       sessionId,
-      title: this.deps.getSession(sessionId)?.title ?? t(lang, 'notify.fallbackTitle'),
+      title: title ?? this.deps.getSession(sessionId)?.title ?? t(lang, 'notify.fallbackTitle'),
       body:
         event === 'accountSwitched'
           ? t(lang, BODY_KEY[event], { label: accountLabel ?? '' })

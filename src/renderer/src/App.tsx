@@ -125,7 +125,9 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, isRemoteSessionKey, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { remoteCall, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
+import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
 import { sessionKindOf } from '../../core/sessions/kind'
@@ -454,6 +456,11 @@ export default function App(): React.JSX.Element {
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  // Phase 9b: sessions on paired Runtimes, each in the tab `session:<runtimeId>:<sessionId>` (D1.4). Never in
+  // `sessions`: nothing local runs, reads or restarts for them (D1.6), and the explorer never takes their folder
+  // (activeTabRoot finds no local session for the key).
+  const [remoteSessions, setRemoteSessions] = useState<RemoteSessionRef[]>([])
+  const [remoteStatus, setRemoteStatus] = useState<Record<string, RemoteFacts['status']>>({})
   /** 이름을 고치고 있는 세션 탭. 더블클릭과 우클릭 메뉴가 같은 자리를 연다 */
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
   /** 이름 고치기가 끝났다. title 이 null 이면 취소다.
@@ -488,7 +495,8 @@ export default function App(): React.JSX.Element {
   // 렌더 중 갱신은 이 파일의 다른 ref들과 같은 관례이고, 세션이 사라졌는지는 아래 `active`의
   // sessions 조회가 판정하므로 여기서 따로 청소하지 않는다.
   const lastSessionIdRef = useRef<string | null>(null)
-  if (activeSessionId) lastSessionIdRef.current = activeSessionId
+  // A remote tab is not a local session: the status bar and usage of the last local one stay as they were (Phase 9b).
+  if (activeSessionId && !isRemoteSessionKey(activeSessionId)) lastSessionIdRef.current = activeSessionId
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   // Two different questions, deliberately kept apart (the same split session/startBlocked.ts explains
@@ -1925,6 +1933,12 @@ export default function App(): React.JSX.Element {
 
   /** 탭 줄에서 탭을 골랐다. 종류에 상관없이 트리에서 그 탭을 활성으로 만들고 그 페인에 포커스를 준다 —
    *  다른 페인의 탭을 눌렀을 때 그 페인으로 옮겨 가는 것도 이 한 줄이 한다 */
+  /** Opens a session on a paired Runtime in a tab, or brings its open tab forward. */
+  const openRemoteSession = (ref: RemoteSessionRef): void => {
+    setRemoteSessions((prev) => (prev.some((r) => r.key === ref.key) ? prev.map((r) => (r.key === ref.key ? ref : r)) : [...prev, ref]))
+    place(layoutRef.current, ref.key)
+  }
+
   const selectWorkbenchTab = (tabId: string): void => {
     const cur = layoutRef.current
     if (!cur) return
@@ -1982,6 +1996,14 @@ export default function App(): React.JSX.Element {
       // only by the pane's Close button (workspace-close). The mirror entry stays, so the next frame of
       // a workspace that is still open does not put the tab back: only a workspace that opens again
       // does (newlyOpened reads a transition, not a presence).
+      dropTabFromTree(tabId)
+      return
+    }
+    if (isRemoteSessionKey(ref.id)) {
+      // Closing the tab is not ending the session: it keeps running on the Runtime (v1 Remote Session 7, 8). Its
+      // view unmounts with its slot, which detaches the stream.
+      setRemoteSessions((prev) => prev.filter((r) => r.key !== ref.id))
+      setRemoteStatus(({ [ref.id]: _s, ...rest }) => rest)
       dropTabFromTree(tabId)
       return
     }
@@ -2649,6 +2671,34 @@ export default function App(): React.JSX.Element {
   /** A paired Runtime's permission as this app was told at pairing; an unknown one is read only (controllerGate). */
   const permissionOf = (runtimeId: string): string => pairedRuntimes.find((r) => r.runtimeId === runtimeId)?.permission ?? 'read-only'
   const readOnlyReason = t('jobs.runtime.readOnlyReason')
+  const runtimeName = (runtimeId: string): string => pairedRuntimes.find((r) => r.runtimeId === runtimeId)?.name ?? runtimeId
+  const remoteReadOnly = (runtimeId: string): boolean => permissionOf(runtimeId) !== 'full-control'
+  /** A remote tab's own name, as its tab and its notification show it. */
+  const remoteTitleOf = (r: RemoteSessionRef): string => `${r.title ?? r.sessionId} · ${runtimeName(r.runtimeId)}`
+  // The paired Runtimes, for a remote tab's name and permission: read when the first remote tab opens.
+  const anyRemoteTab = remoteSessions.length > 0
+  useEffect(() => {
+    if (!anyRemoteTab) return
+    void window.api.remote.list().then(setPairedRuntimes, () => {})
+  }, [anyRemoteTab, pairedChanged])
+  useRemoteSessionWatch({
+    refs: remoteSessions,
+    onUpdate: (next) => setRemoteSessions((prev) => prev.map((r) => (r.key === next.key ? next : r))),
+    // A roll replaced the session while this tab watched it, or while the link was down (X1-11): the tab moves to
+    // the new session in its place, and its view starts again from the new pty's checkpoint.
+    onFollow: (fromKey, to) => {
+      setRemoteSessions((prev) => (prev.some((r) => r.key === to.key) ? prev.filter((r) => r.key !== fromKey) : prev.map((r) => (r.key === fromKey ? to : r))))
+      setLayout((cur) => (cur ? replaceTabId(cur, sessionTab(fromKey), sessionTab(to.key)) : cur))
+    },
+    onStatus: (key, status) => setRemoteStatus((prev) => (prev[key] === status ? prev : { ...prev, [key]: status })),
+    onWaiting: (ref) => window.api.notify.remoteWaiting({ key: ref.key, title: remoteTitleOf(ref) })
+  })
+  const stopRemoteSession = async (ref: RemoteSessionRef): Promise<void> => {
+    const ok = await confirmModal({ title: t('remote.session.stopTitle'), body: t('remote.session.stopBody'), confirmLabel: t('remote.session.stop') })
+    if (!ok) return
+    const r = await remoteCall(ref.runtimeId, 'sessions-stop', { id: ref.sessionId })
+    if (r.status !== 200) toast.error(t('remote.session.failed', { message: String((r.body as { error?: unknown } | null)?.error ?? r.status) }))
+  }
   /** Bumped when a change on a paired Runtime went through: the remote list is read again now (it is not pushed). */
   const [remoteRefresh, setRemoteRefresh] = useState(0)
   const onRemoteChanged = useRef(() => setRemoteRefresh((n) => n + 1)).current
@@ -3956,6 +4006,8 @@ export default function App(): React.JSX.Element {
   // (Separate from the activeSessionId state — only an id whose session existence was confirmed by
   // active is used.)
   const usageSessionId = active?.id
+  const activeRemote = activeSessionId ? remoteSessions.find((r) => r.key === activeSessionId) ?? null : null
+  const activeRemoteKey = activeRemote?.key ?? null
   useEffect(() => {
     if (!usageSessionId) {
       setUsage(null)
@@ -3985,8 +4037,8 @@ export default function App(): React.JSX.Element {
   // place that can answer — panes and tabs are its structure (design doc §7). null covers a file tab
   // being focused, no pane having a session, and the panes being empty.
   useEffect(() => {
-    window.api.notify.activeSession({ sessionId: usageSessionId ?? null })
-  }, [usageSessionId])
+    window.api.notify.activeSession({ sessionId: activeRemoteKey ?? usageSessionId ?? null })
+  }, [usageSessionId, activeRemoteKey])
 
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
@@ -4432,6 +4484,10 @@ export default function App(): React.JSX.Element {
                 에디터는 이 안의 페인 슬롯에 있다 */}
             <div className="session-view">
               <PaneGrid
+                remoteSessions={remoteSessions}
+                remoteStatus={remoteStatus}
+                remoteReadOnly={remoteReadOnly}
+                runtimeName={runtimeName}
                 renamingTabId={renamingTabId}
                 onRenameStart={setRenamingTabId}
                 onRenameEnd={endTabRename}
@@ -4570,7 +4626,14 @@ export default function App(): React.JSX.Element {
         </main>
       </div>
       <div className="statusbar">
-        {active ? (
+        {activeRemote ? (
+          <>
+            <span className="status-item">{activeRemote.title ?? activeRemote.sessionId}</span>
+            <span className="status-item">{runtimeName(activeRemote.runtimeId)}</span>
+            <span className="status-item status-path">{activeRemote.cwd}</span>
+            <span className="status-item">{t(`remote.session.status.${remoteStatus[activeRemote.key] ?? 'unknown'}` as never)}</span>
+          </>
+        ) : active ? (
           <>
             <span className="status-account">
               <span
@@ -5324,7 +5387,9 @@ export default function App(): React.JSX.Element {
               setLayout(res.root)
               setActivePaneId(res.paneId)
             }
-            const isSession = parseTab(tid)?.kind === 'session'
+            const tabRef = parseTab(tid)
+            const remote = tabRef?.kind === 'session' ? remoteSessions.find((r) => r.key === tabRef.id) : undefined
+            const isSession = tabRef?.kind === 'session' && !remote
             // An agent's tab while its script runs: the one way to end it from the UI. Main aborts the
             // run and tells the CLI; nothing here waits for it.
             const agentTab = parseTab(tid)?.kind === 'browser' ? browserTabsRef.current.find((b) => b.id === tid && b.agentSessionId !== undefined) : undefined
@@ -5338,6 +5403,17 @@ export default function App(): React.JSX.Element {
                     {
                       label: t('session.tab.rename'),
                       onSelect: () => setRenamingTabId(tid)
+                    },
+                    'separator'
+                  ] as MenuItem[])
+                : []),
+              ...(remote
+                ? ([
+                    {
+                      label: t('remote.session.stop'),
+                      danger: true,
+                      disabled: !remote.alive || remoteReadOnly(remote.runtimeId),
+                      onSelect: () => void stopRemoteSession(remote)
                     },
                     'separator'
                   ] as MenuItem[])
