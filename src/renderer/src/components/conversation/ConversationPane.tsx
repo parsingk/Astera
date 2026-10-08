@@ -66,6 +66,9 @@ export interface ConversationPaneProps {
    *  neighbouring conversation left the caret in the pane you came from — the marker said one session
    *  and the typing went to another. */
   active?: boolean;
+  /** The tab is the one its pane shows. A hidden chat tab stays mounted (it keeps its thread and scroll) but main stops
+   *  reading its conversation until it shows again (performance audit R4). Defaults to shown. */
+  visible?: boolean;
   /** The rolling and schedule banners (chat-sessions slice 4 §5.6): PaneGrid passes the per-session
    *  events it already holds for TerminalView. Absent for a terminal session's conversation view — its
    *  TerminalView shows them. */
@@ -431,6 +434,7 @@ type Status = "loading" | "unavailable" | "ready";
 export function ConversationPane({
   sessionId,
   active = false,
+  visible = true,
   exited = false,
   rollState = null,
   schedState = null,
@@ -645,7 +649,8 @@ export function ConversationPane({
   // file read every couple of seconds while a person is looking at an empty panel, and the
   // alternative is that dead end again.
   useEffect(() => {
-    if (status !== "unavailable") return;
+    // Not while the tab is hidden: it asks again once it shows
+    if (status !== "unavailable" || !visible) return;
     const generation = generationRef.current;
     const timer = setInterval(() => {
       void window.api.conversation
@@ -667,7 +672,13 @@ export function ConversationPane({
         .catch(() => {});
     }, UNAVAILABLE_RETRY_MS);
     return () => clearInterval(timer);
-  }, [sessionId, status]);
+  }, [sessionId, status, visible]);
+
+  // Main reads this conversation only while its tab shows (performance audit R4). Its follow keeps its place, so what
+  // was written while hidden arrives in one append as it shows again.
+  useEffect(() => {
+    void window.api.conversation.pause(sessionId, !visible).catch(() => {});
+  }, [sessionId, visible]);
 
   const loadMore = useCallback(() => {
     if (!more || loadingMore) return;

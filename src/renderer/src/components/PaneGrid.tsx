@@ -307,6 +307,7 @@ export function PaneGrid({
               <div className="session-slot-view" style={{ display: 'flex' }}>
                 <ConversationPane
                   sessionId={s.id}
+                  visible={visible}
                   exited={s.status === 'exited'}
                   active={visible && pane != null && pane.id === activePaneId}
                   rollState={rollStates[s.id] ?? null}

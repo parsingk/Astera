@@ -2028,6 +2028,9 @@ export type RendererApi = CoreApi & {
      *  repeats a turn already returned. */
     more(sessionId: string, before: number): Promise<{ turns: ConvTurn[]; from: number; more: boolean } | null>
     close(sessionId: string): Promise<void>
+    /** Stops reading this conversation while its tab is not showing, or reads it again (performance audit R4). What
+     *  was written meanwhile arrives in one append on the resume. */
+    pause(sessionId: string, paused: boolean): Promise<void>
     /** One session's attention verdict (main/attention.ts), read once rather than waited for — the
      *  'conversation:attention' event only fires on a change, so a session already `waiting` (or
      *  `working`) when its pane mounts needs this to know that before the first change arrives, if

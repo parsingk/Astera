@@ -411,6 +411,7 @@ const api = {
     open: invoke('conversation.open'),
     more: invoke('conversation.more'),
     close: invoke('conversation.close'),
+    pause: invoke('conversation.pause'),
     attention: invoke('conversation.attention'),
     pendingPrompt: invoke('conversation.pendingPrompt'),
     model: invoke('conversation.model'),

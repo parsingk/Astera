@@ -79,6 +79,11 @@ export interface ConversationSessions {
   close(sessionId: string): void
   /** Every open conversation, closed at once — same timer rule as close(). */
   closeAll(): void
+  /** Stops reading this session while its tab is not showing, or reads it again (performance audit R4). The follow
+   *  keeps its place, so a resume emits in one read what was written meanwhile. Remembered for a session not open
+   *  yet (the pane can say it before its open lands) until it is closed. The timer runs only while some open session
+   *  is not paused. */
+  pause(sessionId: string, paused: boolean): void
   /** How many turns this session's follow is still retaining because at least one of their calls has
    *  not resolved yet. Exists to be asserted by a test: a retention leak (keeping a turn after its
    *  last call resolves) has no other observable trace — the emitted turns look identical either way,
@@ -153,14 +158,20 @@ export function createConversationSessions(deps: {
   emit: (sessionId: string, turns: ConvTurn[], restarted: boolean) => void
 }): ConversationSessions {
   const entries = new Map<string, Entry>()
+  /** Sessions whose tab is not showing (pause): not read until resumed. */
+  const paused = new Set<string>()
   let ticker: ReturnType<typeof setInterval> | null = null
 
+  const reading = (): boolean => {
+    for (const id of entries.keys()) if (!paused.has(id)) return true
+    return false
+  }
   const ensureTicker = (): void => {
-    if (ticker) return
+    if (ticker || !reading()) return
     ticker = setInterval(() => void tick().catch(() => {}), POLL_MS)
   }
   const dropTickerIfIdle = (): void => {
-    if (entries.size > 0 || ticker === null) return
+    if (reading() || ticker === null) return
     clearInterval(ticker)
     ticker = null
   }
@@ -255,6 +266,7 @@ export function createConversationSessions(deps: {
     // for a session further along than the one just started) must drop that session from the rest of
     // this same tick, and a Map iterator already skips an entry deleted before it is visited.
     for (const [sessionId, entry] of entries) {
+      if (paused.has(sessionId)) continue // its tab is not showing: read when it shows again
       if (entry.inFlight) continue // this entry's previous read has not settled yet — try again next tick
       entry.inFlight = true
       void stepEntry(sessionId, entry)
@@ -299,11 +311,19 @@ export function createConversationSessions(deps: {
     },
     close(sessionId) {
       entries.delete(sessionId)
+      paused.delete(sessionId)
       dropTickerIfIdle()
     },
     closeAll() {
       entries.clear()
+      paused.clear()
       dropTickerIfIdle()
+    },
+    pause(sessionId, on) {
+      if (on) paused.add(sessionId)
+      else paused.delete(sessionId)
+      if (on) dropTickerIfIdle()
+      else ensureTicker()
     },
     retainedCount(sessionId) {
       return entries.get(sessionId)?.partOwner.size ?? 0

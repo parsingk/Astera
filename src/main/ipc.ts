@@ -7346,6 +7346,10 @@ export function registerIpc(
   ipcMain.handle('conversation.close', (_e, sessionId: string) => {
     conversationSessions.close(sessionId)
   })
+  // A chat tab that is not showing stops its reads until it shows again (performance audit R4)
+  ipcMain.handle('conversation.pause', (_e, sessionId: string, paused: boolean) => {
+    conversationSessions.pause(sessionId, paused === true)
+  })
   // Independent of open/more/close — a fresh session sitting on a trust prompt is `waiting` while
   // `open` still answers null, so this reads main/attention.ts directly rather than folding onto
   // conversationSessions.

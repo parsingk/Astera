@@ -330,6 +330,46 @@ describe('createConversationSessions', () => {
     expect(clearIntervalSpy).toHaveBeenCalledTimes(2)
   })
 
+  // Performance audit R4: a chat tab that is not showing stays mounted, and main read its conversation every second
+  // for as long as it did. Paused, nothing is read; shown again, what was written meanwhile comes in one read.
+  it('a paused session is not read; resumed, what was written meanwhile is emitted', async () => {
+    const p = path.join(dir, 't.jsonl')
+    await writeFile(p, userLine(1))
+    const emit = vi.fn()
+    const sources = vi.fn(async () => ({ path: p, format: 'claude' as const }))
+    const sessions = createConversationSessions({ sourceFor: sources, emit })
+    await sessions.open('s1')
+    sessions.pause('s1', true)
+    await appendFile(p, userLine(2))
+    sources.mockClear()
+    await advance(POLL_MS * 5)
+    expect(emit).not.toHaveBeenCalled()
+    expect(sources).not.toHaveBeenCalled()
+    sessions.pause('s1', false)
+    await advance(POLL_MS)
+    expect(emit).toHaveBeenCalledTimes(1)
+    expect(emit.mock.calls[0][1].map((t: { id: string }) => t.id)).toEqual(['u2'])
+    sessions.closeAll()
+  })
+
+  it('the timer stops while every open session is paused, and starts again on a resume', async () => {
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    const p = path.join(dir, 't.jsonl')
+    await writeFile(p, userLine(1))
+    const sessions = createConversationSessions({ sourceFor: async () => ({ path: p, format: 'claude' as const }), emit: vi.fn() })
+    await sessions.open('s1')
+    sessions.pause('s1', true)
+    expect(clearIntervalSpy).toHaveBeenCalledTimes(1)
+    sessions.pause('s1', false)
+    expect(setIntervalSpy).toHaveBeenCalledTimes(2)
+    // A pause of a session that is not open is remembered for its open, and a close forgets it
+    sessions.close('s1')
+    sessions.pause('s2', true)
+    sessions.close('s2')
+    sessions.closeAll()
+  })
+
   it('a file that disappears while open emits nothing and does not throw', async () => {
     const p = path.join(dir, 't.jsonl')
     await writeFile(p, userLine(1))
