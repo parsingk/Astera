@@ -58,6 +58,13 @@ describe('runs-changed-files', () => {
     const other = fresh.deps.getState().runs[0].id
     expect((await call(fresh.deps, 'runs-changed-files', { id: other })).body).toMatchObject({ git: null, unavailable: 'not-recorded' })
   })
+  // The Run detail names a Run by its Job (hand check of Phase 10): the Job's latest Run, as runs-completion reads it.
+  it('a Job id reads its latest Run', async () => {
+    const { deps, runId } = await seeded({ answers: { 'D:/p b..h': [FILE] } })
+    const jobId = deps.getState().runs[0].jobId
+    expect((await call(deps, 'runs-changed-files', { runId: jobId })).body).toMatchObject({ runId, git: { files: [FILE] } })
+    expect((await call(deps, 'runs-diff', { runId: jobId, fileId: 'f1' })).status).toBe(200)
+  })
   it('an unknown Run is 404, a missing id 400', async () => {
     const { deps } = await seeded()
     expect((await call(deps, 'runs-changed-files', { runId: 'run_x' })).status).toBe(404)

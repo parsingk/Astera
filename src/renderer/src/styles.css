@@ -2396,6 +2396,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detail-completion { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
 .detail-completion-head { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
 .detail-completion-head:hover { text-decoration: underline; background: none; }
+/* Opened, it shrinks to the room the events column has and scrolls inside itself, so a long list or diff never runs past the detail. */
+.changed-files { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .changed-files-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .changed-files-list > li > button { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; text-align: left; font-size: 12px; }
 .changed-files-list > li > button:hover, .changed-files-list > li > button.is-open { background: var(--elevated); }
@@ -2409,7 +2411,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .changed-file-diff { margin: 4px 0 8px; }
 .changed-files-reported-head { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); }
 .changed-files-reported { margin: 0; padding-left: 18px; font-size: 12px; font-family: var(--font-mono, monospace); color: var(--text); }
-.diff-view { max-height: 480px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg); }
+.diff-view { max-height: 360px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg); }
 .diff-table { border-collapse: collapse; width: 100%; font-family: var(--font-mono, monospace); font-size: 12px; }
 .diff-row td { padding: 0 6px; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff-no { width: 1%; min-width: 36px; text-align: right; color: var(--text-faint); user-select: none; white-space: nowrap !important; }

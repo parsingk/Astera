@@ -39,6 +39,7 @@ import {
   resumeRun,
   setRunWorktree,
   recordRunGit,
+  resolveRunId,
   recordDispatchGit,
   placedByApp,
   coordinatorStarting,
@@ -2200,8 +2201,10 @@ export async function handleCommand(
     // first of `rangesFor`'s ranges git answers. `unavailable` says why there is no git list: no range was recorded
     // (the work predates Phase 10), or git could not read any of them (the folder and the commits are gone).
     case 'runs-changed-files': {
-      const runId = str(args.runId) ?? str(args.id)
-      if (!runId) return bad('--id is required: the run whose changed files to read')
+      const asked = str(args.runId) ?? str(args.id)
+      if (!asked) return bad('--id is required: the run whose changed files to read')
+      // A Job id reads its latest Run, as runs-completion does: the Run detail names a Run by its Job.
+      const runId = resolveRunId(s, asked) ?? asked
       const taskId = str(args.taskId) ?? str(args.task) ?? undefined
       const found = rangesFor(s, runId, taskId)
       if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
@@ -2217,8 +2220,9 @@ export async function handleCommand(
     // **One file's diff, by the id `runs-changed-files` gave it, never a path** (§4.8): the same range's list is read
     // again and the id looked up in it, so a caller can only ever see a file that range changed.
     case 'runs-diff': {
-      const runId = str(args.runId) ?? str(args.id)
-      if (!runId) return bad('--id is required: the run the file changed in')
+      const asked = str(args.runId) ?? str(args.id)
+      if (!asked) return bad('--id is required: the run the file changed in')
+      const runId = resolveRunId(s, asked) ?? asked
       const fileId = str(args.fileId) ?? str(args.file)
       if (!fileId) return bad('--file is required: a file id from runs-changed-files')
       const taskId = str(args.taskId) ?? str(args.task) ?? undefined
