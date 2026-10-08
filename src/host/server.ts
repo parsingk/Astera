@@ -9,6 +9,7 @@ import {
   HOST_PROTOCOL,
   HOST_FEATURE_PROC,
   HOST_FEATURE_PING,
+  HOST_FEATURE_PTY_SEQ,
   HOST_FEATURE_ORCH,
   HOST_FEATURE_REQUESTS,
   HOST_FEATURE_MCP,
@@ -162,7 +163,7 @@ export interface HostServer {
   /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
    *  the app that attaches after a restart is not the app that spawned. With `to`, only to the greeted
    *  sockets whose hello yields pass it (final review M4: a push only a newer app can read). */
-  broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean): void
+  broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>, features: ReadonlySet<string>) => boolean): void
   /** Whether an app is connected right now (design §5): one that announced `role: 'app'`, or an app
    *  1.3.25 or older, whose hello carries no role (LEGACY_APP_NOTICE). Both do their own work, so the
    *  Host does not drive, roll or open Slack beside either (S6-6, SL-11). The command layer asks this
@@ -305,6 +306,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   /** What each greeted socket's hello yielded to this Host (`hello.yields`, ruling R4). Written and
    *  deleted beside `roles`, for the same reason it is kept beside the set rather than inside it. */
   const yields = new Map<net.Socket, ReadonlySet<string>>()
+  /** What each greeted socket's hello listed in `features` (`pty-seq`, remote runtime design §3.7). */
+  const features = new Map<net.Socket, ReadonlySet<string>>()
   /** The MCP client each `mcp` socket's hello named, cleaned on arrival (MCP spec §29). Written and
    *  deleted beside `roles`; a socket of any other role never has one. */
   const mcpClients = new Map<net.Socket, McpClient>()
@@ -535,6 +538,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           // Junk entries are dropped rather than refused: a hello is not the place to turn a client
           // away over a field that only ever narrows what it keeps.
           yields.set(socket, new Set(Array.isArray(m.yields) ? m.yields.filter((x): x is string => typeof x === 'string') : []))
+          features.set(socket, new Set(Array.isArray(m.features) ? m.features.filter((x): x is string => typeof x === 'string') : []))
           // The client names itself, so it is cleaned here whatever the sender did (never trust the wire).
           const client = roles.get(socket) === 'mcp' ? mcpClientOf(m.client) : undefined
           if (client) mcpClients.set(socket, client)
@@ -565,6 +569,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
             features: [
               HOST_FEATURE_PROC,
               HOST_FEATURE_PING,
+              HOST_FEATURE_PTY_SEQ,
               ...(deps.orch ? [HOST_FEATURE_ORCH, HOST_FEATURE_REQUESTS, HOST_FEATURE_MCP] : []),
               ...(deps.features ?? [])
             ],
@@ -705,6 +710,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const role = outwardRole(socket)
       roles.delete(socket)
       yields.delete(socket)
+      features.delete(socket)
       mcpClients.delete(socket)
       mcpRemotes.delete(socket)
       dropState(socket)
@@ -835,7 +841,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       const line = lazyLine(m)
       for (const s of greetedSockets) {
         if (s.destroyed || isMcp(s)) continue
-        if (to && !to(yields.get(s) ?? new Set<string>())) continue
+        if (to && !to(yields.get(s) ?? new Set<string>(), features.get(s) ?? new Set<string>())) continue
         writeTo(s, m, line)
       }
     },

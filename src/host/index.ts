@@ -781,13 +781,15 @@ async function main(): Promise<void> {
           if (slackWiring && from.greeted && from.role === 'app') slackWiring.forwarded(m.event)
           return true
         }
-        return (handlePty?.(m, send) ?? false) || (handleProc?.(m, send) ?? false)
+        return (handlePty?.(m, send, { socket: from.socket }) ?? false) || (handleProc?.(m, send) ?? false)
       },
       // Released by the socket number whatever role the socket gave last: a second `hello` can change
       // it, and marks made as an app must still go when that socket closes. A socket that never held a
       // pty, which is every CLI call, runs no sweep (exits.ts).
       onClientGone: (from) => {
         exits?.appGone(from.socket)
+        // Phase 8 (N2): what this socket paused is resumed, so a dead app does not leave a pty frozen.
+        handlePty?.socketGone(from.socket)
         procHolders.appGone(from.socket)
         // E2: a Job merge the app registered with work-units-git-op and never ended is ended now.
         hostWorkUnits?.clientGone(from.socket)
@@ -869,7 +871,7 @@ async function main(): Promise<void> {
   // And the Remote Gateway (remote runtime design §2.3: every Host start reads remote-runtime.json).
   void gateway.reload()
 
-  handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
+  handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })
   // The leftovers of a Host that died with workspaces open (spec, Lifecycle): killed when their start
   // time still matches, then the file is cleared. A launch waits for this. Never rejects.

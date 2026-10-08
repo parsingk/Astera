@@ -54,8 +54,9 @@ export function takeOverSessions(d: {
       continue
     }
     if (d.hasChain(id)) continue
-    // R31 (preflight R4): an app that died inside a backpressure pause left the pty paused, and nothing
-    // in the Host releases it (SessionManager.adopt does it for the app). Released before the mark.
+    // R31 (preflight R4): an app that died inside a backpressure pause left the pty paused. Since Phase 8 (N2) the
+    // Host resumes what a closed socket paused (ptyHost.ts socketGone), so this is a guard that does nothing then:
+    // resuming a running pty changes nothing. Kept for a pause the close did not see. Released before the mark.
     d.resume(e.id)
     d.note(e.id, { rolledBy: 'host' })
     // A restore that throws is taken as one that refused (fix round 1): the mark comes back either way,

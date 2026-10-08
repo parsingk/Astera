@@ -112,9 +112,9 @@ async function rig() {
   const server = {
     hasApp: () => apps.size > 0,
     yieldsOf: (s: number) => apps.get(s) ?? null,
-    broadcast: (m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean) => {
+    broadcast: (m: HostMessage, to?: (yields: ReadonlySet<string>, features: ReadonlySet<string>) => boolean) => {
       broadcasts.push(m)
-      for (const [no, y] of apps) if (!to || to(y)) delivered.push([no, m])
+      for (const [no, y] of apps) if (!to || to(y, new Set())) delivered.push([no, m])
     },
     act: async (name: string, args: unknown) => { acts.push([name, args as unknown[]]); return { sent: true } }
   }

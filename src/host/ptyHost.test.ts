@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { attachPtyHost } from './ptyHost'
 import { ENDED_WITHOUT_A_CODE } from './exits'
 import { PtyRegistry, type RegistryPty } from './registry'
-import type { ClientMessage, HostMessage } from '../core/host/protocol'
+import { HOST_FEATURE_PTY_SEQ, type ClientMessage, type HostMessage } from '../core/host/protocol'
 
 function fakePty(pid = 11): RegistryPty & { sent: string[]; emit(d: string): void; exit(c: number): void } {
   let onData: (d: string) => void = () => {}
@@ -26,7 +26,8 @@ const harness = (pty = fakePty()) => {
   const broadcast: HostMessage[] = []
   const replies: HostMessage[] = []
   const registry = new PtyRegistry({ spawn: () => pty, log: () => {} })
-  const handle = attachPtyHost({ registry, broadcast: (m) => broadcast.push(m) })
+  // A client without `pty-seq`, as every client before Phase 8: frames filtered to others are not its.
+  const handle = attachPtyHost({ registry, broadcast: (m, to) => void (!to || to(new Set(), new Set()) ? broadcast.push(m) : 0) })
   const send = (m: ClientMessage): boolean => handle(m, (h) => replies.push(h))
   return { pty, registry, broadcast, replies, send }
 }
@@ -173,5 +174,66 @@ describe('attachPtyHost', () => {
     h.send({ t: 'pty-attach', id: 'nope' })
     h.send({ t: 'pty-attach', id: 'p1' })
     expect(h.replies).toEqual([])
+  })
+})
+
+// Remote runtime design §3.7 (Phase 8): `pty-data` carries `seq` only to a client that announced `pty-seq`, and a
+// socket that paused a pty resumes it when it closes (N2), so a dead app no longer freezes it.
+describe('attachPtyHost pty-seq and pauses (Phase 8)', () => {
+  const rig = () => {
+    const pty = fakePty()
+    // node-pty's pause is not counted: one resume undoes any number of pauses. So the count here is of resumes.
+    let paused = 0
+    let resumes = 0
+    pty.pause = () => void (paused = 1)
+    pty.resume = () => void ((paused = 0), resumes++)
+    const sent: Array<{ m: HostMessage; seq: boolean }> = []
+    const registry = new PtyRegistry({ spawn: () => pty, log: () => {} })
+    const handle = attachPtyHost({
+      registry,
+      broadcast: (m, to) => {
+        for (const features of [new Set<string>(), new Set<string>([HOST_FEATURE_PTY_SEQ])])
+          if (!to || to(new Set(), features)) sent.push({ m, seq: features.size > 0 })
+      }
+    })
+    const send = (m: ClientMessage, socket = 1): boolean => handle(m, () => {}, { socket })
+    send(spawnMsg)
+    return { pty, sent, send, handle, paused: () => paused, resumes: () => resumes }
+  }
+
+  it('a client without pty-seq gets the frame it got before; one with it gets the seq', () => {
+    const h = rig()
+    h.pty.emit('hello')
+    expect(h.sent.filter((s) => !s.seq).map((s) => s.m)).toEqual([{ t: 'pty-data', id: 'p1', data: 'hello' }])
+    expect(h.sent.filter((s) => s.seq).map((s) => s.m)).toEqual([{ t: 'pty-data', id: 'p1', data: 'hello', seq: 1 }])
+  })
+
+  it('a socket that paused a pty and closes leaves it resumed', () => {
+    const h = rig()
+    h.send({ t: 'pty-pause', id: 'p1' }, 3)
+    expect(h.paused()).toBe(1)
+    h.handle.socketGone(3)
+    expect(h.paused()).toBe(0)
+  })
+
+  it('two sockets paused it: it stays paused until the last of them resumes or closes', () => {
+    const h = rig()
+    h.send({ t: 'pty-pause', id: 'p1' }, 3)
+    h.send({ t: 'pty-pause', id: 'p1' }, 4)
+    h.handle.socketGone(3)
+    expect(h.resumes()).toBe(0)
+    expect(h.paused()).toBe(1)
+    h.handle.socketGone(4)
+    expect(h.resumes()).toBe(1)
+    expect(h.paused()).toBe(0)
+  })
+
+  it('a socket that paused and resumed leaves nothing to undo when it closes', () => {
+    const h = rig()
+    h.send({ t: 'pty-pause', id: 'p1' }, 3)
+    h.send({ t: 'pty-resume', id: 'p1' }, 3)
+    const before = h.paused()
+    h.handle.socketGone(3)
+    expect(h.paused()).toBe(before)
   })
 })

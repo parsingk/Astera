@@ -163,8 +163,8 @@ async function rig(o: RigOpts) {
     hasApp: () => server.app,
     appsKeep: (_duty: string) => server.app && server.keeps,
     /** What the Host broadcast, with the filter it gave (limits L3 reads the `driver` ones). */
-    broadcasts: [] as Array<{ m: HostMessage; to?: (yields: ReadonlySet<string>) => boolean }>,
-    broadcast: (m: HostMessage, to?: (yields: ReadonlySet<string>) => boolean) => {
+    broadcasts: [] as Array<{ m: HostMessage; to?: (yields: ReadonlySet<string>, features: ReadonlySet<string>) => boolean }>,
+    broadcast: (m: HostMessage, to?: (yields: ReadonlySet<string>, features: ReadonlySet<string>) => boolean) => {
       server.broadcasts.push({ m, to })
     }
   }
@@ -761,8 +761,8 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     await h.wiring.driving.tick()
     const told = h.server.broadcasts.filter((b) => b.m.t === 'driver')
     expect(told.at(-1)?.m).toEqual({ t: 'driver', driver: 'parked', gate: 'unreadable' })
-    expect(told.at(-1)?.to?.(new Set([HOST_YIELD_DISPATCH]))).toBe(true)
-    expect(told.at(-1)?.to?.(new Set())).toBe(false)
+    expect(told.at(-1)?.to?.(new Set([HOST_YIELD_DISPATCH]), new Set())).toBe(true)
+    expect(told.at(-1)?.to?.(new Set(), new Set())).toBe(false)
     const sent: HostMessage[] = []
     h.wiring.appGreeted((m) => sent.push(m))
     expect(sent).toEqual([{ t: 'driver', driver: 'parked', gate: 'unreadable' }])
@@ -843,7 +843,7 @@ describe('the Host drives with no app (§9.3)', { timeout: 40_000 }, () => {
     const intake = src.indexOf("m.t === 'slack-event'")
     expect(src.slice(intake, intake + 300)).toMatch(/from\.greeted && from\.role === 'app'/)
     expect(src.slice(intake, intake + 300)).toMatch(/slackWiring\.forwarded\(m\.event\)/)
-    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send)'))
+    expect(intake).toBeLessThan(src.indexOf('handlePty?.(m, send, { socket: from.socket })'))
     const rollingCall = src.slice(src.indexOf('composeHostRolling('))
     // E2 §4: a roll reaches the work units first, then the Slack.
     expect(rollingCall).toMatch(/onRollEvent: \(e\) => \{[^}]*hostWorkUnits\?\.onRolled\([^]*?slackWiring\?\.onRollEvent\(e\)/)

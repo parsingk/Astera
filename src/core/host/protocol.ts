@@ -42,6 +42,10 @@ export const HOST_FEATURE_PROC = 'proc'
  *  stopped answering — and end a Host that is running perfectly well. */
 export const HOST_FEATURE_PING = 'ping'
 
+/** `pty-data` with the event's `seq` (remote runtime design §3.7, N1), for a client whose hello lists it in `features`.
+ *  A client that does not see `pty-data` frames as today, so an older app is unchanged. */
+export const HOST_FEATURE_PTY_SEQ = 'pty-seq'
+
 /** The `orch-call`/`orch-result` pair (host control plane design §5) — one RPC channel for every
  *  orchestration command instead of a message type per command. Announced the same way and for the
  *  same reason as the features above: the protocol number stays 3 (see HOST_PROTOCOL's comment
@@ -389,6 +393,9 @@ export type ClientMessage =
       app: string
       role?: 'app' | 'cli' | 'mcp'
       yields?: string[]
+      /** What this client reads beyond the base protocol (`pty-seq`, remote runtime design §3.7). Unknown names are
+       *  ignored, so a newer client can ask for more than an older Host offers. */
+      features?: string[]
       pid?: number
       nonce?: string
       client?: { name: string; version?: string }
@@ -541,7 +548,7 @@ export type HostMessage =
     }
   | { t: 'pty-spawned'; id: string; pid: number }
   | { t: 'pty-failed'; id: string; error: string }
-  | { t: 'pty-data'; id: string; data: string }
+  | { t: 'pty-data'; id: string; data: string; /** Only to a client with the `pty-seq` feature. */ seq?: number }
   | { t: 'pty-exit'; id: string; exitCode: number }
   | { t: 'pty-listed'; entries: PtyEntry[] }
   /** A pty the Host opened **itself** — a worker or coordinator it spawned for a CLI call — broadcast

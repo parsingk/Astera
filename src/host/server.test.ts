@@ -205,7 +205,7 @@ describe('startHostServer', () => {
   it('answers a hello on the same protocol with its own version and pid', async () => {
     const h = await server()
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'orch', 'requests', 'mcp'] })
+    expect(reply).toMatchObject({ t: 'hello', protocol: HOST_PROTOCOL, host: '9.9.9', pid: process.pid, features: ['proc', 'ping', 'pty-seq', 'orch', 'requests', 'mcp'] })
     expect((reply as { startedAt: string }).startedAt).toMatch(/^\d{4}-/)
   })
 
@@ -777,7 +777,7 @@ describe('startHostServer', () => {
   it('announces the extra features it was given, after the built-in ones', async () => {
     const h = await server({ features: ['spawn'] })
     const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
-    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'orch', 'requests', 'mcp', 'spawn'])
+    expect((reply as { features: string[] }).features).toEqual(['proc', 'ping', 'pty-seq', 'orch', 'requests', 'mcp', 'spawn'])
   })
   // MCP HTTP §3 (Ruling 2): the hello of a Host built as index.ts builds it tells the app it answers mcp-http-*.
   // One Host per test (one address); features.test.ts covers the spawner half.
@@ -1154,6 +1154,28 @@ describe('startHostServer', () => {
       await vi.waitFor(() => expect(seen).toHaveLength(1))
       expect(seen).toEqual([true])
       sock.end()
+    })
+
+    // Remote runtime design §3.7 (Phase 8): a broadcast filter sees each socket's hello features, so `pty-data` with a
+    // seq goes only to a client that asked for `pty-seq`.
+    it('a broadcast filter sees each socket hello features', async () => {
+      const h = await server()
+      const connect = async (features?: string[]) => {
+        const sock = net.connect(h.address)
+        await new Promise((r) => sock.once('connect', r))
+        const ch = messageChannel(sock)
+        ch.send({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app', ...(features ? { features } : {}) } as ClientMessage)
+        await ch.next()
+        return { sock, ch }
+      }
+      const plain = await connect()
+      const seq = await connect(['pty-seq', 7 as unknown as string])
+      h.s.broadcast({ t: 'pty-data', id: 'p', data: 'x', seq: 1 }, (_y, f) => f.has('pty-seq'))
+      h.s.broadcast({ t: 'pty-data', id: 'p', data: 'x' }, (_y, f) => !f.has('pty-seq'))
+      expect(await seq.ch.next()).toEqual({ t: 'pty-data', id: 'p', data: 'x', seq: 1 })
+      expect(await plain.ch.next()).toEqual({ t: 'pty-data', id: 'p', data: 'x' })
+      plain.sock.end()
+      seq.sock.end()
     })
 
     it('forgets a socket by its number when it closes, greeted or not (S6 R1, review of Task 1)', async () => {
