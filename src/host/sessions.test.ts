@@ -313,16 +313,33 @@ describe('registrySessions — state', () => {
  * size the tab has, and what comes back is what the tab shows.
  */
 describe('registrySessions — read renders the screen', () => {
-  // An ended session's scrollback is gone with its pty (registry.ts), and output after the exit is
-  // not kept either, so `sessions read` answers the blank screen it answers for nothing at all,
-  // rather than a stale screen or only the few bytes that landed after the end.
-  it('an ended terminal session reads as a blank screen, whatever it printed before or after', async () => {
+  // Remote runtime design §3.7 (Phase 8): an exited pty's live terminal stays readable for 10 minutes, so an ended
+  // session reads as its last screen, output after the exit included (it was a blank screen before).
+  it('an ended terminal session reads as its last screen within the exited retention', async () => {
     const { sessions, agent } = harness()
     const crlf = String.fromCharCode(13, 10)
     agent.emit('before' + crlf)
     agent.exit(0)
     agent.emit('after' + crlf)
-    expect(await sessions.readSession('ses-1', 200)).toEqual(await sessions.readSession('nobody', 200))
+    expect((await sessions.readSession('ses-1', 200)).screen).toEqual(['before', 'after'])
+  })
+
+  // Phase 8: the live terminal saw everything, so a header a TUI painted once is still there after more than the old
+  // 256,000-character tail of repaints below it.
+  it('a header painted before more output than the old tail held is still on the screen', async () => {
+    const { sessions, agent } = harness({ cols: 80, rows: 6 })
+    const crlf = String.fromCharCode(13, 10)
+    const esc = String.fromCharCode(27)
+    agent.emit('HEADER' + crlf)
+    // Each repaint fits one row, so nothing scrolls; together they are more than the old 256,000-character tail.
+    for (let i = 0; i < 4000; i++) agent.emit(`${esc}[3;1H${'x'.repeat(70)}`)
+    expect((await sessions.readSession('ses-1', 10)).screen[0]).toBe('HEADER')
+  })
+
+  it('a read asks for at most 1,000 rows above the screen (DC-7)', async () => {
+    const { sessions, agent } = harness({ cols: 20, rows: 3 })
+    agent.emit(Array.from({ length: 1500 }, (_, i) => `r${i}`).join(String.fromCharCode(13, 10)))
+    expect((await sessions.readSession('ses-1', 5000)).scrollback).toHaveLength(1000)
   })
 
   it('a ConPTY-style stream with cursor moves and no newlines renders as its lines', async () => {
@@ -374,17 +391,22 @@ describe('registrySessions — read renders the screen', () => {
     agent.emit('abcdefghijklmno')
     expect((await sessions.readSession('ses-1', 200)).screen).toEqual(['abcdefghij', 'klmno'])
     ptys.resize('pty-a', 20, 5)
+    // The live terminal reads at the new size, and rows painted before the resize keep their width (remote runtime
+    // design §3.7): they are not rebuilt from the text at the new width, as the old tail replay did.
     const wide = await sessions.readSession('ses-1', 200)
-    expect(wide).toMatchObject({ cols: 20, rows: 5, screen: ['abcdefghijklmno'] })
+    expect(wide).toMatchObject({ cols: 20, rows: 5, screen: ['abcdefghij', 'klmno'] })
+    agent.emit(String.fromCharCode(13, 10) + 'pqrstuvwxyzABCDEFGHIJ')
+    expect((await sessions.readSession('ses-1', 200)).screen.slice(-2)).toEqual(['pqrstuvwxyzABCDEFGHI', 'J'])
   })
 
-  // The scrollback goes with the session (registry.ts), so an ended one has nothing to render.
-  it('an ended session, a pty id and a shell tab’s id all render nothing', async () => {
+  // A pty id and a shell tab's id are not session ids. An ended session reads as its last screen while its exited
+  // retention lasts (Phase 8).
+  it('a pty id and a shell tab’s id render nothing; an ended session its last screen', async () => {
     const { sessions, agent } = harness()
     agent.emit('x')
     for (const id of ['pty-a', 'trm-1']) expect((await sessions.readSession(id, 200)).screen).toEqual([])
     agent.exit(0)
-    expect((await sessions.readSession('ses-1', 200)).screen).toEqual([])
+    expect((await sessions.readSession('ses-1', 200)).screen).toEqual(['x'])
   })
 })
 
@@ -641,9 +663,11 @@ describe('registrySessions — chat', () => {
 describe('the @xterm/headless load', () => {
   it('is not a top-level import of the Host', async () => {
     const { readFileSync } = await import('node:fs')
-    const src = readFileSync(new URL('./sessions.ts', import.meta.url), 'utf8')
-    expect(src).not.toMatch(/^import\s+(?!type\b)[^\n]*from\s+'@xterm\/headless'/m)
+    // The live terminal (liveTerminal.ts) loads the packages now, lazily, as sessions.ts's render did.
+    const src = readFileSync(new URL('./liveTerminal.ts', import.meta.url), 'utf8')
+    expect(src).not.toMatch(/^import\s+(?!type\b)[^\n]*from\s+'@xterm\/(headless|addon-serialize)'/m)
     expect(src).toContain("import('@xterm/headless')")
+    expect(src).toContain("import('@xterm/addon-serialize')")
   })
 })
 
