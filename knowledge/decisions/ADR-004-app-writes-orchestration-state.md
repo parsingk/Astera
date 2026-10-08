@@ -247,3 +247,22 @@ default concurrency (3) was first exercised end to end: several workers editing 
 working tree corrupt each other's changes with no merge step to separate them. The placement rule
 (concurrency decides worktree-vs-project-folder) exists to make that combination structurally
 impossible rather than to warn about it after the fact.
+
+## Amendment (2026-10-08): remote Runtimes
+
+The Remote Runtime design (`docs/superpowers/specs/2026-10-07-remote-runtime-design.md`, Q1; C2 N10) adds a second
+kind of target and keeps this decision for the first.
+
+- **This computer keeps this path.** With "This computer" selected, the app's Job commands go through `orch.command`
+  in the main process exactly as above: the same handler, guards, project registration and audit.
+- **A paired Runtime's Job commands go to that Runtime's Host.** The renderer sends them through one door
+  (`src/renderer/src/lib/orchDoor.ts`) with the Runtime's id; main's router (`src/main/remote/orchRouter.ts`) sends
+  them as `orch-call` over the Runtime's controller link, and they run there with the Host's own deps, under the
+  controller's principal and permission. No local guard, path, git call or fallback runs for them, and the Runtime's
+  reply status is the answer.
+- **Accounts and run configurations come from the Runtime** for its Jobs (`accounts-list` with its signed-in flag,
+  `run-configs-list`), never from this computer.
+
+So for a while there are two doors: this one for the local Host, `orch-call` for a remote one. Making the local path
+`orch-call` too (one door, Q1 option B) is a later decision, once the remote path has been used; it would change how
+every local Job action runs and needs a full local regression.
