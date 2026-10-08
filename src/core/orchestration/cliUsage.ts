@@ -159,7 +159,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     detail:
       'Checks the Runtime\'s key against the fingerprint before the code is sent, keeps the token in this profile and never prints it. The parts may be given one by one instead of --pair; the fingerprint is then required.',
     flags: [
-      { name: 'pair', value: '<string>', about: 'the astera-pair:v1: string' },
+      { name: 'pair', value: '<string>', about: 'the astera-pair:v1: string; - reads it from stdin, off the command line other users can see' },
       { name: 'address', value: '<host>', about: 'the address to reach the Runtime at, over the one in the string' },
       { name: 'port', value: '<n>', about: 'its port, without --pair (default 47831)' },
       { name: 'code', value: '<code>', about: 'the one-time code, without --pair' },

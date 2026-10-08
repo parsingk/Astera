@@ -81,9 +81,19 @@ ticket. `--read-only` pairs a controller that may read but not change anything.
 In the app: Settings › Remote Runtimes, paste the string, Pair. From the command line:
 
 ```text
-astera runtimes add --pair 'astera-pair:v1:100.64.0.5:47831:ABCDEFGH23:<fingerprint>'
+astera runtimes add --pair -
 astera runtimes list
 ```
+
+`--pair -` reads the string from standard input: paste it and end the input (Ctrl+D, or Ctrl+Z then Enter on Windows),
+or pipe it in. Prefer it to `--pair '<string>'`: a value on the command line is in the process list, where another user
+of the machine can read it and redeem the code first, and in your shell history. `--code -` and `--fingerprint -` work
+the same way.
+
+A Runtime names itself with an id. If a Runtime paired here already has that id under another key, the pairing is
+refused with `CONFLICT` and the paired one is left as it was: another machine cannot take its place. If it is the same
+machine with a new key (reinstalled, its profile replaced), remove it first, or run `astera runtimes add` again with
+`--replace`.
 
 The controller checks the Runtime's key against the fingerprint in the string **before** it sends the code. A different
 key is refused with `RUNTIME_IDENTITY_CHANGED` and nothing is sent. `--address` reaches the Runtime at another address
@@ -287,6 +297,12 @@ renames and Unicode names included.
   types into them, and those run any command the Runtime's user can, in any folder that user can reach. Pair with full
   control only a controller you would trust with that user account; pair the rest read-only.
 - Logs on both sides never carry tokens, pairing codes or terminal output.
+- Connections that have not signed in have a budget of their own, and few from one address, so sockets that say nothing
+  cannot hold paired controllers off; one pairing holds at most eight connections at once.
+- `astera runtime status` and `astera runtime clients` carry `health`. `burnedCodes` counts pairing codes that wrong
+  guesses used up since the Host started: if it is not 0 and you did not mistype, someone who can reach the port is
+  guessing. `unsavedRevocations` names controllers revoked here whose revocation could not be written to disk yet; the
+  Host keeps trying, and they stay refused meanwhile, but a Host restart before it lands would let them back in.
 
 ## When an answer is lost
 

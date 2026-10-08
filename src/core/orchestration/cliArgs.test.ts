@@ -53,6 +53,8 @@ describe('parseArgs', () => {
   it('값이 - 인 플래그는 stdin 대상으로 표시한다', () => {
     const r = parseArgs(['task-create', '--spec', '-']) as { wantsStdin: string[] }
     expect(r.wantsStdin).toEqual(['spec'])
+    // Security audit SEC-6: a pairing string off the command line, where other users of the machine can read it.
+    expect(parseArgs(['runtimes', 'add', '--pair', '-'])).toMatchObject({ cmd: 'runtimes-add', wantsStdin: ['pair'] })
   })
   it('--deps는 JSON 배열로 파싱한다', () => {
     const r = parseArgs(['task-create', '--deps', '["tsk_1","tsk_2"]']) as {

@@ -35,7 +35,11 @@ describe('docs/remote-runtime.md', () => {
     ['that Jobs are not held to projects', /Jobs are not held to projects/],
     ['serve exit codes', /exits 0 when it is stopped[\s\S]{0,200}75 when an update begins[\s\S]{0,300}78 when this machine cannot start a Host/],
     ['the desktop app', /## Use it from the Astera app/],
-    ['troubleshooting', /## Troubleshooting/]
+    ['troubleshooting', /## Troubleshooting/],
+    // Security audit fixes: what the person does differently because of them.
+    ['the pairing string from stdin', /astera runtimes add --pair -/],
+    ['replacing a Runtime under its id', /--replace/],
+    ['what runtime status says about pairing', /burnedCodes[\s\S]{0,400}unsavedRevocations/]
   ]
   for (const [what, re] of says) it(`says ${what}`, () => expect(doc).toMatch(re))
 

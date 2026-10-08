@@ -98,6 +98,17 @@ describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
     const again = await runRuntimesCommand('runtimes-add', { pair, replace: true }, h.d)
     expect(again).toMatchObject({ ok: true, body: { runtimeId: 'rt_office', address: '10.0.0.2' } })
   })
+  // Security audit SEC-6: a pairing string on the command line is in the process list for anyone on the machine to
+  // read and redeem first. `--pair -` reads it from stdin; a value read that way ends in a newline.
+  it('pairs with values read from stdin, their newline and all', async () => {
+    const h = deps()
+    const pair = `${formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })}\n`
+    expect(await runRuntimesCommand('runtimes-add', { pair }, h.d)).toMatchObject({ ok: true })
+    const parts = deps()
+    const r = await runRuntimesCommand('runtimes-add', { address: '10.0.0.2', code: 'GOODCODE01\r\n', fingerprint: `${FP}\n` }, parts.d)
+    expect(r).toMatchObject({ ok: true })
+    expect(parts.redeemed[0].code).toBe('GOODCODE01')
+  })
   it('add takes --address over the hint, and --name', async () => {
     const h = deps()
     const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })

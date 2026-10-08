@@ -121,9 +121,10 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
       return failure('INVALID_ARGUMENTS', 'runtimes add needs --pair <string>, or --address, --code and --fingerprint')
     // §4.4: the CLI has no prompt to show a key and ask, so the fingerprint is required.
     if (typeof args.fingerprint !== 'string') return failure('INVALID_ARGUMENTS', 'pairing needs the fingerprint the Runtime printed')
-    address = args.address
-    code = args.code
-    fingerprint = args.fingerprint
+    // Trimmed: a value read from stdin (`--code -`, security audit SEC-6) ends in a newline.
+    address = args.address.trim()
+    code = args.code.trim()
+    fingerprint = args.fingerprint.trim()
     port = REMOTE_DEFAULTS.port
   }
   if (args.port !== undefined) {
@@ -132,7 +133,7 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
     port = p
   }
   // --address wins over the hint the string carries (Tailscale names, NAT).
-  if (typeof args.address === 'string' && args.address !== '') address = args.address
+  if (typeof args.address === 'string' && args.address.trim() !== '') address = args.address.trim()
   const name = typeof args.name === 'string' && args.name !== '' ? args.name : d.hostname()
   const client = { name: 'astera cli', version: d.version, surface: 'cli' as const }
 
