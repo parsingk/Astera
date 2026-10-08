@@ -391,3 +391,22 @@ describe('shouldLoadEarlier', () => {
     expect(shouldLoadEarlier({ ...unscrollable, more: true, loadingMore: true })).toBe(false)
   })
 })
+
+// Performance audit R1: every change to a conversation re-made every turn's message, and assistant-ui re-converted and
+// re-drew all of them. An unchanged turn (the same object) gives the same message object.
+describe('toThreadMessages — unchanged turns keep their message', () => {
+  it('answers the same message object for the same turn', () => {
+    const a = { id: 'a', role: 'user' as const, parts: [{ kind: 'text' as const, text: 'hi' }] }
+    const b = { id: 'b', role: 'assistant' as const, parts: [{ kind: 'text' as const, text: 'yo' }] }
+    const first = toThreadMessages([a])
+    const second = toThreadMessages([a, b])
+    expect(second[0]).toBe(first[0])
+    expect(second[1]).toEqual({ id: 'b', role: 'assistant', content: [{ type: 'text', text: 'yo' }] })
+  })
+
+  it('words a failure the way it is asked each time', () => {
+    const f = { id: 'f', role: 'assistant' as const, parts: [{ kind: 'failure' as const, message: 'boom' }] }
+    expect(toThreadMessages([f], (m) => `one ${m}`)[0].content).toEqual([{ type: 'text', text: 'one boom' }])
+    expect(toThreadMessages([f], (m) => `two ${m}`)[0].content).toEqual([{ type: 'text', text: 'two boom' }])
+  })
+})

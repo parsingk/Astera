@@ -34,10 +34,45 @@ export function mergeTurns(held: ConvTurn[], page: ConvTurn[], side: 'older' | '
     const have = new Set(held.map((t) => t.id))
     return [...page.filter((t) => !have.has(t.id)), ...held]
   }
+  // A poll's answer is new objects every time (performance audit R3): a turn that reads the same keeps the held object,
+  // and a page that changed nothing keeps the held list, so the thread does not re-draw every poll.
   const fresh = new Map(page.map((t) => [t.id, t]))
-  const kept = held.map((t) => fresh.get(t.id) ?? t)
+  let changed = false
+  const kept = held.map((t) => {
+    const f = fresh.get(t.id)
+    if (f === undefined || f === t || JSON.stringify(f) === JSON.stringify(t)) return t
+    changed = true
+    return f
+  })
   const have = new Set(held.map((t) => t.id))
-  return [...kept, ...page.filter((t) => !have.has(t.id))]
+  const added = page.filter((t) => !have.has(t.id))
+  return changed || added.length > 0 ? [...kept, ...added] : held
+}
+
+/** `prev` when `next` says the same (performance audit R3): a poll's facts are new objects every time, and setting them
+ *  re-rendered the tab every 2 s with nothing new. */
+export function sameOrNext<T>(prev: T | null, next: T): T {
+  return prev !== null && JSON.stringify(prev) === JSON.stringify(next) ? prev : next
+}
+
+/** Runs `tick`, then again `ms` after each one ends, until the returned stop. A tick that throws does not end the
+ *  polling (performance audit R3: a rejected read used to stop an open remote chat's updates for good). */
+export function pollEvery(tick: () => Promise<void>, ms: number): () => void {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const run = async (): Promise<void> => {
+    try {
+      await tick()
+    } catch {
+      /* the next tick asks again */
+    }
+    if (!stopped) timer = setTimeout(() => void run(), ms)
+  }
+  void run()
+  return () => {
+    stopped = true
+    clearTimeout(timer)
+  }
 }
 
 /** A remote terminal's keys, batched for the link: keys typed within `delayMs` go as one `sessions-input`, sends go

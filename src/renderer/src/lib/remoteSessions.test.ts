@@ -1,7 +1,7 @@
 // A remote session as the renderer holds it (remote runtime design Phase 9b): its ref from a Runtime's row, the roll it
 // follows, when its facts call for a notification, the pages of its conversation, and its input batched for the link.
-import { describe, it, expect } from 'vitest'
-import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, goneOutcome, factsStatus, createFactsReader, pruneBaseline, followAction, remoteChatState, createRemoteAnswer, canStartSession, type RemoteFacts } from './remoteSessions'
+import { describe, it, expect, vi } from 'vitest'
+import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, goneOutcome, factsStatus, createFactsReader, pruneBaseline, followAction, remoteChatState, createRemoteAnswer, canStartSession, pollEvery, sameOrNext, type RemoteFacts } from './remoteSessions'
 import { SESSION_INPUT_MAX } from '../../../core/remote/sessions'
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -264,5 +264,54 @@ describe('canStartSession', () => {
     expect(canStartSession({ cliInstalled: true, pairedRuntimes: 0 })).toBe(true)
     expect(canStartSession({ cliInstalled: false, pairedRuntimes: 1 })).toBe(true)
     expect(canStartSession({ cliInstalled: false, pairedRuntimes: 0 })).toBe(false)
+  })
+})
+
+// Performance audit R3: an open remote chat read its conversation every 2 s and always made a new list from the answer,
+// so the whole thread re-drew every 2 s with nothing new; and a read that threw stopped the polling for good.
+describe('remote chat polling', () => {
+  const turn = (id: string, text: string) => ({ id, role: 'assistant' as const, parts: [{ kind: 'text' as const, text }] })
+
+  it('keeps the held list when a newer page brings nothing new', () => {
+    const held = [turn('a', 'x'), turn('b', 'y')]
+    expect(mergeTurns(held, [turn('a', 'x'), turn('b', 'y')], 'newer')).toBe(held)
+  })
+
+  it('keeps each unchanged turn object when one changes or one is added', () => {
+    const held = [turn('a', 'x'), turn('b', 'y')]
+    const next = mergeTurns(held, [turn('b', 'y2'), turn('c', 'z')], 'newer')
+    expect(next[0]).toBe(held[0])
+    expect(next[1]).toEqual(turn('b', 'y2'))
+    expect(next.map((t) => t.id)).toEqual(['a', 'b', 'c'])
+    const same = mergeTurns(held, [turn('a', 'x')], 'newer')
+    expect(same).toBe(held)
+  })
+
+  it('keeps the held facts when the new ones say the same', () => {
+    const held = { status: 'idle', request: null } as unknown as RemoteFacts
+    expect(sameOrNext(held, JSON.parse(JSON.stringify(held)) as RemoteFacts)).toBe(held)
+    const moved = { status: 'busy', request: null } as unknown as RemoteFacts
+    expect(sameOrNext(held, moved)).toBe(moved)
+    expect(sameOrNext(null, moved)).toBe(moved)
+  })
+
+  it('goes on polling after a read that throws, and stops when told', async () => {
+    vi.useFakeTimers()
+    try {
+      let n = 0
+      const stop = pollEvery(async () => {
+        n++
+        if (n === 1) throw new Error('ipc gone')
+      }, 2_000)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(n).toBe(1)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(n).toBe(2)
+      stop()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(n).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

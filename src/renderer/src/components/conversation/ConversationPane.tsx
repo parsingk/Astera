@@ -113,12 +113,27 @@ export function toThreadMessages(
   turns: readonly ConvTurn[],
   failure: FailureWording = (message) => message
 ): ThreadMessageLike[] {
-  return turns.map((turn) => ({
-    id: turn.id,
-    role: turn.role,
-    content: turn.parts.map((part) => toThreadPart(part, failure)),
-  }));
+  return turns.map((turn) => {
+    // The same turn object gives the same message object (performance audit R1): assistant-ui converts and draws again
+    // only the messages that changed. A turn with a failure is worded by the caller each time, so it is not kept.
+    const worded = turn.parts.some((part) => part.kind === "failure");
+    const hit = worded ? undefined : threadMessageOf.get(turn);
+    if (hit) return hit;
+    const message: ThreadMessageLike = {
+      id: turn.id,
+      role: turn.role,
+      content: turn.parts.map((part) => toThreadPart(part, failure)),
+    };
+    if (!worded) threadMessageOf.set(turn, message);
+    return message;
+  });
 }
+
+/** Each turn's message, while the turn object lives (toThreadMessages). */
+const threadMessageOf = new WeakMap<ConvTurn, ThreadMessageLike>();
+/** One function for every render (performance audit R1): a new one each render made assistant-ui convert every message
+ *  again. The messages are already ThreadMessageLike. */
+export const asThreadMessage = (m: ThreadMessageLike): ThreadMessageLike => m;
 
 /**
  * `conversation:append` carries new **or updated** turns (see the event's own doc comment on
@@ -1452,7 +1467,7 @@ export function ConversationPane({
     messages,
     // Required even though `messages` are already ThreadMessageLike: without it the runtime reads
     // `metadata` off a raw message and throws on the first render. Measured, not folklore.
-    convertMessage: (m: ThreadMessageLike) => m,
+    convertMessage: asThreadMessage,
     // Shut while a request is up — it is answered on the card above, not by typing — and shut until
     // the session's state has arrived at all (composerLockedFor, paneTransport.ts).
     isDisabled: exited || composerLockedFor({ kind: "chat" }, chat, false),

@@ -3,17 +3,17 @@
 // `sessions-answer`. The thread draws with the local pane's pieces, without what reaches this machine's files (D8.2):
 // no `@` file search, no `/` commands, no attachments, no drop or paste of files, no opening a sent file.
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage, type ThreadMessageLike } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
 import { Thread, type ThreadComponents } from "../assistant-ui/elements/thread.aui";
 import { SentFileOpenContext, ToolRow, ToolRowGroup } from "./ToolRow";
 import { ChatRequestCard } from "./ChatRequestCard";
-import { composerTextOf, toThreadMessages } from "./ConversationPane";
+import { asThreadMessage, composerTextOf, toThreadMessages } from "./ConversationPane";
 import { useI18n } from "../../i18n/I18nProvider";
 import { toast } from "../../lib/toast";
 import { confirmModal } from "../../lib/confirm";
 import type { ChatRequest } from "../../../../core/chat/types";
 import type { ConvTurn } from "../../../../core/history/convTypes";
-import { createRemoteAnswer, mergeTurns, remoteCall, remoteChatState, type RemoteFacts, type RemoteSessionRef, readFacts } from "../../lib/remoteSessions";
+import { createRemoteAnswer, mergeTurns, pollEvery, remoteCall, remoteChatState, sameOrNext, type RemoteFacts, type RemoteSessionRef, readFacts } from "../../lib/remoteSessions";
 
 const MemoThread = memo(Thread);
 /** How often an open remote chat reads its conversation and facts. */
@@ -58,7 +58,6 @@ export function RemoteConversationPane({
   // One read of each at a time; a slow Runtime is not asked again until it answered.
   useEffect(() => {
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async (): Promise<void> => {
       const [conv, f] = await Promise.all([
         remoteCall(runtimeId, "sessions-conversation", { id: sessionId }),
@@ -74,13 +73,13 @@ export function RemoteConversationPane({
         // The first page says where the earlier ones start; later reads only add at the end.
         if (pagingRef.current === null) setPaging({ from: b.from, more: b.more });
       }
-      if (f.status === 200) setFacts(f.body as RemoteFacts);
-      timer = setTimeout(() => void tick(), REMOTE_CHAT_POLL_MS);
+      if (f.status === 200) setFacts((held) => sameOrNext(held, f.body as RemoteFacts));
     };
-    void tick();
+    // A read that throws does not stop the polling (pollEvery).
+    const stop = pollEvery(tick, REMOTE_CHAT_POLL_MS);
     return () => {
       stopped = true;
-      clearTimeout(timer);
+      stop();
     };
   }, [runtimeId, sessionId]);
 
@@ -141,7 +140,7 @@ export function RemoteConversationPane({
   );
   const runtime = useExternalStoreRuntime({
     messages,
-    convertMessage: (m: ThreadMessageLike) => m,
+    convertMessage: asThreadMessage,
     // Shut for a read-only pairing, an ended chat, and while a card waits for its answer.
     isDisabled: view.composerDisabled,
     isRunning: false,
