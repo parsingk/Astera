@@ -452,6 +452,18 @@ describe('OrchRollTap 재개 기록', () => {
     expect(resumes?.[0].toAccountId).toBe('acc2')
   })
 
+  // Audit OR-7: a session closed while it waited at its limit kept its stop mark for the tap's whole life.
+  it('a session that ends while stopped does not keep its stop mark', async () => {
+    const { s } = seed()
+    const deps = makeDeps(s)
+    const tap = new OrchRollTap(deps, { git: fakeGit(['head-at-limit']).git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect((tap as unknown as { stopped: Set<string> }).stopped.has('sess1')).toBe(true)
+    tap.onExit({ sessionId: 'sess1', exitCode: 1 })
+    await vi.advanceTimersByTimeAsync(EXIT_DEFER_MS + 1)
+    expect((tap as unknown as { stopped: Set<string> }).stopped.size).toBe(0)
+  })
   it("정지 기록이 없으면 'nudged' 는 아무것도 만들지 않는다", async () => {
     const { s } = seed()
     const deps = makeDeps(s)

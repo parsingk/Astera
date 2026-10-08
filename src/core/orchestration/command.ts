@@ -8,6 +8,7 @@
 // — the app's loopback HTTP server was removed once nothing reached it any more (§7). Nothing here
 // knows whether a dependency is answered locally or across a socket, which is what lets the same
 // command layer run in both places.
+import { lastByState } from './stateMemo'
 import { randomBytes } from 'node:crypto'
 import {
   ackDelivery,
@@ -2164,11 +2165,14 @@ export async function handleCommand(
         }
       }
       type Seen = { gone: true } | { cur: OrchState; extra: JobEvent[]; count: number; ending: Record<string, unknown> | null }
+      // The Run's own events counted once per state object (audit OR-6): the probe runs every 50 ms and the state
+      // changes only at a commit. The journal's rows and the ending (it reads the clock) are asked each time.
+      const ownEvents = lastByState((cur: OrchState) => eventCountFor(cur, id))
       const look = (): Seen => {
         const cur = deps.getState()
         if (!cur.runs.some((r) => r.id === id)) return { gone: true }
         const extra = journalRows(cur)
-        return { cur, extra, count: eventCountFor(cur, id) + extra.length, ending: waitEndingFor(cur, id, deps.now?.() ?? new Date().toISOString()) }
+        return { cur, extra, count: ownEvents(cur) + extra.length, ending: waitEndingFor(cur, id, deps.now?.() ?? new Date().toISOString()) }
       }
       const waited = await pollUntil(() => {
         const l = look()
@@ -3788,10 +3792,18 @@ export async function handleCommand(
       type Taken =
         | { kind: 'batch'; state: OrchState; body: { deliveryId: string; count: number; messages: unknown[] } }
         | { kind: 'error'; error: string }
+      // A state that had nothing to deliver has nothing on the next 50 ms probe either (audit OR-6): `now` only
+      // stamps a delivery that is made, so the answer "none" is the state's alone.
+      let emptyIn: OrchState | null = null
       const take = (): Taken | null => {
-        const r = nextDelivery(deps.getState(), { runId, types }, now)
+        const cur = deps.getState()
+        if (cur === emptyIn) return null
+        const r = nextDelivery(cur, { runId, types }, now)
         if (!r.ok) return { kind: 'error', error: r.error }
-        if (r.value === null) return null
+        if (r.value === null) {
+          emptyIn = cur
+          return null
+        }
         return {
           kind: 'batch',
           state: r.state,

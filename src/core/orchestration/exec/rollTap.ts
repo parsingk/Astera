@@ -101,6 +101,8 @@ export class OrchRollTap {
       e.sessionId,
       setTimeout(() => {
         this.timers.delete(e.sessionId)
+        // No roll took the session on within the window, so it is over, and its stop mark with it (audit OR-7).
+        this.stopped.delete(e.sessionId)
         // handleExit 은 비동기이고(probeLimit 의 파일 읽기 + setState 의 디스크 쓰기) 타이머 콜백은
         // 그것을 기다려 줄 자리가 없다. 잡히지 않은 rejection 은 프로세스를 죽이므로 ipc.ts 의 기존
         // 호출과 같은 .catch 관례를 따른다.
