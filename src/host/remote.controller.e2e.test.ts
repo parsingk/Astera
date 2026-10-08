@@ -237,4 +237,15 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
     expect(JSON.stringify(out)).not.toContain(token!)
     expect(rt.logs.join('\n')).not.toContain(token!)
   })
+
+  // Phase 6: the remote Jobs view's two reads reach a controller over pinned TLS.
+  it('jobs-view and runs-timeline answer a paired controller', async () => {
+    const rt = await runtime()
+    await pair(await rt.pairing('read-only'))
+    const view = await remote('rt_p4', 'jobs-view', { project: 'unregistered' })
+    expect(view).toMatchObject({ status: 200 })
+    expect(JSON.stringify(view)).toContain('already here')
+    // The seeded Job has never run, so it has no Run timeline: the read is reached, and says so.
+    expect(await remote('rt_p4', 'runs-timeline', { runId: rt.state().jobs[0].id })).toMatchObject({ error: { code: 'NOT_FOUND', details: { runtime: 'rt_p4' } } })
+  })
 })
