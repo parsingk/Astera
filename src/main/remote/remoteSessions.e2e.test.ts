@@ -25,7 +25,7 @@ import type { Account } from '../../core/types'
 import { startGateway } from '../../cli/runtime/gateway'
 import { createRemoteRuntimeClient, type RemoteRuntimeClient } from './runtimeClient'
 import { createRemoteStreams } from './remoteStreams'
-import { followRolls, refOf, type RemoteSessionRow } from '../../renderer/src/lib/remoteSessions'
+import { followRolls, refOf, type RemoteSessionRow } from '../../core/remote/sessions'
 
 const identity = (() => {
   const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' })

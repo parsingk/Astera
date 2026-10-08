@@ -1,41 +1,11 @@
 // A session on a paired Runtime as the renderer holds it (remote runtime design Phase 9b, N13, D1.4). Its tab is
 // `sessionTab(key)`, `key` being `<runtimeId>:<sessionId>`; everything it does is a Host command on that Runtime
 // (`remoteCall`), and its output arrives on the session bus under the key (main/remote/remoteStreams.ts).
-import { remoteSessionKey } from '../../../core/panes/tabId'
 import { SESSION_INPUT_MAX } from '../../../core/remote/sessions'
 import type { ConvTurn } from '../../../core/history/convTypes'
 
-/** A row of the Runtime's `sessions-list`, as its Host answers it (core/orchestration/command.ts HostSession). */
-export interface RemoteSessionRow {
-  id: string
-  kind: 'terminal' | 'chat'
-  title: string | null
-  accountId: string | null
-  cwd: string | null
-  alive: boolean
-  state: string
-  ptyId?: string
-  procId?: string
-  provider?: 'claude' | 'codex'
-  rolledFrom?: string
-  sources?: { status: string; prompt: string; usage: string; conversation: string }
-}
-
-export interface RemoteSessionRef {
-  runtimeId: string
-  sessionId: string
-  key: string
-  kind: 'terminal' | 'chat'
-  title: string | null
-  accountId: string | null
-  /** The Runtime's path, shown as text and never handed to a local path helper (D8.1). */
-  cwd: string | null
-  alive: boolean
-  ptyId?: string
-  procId?: string
-  provider?: 'claude' | 'codex'
-  sources?: RemoteSessionRow['sources']
-}
+// The ref and the roll it follows live in core, where main's acceptance test reaches them too.
+export { refOf, followRolls, type RemoteSessionRef, type RemoteSessionRow } from '../../../core/remote/sessions'
 
 /** `sessions-facts` (host/sessionFacts.ts). A fact the Host cannot source is `unknown`, never idle. */
 export interface RemoteFacts {
@@ -46,47 +16,6 @@ export interface RemoteFacts {
   usage: unknown
   model: string | null
   requests?: Array<{ id: string; [k: string]: unknown }>
-}
-
-export function refOf(runtimeId: string, row: RemoteSessionRow): RemoteSessionRef {
-  return {
-    runtimeId,
-    sessionId: row.id,
-    key: remoteSessionKey(runtimeId, row.id),
-    kind: row.kind,
-    title: row.title,
-    accountId: row.accountId,
-    cwd: row.cwd,
-    alive: row.alive,
-    ...(row.ptyId ? { ptyId: row.ptyId } : {}),
-    ...(row.procId ? { procId: row.procId } : {}),
-    ...(row.provider ? { provider: row.provider } : {}),
-    ...(row.sources ? { sources: row.sources } : {})
-  }
-}
-
-/** The open sessions (of one Runtime) that a roll replaced, each with the session that now stands in for it: the end
- *  of the `rolledFrom` chain, so a tab that missed several rolls while disconnected lands on the current one. A roll
- *  into a session that is already open is left alone. */
-export function followRolls(open: RemoteSessionRef[], rows: RemoteSessionRow[]): Array<{ from: string; to: RemoteSessionRef }> {
-  if (open.length === 0) return []
-  const runtimeId = open[0].runtimeId
-  const openIds = new Set(open.map((r) => r.sessionId))
-  const next = new Map<string, RemoteSessionRow>()
-  for (const r of rows) if (r.rolledFrom) next.set(r.rolledFrom, r)
-  const out: Array<{ from: string; to: RemoteSessionRef }> = []
-  for (const ref of open) {
-    let to = next.get(ref.sessionId)
-    if (!to) continue
-    const seen = new Set([ref.sessionId])
-    for (let n = next.get(to.id); n && !seen.has(n.id); n = next.get(n.id)) {
-      seen.add(to.id)
-      to = n
-    }
-    if (openIds.has(to.id)) continue
-    out.push({ from: ref.key, to: refOf(runtimeId, to) })
-  }
-  return out
 }
 
 /** Whether a session's new facts call for a notification: it began waiting, or it asks something it did not ask
