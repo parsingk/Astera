@@ -98,7 +98,12 @@ export function canCopy(src: string, destDir: string, platform: string = runtime
  *  containment means they are the same path, and this keeps two duplicates differing only in
  *  separators or case from cancelling each other out and both disappearing. */
 export function topLevelOnly(paths: string[], platform: string = runtimePlatform()): string[] {
-  return paths.filter(
-    (p, i) => !paths.some((q, j) => j !== i && isSubPath(q, p, platform) && !isSubPath(p, q, platform))
-  )
+  // Each path asks only its own strict ancestors (audit U-15): every pair was compared, millions of normalizations
+  // for a selection of thousands.
+  const all = new Set(paths.map((p) => norm(p, platform)))
+  return paths.filter((p) => {
+    const n = norm(p, platform)
+    for (let i = n.lastIndexOf('\\'); i > 0; i = n.lastIndexOf('\\', i - 1)) if (all.has(n.slice(0, i))) return false
+    return true
+  })
 }

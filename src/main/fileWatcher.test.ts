@@ -63,6 +63,28 @@ describe('FileWatcher — 감시 이벤트를 묶어 보낸다', () => {
   })
 })
 
+// Audit U-14: the root's identity was read with a synchronous stat on Electron main each time the watch opened (and
+// after every quiet window), so an explorer root on a dead share froze the window. It is asked asynchronously.
+describe('FileWatcher root identity', () => {
+  it('asks the root’s identity asynchronously when it opens the native watch', async () => {
+    const root = await tmpRoot()
+    const native = fakeNative()
+    const asked: string[] = []
+    const w = new FileWatcher(vi.fn(), undefined, {
+      platform: 'win32',
+      watchNative: native.watch,
+      identity: async (dir) => {
+        asked.push(dir)
+        return 1n
+      }
+    })
+    await w.watch(root)
+    expect(asked).toEqual([root])
+    expect(native.opened).toEqual([root])
+    await w.unwatch()
+  })
+})
+
 /** A native recursive handle the test drives: `fire` is what fs.watch's listener would hear. */
 function fakeNative(): { watch: NativeWatch; opened: string[]; closed: number; fire: (type: string, name: string | null) => void } {
   const state = { opened: [] as string[], closed: 0, listener: null as ((t: string, n: string | null) => void) | null }
@@ -226,7 +248,8 @@ describe('FileWatcher — win32 는 기본 재귀 감시 하나를 쓴다', () =
     await w.watch(root)
     await fs.rm(root, { recursive: true, force: true })
     for (let i = 0; i < 1000; i++) native.fire('rename', `\\\\?\\${root}`)
-    expect(native.closed).toBe(1)
+    // Asked off the thread now (audit U-14), once for the whole storm.
+    await vi.waitFor(() => expect(native.closed).toBe(1))
     expect(logs.filter((l) => l.includes('was removed or replaced'))).toHaveLength(1)
     await fs.mkdir(root)
     await w.watch(root)

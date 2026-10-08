@@ -158,6 +158,16 @@ describe('canCopy', () => {
 })
 
 describe('topLevelOnly', () => {
+  // Audit U-15: every path was compared with every other, so a selection of thousands of files cost millions of
+  // normalizations on the renderer and again over IPC. Each path asks only its own ancestors.
+  it('reduces thousands of paths quickly', () => {
+    const paths = Array.from({ length: 6000 }, (_, i) => `D:\\p\\dir${i % 60}\\file${i}.ts`)
+    paths.push('D:\\p\\dir7')
+    const t0 = performance.now()
+    const out = topLevelOnly(paths, 'win32')
+    expect(performance.now() - t0).toBeLessThan(300)
+    expect(out).toHaveLength(6000 - 100 + 1)
+  })
   it('다른 항목의 하위인 것을 제거한다', () => {
     expect(topLevelOnly(['D:\\p\\a', 'D:\\p\\a\\b.ts'])).toEqual(['D:\\p\\a'])
   })

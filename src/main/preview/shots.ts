@@ -21,12 +21,14 @@ export interface CapturedImage {
 export async function evictShots(dir: string): Promise<void> {
   try {
     const names = await readdir(dir)
-    const files = await Promise.all(
+    // One file's stat failing (gone meanwhile) no longer skips the whole round (audit U-15).
+    const settled = await Promise.allSettled(
       names.filter((n) => n.endsWith('.png')).map(async (n) => {
         const p = path.join(dir, n)
         return { path: p, mtimeMs: (await stat(p)).mtimeMs }
       })
     )
+    const files = settled.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []))
     await Promise.all(evictionPlan(files, Date.now()).map((p) => unlink(p).catch(() => {})))
   } catch {
     /* the folder may not exist yet */

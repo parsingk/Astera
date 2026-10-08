@@ -3,7 +3,7 @@ import { promises as fs, watch as fsWatch } from 'node:fs'
 import type { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { buildIgnoreMatcher } from '../core/files/tree'
-import { dirIdentity, namesAPath } from '../core/files/watchedDir'
+import { dirIdentityAsync, namesAPath } from '../core/files/watchedDir'
 import { createChangeBatcher, type ChangeBatcher, type FileChangeBatch, type FileChangeKind } from '../core/files/changeBatch'
 
 export type { FileChange, FileChangeKind } from '../core/files/changeBatch'
@@ -20,6 +20,8 @@ const defaultNativeWatch: NativeWatch = (root, listener) =>
 export interface FileWatcherDeps {
   platform?: NodeJS.Platform
   watchNative?: NativeWatch
+  /** The root's identity, asked off the thread (audit U-14); dirIdentityAsync by default. */
+  identity?: (dir: string) => Promise<bigint | null>
 }
 
 /** Recursively watches one explorer root and emits changes. The watch exclusions are language-neutral
@@ -68,7 +70,10 @@ export class FileWatcher {
     this.batcher = createChangeBatcher(emit)
     this.platform = deps.platform ?? process.platform
     this.watchNative = deps.watchNative ?? defaultNativeWatch
+    this.identity = deps.identity ?? dirIdentityAsync
   }
+
+  private readonly identity: (dir: string) => Promise<bigint | null>
 
   watch(root: string): Promise<void> {
     const p = this.ops.then(() => this.doWatch(root))
@@ -99,7 +104,7 @@ export class FileWatcher {
         this.quietPaths = []
         // Unwatched meanwhile (a root switch or the explorer closing): nothing to reopen or report
         if (this.root !== null) {
-          this.openNative()
+          await this.openNative()
           await Promise.all(touched.map((p) => this.reportNow(p)))
         }
       }
@@ -120,7 +125,7 @@ export class FileWatcher {
     this.ignored = ignored
     if (this.platform === 'win32') {
       if (this.quiet > 0) return // quietWhile opens it when the work ends
-      if (this.openNative()) return
+      if (await this.openNative()) return
     }
     this.watcher = chokidar.watch(root, {
       ignoreInitial: true,
@@ -134,11 +139,15 @@ export class FileWatcher {
 
   /** Opens the native handle on the current root. False when it cannot be had (a missing root, no
    *  recursive support): the caller falls back to chokidar, as HistoryIndex does. */
-  private openNative(): boolean {
+  private async openNative(): Promise<boolean> {
     const root = this.root
     if (!root || this.native) return this.native !== null
-    // Read before the handle opens (watchedDir.ts): a root replaced in between reads as replaced.
-    const rootId = dirIdentity(root)
+    // Read before the handle opens (watchedDir.ts): a root replaced in between reads as replaced. Off the thread
+    // (audit U-14): a synchronous stat of a root on a dead share froze the window.
+    const rootId = await this.identity(root)
+    // Unwatched, switched or opened meanwhile.
+    if (this.root !== root || this.native) return this.native !== null
+    let checking = false
     try {
       const h = this.watchNative(root, (type, filename) => {
         // null when the platform cannot name the entry — nothing to point the tree at
@@ -148,10 +157,17 @@ export class FileWatcher {
         // lstat. Never an entry, so never reported; a root that is no longer the one opened closes the
         // handle, and the explorer's next watch of it opens a new one.
         if (namesAPath(filename)) {
-          if (rootId === null || dirIdentity(root) !== rootId) {
-            this.log(`watch on ${root} closed: the folder was removed or replaced`)
-            this.closeNative()
-          }
+          // One check at a time: a removed root fires these without a pause.
+          if (checking) return
+          checking = true
+          void this.identity(root).then((now) => {
+            checking = false
+            if (this.native !== h) return
+            if (rootId === null || now !== rootId) {
+              this.log(`watch on ${root} closed: the folder was removed or replaced`)
+              this.closeNative()
+            }
+          })
           return
         }
         if (this.ignored?.(filename)) return
