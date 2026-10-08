@@ -35,6 +35,9 @@ export function createRemoteRuntimes(a: {
   open?(t: RemoteTarget): RemoteLink
   /** This app's language, for the Runtime's journal rows (review I6). */
   lang?(): string
+  /** A Runtime's client was replaced (a re-pair) or removed, after the fact. Its link does not tell the streams on it
+   *  that it closed, so their owner subscribes them again (Phase 9b remoteStreams `rebind`). */
+  onClientChange?(runtimeId: string): void
 }): RemoteRuntimes {
   const clients = new Map<string, { client: RemoteRuntimeClient; pairing: string }>()
   /** Opened once (review I-4): opening takes the store's lock and sweeps it, which a read on every call must not do. */
@@ -67,6 +70,8 @@ export function createRemoteRuntimes(a: {
     )(target)
     const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link, ...(a.lang ? { lang: a.lang } : {}) })
     clients.set(found.runtimeId, { client, pairing })
+    // After this lookup settles, so the owner's own client() finds the new client rather than this pending lookup.
+    if (kept) setTimeout(() => a.onClientChange?.(found.runtimeId), 0)
     return client
   }
 
@@ -104,6 +109,7 @@ export function createRemoteRuntimes(a: {
       await r.remove(runtimeId)
       clients.get(runtimeId)?.client.close()
       clients.delete(runtimeId)
+      a.onClientChange?.(runtimeId)
       return { ok: true }
     },
     client: (runtimeId) => {

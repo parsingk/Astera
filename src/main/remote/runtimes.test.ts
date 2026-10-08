@@ -100,3 +100,27 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     expect((await r.list()).map((x) => x.runtimeId)).toEqual(['rt_a'])
   })
 })
+
+// Phase 9b: a remote session tab's stream rides the client's link, which does not tell its streams it was closed; the
+// owner of those streams hears when a Runtime's client is replaced or removed.
+describe('a client replaced or removed is announced', () => {
+  it('a re-pair and a remove each call onClientChange; the first open does not', async () => {
+    const o = opener()
+    const changed: string[] = []
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: o.open, onClientChange: (id) => void changed.push(id) })
+    await r.client('rt_a')
+    await r.client('rt_a')
+    await Promise.resolve()
+    expect(changed).toEqual([])
+    await (await controllerRegistry(dir)).add(
+      { runtimeId: 'rt_a', name: 'Office', address: '10.0.0.2', port: 47831, fingerprint: FP, permission: 'full-control', createdAt: 'y', lastSeenAt: null },
+      'tok-b'
+    )
+    await r.client('rt_a')
+    await new Promise((res) => setTimeout(res, 0))
+    expect(changed).toEqual(['rt_a'])
+    await r.remove('rt_a')
+    await new Promise((res) => setTimeout(res, 0))
+    expect(changed).toEqual(['rt_a', 'rt_a'])
+  })
+})

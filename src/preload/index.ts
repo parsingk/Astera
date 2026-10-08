@@ -354,6 +354,10 @@ const api = {
     projects: invoke('remote.projects'),
     thisMachine: invoke('remote.thisMachine')
   },
+  remoteSessions: {
+    attach: invoke('remoteSessions.attach'),
+    detach: invoke('remoteSessions.detach')
+  },
   understanding: {
     get: invoke('understanding.get'),
     regenerate: invoke('understanding.regenerate')

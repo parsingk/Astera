@@ -10,7 +10,7 @@
 // the Runtime's pushes arrive with its subscriptions in a later phase.
 import { randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
-import type { RemoteLink } from '../../core/remote/link'
+import type { PtyStreamHandlers, RemoteLink } from '../../core/remote/link'
 import type { HelloFrame } from '../../core/remote/frames'
 import { remoteMutation, remoteTarget } from '../../core/remote/targets'
 import { resolveRunId, type OrchState } from '../../core/orchestration/state'
@@ -51,6 +51,9 @@ export interface RemoteRuntimeClient {
   ping(): Promise<{ ok: true; hello: HelloFrame | null } | { ok: false; code: string; message: string }>
   completion(runId: string, taskId: string): Promise<CompletionDetail | null>
   command(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  /** A pty's output on the Runtime (Phase 9b), kept going across gaps and reconnects by the link. Returns the
+   *  unsubscribe. */
+  subscribePty(ptyId: string, h: PtyStreamHandlers): () => void
   close(): void
 }
 
@@ -227,9 +230,11 @@ export function createRemoteRuntimeClient(a: {
       const r = heard(await a.link.call(cmd, args, request !== undefined ? { request } : {}))
       if (r instanceof RemoteError) return replyOf(r, change)
       // The change ran: a refresh that fails after it must not turn its answer into "could not be asked" (review M-2).
-      if (r.status >= 200 && r.status < 300 && change) await refresh().catch(() => undefined)
+      // A session command (Phase 9b) changes no orchestration state: a keystroke must not cost a state read.
+      if (r.status >= 200 && r.status < 300 && change && !cmd.startsWith('sessions-')) await refresh().catch(() => undefined)
       return { status: r.status, body: r.body }
     },
+    subscribePty: (ptyId, h) => a.link.subscribe(ptyId, h),
     close: () => a.link.close()
   }
 }

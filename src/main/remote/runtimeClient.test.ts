@@ -323,3 +323,28 @@ describe('runDetail of a Job that has not run', () => {
     expect(d.events).toEqual([])
   })
 })
+
+// Phase 9b: a remote session tab's commands and its pty stream.
+describe('remote sessions through the client', () => {
+  it('a session command changes no orchestration state, so it reads no state after it', async () => {
+    const f = fakeLink(() => ({ status: 200, body: { written: 1 } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect(await c.command('sessions-input', { id: 's1', data: 'x' })).toEqual({ status: 200, body: { written: 1 } })
+    expect(f.calls.map((x) => x.cmd)).toEqual(['sessions-input'])
+    expect(f.calls[0].request).toMatch(/^desk_/)
+  })
+  it('subscribes to a pty through its link and hands back the unsubscribe', () => {
+    const f = fakeLink(() => ({ status: 200, body: null }))
+    const subs: string[] = []
+    let stopped = 0
+    f.link.subscribe = (pty) => {
+      subs.push(pty)
+      return () => void stopped++
+    }
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    const stop = c.subscribePty('pty-1', { onReset: () => {}, onEvents: () => {} })
+    expect(subs).toEqual(['pty-1'])
+    stop()
+    expect(stopped).toBe(1)
+  })
+})

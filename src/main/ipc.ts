@@ -105,6 +105,7 @@ import { executeRecovery } from '../core/recovery/execute'
 import { readGitFacts } from '../core/recovery/git'
 import { createRecoveryOwner } from './host/recoveryOwner'
 import { createRemoteRuntimes } from './remote/runtimes'
+import { createRemoteStreams, type RemoteStreams } from './remote/remoteStreams'
 import { createOrchRouter } from './remote/orchRouter'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
@@ -4621,8 +4622,28 @@ export function registerIpc(
   // **Which Host each orchestration call goes to** (remote runtime design §2.7, D1.1): no runtimeId, or 'local', runs
   // the four bodies above exactly as before; a paired Runtime's id goes to its client in main/remote, so none of the
   // guards, fallbacks or writes above can run for it (D1.6, D1.7), and its replies never reach 'orch:state'.
-  const remoteRuntimes = createRemoteRuntimes({ profileDir: app.getPath('userData'), version: app.getVersion(), lang: () => core.lang })
-  app.once('will-quit', () => remoteRuntimes.close())
+  // Phase 9b: a remote session tab's output, subscribed through its Runtime's client and sent on the session bus under
+  // the tab's key (remoteStreams.ts). A re-paired or removed Runtime's streams subscribe again or are reported gone.
+  let remoteStreams: RemoteStreams | null = null
+  const remoteRuntimes = createRemoteRuntimes({
+    profileDir: app.getPath('userData'),
+    version: app.getVersion(),
+    lang: () => core.lang,
+    onClientChange: (runtimeId) => void remoteStreams?.rebind(runtimeId)
+  })
+  remoteStreams = createRemoteStreams({ clientOf: (runtimeId) => remoteRuntimes.client(runtimeId), send })
+  app.once('will-quit', () => {
+    remoteStreams?.close()
+    remoteRuntimes.close()
+  })
+  ipcMain.handle('remoteSessions.attach', (_e, runtimeId: unknown, sessionId: unknown, ptyId: unknown) =>
+    typeof runtimeId === 'string' && typeof sessionId === 'string' && typeof ptyId === 'string' && ptyId !== ''
+      ? remoteStreams!.attach(runtimeId, sessionId, ptyId)
+      : false
+  )
+  ipcMain.handle('remoteSessions.detach', (_e, key: unknown) => {
+    if (typeof key === 'string') remoteStreams!.detach(key)
+  })
   const orchRouter = createOrchRouter({
     local: {
       list: (projectPath) => orchLocalList(projectPath),

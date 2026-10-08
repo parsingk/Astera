@@ -28,6 +28,7 @@ const fakeClient = (): RemoteRuntimeClient & { seen: string[] } => {
     projects: async () => [],
     status: () => ({ offline: false, lastSeenAt: null }),
     ping: async () => ({ ok: true, hello: null }),
+    subscribePty: () => () => {},
     close: () => {}
   }
 }

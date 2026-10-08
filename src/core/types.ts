@@ -763,6 +763,12 @@ export interface RuntimeView {
 
 export interface CoreEvents {
   'session:data': { sessionId: string; data: string }
+  /** A remote session tab's checkpoint (Phase 9b, main/remote/remoteStreams.ts): the view resets, writes `state`, then
+   *  `pending`. `sessionId` is the tab's key, `<runtimeId>:<sessionId>`. */
+  'session:reset': { sessionId: string; state: string; pending: string; cols: number; rows: number; exitCode?: number }
+  'session:remote-size': { sessionId: string; cols: number; rows: number }
+  'session:remote-exit': { sessionId: string; code: number }
+  'session:remote-gone': { sessionId: string; code: string; message: string }
   'session:exit': { sessionId: string; exitCode: number }
   // main created a session without the renderer asking — an orchestration worker. The whole
   // SessionInfo is carried so the renderer can build the tab (the same value sessions.spawn returns).
@@ -1836,6 +1842,13 @@ export interface RemoteApi {
   thisMachine(): Promise<{ gateway: { state: string; [k: string]: unknown }; clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null }> } | null>
 }
 
+/** A remote session tab's pty stream (Phase 9b): its output arrives on the session bus under the tab's key. */
+export interface RemoteSessionsApi {
+  /** false when the Runtime cannot be reached for it (a `session:remote-gone` says why). */
+  attach(runtimeId: string, sessionId: string, ptyId: string): Promise<boolean>
+  detach(key: string): Promise<void>
+}
+
 export interface UnderstandingApi {
   /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
   get(projectPath: string): Promise<ProjectUnderstanding | null>
@@ -1936,6 +1949,7 @@ export type RendererApi = CoreApi & {
   orch: OrchApi
   /** Remote Runtimes (remote runtime design Phase 6): Settings › Remote Runtimes and the Jobs view's selectors. */
   remote: RemoteApi
+  remoteSessions: RemoteSessionsApi
   understanding: UnderstandingApi
   sessionTasks: SessionTaskApi
   /** Astera Host (slice 1). The Host owns nothing yet — this reports whether the channel to it is
