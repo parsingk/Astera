@@ -1766,7 +1766,7 @@ export function createHostOrch(a: {
             // The code goes to the caller and nowhere else: never into a log line (design §4.4).
             return { status: 200, body: { ...a.controllers.createPairing({ permission, ...(name ? { name } : {}) }), permission } }
           }
-          if (cmd === 'clients-list') return { status: 200, body: { clients: a.controllers.list() } }
+          if (cmd === 'clients-list') return { status: 200, body: { clients: a.controllers.list(), health: a.controllers.health() } }
           const id = args.id
           if (typeof id !== 'string' || id === '') return { status: 400, body: { error: 'clients-revoke needs --id' } }
           const out = await a.controllers.revoke(id)

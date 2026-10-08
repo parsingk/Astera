@@ -4522,6 +4522,9 @@ describe('clients-revoke when clients.json cannot be written (remote runtime Pha
     expect(r.status).toBe(500)
     expect(JSON.stringify(r.body)).toContain('disk full')
     expect(controllers.list()).toEqual([])
+    // Security audit SEC-3: and status keeps saying so until a save lands.
+    const s = await orch.call({ cmd: 'clients-list', args: {}, sessionId: '', from: { role: 'cli', toOthers: () => {} } })
+    expect(s.body).toMatchObject({ health: { unsavedRevocations: [got.clientId] } })
   })
 })
 

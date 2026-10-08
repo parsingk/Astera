@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { controllerRecordsFile, createControllerRegistry, sha256Base64url, type ControllerRecord } from './controllers'
+import { REVOKE_RETRY_MS, controllerRecordsFile, createControllerRegistry, sha256Base64url, type ControllerRecord } from './controllers'
 import { openSecretStore } from '../core/secrets/secretStore'
 
 const clock = () => {
@@ -207,6 +207,30 @@ describe('client records: final review fixes', () => {
     const out = await r.revoke(got.clientId)
     expect(out).toMatchObject({ revoked: true, conns: [{ linkGen: 1, conn: 'c' }], saveError: 'disk full' })
     expect(r.principalFor(1, 'c')).toBeNull()
+  })
+  // Security audit SEC-3: a revocation whose save failed was gone from memory but still on disk, so the next Host start
+  // took the revoked token again. It is saved again until a save lands, and said meanwhile.
+  it('a revocation whose save failed is saved again until it lands, and health names it until then', async () => {
+    vi.useFakeTimers()
+    try {
+      let saved: ControllerRecord[] | null = null
+      let failing = false
+      const file = { load: async (): Promise<ControllerRecord[]> => [], save: async (r: ControllerRecord[]): Promise<void> => { if (failing) throw new Error('locked'); saved = r } }
+      const r = createControllerRegistry({ records: file })
+      const got = await r.redeem(r.createPairing({ permission: 'read-only' }).code, 'x')
+      if (!got.ok) throw new Error('redeem')
+      failing = true
+      expect((await r.revoke(got.clientId)).saveError).toBe('locked')
+      expect(r.health().unsavedRevocations).toEqual([got.clientId])
+      await vi.advanceTimersByTimeAsync(REVOKE_RETRY_MS[0])
+      expect(r.health().unsavedRevocations).toEqual([got.clientId])
+      failing = false
+      await vi.advanceTimersByTimeAsync(REVOKE_RETRY_MS[1])
+      expect(saved).toEqual([])
+      expect(r.health().unsavedRevocations).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it('a redeem whose save fails leaves no client behind', async () => {
     const r = createControllerRegistry({ records: { load: async () => [], save: async () => Promise.reject(new Error('disk full')) } })

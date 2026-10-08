@@ -66,8 +66,9 @@ export interface ControllerRegistry {
   /** Deletes the record and every binding to it, and names the connections to close (design §3.3's order). */
   revoke(clientId: string): Promise<{ revoked: boolean; conns: Array<{ linkGen: number; conn: string }>; saveError?: string }>
   list(): Array<Omit<ControllerRecord, 'tokenHash'>>
-  /** What the person should know about pairing on this Host (security audit SEC-2): how many codes wrong guesses burned. */
-  health(): { burnedCodes: number }
+  /** What the person should know about pairing on this Host: how many codes wrong guesses burned (security audit SEC-2),
+   *  and the clients revoked here whose revocation is not on disk yet (SEC-3). */
+  health(): { burnedCodes: number; unsavedRevocations: string[] }
 }
 
 const sameHash = (a: string, b: string): boolean => {
@@ -75,6 +76,9 @@ const sameHash = (a: string, b: string): boolean => {
   const y = Buffer.from(b)
   return x.length === y.length && timingSafeEqual(x, y)
 }
+
+/** The waits before a revocation that could not be saved is saved again (security audit SEC-3); the last repeats. */
+export const REVOKE_RETRY_MS = [1_000, 5_000, 30_000, 2 * 60_000, 10 * 60_000]
 
 /** How often a client's lastSeenAt is saved at most (design §4.5). */
 export const LAST_SEEN_EVERY_MS = 60_000
@@ -93,10 +97,14 @@ export function createControllerRegistry(
   /** The saves, one after another. The store's lock is not a queue, so two saves let run together could land in
    *  either order; chained, each takes memory as it is when it starts, and the last to start is the last to land. */
   let saving: Promise<void> = Promise.resolve()
+  /** Clients revoked here whose revocation no save has landed yet: a Host start would read them back from the file. */
+  const unsaved = new Set<string>()
   const persist = (): Promise<void> => {
     const next = saving.then(async () => {
       if (loadFailed !== null) throw loadFailed
       if (deps.records) await deps.records.save([...records.values()])
+      // Every save writes memory whole, so any save that lands carries the revocations made before it.
+      unsaved.clear()
     })
     saving = next.catch(() => {})
     return next
@@ -110,6 +118,21 @@ export function createControllerRegistry(
   /** `${linkGen}\u0000${conn}` to clientId. */
   const bindings = new Map<string, string>()
   const bindKey = (linkGen: number, conn: string): string => `${linkGen}\u0000${conn}`
+
+  /** Saves again until a save lands (security audit SEC-3), with waits that grow to REVOKE_RETRY_MS's last. */
+  let retrying = false
+  const saveAgain = (attempt: number): void => {
+    if (retrying && attempt === 0) return
+    retrying = true
+    const wait = REVOKE_RETRY_MS[Math.min(attempt, REVOKE_RETRY_MS.length - 1)]
+    setTimeout(() => {
+      if (unsaved.size === 0) return void (retrying = false)
+      persist().then(
+        () => void (retrying = false),
+        () => saveAgain(attempt + 1)
+      )
+    }, wait).unref?.()
+  }
 
   const newCode = (): string => {
     const bytes = random(CODE_LENGTH)
@@ -229,11 +252,13 @@ export function createControllerRegistry(
         try {
           await persist()
         } catch (e) {
+          unsaved.add(clientId)
+          saveAgain(0)
           return { revoked, conns, saveError: e instanceof Error ? e.message : String(e) }
         }
       return { revoked, conns }
     },
     list: () => [...records.values()].map(({ tokenHash: _hidden, ...rest }) => rest),
-    health: () => ({ burnedCodes })
+    health: () => ({ burnedCodes, unsavedRevocations: [...unsaved] })
   }
 }
