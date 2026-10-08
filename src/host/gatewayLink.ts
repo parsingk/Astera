@@ -63,7 +63,7 @@ export function attachGatewayLink(o: {
   }
   /** One subscription: which connection and pty, whether its replay is done, events that came during the replay, and
    *  the last seq handed to the stream (nothing at or below it is sent again). */
-  type Sub = { key: string; conn: string; sub: string; pty: string; live: boolean; held: PtyEvent[]; last: number }
+  type Sub = { key: string; conn: string; sub: string; pty: string; live: boolean; held: PtyEvent[]; heldBytes: number; last: number }
   const subs = new Map<string, Sub>()
   const keyOf = (conn: string, sub: string): string => `${conn}\u0000${sub}`
   const out = createLaneWriter(o.output, {
@@ -85,11 +85,21 @@ export function attachGatewayLink(o: {
     s.last = e.seq
     out.stream(s.key, `${JSON.stringify({ t: 'pty-out', conn: s.conn, sub: s.sub, events: [e] })}\n`, e.seq)
   }
+  const perStream = o.streamPerKey ?? LINK_STREAM_MAX
   const stopEvents = o.ptys?.onEvent((id, e) => {
-    for (const s of subs.values()) {
+    for (const s of [...subs.values()]) {
       if (s.pty !== id) continue
-      if (s.live) push(s, e)
-      else s.held.push(e)
+      if (s.live) {
+        push(s, e)
+        continue
+      }
+      // Held while the replay is computed, within the stream's budget (review M6): past it the stream ends with a gap.
+      s.held.push(e)
+      s.heldBytes += e.kind === 'data' ? e.data.length * 2 : 64
+      if (s.heldBytes > perStream) {
+        subs.delete(s.key)
+        send({ t: 'output-gap', conn: s.conn, sub: s.sub, firstSeq: s.held[0].seq, lastSeq: e.seq, code: 'OUTPUT_GAP' })
+      }
     }
   })
   const dropSub = (key: string): void => {
@@ -192,7 +202,7 @@ export function attachGatewayLink(o: {
           return refuse('RUNTIME_BUSY', `at most ${SUBS_PER_CONN} subscriptions per connection`)
         // Registered before the replay is computed, so an event in between is held, not lost (§3.7: nothing lost or
         // repeated), and sent after the replay in seq order.
-        const s: Sub = { key, conn: f.conn, sub: f.sub, pty: f.pty, live: false, held: [], last: 0 }
+        const s: Sub = { key, conn: f.conn, sub: f.sub, pty: f.pty, live: false, held: [], heldBytes: 0, last: 0 }
         subs.set(key, s)
         const r = await o.ptys.replayFrom(f.pty, { ...(f.fromSeq !== undefined ? { fromSeq: f.fromSeq } : {}), ...(f.bootId !== undefined ? { bootId: f.bootId } : {}) })
         if (subs.get(key) !== s) return

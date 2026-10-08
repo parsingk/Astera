@@ -349,4 +349,27 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     expect(of(s.frames, 'sub-error')).toEqual([])
     expect(of(s.frames, 'output-gap')).toMatchObject([{ sub: 's1', code: 'OUTPUT_GAP' }])
   })
+
+  // Phase 8 review M6: what arrives while a replay is computed is held, within the stream's budget; past it the stream
+  // ends with a gap rather than holding without bound.
+  it('output held during a slow replay past the stream budget ends the stream with output-gap', async () => {
+    let tell: (id: string, e: { seq: number; kind: 'data'; data: string }) => void = () => {}
+    let finish: (v: unknown) => void = () => {}
+    const ptys = {
+      bootId: 'b',
+      onEvent: (cb: typeof tell) => ((tell = cb), () => {}),
+      replayFrom: () => new Promise((r) => (finish = r))
+    }
+    const s = await setup({ ptys: ptys as never, streamPerKey: 1_000 })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await s.settle()
+    for (let seq = 1; seq <= 10; seq++) tell('p1', { seq, kind: 'data', data: 'x'.repeat(200) })
+    finish({ gap: null, checkpoint: null, events: [] })
+    await s.settle()
+    expect(of(s.frames, 'output-gap')).toMatchObject([{ sub: 's1' }])
+    expect(of(s.frames, 'pty-out')).toEqual([])
+  })
 })
