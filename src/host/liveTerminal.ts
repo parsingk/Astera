@@ -31,6 +31,10 @@ export interface PtyCheckpoint {
 
 export interface LiveTerminal {
   apply(e: PtyEvent): void
+  /** True once the terminal could not take an event (xterm discards writes past 50,000,000 waiting units): its screen
+   *  is no longer the pty's, and the owner builds a new one (registry.ts). Never thrown out of `apply`, which runs
+   *  inside node-pty's data callback (Phase 8 review I2). */
+  broken(): boolean
   watermark(): number
   checkpoint(): Promise<PtyCheckpoint>
   /** The screen and up to `lines` rows above it (at most TERMINAL_SCROLLBACK), as `sessions-read` answers. */
@@ -114,9 +118,18 @@ export function createLiveTerminal(o: { cols: number; rows: number }): LiveTermi
   let exited = false
   let exitCode: number | null = null
   const tracker = createEscapeTracker()
+  let lost = false
   /** Events applied before the packages loaded, in order. */
   const early: PtyEvent[] = []
 
+  const applySafely = (t: HeadlessTerminal, e: PtyEvent): void => {
+    if (lost) return
+    try {
+      applyNow(t, e)
+    } catch {
+      lost = true
+    }
+  }
   const applyNow = (t: HeadlessTerminal, e: PtyEvent): void => {
     // The tracker and the watermark move in the write callback, so both stand where the parser stands.
     if (e.kind === 'data')
@@ -145,20 +158,32 @@ export function createLiveTerminal(o: { cols: number; rows: number }): LiveTermi
     serializer = new m.SerializeAddon()
     t.loadAddon(serializer)
     term = t
-    for (const e of early.splice(0)) applyNow(t, e)
+    for (const e of early.splice(0)) applySafely(t, e)
     if (disposed) t.dispose()
     return t
   })
   /** Resolves inside a write callback queued after every event applied so far: the terminal stands at the watermark. */
   const settled = <T>(f: (t: HeadlessTerminal) => T): Promise<T> =>
-    ready.then((t) => new Promise<T>((resolve) => t.write('', () => resolve(f(t)))))
+    ready.then(
+      (t) =>
+        new Promise<T>((resolve, reject) => {
+          if (lost) return reject(new Error('the live terminal lost its place (write backlog)'))
+          try {
+            t.write('', () => resolve(f(t)))
+          } catch (e) {
+            lost = true
+            reject(e)
+          }
+        })
+    )
 
   return {
     apply: (e) => {
       if (disposed) return
-      if (term) applyNow(term, e)
+      if (term) applySafely(term, e)
       else early.push(e)
     },
+    broken: () => lost,
     watermark: () => mark,
     checkpoint: () =>
       settled((t) => ({

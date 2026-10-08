@@ -180,6 +180,32 @@ export class PtyRegistry {
       entry.term?.apply(ev)
       for (const cb of this.eventCbs) this.tell(cb, 'event', entry.id, () => cb(entry.id, ev))
     }
+    if (entry.term?.broken()) this.rebuildTerminal(entry)
+  }
+
+  /** A live terminal that lost its place (output faster than it parses, Phase 8 review I2) is built again from the
+   *  ring: what it shows is then what the ring holds, the best this Host still has. Never thrown into node-pty. */
+  private rebuildTerminal(entry: Entry): void {
+    if (!entry.ring) return
+    entry.term?.dispose()
+    this.deps.log(`pty ${entry.id}: its live terminal fell behind the output and was built again from the ring`)
+    const term = createLiveTerminal({ cols: entry.cols, rows: entry.rows })
+    for (const ev of entry.ring.since(entry.ring.firstSeq()) ?? []) term.apply(ev)
+    entry.term = term
+  }
+
+  /** The entry's terminal, built again if it lost its place; null when it has none. */
+  private async withTerminal<T>(entry: Entry, f: (t: LiveTerminal) => Promise<T>): Promise<T | null> {
+    for (let tries = 0; tries < 3; tries++) {
+      if (!entry.term || !entry.ring) return null
+      if (entry.term.broken()) this.rebuildTerminal(entry)
+      try {
+        return await f(entry.term as LiveTerminal)
+      } catch {
+        this.rebuildTerminal(entry)
+      }
+    }
+    return null
   }
 
   /** Adds a listener; every one registered hears every chunk. Returns the unsubscribe. */
@@ -349,10 +375,10 @@ export class PtyRegistry {
       if (events) return { gap: null, checkpoint: null, events }
     }
     for (let tries = 0; tries < 8; tries++) {
-      const term = e.term
       const ring = e.ring
-      if (!term || !ring) return null
-      const checkpoint = await term.checkpoint()
+      if (!ring) return null
+      const checkpoint = await this.withTerminal(e, (t) => t.checkpoint())
+      if (!checkpoint) return null
       const events = ring.since(checkpoint.watermark + 1)
       if (events) return { gap: { firstSeq: a.bootId === this.bootId && a.fromSeq !== undefined ? a.fromSeq : 1, lastSeq: checkpoint.watermark }, checkpoint, events }
     }
@@ -363,8 +389,8 @@ export class PtyRegistry {
   /** The live terminal's screen and up to `lines` rows above it, or null for a pty never here or cleared. */
   async readScreen(id: string, lines: number): Promise<SessionScreen | null> {
     this.sweepExited()
-    const term = this.entries.get(id)?.term
-    return term ? term.read(lines) : null
+    const e = this.entries.get(id)
+    return e ? this.withTerminal(e, (t) => t.read(lines)) : null
   }
 
   private pruneEnded(id: string): void {

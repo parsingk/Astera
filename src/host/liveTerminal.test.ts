@@ -173,3 +173,20 @@ describe('createLiveTerminal checkpoint', () => {
     for (const t of terms) t.dispose()
   }, 120_000)
 })
+
+// Phase 8 review I2: xterm throws once more than 50,000,000 units wait to be parsed. Output faster than the Host parses
+// must never throw out of `apply` (it runs inside node-pty's data callback); the terminal says it lost its place.
+describe('createLiveTerminal under a flood', () => {
+  it('a backlog past what xterm takes does not throw, and the terminal says it is broken', async () => {
+    const live = createLiveTerminal({ cols: 80, rows: 24 })
+    const ring = createPtyRing({ bound: 1_000 })
+    const piece = 'x'.repeat(65_536)
+    expect(() => {
+      for (let i = 0; i < 800; i++) for (const e of ring.push(data(piece))) live.apply(e)
+    }).not.toThrow()
+    // Events applied before the package loaded are written when it does: the backlog is met then.
+    await expect(live.checkpoint()).rejects.toThrow()
+    expect(live.broken()).toBe(true)
+    live.dispose()
+  }, 120_000)
+})

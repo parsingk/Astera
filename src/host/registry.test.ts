@@ -819,3 +819,22 @@ describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
     expect(await r.replayFrom(`b${n - 1}`, {})).not.toBeNull()
   })
 })
+
+// Phase 8 review I2: output faster than the Host parses never ends the Host: the live terminal that lost its place is
+// built again from the ring, and replays and reads go on.
+describe('PtyRegistry under an output flood', () => {
+  it('a flood does not throw out of the pty callback, and the pty still replays and reads', async () => {
+    const p = fakePty()
+    const r = new PtyRegistry({ spawn: () => p, log: () => {}, bootId: 'b' })
+    r.open({ id: 'p1', file: 'sh', args: [], opts })
+    const piece = 'x'.repeat(65_536)
+    expect(() => {
+      for (let i = 0; i < 800; i++) p.emit(piece)
+    }).not.toThrow()
+    p.emit('end of the flood')
+    const replay = await r.replayFrom('p1', {})
+    expect(replay?.checkpoint).not.toBeNull()
+    const screen = await r.readScreen('p1', 10)
+    expect(screen?.screen.join('')).toContain('end of the flood')
+  }, 120_000)
+})
