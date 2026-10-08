@@ -140,7 +140,8 @@ function RunCard({
   onOpenSession,
   onOpenRun,
   onDeleteRun,
-  onRestartCoordinator
+  onRestartCoordinator,
+  disabledReason
 }: {
   run: JobRow
   open: boolean
@@ -151,11 +152,13 @@ function RunCard({
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
   onOpenRun: (runId: string) => void
-  /** Absent on a read-only view (a remote Runtime, Phase 6): the button is not drawn. */
+  /** Absent: the button is not drawn. */
   onDeleteRun?: (runId: string) => void
   /** 관리자가 사라진 Run 에 코디네이터를 다시 붙인다 — run-start 를 다시 부른다(그 명령의 뜻이
-   *  "이 Run 에 관리자가 있게 하라" 이고, 이미 있으면 아무것도 하지 않는다). Absent on a read-only view. */
+   *  "이 Run 에 관리자가 있게 하라" 이고, 이미 있으면 아무것도 하지 않는다). */
   onRestartCoordinator?: (runId: string) => void
+  /** Why the controls are off (a read-only pairing, Phase 7): drawn disabled with this as their title. */
+  disabledReason?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const kind = runKind(run)
@@ -226,7 +229,8 @@ function RunCard({
         {run.coordinatorMissing && onRestartCoordinator && (
           <button
             className="jobs-more"
-            title={t('jobs.run.coordinatorRestartHint')}
+            disabled={disabledReason !== undefined}
+            title={disabledReason ?? t('jobs.run.coordinatorRestartHint')}
             aria-label={t('jobs.run.coordinatorRestart')}
             onClick={(e) => {
               e.stopPropagation()
@@ -354,7 +358,8 @@ function RunCard({
           {onDeleteRun && (
             <button
               className="jobs-delete"
-              title={t('jobs.run.delete')}
+              disabled={disabledReason !== undefined}
+              title={disabledReason ?? t('jobs.run.delete')}
               aria-label={t('jobs.run.delete')}
               onClick={() => onDeleteRun(run.id)}
             >
@@ -396,7 +401,8 @@ function ScheduleCard({
   onPauseRun,
   onResumeRun,
   onDeleteRun,
-  onRestartCoordinator
+  onRestartCoordinator,
+  disabledReason
 }: {
   run: JobRow
   open: boolean
@@ -407,11 +413,12 @@ function ScheduleCard({
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
   onOpenRun: (runId: string) => void
-  /** The four actions are absent on a read-only view (a remote Runtime, Phase 6): their buttons are not drawn. */
   onPauseRun?: (runId: string) => void
   onResumeRun?: (runId: string) => void
   onDeleteRun?: (runId: string) => void
   onRestartCoordinator?: (runId: string) => void
+  /** Why the controls are off (a read-only pairing, Phase 7): drawn disabled with this as their title. */
+  disabledReason?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const children = run.children ?? []
@@ -447,7 +454,8 @@ function ScheduleCard({
         {run.schedule && onPauseRun && onResumeRun && (
           <button
             className="jobs-more"
-            title={run.paused ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
+            disabled={disabledReason !== undefined}
+            title={disabledReason ?? (run.paused ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint'))}
             aria-label={run.paused ? t('jobs.run.resume') : t('jobs.run.pause')}
             onClick={(e) => {
               e.stopPropagation()
@@ -518,6 +526,7 @@ function ScheduleCard({
                 onOpenRun={onOpenRun}
                 onDeleteRun={onDeleteRun}
                 onRestartCoordinator={onRestartCoordinator}
+                disabledReason={disabledReason}
               />
             ))}
             {/* **누르면 늘어나는 수를 그대로 적는다.** "+12개 더" 라고 쓰고 5개만 늘리면 그 줄이
@@ -558,7 +567,8 @@ function ScheduleCard({
           {onDeleteRun && (
             <button
               className="jobs-delete"
-              title={t('jobs.run.delete')}
+              disabled={disabledReason !== undefined}
+              title={disabledReason ?? t('jobs.run.delete')}
               aria-label={t('jobs.run.delete')}
               onClick={() => onDeleteRun(run.id)}
             >
@@ -595,7 +605,8 @@ export function JobsView({
   onResumeRun,
   onDeleteRun,
   onRestartCoordinator,
-  readOnly = false
+  remote = false,
+  disabledReason
 }: {
   snapshot: OrchSnapshot | null
   /** Why there is nothing to draw, when the Host is the reason — null in the ordinary case.
@@ -641,15 +652,15 @@ export function JobsView({
    *  세어 보여 준다) 명령은 App 이 보낸다, onOpenRun 과 같은 갈래다. */
   onDeleteRun: (runId: string) => void
   onRestartCoordinator: (runId: string) => void
-  /** A remote Runtime's Jobs (remote runtime design Phase 6): shown, never changed from here. No new Job, pause,
-   *  resume, delete or coordinator restart is drawn; control from the app comes in Phase 7. */
-  readOnly?: boolean
+  /** A paired Runtime's Jobs (remote runtime design Phase 6): its empty view says the Runtime has none here. */
+  remote?: boolean
+  /** Why the controls are off (a read-only pairing, Phase 7): every control is drawn disabled with this as its title,
+   *  and it is said once above the list. Absent: the controls act. */
+  disabledReason?: string
 }): React.JSX.Element {
   const { t } = useI18n()
-  // The actions a row may draw: none on a read-only view.
-  const acts = readOnly
-    ? { onPauseRun: undefined, onResumeRun: undefined, onDeleteRun: undefined, onRestartCoordinator: undefined }
-    : { onPauseRun, onResumeRun, onDeleteRun, onRestartCoordinator }
+  const acts = { onPauseRun, onResumeRun, onDeleteRun, onRestartCoordinator }
+  const reasonLine = disabledReason !== undefined ? <p className="jobs-disabled-reason">{disabledReason}</p> : null
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
   // component ever rendered, opens by default rather than needing to be found and expanded by hand.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -737,9 +748,10 @@ export function JobsView({
     return (
       <div className="jobs-empty">
         {stallLine}
-        {/* A remote Runtime's view creates nothing here (Phase 6): its own line, never "create one here". */}
-        <p>{readOnly ? t('jobs.runtime.empty') : hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
-        {!readOnly && (
+        {reasonLine}
+        {/* A paired Runtime's empty view says the Runtime has no Jobs here, not "create one here". */}
+        <p>{remote ? t('jobs.runtime.empty') : hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
+        {!remote && (
           <p className="jobs-empty-hint">
             {hasProject ? t('jobs.empty.hint') : t('jobs.noProject.hint')}
           </p>
@@ -747,8 +759,8 @@ export function JobsView({
         {/* 아무것도 없을 때가 만들고 싶을 때다 — 목록이 생긴 뒤의 자리(아래)와 같은 버튼.
             hasProject 로 가드하는 이유는 위 hasProject 의 주석대로다: 그때 이 버튼을 누르면
             만들 자리도 없는 newRunOpen 이 true 로 남아 전역 단축키를 죽인다. */}
-        {hasProject && !readOnly && (
-          <button className="jobs-new" onClick={onNewRun}>
+        {hasProject && (
+          <button className="jobs-new" disabled={disabledReason !== undefined} title={disabledReason} onClick={onNewRun}>
             + {t('jobs.new.open')}
           </button>
         )}
@@ -760,11 +772,10 @@ export function JobsView({
     <section className="jobs-view">
       {stallLine}
       {/* 목록 위, 첫 자식 — 아이콘을 새로 만들지 않는다: '+' 글자로 충분하다 */}
-      {!readOnly && (
-        <button className="jobs-new" onClick={onNewRun}>
-          + {t('jobs.new.open')}
-        </button>
-      )}
+      {reasonLine}
+      <button className="jobs-new" disabled={disabledReason !== undefined} title={disabledReason} onClick={onNewRun}>
+        + {t('jobs.new.open')}
+      </button>
       {/* **회차가 여럿이면 예약이 아니어도 펼치는 카드다.** 접히는 카드를 예약에만 쓰던 것은 회차가
           예약에서만 생겼기 때문이고, 이제는 끝난 Job 을 다시 돌려도 생긴다 — 조건을 `schedule` 로
           두면 그 회차들이 화면에서 통째로 사라진다(상태에는 있는데 그리는 곳이 없다). */}
@@ -785,6 +796,7 @@ export function JobsView({
             onResumeRun={acts.onResumeRun}
             onDeleteRun={acts.onDeleteRun}
             onRestartCoordinator={acts.onRestartCoordinator}
+            disabledReason={disabledReason}
           />
         ) : (
           <RunCard
@@ -798,6 +810,7 @@ export function JobsView({
             onOpenRun={onOpenRun}
             onDeleteRun={acts.onDeleteRun}
             onRestartCoordinator={acts.onRestartCoordinator}
+            disabledReason={disabledReason}
           />
         )
       )}

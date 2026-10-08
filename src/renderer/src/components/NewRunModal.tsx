@@ -113,6 +113,8 @@ export function NewRunModal({
             저장소인지 확인하려면 main 에 물어야 하고, 그 왕복을 모달을 여는 길에 넣는 것은 이
             한 줄이 사는 값보다 크다(docs/jobs.md 에 같은 사실이 적혀 있다). */}
         <p className="modal-hint">{t('jobs.new.gitRequired')}</p>
+        {/* A paired Runtime's "Unregistered folders" has no folder to make a Job in (Phase 7). */}
+        {cwd === null && <p className="warn-text">{t('jobs.runtime.noFolder')}</p>}
         <div className="field">
           <label>{t('jobs.new.objective')}</label>
           <input
@@ -216,7 +218,7 @@ export function NewRunModal({
             className="primary"
             // 코디네이터 계정 없이는 만들 수 없다 — 이 폼은 관리자 있는 Run 만 만든다
             disabled={
-              busy || !objective.trim() || !coordinatorAccountId || (scheduled && schedule === null)
+              busy || cwd === null || !objective.trim() || !coordinatorAccountId || (scheduled && schedule === null)
             }
             onClick={() => void create()}
           >

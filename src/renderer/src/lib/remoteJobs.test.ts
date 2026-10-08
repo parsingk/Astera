@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { LOCAL, isRemoteRuntime, offlineNote, projectOptions, remoteDetailKey, remotePollReady, runtimeOptions } from './remoteJobs'
+import { LOCAL, controlReason, isRemoteRuntime, offlineNote, projectOptions, remoteDetailKey, remoteNewJobFolder, remotePollReady, runtimeOptions } from './remoteJobs'
 import type { OrchSnapshot } from '../../../core/types'
 
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -57,5 +57,22 @@ describe('the remote Jobs view, review minors', () => {
     expect(remoteDetailKey(snap([row('run_1', 4), row('run_2', 1)]), 'run_1')).not.toBe(a)
     expect(remoteDetailKey(snap([row('run_1', 3), row('run_2', 1)], true), 'run_1')).not.toBe(a)
     expect(remoteDetailKey(null, 'run_1')).toBe('none')
+  })
+})
+
+// Phase 7: a new remote Job's folder, and when control is off.
+describe('remote Job control (Phase 7)', () => {
+  it("a new remote Job is made in the Runtime project's own folder, never under unregistered folders", () => {
+    const projects = [{ id: 'p1', name: 'repo', path: '/srv/repo' }, { id: 'unregistered', name: null, path: null }]
+    expect(remoteNewJobFolder(projects, 'p1')).toBe('/srv/repo')
+    expect(remoteNewJobFolder(projects, 'unregistered')).toBeNull()
+    expect(remoteNewJobFolder(projects, 'nope')).toBeNull()
+    expect(remoteNewJobFolder(null, 'p1')).toBeNull()
+  })
+  it('control is off with a reason only for a read-only pairing; an unknown level is read only', () => {
+    expect(controlReason('read-only', t)).toBe('jobs.runtime.readOnlyReason')
+    expect(controlReason('full-control', t)).toBeNull()
+    expect(controlReason('admin', t)).toBe('jobs.runtime.readOnlyReason')
+    expect(controlReason(undefined, t)).toBe('jobs.runtime.readOnlyReason')
   })
 })

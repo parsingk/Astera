@@ -18,15 +18,16 @@ const render = (over: Partial<React.ComponentProps<typeof RuntimeSelector>> = {}
       project: 'p1',
       onProject: () => {},
       offline: null,
+      readOnlyReason: null,
       ...over
     })
   )
 
 describe('RuntimeSelector', () => {
-  it('for a paired Runtime: its project choice, read only and Slack lines, and no offline line while it answers', () => {
+  it('for a paired Runtime: its project choice, where actions run, the Slack line, and no offline line while it answers', () => {
     const html = render()
     expect(html).toContain('jobs.runtime.project')
-    expect(html).toContain('jobs.runtime.readOnly')
+    expect(html).toContain('jobs.runtime.control')
     expect(html).toContain('jobs.runtime.slack')
     expect(html).not.toContain('jobs-runtime-offline')
   })
@@ -40,7 +41,12 @@ describe('RuntimeSelector', () => {
   })
   it('for this computer: only the runtime choice', () => {
     const html = render({ runtimeId: LOCAL })
-    expect(html).not.toContain('jobs.runtime.readOnly')
+    expect(html).not.toContain('jobs.runtime.control')
     expect(html).not.toContain('jobs.runtime.project')
+  })
+  it('a read-only pairing says why actions are off, instead of where they run (Phase 7)', () => {
+    const html = render({ readOnlyReason: 'Read only pairing' })
+    expect(html).toContain('Read only pairing')
+    expect(html).not.toContain('jobs.runtime.control')
   })
 })

@@ -13,7 +13,8 @@ export function RuntimeSelector({
   projects,
   project,
   onProject,
-  offline
+  offline,
+  readOnlyReason
 }: {
   paired: Array<{ runtimeId: string; name: string }>
   runtimeId: string
@@ -23,6 +24,8 @@ export function RuntimeSelector({
   onProject: (project: string) => void
   /** The unreachable line (lib/remoteJobs offlineNote), or null. */
   offline: string | null
+  /** Why actions on that Runtime are off (a read-only pairing), or null when they run there (Phase 7). */
+  readOnlyReason: string | null
 }): React.JSX.Element {
   const { t } = useI18n()
   const remote = isRemoteRuntime(runtimeId)
@@ -40,7 +43,7 @@ export function RuntimeSelector({
       )}
       {remote && projects !== null && projects.length === 0 && <p className="jobs-empty-hint">{t('jobs.runtime.noProjects')}</p>}
       {remote && offline && <p className="jobs-runtime-offline">{offline}</p>}
-      {remote && <p className="jobs-empty-hint">{t('jobs.runtime.readOnly')}</p>}
+      {remote && <p className="jobs-empty-hint">{readOnlyReason ?? t('jobs.runtime.control', { name })}</p>}
       {remote && <p className="jobs-empty-hint">{t('jobs.runtime.slack')}</p>}
     </div>
   )

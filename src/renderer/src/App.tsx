@@ -43,7 +43,7 @@ import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
-import { LOCAL, isRemoteRuntime, offlineNote, remoteDetailKey, remotePollReady } from './lib/remoteJobs'
+import { LOCAL, controlReason, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
 import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resumeRun, type ActionUi } from './lib/jobActions'
@@ -2456,7 +2456,7 @@ export default function App(): React.JSX.Element {
   // the remote project never becomes `currentProject`, and the remote snapshot never mixes with `orchSnapshot`, so
   // with "This computer" selected every local path, call and push is what it was.
   const [jobsRuntime, setJobsRuntime] = useState<string>(LOCAL)
-  const [pairedRuntimes, setPairedRuntimes] = useState<Array<{ runtimeId: string; name: string; lastSeenAt: string | null; offline: boolean | null }>>([])
+  const [pairedRuntimes, setPairedRuntimes] = useState<Array<{ runtimeId: string; name: string; lastSeenAt: string | null; offline: boolean | null; permission: string }>>([])
   /** Bumped when Settings pairs or removes a Runtime: the paired list is read again (review minor). */
   const [pairedChanged, setPairedChanged] = useState(0)
   /** Which Runtime `remoteProject` is a project of: the poll never asks one Runtime for another's (review minor). */
@@ -2530,6 +2530,7 @@ export default function App(): React.JSX.Element {
       for (const p of paths) hiddenProjects.hide(p)
     }
   }
+  const remoteActionUi: ActionUi = { t: actionUi.t, confirm: actionUi.confirm, confirmChoices: actionUi.confirmChoices, error: actionUi.error }
   const pauseScheduleRun = (runId: string): void => {
     if (currentProject) void pauseRun(localDoor(window.api, currentProject), runId, actionUi)
   }
@@ -2645,12 +2646,41 @@ export default function App(): React.JSX.Element {
   const remoteSnapshotRef = useRef(remoteSnapshot)
   remoteSnapshotRef.current = remoteSnapshot
   const remoteRowKey = openRun?.runtimeId ? remoteDetailKey(remoteSnapshot, openRun.runId) : ''
+  /** A paired Runtime's permission as this app was told at pairing; an unknown one is read only (controllerGate). */
+  const permissionOf = (runtimeId: string): string => pairedRuntimes.find((r) => r.runtimeId === runtimeId)?.permission ?? 'read-only'
+  const readOnlyReason = t('jobs.runtime.readOnlyReason')
   /** Where the open detail's commands, accounts and run configurations go (lib/orchDoor.ts, Phase 7). */
+  const detailPermission = openRun?.runtimeId ? permissionOf(openRun.runtimeId) : ''
   const detailDoor = useMemo<OrchDoor | null>(() => {
     if (!openRun) return null
     if (!openRun.runtimeId) return localDoor(window.api, openRun.projectPath)
-    return remoteDoor(window.api, { runtimeId: openRun.runtimeId, projectKey: openRun.projectPath, permission: 'read-only', readOnlyReason: '' })
-  }, [openRun?.runtimeId, openRun?.projectPath])
+    return remoteDoor(window.api, { runtimeId: openRun.runtimeId, projectKey: openRun.projectPath, permission: detailPermission, readOnlyReason })
+  }, [openRun?.runtimeId, openRun?.projectPath, detailPermission, readOnlyReason])
+  /** The remote Jobs view's door: the selected Runtime and its project (Phase 7). */
+  const remoteViewPermission = isRemoteRuntime(jobsRuntime) ? permissionOf(jobsRuntime) : ''
+  const remoteViewDoor = useMemo<OrchDoor | null>(
+    () =>
+      isRemoteRuntime(jobsRuntime) && remoteProject !== null
+        ? remoteDoor(window.api, { runtimeId: jobsRuntime, projectKey: remoteProject, permission: remoteViewPermission, readOnlyReason })
+        : null,
+    [jobsRuntime, remoteProject, remoteViewPermission, readOnlyReason]
+  )
+  /** A new Job on a paired Runtime: its form is open, and the Runtime's accounts once they came. */
+  const [remoteNewRunOpen, setRemoteNewRunOpen] = useState(false)
+  const [remoteAccounts, setRemoteAccounts] = useState<Account[] | null>(null)
+  useEffect(() => {
+    if (!remoteNewRunOpen || !remoteViewDoor) return
+    let alive = true
+    setRemoteAccounts(null)
+    void remoteViewDoor.accounts().then((list) => {
+      if (alive) setRemoteAccounts(list)
+    })
+    return () => {
+      alive = false
+    }
+  }, [remoteNewRunOpen, remoteViewDoor])
+  // Another Runtime or project is not the one the form was opened for.
+  useEffect(() => setRemoteNewRunOpen(false), [jobsRuntime, remoteProject])
   // 기록 모달이 열려 있는 동안 이벤트를 다시 읽는다. **이 자리에 있어야 한다** — 의존성 배열은
   // 렌더 중에 평가되므로, currentProject 선언보다 위에 두면 TDZ ReferenceError 로 죽는다(타입체크는
   // 잡지 못한다).
@@ -4197,6 +4227,7 @@ export default function App(): React.JSX.Element {
               {/* Only when a Runtime is paired: with none, the Jobs view is exactly what it was (Phase 6). */}
               {pairedRuntimes.length > 0 && (
                 <RuntimeSelector
+                  readOnlyReason={controlReason(remoteViewPermission, t as never)}
                   paired={pairedRuntimes}
                   runtimeId={jobsRuntime}
                   onRuntime={setJobsRuntime}
@@ -4216,25 +4247,37 @@ export default function App(): React.JSX.Element {
                 />
               )}
               {isRemoteRuntime(jobsRuntime) ? (
-                // A paired Runtime's Jobs, read only: no new Job, pause, resume, delete or restart (Phase 7 adds
-                // control), and no session to jump to (remote session tabs are Phase 9).
+                // A paired Runtime's Jobs, acted on there through its door (Phase 7): every action is an orch-call
+                // to that Runtime, disabled with the reason for a read-only pairing. No session to jump to (remote
+                // session tabs are Phase 9).
                 <JobsView
                   snapshot={remoteSnapshot}
                   hostGate={null}
                   stall={null}
                   hasProject={remoteProject !== null}
-                  readOnly
+                  remote
+                  disabledReason={controlReason(remoteViewPermission, t as never) ?? undefined}
                   canOpenSession={() => false}
                   onOpenSession={() => {}}
                   onOpenRun={(runId) => {
                     setDetail(null)
                     if (remoteProject) setOpenRun({ projectPath: remoteProject, runId, runtimeId: jobsRuntime })
                   }}
-                  onNewRun={() => {}}
-                  onPauseRun={() => {}}
-                  onResumeRun={() => {}}
-                  onDeleteRun={() => {}}
-                  onRestartCoordinator={() => {}}
+                  onNewRun={() => {
+                    if (remoteViewDoor) setRemoteNewRunOpen(true)
+                  }}
+                  onPauseRun={(runId) => {
+                    if (remoteViewDoor) void pauseRun(remoteViewDoor, runId, remoteActionUi)
+                  }}
+                  onResumeRun={(runId) => {
+                    if (remoteViewDoor) void resumeRun(remoteViewDoor, runId, remoteActionUi)
+                  }}
+                  onDeleteRun={(runId) => {
+                    if (remoteViewDoor) void deleteRun(remoteViewDoor, remoteSnapshot, runId, remoteActionUi)
+                  }}
+                  onRestartCoordinator={(runId) => {
+                    if (remoteViewDoor) void restartRunCoordinator(remoteViewDoor, runId, remoteActionUi)
+                  }}
                 />
               ) : (
               <JobsView
@@ -5382,6 +5425,21 @@ export default function App(): React.JSX.Element {
           막아 두었다(JobsView 의 hasProject, 바로 위 onNewRun) — currentProject 없이는 newRunOpen
           자체가 true 가 되지 않으므로 이 조건은 실제로는 걸리지 않지만, 렌더 자리를 currentProject
           와 별개로 옮기지 않기 위해 남겨 둔다. */}
+      {remoteNewRunOpen && remoteViewDoor && (
+        // A new Job on the paired Runtime, in its project's own folder there (never a path on this computer); none
+        // under "Unregistered folders" (remoteNewJobFolder).
+        <NewRunModal
+          door={remoteViewDoor}
+          cwd={remoteNewJobFolder(remoteProjects, remoteProject)}
+          projectFolderBusy={remoteSnapshot?.projectFolderBusy ?? false}
+          accounts={remoteAccounts}
+          onClose={() => setRemoteNewRunOpen(false)}
+          onCreated={(runId) => {
+            setRemoteNewRunOpen(false)
+            if (remoteProject) setOpenRun({ projectPath: remoteProject, runId, runtimeId: jobsRuntime })
+          }}
+        />
+      )}
       {newRunOpen && currentProject && (
         <NewRunModal
           door={localDoor(window.api, currentProject)}

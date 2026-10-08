@@ -245,13 +245,16 @@ export function RunDetail({
   /** "이전 저널 기록 더 보기" — 저널 줄을 한 쪽 더 읽게 한다(stage 3 T1). 쪽 수는 App.tsx 가 든다 */
   onShowOlderJournal: () => void
   onClose: () => void
-  /** A paired Runtime's Run (remote runtime design Phase 6): read only, so the actions are not shown (styles.css,
-   *  `.run-detail-readonly`), and its completion is read from that Runtime. Absent for this computer's own. */
+  /** A paired Runtime's Run (remote runtime design Phase 6): its completion is read from that Runtime. Absent for this
+   *  computer's own. Its actions go through `door`, which says when they are off. */
   runtimeId?: string
   /** Where this Run's commands, accounts and run configurations go: this computer or its Runtime (Phase 7). */
   door: OrchDoor
 }): React.JSX.Element {
   const { t } = useI18n()
+  /** Why the controls are off: a read-only pairing (Phase 7). They are drawn disabled with it as their title, and it
+   *  is said under the head, so the reason is on screen rather than a button that does nothing. */
+  const lockedReason = door.readOnlyReason ?? undefined
   /** 고른 노드 = 아래 이벤트의 필터. 같은 노드를 다시 누르면 풀린다 */
   const [selected, setSelected] = useState<string | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -791,7 +794,7 @@ export function RunDetail({
 
   return (
     <div className="modal-backdrop" onClick={() => !formOpen && onClose()}>
-      <div className={`modal run-detail${runtimeId ? ' run-detail-readonly' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className="modal run-detail" onClick={(e) => e.stopPropagation()}>
         {/* 머리말이 없다 — Run 의 목표가 제목이고, 그 옆의 아이콘과 숫자가 상태를 말한다 */}
         <div className="detail-head">
           <h2 title={run?.objective}>{run?.objective ?? ''}</h2>
@@ -833,6 +836,7 @@ export function RunDetail({
                 통째로 NewTaskModal 로 바뀌어 아직 안 보낸 질문을 잃고, Task 를 짓는 중에 누르면
                 폼이 다시 그려져 채워 둔 것을 잃는다. 이 버튼이 여는 것은 새 창이 아니라 아래 칸
                 (.detail-events)의 두 번째 모습이다: 그래프는 그대로 보이고 아래만 바뀐다. */}
+            {lockedReason !== undefined && <p className="jobs-disabled-reason">{lockedReason}</p>}
             {!authoringOpen && (
               <div className="detail-graph-head">
                 {/* 명령이 도는 동안 이 줄은 남지만(authoringOpen 의 주석), 그 동안 Task 를 짓기
@@ -840,7 +844,8 @@ export function RunDetail({
                     실행·병합이 busy 를 잠그는 것과 같은 이유다. */}
                 <button
                   className="jobs-new"
-                  disabled={busy !== null}
+                  disabled={lockedReason !== undefined || busy !== null}
+                  title={lockedReason}
                   onClick={() => setAuthoring(true)}
                 >
                   + {t('jobs.task.new')}
@@ -852,8 +857,8 @@ export function RunDetail({
                 {run?.pendingStart && (
                   <button
                     className="jobs-new primary"
-                    disabled={busy === RUN_START || tasks.length === 0}
-                    title={t('jobs.run.startHint')}
+                    disabled={lockedReason !== undefined || busy === RUN_START || tasks.length === 0}
+                    title={lockedReason ?? t('jobs.run.startHint')}
                     onClick={() => void startRunNow()}
                   >
                     {/* 도는 동안은 회전과 문구로 바뀐다. **이 버튼에만 둔다** — 여기서 기다리는
@@ -880,8 +885,8 @@ export function RunDetail({
                   (run.worktrees ?? []).length > 0 && (
                     <button
                       className="jobs-new"
-                      disabled={busy === RUN_MERGE}
-                      title={t('jobs.run.mergeHint', { count: (run.worktrees ?? []).length })}
+                      disabled={lockedReason !== undefined || busy === RUN_MERGE}
+                      title={lockedReason ?? t('jobs.run.mergeHint', { count: (run.worktrees ?? []).length })}
                       onClick={() => void mergeRunNow()}
                     >
                       {t('jobs.run.merge')}
@@ -900,6 +905,7 @@ export function RunDetail({
               onOpenSession={onOpenSession}
               canManualStart={canManualStart}
               formOpen={formOpen}
+              lockedReason={lockedReason}
               onStart={(taskId) => void startTask(taskId)}
               onStop={(taskId) => void stopTask(taskId)}
               onGate={(taskId) => {
@@ -1219,7 +1225,8 @@ function Graph({
   onGate,
   onAnswer,
   onRestart,
-  onStopConvergence
+  onStopConvergence,
+  lockedReason
 }: {
   tasks: JobTask[]
   layers: string[][]
@@ -1252,6 +1259,8 @@ function Graph({
   /** 자동 수정 중지 (설계 §4.1). 누르면 확인 창을 먼저 띄운다 — 이 컴포넌트는 그것을 모르고,
    *  onGate·onAnswer 와 같은 관례로 결과만 위로 올린다 */
   onStopConvergence: (taskId: string) => void
+  /** Why the node actions are off (a read-only pairing, Phase 7): drawn disabled with this as their title. */
+  lockedReason?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const byId = new Map(tasks.map((tk) => [tk.id, tk]))
@@ -1374,7 +1383,8 @@ function Graph({
             {showStart && (
               <button
                 className="detail-node-btn"
-                title={t('jobs.node.start')}
+                disabled={lockedReason !== undefined}
+                title={lockedReason ?? t('jobs.node.start')}
                 aria-label={t('jobs.node.start')}
                 onClick={(ev) => {
                   ev.stopPropagation()
@@ -1387,7 +1397,8 @@ function Graph({
             {showGate && (
               <button
                 className="detail-node-btn"
-                title={t('jobs.node.gate')}
+                disabled={lockedReason !== undefined}
+                title={lockedReason ?? t('jobs.node.gate')}
                 aria-label={t('jobs.node.gate')}
                 onClick={(ev) => {
                   ev.stopPropagation()
@@ -1402,7 +1413,8 @@ function Graph({
             {showAnswer && (
               <button
                 className="detail-node-btn"
-                title={t('jobs.node.answer')}
+                disabled={lockedReason !== undefined}
+                title={lockedReason ?? t('jobs.node.answer')}
                 aria-label={t('jobs.node.answer')}
                 onClick={(ev) => {
                   ev.stopPropagation()
@@ -1415,7 +1427,8 @@ function Graph({
             {showStop && (
               <button
                 className="detail-node-btn"
-                title={t('jobs.node.stop')}
+                disabled={lockedReason !== undefined}
+                title={lockedReason ?? t('jobs.node.stop')}
                 aria-label={t('jobs.node.stop')}
                 onClick={(ev) => {
                   ev.stopPropagation()
@@ -1428,7 +1441,8 @@ function Graph({
             {showRestart && (
               <button
                 className="detail-node-btn"
-                title={t('jobs.node.restart')}
+                disabled={lockedReason !== undefined}
+                title={lockedReason ?? t('jobs.node.restart')}
                 aria-label={t('jobs.node.restart')}
                 onClick={(ev) => {
                   ev.stopPropagation()
@@ -1444,7 +1458,8 @@ function Graph({
             {canStopConvergence(task) && (
               <button
                 className="detail-node-btn"
-                title={t('jobs.convergence.stop')}
+                disabled={lockedReason !== undefined}
+                title={lockedReason ?? t('jobs.convergence.stop')}
                 aria-label={t('jobs.convergence.stop')}
                 onClick={(ev) => {
                   ev.stopPropagation()

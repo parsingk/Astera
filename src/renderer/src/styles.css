@@ -1610,8 +1610,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .modal.run-detail { width: clamp(760px, 86vw, 1440px); height: min(90vh, 1160px); }
 /* A paired Runtime's Run (remote runtime design Phase 6): read only. Its actions, the head row of buttons and each
    node's buttons, are not shown; reading, filtering and the timeline stay. Control from the app is Phase 7. */
-.modal.run-detail.run-detail-readonly .detail-graph-head,
-.modal.run-detail.run-detail-readonly .detail-node-btn { display: none; }
+/* Why a paired Runtime's controls are off (a read-only pairing, Phase 7): said once, above them. */
+.jobs-disabled-reason { margin: 4px 0 8px; font-size: 12px; color: var(--text-dim); }
 /* 머리말 없이 목표가 제목이고, 그 옆이 묶음 개수다. .jobs-count 를 사이드바에서 그대로 빌린다 —
    같은 아이콘과 같은 숫자가 화면마다 다르게 생기면 "아이콘으로 읽는다"는 규칙이 무너진다 */
 .detail-head { flex: none; display: flex; align-items: center; gap: 9px; }

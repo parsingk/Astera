@@ -43,3 +43,15 @@ export function offlineNote(view: RuntimeView | undefined, name: string, lastSee
   const head = tt(t)('jobs.runtime.offline', { name })
   return lastSeenAt ? `${head} ${tt(t)('jobs.runtime.lastSeen', { at: when(lastSeenAt) })}` : head
 }
+
+/** The folder a new Job on a paired Runtime is made in: its project's own path there. null for "Unregistered folders"
+ *  (no folder to make one in) or a project it does not list (Phase 7). Never a path on this computer. */
+export function remoteNewJobFolder(projects: Array<{ id: string; path: string | null }> | null, projectKey: string | null): string | null {
+  return projects?.find((p) => p.id === projectKey && p.id !== 'unregistered')?.path ?? null
+}
+
+/** Why control is off on a paired Runtime: a read-only pairing, or a level this app does not know (the Runtime
+ *  reads that as read only too, controllerGate). null when the pairing is full-control (Phase 7). */
+export function controlReason(permission: string | undefined, t: T): string | null {
+  return permission === 'full-control' ? null : tt(t)('jobs.runtime.readOnlyReason')
+}
