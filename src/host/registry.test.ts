@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
+import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 import { RING_EVENT_COST } from './ptyRing'
 
@@ -647,6 +647,31 @@ describe('what each live pty runs in, and how many ended ones are kept', () => {
     expect(reg.sessionExitCode('m_s0')).toEqual({ code: 1 })
     // The pty that just ended is the newest ended one, so a late attach still hears its exit.
     expect(reg.exitCodeOf(`r${DEAD_ENTRIES_KEPT + 5}`)).toEqual({ code: 0 })
+  })
+
+  // Performance audit H5: a Host that runs worker sessions for a week must not keep every ended session's entry, which
+  // every scan (`list`, `sessionPty`, the spawner's per-second checks) walks. The newest ended sessions keep their
+  // entry; older ones keep only how they ended, which `sessionExitCode` still answers by session id.
+  it('keeps the newest ended sessions whole and only the exit code of older ones', () => {
+    const { reg, exit } = rig()
+    const open = (id: string): void => {
+      reg.open({ id, file: 'x', args: [], opts: { cwd: 'D:/p', cols: 80, rows: 24, env: {} }, meta: { kind: 'session', id: `m_${id}`, restore: {} } })
+    }
+    for (let i = 0; i < ENDED_SESSIONS_KEPT + 10; i++) {
+      open(`s${i}`)
+      exit(`s${i}`, i % 2)
+    }
+    open('live')
+    const ids = reg.list().map((e) => e.id)
+    expect(ids.filter((id) => /^s\d+$/.test(id))).toHaveLength(ENDED_SESSIONS_KEPT)
+    expect(ids).toContain('live')
+    expect(ids).not.toContain('s0')
+    expect(reg.sessionExitCode('m_s0')).toEqual({ code: 0 })
+    expect(reg.sessionExitCode('m_s1')).toEqual({ code: 1 })
+    expect(reg.sessionExitCode(`m_s${ENDED_SESSIONS_KEPT + 9}`)).toEqual({ code: 1 })
+    expect(reg.sessionExitCode('m_live')).toBeNull()
+    expect(reg.sessionExitCode('m_never')).toBeNull()
+    expect(ENDED_SESSION_CODES_KEPT).toBeGreaterThan(ENDED_SESSIONS_KEPT)
   })
 
   // Opening order is not ending order: a dev server opened at the Host's start that ends after a day

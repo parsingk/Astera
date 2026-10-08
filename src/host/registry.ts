@@ -61,9 +61,13 @@ export type RegistrySpawn = (file: string, args: string[] | string, opts: PtyOpe
  *  2,500 lines of 100 characters. */
 export const SCROLLBACK_CHARS = 256_000
 
-/** How many ended entries that are not agent sessions are kept (M4). Ended sessions are always kept:
- *  the spawner's `held`, `sessionExitCode` and the handover sweep read them. */
+/** How many ended entries that are not agent sessions are kept (M4). */
 export const DEAD_ENTRIES_KEPT = 64
+/** How many ended agent sessions keep their whole entry (performance audit H5): `list`, `pty-listed` and the spawner's
+ *  checks scan every entry, and a week of worker sessions would make each scan walk thousands. Older ones keep only
+ *  how they ended (ENDED_SESSION_CODES_KEPT of them), which is what `sessionExitCode` and the handover sweep ask. */
+export const ENDED_SESSIONS_KEPT = 256
+export const ENDED_SESSION_CODES_KEPT = 4096
 
 /** How long an exited pty's ring and live terminal stay readable (N1): a controller that was away sees the end. */
 export const EXITED_RETAIN_MS = 10 * 60 * 1000
@@ -152,6 +156,10 @@ export class PtyRegistry {
   private readonly entries = new Map<string, Entry>()
   /** The ended entries that are not sessions, oldest ending first (`pruneEnded`). */
   private readonly endedOrder = new Set<string>()
+  /** Ended agent sessions in ending order, whose entries are kept until ENDED_SESSIONS_KEPT newer ones end. */
+  private readonly endedSessions = new Set<string>()
+  /** How older ended sessions ended, by session id, oldest first, at most ENDED_SESSION_CODES_KEPT. */
+  private readonly endedCodes = new Map<string, number | null>()
   // Sets, not single slots: attachPtyHost broadcasts to the clients and the Host's own spawner reads
   // the same output and exits, and a second subscriber must not silently disconnect the first.
   private readonly dataCbs = new Set<(id: string, data: string) => void>()
@@ -326,6 +334,7 @@ export class PtyRegistry {
       // After the listeners, which read this entry's note. It is the newest ended one now, so it is
       // never the one that goes.
       if (entry.meta?.kind !== 'session') this.pruneEnded(a.id)
+      else this.pruneEndedSession(a.id)
       this.sweepExited()
     })
     this.deps.log(`pty ${a.id} started, pid ${pty.pid}`)
@@ -425,6 +434,27 @@ export class PtyRegistry {
     this.sweepExited()
     const e = this.entries.get(id)
     return e ? this.withTerminal(e, (t) => t.read(lines)) : null
+  }
+
+  /** As `pruneEnded`, for agent sessions: past ENDED_SESSIONS_KEPT, the oldest ended one's entry goes and its exit code
+   *  stays by session id (audit H5). Set and Map operations only. */
+  private pruneEndedSession(id: string): void {
+    this.endedSessions.add(id)
+    for (const old of this.endedSessions) {
+      if (this.endedSessions.size <= ENDED_SESSIONS_KEPT) return
+      this.endedSessions.delete(old)
+      const e = this.entries.get(old)
+      if (e?.meta?.kind === 'session') {
+        this.endedCodes.delete(e.meta.id)
+        this.endedCodes.set(e.meta.id, e.exitCode ?? null)
+        for (const k of this.endedCodes.keys()) {
+          if (this.endedCodes.size <= ENDED_SESSION_CODES_KEPT) break
+          this.endedCodes.delete(k)
+        }
+      }
+      this.clearRing(e)
+      this.entries.delete(old)
+    }
   }
 
   private pruneEnded(id: string): void {
@@ -589,6 +619,8 @@ export class PtyRegistry {
       if (e.alive) return null
       ended = { code: e.exitCode ?? null }
     }
+    // An ended session whose entry went (ENDED_SESSIONS_KEPT) still answers how it ended.
+    if (ended === null && this.endedCodes.has(sessionId)) return { code: this.endedCodes.get(sessionId) ?? null }
     return ended
   }
 

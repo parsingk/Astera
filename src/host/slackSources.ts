@@ -28,6 +28,7 @@ import type { SlackNotifier } from '../core/slack/notifier'
 import type { SessionInfo } from '../core/types'
 import type { HostChats } from './hostChats'
 import type { HostRollEvent, HostRolling } from './rolling'
+import { onceBounded } from '../core/bounded'
 
 export interface HostSlackSources {
   onHookEvent(sessionId: string, payload: unknown): void
@@ -65,8 +66,8 @@ export function createHostSlackSources(d: {
   const dropped = new Set<string>()
   const drop = (kind: string, id: string): void => {
     const key = `${kind} ${id}`
-    if (dropped.has(key)) return
-    dropped.add(key)
+    // Once per session and kind, remembered for the last thousand (audit H5: not for the Host's life).
+    if (!onceBounded(dropped, key, 1000)) return
     log(`slack: a forwarded ${kind} of ${id} dropped — this Host sources that session itself`)
   }
   const lookUp = (sid: string): void => {

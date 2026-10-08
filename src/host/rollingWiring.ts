@@ -39,6 +39,7 @@ import { createRollJournal, rollJournalPath, type RollJournal } from './rollJour
 import type { HostServer } from './server'
 import type { HostSpawner } from './spawner'
 import { takeOverChats, takeOverSessions } from './takeover'
+import { onceBounded } from '../core/bounded'
 
 /** How often the accounts and the resume strategy are read again, and the app-gone watch ticks (R13). */
 export const ROLLING_TICK_MS = 15_000
@@ -302,8 +303,7 @@ export function composeHostRolling(a: {
     })
     for (const s of [...skipped, ...chatPass.skipped]) {
       const key = `${s.sessionId} ${s.why}`
-      if (skipsLogged.has(key)) continue
-      skipsLogged.add(key)
+      if (!onceBounded(skipsLogged, key, 1000)) continue
       log(`takeover: ${s.sessionId} skipped — ${s.why}`)
     }
   }

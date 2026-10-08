@@ -49,6 +49,9 @@ import type { Account, SessionInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
 import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
+import { setBounded } from '../core/bounded'
+/** Which session each attempt was started on, for the newest this many (audit H5); an older attempt's tail is long gone. */
+const STARTED_ON_KEPT = 2048
 
 export type HostLocalName =
   | 'startWorker'
@@ -626,7 +629,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       },
       a
     )
-    startedOn.set(a.dispatchId, started.sessionId)
+    setBounded(startedOn, a.dispatchId, started.sessionId, STARTED_ON_KEPT)
     return started
   }
 
@@ -845,7 +848,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       busyCbs.push(cb)
     },
     retarget: ({ dispatchId, sessionId, previousSessionId }) => {
-      startedOn.set(dispatchId, sessionId)
+      setBounded(startedOn, dispatchId, sessionId, STARTED_ON_KEPT)
       tails.start(
         { dispatchId, sessionId, previousSessionId },
         (id) => {
