@@ -1553,5 +1553,21 @@ export const es: Catalog = {
   'remote.session.status.unknown': 'Estado desconocido',
   'remote.session.earlier': 'Anteriores',
   'remote.session.chatEnded': 'Esta sesión terminó en el Runtime.',
-  'remote.session.composer': 'Un mensaje para la sesión en el Runtime'
+  'remote.session.composer': 'Un mensaje para la sesión en el Runtime',
+  'remote.sessions.title': 'Sesiones remotas',
+  'remote.sessions.runtime': 'Se ejecuta en',
+  'remote.sessions.thisComputer': 'Este equipo',
+  'remote.sessions.running': 'Sesiones en marcha allí',
+  'remote.sessions.loading': 'Cargando…',
+  'remote.sessions.none': 'No hay sesiones en marcha.',
+  'remote.sessions.new': 'Nueva sesión',
+  'remote.sessions.readOnly': 'Un emparejamiento de solo lectura no puede iniciar sesiones allí. Las sesiones en marcha se pueden abrir.',
+  'remote.sessions.account': 'Cuenta (de ese equipo)',
+  'remote.sessions.signedOut': 'Sin sesión',
+  'remote.sessions.folder': 'Carpeta (un proyecto registrado allí)',
+  'remote.sessions.noProjects': 'No hay proyectos registrados allí. Una sesión remota solo empieza en un proyecto registrado.',
+  'remote.sessions.sessionTitle': 'Nombre (opcional)',
+  'remote.sessions.prompt': 'Primera petición (opcional)',
+  'remote.sessions.start': 'Iniciar allí',
+  'remote.sessions.starting': 'Iniciando…'
 }

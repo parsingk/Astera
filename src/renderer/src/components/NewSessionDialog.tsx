@@ -46,7 +46,9 @@ export function NewSessionDialog({
   initialCwd = null, // prefill from WorktreePanel's 'start session'
   onSpawn,
   onCancel,
-  defaultSessionKind
+  defaultSessionKind,
+  runtimes = [],
+  onRemote
 }: {
   accounts: Account[]
   runningCount: number
@@ -75,6 +77,10 @@ export function NewSessionDialog({
     schedule?: ScheduleConfig
   }) => void | Promise<void>
   onCancel: () => void
+  /** Paired Runtimes (remote runtime design Phase 9b): when there are any, the dialog opens with a choice of where
+   *  the session runs, this computer first. Picking a Runtime hands over to its own dialog (`onRemote`). */
+  runtimes?: Array<{ runtimeId: string; name: string }>
+  onRemote?: (runtimeId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [cwd, setCwd] = useState<string | null>(initialCwd)
@@ -465,6 +471,19 @@ export function NewSessionDialog({
           />
         )}
         <h2>{t('session.new.title')}</h2>
+        {runtimes.length > 0 && onRemote && (
+          <div className="field">
+            <label>{t('remote.sessions.runtime')}</label>
+            <Select
+              items={[
+                { value: 'local', label: t('remote.sessions.thisComputer') },
+                ...runtimes.map((r) => ({ value: r.runtimeId, label: r.name }))
+              ]}
+              value="local"
+              onChange={(v) => v !== 'local' && onRemote(v)}
+            />
+          </div>
+        )}
         {runningCount >= SOFT_LIMIT && (
           <p className="warn">{t('session.new.runningWarning', { count: runningCount })}</p>
         )}

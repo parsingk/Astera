@@ -1,7 +1,7 @@
 // A remote session as the renderer holds it (remote runtime design Phase 9b): its ref from a Runtime's row, the roll it
 // follows, when its facts call for a notification, the pages of its conversation, and its input batched for the link.
 import { describe, it, expect } from 'vitest'
-import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, type RemoteFacts } from './remoteSessions'
+import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, type RemoteFacts } from './remoteSessions'
 import { SESSION_INPUT_MAX } from '../../../core/remote/sessions'
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -109,5 +109,24 @@ describe('InputCoalescer', () => {
     c.push('b')
     await new Promise((r) => setTimeout(r, 5))
     expect(sent).toEqual(['b'])
+  })
+})
+
+describe('createSessionArgs', () => {
+  it('names the account as the Host reads it and drops an empty title or prompt', () => {
+    expect(createSessionArgs({ kind: 'chat', accountId: 'a1', cwd: '/srv/repo', title: '  ', prompt: '' })).toEqual({
+      kind: 'chat',
+      account: 'a1',
+      cwd: '/srv/repo'
+    })
+  })
+  it('keeps a title and prompt, trimmed', () => {
+    expect(createSessionArgs({ kind: 'terminal', accountId: 'a1', cwd: '/r', title: ' fix ', prompt: ' go ' })).toEqual({
+      kind: 'terminal',
+      account: 'a1',
+      cwd: '/r',
+      title: 'fix',
+      prompt: 'go'
+    })
   })
 })

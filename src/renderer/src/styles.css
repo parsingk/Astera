@@ -825,6 +825,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .remote-session-banners { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; z-index: 2; }
 .remote-session-banner { align-self: flex-start; padding: 4px 8px; border-radius: 4px; background: var(--elevated); color: var(--text-dim); font-size: 12px; }
 .remote-session-banner.is-error { background: var(--danger-bg); color: var(--danger); }
+/* The remote sessions dialog's list of sessions running on the Runtime (Phase 9b): one button per session. */
+.remote-session-list { list-style: none; margin: 0; padding: 0; max-height: 180px; overflow-y: auto; border: 1px solid var(--line-soft); border-radius: 6px; }
+.remote-session-list li + li { border-top: 1px solid var(--line-soft); }
+.remote-session-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; padding: 6px 10px; border: 0; border-radius: 0; background: transparent; text-align: left; }
+.remote-session-list button:hover { background: var(--elevated); }
+.remote-session-name { color: var(--text); }
+.remote-session-meta { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .remote-chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--text-dim); }
 .remote-chat-spacer { flex: 1; }
 .remote-chat-status.is-waiting { color: var(--warn); }

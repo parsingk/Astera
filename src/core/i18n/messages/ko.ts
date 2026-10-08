@@ -1972,5 +1972,21 @@ export const ko = {
   'remote.session.status.unknown': '상태 알 수 없음',
   'remote.session.earlier': '이전 대화',
   'remote.session.chatEnded': '이 세션은 Runtime 에서 끝났습니다.',
-  'remote.session.composer': 'Runtime 의 세션에 보낼 메시지'
+  'remote.session.composer': 'Runtime 의 세션에 보낼 메시지',
+  'remote.sessions.title': '원격 세션',
+  'remote.sessions.runtime': '실행할 컴퓨터',
+  'remote.sessions.thisComputer': '이 컴퓨터',
+  'remote.sessions.running': '그 컴퓨터에서 돌고 있는 세션',
+  'remote.sessions.loading': '불러오는 중…',
+  'remote.sessions.none': '돌고 있는 세션이 없습니다.',
+  'remote.sessions.new': '새 세션',
+  'remote.sessions.readOnly': '읽기 전용으로 짝지어서 이 컴퓨터에서 세션을 시작할 수 없습니다. 돌고 있는 세션은 열어 볼 수 있습니다.',
+  'remote.sessions.account': '계정 (그 컴퓨터의 계정)',
+  'remote.sessions.signedOut': '로그인 안 됨',
+  'remote.sessions.folder': '폴더 (그 컴퓨터에 등록된 프로젝트)',
+  'remote.sessions.noProjects': '그 컴퓨터에 등록된 프로젝트가 없습니다. 원격 세션은 등록된 프로젝트에서만 시작합니다.',
+  'remote.sessions.sessionTitle': '이름 (선택)',
+  'remote.sessions.prompt': '첫 요청 (선택)',
+  'remote.sessions.start': '그 컴퓨터에서 시작',
+  'remote.sessions.starting': '시작하는 중…'
 } as const

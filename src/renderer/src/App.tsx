@@ -28,6 +28,7 @@ import { RecordDetailHost } from './components/RecordDetail'
 import { RunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
+import { RemoteSessionsDialog } from './components/RemoteSessionsDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
 import { RunConfigManager } from './components/RunConfigManager'
@@ -460,6 +461,8 @@ export default function App(): React.JSX.Element {
   // `sessions`: nothing local runs, reads or restarts for them (D1.6), and the explorer never takes their folder
   // (activeTabRoot finds no local session for the key).
   const [remoteSessions, setRemoteSessions] = useState<RemoteSessionRef[]>([])
+  /** The Runtime the remote sessions dialog is on, or null while it is closed. */
+  const [remoteDialog, setRemoteDialog] = useState<string | null>(null)
   const [remoteStatus, setRemoteStatus] = useState<Record<string, RemoteFacts['status']>>({})
   /** 이름을 고치고 있는 세션 탭. 더블클릭과 우클릭 메뉴가 같은 자리를 연다 */
   const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
@@ -2677,10 +2680,11 @@ export default function App(): React.JSX.Element {
   const remoteTitleOf = (r: RemoteSessionRef): string => `${r.title ?? r.sessionId} · ${runtimeName(r.runtimeId)}`
   // The paired Runtimes, for a remote tab's name and permission: read when the first remote tab opens.
   const anyRemoteTab = remoteSessions.length > 0
+  // ... and when the new session dialog opens, for its choice of where the session runs.
   useEffect(() => {
-    if (!anyRemoteTab) return
+    if (!anyRemoteTab && !showNew) return
     void window.api.remote.list().then(setPairedRuntimes, () => {})
-  }, [anyRemoteTab, pairedChanged])
+  }, [anyRemoteTab, showNew, pairedChanged])
   useRemoteSessionWatch({
     refs: remoteSessions,
     onUpdate: (next) => setRemoteSessions((prev) => prev.map((r) => (r.key === next.key ? next : r))),
@@ -4732,12 +4736,36 @@ export default function App(): React.JSX.Element {
           // The promise is passed straight through — the dialog awaits it to show a start-pending state
           // (discarding it with void would make the wait look instantly over)
           onSpawn={spawn}
+          runtimes={pairedRuntimes}
+          onRemote={(runtimeId) => {
+            pendingSplitRef.current = null
+            setShowNew(false)
+            setNewSessionCwd(null)
+            setRemoteDialog(runtimeId)
+          }}
           onCancel={() => {
             // Cancels the split Ctrl+\ reserved — closing the dialog leaves no empty pane
             pendingSplitRef.current = null
             setShowNew(false)
             setNewSessionCwd(null)
           }}
+        />
+      )}
+      {remoteDialog !== null && (
+        <RemoteSessionsDialog
+          runtimes={pairedRuntimes}
+          runtimeId={remoteDialog}
+          readOnly={remoteReadOnly(remoteDialog)}
+          onRuntime={setRemoteDialog}
+          onLocal={() => {
+            setRemoteDialog(null)
+            setShowNew(true)
+          }}
+          onOpen={(ref) => {
+            setRemoteDialog(null)
+            openRemoteSession(ref)
+          }}
+          onCancel={() => setRemoteDialog(null)}
         />
       )}
       {showSettings && (

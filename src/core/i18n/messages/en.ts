@@ -1725,5 +1725,21 @@ export const en: Record<keyof typeof ko, string> = {
   'remote.session.status.unknown': 'Status unknown',
   'remote.session.earlier': 'Earlier',
   'remote.session.chatEnded': 'This session has ended on the Runtime.',
-  'remote.session.composer': 'A message for the session on the Runtime'
+  'remote.session.composer': 'A message for the session on the Runtime',
+  'remote.sessions.title': 'Remote sessions',
+  'remote.sessions.runtime': 'Runs on',
+  'remote.sessions.thisComputer': 'This computer',
+  'remote.sessions.running': 'Sessions running there',
+  'remote.sessions.loading': 'Loading…',
+  'remote.sessions.none': 'No sessions are running.',
+  'remote.sessions.new': 'New session',
+  'remote.sessions.readOnly': 'A read-only pairing cannot start sessions there. Running sessions can still be opened.',
+  'remote.sessions.account': 'Account (on that computer)',
+  'remote.sessions.signedOut': 'Signed out',
+  'remote.sessions.folder': 'Folder (a project registered there)',
+  'remote.sessions.noProjects': 'No projects are registered there. A remote session starts only in a registered project.',
+  'remote.sessions.sessionTitle': 'Name (optional)',
+  'remote.sessions.prompt': 'First prompt (optional)',
+  'remote.sessions.start': 'Start there',
+  'remote.sessions.starting': 'Starting…'
 }

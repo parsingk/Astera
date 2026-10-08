@@ -1527,5 +1527,21 @@ export const ja: Catalog = {
   'remote.session.status.unknown': '状態不明',
   'remote.session.earlier': '以前の会話',
   'remote.session.chatEnded': 'このセッションは Runtime で終了しました。',
-  'remote.session.composer': 'Runtime のセッションへのメッセージ'
+  'remote.session.composer': 'Runtime のセッションへのメッセージ',
+  'remote.sessions.title': 'リモートセッション',
+  'remote.sessions.runtime': '実行するコンピューター',
+  'remote.sessions.thisComputer': 'このコンピューター',
+  'remote.sessions.running': 'そのコンピューターで動いているセッション',
+  'remote.sessions.loading': '読み込み中…',
+  'remote.sessions.none': '動いているセッションはありません。',
+  'remote.sessions.new': '新しいセッション',
+  'remote.sessions.readOnly': '読み取り専用のペアリングではセッションを開始できません。動いているセッションは開けます。',
+  'remote.sessions.account': 'アカウント(そのコンピューターのもの)',
+  'remote.sessions.signedOut': '未ログイン',
+  'remote.sessions.folder': 'フォルダー(そこに登録されたプロジェクト)',
+  'remote.sessions.noProjects': 'そこに登録されたプロジェクトがありません。リモートセッションは登録済みのプロジェクトでのみ開始します。',
+  'remote.sessions.sessionTitle': '名前(任意)',
+  'remote.sessions.prompt': '最初の依頼(任意)',
+  'remote.sessions.start': 'そこで開始',
+  'remote.sessions.starting': '開始中…'
 }
