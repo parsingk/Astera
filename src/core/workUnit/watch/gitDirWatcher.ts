@@ -12,7 +12,7 @@
 // Both directories are watched non-recursively, plus a sweep over the three files' size and mtime,
 // which also arms a watch that could not start (a fresh repository has no logs/ yet). Never throws.
 import path from 'node:path'
-import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, sameStamp, stampOf, type DirWatch, type Stamp } from './dirWatch'
+import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, sameStamp, slowGuard, stampOf, type DirWatch, type Stamp } from './dirWatch'
 
 /** The files, relative to the git dir, whose change means a refresh. */
 const SWEPT = ['index', 'HEAD', path.join('logs', 'HEAD')]
@@ -36,7 +36,10 @@ export function createGitDirWatcher(d: {
   gitDir(root: string): Promise<string | null>
   sweepMs?: number
   debounceMs?: number
+  /** Milliseconds, for timing the sweep's checks; `performance.now` when left out. */
+  now?: () => number
 }): GitDirWatcher {
+  const slow = slowGuard(d.now ?? (() => performance.now()), d.log)
   const debounceMs = d.debounceMs ?? WATCH_DEBOUNCE_MS
   const roots = new Map<string, Entry>()
   let closed = false
@@ -74,9 +77,13 @@ export function createGitDirWatcher(d: {
   const sweep = (): void => {
     for (const [root, e] of roots) {
       if (!e.dir) continue
-      for (const w of e.watches) w.arm()
-      const now = stampsOf(e.dir)
-      if (now.some((s, i) => !sameStamp(s, e.stamps[i]))) schedule(root)
+      const dir = e.dir
+      // A git dir that stopped answering pauses itself and nothing else (audit H3).
+      slow.run(dir, () => {
+        for (const w of e.watches) w.arm()
+        const now = stampsOf(dir)
+        if (now.some((s, i) => !sameStamp(s, e.stamps[i]))) schedule(root)
+      })
     }
   }
   const sweeper = setInterval(sweep, d.sweepMs ?? WATCH_SWEEP_MS)

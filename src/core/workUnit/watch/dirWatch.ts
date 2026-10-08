@@ -22,6 +22,32 @@ export function stampOf(file: string): Stamp {
   }
 }
 
+/** A sweep check that took this long is a folder that stopped answering (a share gone away): the stat ran on the
+ *  process's one thread, so that folder is left out of the sweep for SLOW_PAUSE_MS (performance audit H3). */
+export const SLOW_CHECK_MS = 1_000
+export const SLOW_PAUSE_MS = 10 * 60_000
+
+/** Which sweep keys are paused for being slow. `run(key, check)` runs the check unless its key is paused, and pauses it
+ *  (logging once per pause) when the check took SLOW_CHECK_MS or more. */
+export function slowGuard(now: () => number, log: (m: string) => void): { run(key: string, check: () => void): void; forget(key: string): void } {
+  const pausedUntil = new Map<string, number>()
+  return {
+    run(key, check) {
+      const until = pausedUntil.get(key)
+      if (until !== undefined && now() < until) return
+      pausedUntil.delete(key)
+      const started = now()
+      check()
+      const took = now() - started
+      if (took >= SLOW_CHECK_MS) {
+        pausedUntil.set(key, now() + SLOW_PAUSE_MS)
+        log(`${key} was slow to check (${took} ms); leaving it out of the sweep for ${SLOW_PAUSE_MS / 60_000} min`)
+      }
+    },
+    forget: (key) => void pausedUntil.delete(key)
+  }
+}
+
 export function sameStamp(a: Stamp, b: Stamp): boolean {
   return a === b || (a !== null && b !== null && a.size === b.size && a.mtimeMs === b.mtimeMs)
 }

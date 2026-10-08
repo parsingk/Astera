@@ -235,4 +235,23 @@ describe('createTranscriptWatcher', () => {
     vi.advanceTimersByTime(1000)
     expect(live(dir)).toHaveLength(1)
   })
+
+  // Performance audit H3: the sweep stats on the Host's one thread. A folder whose check took over a second (a share
+  // that stopped answering) is left out of the sweep for ten minutes, said once, so it stalls the Host once and not
+  // every ten seconds.
+  it('a folder whose check was slow is left out of the sweep for a while, and said once', () => {
+    vi.useFakeTimers()
+    let t = 0
+    const t0 = make(1000, 20)
+    t0.close()
+    w = createTranscriptWatcher({ onChange: (p) => changes.push(p), log: (m) => logs.push(m), sweepMs: 1000, debounceMs: 20, now: () => (t += 2000) })
+    w.watch(file)
+    appendFileSync(file, '{"n":1}\n')
+    vi.advanceTimersByTime(1000 + 20)
+    expect(changes).toEqual([file])
+    appendFileSync(file, '{"n":2}\n')
+    vi.advanceTimersByTime(5000)
+    expect(changes).toEqual([file])
+    expect(logs.filter((l) => l.includes('slow')).length).toBe(1)
+  })
 })

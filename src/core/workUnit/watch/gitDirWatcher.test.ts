@@ -309,4 +309,20 @@ describe('createGitDirWatcher', () => {
     await waitFor(() => changes.length > 0)
     expect(changes[0]).toBe(real)
   })
+
+  // Performance audit H3, as for transcripts: a git dir whose check was slow is left out of the sweep for a while.
+  it('a git dir whose check was slow is left out of the sweep for a while, and said once', async () => {
+    vi.useFakeTimers()
+    let t = 0
+    const g = make({ sweepMs: 1000, now: () => (t += 2000) })
+    g.watch(root)
+    await vi.advanceTimersByTimeAsync(0)
+    writeFileSync(path.join(gd, 'index'), 'i1-changed')
+    await vi.advanceTimersByTimeAsync(1000 + 20)
+    expect(changes).toEqual([root])
+    writeFileSync(path.join(gd, 'index'), 'i2-changed-again')
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(changes).toEqual([root])
+    expect(logs.filter((l) => l.includes('slow')).length).toBe(1)
+  })
 })

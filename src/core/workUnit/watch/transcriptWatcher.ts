@@ -6,7 +6,7 @@
 // compares each file's size and mtime: fs.watch sometimes drops events, and a transcript's directory
 // may not exist yet when its session starts (the sweep then arms the watch). Never throws.
 import path from 'node:path'
-import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, sameStamp, stampOf, type DirWatch, type Stamp } from './dirWatch'
+import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, sameStamp, slowGuard, stampOf, type DirWatch, type Stamp } from './dirWatch'
 
 export interface TranscriptWatcher {
   watch(path: string): void
@@ -19,7 +19,10 @@ export function createTranscriptWatcher(d: {
   log(m: string): void
   sweepMs?: number
   debounceMs?: number
+  /** Milliseconds, for timing the sweep's checks; `performance.now` when left out. */
+  now?: () => number
 }): TranscriptWatcher {
+  const slow = slowGuard(d.now ?? (() => performance.now()), d.log)
   const debounceMs = d.debounceMs ?? WATCH_DEBOUNCE_MS
   const files = new Map<string, { dir: string; name: string; stamp: Stamp; timer: NodeJS.Timeout | null }>()
   // dir -> its watch and the watched basenames in it, each with its full path
@@ -47,9 +50,16 @@ export function createTranscriptWatcher(d: {
     f.timer.unref?.()
   }
 
+  // Per directory, so one folder that stopped answering pauses its own files and nothing else (audit H3).
   const sweep = (): void => {
-    for (const { w } of dirs.values()) w.arm()
-    for (const [p, f] of files) if (!sameStamp(stampOf(p), f.stamp)) schedule(p)
+    for (const [dir, { w, names }] of dirs)
+      slow.run(dir, () => {
+        w.arm()
+        for (const p of names.values()) {
+          const f = files.get(p)
+          if (f && !sameStamp(stampOf(p), f.stamp)) schedule(p)
+        }
+      })
   }
   // unref: a timer whose only job is to catch up must never be the reason the process stays alive.
   const sweeper = setInterval(sweep, d.sweepMs ?? WATCH_SWEEP_MS)
