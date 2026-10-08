@@ -11,7 +11,9 @@ import {
   COORDINATOR_STOP_RETRY_MS,
   FINISHED_RUN_BUSY_CAP_MS,
   FINISHED_RUN_GRACE_MS,
-  createDispatchLoop, type DispatchLoop, type DispatchLoopContext } from './dispatchLoop'
+  createDispatchLoop, type DispatchLoop, type DispatchLoopContext,
+  idleWorkersOf
+} from './dispatchLoop'
 import { coordinatorReleaseOf } from './releaseDefer'
 import { handleCommand, type OrchServerDeps } from '../command'
 import { APP_CALLER } from '../../host/driver'
@@ -913,6 +915,38 @@ describe('a finished manual Run’s coordinator stops after the grace', () => {
 // A worker reports and then waits, by the guide's rule, and only `worker-release` ends its session;
 // that is the coordinator's to send, and once the Run has finished nothing sent it. Now the driving loop
 // sends it for an idle worker (its Dispatch closed, not retained) of a finished Run, under the same grace.
+// Audit OR-1: the release pass walked every Dispatch for every finished Run, and for each pair filtered the Tasks and the
+// Dispatches again — on every commit and every tick, over 30 days of Runs. It is one pass with its indexes built once.
+describe('idleWorkersOf', () => {
+  const task = (id: string, runId: string, status: Task['status']): Task => ({ id, runId, title: id, spec: '', deps: [], status, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }) as Task
+  const disp = (id: string, taskId: string, sessionId: string, over: Partial<Dispatch> = {}): Dispatch =>
+    ({ id, taskId, sessionId, provider: 'claude', accountId: 'a', cwd: '/w', specPath: '/s', startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'stopped', retained: false, ...over }) as Dispatch
+  const base = (runs: string[]): OrchState => ({ ...emptyState(), runs: runs.map((id) => ({ id, jobId: 'job_1', ordinal: 1, createdAt: NOW })) }) as OrchState
+  it('names the closed, unretained, latest Dispatch of each session of a finished Run, and nothing else', () => {
+    const s: OrchState = {
+      ...base(['run_done', 'run_live']),
+      tasks: [task('t1', 'run_done', 'completed'), task('t2', 'run_done', 'completed'), task('t3', 'run_live', 'dispatched')],
+      dispatches: [
+        disp('d_old', 't1', 'sess_reused'),
+        disp('d_new', 't2', 'sess_reused'),
+        disp('d_kept', 't1', 'sess_kept', { retained: true }),
+        disp('d_open', 't2', 'sess_open', { outcome: undefined, endedAt: undefined }),
+        disp('d_live', 't3', 'sess_live')
+      ]
+    }
+    expect(idleWorkersOf(s).map((x) => `${x.runId}:${x.dispatch.id}`)).toEqual(['run_done:d_new'])
+  })
+  it('is one pass: a month of history is read in well under a second', () => {
+    const runs = Array.from({ length: 200 }, (_, i) => `run_${i}`)
+    const tasks = runs.flatMap((r) => Array.from({ length: 5 }, (_, j) => task(`${r}_t${j}`, r, 'completed')))
+    const dispatches = tasks.flatMap((t, i) => [disp(`d${i}a`, t.id, `sess_${i}`), disp(`d${i}b`, t.id, `sess_${i}`)])
+    const s: OrchState = { ...base(runs), tasks, dispatches }
+    const t0 = performance.now()
+    expect(idleWorkersOf(s)).toHaveLength(tasks.length)
+    expect(performance.now() - t0).toBeLessThan(500)
+  })
+})
+
 describe('a finished Run’s idle workers are released after the grace', () => {
   const MIN = 60_000
   const dispatch = (over: Partial<Dispatch> & { id: string; taskId: string; sessionId: string }): Dispatch => ({

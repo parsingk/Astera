@@ -56,6 +56,32 @@ export const ORCH_FIRE_TICK_MS = 15_000
  *  즉 이 문턱을 넘는 것은 "루프를 놓았다" 의 신호에 가깝다. 틱이 15초이므로 실제 깨우기는
  *  90~105초 사이에 일어난다. */
 export const COORDINATOR_NUDGE_MS = 90_000
+
+/** The idle workers of finished Runs (audit OR-1): each Dispatch closed, not retained, the latest of its session, and of
+ *  a Task the finished Run owns. One sweep with its indexes built once; it walked every Dispatch per finished Run and
+ *  filtered the Tasks and the Dispatches again per pair, on every commit. `only` asks about one pair. */
+export function idleWorkersOf(
+  s: OrchState,
+  only?: { runId: string; dispatchId: string }
+): Array<{ runId: string; dispatch: OrchState['dispatches'][number] }> {
+  const latestOfSession = new Map<string, string>()
+  for (const d of s.dispatches) latestOfSession.set(d.sessionId, d.id)
+  const ownerOfTask = new Map<string, string>()
+  for (const run of s.runs) {
+    if (only && run.id !== only.runId) continue
+    if (outcomeOf(s, run.id) === 'running') continue
+    for (const t of tasksOwnedBy(s, run.id)) if (!ownerOfTask.has(t.id)) ownerOfTask.set(t.id, run.id)
+  }
+  const out: Array<{ runId: string; dispatch: OrchState['dispatches'][number] }> = []
+  for (const d of s.dispatches) {
+    if (only && d.id !== only.dispatchId) continue
+    if (d.retained || (!d.outcome && !d.endedAt)) continue
+    if (latestOfSession.get(d.sessionId) !== d.id) continue
+    const runId = ownerOfTask.get(d.taskId)
+    if (runId !== undefined) out.push({ runId, dispatch: d })
+  }
+  return out
+}
 /** The first wait before a coordinator stop is sent again (limits pass L1). Longer than the exit
  *  release's window (EXIT_DEFER_MS) by far, so a stop that landed has emptied the slot before it; each
  *  further try waits twice as long, up to `COORDINATOR_STOP_RETRY_MAX_MS`. */
@@ -343,21 +369,15 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    * a failure is logged and never thrown (R14).
    */
   const releaseIdleWorkers = async (): Promise<void> => {
-    /** Whether `dispatchId` is, in `s`, an idle worker of the finished Run `runId`. */
-    const idleIn = (s: OrchState, runId: string, dispatchId: string): boolean => {
-      if (outcomeOf(s, runId) === 'running') return false
-      const d = s.dispatches.find((x) => x.id === dispatchId)
-      if (!d || d.retained || (!d.outcome && !d.endedAt)) return false
-      if (!tasksOwnedBy(s, runId).some((t) => t.id === d.taskId)) return false
-      const owners = s.dispatches.filter((x) => x.sessionId === d.sessionId)
-      return owners[owners.length - 1]?.id === d.id
-    }
+    /** Whether `dispatchId` is, in `s`, an idle worker of the finished Run `runId`. Asked of one pair only, on the
+     *  state after an await; the pass itself reads idleWorkersOf's one sweep (audit OR-1). */
+    const idleIn = (s: OrchState, runId: string, dispatchId: string): boolean =>
+      idleWorkersOf(s, { runId, dispatchId }).length > 0
     const s = c.getState()
     for (const id of [...releaseRetry.keys()]) if (!c.sessionAlive(id)) releaseRetry.delete(id)
-    for (const run of s.runs) {
-      if (outcomeOf(s, run.id) === 'running') continue
-      for (const d of s.dispatches) {
-        if (!idleIn(s, run.id, d.id)) continue
+    for (const { runId, dispatch: d } of idleWorkersOf(s)) {
+      const run = { id: runId }
+      {
         // **Asked again on the state as it is now** (fix round 1): each release below awaits, and a Run
         // reopened, a Dispatch reused or a worker retained meanwhile must not lose its session to the
         // snapshot this pass started from.
