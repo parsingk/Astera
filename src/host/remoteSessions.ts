@@ -28,10 +28,8 @@ import { reduceCodexRollout } from '../core/history/codexConversation'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { findClaudeTranscript } from '../core/history/strategies/claude'
 
-/** The most one input carries: a paste, never a file. */
-export const SESSION_INPUT_MAX = 64 * 1024
-/** The longest message a declined approval carries back to the CLI. */
-export const ANSWER_MESSAGE_MAX = 4096
+import { SESSION_INPUT_MAX, ANSWER_MESSAGE_MAX } from '../core/remote/sessions'
+export { SESSION_INPUT_MAX, ANSWER_MESSAGE_MAX }
 
 export const REMOTE_SESSION_READS: ReadonlySet<string> = new Set(['sessions-facts', 'sessions-conversation'])
 export const REMOTE_SESSION_CHANGES: ReadonlySet<string> = new Set(['sessions-input', 'sessions-resize', 'sessions-stop', 'sessions-answer'])
