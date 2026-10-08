@@ -40,6 +40,7 @@ import { ThemeSettings } from './components/ThemeSettings'
 import { GeneratorSettings } from './components/GeneratorSettings'
 import { CliSettings } from './components/CliSettings'
 import { McpSettings } from './components/McpSettings'
+import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
@@ -649,6 +650,7 @@ export default function App(): React.JSX.Element {
     | 'slack'
     | 'notifications'
     | 'github'
+    | 'remote'
     | 'worktree'
     | 'history'
   >('general') // the settings sidebar, with general and accounts added
@@ -4618,6 +4620,8 @@ export default function App(): React.JSX.Element {
                     // The astera command has a tab of its own (2026-09-30): it is for a person's own
                     // terminal, not a setting of the agents the app runs. A name like GitHub's, untranslated.
                     ['cli', 'CLI'],
+                    // Remote Runtimes (remote runtime design Phase 6): pairing with another computer, and this one as a Runtime.
+                    ['remote', t('settings.tab.remote')],
                     ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
@@ -5179,6 +5183,7 @@ export default function App(): React.JSX.Element {
                 )}
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
+                {settingsTab === 'remote' && <RemoteRuntimesSettings />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>
