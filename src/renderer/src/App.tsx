@@ -46,6 +46,7 @@ import { createReplyGate } from './lib/replyGate'
 import { LOCAL, isRemoteRuntime, offlineNote, remoteDetailKey, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
+import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resumeRun, type ActionUi } from './lib/jobActions'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
@@ -2518,30 +2519,19 @@ export default function App(): React.JSX.Element {
    *
    *  409 를 문구로 가른다 — 붙잡아 둔 세션에는 "다시 해 보세요" 가 틀린 안내다(놓아 주는 것이
    *  답이다). 삭제 흐름이 같은 자리에서 같은 방식으로 가른다. */
+  /** What the Job actions (lib/jobActions.ts) ask and show through. `hide` is this computer's history list, so only
+   *  a local door gets it (remoteActionUi leaves it out). */
+  const actionUi: ActionUi = {
+    t: (key, params) => (t as (k: string, p?: Record<string, string | number>) => string)(key, params),
+    confirm: (o) => confirmModal(o),
+    confirmChoices: (o) => confirmModalWithChoices(o),
+    error: (m) => void toast.error(m),
+    hide: (paths) => {
+      for (const p of paths) hiddenProjects.hide(p)
+    }
+  }
   const pauseScheduleRun = (runId: string): void => {
-    void (async () => {
-      if (!currentProject) return
-      if (
-        !(await confirmModal({
-          title: t('jobs.run.pauseConfirmTitle'),
-          body: t('jobs.run.pauseConfirmBody'),
-          confirmLabel: t('jobs.run.pause')
-        }))
-      )
-        return
-      try {
-        const reply = await window.api.orch.command(currentProject, 'run-pause', { run: runId })
-        if (reply.status === 409)
-          toast.error(
-            JSON.stringify(reply.body).includes('worker-retain')
-              ? t('jobs.run.pauseRetained')
-              : t('jobs.run.pauseFailed')
-          )
-        else if (reply.status >= 400) toast.error(t('jobs.run.pauseFailed'))
-      } catch {
-        toast.error(t('jobs.run.pauseFailed'))
-      }
-    })()
+    if (currentProject) void pauseRun(localDoor(window.api, currentProject), runId, actionUi)
   }
 
   /** 세워 둔 예약을 다시 돌린다 — 칸을 걷는 것뿐이라 묻지 않는다(잃는 것이 없다). 무장은 이 순간부터
@@ -2550,15 +2540,7 @@ export default function App(): React.JSX.Element {
    *  run-start 가 아니라 run-resume 다. 그쪽은 "아직 시작하지 않았다" 를 걷고 이쪽은 "세워 뒀다" 를
    *  걷는다 — 상세 창의 '실행' 과 이 '▶' 는 다른 버튼이다(Run.paused 의 주석). */
   const resumeScheduleRun = (runId: string): void => {
-    void (async () => {
-      if (!currentProject) return
-      try {
-        const reply = await window.api.orch.command(currentProject, 'run-resume', { run: runId })
-        if (reply.status >= 400) toast.error(t('jobs.run.pauseFailed'))
-      } catch {
-        toast.error(t('jobs.run.pauseFailed'))
-      }
-    })()
+    if (currentProject) void resumeRun(localDoor(window.api, currentProject), runId, actionUi)
   }
 
   /** 관리자가 사라진 Run 에 코디네이터를 다시 붙인다. **`run-start` 를 다시 부른다** — 그 명령의
@@ -2573,15 +2555,7 @@ export default function App(): React.JSX.Element {
    *  사람의 결정이고, 곧바로 다시 여는 것은 그 결정을 무시하는 일이다. 그래서 되돌리는 자리가
    *  사람의 손에 있다. */
   const restartCoordinator = (runId: string): void => {
-    void (async () => {
-      if (!currentProject) return
-      try {
-        const reply = await window.api.orch.command(currentProject, 'run-start', { run: runId })
-        if (reply.status >= 400) toast.error(t('jobs.run.coordinatorRestartFailed'))
-      } catch {
-        toast.error(t('jobs.run.coordinatorRestartFailed'))
-      }
-    })()
+    if (currentProject) void restartRunCoordinator(localDoor(window.api, currentProject), runId, actionUi)
   }
 
   /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 기능 탭이면 그 기능의 프로젝트,
@@ -4303,108 +4277,7 @@ export default function App(): React.JSX.Element {
                 onResumeRun={resumeScheduleRun}
                 onRestartCoordinator={restartCoordinator}
                 onDeleteRun={(runId) => {
-                  void (async () => {
-                    if (!currentProject) return
-                    // findRun: 회차는 최상위 runs 에 없다(snapshot.ts). `runs.find` 였을 때
-                    // 회차의 휴지통은 눌려도 이 자리에서 조용히 되돌아갔다.
-                    const run = orchSnapshot ? findRun(orchSnapshot, runId) : undefined
-                    if (!run) return
-                    // **회차를 함께 센다.** `run-delete` 는 템플릿을 지울 때 그 회차도 같은
-                    // 집합으로 지우므로(server.ts), 템플릿 자신의 total·eventCount 만 적으면
-                    // 확인 창의 숫자가 실제로 사라지는 것보다 적다 — 되돌릴 수 없는 동작에서
-                    // 축소해 말하는 것이 가장 나쁜 방향이다. 예약이 아닌 Run 에는 children 이
-                    // 아예 없어 합이 그대로다(JobRow 의 주석).
-                    const kids = run.children ?? []
-                    const tasks = kids.reduce((n, k) => n + k.total, run.total)
-                    const events = kids.reduce((n, k) => n + k.eventCount, run.eventCount)
-                    // 정지될 워커 수. **runningCount 를 쓰지 않는다** — 그것은 validating·reviewing
-                    // 까지 세는데 그 둘에는 죽일 세션이 없다(running.ts). 여기서 세야 하는 것은
-                    // "열린 Dispatch 가 있는 Task", 즉 실제로 닫히는 세션의 수다.
-                    const workers = [run, ...kids].reduce(
-                      (n, r) => n + r.tasks.filter((tk) => tk.startedAt !== undefined).length,
-                      0
-                    )
-                    // **워크트리를 쓴 Run 에만 선택지를 준다.** 하나도 없으면 합칠 것도 지울 폴더도
-                    // 없어서 뜻 없는 체크박스가 된다.
-                    //
-                    // **예약 템플릿은 회차들의 것을 센다.** 템플릿 자신은 한 번도 돌지 않아 폴더가
-                    // 없지만, 지우면 회차까지 함께 사라지고(server.ts 의 doomed) 폴더를 쓴 것은
-                    // 그 회차들이다. 템플릿을 빈 목록으로 두었더니 체크박스가 아예 안 떠서, 회차마다
-                    // 하나씩 쌓인 폴더를 지울 문이 없었다 — 그렇게 보고됐다.
-                    const wt = run.schedule
-                      ? kids.flatMap((k) => k.worktrees ?? [])
-                      : (run.worktrees ?? [])
-                    const answer = await confirmModalWithChoices({
-                      title: t('jobs.run.delete'),
-                      // 예약 템플릿을 지우는 것만 워커를 정지시킨다(server.ts 의 run-delete) —
-                      // 되돌릴 수 없는 동작이므로 무엇이 함께 사라지는지 여기서 말한다
-                      body:
-                        t('jobs.run.deleteBody', {
-                          objective: run.objective,
-                          tasks,
-                          events
-                        }) +
-                        (run.schedule && workers > 0
-                          ? '\n\n' + t('jobs.run.deleteStopsWorkers', { workers })
-                          : ''),
-                      confirmLabel: t('jobs.run.delete'),
-                      ...(wt.length > 0
-                        ? {
-                            choices: [
-                              {
-                                id: 'merge',
-                                label: t('jobs.run.deleteMerge'),
-                                hint: t('jobs.run.deleteMergeHint', { count: wt.length })
-                              },
-                              { id: 'hide', label: t('jobs.run.deleteHide') },
-                              {
-                                id: 'worktrees',
-                                label: t('jobs.run.deleteWorktrees', { count: wt.length }),
-                                // 병합 없이 지우면 합치지 않은 커밋이 그때 사라진다. 조건부로 띄우는
-                                // 대신 늘 적는다 — 그 조합을 고르는 순간에 읽혀야 하는 문장이다
-                                hint: t('jobs.run.deleteWorktreesHint')
-                              }
-                            ]
-                          }
-                        : {})
-                    })
-                    if (!answer.ok) return
-                    try {
-                      const reply = await window.api.orch.command(currentProject, 'run-delete', {
-                        id: runId,
-                        ...(answer.checked.includes('merge') ? { merge: true } : {}),
-                        ...(answer.checked.includes('worktrees') ? { removeWorktrees: true } : {})
-                      })
-                      // 감추기는 렌더러가 가진 목록이라 여기서 한다 — 명령이 아니라 표시의 문제다.
-                      // 폴더를 지우면 어차피 자동으로 감춰지지만(hiddenHistory), 폴더는 남기고 목록만
-                      // 치우고 싶을 때가 이 선택이 있는 이유다.
-                      //
-                      // **명령이 성공한 뒤에 한다.** 앞에서 하면 거절된 삭제가 히스토리를 감춘 채로
-                      // 끝난다 — 도는 워커 때문에 409 를 받는 것은 흔한 경로이고(먼저 멈춰야 한다),
-                      // 그때 사용자는 아무것도 지우지 않았는데 세션 목록이 비어 있는 것을 본다.
-                      if (reply.status < 400 && answer.checked.includes('hide'))
-                        for (const p of wt) hiddenProjects.hide(p)
-                      // 409 의 두 갈래를 가른다. **문구로 가르는 이유**: 양쪽 문장이 모두 우리
-                      // server.ts 의 것이고, "멈춰 주세요" 는 붙잡아 둔 세션에 틀린 안내다 —
-                      // 그쪽은 멈추는 것이 아니라 붙잡음을 놓는 것이 답이다.
-                      if (reply.status === 409)
-                        toast.error(
-                          JSON.stringify(reply.body).includes('worker-retain')
-                            ? t('jobs.run.deleteRetained')
-                            : t('jobs.run.deleteBusy')
-                        )
-                      else if (reply.status >= 400) toast.error(t('jobs.run.deleteFailed'))
-                      else {
-                        // 병합 뒤에도 커밋되지 않은 변경이 남았거나 상태를 확인하지 못한 폴더는 명령이
-                        // 지우지 않고 남겼다. 사라지지 않고 남는 알림으로 그 사실을 알린다
-                        const kept = (reply.body as { worktreesKept?: unknown } | null)?.worktreesKept
-                        if (Array.isArray(kept) && kept.length > 0)
-                          toast.error(t('jobs.run.deleteKeptWorktrees', { count: kept.length }))
-                      }
-                    } catch {
-                      toast.error(t('jobs.run.deleteFailed'))
-                    }
-                  })()
+                  if (currentProject) void deleteRun(localDoor(window.api, currentProject), orchSnapshot, runId, actionUi)
                 }}
               />
               )}
