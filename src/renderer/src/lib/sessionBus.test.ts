@@ -19,7 +19,9 @@ beforeEach(async () => {
   // 테스트 환경은 node라 window가 없다. init()이 의존하는 최소한만 세운다.
   vi.stubGlobal('window', {
     api: {
-      on: (_channel: string, cb: (e: DataEvent) => void) => {
+      on: (channel: string, cb: (e: DataEvent) => void) => {
+        // Only the output channel: init also listens for a remote tab's reset (sessionBus.reset.test.ts).
+        if (channel !== 'session:data') return () => {}
         emit = cb
         listening = true
         return () => {}

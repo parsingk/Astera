@@ -31,6 +31,11 @@ const listeners = new Map<string, Listener>()
  *  conversation view uses one to notice that the CLI has redrawn, instead of asking on a timer
  *  whether it has. */
 const observers = new Map<string, Set<Listener>>()
+/** A remote session tab's checkpoint (Phase 9b, main/remote/remoteStreams.ts): the view resets and writes `state` then
+ *  `pending`. Held when no view has registered for it, as output is, and handed over first when one does. */
+export type Checkpoint = { state: string; pending: string; cols: number; rows: number; exitCode?: number }
+const resetListeners = new Map<string, (c: Checkpoint) => void>()
+const heldCheckpoints = new Map<string, Checkpoint>()
 let initialized = false
 
 export function init(): void {
@@ -54,6 +59,13 @@ export function init(): void {
         // an onlooker's problem is its own
       }
     }
+  })
+  // A remote tab's checkpoint replaces everything held for it: what came before is in the checkpoint's state.
+  window.api.on('session:reset', ({ sessionId, ...c }) => {
+    buffers.delete(sessionId)
+    const fn = resetListeners.get(sessionId)
+    if (fn) fn(c)
+    else heldCheckpoints.set(sessionId, c)
   })
   // 귀가 열렸다고 메인에 알린다 — **리스너를 건 바로 다음 줄이어야 한다.** 메인은 이 신고를
   // 받고서야 붙잡아 둔 재생 데이터를 흘리고, 그 전에 흘리면 위의 `window.api.on` 이 아직 없어
@@ -90,6 +102,20 @@ export function attach(sessionId: string, listener: Listener): () => void {
   }
 }
 
+/** A remote tab's view registers for its checkpoints **before** it attaches, so a held checkpoint reaches it ahead of
+ *  the output held after it. Returns the unregister. */
+export function onReset(sessionId: string, fn: (c: Checkpoint) => void): () => void {
+  const held = heldCheckpoints.get(sessionId)
+  if (held) {
+    heldCheckpoints.delete(sessionId)
+    fn(held)
+  }
+  resetListeners.set(sessionId, fn)
+  return () => {
+    if (resetListeners.get(sessionId) === fn) resetListeners.delete(sessionId)
+  }
+}
+
 /** Be told when a session produces output, without consuming it. Returns an unsubscribe.
  *
  *  Deliberately not `attach`: that one is the terminal's, it is a single slot, and what it hands over
@@ -111,6 +137,8 @@ export function observe(sessionId: string, fn: Listener): () => void {
 export function discard(sessionId: string): void {
   listeners.delete(sessionId)
   buffers.delete(sessionId)
+  resetListeners.delete(sessionId)
+  heldCheckpoints.delete(sessionId)
   observers.delete(sessionId)
 }
 
