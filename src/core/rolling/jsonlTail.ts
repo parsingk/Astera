@@ -77,7 +77,21 @@ export class JsonlTail {
    *  If the file got shorter (recreated), read from the start again and report `restarted: true`.
    *  A missing file or a permission error gives `null` — the caller has to be able to tell that apart
    *  from "no new lines". */
-  async read(): Promise<{ lines: string[]; restarted: boolean } | null> {
+  read(): Promise<{ lines: string[]; restarted: boolean } | null> {
+    // One read at a time (audit RL-3): the tick and the data path both read, and two reads from the same offset
+    // handed out the same lines twice. A read asked during another starts where that one ends.
+    const next = this.reading.then(() => this.readOnce())
+    this.reading = next.then(
+      () => undefined,
+      () => undefined
+    )
+    return next
+  }
+
+  /** The reads, one after another. */
+  private reading: Promise<void> = Promise.resolve()
+
+  private async readOnce(): Promise<{ lines: string[]; restarted: boolean } | null> {
     if (this.startOffset) {
       this.offset = await this.startOffset
       this.startOffset = null

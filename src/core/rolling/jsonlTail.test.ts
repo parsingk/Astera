@@ -26,6 +26,15 @@ describe('JsonlTail', () => {
     expect(second?.lines).toEqual(['{"c":3}', '{"d":4}'])
   })
 
+  // Audit RL-3: the tick and the data path could read at once, both from the same offset, and each was handed the
+  // same lines. Reads take turns, so every line is handed out once.
+  it('reads that overlap hand each line out once', async () => {
+    const p = path.join(dir, 'overlap.jsonl')
+    await writeFile(p, '{"a":1}\n{"a":2}\n', 'utf8')
+    const tail = new JsonlTail(p)
+    const [x, y] = await Promise.all([tail.read(), tail.read()])
+    expect([...(x?.lines ?? []), ...(y?.lines ?? [])]).toEqual(['{"a":1}', '{"a":2}'])
+  })
   it('새 줄이 없으면 빈 배열 (오류가 아니다)', async () => {
     const p = path.join(dir, 'b.jsonl')
     await writeFile(p, '{"a":1}\n')
