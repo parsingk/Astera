@@ -217,3 +217,9 @@ export function createRemoteAnswer(call: Call, runtimeId: string, sessionId: str
     if (r.status !== 200) throw new Error(String((r.body as { error?: unknown } | null)?.error ?? r.status))
   }
 }
+
+/** Whether a new session can be started from here at all: with an agent CLI on this machine, or a paired Runtime to
+ *  start it on (a controller needs no CLI of its own). The dialog says the rest. */
+export function canStartSession(o: { cliInstalled: boolean; pairedRuntimes: number }): boolean {
+  return o.cliInstalled || o.pairedRuntimes > 0
+}

@@ -1,7 +1,7 @@
 // A remote session as the renderer holds it (remote runtime design Phase 9b): its ref from a Runtime's row, the roll it
 // follows, when its facts call for a notification, the pages of its conversation, and its input batched for the link.
 import { describe, it, expect } from 'vitest'
-import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, goneOutcome, factsStatus, createFactsReader, pruneBaseline, followAction, remoteChatState, createRemoteAnswer, type RemoteFacts } from './remoteSessions'
+import { refOf, followRolls, factsTransition, mergeTurns, InputCoalescer, createSessionArgs, goneOutcome, factsStatus, createFactsReader, pruneBaseline, followAction, remoteChatState, createRemoteAnswer, canStartSession, type RemoteFacts } from './remoteSessions'
 import { SESSION_INPUT_MAX } from '../../../core/remote/sessions'
 
 const row = (over: Record<string, unknown> = {}) => ({
@@ -254,5 +254,15 @@ describe('createRemoteAnswer', () => {
     expect(asked).toEqual([['rt', 'sessions-answer', { id: 'c1', request: 'r1', answer: { kind: 'approval', decision: 'accept' } }]])
     status = 404
     await expect(answer('r1', { kind: 'approval', decision: 'accept' } as never)).rejects.toThrow('no such request')
+  })
+})
+
+// A controller with no agent CLI of its own still starts sessions on its paired Runtimes: the + button and the empty
+// pane's start must not go dead for it (found checking the remote chat tab, 2026-10-08).
+describe('canStartSession', () => {
+  it('a CLI here, or a paired Runtime, is enough', () => {
+    expect(canStartSession({ cliInstalled: true, pairedRuntimes: 0 })).toBe(true)
+    expect(canStartSession({ cliInstalled: false, pairedRuntimes: 1 })).toBe(true)
+    expect(canStartSession({ cliInstalled: false, pairedRuntimes: 0 })).toBe(false)
   })
 })

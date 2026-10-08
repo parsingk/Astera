@@ -127,7 +127,7 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { followAction, remoteCall, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
+import { canStartSession, followAction, remoteCall, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
@@ -2296,9 +2296,12 @@ export default function App(): React.JSX.Element {
 
   /** A group's + button — moves the active group there first so the new session becomes that group's tab.
    *  spawn's placement reads activePaneIdRef, so this one line is enough. */
+  // ... or a paired Runtime to start one on: a controller with no CLI of its own still starts remote sessions. Read at
+  // the call: the paired list is state declared further down.
+  const canStart = (): boolean => canStartSession({ cliInstalled: anyCliInstalled, pairedRuntimes: pairedRuntimes.length })
   const newInGroup = (paneId: string): void => {
     setActivePaneId(paneId)
-    if (anyCliInstalled) setShowNew(true)
+    if (canStart()) setShowNew(true)
   }
 
   /** A drop on the tab bar — reorder within the same group, or move to that position in another group */
@@ -2680,9 +2683,9 @@ export default function App(): React.JSX.Element {
   const remoteTitleOf = (r: RemoteSessionRef): string => `${r.title ?? r.sessionId} · ${runtimeName(r.runtimeId)}`
   // The paired Runtimes, for a remote tab's name and permission: read when the first remote tab opens.
   const anyRemoteTab = remoteSessions.length > 0
-  // ... and when the new session dialog opens, for its choice of where the session runs.
+  // ... when the new session dialog opens, for its choice of where the session runs; and once at start, so a
+  // controller with no CLI of its own can open that dialog at all (canStart). A local file read, nothing remote.
   useEffect(() => {
-    if (!anyRemoteTab && !showNew) return
     void window.api.remote.list().then(setPairedRuntimes, () => {})
   }, [anyRemoteTab, showNew, pairedChanged])
   useRemoteSessionWatch({
@@ -4522,7 +4525,7 @@ export default function App(): React.JSX.Element {
                 schedStates={schedStates}
                 busy={busy}
                 draggingTabId={dragTabId}
-                newDisabled={!anyCliInstalled}
+                newDisabled={!canStart()}
                 onFocusPane={setActivePaneId}
                 onSetRatio={(splitId, ratio) =>
                   setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
@@ -4546,9 +4549,9 @@ export default function App(): React.JSX.Element {
               {!layout && (
                 <button
                   className="placeholder primary"
-                  disabled={!anyCliInstalled}
+                  disabled={!canStart}
                   onClick={() => {
-                    if (anyCliInstalled) setShowNew(true)
+                    if (canStart()) setShowNew(true)
                   }}
                 >
                   {t('session.placeholder.start')}

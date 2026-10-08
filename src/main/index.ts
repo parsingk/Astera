@@ -536,6 +536,8 @@ app.whenReady().then(async () => {
   const pendingPrompt = createPendingPromptState()
   // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
   // app until now — only Tray was.
+  // One line per desktop notification, shown or refused: "I got no notification" is answered from here.
+  const notifyLog = lineLog(path.join(app.getPath('userData'), 'notifications.log'))
   const desktop = new DesktopNotifier({
     settings: core!.appSettings,
     isFocused: () => !win.isDestroyed() && win.isFocused(),
@@ -547,7 +549,10 @@ app.whenReady().then(async () => {
       // — it is dropped silently (§9). A notification saying that notifications do not work cannot be
       // delivered by the thing that is broken, and a toast for it would fire in the window the person
       // is not looking at, which is the entire situation this feature exists for.
-      if (!Notification.isSupported()) return
+      if (!Notification.isSupported()) {
+        notifyLog(`not shown ${req.event} ${req.sessionId}: notifications are not supported here`)
+        return
+      }
       try {
         const n = new Notification({ title: req.title, body: req.body })
         // Held in liveNotifications from before show() until a terminal event removes it — see that
@@ -571,8 +576,10 @@ app.whenReady().then(async () => {
         })
         n.on('close', () => liveNotifications.delete(n))
         n.show()
-      } catch {
+        notifyLog(`shown ${req.event} ${req.sessionId}`)
+      } catch (err) {
         /* the OS refused it — see above */
+        notifyLog(`not shown ${req.event} ${req.sessionId}: ${String(err)}`)
       }
     }
   })
