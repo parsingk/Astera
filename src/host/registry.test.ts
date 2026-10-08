@@ -672,6 +672,10 @@ describe('what each live pty runs in, and how many ended ones are kept', () => {
     expect(reg.sessionExitCode('m_live')).toBeNull()
     expect(reg.sessionExitCode('m_never')).toBeNull()
     expect(ENDED_SESSION_CODES_KEPT).toBeGreaterThan(ENDED_SESSIONS_KEPT)
+    // Final review M2: a session whose entry went was still held here (the spawner's release asks)
+    expect(reg.heldSession('m_s0')).toBe(true)
+    expect(reg.heldSession('m_live')).toBe(true)
+    expect(reg.heldSession('m_never')).toBe(false)
   })
 
   // Opening order is not ending order: a dev server opened at the Host's start that ends after a day

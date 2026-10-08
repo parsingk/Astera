@@ -352,8 +352,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   /** Whether this registry ever held a pty for the session, alive or ended. One it never held was
    *  spawned by the app in its own node-pty (the unresponsive-Host fallback), so it is the app's to type
    *  into or to kill (review M2). */
-  const held = (sessionId: string): boolean =>
-    registry.list().some((e) => e.meta?.kind === 'session' && e.meta.id === sessionId)
+  const held = (sessionId: string): boolean => registry.heldSession(sessionId)
   const alive = (ptyId: string): boolean => registry.list().some((e) => e.id === ptyId && e.alive)
   /** The watcher's claimed(): every rollout a live session's note already holds, other than this pty's.
    *  The notes are the one list both processes write to: the Host here, the app's watcher through

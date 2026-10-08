@@ -227,8 +227,20 @@ describe('createRunGitRecorder with work it did not see start', () => {
       r.rec.onState(s)
       await settle()
     }
-    expect(r.reads.filter((x) => x === 'head D').length).toBeLessThanOrEqual(5)
+    expect(r.reads.filter((x) => x === 'head D').length).toBeLessThanOrEqual(7)
     expect(r.logs.filter((m) => m.includes('giving up')).length).toBe(1)
+  })
+  // Final review M4: a base read that failed once (git busy, an antivirus holding the process) is asked again within
+  // a second or so, on the next commit: waiting 30 s let the worker commit first, and the attempt's diff lost them.
+  it('asks again soon after a first failure', async () => {
+    const r = rig({ dirs: ['D'] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', git: { base: 'b' } }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1' }] })
+    r.rec.onState(s)
+    await settle()
+    r.clock.now += 1_500
+    r.rec.onState(s)
+    await settle()
+    expect(r.reads.filter((x) => x === 'head D')).toEqual(['head D', 'head D'])
   })
   // Performance audit H2: Runs from before Phase 10, with no attempt open, are not looked over on every commit.
   it('a Run that can get no base is not looked over again until something about it changes', async () => {

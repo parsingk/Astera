@@ -2700,7 +2700,8 @@ export default function App(): React.JSX.Element {
   const remoteSnapshotRef = useRef(remoteSnapshot)
   remoteSnapshotRef.current = remoteSnapshot
   const remoteRowKey = openRun?.runtimeId ? remoteDetailKey(remoteSnapshot, openRun.runId) : ''
-  const localRowKey = openRun && !openRun.runtimeId ? runDetailKey(orchSnapshot, openRun.runId) : ''
+  const localRowKey =
+    openRun && !openRun.runtimeId ? runDetailKey(orchSnapshot, openRun.runId, sessions.map((s) => s.id)) : ''
   /** A paired Runtime's permission as this app was told at pairing; an unknown one is read only (controllerGate). */
   const permissionOf = (runtimeId: string): string => pairedRuntimes.find((r) => r.runtimeId === runtimeId)?.permission ?? 'read-only'
   const readOnlyReason = t('jobs.runtime.readOnlyReason')

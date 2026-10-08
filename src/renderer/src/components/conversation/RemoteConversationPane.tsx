@@ -75,8 +75,9 @@ export function RemoteConversationPane({
       }
       if (f.status === 200) setFacts((held) => sameOrNext(held, f.body as RemoteFacts));
     };
-    // A read that throws does not stop the polling (pollEvery).
-    const stop = pollEvery(tick, REMOTE_CHAT_POLL_MS);
+    // A read that throws does not stop the polling (pollEvery), and nothing is read while the window is hidden: the tab
+    // watch is what notifies then (final review M7).
+    const stop = pollEvery(tick, REMOTE_CHAT_POLL_MS, { paused: () => document.hidden });
     return () => {
       stopped = true;
       stop();

@@ -123,12 +123,16 @@ export interface HostServerDeps {
   /** What one client may leave unread before it is let go (performance audit H1): a client that stopped reading
    *  would otherwise hold every byte of output written to it in this process. 64 MiB when left out. */
   maxQueuedBytes?: number
+  /** The same for the app, the one reader the Host must not lose (final review M3): a main thread that stalls falls
+   *  behind every worker's output at once, and a cut socket costs a reconnect and a handover. 512 MiB when left out. */
+  maxAppQueuedBytes?: number
 }
 
 /** Broadcasts a CLI never reads (it reads the answers to its own calls only, cli/run.ts): every session's output, its
  *  exits and chat lines, and the whole state. Sent to one, they cost a parse of each in every waiting `astera` call. */
 const NOT_FOR_CLI: ReadonlySet<string> = new Set(['pty-data', 'pty-exit', 'pty-opened', 'proc-line', 'proc-opened', 'proc-exit', 'orch-state'])
 const MAX_QUEUED_BYTES = 64 * 1024 * 1024
+const MAX_APP_QUEUED_BYTES = 512 * 1024 * 1024
 
 /** What the `orch-state` throttle measures gaps with and waits on. `after` returns its cancel. */
 export interface StateClock {
@@ -332,7 +336,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    * Every commit pushes the whole state, and it grows with every Run the file keeps; a burst of
    * commits — a worker's report, the dispatch it frees, the next Task's start — sent it whole each
    * time, and the app parsed and folded each one on its main thread. A client that says it reads
-   * `orch-state` as "the latest" (HOST_YIELD_ORCH_STATE_LATEST, and every CLI, which reads none of
+   * `orch-state` as "the latest" (HOST_YIELD_ORCH_STATE_LATEST; a CLI is sent none of
    * them) is sent the first push at once and after that at most one per ORCH_STATE_PUSH_MS, always
    * the newest. What is skipped is only ever a state a newer one replaces: each push carries the
    * whole state and its version, so the mirror that takes the newest takes everything.
@@ -348,8 +352,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
    */
   const clock = deps.stateClock ?? monotonicClock
   const stateLanes = new Map<net.Socket, { held: (() => string) | null; lastAt: number; cancel: (() => void) | null }>()
+  // A CLI is not here: it is sent no `orch-state` at all (NOT_FOR_CLI, audit H1)
   const readsLatest = (s: net.Socket): boolean =>
-    roles.get(s) === 'cli' || (roles.get(s) === 'app' && (yields.get(s)?.has(HOST_YIELD_ORCH_STATE_LATEST) ?? false))
+    roles.get(s) === 'app' && (yields.get(s)?.has(HOST_YIELD_ORCH_STATE_LATEST) ?? false)
   const laneOf = (s: net.Socket): { held: (() => string) | null; lastAt: number; cancel: (() => void) | null } => {
     let lane = stateLanes.get(s)
     if (!lane) {
@@ -412,13 +417,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   }
   /** Every message to a socket goes through here, so nothing overtakes a held `orch-state`. */
   const queueCap = deps.maxQueuedBytes ?? MAX_QUEUED_BYTES
+  const appQueueCap = deps.maxAppQueuedBytes ?? MAX_APP_QUEUED_BYTES
   const writeTo = (s: net.Socket, m: HostMessage, line: () => string): void => {
     if (s.destroyed) return
     if (m.t === 'orch-state') return pushState(s, line)
     if (m.t !== 'pty-data' && m.t !== 'proc-line') flushState(s)
     s.write(line())
     // A client that reads nothing is let go before its unread output is this process's problem (audit H1).
-    if (s.writableLength > queueCap) {
+    if (s.writableLength > (roles.get(s) === 'app' ? appQueueCap : queueCap)) {
       deps.log.write(`a client left ${s.writableLength} bytes unread; closing it`)
       s.destroy()
     }

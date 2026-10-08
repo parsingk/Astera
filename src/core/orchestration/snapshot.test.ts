@@ -71,4 +71,11 @@ describe('runDetailKey', () => {
     expect(runDetailKey(null, 'r1')).not.toBe(runDetailKey(a, 'r1'))
     expect(runDetailKey(a, 'gone')).not.toBe(runDetailKey(a, 'r1'))
   })
+  // Final review M6: the detail's events link to sessions this app holds; one closing leaves the row as it was, and
+  // the links must still be read again.
+  it('moves when the sessions this app holds change, whatever their order', () => {
+    const a = { runs: [row('r1', 1)], projectFolderBusy: false }
+    expect(runDetailKey(a, 'r1', ['s1', 's2'])).toBe(runDetailKey(a, 'r1', ['s2', 's1']))
+    expect(runDetailKey(a, 'r1', ['s1'])).not.toBe(runDetailKey(a, 'r1', ['s1', 's2']))
+  })
 })

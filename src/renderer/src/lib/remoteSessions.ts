@@ -56,13 +56,14 @@ export function sameOrNext<T>(prev: T | null, next: T): T {
 }
 
 /** Runs `tick`, then again `ms` after each one ends, until the returned stop. A tick that throws does not end the
- *  polling (performance audit R3: a rejected read used to stop an open remote chat's updates for good). */
-export function pollEvery(tick: () => Promise<void>, ms: number): () => void {
+ *  polling (performance audit R3: a rejected read used to stop an open remote chat's updates for good). While
+ *  `paused` says so, a turn asks nothing and the next looks again (final review M7: a hidden window). */
+export function pollEvery(tick: () => Promise<void>, ms: number, o: { paused?: () => boolean } = {}): () => void {
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const run = async (): Promise<void> => {
     try {
-      await tick()
+      if (!o.paused?.()) await tick()
     } catch {
       /* the next tick asks again */
     }

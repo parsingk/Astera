@@ -1,8 +1,8 @@
 // What the transcript and git-dir watchers share: a non-recursive `fs.watch` on one directory that
 // can be re-armed by a sweep, and the size/mtime stamp the sweep compares. Built after
 // core/hooks/eventWatcher.ts, without chokidar, because the Host imports these (src/host/importFence.test.ts).
-import { watch, statSync, type FSWatcher } from 'node:fs'
-import { dirIdentity, namesAPath } from '../../files/watchedDir'
+import { watch, statSync, promises as fsp, type FSWatcher } from 'node:fs'
+import { dirIdentity, dirIdentityAsync, namesAPath } from '../../files/watchedDir'
 
 /** How often the sweep runs. fs.watch sometimes delivers nothing at all (measured on macOS, see
  *  HookEventWatcher.sweep), so the sweep is what bounds the delay of a dropped event. */
@@ -22,29 +22,58 @@ export function stampOf(file: string): Stamp {
   }
 }
 
-/** A sweep check that took this long is a folder that stopped answering (a share gone away): the stat ran on the
- *  process's one thread, so that folder is left out of the sweep for SLOW_PAUSE_MS (performance audit H3). */
+/** stampOf without blocking the thread (performance audit H3): what the sweep reads. */
+export async function stampOfAsync(file: string): Promise<Stamp> {
+  try {
+    const s = await fsp.stat(file)
+    return { size: s.size, mtimeMs: s.mtimeMs }
+  } catch {
+    return null
+  }
+}
+
+/** The sweep's reads, injectable so a test with fake timers can have them answer within the tick it advances. */
+export interface SweepReads {
+  stat(file: string): Promise<Stamp>
+  identity(dir: string): Promise<bigint | null>
+}
+export const realSweepReads: SweepReads = { stat: stampOfAsync, identity: dirIdentityAsync }
+
+/** A sweep check that took this long is a folder that stopped answering (a share gone away). Its reads are
+ *  asynchronous, so it never holds the process's thread; it is left out of the sweep for SLOW_PAUSE_MS so it does not
+ *  tie up a pool thread every sweep either (performance audit H3). */
 export const SLOW_CHECK_MS = 1_000
 export const SLOW_PAUSE_MS = 10 * 60_000
 
-/** Which sweep keys are paused for being slow. `run(key, check)` runs the check unless its key is paused, and pauses it
- *  (logging once per pause) when the check took SLOW_CHECK_MS or more. */
-export function slowGuard(now: () => number, log: (m: string) => void): { run(key: string, check: () => void): void; forget(key: string): void } {
+/** Each sweep key's check, one at a time. `run(key, check)` starts the check unless its key is paused or its last check
+ *  has not finished (a folder that does not answer holds one read, never a pile of them), and pauses it (logging once
+ *  per pause) when the check took SLOW_CHECK_MS or more. Never rejects. */
+export function slowGuard(now: () => number, log: (m: string) => void): { run(key: string, check: () => Promise<void>): void; forget(key: string): void } {
   const pausedUntil = new Map<string, number>()
+  const inFlight = new Set<string>()
   return {
     run(key, check) {
+      if (inFlight.has(key)) return
       const until = pausedUntil.get(key)
       if (until !== undefined && now() < until) return
       pausedUntil.delete(key)
       const started = now()
-      check()
-      const took = now() - started
-      if (took >= SLOW_CHECK_MS) {
-        pausedUntil.set(key, now() + SLOW_PAUSE_MS)
-        log(`${key} was slow to check (${took} ms); leaving it out of the sweep for ${SLOW_PAUSE_MS / 60_000} min`)
-      }
+      inFlight.add(key)
+      void check()
+        .catch((err: unknown) => log(`sweep of ${key} failed: ${err instanceof Error ? err.message : String(err)}`))
+        .finally(() => {
+          inFlight.delete(key)
+          const took = now() - started
+          if (took >= SLOW_CHECK_MS) {
+            pausedUntil.set(key, now() + SLOW_PAUSE_MS)
+            log(`${key} was slow to check (${took} ms); leaving it out of the sweep for ${SLOW_PAUSE_MS / 60_000} min`)
+          }
+        })
     },
-    forget: (key) => void pausedUntil.delete(key)
+    forget: (key) => {
+      pausedUntil.delete(key)
+      inFlight.delete(key)
+    }
   }
 }
 
@@ -58,6 +87,8 @@ export interface DirWatch {
    *  directory that cannot be watched (missing, EPERM) is logged once and left to the next arm(), which
    *  the owner's sweep calls. Never throws. */
   arm(): void
+  /** arm() with the directory's identity read asynchronously (the sweep's, performance audit H3). */
+  armAsync(identity?: (dir: string) => Promise<bigint | null>): Promise<void>
   close(): void
 }
 
@@ -71,6 +102,7 @@ export function dirWatch(
   let watcher: FSWatcher | null = null
   let ino: bigint | null = null // of the directory the running watch was armed on
   let failureLogged = false
+  let closed = false
   const drop = (): void => {
     try {
       watcher?.close()
@@ -83,21 +115,20 @@ export function dirWatch(
     if (!failureLogged) log(`watch failed on ${dir}, relying on the sweep: ${why}`)
     failureLogged = true
   }
-  return {
-    armed: () => watcher !== null,
-    arm() {
+  /** `id`: the directory's identity now. */
+  const armWith = (id: bigint | null): void => {
+      if (closed) return
       if (watcher) {
         // On Linux and macOS a deleted watched directory raises no `error`: the watcher stays open on
         // a directory that is gone and a recreated one is never watched. So a directory that is missing,
         // or is not the one the watch was armed on, drops the watch here. (An inode the filesystem hands
         // back to the recreated directory goes unnoticed; the sweep still covers that case.)
-        if (dirIdentity(dir) === ino) return
+        if (id === ino) return
         drop()
       }
       // Read before the watch opens, and no watch without it: a watch whose directory has no id could
       // never tell that directory going (a null id equals "gone"), and a directory replaced in between
       // leaves this id older than the one watched, which the next check reads as replaced.
-      const id = dirIdentity(dir)
       if (id === null) return notWatchable('the directory is not there')
       try {
         const w = watchFn(dir, (_event, filename) => {
@@ -130,7 +161,14 @@ export function dirWatch(
       } catch (err) {
         notWatchable(err instanceof Error ? err.message : String(err))
       }
-    },
-    close: drop
+  }
+  return {
+    armed: () => watcher !== null,
+    arm: () => armWith(dirIdentity(dir)),
+    armAsync: async (identity = dirIdentityAsync) => armWith(await identity(dir)),
+    close: () => {
+      closed = true
+      drop()
+    }
   }
 }

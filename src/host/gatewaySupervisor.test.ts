@@ -162,6 +162,33 @@ describe('the Gateway supervisor (remote runtime design §2.3)', () => {
     for (let i = 1; i < waits.length; i++) expect(waits[i]).toBeGreaterThanOrEqual(waits[i - 1])
     expect(Math.max(...waits)).toBe(10 * 60_000)
   })
+  // Final review M5: the person changing the port starts the count again; their new setting is not made to wait the
+  // ten minutes the old one earned.
+  it('a changed setting starts the named-failure waits again', async () => {
+    const r = rig()
+    await r.sup.reload()
+    const failOnce = async (): Promise<void> => {
+      r.last().frame({ t: 'gateway-failed', code: 'BIND_IN_USE', message: 'in use' })
+      await settle()
+      r.last().exit(1)
+      await settle()
+    }
+    for (let i = 0; i < 5; i++) {
+      await failOnce()
+      const before = r.children.length
+      while (r.children.length === before) await r.clock.advance(60_000)
+    }
+    r.set(on({ port: 47900 }))
+    await r.sup.reload()
+    await failOnce()
+    const before = r.children.length
+    let waited = 0
+    while (r.children.length === before && waited < 20 * 60_000) {
+      await r.clock.advance(1_000)
+      waited += 1_000
+    }
+    expect(waited).toBe(30_000)
+  })
   // Phase 3 minor: an app greeting reloads too, and must not cut a failed Gateway's cadence short; the person's own
   // `runtime start` (runtime-reload) does try again at once.
   it('a plain reload leaves a failed Gateway to its cadence; reload({ now: true }) tries again at once', async () => {

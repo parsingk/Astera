@@ -9,7 +9,7 @@
 // whether its directory is still the one it opened, and closes itself when it is not.
 //
 // Imports only node builtins: the Host bundles this.
-import { accessSync, statSync } from 'node:fs'
+import { accessSync, promises as fsp, statSync } from 'node:fs'
 import path from 'node:path'
 
 /** The directory's file id now, or null when it is not there to be read. **Access is checked first**:
@@ -18,6 +18,18 @@ export function dirIdentity(dir: string): bigint | null {
   try {
     accessSync(dir)
     const s = statSync(dir, { bigint: true })
+    return s.isDirectory() ? s.ino : null
+  } catch {
+    return null
+  }
+}
+
+/** dirIdentity without blocking the thread (performance audit H3): what a periodic sweep asks, since a folder on a
+ *  share that stopped answering would hold a synchronous stat for the OS's whole timeout. */
+export async function dirIdentityAsync(dir: string): Promise<bigint | null> {
+  try {
+    await fsp.access(dir)
+    const s = await fsp.stat(dir, { bigint: true })
     return s.isDirectory() ? s.ino : null
   } catch {
     return null

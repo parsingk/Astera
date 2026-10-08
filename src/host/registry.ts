@@ -320,10 +320,10 @@ export class PtyRegistry {
       // and a project that runs a build every minute would leave a great many of them. The entry
       // itself stays for a while: it is a few fields, and `list` reporting a pty as gone is how the
       // app tells "it ended while I was away" from "it was never here", and how a late `pty-attach`
-      // is answered with the exit it missed. **An ended session stays for good**, because the
-      // spawner's `held`, `sessionExitCode` and the handover sweep ask for it by session id at any
-      // later time; any other ended entry stays until DEAD_ENTRIES_KEPT newer ones have ended
-      // (`pruneEnded`, M4).
+      // is answered with the exit it missed. An ended session keeps its entry until ENDED_SESSIONS_KEPT newer ones have
+      // ended, then only how it ended (`pruneEndedSession`, audit H5), which is what the spawner's `held`
+      // (`heldSession`), `sessionExitCode` and the handover sweep ask by session id at any later time; any other
+      // ended entry stays until DEAD_ENTRIES_KEPT newer ones have ended (`pruneEnded`, M4).
       // The ring and the live terminal stay for EXITED_RETAIN_MS within the exited budget (§3.7, N1), then go
       // (sweepExited); `buffer` already answers empty for an ended pty.
       this.record(entry, { kind: 'exit', code: typeof exitCode === 'number' ? exitCode : null })
@@ -612,6 +612,13 @@ export class PtyRegistry {
    *  (the `exited undefined` lines), and that answers `{ code: null }`: the session did end. The
    *  Host's handover sweep closes an ended session's Dispatch and skips one the registry never held
    *  (R3), and a bare `null` for both would skip a pty that is dead. */
+  /** Whether this registry ever held a pty for the session, alive or ended, its entry kept or gone (audit H5). */
+  heldSession(sessionId: string): boolean {
+    if (this.endedCodes.has(sessionId)) return true
+    for (const e of this.entries.values()) if (e.meta?.kind === 'session' && e.meta.id === sessionId) return true
+    return false
+  }
+
   sessionExitCode(sessionId: string): { code: number | null } | null {
     let ended: { code: number | null } | null = null
     for (const e of this.entries.values()) {

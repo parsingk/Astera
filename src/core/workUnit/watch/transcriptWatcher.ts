@@ -6,7 +6,7 @@
 // compares each file's size and mtime: fs.watch sometimes drops events, and a transcript's directory
 // may not exist yet when its session starts (the sweep then arms the watch). Never throws.
 import path from 'node:path'
-import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, sameStamp, slowGuard, stampOf, type DirWatch, type Stamp } from './dirWatch'
+import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, realSweepReads, sameStamp, slowGuard, stampOf, type DirWatch, type Stamp, type SweepReads } from './dirWatch'
 
 export interface TranscriptWatcher {
   watch(path: string): void
@@ -21,10 +21,14 @@ export function createTranscriptWatcher(d: {
   debounceMs?: number
   /** Milliseconds, for timing the sweep's checks; `performance.now` when left out. */
   now?: () => number
+  /** The sweep's asynchronous reads; node's when left out. */
+  reads?: SweepReads
 }): TranscriptWatcher {
+  const reads = d.reads ?? realSweepReads
   const slow = slowGuard(d.now ?? (() => performance.now()), d.log)
   const debounceMs = d.debounceMs ?? WATCH_DEBOUNCE_MS
-  const files = new Map<string, { dir: string; name: string; stamp: Stamp; timer: NodeJS.Timeout | null }>()
+  /** `restamping`: the stamp is being read again after a report, so the sweep does not compare against the old one. */
+  const files = new Map<string, { dir: string; name: string; stamp: Stamp; timer: NodeJS.Timeout | null; restamping: boolean }>()
   // dir -> its watch and the watched basenames in it, each with its full path
   const dirs = new Map<string, { w: DirWatch; names: Map<string, string> }>()
   let closed = false
@@ -33,8 +37,14 @@ export function createTranscriptWatcher(d: {
     const f = files.get(p)
     if (!f) return
     f.timer = null
-    // Taken when the call goes out, so the sweep does not report again what this call reported.
-    f.stamp = stampOf(p)
+    // Taken when the call goes out, so the sweep does not report again what this call reported. Read asynchronously
+    // (audit H3); the sweep leaves the file alone until it is in.
+    f.restamping = true
+    void reads.stat(p).then((s) => {
+      if (files.get(p) !== f) return
+      f.stamp = s
+      f.restamping = false
+    })
     try {
       d.onChange(p)
     } catch (err) {
@@ -53,11 +63,13 @@ export function createTranscriptWatcher(d: {
   // Per directory, so one folder that stopped answering pauses its own files and nothing else (audit H3).
   const sweep = (): void => {
     for (const [dir, { w, names }] of dirs)
-      slow.run(dir, () => {
-        w.arm()
-        for (const p of names.values()) {
+      slow.run(dir, async () => {
+        // Asynchronous (audit H3): a folder on a share that stopped answering holds a pool thread, never the Host's.
+        await w.armAsync(reads.identity)
+        for (const p of [...names.values()]) {
+          const now = await reads.stat(p)
           const f = files.get(p)
-          if (f && !sameStamp(stampOf(p), f.stamp)) schedule(p)
+          if (f && !f.restamping && !sameStamp(now, f.stamp)) schedule(p)
         }
       })
   }
@@ -73,7 +85,8 @@ export function createTranscriptWatcher(d: {
       if (closed || files.has(p)) return
       const dir = path.dirname(p)
       const name = path.basename(p)
-      files.set(p, { dir, name, stamp: stampOf(p), timer: null })
+      // The first stamp and arm are synchronous, once per file: the sweep's are not (audit H3)
+      files.set(p, { dir, name, stamp: stampOf(p), timer: null, restamping: false })
       const known = dirs.get(dir)
       if (known) {
         known.names.set(name, p)

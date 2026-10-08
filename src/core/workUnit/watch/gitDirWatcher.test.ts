@@ -24,6 +24,11 @@ import { execFileSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import { createGitDirWatcher } from './gitDirWatcher'
+import { stampOf } from './dirWatch'
+import { dirIdentity } from '../../files/watchedDir'
+
+/** The sweep's reads answered within the tick a fake timer advances (the real ones answer on node's pool) */
+const syncReads = { stat: async (p: string) => stampOf(p), identity: async (d: string) => dirIdentity(d) }
 import { gitDir } from '../../worktrees/git'
 
 const live = (dir: string): Fake[] => (fakes.list as Fake[]).filter((w) => w.dir === dir && !w.closed)
@@ -78,6 +83,7 @@ describe('createGitDirWatcher', () => {
       gitDir: async () => gd,
       sweepMs: 60_000,
       debounceMs: 20,
+      reads: syncReads,
       ...over
     }))
   /** Lets the injected gitDir promise settle under fake timers. */
@@ -93,10 +99,10 @@ describe('createGitDirWatcher', () => {
     emit(gd, 'index')
     emit(gd, 'HEAD')
     emit(logsDir, 'HEAD')
-    vi.advanceTimersByTime(50)
+    await vi.advanceTimersByTimeAsync(50)
     expect(changes).toEqual([repo])
     emit(logsDir, 'HEAD')
-    vi.advanceTimersByTime(50)
+    await vi.advanceTimersByTimeAsync(50)
     expect(changes).toEqual([repo, repo])
   })
 
@@ -107,7 +113,7 @@ describe('createGitDirWatcher', () => {
     await settle()
     for (const n of ['FETCH_HEAD', 'ORIG_HEAD', 'index.lock', 'HEAD.lock', 'objects', 'logs', 'packed-refs']) emit(gd, n)
     emit(logsDir, 'refs')
-    vi.advanceTimersByTime(500)
+    await vi.advanceTimersByTimeAsync(500)
     expect(changes).toEqual([])
   })
 
@@ -121,7 +127,7 @@ describe('createGitDirWatcher', () => {
     renameSync(path.join(gd, 'index.lock'), path.join(gd, 'index'))
     emit(gd, 'index.lock', 'rename')
     emit(gd, 'index', 'rename')
-    vi.advanceTimersByTime(500)
+    await vi.advanceTimersByTimeAsync(500)
     expect(changes).toEqual([repo])
     // The watch is on the directory, so it outlives the swap.
     expect(live(gd)).toHaveLength(1)
@@ -132,19 +138,19 @@ describe('createGitDirWatcher', () => {
     const t = make({ sweepMs: 1000 })
     t.watch(repo)
     await settle()
-    vi.advanceTimersByTime(5000)
+    await vi.advanceTimersByTimeAsync(5000)
     expect(changes).toEqual([])
     writeFileSync(path.join(gd, 'index.lock'), 'i1-longer')
     renameSync(path.join(gd, 'index.lock'), path.join(gd, 'index'))
-    vi.advanceTimersByTime(1000 + 20)
+    await vi.advanceTimersByTimeAsync(1000 + 20)
     expect(changes).toHaveLength(1)
     writeFileSync(path.join(gd, 'HEAD'), 'ref: refs/heads/feature\n')
-    vi.advanceTimersByTime(1000 + 20)
+    await vi.advanceTimersByTimeAsync(1000 + 20)
     expect(changes).toHaveLength(2)
     appendFileSync(path.join(logsDir, 'HEAD'), 'r1\n')
-    vi.advanceTimersByTime(1000 + 20)
+    await vi.advanceTimersByTimeAsync(1000 + 20)
     expect(changes).toEqual([repo, repo, repo])
-    vi.advanceTimersByTime(5000)
+    await vi.advanceTimersByTimeAsync(5000)
     expect(changes).toHaveLength(3)
   })
 
@@ -154,14 +160,14 @@ describe('createGitDirWatcher', () => {
     const t = make({ sweepMs: 1000 })
     t.watch(repo)
     await settle()
-    vi.advanceTimersByTime(3000)
+    await vi.advanceTimersByTimeAsync(3000)
     expect(logs.filter((l) => l.includes(logsDir))).toHaveLength(1)
     mkdirSync(logsDir)
     writeFileSync(path.join(logsDir, 'HEAD'), 'r0\n')
-    vi.advanceTimersByTime(1000 + 20)
+    await vi.advanceTimersByTimeAsync(1000 + 20)
     expect(changes).toEqual([repo])
     emit(logsDir, 'HEAD')
-    vi.advanceTimersByTime(20)
+    await vi.advanceTimersByTimeAsync(20)
     expect(changes).toEqual([repo, repo])
   })
 
@@ -229,11 +235,11 @@ describe('createGitDirWatcher', () => {
     await settle()
     const first = live(logsDir)[0]
     rmSync(logsDir, { recursive: true }) // Linux and macOS raise no error event for this
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(first.closed).toBe(true)
     mkdirSync(logsDir)
     writeFileSync(path.join(logsDir, 'HEAD'), 'r0\n')
-    vi.advanceTimersByTime(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     expect(live(logsDir)).toHaveLength(1)
     expect(live(logsDir)[0]).not.toBe(first)
   })
@@ -247,7 +253,7 @@ describe('createGitDirWatcher', () => {
     await settle()
     expect(asked).toEqual([path.resolve(repo)])
     emit(gd, 'HEAD')
-    vi.advanceTimersByTime(50)
+    await vi.advanceTimersByTimeAsync(50)
     expect(changes).toEqual([path.resolve(repo)])
     t.unwatch(`${repo}/.`)
     expect(live(gd)).toHaveLength(0)
@@ -259,7 +265,7 @@ describe('createGitDirWatcher', () => {
     t.watch(repo)
     await settle()
     emit(gd, 'HEAD')
-    expect(() => vi.advanceTimersByTime(50)).not.toThrow()
+    await expect(vi.advanceTimersByTimeAsync(50)).resolves.not.toThrow()
     expect(logs.some((l) => l.includes('consumer broke'))).toBe(true)
   })
 
@@ -275,7 +281,7 @@ describe('createGitDirWatcher', () => {
     emit(gd, 'HEAD')
     t.unwatch(repo)
     appendFileSync(path.join(logsDir, 'HEAD'), 'r1\n')
-    vi.advanceTimersByTime(5000)
+    await vi.advanceTimersByTimeAsync(5000)
     expect(changes).toEqual([])
     expect(live(gd)).toHaveLength(0)
     expect(live(logsDir)).toHaveLength(0)

@@ -43,8 +43,10 @@ export interface RunGitRecorder {
 
 const READS_AT_ONCE = 4
 /** The waits after each failed read with no answer (performance audit H2): git that cannot answer for a folder (not a
- *  repository, no commit yet) is not asked again on every commit. After the last one it is given up. */
-const RETRY_WAITS_MS = [30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000]
+ *  repository, no commit yet) is not asked again on every commit. After the last one it is given up. The first waits are
+ *  short (final review M4): a read that failed once is often a busy moment, and a base read late lets the worker's first
+ *  commits in before it. */
+const RETRY_WAITS_MS = [1_000, 5_000, 30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000]
 /** A read that will never answer: settled, not retried. */
 const SETTLED = Symbol('settled')
 type Read = string | null | typeof SETTLED

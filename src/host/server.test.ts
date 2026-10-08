@@ -45,6 +45,7 @@ const server = async (
     maxLine?: HostServerDeps['maxLine']
     bootId?: HostServerDeps['bootId']
     maxQueuedBytes?: HostServerDeps['maxQueuedBytes']
+    maxAppQueuedBytes?: HostServerDeps['maxAppQueuedBytes']
   } = {}
 ): Promise<{
   s: HostServer
@@ -81,6 +82,7 @@ const server = async (
     hostKey: over.hostKey,
     maxLine: over.maxLine,
     ...(over.maxQueuedBytes !== undefined ? { maxQueuedBytes: over.maxQueuedBytes } : {}),
+    ...(over.maxAppQueuedBytes !== undefined ? { maxAppQueuedBytes: over.maxAppQueuedBytes } : {}),
     bootId: over.bootId,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
@@ -471,6 +473,22 @@ describe('startHostServer', () => {
     for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'x'.repeat(16 * 1024) })
     await Promise.race([closed, new Promise((r) => setTimeout(r, 3000))])
     expect(h.s.clients()).toBe(0)
+    sock.destroy()
+  })
+
+  // Final review M3: the app is the one reader the Host must not lose. A main thread that stalls for a while falls
+  // behind every worker's output at once, and cutting its socket sends it through a reconnect and a handover for a
+  // stall it would have read through. Its budget is the larger one.
+  it('gives the app a larger unread budget than other clients', async () => {
+    const h = await server({ maxQueuedBytes: 64 * 1024, maxAppQueuedBytes: 64 * 1024 * 1024 })
+    const sock = net.connect(h.address)
+    await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }))
+    await new Promise((r) => setTimeout(r, 100))
+    sock.pause()
+    for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'x'.repeat(16 * 1024) })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(h.s.clients()).toBe(1)
     sock.destroy()
   })
 

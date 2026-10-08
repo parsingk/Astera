@@ -12,7 +12,7 @@
 // Both directories are watched non-recursively, plus a sweep over the three files' size and mtime,
 // which also arms a watch that could not start (a fresh repository has no logs/ yet). Never throws.
 import path from 'node:path'
-import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, sameStamp, slowGuard, stampOf, type DirWatch, type Stamp } from './dirWatch'
+import { WATCH_DEBOUNCE_MS, WATCH_SWEEP_MS, dirWatch, realSweepReads, sameStamp, slowGuard, stampOf, type DirWatch, type Stamp, type SweepReads } from './dirWatch'
 
 /** The files, relative to the git dir, whose change means a refresh. */
 const SWEPT = ['index', 'HEAD', path.join('logs', 'HEAD')]
@@ -26,6 +26,8 @@ export interface GitDirWatcher {
 interface Entry {
   dir: string | null
   stamps: Stamp[]
+  /** The stamps are being read again after a report: the sweep does not compare against the old ones. */
+  restamping: boolean
   watches: DirWatch[]
   timer: NodeJS.Timeout | null
 }
@@ -38,19 +40,30 @@ export function createGitDirWatcher(d: {
   debounceMs?: number
   /** Milliseconds, for timing the sweep's checks; `performance.now` when left out. */
   now?: () => number
+  /** The sweep's asynchronous reads; node's when left out. */
+  reads?: SweepReads
 }): GitDirWatcher {
+  const reads = d.reads ?? realSweepReads
   const slow = slowGuard(d.now ?? (() => performance.now()), d.log)
   const debounceMs = d.debounceMs ?? WATCH_DEBOUNCE_MS
   const roots = new Map<string, Entry>()
   let closed = false
 
   const stampsOf = (dir: string): Stamp[] => SWEPT.map((rel) => stampOf(path.join(dir, rel)))
+  /** The sweep's, asynchronous (audit H3). */
+  const stampsOfAsync = (dir: string): Promise<Stamp[]> => Promise.all(SWEPT.map((rel) => reads.stat(path.join(dir, rel))))
 
   const fire = (root: string): void => {
     const e = roots.get(root)
     if (!e || !e.dir) return
     e.timer = null
-    e.stamps = stampsOf(e.dir)
+    // Read asynchronously (audit H3); the sweep leaves the root alone until they are in.
+    e.restamping = true
+    void stampsOfAsync(e.dir).then((s) => {
+      if (roots.get(root) !== e) return
+      e.stamps = s
+      e.restamping = false
+    })
     try {
       d.onChange(root)
     } catch (err) {
@@ -79,9 +92,11 @@ export function createGitDirWatcher(d: {
       if (!e.dir) continue
       const dir = e.dir
       // A git dir that stopped answering pauses itself and nothing else (audit H3).
-      slow.run(dir, () => {
-        for (const w of e.watches) w.arm()
-        const now = stampsOf(dir)
+      slow.run(dir, async () => {
+        // Asynchronous (audit H3): a git dir on a share that stopped answering holds a pool thread, never the Host's.
+        for (const w of e.watches) await w.armAsync(reads.identity)
+        const now = await stampsOfAsync(dir)
+        if (roots.get(root) !== e || e.restamping) return
         if (now.some((s, i) => !sameStamp(s, e.stamps[i]))) schedule(root)
       })
     }
@@ -95,7 +110,7 @@ export function createGitDirWatcher(d: {
     watch(given) {
       const root = path.resolve(given)
       if (closed || roots.has(root)) return
-      const e: Entry = { dir: null, stamps: [], watches: [], timer: null }
+      const e: Entry = { dir: null, stamps: [], restamping: false, watches: [], timer: null }
       roots.set(root, e)
       // Resolved once per watch, and not on the sweep. A root with no git dir (not a repository, git
       // failed) leaves no entry, so the next watch(root) asks again, as GitWatcher.watch does.

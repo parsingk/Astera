@@ -298,6 +298,8 @@ export function createGatewaySupervisor(d: {
         await stopChild()
         applied = s
         failures = 0
+        // A new setting (or the person's own retry) is not made to wait what the old one earned (final review M5)
+        namedFailures = 0
         await start()
       }),
     status: () => state,

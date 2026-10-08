@@ -295,6 +295,28 @@ describe('remote chat polling', () => {
     expect(sameOrNext(null, moved)).toBe(moved)
   })
 
+  // Final review M7: an open remote chat in a hidden window read its conversation every 2 s; the tab watch, not this,
+  // is what notifies then.
+  it('asks nothing while paused, and again once it is not', async () => {
+    vi.useFakeTimers()
+    try {
+      let n = 0
+      let hidden = false
+      const stop = pollEvery(async () => void n++, 2_000, { paused: () => hidden })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(n).toBe(1)
+      hidden = true
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(n).toBe(1)
+      hidden = false
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(n).toBe(2)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('goes on polling after a read that throws, and stops when told', async () => {
     vi.useFakeTimers()
     try {
