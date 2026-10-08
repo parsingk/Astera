@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Account, JobTask } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
+import type { OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
 import { Select, type SelectOption } from './Select'
 import { X } from 'lucide-react'
@@ -22,7 +23,7 @@ const MAX_TASK_ACCOUNTS = 3
  *  NewRunModal 과 같은 관례로 로컬 draft 만 들고(제출 버튼 하나로 끝나는 한 번짜리 폼, flush/onBlur
  *  배선 없음), 실패해도 폼을 닫지 않는다 — 닫으면 에러를 보여줄 자리가 없어진다. */
 export function NewTaskModal({
-  projectPath,
+  door,
   runId,
   tasks,
   accounts,
@@ -30,7 +31,8 @@ export function NewTaskModal({
   onClose,
   onCreated
 }: {
-  projectPath: string
+  /** Where the Task is made: this computer or a paired Runtime (lib/orchDoor.ts, Phase 7). */
+  door: OrchDoor
   runId: string
   /** 이 Run 의 Task 들 — 의존 셀렉트의 항목이다. 제목이 필요하므로 id 목록으로는 안 된다.
    *  자기 자신은 아직 만들어지지 않았으므로 목록에 있을 수가 없고, 그래서 "자신을 의존으로 고르는"
@@ -122,7 +124,7 @@ export function NewTaskModal({
     setBusy(true)
     setError(null)
     try {
-      const reply = await window.api.orch.command(projectPath, 'task-create', {
+      const reply = await door.command('task-create', {
         // runId 를 언제나 명시한다 — task-create 의 기본값(`s.runs[마지막]`)에 기대면, 이 창이 아닌
         // 다른 프로젝트에서 방금 만들어진 Run 에 이 Task 가 들어간다(Global Constraints).
         runId,

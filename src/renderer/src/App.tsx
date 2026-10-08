@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Account, CliInstallStatus, CliStatus, HistoryEntry, HostDriverReport, HostHoldings, HostStatus, HostRuntimeInstallState, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionKind, SessionUsage, UpdateStatus, UpdateCampaignInfo, InstallOutcome } from '../../core/types'
 import type { UnattendedPermission } from '../../core/chat/types'
 import type { Lang, MessageKey } from '../../core/i18n'
@@ -45,6 +45,7 @@ import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, isRemoteRuntime, offlineNote, remoteDetailKey, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
+import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
@@ -2670,6 +2671,12 @@ export default function App(): React.JSX.Element {
   const remoteSnapshotRef = useRef(remoteSnapshot)
   remoteSnapshotRef.current = remoteSnapshot
   const remoteRowKey = openRun?.runtimeId ? remoteDetailKey(remoteSnapshot, openRun.runId) : ''
+  /** Where the open detail's commands, accounts and run configurations go (lib/orchDoor.ts, Phase 7). */
+  const detailDoor = useMemo<OrchDoor | null>(() => {
+    if (!openRun) return null
+    if (!openRun.runtimeId) return localDoor(window.api, openRun.projectPath)
+    return remoteDoor(window.api, { runtimeId: openRun.runtimeId, projectKey: openRun.projectPath, permission: 'read-only', readOnlyReason: '' })
+  }, [openRun?.runtimeId, openRun?.projectPath])
   // 기록 모달이 열려 있는 동안 이벤트를 다시 읽는다. **이 자리에 있어야 한다** — 의존성 배열은
   // 렌더 중에 평가되므로, currentProject 선언보다 위에 두면 TDZ ReferenceError 로 죽는다(타입체크는
   // 잡지 못한다).
@@ -5461,8 +5468,9 @@ export default function App(): React.JSX.Element {
           }}
         />
       )}
-      {openRun && (
+      {openRun && detailDoor && (
         <RunDetail
+          door={detailDoor}
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
           // findRun 인 이유는 위 두 효과와 같다 — 예약 회차는 children 안에 있다(snapshot.ts).
@@ -5503,7 +5511,8 @@ export default function App(): React.JSX.Element {
           와 별개로 옮기지 않기 위해 남겨 둔다. */}
       {newRunOpen && currentProject && (
         <NewRunModal
-          projectPath={currentProject}
+          door={localDoor(window.api, currentProject)}
+          cwd={currentProject}
           // 스냅숏이 이미 프로젝트별로 접혀 오므로 폴더 사실이 앉을 자리가 그것이다(view.ts).
           // 아직 안 왔으면 거짓 — 없는 것을 경고하는 것보다 낫다
           projectFolderBusy={orchSnapshot?.projectFolderBusy ?? false}

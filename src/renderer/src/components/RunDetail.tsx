@@ -22,6 +22,7 @@ import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/
 import { runningCount } from '../../../core/orchestration/running'
 import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
+import type { OrchDoor } from '../lib/orchDoor'
 import { confirmModal } from '../lib/confirm'
 import { CompletionBlock } from './CompletionBlock'
 import { toast } from '../lib/toast'
@@ -226,7 +227,8 @@ export function RunDetail({
   onOpenSession,
   onShowOlderJournal,
   onClose,
-  runtimeId
+  runtimeId,
+  door
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
@@ -246,6 +248,8 @@ export function RunDetail({
   /** A paired Runtime's Run (remote runtime design Phase 6): read only, so the actions are not shown (styles.css,
    *  `.run-detail-readonly`), and its completion is read from that Runtime. Absent for this computer's own. */
   runtimeId?: string
+  /** Where this Run's commands, accounts and run configurations go: this computer or its Runtime (Phase 7). */
+  door: OrchDoor
 }): React.JSX.Element {
   const { t } = useI18n()
   /** 고른 노드 = 아래 이벤트의 필터. 같은 노드를 다시 누르면 풀린다 */
@@ -291,7 +295,7 @@ export function RunDetail({
     let cancelled = false
     // 거부 팔을 둔다 — 실패해도 폼은 쓸 수 있어야 하므로 빈 목록으로 접는다. 그러면 계정 칸이
     // 그려지지 않고(고를 것이 둘 미만) 지정 없이 Task 를 만드는 길이 남는다.
-    void window.api.accounts.list().then(
+    void door.accounts().then(
       (list) => {
         if (!cancelled) setAccounts(list)
       },
@@ -312,13 +316,13 @@ export function RunDetail({
     // 거부 팔을 반드시 둔다 — main 이 프로젝트를 읽다 던질 수 있고, 그러면 DevTools 에
     // Uncaught (in promise) 가 뜬다. 실패해도 폼은 그대로 쓸 수 있어야 하므로(검증 없이 Task 를
     // 만드는 것도 유효한 선택이다) 빈 목록으로 접는다 — "검증 없음" 하나만 남는다.
-    void window.api.run.list(projectPath).then(
-      (r) => {
+    void door.runConfigs(runId).then(
+      (configs) => {
         // A compound has no command and no exit code of its own — validation's contract is one
         // command, one exit code (see prepareRun's compoundNotRunnable refusal), so it is excluded
         // here rather than offered and then failed every time it runs.
         if (!cancelled)
-          setRunConfigs(r.configs.filter((c) => c.type !== 'compound').map((c) => ({ id: c.id, name: c.name })))
+          setRunConfigs(configs.filter((c) => c.type !== 'compound').map((c) => ({ id: c.id, name: c.name })))
       },
       () => {
         if (!cancelled) setRunConfigs([])
@@ -327,7 +331,7 @@ export function RunDetail({
     return () => {
       cancelled = true
     }
-  }, [authoring, projectPath])
+  }, [authoring, door, runId])
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
    *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
@@ -469,14 +473,8 @@ export function RunDetail({
     provider: Provider,
     assigned?: readonly string[]
   ): Promise<string | null> => {
-    const list = await window.api.accounts.list()
-    const loggedIn = new Set(
-      (
-        await Promise.all(
-          list.map(async (a) => ((await window.api.accounts.loginStatus(a.id)) ? a.id : null))
-        )
-      ).filter((id): id is string => id !== null)
-    )
+    const list = await door.accounts()
+    const loggedIn = await door.signedInIds(list)
     const picked = accountToDispatchOn({
       ...(assigned !== undefined ? { assigned } : {}),
       provider,
@@ -497,7 +495,7 @@ export function RunDetail({
   const startRunNow = async (): Promise<void> => {
     setBusy(RUN_START)
     try {
-      const reply = await window.api.orch.command(projectPath, 'run-start', { run: runId })
+      const reply = await door.command('run-start', { run: runId })
       if (reply.status >= 400) toast.error(t('jobs.run.startFailed'))
     } catch {
       toast.error(t('jobs.run.startFailed'))
@@ -534,7 +532,7 @@ export function RunDetail({
     setBusy(RUN_MERGE)
     try {
       // A Job row's id is the Job's; run-merge needs the Run whose worktrees the button counted.
-      const reply = await window.api.orch.command(projectPath, 'run-merge', { run: runIdToMerge(run, runId) })
+      const reply = await door.command('run-merge', { run: runIdToMerge(run, runId) })
       if (reply.status >= 400) {
         const reason =
           typeof reply.body === 'object' && reply.body !== null && 'error' in reply.body
@@ -608,7 +606,7 @@ export function RunDetail({
         toast.error(t('session.resume.noLoggedInAccounts'))
         return
       }
-      const reply = await window.api.orch.command(projectPath, 'worker-start', {
+      const reply = await door.command('worker-start', {
         taskId,
         agent: provider,
         account: accountId
@@ -629,7 +627,7 @@ export function RunDetail({
   const stopTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
     try {
-      const shown = await window.api.orch.command(projectPath, 'dispatch-show', { task: taskId })
+      const shown = await door.command('dispatch-show', { task: taskId })
       if (shown.status >= 400) {
         toast.error(t('jobs.node.failed'))
         return
@@ -641,7 +639,7 @@ export function RunDetail({
         toast.error(t('jobs.node.failed'))
         return
       }
-      const reply = await window.api.orch.command(projectPath, 'worker-stop', { dispatch: open.id })
+      const reply = await door.command('worker-stop', { dispatch: open.id })
       // The refusal's own words, not only "could not": a stop refused because the worker is still
       // starting, or because the Host could not confirm the kill, says what to do next.
       if (reply.status >= 400) {
@@ -672,7 +670,7 @@ export function RunDetail({
       return
     setBusy(taskId)
     try {
-      const reply = await window.api.orch.command(projectPath, 'task-update', {
+      const reply = await door.command('task-update', {
         id: taskId,
         convergence: 'off'
       })
@@ -691,7 +689,7 @@ export function RunDetail({
   const restartTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
     try {
-      const reply = await window.api.orch.command(projectPath, 'task-update', {
+      const reply = await door.command('task-update', {
         id: taskId,
         status: 'ready'
       })
@@ -713,7 +711,7 @@ export function RunDetail({
     setBusy(taskId)
     setGateError(null)
     try {
-      const reply = await window.api.orch.command(projectPath, 'gate-create', {
+      const reply = await door.command('gate-create', {
         task: taskId,
         question: trimmed
       })
@@ -754,7 +752,7 @@ export function RunDetail({
     setBusy(taskId)
     setGateError(null)
     try {
-      const reply = await window.api.orch.command(projectPath, 'gate-resolve', {
+      const reply = await door.command('gate-resolve', {
         id: gateId,
         resolution: trimmed
       })
@@ -924,7 +922,7 @@ export function RunDetail({
               // 정하므로(Task.accountIds), 걸러 보낼 기준이 이 시점에 없다. 두 번째 칸부터 첫
               // 계정의 provider 로 좁히는 일은 폼 안에서 한다.
               <NewTaskModal
-                projectPath={projectPath}
+                door={door}
                 runId={runId}
                 tasks={tasks}
                 accounts={accounts}

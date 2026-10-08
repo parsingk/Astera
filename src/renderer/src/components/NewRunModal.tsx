@@ -3,6 +3,7 @@ import type { Account, ScheduleRule } from '../../../core/types'
 import { DEFAULT_BLOCKING_SEVERITY } from '../../../core/orchestration/convergence'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
+import type { OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
 
@@ -13,7 +14,8 @@ import { ScheduleRuleFields } from './ScheduleRuleFields'
  *  RunConfigForm 과 같은 관례로 로컬 draft 를 들지만, 이 폼은 '저장'이 아니라 '한 번 제출하고
  *  끝'이라 flush/onBlur 배선은 없다 — 제출 버튼 하나가 전부다. */
 export function NewRunModal({
-  projectPath,
+  door,
+  cwd,
   projectFolderBusy,
   accounts,
   onClose,
@@ -23,7 +25,11 @@ export function NewRunModal({
    *  고르면 이 Run 의 워커도 그 폴더로 가므로 둘이 한 작업 트리를 나눠 쓰게 된다 — 그때 경고한다.
    *  **막지 않는다**: 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다. */
   projectFolderBusy: boolean
-  projectPath: string
+  /** Where the Job is made: this computer or a paired Runtime (lib/orchDoor.ts, Phase 7). */
+  door: OrchDoor
+  /** The folder the Job works in: this computer's project, or the Runtime project's own path. null: no folder to make
+   *  one in (a Runtime's unregistered folders), so the form says so and makes nothing. */
+  cwd: string | null
   /** 고를 수 있는 계정 전부. null 은 아직 안 온 것 — NewTaskModal 의 같은 prop 과 같은 뜻이다 */
   accounts: Account[] | null
   onClose: () => void
@@ -50,13 +56,13 @@ export function NewRunModal({
     // busy 로 다시 걸러 이중 클릭이 Run 을 두 개 만들지 못하게 한다 — 버튼의 disabled 는 같은
     // 프레임에 반영되지 않을 수 있어 여기서도 확인한다.
     // 계정도 함께 본다 — 아래 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석)
-    if (!trimmed || !coordinatorAccountId || busy) return
+    if (!trimmed || !coordinatorAccountId || busy || cwd === null) return
     setBusy(true)
     setError(null)
     try {
-      const reply = await window.api.orch.command(projectPath, 'run-create', {
+      const reply = await door.command('run-create', {
         objective: trimmed,
-        cwd: projectPath,
+        cwd,
         // **provider 를 보내지 않는다** — Run 은 더 이상 그것을 정하지 않고, Task 의 계정이
         // 정한다(orchestration/types.ts 의 Task.accountIds). run-create 는 이 플래그를 이제
         // 거절한다(server.ts).
