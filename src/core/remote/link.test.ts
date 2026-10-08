@@ -17,6 +17,7 @@ function fakeRuntime(o: {
   authFails?: RemoteError
   answer?: (s: Sent, conn: number) => CallReply | 'drop' | 'hang' | 'unsent' | RemoteError | { dropWith: string }
   connectHangs?: (n: number) => boolean
+  authHangs?: boolean
 }) {
   const sent: Array<Sent & { conn: number }> = []
   let conns = 0
@@ -33,6 +34,7 @@ function fakeRuntime(o: {
     const link: RuntimeLink = {
       auth: async () => {
         auths++
+        if (o.authHangs) await new Promise(() => {})
         if (o.authFails) throw o.authFails
         return o.hello ?? hello()
       },
@@ -235,12 +237,30 @@ describe('openRemoteLink (remote runtime design §2.8, §3.9)', () => {
     expect(await link.call('jobs-list', {})).toMatchObject({ code: 'RUNTIME_OFFLINE' })
   })
 
-  it('a reply timeout drops the connection, so the next call opens a new one', async () => {
-    const rt = fakeRuntime({ answer: (_s, conn) => (conn === 1 ? 'hang' : { status: 200, body: [] }) })
+  // Second pass RR-8: one slow call closed the shared connection, resetting every terminal stream on it. A connection
+  // that is really gone is the heartbeat's to find (client.ts: 45 s of silence).
+  it('a reply timeout keeps the connection: the next call goes on the same one', async () => {
+    let first = true
+    const rt = fakeRuntime({
+      answer: () => {
+        if (first) {
+          first = false
+          return 'hang'
+        }
+        return { status: 200, body: [] }
+      }
+    })
     const { link } = fastLink(rt)
-    expect(await link.call('jobs-list', {}, { timeoutMs: 20 })).toMatchObject({ code: 'REMOTE_TIMEOUT' })
+    expect(await link.call('runs-diff', {}, { timeoutMs: 20 })).toMatchObject({ code: 'REMOTE_TIMEOUT' })
     expect(await link.call('jobs-list', {})).toEqual({ status: 200, body: [] })
-    expect(rt.conns()).toBe(2)
+    expect(rt.conns()).toBe(1)
+  })
+
+  // Second pass RR-6: the sign-in had no deadline, so a Host that never answered `auth` held every call forever.
+  it('a sign-in that never answers is RUNTIME_OFFLINE after the connect timeout', async () => {
+    const rt = fakeRuntime({ authHangs: true })
+    const { link } = fastLink(rt, { connectTimeoutMs: 20 })
+    expect(await link.call('jobs-list', {})).toMatchObject({ code: 'RUNTIME_OFFLINE' })
   })
 
   // A retry that finds its own first attempt still running (409 with its request id) asks again until it is done.

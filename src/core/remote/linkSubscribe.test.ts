@@ -2,7 +2,7 @@
 // repeated, a gap recovered by subscribing again from the last seq, a reconnect resubscribing with the old boot, and an
 // unsubscribe that stops everything.
 import { describe, it, expect } from 'vitest'
-import { openRemoteLink, type RemoteTarget } from './link'
+import { openRemoteLink, GAP_WAITS_MS, type RemoteTarget } from './link'
 import type { RuntimeLink } from './client'
 import type { HelloFrame, RemoteCheckpoint, RemotePtyEvent, SubscriptionFrame } from './frames'
 
@@ -173,6 +173,64 @@ describe('RemoteLink.subscribe', () => {
     await settle()
     expect(w.seen).toEqual(['reset@2'])
     expect(rt.asked.at(-1)).toMatchObject({ t: 'subscribe', sub, fromSeq: 3 })
+    w.link.close()
+  })
+
+  // Second pass RR-1: a stream whose Runtime could not be reached at the first subscribe never said so, and the tab
+  // stayed blank with no banner for as long as the Runtime was away.
+  it('a stream that cannot reach its Runtime at the start says it is down once, and up when it is answered', async () => {
+    const rt = fakeRuntime()
+    let offline = true
+    const connect = (): Promise<RuntimeLink> =>
+      offline ? Promise.reject(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })) : rt.connect()
+    const link = openRemoteLink({ target, client: {}, connect, sleep: () => new Promise((r) => setTimeout(r, 1)), random: () => 0.5 })
+    const states: string[] = []
+    link.subscribe('p1', { onReset: () => {}, onEvents: () => {}, onLinkState: (st) => states.push(st) })
+    await settle()
+    await settle()
+    expect(states).toEqual(['down'])
+    offline = false
+    await settle()
+    await settle()
+    const sub = rt.asked[0].sub
+    rt.conns[0].push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    expect(states).toEqual(['down', 'up'])
+    link.close()
+  })
+
+  // Second pass RR-3: while the resubscribe loop slept its backoff (up to 30 s), a new tab's subscribe did nothing.
+  it('a new stream wakes a resubscribe that is waiting out its backoff', async () => {
+    const rt = fakeRuntime()
+    let offline = true
+    const connect = (): Promise<RuntimeLink> =>
+      offline ? Promise.reject(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' })) : rt.connect()
+    const link = openRemoteLink({ target, client: {}, connect, sleep: () => new Promise(() => {}), random: () => 0.5 })
+    link.subscribe('p1', { onReset: () => {}, onEvents: () => {} })
+    await settle()
+    offline = false
+    link.subscribe('p2', { onReset: () => {}, onEvents: () => {} })
+    await settle()
+    await settle()
+    expect(rt.asked.filter((a) => a.t === 'subscribe').map((a) => a.pty).sort()).toEqual(['p1', 'p2'])
+    link.close()
+  })
+
+  // Second pass RR-2: a gap subscribed again at once every time; on a link too slow for the output, each new
+  // subscription overflowed again and the Host serialised a checkpoint per cycle. A gap soon after another waits longer.
+  it('a gap soon after another waits before subscribing again, longer each time', async () => {
+    const rt = fakeRuntime()
+    const slept: number[] = []
+    const w = watch(rt, slept)
+    await settle()
+    const sub = rt.asked[0].sub
+    rt.conns[0].push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    rt.conns[0].push({ t: 'checkpoint', sub, checkpoint: cp(2), gap: { firstSeq: 1, lastSeq: 2 } })
+    for (let i = 0; i < 3; i++) {
+      rt.conns[0].push({ t: 'output-gap', sub, firstSeq: 3, lastSeq: 9, code: 'OUTPUT_GAP' })
+      await settle()
+    }
+    expect(slept).toEqual([GAP_WAITS_MS[0], GAP_WAITS_MS[1]])
+    expect(rt.asked.filter((a) => a.t === 'subscribe')).toHaveLength(4)
     w.link.close()
   })
 

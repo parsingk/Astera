@@ -47,6 +47,12 @@ export interface PtyStreamHandlers {
 
 /** The waits before each reconnect (N14): 1 s, 2 s, 5 s, 10 s, then 30 s, each with jitter of plus or minus half. */
 export const RECONNECT_STEPS_MS = [1000, 2000, 5000, 10_000, 30_000]
+/** The waits before a stream subscribes again after a gap or a hole that came soon after the last one (second pass
+ *  RR-2): the first goes at once; on a link too slow for the output, each new subscription overflowed again and the
+ *  Host serialised a checkpoint per cycle. */
+export const GAP_WAITS_MS = [250, 1000, 5000]
+/** A gap this long after the last one starts the waits again. */
+const GAP_CALM_MS = 30_000
 const RECONNECT_CAP_MS = 30_000
 /** How long a call waits for its reply. Waiting commands pass their own. */
 export const DEFAULT_CALL_TIMEOUT_MS = 60_000
@@ -90,7 +96,20 @@ export function openRemoteLink(a: {
   let closed = false
   /** Each subscription: its pty, the last seq handed on (null before a checkpoint or a replay), the boot it was on,
    *  and the connection it is subscribed on now. */
-  type Stream = { id: string; pty: string; h: PtyStreamHandlers; lastSeq: number | null; bootId: string | null; on: RuntimeLink | null; down?: boolean }
+  type Stream = {
+    id: string
+    pty: string
+    h: PtyStreamHandlers
+    lastSeq: number | null
+    bootId: string | null
+    on: RuntimeLink | null
+    down?: boolean
+    /** Gaps in a row, each within GAP_CALM_MS of the last, and when the last was. */
+    gaps?: number
+    gapAt?: number
+    /** Waiting out a gap: frames of the old subscription are not applied. */
+    waiting?: boolean
+  }
   const streams = new Map<string, Stream>()
   let streamN = 0
   /** Connections that closed before any stream on them was answered, in a row: each waits longer (review I4). */
@@ -117,7 +136,18 @@ export function openRemoteLink(a: {
       return asRemoteError(e, 'RUNTIME_OFFLINE')
     }
     try {
-      const h = await link.auth(target.token, a.client)
+      // The sign-in is bounded by the same deadline (second pass RR-6): a Host that never answers `auth` held every call.
+      const h = await new Promise<Awaited<ReturnType<RuntimeLink['auth']>> | 'timeout'>((resolve, reject) => {
+        const t = setTimeout(() => resolve('timeout'), connectTimeoutMs)
+        link.auth(target.token, a.client).then(
+          (v) => (clearTimeout(t), resolve(v)),
+          (e) => (clearTimeout(t), reject(e))
+        )
+      })
+      if (h === 'timeout') {
+        link.close()
+        return new RemoteError('RUNTIME_OFFLINE', `the Runtime at ${target.address}:${target.port} did not finish signing in within ${Math.round(connectTimeoutMs / 1000)} s`)
+      }
       if (h.gatewayProtocol !== GATEWAY_PROTOCOL) {
         link.close()
         return new RemoteError(
@@ -155,7 +185,11 @@ export function openRemoteLink(a: {
       void p.then((l) => {
         if (live !== p) return
         if (l instanceof RemoteError) live = null
-        else current = l
+        else {
+          current = l
+          // A connection is up: streams waiting out a backoff need not (second pass RR-3).
+          wake()
+        }
       })
     }
     return live
@@ -171,7 +205,7 @@ export function openRemoteLink(a: {
     }
   }
   const onStreamFrame = (s: Stream, link: RuntimeLink, f: SubscriptionFrame): void => {
-    if (streams.get(s.id) !== s || s.on !== link) return
+    if (streams.get(s.id) !== s || s.on !== link || s.waiting) return
     switch (f.t) {
       case 'subscribed':
         s.bootId = f.bootId
@@ -191,19 +225,32 @@ export function openRemoteLink(a: {
         if (fresh.length === 0) return
         // An event that does not follow the last one means a hole (review I5): applying it would show a wrong screen
         // with no way back. Not applied; the stream is asked for again from where the view is.
-        if (s.lastSeq !== null && fresh[0].seq !== s.lastSeq + 1) return start(s, link)
+        if (s.lastSeq !== null && fresh[0].seq !== s.lastSeq + 1) return again(s, link)
         s.lastSeq = fresh[fresh.length - 1].seq
         s.h.onEvents(fresh)
         return
       }
       case 'output-gap':
         // The stream ended behind its budget: again from the last seq handed on, on the same connection.
-        return start(s, link)
+        return again(s, link)
       case 'sub-error':
         streams.delete(s.id)
         s.h.onGone?.(f.code, f.message)
         return
     }
+  }
+  /** Subscribes `s` again after a gap or a hole: at once the first time, then after GAP_WAITS_MS while they keep coming. */
+  const again = (s: Stream, link: RuntimeLink): void => {
+    const t = now()
+    const n = s.gapAt !== undefined && t - s.gapAt < GAP_CALM_MS ? (s.gaps ?? 0) + 1 : 0
+    s.gaps = n
+    s.gapAt = t
+    if (n === 0) return start(s, link)
+    s.waiting = true
+    void sleep(GAP_WAITS_MS[Math.min(n - 1, GAP_WAITS_MS.length - 1)]).then(() => {
+      s.waiting = false
+      if (!closed && streams.get(s.id) === s && s.on === link) start(s, link)
+    })
   }
   const start = (s: Stream, link: RuntimeLink): void => {
     if (!link.subscribe) {
@@ -216,14 +263,30 @@ export function openRemoteLink(a: {
       onStreamFrame(s, link, f)
     )
   }
-  /** Subscribes every stream that has no connection, waiting out the reconnect backoff; gives up as calls do. */
+  /** Ends the resubscribe loop's backoff early: a new stream, or a connection that came up (second pass RR-3). */
+  let wakeUp: (() => void) | null = null
+  const wake = (): void => {
+    const w = wakeUp
+    wakeUp = null
+    w?.()
+  }
+  const nap = (ms: number): Promise<void> =>
+    new Promise<void>((resolve) => {
+      wakeUp = resolve
+      void sleep(ms).then(() => {
+        if (wakeUp === resolve) wakeUp = null
+        resolve()
+      })
+    })
+  /** Subscribes every stream that has no connection, waiting out the reconnect backoff; ends only when every stream is
+   *  subscribed, gone, or the link closed. */
   let resubscribing = false
   const resubscribeAll = async (i: number): Promise<void> => {
     if (resubscribing) return
     resubscribing = true
     try {
       // After a drop, wait first: a connection that closes as soon as it is subscribed must not spin.
-      if (i > 0) await sleep(backoff(i - 1))
+      if (i > 0) await nap(backoff(i - 1))
       for (let tries = i; !closed && [...streams.values()].some((s) => s.on === null); tries++) {
         const link = await ensure()
         if (!(link instanceof RemoteError)) {
@@ -246,7 +309,13 @@ export function openRemoteLink(a: {
           }
           return
         }
-        await sleep(backoff(tries))
+        // A stream that never got a connection says so too (second pass RR-1): its tab showed nothing at all.
+        for (const s of streams.values())
+          if (s.on === null && !s.down) {
+            s.down = true
+            s.h.onLinkState?.('down')
+          }
+        await nap(backoff(tries))
       }
     } finally {
       resubscribing = false
@@ -276,6 +345,7 @@ export function openRemoteLink(a: {
     subscribe: (pty, h) => {
       const s: Stream = { id: `s${++streamN}`, pty, h, lastSeq: null, bootId: null, on: null }
       streams.set(s.id, s)
+      wake()
       void resubscribeAll(0)
       return () => {
         if (!streams.delete(s.id)) return
@@ -330,8 +400,8 @@ export function openRemoteLink(a: {
           continue
         }
         if (r === 'timeout') {
-          // A link that does not answer may be half-open (review I3): the next call opens a new one.
-          drop(link)
+          // The connection stays (second pass RR-8): one slow call closed it, resetting every stream on it. A link that is
+          // half-open is the heartbeat's to find (client.ts).
           return new RemoteError('REMOTE_TIMEOUT', `the Runtime did not answer ${cmd} within ${Math.round(timeoutMs / 1000)} s; it may still finish`)
         }
         // A retry that finds its own first attempt still running (§3.9: 409, naming this request) asks again until that
