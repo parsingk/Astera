@@ -2897,7 +2897,8 @@ describe('WorkUnitCollector — 줄인 읽기에서도 모름은 모름이다', 
 
 // An agent that edits and commits in one step (`git commit -am`) leaves nothing uncommitted for a
 // working-tree read to see. The completion paths also read startHead..HEAD, so that unit is kept.
-describe('WorkUnitCollector — work committed inside the unit is observed at completion', () => {
+// Real git, a dozen calls per case: the default 10 s ran out on a loaded Windows runner (CI 37703955681).
+describe('WorkUnitCollector — work committed inside the unit is observed at completion', { timeout: 30_000 }, () => {
   async function setupWithFake(run: GitRun = git, extra: Partial<CollectorDeps> = {}) {
     const repo = await makeRepo('astera-wu-committed-')
     const fake = makeFake()
