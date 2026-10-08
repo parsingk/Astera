@@ -43,7 +43,7 @@ const fakeProc = (): RegistryProc => ({ pid: 2, onLine: () => {}, onExit: () => 
 
 const accounts: Account[] = [{ id: 'acc1', label: 'Work', configDir: 'D:/acc1', color: '#000', createdAt: NOW, provider: 'claude' }]
 
-const rig = async (o: { held?: boolean } = {}) => {
+const rig = async (o: { held?: boolean; transcript?: string } = {}) => {
   const pty = fakePty()
   const ptys = new PtyRegistry({ spawn: () => pty as unknown as RegistryPty, log: () => {}, bootId: 'b' })
   const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
@@ -55,7 +55,8 @@ const rig = async (o: { held?: boolean } = {}) => {
     procs,
     sessions,
     holdersOf: () => (o.held ? [3] : []),
-    statusLinePayload: async () => null,
+    statusLinePayload: async () => (o.transcript ? { transcript_path: o.transcript, session_id: 'x' } : null),
+    accounts: async () => accounts,
     chats: {
       turnOf: () => null,
       requests: () => [],
@@ -153,5 +154,33 @@ describe('remote sessions through the Host (Phase 9a)', () => {
     const answer = { kind: 'question', answers: [] }
     expect(await h.ask('sessions-answer', { id: 'chat-1', request: 'r1', answer })).toMatchObject({ status: 200 })
     expect(h.answered).toEqual([['chat-1', 'r1', answer]])
+  })
+
+  // Task 3: a bounded, paged conversation read, in the page shape the app's conversation view takes.
+  it('sessions-conversation pages a transcript newest first, each turn once and in order', async () => {
+    const file = path.join(dir, 'transcript.jsonl')
+    const lines: string[] = []
+    for (let i = 0; i < 400; i++) {
+      lines.push(JSON.stringify({ type: 'user', uuid: `u${i}`, timestamp: NOW, message: { role: 'user', content: `question ${i} ${'q'.repeat(600)}` } }))
+      lines.push(JSON.stringify({ type: 'assistant', uuid: `a${i}`, timestamp: NOW, message: { role: 'assistant', content: [{ type: 'text', text: `answer ${i}` }] } }))
+    }
+    await fs.writeFile(file, lines.join(String.fromCharCode(10)) + String.fromCharCode(10), 'utf8')
+    const h = await rig({ transcript: file })
+    const pages: Array<{ turns: Array<{ id: string }>; from: number; more: boolean }> = []
+    let page = (await h.ask('sessions-conversation', { id: 'ses-1' }, 'read-only')).body as (typeof pages)[number]
+    pages.push(page)
+    while (page.more) {
+      page = (await h.ask('sessions-conversation', { id: 'ses-1', before: page.from }, 'read-only')).body as (typeof pages)[number]
+      pages.push(page)
+    }
+    expect(pages.length).toBeGreaterThan(1)
+    const ids = pages.reverse().flatMap((p) => p.turns.map((t) => t.id))
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.length).toBe(800)
+  })
+  it('a session with no conversation source reads as empty; an unknown id is 404', async () => {
+    const h = await rig()
+    expect(await h.ask('sessions-conversation', { id: 'ses-1' }, 'read-only')).toEqual({ status: 200, body: { turns: [], from: 0, more: false } })
+    expect((await h.ask('sessions-conversation', { id: 'nope' }, 'read-only')).status).toBe(404)
   })
 })

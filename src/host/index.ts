@@ -646,6 +646,7 @@ async function main(): Promise<void> {
       sessions: hostSessions,
       holdersOf: (ptyId) => exits?.holdersOf(ptyId) ?? [],
       statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
+      accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
       chats: rollingWiring?.chats ?? null
     }),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for

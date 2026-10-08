@@ -27,6 +27,7 @@ export const CONTROLLER_READ_COMMANDS = [
   'runs-timeline',
   // Phase 9a: a remote session's facts (remoteSessions.ts).
   'sessions-facts',
+  'sessions-conversation',
   'questions-list',
   'questions-get',
   'run-configs-list',

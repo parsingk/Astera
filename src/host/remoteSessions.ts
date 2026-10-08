@@ -4,6 +4,9 @@
 //
 // - `sessions-facts { id }`: status, the waiting prompt, usage and model with the source of each (sessionFacts.ts), and a
 //   chat's open requests.
+// - `sessions-conversation { id, before? }`: the conversation in the page shape the app's view takes (`turns`, `from`,
+//   `more`), read from the end of its file and bounded there (core/history/conversationRead.ts): a Claude terminal's
+//   transcript (its statusline names it), a Codex terminal's rollout, a chat's transcript or rollout.
 // - `sessions-input { id, data }`: raw bytes to the session's live pty, as a person's write.
 // - `sessions-resize { id, cols, rows }`: applied when no local app holds the pty, else answered `applied: false`
 //   (N17: a controller's resize must not change the terminal under the person at that machine).
@@ -16,11 +19,17 @@ import type { HostChats } from './hostChats'
 import type { HostSession } from '../core/orchestration/command'
 import type { ChatAnswer } from '../core/chat/types'
 import { createSessionFacts, type SessionFactsDeps } from './sessionFacts'
+import type { Account } from '../core/types'
+import { readConversationWindow } from '../core/history/conversationRead'
+import { reduceTranscript } from '../core/history/conversation'
+import { reduceCodexRollout } from '../core/history/codexConversation'
+import { extractStatusLineSession } from '../core/usage/statusline'
+import { findClaudeTranscript } from '../core/history/strategies/claude'
 
 /** The most one input carries: a paste, never a file. */
 export const SESSION_INPUT_MAX = 64 * 1024
 
-export const REMOTE_SESSION_READS: ReadonlySet<string> = new Set(['sessions-facts'])
+export const REMOTE_SESSION_READS: ReadonlySet<string> = new Set(['sessions-facts', 'sessions-conversation'])
 export const REMOTE_SESSION_CHANGES: ReadonlySet<string> = new Set(['sessions-input', 'sessions-resize', 'sessions-stop', 'sessions-answer'])
 
 type Reply = { status: number; body: unknown }
@@ -35,6 +44,8 @@ export interface RemoteSessionDeps {
   /** The local sockets that hold this pty (exits.ts `holdersOf`): a resize yields to them (N17). */
   holdersOf(ptyId: string): number[]
   statusLinePayload(sessionId: string): Promise<unknown | null>
+  /** The profile's accounts: a Claude chat's transcript lives under its account's folder. */
+  accounts(): Promise<Account[]>
   chats: (Pick<HostChats, 'turnOf' | 'requests' | 'chosenModelOf' | 'subscribe' | 'kill' | 'answerCard'>) | null
   readTail?: SessionFactsDeps['readTail']
 }
@@ -63,10 +74,55 @@ export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
   const find = async (id: unknown): Promise<HostSession | null> =>
     typeof id === 'string' && id !== '' ? ((await d.sessions.listSessions()).find((s) => s.id === id) ?? null) : null
 
+  const noteOf = (s: HostSession): Record<string, unknown> => {
+    if (s.ptyId) return (d.ptys.metaOf(s.ptyId)?.restore ?? {}) as Record<string, unknown>
+    const proc = d.procs.list().find((e) => e.id === s.procId)
+    return (proc?.meta?.restore ?? {}) as Record<string, unknown>
+  }
+  const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)
+  /** Where a session's conversation is written, and in which format; null when the Host cannot say. */
+  const sourceOf = async (s: HostSession): Promise<{ path: string; format: 'claude' | 'codex' } | null> => {
+    const note = noteOf(s)
+    if (s.kind === 'terminal') {
+      if (s.provider === 'codex') {
+        const p = str(note.rolloutPath)
+        return p ? { path: p, format: 'codex' } : null
+      }
+      if (s.provider !== 'claude') return null
+      const payload = await d.statusLinePayload(s.id).catch(() => null)
+      const p = payload ? extractStatusLineSession(payload).transcriptPath : null
+      return p ? { path: p, format: 'claude' } : null
+    }
+    if (s.provider === 'codex') {
+      const p = str(note.rolloutPath)
+      return p ? { path: p, format: 'codex' } : null
+    }
+    const threadId = str(note.threadId)
+    const account = (await d.accounts().catch(() => [] as Account[])).find((x) => x.id === s.accountId)
+    if (!threadId || !account) return null
+    const file = await findClaudeTranscript(account.configDir, threadId)
+    return file ? { path: file, format: 'claude' } : null
+  }
+
   const reads = async (cmd: string, args: Record<string, unknown>): Promise<Reply> => {
     if (typeof args.id !== 'string' || args.id === '') return bad(`${cmd} needs --id`)
-    const f = await facts.factsOf(args.id)
-    return f ? { status: 200, body: f } : notFound(args.id)
+    if (cmd === 'sessions-facts') {
+      const f = await facts.factsOf(args.id)
+      return f ? { status: 200, body: f } : notFound(args.id)
+    }
+    // sessions-conversation
+    const s = await find(args.id)
+    if (!s) return notFound(args.id)
+    if (args.before !== undefined && (typeof args.before !== 'number' || !Number.isInteger(args.before) || args.before < 0))
+      return bad('--before is a whole number from 0: an earlier page’s from')
+    const source = await sourceOf(s)
+    const empty = { status: 200, body: { turns: [], from: 0, more: false } }
+    if (!source) return empty
+    const window = await readConversationWindow(source.path, {
+      reduce: source.format === 'codex' ? reduceCodexRollout : reduceTranscript,
+      ...(args.before !== undefined ? { endAt: args.before as number } : {})
+    })
+    return window ? { status: 200, body: { turns: window.turns, from: window.from, more: window.more } } : empty
   }
 
   const changes = async (cmd: string, args: Record<string, unknown>, marked: () => void): Promise<Reply> => {
