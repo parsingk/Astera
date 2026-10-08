@@ -181,6 +181,9 @@
   el sitio, así que conserva su scrollback
 - La tipografía de la terminal se elige aparte, incluida la de reserva para texto CJK
 
+**Remote runtimes (Runtimes remotos)**
+Ejecuta sesiones y Jobs de Astera en otra máquina a través de tu propia LAN, VPN o conexión de Tailscale. El Runtime remoto se encarga de los agentes, los worktrees, las comprobaciones y la recuperación, así que el trabajo sigue aunque tu cliente se desconecte. No hace falta ningún relay ni servicio en la nube de Astera. Consulta [docs/remote-runtime.md](docs/remote-runtime.md).
+
 **Además**
 - Interfaz en coreano, inglés, japonés y español, más una opción System que sigue la configuración
   regional del sistema

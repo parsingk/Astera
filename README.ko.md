@@ -171,6 +171,9 @@
   그대로 남습니다
 - 터미널 폰트는 따로 고릅니다 — CJK 텍스트에 쓰이는 대체 폰트까지
 
+**Remote runtime (원격 Runtime)**
+내 LAN, VPN, Tailscale 연결로 다른 컴퓨터에서 Astera 세션과 Job 을 돌립니다. 에이전트, worktree, 검사, 복구는 그 Runtime 이 맡으므로 이쪽 연결이 끊겨도 작업은 계속됩니다. Astera 릴레이나 클라우드 서비스는 필요하지 않습니다. [docs/remote-runtime.md](docs/remote-runtime.md) 를 보세요.
+
 **그 외**
 - 한국어·영어·일본어·스페인어 UI, 그리고 OS 로케일을 따르는 System 옵션
 - GitHub Releases를 통한 자동 업데이트

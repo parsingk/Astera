@@ -175,6 +175,9 @@
   スクロールバックはそのまま残ります
 - ターミナルのフォントは別に選びます — CJK テキストに使われるフォールバックも含めて
 
+**Remote runtime(リモート Runtime)**
+自分の LAN、VPN、Tailscale の接続で、別のマシンで Astera のセッションと Job を動かします。エージェント、worktree、チェック、復旧はその Runtime が受け持つため、こちらの接続が切れても作業は続きます。Astera のリレーやクラウドサービスは不要です。[docs/remote-runtime.md](docs/remote-runtime.md) を参照してください。
+
 **そのほか**
 - 韓国語・英語・日本語・スペイン語の UI、および OS のロケールに従う System オプション
 - GitHub Releases からの自動更新

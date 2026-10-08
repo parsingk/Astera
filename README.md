@@ -198,6 +198,9 @@ what to check when an explanation is missing.
   it keeps its scrollback
 - The terminal font is chosen separately, including the fallback for CJK text
 
+**Remote runtimes**
+Run Astera Sessions and Jobs on another machine over your own LAN, VPN, or Tailscale connection. The remote Runtime owns the agents, worktrees, checks, and recovery, so work keeps going even if your client disconnects. No Astera relay or cloud service is required. See [docs/remote-runtime.md](docs/remote-runtime.md).
+
 **Also**
 - Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale
 - Auto-update from GitHub Releases
