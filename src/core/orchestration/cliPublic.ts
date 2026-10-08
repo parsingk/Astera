@@ -66,6 +66,8 @@ const RUN_FIELDS = [
   'createdAt',
   'coordinatorSessionId',
   'worktree',
+  // The git range its changed files are read over (Phase 10).
+  'git',
   'paused',
   // Public like the Job's own: a script can read who places this Run (U1, JobRun.autoDispatch).
   'autoDispatch'

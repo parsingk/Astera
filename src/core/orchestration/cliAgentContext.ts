@@ -146,6 +146,16 @@ const SESSION = {
     detail: 'It does not remove the worktrees afterwards.',
     flags: [RUN_ARG('<runId>', 'the run whose worktrees to merge')]
   },
+  'runs-git-record': {
+    summary: 'record the git range a run or one attempt worked over',
+    detail: 'The Host records it itself; anyone else is refused. One of --runId and --dispatchId, with --base or --head.',
+    flags: [
+      { name: 'runId', value: '<runId>', about: 'the run to record it on' },
+      { name: 'dispatchId', value: '<dispatchId>', about: 'the attempt to record it on' },
+      { name: 'base', value: '<sha>', about: 'where the work started; kept once set' },
+      { name: 'head', value: '<sha>', about: 'where the work stands now' }
+    ]
+  },
   'run-worktree-set': {
     summary: "record this run's worktree",
     flags: [

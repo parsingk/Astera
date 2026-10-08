@@ -184,6 +184,13 @@ export interface Job {
  *
  *  **id 는 옛 Run 의 것을 그대로 물려받는다** — Task.runId, 그 아래 Dispatch, 저널에 이미 적힌
  *  runId 가 전부 이것을 가리키고 있었다. 새 id 를 받는 것은 Job 쪽이다(설계 §5). */
+/** A commit range: `base` is where the work started (set once), `head` where it stands (moves with it). Absent fields
+ *  were not recorded yet, or the work predates Phase 10. */
+export interface GitRange {
+  base?: string
+  head?: string
+}
+
 export interface JobRun {
   id: string
   jobId: string
@@ -236,6 +243,9 @@ export interface JobRun {
    *  `cwd` 는 "속한 프로젝트이자 최종 병합 대상", 이 칸은 "일하는 자리" 다.
    *  둘을 함께 읽는 자리는 runRootOf(integrate.ts) 하나다. */
   worktree?: string
+  /** The git range this Run worked over (remote runtime design Phase 10): its base when it began and its head as it
+   *  moved, recorded by the Host, so its changed files and diffs outlive a reaped worktree. */
+  git?: GitRange
   /** 예약을 세울 때 이 회차도 함께 멈췄다.
    *
    *  **Job.paused 하나로 겸할 수 없다.** Dispatch 를 닫는 것만으로는 회차가 멈추지 않는다 — 닫힌
@@ -385,6 +395,8 @@ export interface Dispatch {
   workerState: WorkerState
   outcome?: Outcome
   endedAt?: string
+  /** The git range this attempt worked over in its `cwd`, recorded by the Host (remote runtime design Phase 10). */
+  git?: GitRange
   /** Who closed this Dispatch, when a person did. Absent means the worker ended on its own — it
    *  exited, it crashed, or the app went down under it.
    *

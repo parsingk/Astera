@@ -38,6 +38,8 @@ import {
   resumeSchedule,
   resumeRun,
   setRunWorktree,
+  recordRunGit,
+  recordDispatchGit,
   placedByApp,
   coordinatorStarting,
   type OrchState,
@@ -2499,6 +2501,22 @@ export async function handleCommand(
       // paused("세워 뒀다")를 걷는다 — 사람에게 다른 버튼이고 다른 상황이다(Run.paused 의 주석).
       // 하나로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 떴다.
       return commit(resumeSchedule(s, id))
+    }
+    // The git range a Run or one attempt worked over (remote runtime design Phase 10), which `runs-changed-files` and
+    // `runs-diff` read. **The Host's alone**: anyone else could point a Run's changed files at any commits.
+    case 'runs-git-record': {
+      if (caller.sessionId !== HOST_CALLER) return denied('runs-git-record is the Host’s own record')
+      const runId = str(args.runId)
+      const dispatchId = str(args.dispatchId)
+      if ((runId === null) === (dispatchId === null)) return bad('runs-git-record takes exactly one of runId and dispatchId')
+      const base = str(args.base) ?? undefined
+      const head = str(args.head) ?? undefined
+      if (base === undefined && head === undefined) return bad('runs-git-record needs a base or a head')
+      const patch = { ...(base !== undefined ? { base } : {}), ...(head !== undefined ? { head } : {}) }
+      const r: Res<unknown> = runId !== null ? recordRunGit(s, runId, patch) : recordDispatchGit(s, dispatchId!, patch)
+      // Nothing changed: no write, so a recorder that reads the same head twice costs no state version.
+      if (r.ok && r.state === s) return okBody(r.value)
+      return commit(r)
     }
     case 'run-worktree-set': {
       const id = str(args.run)

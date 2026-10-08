@@ -13,6 +13,7 @@ import {
   type Dispatch,
   type Gate,
   type GateKind,
+  type GitRange,
   type Message,
   type MessageType,
   type Outcome,
@@ -466,6 +467,34 @@ export function resumeRun(s: OrchState, runId: string): Res<JobRun> {
   if (!run.paused) return ok(s, run)
   const { paused: _drop, coordinatorStopPending: _stop, ...resumed } = run
   return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? resumed : r)) }, resumed)
+}
+
+/** The range with `patch` applied: a base is kept once set, a head replaces. Null when nothing changes. */
+function nextRange(cur: GitRange | undefined, patch: GitRange): GitRange | null {
+  const next: GitRange = { ...cur }
+  if (patch.base !== undefined && next.base === undefined) next.base = patch.base
+  if (patch.head !== undefined) next.head = patch.head
+  return next.base === cur?.base && next.head === cur?.head ? null : next
+}
+
+/** Records the git range a Run worked over (Phase 10). An unchanged record answers the same state. */
+export function recordRunGit(s: OrchState, runId: string, patch: GitRange): Res<JobRun> {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return gone(`unknown run: ${runId}`)
+  const git = nextRange(run.git, patch)
+  if (git === null) return ok(s, run)
+  const next = { ...run, git }
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? next : r)) }, next)
+}
+
+/** Records the git range one attempt worked over in its `cwd` (Phase 10). */
+export function recordDispatchGit(s: OrchState, dispatchId: string, patch: GitRange): Res<Dispatch> {
+  const d = s.dispatches.find((x) => x.id === dispatchId)
+  if (!d) return gone(`unknown dispatch: ${dispatchId}`)
+  const git = nextRange(d.git, patch)
+  if (git === null) return ok(s, d)
+  const next = { ...d, git }
+  return ok({ ...s, dispatches: s.dispatches.map((x) => (x.id === dispatchId ? next : x)) }, next)
 }
 
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {
