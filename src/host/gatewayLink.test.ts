@@ -313,8 +313,12 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
       pause: () => {},
       resume: () => {}
     }
-    const registry = new PtyRegistry({ spawn: () => pty, log: () => {}, bootId: 'boot-1' })
-    registry.open({ id: 'p1', file: 'sh', args: [], opts: { cwd: 'D:/p', cols: 40, rows: 5, env: {} } })
+    // p1 is the pty the tests drive; the shell tab gets one of its own that says nothing.
+    let spawned = 0
+    const registry = new PtyRegistry({ spawn: () => (spawned++ === 0 ? pty : { ...pty, onData: () => {}, onExit: () => {} }), log: () => {}, bootId: 'boot-1' })
+    registry.open({ id: 'p1', file: 'sh', args: [], opts: { cwd: 'D:/p', cols: 40, rows: 5, env: {} }, meta: { kind: 'session', id: 's1', restore: {} } })
+    // A plain shell tab of the person's own, which no controller is shown (security audit SEC-7).
+    registry.open({ id: 'shell', file: 'sh', args: [], opts: { cwd: 'D:/p', cols: 40, rows: 5, env: {} }, meta: { kind: 'terminal', id: 't1', restore: {} } })
     return { registry, emit: (d: string) => emit(d), exit: (c: number) => exit({ exitCode: c }) }
   }
   const ready = async (o: { streamPerKey?: number } = {}) => {
@@ -331,6 +335,15 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
    *  runner takes far longer than 20 ms to do (Windows CI, 2026-10-08). */
   const eventually = (check: () => void): Promise<void> => vi.waitFor(check, { timeout: 10_000, interval: 10 })
 
+  // Security audit SEC-7: any pty was streamed to any signed-in controller that named its id, the person's own shell tabs
+  // and Run consoles included. A controller reads sessions; anything else is as unknown as a pty that does not exist.
+  it('a pty that is not a session is not streamed, and is answered as unknown', async () => {
+    const s = await ready()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's9', pty: 'shell' })
+    await eventually(() => expect(of(s.frames, 'sub-error')).toHaveLength(1))
+    expect(of(s.frames, 'sub-error')[0]).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
+    expect(of(s.frames, 'subscribed')).toEqual([])
+  })
   it('a read-only controller subscribes: subscribed, then a checkpoint with the gap, then live output', async () => {
     const s = await ready()
     s.emit('before')
@@ -447,7 +460,7 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
   // Phase 8 review M5: a terminal that cannot catch up with the output is not "no such pty": the stream ends with a gap
   // and the controller subscribes again.
   it('a replay that stays behind the output ends the stream with output-gap, never RUNTIME_NOT_FOUND', async () => {
-    const ptys = { bootId: 'b', onEvent: () => () => {}, replayFrom: async () => 'behind' as const }
+    const ptys = { bootId: 'b', onEvent: () => () => {}, replayFrom: async () => 'behind' as const, metaOf: () => ({ kind: 'session' }) }
     const s = await setup({ ptys: ptys as never })
     const c = await s.pairClient('read-only')
     s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
@@ -466,7 +479,8 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     const ptys = {
       bootId: 'b',
       onEvent: (cb: typeof tell) => ((tell = cb), () => {}),
-      replayFrom: () => new Promise((r) => (finish = r))
+      replayFrom: () => new Promise((r) => (finish = r)),
+      metaOf: () => ({ kind: 'session' })
     }
     const s = await setup({ ptys: ptys as never, streamPerKey: 1_000 })
     const c = await s.pairClient('read-only')

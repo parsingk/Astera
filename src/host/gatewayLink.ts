@@ -55,7 +55,7 @@ export function attachGatewayLink(o: {
   onHardCap(): void
   hardCap?: number
   /** The pty registry, for subscriptions (§3.7). Absent: a subscription is refused as a missing capability. */
-  ptys?: Pick<PtyRegistry, 'replayFrom' | 'onEvent' | 'bootId'>
+  ptys?: Pick<PtyRegistry, 'replayFrom' | 'onEvent' | 'bootId' | 'metaOf'>
   /** The stream budgets, for tests; LINK_STREAM_MAX and LINK_OUTPUT_MAX otherwise. */
   streamPerKey?: number
   streamTotal?: number
@@ -217,6 +217,9 @@ export function attachGatewayLink(o: {
         const refuse = (code: string, message: string): void => send({ t: 'sub-error', conn: f.conn, sub: f.sub, code, message })
         if (!o.controllers.principalFor(o.linkGen, f.conn)) return refuse('RUNTIME_AUTH_FAILED', 'this connection is not authenticated')
         if (!o.ptys) return refuse('RUNTIME_CAPABILITY_MISSING', 'this Runtime does not stream pty output')
+        // Sessions only (security audit SEC-7, §4.8): the person's own shell tabs, Run consoles and checks are not a
+        // controller's to read, and are answered as a pty that does not exist.
+        if (o.ptys.metaOf(f.pty)?.kind !== 'session') return refuse('RUNTIME_NOT_FOUND', `no pty ${f.pty} on this Runtime (or its output is no longer kept)`)
         const key = keyOf(f.conn, f.sub)
         // The same id again replaces the old subscription (a resubscribe after a gap).
         if (subs.has(key)) dropSub(key)

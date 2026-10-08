@@ -931,6 +931,17 @@ describe('pairing and clients (local only)', () => {
     const revoked = await orch.call({ cmd: 'clients-revoke', args: { id: got.clientId }, sessionId: '', from: cli })
     expect(revoked.body).toMatchObject({ revoked: true })
   })
+  // Security audit SEC-10: an agent session's CLI is role `cli` too, so an agent talked into it could open this machine
+  // to the network and hand out a full-control code. These are for a person at their own shell or in the app.
+  it('refuses pair-create, runtime-reload and projects-add to a CLI inside an agent session', async () => {
+    const orch = orchOver({ controllers: createControllerRegistry(), gateway: { reload: async () => {}, status: () => ({ state: 'off' }) as never } })
+    for (const cmd of ['pair-create', 'runtime-reload', 'projects-add']) {
+      const r = await orch.call({ cmd, args: {}, sessionId: 'sess-agent', from: cli })
+      expect(r.status).toBe(403)
+      expect(JSON.stringify(r.body)).toContain('own shell')
+    }
+    expect((await orch.call({ cmd: 'pair-create', args: {}, sessionId: '', from: cli })).status).toBe(200)
+  })
   it('pair-create refuses a permission it does not know rather than granting full control', async () => {
     const orch = orchOver({ controllers: createControllerRegistry() })
     const r = await orch.call({ cmd: 'pair-create', args: { permission: 'readonly' }, sessionId: '', from: cli })

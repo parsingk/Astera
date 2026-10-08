@@ -9,6 +9,7 @@ import { isOnlyTerminalReports } from '../core/terminal/reports'
 import { randomBytes } from 'node:crypto'
 // The ring and the live terminal (remote runtime design §3.7): the terminal loads @xterm/headless lazily.
 import { createPtyRing, type PtyEvent, type PtyRing } from './ptyRing'
+import { redactSecrets } from '../core/remote/redact'
 import { createLiveTerminal, type LiveTerminal, type PtyCheckpoint } from './liveTerminal'
 import type { SessionScreen } from '../core/orchestration/command'
 
@@ -24,6 +25,10 @@ const LAST_SCREEN_CHARS = 400
  *  nothing at all), because it bundles into the Host's own
  *  executable; pulling in the rolling module to save four lines would drag its detection machinery
  *  along with it. That is the same reason `PtyOpenOptions` repeats fields instead of importing them. */
+/** How soon after its start a bad exit still logs its last screen (security audit SEC-8): the failure as it starts that
+ *  the line exists for. Later, a session's screen is the person's work, and terminal output is never logged (§4.7). */
+export const LAST_SCREEN_WITHIN_MS = 30_000
+
 function lastScreen(buffer: string): string {
   const text = buffer
     // CSI and the OSC title sequences a TUI writes constantly; enough to make the line readable,
@@ -292,6 +297,7 @@ export class PtyRegistry {
       treeKillSent: false
     }
     this.entries.set(a.id, entry)
+    const openedAt = this.now()
     this.sweepExited()
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail. **Only while
@@ -314,7 +320,8 @@ export class PtyRegistry {
       // whether the command was not found, refused to run, or printed something and gave up.
       // Only an unclean exit: a 0 is the ordinary end of a session, and its screen belongs to the
       // person who was reading it, not to a log that outlives them.
-      if (exitCode !== 0) this.deps.log(`pty ${a.id} last screen: ${lastScreen(entry.ring?.text() ?? '')}`)
+      if (exitCode !== 0 && this.now() - openedAt <= LAST_SCREEN_WITHIN_MS)
+        this.deps.log(`pty ${a.id} last screen: ${redactSecrets(lastScreen(entry.ring?.text() ?? ''))}`)
       // The scrollback goes with the session. The Host outlives the app, so an entry kept for the rest
       // of the Host's life is a quarter of a million characters kept for the rest of the Host's life,
       // and a project that runs a build every minute would leave a great many of them. The entry

@@ -80,7 +80,8 @@ async function runtime(o: { scrollback?: number; now?: () => number } = {}) {
     resume: () => {}
   }
   const registry = new PtyRegistry({ spawn: () => pty, log: () => {}, bootId: 'boot-p8', ...(o.scrollback ? { scrollback: o.scrollback } : {}), ...(o.now ? { now: o.now } : {}) })
-  registry.open({ id: 'p1', file: 'sh', args: [], opts: { cwd: '.', cols: 40, rows: 8, env: {} } })
+  // A session's pty: a controller streams sessions only (security audit SEC-7).
+  registry.open({ id: 'p1', file: 'sh', args: [], opts: { cwd: '.', cols: 40, rows: 8, env: {} }, meta: { kind: 'session', id: 's1', restore: {} } })
   const reference = new Terminal({ cols: 40, rows: 8, scrollback: TERMINAL_SCROLLBACK, allowProposedApi: true })
   let refChain = Promise.resolve()
   const controllers = createControllerRegistry()

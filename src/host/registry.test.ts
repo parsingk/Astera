@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
+import { LAST_SCREEN_WITHIN_MS, PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, ENDED_SESSION_CODES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, EXITED_TERMINAL_BYTES, type PtyReplay, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
 import { RING_EVENT_COST } from './ptyRing'
 
@@ -496,6 +496,29 @@ describe('the last screen of a session that ended badly', () => {
     expect(logs.some((l) => l.includes('last screen'))).toBe(false)
   })
 
+  // Security audit SEC-8: terminal output is never logged (§4.7), and a session's screen can hold what the person typed
+  // or printed. The line exists for a session that fails as it starts; a session that ran a while and then ended badly
+  // logs its code only, and what is logged passes through redactSecrets.
+  it('logs no screen for a session that ran past its start before it ended badly', () => {
+    const p = fakePty()
+    let t = 1_000_000
+    const logs: string[] = []
+    const r = new PtyRegistry({ spawn: () => p, log: (m) => logs.push(m), now: () => t })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit('my private work\n')
+    t += LAST_SCREEN_WITHIN_MS + 1
+    p.exit(1)
+    expect(logs.some((l) => l.includes('last screen'))).toBe(false)
+    expect(logs.join('\n')).not.toContain('my private work')
+  })
+  it('passes the screen it logs through redactSecrets', () => {
+    const p = fakePty()
+    const { r, logs } = registry({ pty: p })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit(`token=${'a'.repeat(43)}\n`)
+    p.exit(1)
+    expect(logs.find((l) => l.includes('last screen'))).toContain('[redacted]')
+  })
   it('says so when the session ended badly with nothing on screen', () => {
     const p = fakePty()
     const { r, logs } = registry({ pty: p })

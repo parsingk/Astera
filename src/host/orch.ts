@@ -242,6 +242,14 @@ const isUnitShaped = (u: unknown): u is SessionWorkUnit => {
 }
 
 /** The app's calls into the Host's session work units (E2 §5), answered above the receipt line. */
+/** A CLI run inside an agent session Astera started (security audit SEC-10): `ASTERA_SESSION` is set. Opening this
+ *  machine to the network and handing out a pairing are for a person at their own shell or in the app, so an agent
+ *  talked into it is refused. A speed bump, not a wall: an agent that clears the variable reads as a shell, as with every
+ *  role check in this CLI. */
+const agentShell = (from: OrchCaller | undefined, sessionId: string): boolean => from?.role === 'cli' && sessionId !== ''
+const AGENT_REFUSAL = (cmd: string): string =>
+  `${cmd} is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)`
+
 const WORK_UNITS_CALLS: ReadonlySet<string> = new Set([
   'work-units-fork',
   'work-units-reload',
@@ -1747,6 +1755,7 @@ export function createHostOrch(a: {
         // `stop` write remote-runtime.json and then ask for a reload; `status` reads. The link never routes these.
         if (cmd === 'runtime-reload' || cmd === 'runtime-status') {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
+          if (cmd === 'runtime-reload' && agentShell(from, sessionId)) return { status: 403, body: { error: AGENT_REFUSAL(cmd) } }
           if (!a.gateway) return { status: 501, body: { error: 'this Host does not run the Remote Gateway' } }
           if (cmd === 'runtime-reload') await a.gateway.reload({ now: true })
           return {
@@ -1756,6 +1765,7 @@ export function createHostOrch(a: {
         }
         if (cmd === 'pair-create' || cmd === 'clients-list' || cmd === 'clients-revoke') {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
+          if (cmd === 'pair-create' && agentShell(from, sessionId)) return { status: 403, body: { error: AGENT_REFUSAL(cmd) } }
           if (!a.controllers) return { status: 501, body: { error: 'this Host pairs no remote controllers' } }
           if (cmd === 'pair-create') {
             // An unknown level is refused, not widened: the gate denies one, so pairing must not grant one.
@@ -1856,6 +1866,10 @@ export function createHostOrch(a: {
         if (cmd === 'projects-add') {
           if (from?.role !== 'app' && from?.role !== 'cli') {
             const refused = { status: 403, body: { error: 'projects-add is for this machine’s app and CLI only' } }
+            return claimed === null ? refused : settleRequest(claimed, cmd, marks, refused)
+          }
+          if (agentShell(from, sessionId)) {
+            const refused = { status: 403, body: { error: AGENT_REFUSAL(cmd) } }
             return claimed === null ? refused : settleRequest(claimed, cmd, marks, refused)
           }
           const p = args.path
