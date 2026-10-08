@@ -832,6 +832,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .remote-session-list button:hover { background: var(--elevated); }
 .remote-session-name { color: var(--text); }
 .remote-session-meta { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.remote-sessions-new { margin: 14px 0 6px; padding-top: 12px; border-top: 1px solid var(--line-soft); font-size: 13px; font-weight: 600; color: var(--text); }
 .remote-chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--text-dim); }
 .remote-chat-spacer { flex: 1; }
 .remote-chat-status.is-waiting { color: var(--warn); }

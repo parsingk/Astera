@@ -151,7 +151,7 @@ export function RemoteSessionsDialog({
           )}
         </div>
 
-        <h3>{t('remote.sessions.new')}</h3>
+        <h3 className="remote-sessions-new">{t('remote.sessions.new')}</h3>
         {readOnly && <p className="modal-hint">{t('remote.sessions.readOnly')}</p>}
         <div className="field kind-field">
           <label>{t('session.new.kindLabel')}</label>
@@ -195,7 +195,7 @@ export function RemoteSessionsDialog({
         </div>
         <div className="field">
           <label>{t('remote.sessions.sessionTitle')}</label>
-          <input value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} />
+          <input type="text" value={title} disabled={readOnly} onChange={(e) => setTitle(e.target.value)} />
         </div>
         <div className="field">
           <label>{t('remote.sessions.prompt')}</label>
