@@ -5,19 +5,9 @@
 import { createHash } from 'node:crypto'
 import { git } from '../worktrees/git'
 import type { GitRun } from './range'
+import type { ChangedFile } from './changedFile'
 
-export interface ChangedFile {
-  /** Stable for the same change in the same range: what `runs-diff` takes. */
-  id: string
-  path: string
-  /** A rename's source. */
-  oldPath?: string
-  status: 'added' | 'modified' | 'deleted' | 'renamed'
-  additions?: number
-  deletions?: number
-  /** git counts no lines in it, and its diff says only that it differs. */
-  binary?: true
-}
+export type { ChangedFile } from './changedFile'
 
 /** A diff past this is cut at a line and marked truncated: the reply crosses the link whole. */
 export const DIFF_MAX_BYTES = 1024 * 1024

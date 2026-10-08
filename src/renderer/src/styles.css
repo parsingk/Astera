@@ -2396,6 +2396,27 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detail-completion { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
 .detail-completion-head { align-self: flex-start; background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
 .detail-completion-head:hover { text-decoration: underline; background: none; }
+.changed-files-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.changed-files-list > li > button { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; text-align: left; font-size: 12px; }
+.changed-files-list > li > button:hover, .changed-files-list > li > button.is-open { background: var(--elevated); }
+.changed-file-status { flex: 0 0 auto; min-width: 56px; color: var(--text-dim); }
+.changed-file-status.is-added { color: var(--success, #3fb950); }
+.changed-file-status.is-deleted { color: var(--danger); }
+.changed-file-status.is-renamed { color: var(--accent); }
+.changed-file-path { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text); font-family: var(--font-mono, monospace); }
+.changed-file-from { margin-left: 6px; color: var(--text-dim); }
+.changed-file-counts { flex: 0 0 auto; color: var(--text-dim); font-family: var(--font-mono, monospace); }
+.changed-file-diff { margin: 4px 0 8px; }
+.changed-files-reported-head { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); }
+.changed-files-reported { margin: 0; padding-left: 18px; font-size: 12px; font-family: var(--font-mono, monospace); color: var(--text); }
+.diff-view { max-height: 480px; overflow: auto; border: 1px solid var(--line-soft); border-radius: 6px; background: var(--bg); }
+.diff-table { border-collapse: collapse; width: 100%; font-family: var(--font-mono, monospace); font-size: 12px; }
+.diff-row td { padding: 0 6px; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diff-no { width: 1%; min-width: 36px; text-align: right; color: var(--text-faint); user-select: none; white-space: nowrap !important; }
+.diff-add { background: rgba(63, 185, 80, 0.15); }
+.diff-del { background: rgba(248, 81, 73, 0.15); }
+.diff-hunk td { color: var(--accent); background: var(--elevated); }
+.diff-meta td { color: var(--text-dim); }
 .detail-completion-checks, .detail-completion-issues, .detail-completion-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
 .detail-completion-checks > li, .detail-completion-issues > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .detail-completion-name { font-weight: 600; }

@@ -24,6 +24,7 @@ import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
 import { replyNote, type OrchDoor } from '../lib/orchDoor'
 import { confirmModal } from '../lib/confirm'
+import { ChangedFilesBlock } from './ChangedFilesBlock'
 import { CompletionBlock } from './CompletionBlock'
 import { toast } from '../lib/toast'
 import { errText } from '../hooks/useFileOps'
@@ -1081,6 +1082,9 @@ export function RunDetail({
                 {selectedTask && (
                   <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} runtimeId={runtimeId} />
                 )}
+                {/* What the Task, or with none chosen the whole Run, changed (Phase 10): from git where the Run lives,
+                    beside what its workers reported. */}
+                <ChangedFilesBlock door={door} runId={runId} {...(selectedTask ? { taskId: selectedTask.id } : {})} />
                 <JournalBusy journal={detail?.journal} />
                 <div className="detail-list">
                   {/* 목록은 오래된 것이 위다 — 더 오래된 저널 줄을 부르는 자리도 맨 위다 */}
