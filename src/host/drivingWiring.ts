@@ -44,6 +44,8 @@ export interface HostDrivingWiring {
     driverStatus(): { driver: Driver; appAttached: boolean }
     validationStop(runId: string): boolean
     dispatchTask(taskId: string): Promise<{ status: number; body: unknown }>
+    /** The armed schedules' next fire times, for `jobs-view` (remote runtime design Phase 6). */
+    nextFireOf(runId: string): number | null
     /** The Host's own recovery (remote runtime design §2.6): `onDispatchLost` while it owns recovery. */
     recovery: HostRecovery
   }
@@ -192,6 +194,7 @@ export function composeHostDriving(a: {
     driving,
     orchHooks: {
       recovery,
+      nextFireOf: (runId) => driving.nextFireOf(runId),
       // False from dispose on (review of Task 13, I1): `driving.drives()` keeps the last driver, and a
       // leaving Host must start none of the three.
       drive: { owns: () => !disposed && driving.drives(), checks },

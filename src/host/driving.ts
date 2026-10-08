@@ -79,6 +79,8 @@ export interface HostDriving {
   /** `tasks dispatch` (CLI spec §18): one ready Task placed now by this Host's loop (`dispatchOne`),
    *  after any handover in progress. 409 when this Host does not drive, naming who does. */
   dispatchOne(taskId: string): Promise<{ status: number; body: unknown }>
+  /** When a scheduled Job's template fires next (epoch ms), or null: the loop's own arming, for `jobs-view`. */
+  nextFireOf(runId: string): number | null
   dispose(): void
 }
 
@@ -587,6 +589,7 @@ export function createHostDriving(d: {
       await handover
       return loop.dispatchOne(taskId)
     },
+    nextFireOf: (runId) => loop.nextFireOf(runId),
     dispose: () => {
       stop()
       grace.dispose()

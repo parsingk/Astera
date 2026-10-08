@@ -4,6 +4,8 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { stat } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
 import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -438,7 +440,9 @@ export function createHostOrch(a: {
    *  `worktree-*` names, answered on this side of the request-receipt line because none of them goes
    *  through `handleCommand` (R1: the app is their only caller). Absent exactly when there is no
    *  spawner (R5): with no spawner nothing built here ever reaches `worktrees`, so the four answer 501. */
-  worktrees?: Pick<HostWorktrees, 'call'> & Partial<Pick<HostWorktrees, 'isRegistered'>>
+  worktrees?: Pick<HostWorktrees, 'call'> & Partial<Pick<HostWorktrees, 'isRegistered' | 'list'>>
+  /** The next fire time of a scheduled Job's armed template (the driving's loop), for `jobs-view`. Absent: none. */
+  nextFireOf?(runId: string): number | null
   /** Paired remote controllers (src/host/controllers.ts, remote runtime design §3.3). Absent: this Host pairs nobody,
    *  and `pair-create`, `clients-list` and `clients-revoke` answer 501. */
   controllers?: ControllerRegistry
@@ -1542,6 +1546,8 @@ export function createHostOrch(a: {
         if (
           (cmd === 'state-put' ||
             cmd === 'state-get' ||
+            cmd === 'jobs-view' ||
+            cmd === 'runs-timeline' ||
             cmd === 'validation-stop' ||
             cmd === 'roll-state' ||
             cmd === 'roll-force' ||
@@ -1572,6 +1578,19 @@ export function createHostOrch(a: {
         // `jobs-list` and its neighbours, so a refusal here would be a new one nobody needs. The half
         // of it that is not a read — the boot findings — is the app's alone, inside.
         if (cmd === 'state-get') return await stateGet(args, from)
+        // **A remote Jobs view's two reads** (remote runtime design Phase 6, X1-05): folded and paged here, with this
+        // Runtime's own path rules and facts, so a controller never folds with its own. Read only; anyone may ask.
+        if (cmd === 'jobs-view' || cmd === 'runs-timeline') {
+          await ready()
+          const facts: RuntimeFacts = {
+            aliveSessionIds: a.aliveSessionIds(),
+            worktrees: a.worktrees?.list?.() ?? [],
+            nextFireOf: (id) => a.nextFireOf?.(id) ?? null,
+            exists: (p) => existsSync(p),
+            journalTimeline: (id, st) => a.journal?.timeline(id, st) ?? []
+          }
+          return cmd === 'jobs-view' ? jobsViewOf(store.get(), args.project, facts) : runsTimelineOf(store.get(), args, facts)
+        }
         // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of
         // the four `worktree-*` names goes through `handleCommand` — the app is their only caller
         // (`HostWorktrees.call` itself checks `from?.role === 'app'`) — so a Host too old to own

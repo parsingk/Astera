@@ -22,6 +22,9 @@ export const CONTROLLER_READ_COMMANDS = [
   // Long-poll reads (Phase 4 ruling): §3.1 counts them among a connection's in-flight calls.
   'runs-wait',
   'jobs-wait',
+  // Phase 6: a remote Jobs view's own reads, folded and paged on the Runtime (X1-05).
+  'jobs-view',
+  'runs-timeline',
   'questions-list',
   'questions-get',
   'run-configs-list',
