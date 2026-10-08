@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NO_COORDINATOR_ANSWER, unattendedQuestions, unreadUpwardMail } from './inbox'
+import { NO_COORDINATOR_ANSWER, NUDGE_AGAIN_MS, planNudges, type NudgeMemo, unattendedQuestions, unreadUpwardMail } from './inbox'
 import { emptyState, type OrchState } from './state'
 import type { Dispatch, Message } from './types'
 import { stateFromLegacy } from './legacyState'
@@ -130,6 +130,31 @@ describe('unattendedQuestions', () => {
   })
 })
 
+// Audit OR-2: nothing remembered a nudge, so an unread batch was typed into the coordinator every 15 s for as long as it
+// stayed unread. A nudge for the same messages waits longer each time; new mail is nudged at once.
+describe('planNudges', () => {
+  const m = (ids: string[], sessionId = 'coord1') => ({ runId: 'run_1', sessionId, messageIds: ids })
+  it('nudges a batch once, then again only after a growing wait, and at once when new mail arrives', () => {
+    let memo = new Map<string, NudgeMemo>()
+    const at = (t: number, mail: ReturnType<typeof m>[]) => {
+      const r = planNudges(mail, memo, t)
+      memo = r.memo
+      return r.due.map((d) => d.sessionId)
+    }
+    expect(at(0, [m(['a'])])).toEqual(['coord1'])
+    expect(at(15_000, [m(['a'])])).toEqual([])
+    expect(at(NUDGE_AGAIN_MS[0] - 1, [m(['a'])])).toEqual([])
+    expect(at(NUDGE_AGAIN_MS[0], [m(['a'])])).toEqual(['coord1'])
+    expect(at(NUDGE_AGAIN_MS[0] + NUDGE_AGAIN_MS[1] - 1, [m(['a'])])).toEqual([])
+    expect(at(NUDGE_AGAIN_MS[0] + NUDGE_AGAIN_MS[1], [m(['a'])])).toEqual(['coord1'])
+    expect(at(NUDGE_AGAIN_MS[0] + NUDGE_AGAIN_MS[1] + 1, [m(['a', 'b'])])).toEqual(['coord1'])
+  })
+  it('forgets a session with nothing unread', () => {
+    const r1 = planNudges([m(['a'])], new Map(), 0)
+    expect(planNudges([], r1.memo, 1).memo.size).toBe(0)
+  })
+})
+
 describe('unreadUpwardMail', () => {
   const T0 = Date.parse(NOW)
   const STALE = 60_000
@@ -157,6 +182,13 @@ describe('unreadUpwardMail', () => {
     expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([])
   })
 
+  // Audit OR-2: a coordinator stopped at its account's limit was typed into every 15 s for hours, and an Enter there can
+  // accept the highlighted choice of the limit dialog. Its Run waits for the roll, not for a nudge.
+  it('한도로 멈춘 코디네이터는 깨우지 않는다', () => {
+    const s0 = state({ runs: [withCoord()], messages: [mail()] })
+    const s = { ...s0, runs: s0.runs.map((r) => ({ ...r, coordinatorStop: { since: NOW } })) }
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([])
+  })
   it('코디네이터가 없는 Run 은 깨울 대상이 없다', () => {
     const s = state({ runs: [run()], messages: [mail()] })
     expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([])

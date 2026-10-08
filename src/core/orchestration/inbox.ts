@@ -89,20 +89,60 @@ export function unreadUpwardMail(
   s: OrchState,
   a: { nowMs: number; staleMs: number }
 ): { runId: string; sessionId: string; messageIds: string[] }[] {
+  // The messages grouped by Run once (audit OR-2): filtering every message per Run cost Runs × messages a tick.
+  const byRun = new Map<string, string[]>()
+  for (const m of s.messages) {
+    if (m.type === 'heartbeat' || m.ackedAt !== undefined || Date.parse(m.createdAt) > a.nowMs - a.staleMs) continue
+    const ids = byRun.get(m.runId)
+    if (ids) ids.push(m.id)
+    else byRun.set(m.runId, [m.id])
+  }
   const out: { runId: string; sessionId: string; messageIds: string[] }[] = []
   for (const run of s.runs) {
     const sessionId = run.coordinatorSessionId
     if (sessionId === undefined) continue
-    const messageIds = s.messages
-      .filter(
-        (m) =>
-          m.runId === run.id &&
-          m.type !== 'heartbeat' &&
-          m.ackedAt === undefined &&
-          Date.parse(m.createdAt) <= a.nowMs - a.staleMs
-      )
-      .map((m) => m.id)
-    if (messageIds.length > 0) out.push({ runId: run.id, sessionId, messageIds })
+    // Stopped at its account's limit (audit OR-2): it waits for the roll, and an Enter typed now can accept the limit
+    // dialog's highlighted choice, the risk rolling keeps away from it.
+    if (run.coordinatorStop) continue
+    const messageIds = byRun.get(run.id)
+    if (messageIds) out.push({ runId: run.id, sessionId, messageIds })
   }
   return out
+}
+
+/** The waits before the same unread messages are nudged about again (audit OR-2); the last repeats. */
+export const NUDGE_AGAIN_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000]
+
+/** What was nudged last per coordinator session: the messages, when, and how many times for these. */
+export interface NudgeMemo {
+  ids: string
+  at: number
+  times: number
+}
+
+/** The sessions to nudge now, and the memory to keep (audit OR-2). New mail is nudged at once; the same mail again only
+ *  after a wait that grows; a session with nothing unread is forgotten. */
+export function planNudges<T extends { sessionId: string; messageIds: string[] }>(
+  mail: T[],
+  memo: ReadonlyMap<string, NudgeMemo>,
+  now: number
+): { due: T[]; memo: Map<string, NudgeMemo> } {
+  const next = new Map<string, NudgeMemo>()
+  const due: T[] = []
+  for (const m of mail) {
+    const ids = [...m.messageIds].sort().join(',')
+    const before = memo.get(m.sessionId)
+    const fresh = !before || before.ids !== ids || ids.split(',').some((id) => !before.ids.split(',').includes(id))
+    if (fresh) {
+      due.push(m)
+      next.set(m.sessionId, { ids, at: now, times: 1 })
+      continue
+    }
+    const wait = NUDGE_AGAIN_MS[Math.min(before.times - 1, NUDGE_AGAIN_MS.length - 1)]
+    if (now - before.at >= wait) {
+      due.push(m)
+      next.set(m.sessionId, { ids, at: now, times: before.times + 1 })
+    } else next.set(m.sessionId, before)
+  }
+  return { due, memo: next }
 }

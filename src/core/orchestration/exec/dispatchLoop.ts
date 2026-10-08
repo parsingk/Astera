@@ -24,7 +24,7 @@ import { providerOf } from '../../providers/meta'
 import type { Account } from '../../types'
 import { nameForRun, nameForTask } from '../../worktrees/naming'
 import { firesDue } from '../fire'
-import { NO_COORDINATOR_ANSWER, unattendedQuestions, unreadUpwardMail } from '../inbox'
+import { NO_COORDINATOR_ANSWER, planNudges, type NudgeMemo, unattendedQuestions, unreadUpwardMail } from '../inbox'
 import {
   buildIntegrationSpec,
   integrationTaskFor,
@@ -1003,19 +1003,44 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *  선택지를 승인해 버린다 — 롤링이 같은 위험을 훅 알림으로 막는다(claudeCoordinator.ts 의 onHookEvent).
    *  훅이 아니라 바쁨으로 막는 것은 더 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
    *  있으면 이 가드는 새어 나간다. 그 경우를 실측한 적은 없다. */
+  /** What each coordinator was last nudged about (audit OR-2), and whether a nudge pass is running: two ticks that
+   *  overlapped typed the same line twice. */
+  let nudgeMemo = new Map<string, NudgeMemo>()
+  let nudging = false
   const nudgeSleepingCoordinators = async (): Promise<void> => {
+    if (nudging) return
+    nudging = true
+    try {
+      await nudgePass()
+    } finally {
+      nudging = false
+    }
+  }
+  const nudgePass = async (): Promise<void> => {
     if (!c.mayStart()) return
     // 타이머 쪽의 정리(L1, L2) — 앱은 커밋 때만 pass 를 돌리므로, 커밋 없이 때가 온 재시도와 낡은
     // 표시는 이 틱이 맡는다. tidyCoordinators 는 던지지 않는다.
     await tidyCoordinators()
     if (!c.mayStart()) return
-    for (const m of unreadUpwardMail(c.getState(), {
-      nowMs: c.nowMs(),
-      staleMs: COORDINATOR_NUDGE_MS
-    })) {
-      if (c.sessionBusy(m.sessionId) === true) continue
+    const before = nudgeMemo
+    const planned = planNudges(unreadUpwardMail(c.getState(), { nowMs: c.nowMs(), staleMs: COORDINATOR_NUDGE_MS }), before, c.nowMs())
+    nudgeMemo = planned.memo
+    // A nudge not typed is not remembered as one: the next tick may type it.
+    const notTyped = (sessionId: string): void => {
+      const was = before.get(sessionId)
+      if (was) nudgeMemo.set(sessionId, was)
+      else nudgeMemo.delete(sessionId)
+    }
+    for (const m of planned.due) {
+      if (c.sessionBusy(m.sessionId) === true) {
+        notTyped(m.sessionId)
+        continue
+      }
       // 세션이 없으면(사용자가 닫았다) 깨울 것이 없다 — 그 자리는 되띄우기가 맡는다.
-      if (!c.sessionAlive(m.sessionId)) continue
+      if (!c.sessionAlive(m.sessionId)) {
+        notTyped(m.sessionId)
+        continue
+      }
       // **영어다.** 코디네이터는 영어로 인계받았다(handover.ts) — 롤링이 워커의 재개 문구를
       // 앱의 UI 언어로 타이핑하다 같은 어긋남을 겪었고, 그 주석이 이유를 적어 두었다.
       c.typeInto(
