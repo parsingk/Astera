@@ -11,8 +11,12 @@ type Rec = Record<string, unknown>
 function rig(o: { heads?: Record<string, string>; bases?: Record<string, string>; dirs?: string[]; baseRefs?: Record<string, string> } = {}) {
   const records: Rec[] = []
   const reads: string[] = []
+  const logs: string[] = []
   const heads = { ...o.heads }
+  const clock = { now: 0 }
+  const refAsked: string[] = []
   const rec = createRunGitRecorder({
+    now: () => clock.now,
     record: async (args) => void records.push(args),
     headOf: async (cwd) => {
       reads.push(`head ${cwd}`)
@@ -22,11 +26,14 @@ function rig(o: { heads?: Record<string, string>; bases?: Record<string, string>
       reads.push(`merge-base ${cwd} ${ref}`)
       return o.bases?.[`${cwd} ${ref}`] ?? null
     },
-    baseRefOf: (p) => o.baseRefs?.[p] ?? null,
+    baseRefOf: (p) => {
+      refAsked.push(p)
+      return o.baseRefs?.[p] ?? null
+    },
     isDir: (p) => (o.dirs ?? []).includes(p),
-    log: () => {}
+    log: (m) => void logs.push(m)
   })
-  return { rec, records, reads, heads }
+  return { rec, records, reads, heads, clock, logs, refAsked }
 }
 
 const state = (over: { runs?: Rec[]; dispatches?: Rec[] }): OrchState =>
@@ -193,16 +200,42 @@ describe('createRunGitRecorder with work it did not see start', () => {
     expect(r.records).toEqual([])
     expect(r.reads.filter((x) => x.startsWith('merge-base'))).toEqual(['merge-base W main'])
   })
-  it('a read that failed is tried again on a later state', async () => {
+  it('a read that failed is tried again on a later state, once its wait has passed', async () => {
     const r = rig({ dirs: ['D'] })
     const s = state({ runs: [{ id: 'run1', jobId: 'job1', git: { base: 'b' } }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1' }] })
     r.rec.onState(s)
     await settle()
     expect(r.records).toEqual([])
     r.heads.D = 'd0'
+    r.clock.now += 60_000
     r.rec.onState(s)
     await settle()
     expect(r.records).toEqual([{ dispatchId: 'd1', base: 'd0' }])
+  })
+  // Performance audit H2: a folder git cannot answer for (not a repository, no commit yet) is not asked again on every
+  // commit of a busy Run: each failure waits longer, and after a few it is given up with one line in the log.
+  it('a folder git keeps failing for is asked less and less, then not at all', async () => {
+    const r = rig({ dirs: ['D'] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', git: { base: 'b' } }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1' }] })
+    for (let i = 0; i < 50; i++) {
+      r.rec.onState(s)
+      await settle()
+    }
+    expect(r.reads.filter((x) => x === 'head D')).toEqual(['head D'])
+    for (let i = 0; i < 20; i++) {
+      r.clock.now += 3_600_000
+      r.rec.onState(s)
+      await settle()
+    }
+    expect(r.reads.filter((x) => x === 'head D').length).toBeLessThanOrEqual(5)
+    expect(r.logs.filter((m) => m.includes('giving up')).length).toBe(1)
+  })
+  // Performance audit H2: Runs from before Phase 10, with no attempt open, are not looked over on every commit.
+  it('a Run that can get no base is not looked over again until something about it changes', async () => {
+    const r = rig({ dirs: ['W'] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'W', startedAt: '1', endedAt: '2' }] })
+    for (let i = 0; i < 10; i++) r.rec.onState(s)
+    expect(r.refAsked.length).toBe(1)
   })
   it('runs at most a few git reads at once', async () => {
     let inFlight = 0

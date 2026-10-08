@@ -31,6 +31,8 @@ export interface RunGitRecorderDeps {
   /** Whether the folder is there. A promise on the Host, so no synchronous probe runs on its one thread. */
   isDir(path: string): boolean | Promise<boolean>
   log(m: string): void
+  /** Epoch milliseconds, for the waits between failed reads. */
+  now?(): number
 }
 
 export interface RunGitRecorder {
@@ -40,6 +42,9 @@ export interface RunGitRecorder {
 }
 
 const READS_AT_ONCE = 4
+/** The waits after each failed read with no answer (performance audit H2): git that cannot answer for a folder (not a
+ *  repository, no commit yet) is not asked again on every commit. After the last one it is given up. */
+const RETRY_WAITS_MS = [30_000, 2 * 60_000, 10 * 60_000, 60 * 60_000]
 /** A read that will never answer: settled, not retried. */
 const SETTLED = Symbol('settled')
 type Read = string | null | typeof SETTLED
@@ -48,6 +53,11 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
   /** Keys read, being read, or done: `run:<id>:base`, `dsp:<id>:base`, `dsp:<id>:head`. A failed one leaves. */
   const taken = new Set<string>()
   let last: OrchState | null = null
+  const now = d.now ?? Date.now
+  /** Failed reads per key: how many, and not before when again. */
+  const failed = new Map<string, { count: number; until: number }>()
+  /** Runs looked over with nothing to read, by what would change that: not looked over again while it holds. */
+  const idle = new Map<string, string>()
 
   let running = 0
   const waiting: Array<() => void> = []
@@ -76,6 +86,8 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
    *  settled one keeps it. */
   const once = (key: string, read: () => Promise<Read>, write: (sha: string) => Record<string, string>): void => {
     if (taken.has(key)) return
+    const f = failed.get(key)
+    if (f && now() < f.until) return
     taken.add(key)
     void slot(read)
       .catch((e): Read => {
@@ -84,8 +96,18 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
       })
       .then(async (sha) => {
         if (sha === SETTLED) return
-        if (sha && (await record(write(sha)))) return
-        if (!sha) d.log(`git range: ${key}: git had no answer; tried again on a later change`)
+        if (sha && (await record(write(sha)))) {
+          failed.delete(key)
+          return
+        }
+        const count = (failed.get(key)?.count ?? 0) + 1
+        if (count > RETRY_WAITS_MS.length) {
+          d.log(`git range: ${key}: git had no answer ${count} times; giving up`)
+          failed.delete(key)
+          return
+        }
+        failed.set(key, { count, until: now() + RETRY_WAITS_MS[count - 1] })
+        if (!sha) d.log(`git range: ${key}: git had no answer; trying again in ${RETRY_WAITS_MS[count - 1] / 1000} s`)
         taken.delete(key)
       })
   }
@@ -99,15 +121,33 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
       const runOfTask = new Map(s.tasks.map((t) => [t.id, t.runId]))
       const openRuns = new Set(s.dispatches.filter((x) => x.endedAt === undefined).map((x) => runOfTask.get(x.taskId)))
       const workedRuns = new Set(s.dispatches.map((x) => runOfTask.get(x.taskId)))
+      const attemptsOf = new Map<string, number>()
+      for (const x of s.dispatches) {
+        const r = runOfTask.get(x.taskId)
+        if (r) attemptsOf.set(r, (attemptsOf.get(r) ?? 0) + 1)
+      }
+      const jobs = new Map(s.jobs.map((j) => [j.id, j]))
       for (const run of s.runs) {
-        if (run.git?.base !== undefined) continue
-        const project = s.jobs.find((j) => j.id === run.jobId)?.cwd ?? ''
-        const root = runRootOf(run, s.jobs.find((j) => j.id === run.jobId))
+        if (run.git?.base !== undefined) {
+          idle.delete(run.id)
+          continue
+        }
         const open = openRuns.has(run.id)
+        // A Run looked over with nothing to read is not looked over again until it changes (audit H2: old Runs on every
+        // commit).
+        const sig = `${open}|${run.worktree ?? ''}|${attemptsOf.get(run.id) ?? 0}`
+        if (idle.get(run.id) === sig) continue
+        const job = jobs.get(run.jobId)
+        const project = job?.cwd ?? ''
+        const root = runRootOf(run, job)
         const wt = run.worktree !== undefined && !isSamePath(run.worktree, project) ? run.worktree : null
         const ref = wt ? d.baseRefOf(wt) : null
         // Where a registered worktree forked is true whenever it is read; anything else only while the work is under way.
-        if (!open && !ref) continue
+        if (!open && !ref) {
+          idle.set(run.id, sig)
+          continue
+        }
+        idle.delete(run.id)
         once(
           `run:${run.id}:base`,
           async (): Promise<Read> => {
@@ -133,7 +173,7 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
         }
         if (x.endedAt === undefined || x.git.head !== undefined) continue
         const run = s.runs.find((r) => r.id === runOfTask.get(x.taskId))
-        const root = run ? runRootOf(run, s.jobs.find((j) => j.id === run.jobId)) : ''
+        const root = run ? runRootOf(run, jobs.get(run.jobId)) : ''
         once(
           `dsp:${x.id}:head`,
           async () => {
