@@ -373,7 +373,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     if (!held) return
     lane.held = null
     lane.lastAt = clock.now()
-    if (!s.destroyed) s.write(held())
+    if (!s.destroyed) {
+      s.write(held())
+      overBudget(s)
+    }
   }
   /** Forgets what is held for `s` without sending it — the sender of a `state-put` holds newer. */
   const dropState = (s: net.Socket): void => {
@@ -388,6 +391,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     if (s.destroyed) return
     if (!readsLatest(s)) {
       s.write(line())
+      overBudget(s)
       return
     }
     const lane = laneOf(s)
@@ -397,6 +401,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       lane.held = null
       lane.lastAt = now
       s.write(line())
+      overBudget(s)
       return
     }
     lane.held = line
@@ -423,7 +428,11 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     if (m.t === 'orch-state') return pushState(s, line)
     if (m.t !== 'pty-data' && m.t !== 'proc-line') flushState(s)
     s.write(line())
-    // A client that reads nothing is let go before its unread output is this process's problem (audit H1).
+    overBudget(s)
+  }
+  /** A client that reads nothing is let go before its unread output is this process's problem (audit H1), state pushes
+   *  included (second pass H2-5). */
+  function overBudget(s: net.Socket): void {
     if (s.writableLength > (roles.get(s) === 'app' ? appQueueCap : queueCap)) {
       deps.log.write(`a client left ${s.writableLength} bytes unread; closing it`)
       s.destroy()

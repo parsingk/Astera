@@ -476,6 +476,23 @@ describe('startHostServer', () => {
     sock.destroy()
   })
 
+  // Second pass H2-5: state pushes were written past the budget check, so an app that stalled while no pty output flowed
+  // could pile them up without limit.
+  it('closes an app whose unread state pushes pass its budget', async () => {
+    const h = await server({ maxQueuedBytes: 64 * 1024, maxAppQueuedBytes: 64 * 1024 })
+    const sock = net.connect(h.address)
+    await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', role: 'app' }))
+    await new Promise((r) => setTimeout(r, 100))
+    sock.pause()
+    const closed = new Promise<void>((resolve) => sock.on('close', () => resolve()))
+    for (let i = 0; i < 200; i++)
+      h.s.broadcast({ t: 'orch-state', state: { ...emptyState(), pad: 'x'.repeat(16 * 1024) } as unknown as ReturnType<typeof emptyState>, version: i })
+    await Promise.race([closed, new Promise((r) => setTimeout(r, 3000))])
+    expect(h.s.clients()).toBe(0)
+    sock.destroy()
+  })
+
   // Final review M3: the app is the one reader the Host must not lose. A main thread that stalls for a while falls
   // behind every worker's output at once, and cutting its socket sends it through a reconnect and a handover for a
   // stall it would have read through. Its budget is the larger one.

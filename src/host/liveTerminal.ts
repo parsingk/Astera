@@ -103,12 +103,20 @@ function stateSuffix(T: typeof HeadlessTerminal, t: HeadlessTerminal): string {
   return out
 }
 let mods: Promise<Mods> | null = null
-const load = (): Promise<Mods> =>
-  (mods ??= (async () => {
+/** A load that failed is not kept (second pass H2-3): the next terminal tries again. */
+const load = (): Promise<Mods> => {
+  if (mods) return mods
+  const p = (async () => {
     const h: typeof import('@xterm/headless') & { default?: typeof import('@xterm/headless') } = await import('@xterm/headless')
     const s: typeof import('@xterm/addon-serialize') & { default?: typeof import('@xterm/addon-serialize') } = await import('@xterm/addon-serialize')
     return { Terminal: (h.default ?? h).Terminal, SerializeAddon: (s.default ?? s).SerializeAddon }
-  })())
+  })()
+  mods = p
+  p.catch(() => {
+    if (mods === p) mods = null
+  })
+  return p
+}
 
 export function createLiveTerminal(o: { cols: number; rows: number }): LiveTerminal {
   let term: HeadlessTerminal | null = null
@@ -162,6 +170,12 @@ export function createLiveTerminal(o: { cols: number; rows: number }): LiveTermi
     if (disposed) t.dispose()
     return t
   })
+  // A library that does not load leaves this terminal broken, so its owner builds another, and keeps nothing meanwhile
+  // (second pass H2-3: every event was held in `early` for good).
+  ready.catch(() => {
+    lost = true
+    early.length = 0
+  })
   /** Resolves inside a write callback queued after every event applied so far: the terminal stands at the watermark. */
   const settled = <T>(f: (t: HeadlessTerminal) => T): Promise<T> =>
     ready.then(
@@ -179,7 +193,7 @@ export function createLiveTerminal(o: { cols: number; rows: number }): LiveTermi
 
   return {
     apply: (e) => {
-      if (disposed) return
+      if (disposed || lost) return
       if (term) applySafely(term, e)
       else early.push(e)
     },

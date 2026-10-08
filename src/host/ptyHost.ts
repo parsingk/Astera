@@ -55,7 +55,8 @@ export function attachPtyHost(a: {
         a.registry.kill(m.id)
         return true
       case 'pty-pause': {
-        if (from) {
+        // Only a live pty's (second pass H2-4): a pause that raced the exit would be held until the socket closed.
+        if (from && a.registry.list().some((e) => e.id === m.id && e.alive)) {
           const by = pausedBy.get(m.id) ?? new Set<number>()
           by.add(from.socket)
           pausedBy.set(m.id, by)

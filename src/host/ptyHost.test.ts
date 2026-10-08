@@ -237,6 +237,15 @@ describe('attachPtyHost pty-seq and pauses (Phase 8)', () => {
     expect(h.paused()).toBe(before)
   })
 
+  // Second pass H2-4: a pause that raced the exit was recorded after the exit hook ran, and stayed until the socket closed.
+  it('a pause for a pty that already exited, or never was, is not recorded', () => {
+    const h = rig()
+    h.pty.exit(0)
+    h.send({ t: 'pty-pause', id: 'p1' }, 3)
+    h.send({ t: 'pty-pause', id: 'nope' }, 3)
+    expect(h.handle.pausedHeld()).toBe(0)
+  })
+
   // Phase 8 review M7: an exited pty's pauses are forgotten with it.
   it('a pty that exits is no longer tracked as paused: a later close resumes nothing', () => {
     const h = rig()
