@@ -151,10 +151,11 @@ function RunCard({
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
   onOpenRun: (runId: string) => void
-  onDeleteRun: (runId: string) => void
+  /** Absent on a read-only view (a remote Runtime, Phase 6): the button is not drawn. */
+  onDeleteRun?: (runId: string) => void
   /** 관리자가 사라진 Run 에 코디네이터를 다시 붙인다 — run-start 를 다시 부른다(그 명령의 뜻이
-   *  "이 Run 에 관리자가 있게 하라" 이고, 이미 있으면 아무것도 하지 않는다). */
-  onRestartCoordinator: (runId: string) => void
+   *  "이 Run 에 관리자가 있게 하라" 이고, 이미 있으면 아무것도 하지 않는다). Absent on a read-only view. */
+  onRestartCoordinator?: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const kind = runKind(run)
@@ -222,7 +223,7 @@ function RunCard({
             이고(도는 것이 없어 보인다), 상세 창을 열어야 되돌릴 수 있다면 정확히 그 순간에 마찰이
             생긴다 — 일시 중지 버튼이 이 줄에 있는 것과 같은 판단이다.
             stopPropagation: 이 줄 자체가 접기·펴기다 */}
-        {run.coordinatorMissing && (
+        {run.coordinatorMissing && onRestartCoordinator && (
           <button
             className="jobs-more"
             title={t('jobs.run.coordinatorRestartHint')}
@@ -350,14 +351,16 @@ function RunCard({
               누르면 App 이 확인 창을 먼저 띄운다(onDeleteRun). 도는 워커가 있으면 명령이
               409 로 거절하고 그것을 토스트로 말한다 — 버튼을 감추지 않는 것은 왜 못 지우는지가
               화면에 남아야 하기 때문이다. */}
-          <button
-            className="jobs-delete"
-            title={t('jobs.run.delete')}
-            aria-label={t('jobs.run.delete')}
-            onClick={() => onDeleteRun(run.id)}
-          >
-            <TrashIcon />
-          </button>
+          {onDeleteRun && (
+            <button
+              className="jobs-delete"
+              title={t('jobs.run.delete')}
+              aria-label={t('jobs.run.delete')}
+              onClick={() => onDeleteRun(run.id)}
+            >
+              <TrashIcon />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -404,10 +407,11 @@ function ScheduleCard({
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
   onOpenRun: (runId: string) => void
-  onPauseRun: (runId: string) => void
-  onResumeRun: (runId: string) => void
-  onDeleteRun: (runId: string) => void
-  onRestartCoordinator: (runId: string) => void
+  /** The four actions are absent on a read-only view (a remote Runtime, Phase 6): their buttons are not drawn. */
+  onPauseRun?: (runId: string) => void
+  onResumeRun?: (runId: string) => void
+  onDeleteRun?: (runId: string) => void
+  onRestartCoordinator?: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const children = run.children ?? []
@@ -440,7 +444,7 @@ function ScheduleCard({
             회차가 없고, `run-pause` 가 "예약이 아니다" 로 거절한다(server.ts). 누를 수 있는데
             아무 일도 일어나지 않는 버튼을 두지 않는다. 그 Job 의 워커를 멈추는 것은 회차 안에서
             Dispatch 하나씩 하는 일이다. */}
-        {run.schedule && (
+        {run.schedule && onPauseRun && onResumeRun && (
           <button
             className="jobs-more"
             title={run.paused ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
@@ -551,14 +555,16 @@ function ScheduleCard({
               자리와 모양은 RunCard 의 그것과 같고 이유도 같다: 되돌릴 수 없는 동작을 상세 창으로
               가는 `›` 옆에 두면 둘 다 작은 표적이라 오클릭이 값비싸고, 펼쳤을 때만 보이므로 그
               예약을 열어 본 사람만 지우게 된다. */}
-          <button
-            className="jobs-delete"
-            title={t('jobs.run.delete')}
-            aria-label={t('jobs.run.delete')}
-            onClick={() => onDeleteRun(run.id)}
-          >
-            <TrashIcon />
-          </button>
+          {onDeleteRun && (
+            <button
+              className="jobs-delete"
+              title={t('jobs.run.delete')}
+              aria-label={t('jobs.run.delete')}
+              onClick={() => onDeleteRun(run.id)}
+            >
+              <TrashIcon />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -588,7 +594,8 @@ export function JobsView({
   onPauseRun,
   onResumeRun,
   onDeleteRun,
-  onRestartCoordinator
+  onRestartCoordinator,
+  readOnly = false
 }: {
   snapshot: OrchSnapshot | null
   /** Why there is nothing to draw, when the Host is the reason — null in the ordinary case.
@@ -634,8 +641,15 @@ export function JobsView({
    *  세어 보여 준다) 명령은 App 이 보낸다, onOpenRun 과 같은 갈래다. */
   onDeleteRun: (runId: string) => void
   onRestartCoordinator: (runId: string) => void
+  /** A remote Runtime's Jobs (remote runtime design Phase 6): shown, never changed from here. No new Job, pause,
+   *  resume, delete or coordinator restart is drawn; control from the app comes in Phase 7. */
+  readOnly?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
+  // The actions a row may draw: none on a read-only view.
+  const acts = readOnly
+    ? { onPauseRun: undefined, onResumeRun: undefined, onDeleteRun: undefined, onRestartCoordinator: undefined }
+    : { onPauseRun, onResumeRun, onDeleteRun, onRestartCoordinator }
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
   // component ever rendered, opens by default rather than needing to be found and expanded by hand.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -730,7 +744,7 @@ export function JobsView({
         {/* 아무것도 없을 때가 만들고 싶을 때다 — 목록이 생긴 뒤의 자리(아래)와 같은 버튼.
             hasProject 로 가드하는 이유는 위 hasProject 의 주석대로다: 그때 이 버튼을 누르면
             만들 자리도 없는 newRunOpen 이 true 로 남아 전역 단축키를 죽인다. */}
-        {hasProject && (
+        {hasProject && !readOnly && (
           <button className="jobs-new" onClick={onNewRun}>
             + {t('jobs.new.open')}
           </button>
@@ -743,9 +757,11 @@ export function JobsView({
     <section className="jobs-view">
       {stallLine}
       {/* 목록 위, 첫 자식 — 아이콘을 새로 만들지 않는다: '+' 글자로 충분하다 */}
-      <button className="jobs-new" onClick={onNewRun}>
-        + {t('jobs.new.open')}
-      </button>
+      {!readOnly && (
+        <button className="jobs-new" onClick={onNewRun}>
+          + {t('jobs.new.open')}
+        </button>
+      )}
       {/* **회차가 여럿이면 예약이 아니어도 펼치는 카드다.** 접히는 카드를 예약에만 쓰던 것은 회차가
           예약에서만 생겼기 때문이고, 이제는 끝난 Job 을 다시 돌려도 생긴다 — 조건을 `schedule` 로
           두면 그 회차들이 화면에서 통째로 사라진다(상태에는 있는데 그리는 곳이 없다). */}
@@ -762,10 +778,10 @@ export function JobsView({
             canOpenSession={canOpenSession}
             onOpenSession={onOpenSession}
             onOpenRun={onOpenRun}
-            onPauseRun={onPauseRun}
-            onResumeRun={onResumeRun}
-            onDeleteRun={onDeleteRun}
-            onRestartCoordinator={onRestartCoordinator}
+            onPauseRun={acts.onPauseRun}
+            onResumeRun={acts.onResumeRun}
+            onDeleteRun={acts.onDeleteRun}
+            onRestartCoordinator={acts.onRestartCoordinator}
           />
         ) : (
           <RunCard
@@ -777,8 +793,8 @@ export function JobsView({
             canOpenSession={canOpenSession}
             onOpenSession={onOpenSession}
             onOpenRun={onOpenRun}
-            onDeleteRun={onDeleteRun}
-            onRestartCoordinator={onRestartCoordinator}
+            onDeleteRun={acts.onDeleteRun}
+            onRestartCoordinator={acts.onRestartCoordinator}
           />
         )
       )}

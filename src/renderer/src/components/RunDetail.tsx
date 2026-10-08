@@ -225,7 +225,8 @@ export function RunDetail({
   canOpenSession,
   onOpenSession,
   onShowOlderJournal,
-  onClose
+  onClose,
+  runtimeId
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
@@ -242,6 +243,9 @@ export function RunDetail({
   /** "이전 저널 기록 더 보기" — 저널 줄을 한 쪽 더 읽게 한다(stage 3 T1). 쪽 수는 App.tsx 가 든다 */
   onShowOlderJournal: () => void
   onClose: () => void
+  /** A paired Runtime's Run (remote runtime design Phase 6): read only, so the actions are not shown (styles.css,
+   *  `.run-detail-readonly`), and its completion is read from that Runtime. Absent for this computer's own. */
+  runtimeId?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   /** 고른 노드 = 아래 이벤트의 필터. 같은 노드를 다시 누르면 풀린다 */
@@ -789,7 +793,7 @@ export function RunDetail({
 
   return (
     <div className="modal-backdrop" onClick={() => !formOpen && onClose()}>
-      <div className="modal run-detail" onClick={(e) => e.stopPropagation()}>
+      <div className={`modal run-detail${runtimeId ? ' run-detail-readonly' : ''}`} onClick={(e) => e.stopPropagation()}>
         {/* 머리말이 없다 — Run 의 목표가 제목이고, 그 옆의 아이콘과 숫자가 상태를 말한다 */}
         <div className="detail-head">
           <h2 title={run?.objective}>{run?.objective ?? ''}</h2>
@@ -1071,7 +1075,7 @@ export function RunDetail({
                     목록 위다: 이벤트는 "무슨 일이 있었나" 이고 이것은 "지금 무엇이 막고 있나" 라,
                     찾는 사람이 스크롤하지 않고 만나야 하는 쪽이 이것이다. */}
                 {selectedTask && (
-                  <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} />
+                  <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} runtimeId={runtimeId} />
                 )}
                 <JournalBusy journal={detail?.journal} />
                 <div className="detail-list">

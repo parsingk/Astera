@@ -41,6 +41,9 @@ import { GeneratorSettings } from './components/GeneratorSettings'
 import { CliSettings } from './components/CliSettings'
 import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
+import { RuntimeSelector } from './components/RuntimeSelector'
+import { createReplyGate } from './lib/replyGate'
+import { LOCAL, isRemoteRuntime, offlineNote } from './lib/remoteJobs'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
@@ -384,6 +387,8 @@ function formatResetHud(resetsAt: string | null | undefined): string | null {
 const HOST_STATUS_POLL_MS = 30_000
 /** 저널이 바빠 상세가 마지막으로 읽은 줄을 받았을 때, 다시 묻기까지 기다리는 시간(stage 3 T1) */
 const DETAIL_BUSY_RETRY_MS = 2_000
+/** How often a paired Runtime's Jobs are asked again while its view is open: it pushes nothing to this app yet. */
+const REMOTE_JOBS_POLL_MS = 5_000
 
 /** "7m", "2h" — a coarse uptime is all this row needs; it is a sign of life, not a metric, which is
  *  also why the unit is not translated. */
@@ -2442,6 +2447,18 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
+  // **A paired Runtime in the Jobs view** (remote runtime design Phase 6, D1.4, D1.5). Every value here is its own:
+  // the remote project never becomes `currentProject`, and the remote snapshot never mixes with `orchSnapshot`, so
+  // with "This computer" selected every local path, call and push is what it was.
+  const [jobsRuntime, setJobsRuntime] = useState<string>(LOCAL)
+  const [pairedRuntimes, setPairedRuntimes] = useState<Array<{ runtimeId: string; name: string; lastSeenAt: string | null }>>([])
+  const [remoteProjects, setRemoteProjects] = useState<Array<{ id: string; name: string | null; path: string | null }> | null>(null)
+  const [remoteProject, setRemoteProject] = useState<string | null>(null)
+  const [remoteSnapshot, setRemoteSnapshot] = useState<OrchSnapshot | null>(null)
+  /** Drops a remote reply whose Runtime is no longer selected, or that a newer one overtook (X1-11). */
+  const replyGate = useRef(createReplyGate()).current
+  const jobsRuntimeRef = useRef(jobsRuntime)
+  jobsRuntimeRef.current = jobsRuntime
   /** Why the Jobs sidebar has nothing to draw, when the Host is the reason — null in the ordinary
    *  case. **Kept apart from the snapshot above, and that separation is the fix for ruling F41.** The
    *  snapshot is per project and this state deliberately substitutes an empty one whenever there is
@@ -2464,7 +2481,8 @@ export default function App(): React.JSX.Element {
    *  발사되고, 그러면 main 이 `run X does not belong to Y` 를 orchLog 에 쓴다 — 진짜 크로스 프로젝트
    *  접근 시도가 남기는 줄과 한 글자도 다르지 않아 그 로그를 감사에 쓸 수 없게 된다. 짝을 한 값으로
    *  들면 재조회가 발사 지점에서 스스로 거를 수 있다(효과 선언 순서를 바꾸는 것으로는 고쳐지지 않는다). */
-  const [openRun, setOpenRun] = useState<{ projectPath: string; runId: string } | null>(null)
+  /** `runtimeId` for a paired Runtime's Run (Phase 6): `projectPath` is then that Runtime's project key, never a path here. */
+  const [openRun, setOpenRun] = useState<{ projectPath: string; runId: string; runtimeId?: string } | null>(null)
   /** 그 Run 의 이벤트와 의존 그래프. null 은 아직 도착하지 않았다는 뜻이고 빈 배열과 다르다 — 모달은
    *  전자에 아무것도 그리지 않고 후자에만 빈 상태를 그린다. 읽는 효과는 currentProject 선언 아래에 있다. */
   const [detail, setDetail] = useState<RunDetailData | null>(null)
@@ -2652,19 +2670,22 @@ export default function App(): React.JSX.Element {
     // 짝이 맞지 않으면 부르지 않는다 — 프로젝트 A→B 커밋에서 이 효과는 아직 A 의 runId 를 들고
     // 돌지만, 그 조합은 main 이 거부할 조합이다. 여기서 거르면 orchLog 에 접근 위반과 똑같이 생긴
     // 줄이 남지 않는다. 모달을 닫는 것은 아래의 리셋 효과다(이 가드는 로그만 지킨다).
-    if (!openRun || openRun.projectPath !== currentProject) return
+    if (!openRun) return
+    // A paired Runtime's Run is read from that Runtime and its own snapshot; a local one keeps its project guard.
+    const detailSnapshot = openRun.runtimeId ? remoteSnapshot : orchSnapshot
+    if (!openRun.runtimeId && openRun.projectPath !== currentProject) return
     // 스냅샷에 없는 Run 도 부르지 않는다 — worktree 제거나 astera reset 으로 Run 이 사라지면
     // 프로젝트는 그대로인데 main 은 접근 위반과 똑같이 생긴 `run X does not belong to Y` 를 로그에
     // 남긴다. orchSnapshot 이 아직 null 이면(안 왔다) 없다고 단정하지 않는다 — 그때는 부르는 쪽이
     // 맞다. Run 이 사라진 뒤에 창을 닫는 것은 아래의 새 효과다.
     // **findRun 이어야 한다**(snapshot.ts): 예약 회차는 최상위 runs 에서 빠져 children 에 있으므로
     // `runs.some` 은 회차를 늘 "없다"고 답하고, 그러면 상세 창이 영원히 비어 있다.
-    if (orchSnapshot !== null && !findRun(orchSnapshot, openRun.runId)) return
+    if (detailSnapshot !== null && !findRun(detailSnapshot, openRun.runId)) return
     let cancelled = false
     // 거부 팔을 반드시 둔다 — 위의 가드가 걸러도 main 은 저장소를 읽다 던질 수 있고, 그러면
     // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 모양으로 접으면 모달은 빈 상태를 그린다.
     const journalPages = journalPagesFor?.runId === openRun.runId ? journalPagesFor.pages : 1
-    void window.api.orch.runDetail(openRun.projectPath, openRun.runId, { journalPages }).then(
+    void window.api.orch.runDetail(openRun.projectPath, openRun.runId, { journalPages }, openRun.runtimeId).then(
       (d) => {
         if (!cancelled) setDetail(d)
       },
@@ -2675,7 +2696,7 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [openRun, currentProject, orchSnapshot, journalPagesFor, detailRetry])
+  }, [openRun, currentProject, orchSnapshot, remoteSnapshot, journalPagesFor, detailRetry])
   // 저널이 바빴다(stage 3 T1) — main 은 기다리지 않고 마지막으로 읽은 줄을 줬다. 잠시 뒤에 다시 묻는다.
   // 답이 여전히 바쁘면 다음 답이 또 한 번을 잡는다. 창을 닫거나 답이 바뀌면 타이머를 걷는다.
   useEffect(() => {
@@ -2695,10 +2716,12 @@ export default function App(): React.JSX.Element {
   // ReferenceError 로 죽는다(타입체크는 못 잡는다). 여기서도 orchSnapshot === null 은 "없다"가
   // 아니다 — 아직 첫 조회가 오지 않았을 뿐이면 닫지 않는다.
   useEffect(() => {
-    if (!openRun || openRun.projectPath !== currentProject || orchSnapshot === null) return
+    if (!openRun) return
+    const snap = openRun.runtimeId ? remoteSnapshot : orchSnapshot
+    if ((!openRun.runtimeId && openRun.projectPath !== currentProject) || snap === null) return
     // 위와 같은 이유로 findRun 이다 — `runs.some` 이면 회차의 상세 창이 열린 다음 프레임에 닫힌다.
-    if (!findRun(orchSnapshot, openRun.runId)) setOpenRun(null)
-  }, [openRun, currentProject, orchSnapshot])
+    if (!findRun(snap, openRun.runId)) setOpenRun(null)
+  }, [openRun, currentProject, orchSnapshot, remoteSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. The dialog is pinned to the project (and context) it was opened
@@ -3377,6 +3400,60 @@ export default function App(): React.JSX.Element {
       void window.api.orch.unwatch()
     }
   }, [jobsOpen, sidebarOpen, currentProject])
+
+  // **The paired Runtimes, read each time the Jobs view opens** (Phase 6): Settings may have paired or removed one.
+  useEffect(() => {
+    if (!jobsOpen || !sidebarOpen) return
+    void window.api.remote.list().then(setPairedRuntimes, () => setPairedRuntimes([]))
+  }, [jobsOpen, sidebarOpen])
+  // A Runtime removed in Settings falls back to this computer.
+  useEffect(() => {
+    if (isRemoteRuntime(jobsRuntime) && !pairedRuntimes.some((r) => r.runtimeId === jobsRuntime)) setJobsRuntime(LOCAL)
+  }, [pairedRuntimes, jobsRuntime])
+  // The selected Runtime's projects; its first one is shown until the person picks another. A remote detail open
+  // from the Runtime before closes: it was that Runtime's.
+  useEffect(() => {
+    setRemoteProjects(null)
+    setRemoteProject(null)
+    setRemoteSnapshot(null)
+    setOpenRun((o) => (o?.runtimeId ? null : o))
+    if (!isRemoteRuntime(jobsRuntime)) return
+    let alive = true
+    void window.api.remote.projects(jobsRuntime).then(
+      (list) => {
+        if (!alive) return
+        setRemoteProjects(list)
+        setRemoteProject(list[0]?.id ?? null)
+      },
+      () => {
+        if (alive) setRemoteProjects([])
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [jobsRuntime])
+  // **The remote list**: asked now and every few seconds, since a Runtime pushes nothing to this app yet, and drawn
+  // only through the reply gate. An unreachable Runtime answers with its last list marked offline (main keeps it).
+  useEffect(() => {
+    if (!jobsOpen || !sidebarOpen || !isRemoteRuntime(jobsRuntime) || remoteProject === null) return
+    let alive = true
+    const ask = (): void => {
+      const token = replyGate.begin('jobs', jobsRuntime)
+      void window.api.orch.list(remoteProject, jobsRuntime).then(
+        (snapshot) => {
+          if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot(snapshot)
+        },
+        () => {}
+      )
+    }
+    ask()
+    const timer = setInterval(ask, REMOTE_JOBS_POLL_MS)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [jobsOpen, sidebarOpen, jobsRuntime, remoteProject, replyGate])
 
   // 배경 재생성이 끝나면 main 이 밀어 준다 — 그 결과가 화면에 닿는 유일한 길이다. 재생성은
   // 작업 단위가 닫힐 때 저절로 돌고 수십 초가 걸리므로, 이것이 없으면 새 설명은 사용자가 프로젝트를
@@ -4106,6 +4183,47 @@ export default function App(): React.JSX.Element {
                 onRunFile={runFile}
               />
             ) : sidebarPane === 'jobs' ? (
+              <>
+              {/* Only when a Runtime is paired: with none, the Jobs view is exactly what it was (Phase 6). */}
+              {pairedRuntimes.length > 0 && (
+                <RuntimeSelector
+                  paired={pairedRuntimes}
+                  runtimeId={jobsRuntime}
+                  onRuntime={setJobsRuntime}
+                  projects={remoteProjects}
+                  project={remoteProject}
+                  onProject={setRemoteProject}
+                  offline={offlineNote(
+                    remoteSnapshot?.runtime,
+                    pairedRuntimes.find((r) => r.runtimeId === jobsRuntime)?.name ?? jobsRuntime,
+                    pairedRuntimes.find((r) => r.runtimeId === jobsRuntime)?.lastSeenAt ?? null,
+                    t as never,
+                    (iso) => new Date(iso).toLocaleString()
+                  )}
+                />
+              )}
+              {isRemoteRuntime(jobsRuntime) ? (
+                // A paired Runtime's Jobs, read only: no new Job, pause, resume, delete or restart (Phase 7 adds
+                // control), and no session to jump to (remote session tabs are Phase 9).
+                <JobsView
+                  snapshot={remoteSnapshot}
+                  hostGate={null}
+                  stall={null}
+                  hasProject={remoteProject !== null}
+                  readOnly
+                  canOpenSession={() => false}
+                  onOpenSession={() => {}}
+                  onOpenRun={(runId) => {
+                    setDetail(null)
+                    if (remoteProject) setOpenRun({ projectPath: remoteProject, runId, runtimeId: jobsRuntime })
+                  }}
+                  onNewRun={() => {}}
+                  onPauseRun={() => {}}
+                  onResumeRun={() => {}}
+                  onDeleteRun={() => {}}
+                  onRestartCoordinator={() => {}}
+                />
+              ) : (
               <JobsView
                 snapshot={orchSnapshot}
                 hostGate={orchHostGate}
@@ -4250,6 +4368,8 @@ export default function App(): React.JSX.Element {
                   })()
                 }}
               />
+              )}
+              </>
             ) : sidebarPane === 'understanding' ? (
               <UnderstandingView
                 // Passed only when it belongs to the current project. Between switching projects and
@@ -5314,7 +5434,11 @@ export default function App(): React.JSX.Element {
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
           // findRun 인 이유는 위 두 효과와 같다 — 예약 회차는 children 안에 있다(snapshot.ts).
-          run={orchSnapshot ? findRun(orchSnapshot, openRun.runId) : undefined}
+          run={(() => {
+            const snap = openRun.runtimeId ? remoteSnapshot : orchSnapshot
+            return snap ? findRun(snap, openRun.runId) : undefined
+          })()}
+          runtimeId={openRun.runtimeId}
           detail={detail}
           // Task 짓기(task-create)와 검증 구성 조회(run.list)가 쓴다 — run 이 undefined 인 동안에도
           // openRun 이 이 짝을 그대로 들고 있으므로 run?.id 를 대신 넘길 이유가 없다.

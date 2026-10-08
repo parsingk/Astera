@@ -62,14 +62,15 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
       <p className="settings-hint">{t('settings.remote.hint')}</p>
 
       <div className="settings-group">
-        <h3 className="settings-subtitle">{t('settings.remote.thisMachine.title')}</h3>
+        <div className="settings-field-label">{t('settings.remote.thisMachine.title')}</div>
         {mine !== undefined && <p className="settings-hint">{thisMachineLine(mine, t as never)}</p>}
         {mine && (mine.gateway as { fingerprint?: string }).fingerprint && (
           <p className="settings-hint">{t('settings.remote.thisMachine.fingerprint', { fingerprint: String((mine.gateway as { fingerprint?: string }).fingerprint) })}</p>
         )}
-        {mine && (
+        {/* The controllers paired with this computer, only while it is a Runtime: with Remote off they cannot connect. */}
+        {mine && (mine.gateway as { state: string }).state !== 'disabled' && (
           <>
-            <span>{t('settings.remote.thisMachine.clients')}</span>
+            <span className="settings-hint">{t('settings.remote.thisMachine.clients')}</span>
             {mine.clients.length === 0 ? (
               <p className="settings-hint">{t('settings.remote.thisMachine.noClients')}</p>
             ) : (
@@ -86,7 +87,7 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-subtitle">{t('settings.remote.paired.title')}</h3>
+        <div className="settings-field-label">{t('settings.remote.paired.title')}</div>
         {paired !== null && paired.length === 0 && <p className="settings-hint">{t('settings.remote.paired.none')}</p>}
         {paired?.map((r) => (
           <div key={r.runtimeId} className="settings-row">
@@ -96,7 +97,7 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
               {pings[r.runtimeId] && <span className="settings-hint"> · {pings[r.runtimeId]}</span>}
             </span>
             <span>
-              <button className="btn" onClick={() => void ping(r.runtimeId)}>
+              <button className="settings-gen-refresh" onClick={() => void ping(r.runtimeId)}>
                 {t('settings.remote.paired.ping')}
               </button>{' '}
               <button className="ghost danger" onClick={() => void remove(r)}>
@@ -108,10 +109,10 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
       </div>
 
       <div className="settings-group">
-        <h3 className="settings-subtitle">{t('settings.remote.pair.title')}</h3>
+        <div className="settings-field-label">{t('settings.remote.pair.title')}</div>
         <p className="settings-hint">{t('settings.remote.pair.hint')}</p>
         <input
-          className="settings-input"
+          className="settings-gen-input"
           aria-label={t('settings.remote.pair.title')}
           placeholder="astera-pair:v1:…"
           value={pairing}
@@ -120,7 +121,7 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
           autoComplete="off"
         />
         <input
-          className="settings-input"
+          className="settings-gen-input"
           aria-label={t('settings.remote.pair.name')}
           placeholder={t('settings.remote.pair.name')}
           value={name}

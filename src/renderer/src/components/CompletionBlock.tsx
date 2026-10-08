@@ -16,12 +16,15 @@ import { useI18n } from '../i18n/I18nProvider'
 export function CompletionBlock({
   projectPath,
   runId,
-  taskId
+  taskId,
+  runtimeId
 }: {
   projectPath: string
   runId: string
   /** 고른 노드. 바뀌면 다시 가져온다 */
   taskId: string
+  /** A paired Runtime's Task (remote runtime design Phase 6); absent for this computer's own. */
+  runtimeId?: string
 }): React.JSX.Element | null {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -42,7 +45,7 @@ export function CompletionBlock({
   useEffect(() => {
     if (!open) return
     let alive = true
-    void window.api.orch.completion(projectPath, runId, taskId).then(
+    void window.api.orch.completion(projectPath, runId, taskId, runtimeId).then(
       (d) => {
         if (alive) setDetail(d)
       },
@@ -53,7 +56,7 @@ export function CompletionBlock({
     return () => {
       alive = false
     }
-  }, [open, projectPath, runId, taskId])
+  }, [open, projectPath, runId, taskId, runtimeId])
 
   const toggleTail = (configId: string): void =>
     setTails((prev) => {
