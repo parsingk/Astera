@@ -6,13 +6,14 @@
 // into the Host's own executable.
 import type { PtyEntry, PtyMeta, ProcOpenOptions } from '../core/host/protocol'
 import { createLineSplitter, type LineSplitter } from '../core/host/lines'
-import { DEAD_ENTRIES_KEPT } from './registry'
+import { DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT } from './registry'
 
-/** The same cap as PtyRegistry's (M4), one number for both. **Here an ended chat is what is always
- *  kept**, where PtyRegistry keeps an ended session: `sessions list` shows an ended chat and
- *  `sessions read` finds its transcript through its note, both by its session id (host/sessions.ts
- *  `chatOf`). Every other ended entry is capped. */
-export { DEAD_ENTRIES_KEPT }
+/** The same caps as PtyRegistry's, one number each for both. **Here an ended chat is what is kept longer**, where
+ *  PtyRegistry keeps an ended session: `sessions list` shows an ended chat and `sessions read` finds its transcript
+ *  through its note, both by its session id (host/sessions.ts `chatOf`). The newest ENDED_SESSIONS_KEPT ended chats
+ *  stay (second pass H2-2: all of them did, and every chat lookup scans them); every other ended entry until
+ *  DEAD_ENTRIES_KEPT newer ones have ended. */
+export { DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT }
 
 /** The process surface the registry needs. child_process's ChildProcess is wrapped into it by
  *  nodeProc.ts; a test's fake satisfies it directly. Output arrives as chunks — the registry, not the
@@ -59,6 +60,8 @@ export class ProcRegistry {
   private readonly entries = new Map<string, Entry>()
   /** The ended entries that are not chats, oldest ending first (`pruneEnded`). */
   private readonly endedOrder = new Set<string>()
+  /** The ended chats, oldest ending first (`pruneEnded`). */
+  private readonly endedChats = new Set<string>()
   /** Every listener hears (chat takeover P13): the app bridge (procHost.ts), the Host's chats and the
    *  proc holders. Each is called in its own `try`, so one that throws costs the others nothing. */
   private readonly lineCbs = new Set<(id: string, seq: number, line: string) => void>()
@@ -143,14 +146,15 @@ export class ProcRegistry {
       entry.alive = false
       // The buffer goes with the process, as a pty's scrollback does: the entry stays so `list` can
       // say "it ended while you were away", but a million characters per ended process would be kept
-      // for the rest of the Host's life otherwise. An ended chat stays for good; any other ended
-      // entry until DEAD_ENTRIES_KEPT newer ones have ended (`pruneEnded`, M4).
+      // for the rest of the Host's life otherwise. An ended chat stays until ENDED_SESSIONS_KEPT newer ones have ended;
+      // any other ended entry until DEAD_ENTRIES_KEPT newer ones have (`pruneEnded`, M4, H2-2).
       entry.lines = []
       entry.chars = 0
       this.deps.log(`proc ${a.id} exited ${exitCode}`)
       // Before the listeners, kept from before they were isolated: the entry is counted whatever a
       // listener does. It is the newest ended one, so every listener still finds it.
-      if (entry.meta?.kind !== 'chat') this.pruneEnded(a.id)
+      if (entry.meta?.kind === 'chat') this.pruneEnded(a.id, this.endedChats, ENDED_SESSIONS_KEPT)
+      else this.pruneEnded(a.id, this.endedOrder, DEAD_ENTRIES_KEPT)
       for (const cb of [...this.exitCbs]) {
         try {
           cb(a.id, exitCode, stderrTail)
@@ -192,11 +196,11 @@ export class ProcRegistry {
   }
 
   /** PtyRegistry.pruneEnded's rule: by ending order, Set and Map operations only. */
-  private pruneEnded(id: string): void {
-    this.endedOrder.add(id)
-    for (const old of this.endedOrder) {
-      if (this.endedOrder.size <= DEAD_ENTRIES_KEPT) return
-      this.endedOrder.delete(old)
+  private pruneEnded(id: string, order: Set<string>, kept: number): void {
+    order.add(id)
+    for (const old of order) {
+      if (order.size <= kept) return
+      order.delete(old)
       this.entries.delete(old)
     }
   }

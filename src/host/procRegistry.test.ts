@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ProcRegistry, PROC_BUFFER_CHARS, DEAD_ENTRIES_KEPT, type RegistryProc } from './procRegistry'
+import { ProcRegistry, PROC_BUFFER_CHARS, DEAD_ENTRIES_KEPT, ENDED_SESSIONS_KEPT, type RegistryProc } from './procRegistry'
 import type { PtyMeta } from '../core/host/protocol'
 
 const meta = (over: Partial<PtyMeta> = {}): PtyMeta => ({ kind: 'chat', id: 'chat_1', restore: { accountId: 'a1' }, ...over })
@@ -216,8 +216,8 @@ describe('ProcRegistry — what each live process runs in, and how many ended on
 
   // An ended chat is read by its session id: `sessions list` shows it, and `sessions read` finds its
   // transcript through its note (host/sessions.ts `chatOf`). So a chat is kept the way a pty session
-  // is, and only the other ended entries are capped.
-  it('keeps only the newest ended entries that are not sessions, and every ended chat', () => {
+  // is, and the other ended entries are capped harder.
+  it('keeps only the newest ended entries that are not sessions, and the newest ended chats', () => {
     const { reg, exit } = rig()
     const open = (id: string, m: PtyMeta | undefined): void => {
       reg.open({ id, file: 'x', args: [], opts: { cwd: 'D:/p', env: {} }, meta: m })
@@ -238,6 +238,22 @@ describe('ProcRegistry — what each live process runs in, and how many ended on
     expect(ids).not.toContain('r0')
     expect(ids).not.toContain('r5')
     expect(ids).toContain('r6')
+  })
+
+  // Second pass H2-2: every ended chat was kept for the Host's life, and every chat lookup scans them all. Ended pty
+  // sessions are kept to the newest ENDED_SESSIONS_KEPT (first pass H5); chats now follow the same number.
+  it('keeps the newest ENDED_SESSIONS_KEPT ended chats, dropping the one that ended longest ago', () => {
+    const { reg, exit } = rig()
+    for (let i = 0; i < ENDED_SESSIONS_KEPT + 3; i++) {
+      reg.open({ id: `c${i}`, file: 'x', args: [], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id: `m_c${i}`, restore: {} } })
+      exit(`c${i}`, 0)
+    }
+    reg.open({ id: 'live', file: 'x', args: [], opts: { cwd: 'D:/p', env: {} }, meta: { kind: 'chat', id: 'm_live', restore: {} } })
+    const ids = reg.list().map((e) => e.id)
+    expect(ids.filter((id) => /^c\d+$/.test(id))).toHaveLength(ENDED_SESSIONS_KEPT)
+    expect(ids).not.toContain('c2')
+    expect(ids).toContain('c3')
+    expect(ids).toContain('live')
   })
 
   it('drops the entry that ended longest ago, not the one opened first', () => {
