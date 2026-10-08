@@ -25,7 +25,19 @@ export interface RuntimeCommandDeps {
   privateAddress(): string | null
   /** This machine's name: the pairing string's hint when it listens everywhere and has no private address. */
   hostname(): string
+  /** Run inside an agent session Astera started (`ASTERA_SESSION` is set; security audit SEC-10). */
+  agentSession?: boolean
 }
+
+/** `runtime start` and `runtime pair` from an agent session (security audit SEC-10). A speed bump, as every role check
+ *  in this CLI: an agent that clears ASTERA_SESSION reads as a shell. */
+const agentRefusal = (cmd: string): HostCommandResult => ({
+  ok: false,
+  error: {
+    code: 'PERMISSION_DENIED',
+    message: `astera ${cmd.replace('-', ' ')} is for a person at their own shell or in the Astera app, not an agent session (ASTERA_SESSION is set)`
+  }
+})
 
 const START_WAIT_MS = 10_000
 const POLL_MS = 250
@@ -48,6 +60,8 @@ const answered = (r: { status: number; body: unknown }): HostCommandResult => {
 export async function runRuntimeCommand(cmd: string, args: Record<string, unknown>, d: RuntimeCommandDeps): Promise<HostCommandResult> {
   switch (cmd) {
     case 'runtime-start': {
+      // Before anything is written (security audit SEC-10): opening this machine to the network is a person's call.
+      if (d.agentSession) return agentRefusal(cmd)
       const patch: Partial<RemoteSettings> = { enabled: true }
       if (args.listen !== undefined) {
         if (typeof args.listen !== 'string' || args.listen === '') return failure('INVALID_ARGUMENTS', '--listen needs an address')
@@ -99,6 +113,7 @@ export async function runRuntimeCommand(cmd: string, args: Record<string, unknow
       return done.ok ? { ok: true, body: { ...base, host: 'running', ...done.body } } : done
     }
     case 'runtime-pair': {
+      if (d.agentSession) return agentRefusal(cmd)
       const permission = args.readOnly === true ? 'read-only' : 'full-control'
       // Everything a pairing string needs is checked before a code is made (Phase 3 minor): a code nobody can redeem,
       // while Remote is off, is not handed out.

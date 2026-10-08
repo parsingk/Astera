@@ -933,9 +933,11 @@ describe('pairing and clients (local only)', () => {
   })
   // Security audit SEC-10: an agent session's CLI is role `cli` too, so an agent talked into it could open this machine
   // to the network and hand out a full-control code. These are for a person at their own shell or in the app.
-  it('refuses pair-create, runtime-reload and projects-add to a CLI inside an agent session', async () => {
+  // runtime-reload is not among them: `runtime stop` reloads too, and stopping is never refused. `runtime start` is
+  // refused by the CLI before it writes anything (src/cli/runtime/commands.ts).
+  it('refuses pair-create and projects-add to a CLI inside an agent session', async () => {
     const orch = orchOver({ controllers: createControllerRegistry(), gateway: { reload: async () => {}, status: () => ({ state: 'off' }) as never } })
-    for (const cmd of ['pair-create', 'runtime-reload', 'projects-add']) {
+    for (const cmd of ['pair-create', 'projects-add']) {
       const r = await orch.call({ cmd, args: {}, sessionId: 'sess-agent', from: cli })
       expect(r.status).toBe(403)
       expect(JSON.stringify(r.body)).toContain('own shell')

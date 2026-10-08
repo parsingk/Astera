@@ -55,6 +55,17 @@ describe('astera runtime (remote runtime design §2.9)', () => {
     expect(r).toMatchObject({ ok: false, error: { code: 'FAILED', details: { gateway: 'BIND_IN_USE' } } })
     expect(r.ok ? '' : r.error.message).toMatch(/BIND_IN_USE/)
   })
+  // Security audit SEC-10: the CLI's own runtime commands asked the Host with no session id, so the Host never saw an
+  // agent behind them, and `runtime start` wrote Remote on before it asked. Refused here, before anything is written.
+  it('start and pair refuse inside an agent session, before they write or ask anything', async () => {
+    const m = machine()
+    const deps = { ...m.deps, agentSession: true }
+    for (const cmd of ['runtime-start', 'runtime-pair'])
+      expect(await runRuntimeCommand(cmd, {}, deps)).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } })
+    expect(m.order).toEqual([])
+    expect(m.settings().enabled).toBe(false)
+    expect(await runRuntimeCommand('runtime-status', {}, deps)).toMatchObject({ ok: true })
+  })
   it('start refuses a port that is not a number before it writes anything', async () => {
     const m = machine()
     expect(await runRuntimeCommand('runtime-start', { port: 'x' }, m.deps)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS' } })

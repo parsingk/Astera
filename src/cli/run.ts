@@ -718,7 +718,8 @@ const runtimeDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; hom
         return { down: true }
       }
       try {
-        const r = await callHost({ conn, cmd, args, sessionId: '', timeoutMs: 30_000 })
+        // The session it runs in, so the Host sees an agent behind it too (security audit SEC-10).
+        const r = await callHost({ conn, cmd, args, sessionId: a.env.ASTERA_SESSION ?? '', timeoutMs: 30_000 })
         if ('unreachable' in r) return { down: true }
         if ('stuck' in r) return { error: { code: 'TIMEOUT', message: r.stuck } }
         return { status: r.status, body: r.body }
@@ -728,7 +729,8 @@ const runtimeDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; hom
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     privateAddress,
-    hostname: () => os.hostname()
+    hostname: () => os.hostname(),
+    agentSession: (a.env.ASTERA_SESSION ?? '') !== ''
   }
 }
 

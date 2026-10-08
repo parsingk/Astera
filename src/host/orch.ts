@@ -1755,7 +1755,6 @@ export function createHostOrch(a: {
         // `stop` write remote-runtime.json and then ask for a reload; `status` reads. The link never routes these.
         if (cmd === 'runtime-reload' || cmd === 'runtime-status') {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
-          if (cmd === 'runtime-reload' && agentShell(from, sessionId)) return { status: 403, body: { error: AGENT_REFUSAL(cmd) } }
           if (!a.gateway) return { status: 501, body: { error: 'this Host does not run the Remote Gateway' } }
           if (cmd === 'runtime-reload') await a.gateway.reload({ now: true })
           return {
