@@ -31,4 +31,20 @@ describe('chunked replies (remote runtime design §3.1)', () => {
     r2.add(frames[0])
     expect(r2.add(frames[0])).toHaveProperty('error')
   })
+
+  // Performance audit H7: a reply whose remaining chunks never come (its connection closed, its stream dropped) must
+  // not stay held for the life of the process. Past a while, or past a few held at once, the oldest goes.
+  it('forgets a reply whose chunks stopped coming, after a while or past a few at once', () => {
+    let now = 0
+    const r = createReassembler({ now: () => now, staleMs: 60_000, maxOpen: 3 })
+    const first = (ref: string) => ({ t: 'chunk' as const, ref, i: 0, n: 2, data: Buffer.from('x').toString('base64') })
+    r.add(first('old'))
+    expect(r.held()).toBe(1)
+    now += 61_000
+    r.add(first('new'))
+    expect(r.held()).toBe(1)
+    for (const ref of ['a', 'b', 'c', 'd']) r.add(first(ref))
+    expect(r.held()).toBe(3)
+  })
 })
+

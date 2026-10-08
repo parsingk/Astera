@@ -136,6 +136,32 @@ describe('the Gateway supervisor (remote runtime design §2.3)', () => {
     await r.clock.advance(1_000)
     expect(r.children).toHaveLength(2)
   })
+  // Performance audit H8: a port another program keeps does not free itself; each named failure in a row waits longer,
+  // up to ten minutes, so a Runtime left in that state does not start a Gateway process every 30 s for days.
+  it('a named failure that keeps happening waits longer each time, up to ten minutes', async () => {
+    const r = rig()
+    await r.sup.reload()
+    const failOnce = async (): Promise<void> => {
+      r.last().frame({ t: 'gateway-failed', code: 'BIND_IN_USE', message: 'in use' })
+      await settle()
+      r.last().exit(1)
+      await settle()
+    }
+    const waits: number[] = []
+    for (let i = 0; i < 7; i++) {
+      await failOnce()
+      const before = r.children.length
+      let waited = 0
+      while (r.children.length === before && waited < 20 * 60_000) {
+        await r.clock.advance(1_000)
+        waited += 1_000
+      }
+      waits.push(waited)
+    }
+    expect(waits[0]).toBe(30_000)
+    for (let i = 1; i < waits.length; i++) expect(waits[i]).toBeGreaterThanOrEqual(waits[i - 1])
+    expect(Math.max(...waits)).toBe(10 * 60_000)
+  })
   // Phase 3 minor: an app greeting reloads too, and must not cut a failed Gateway's cadence short; the person's own
   // `runtime start` (runtime-reload) does try again at once.
   it('a plain reload leaves a failed Gateway to its cadence; reload({ now: true }) tries again at once', async () => {

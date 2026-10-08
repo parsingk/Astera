@@ -15,6 +15,9 @@ import { openHostLog } from './log'
 
 export const GATEWAY_BACKOFF_MS = [1_000, 2_000, 5_000]
 export const GATEWAY_RETRY_MS = 30_000
+/** The waits after a named failure in a row (a port another program keeps, an identity it cannot use): 30 s at first,
+ *  longer each time, then every ten minutes (performance audit H8). A ready Gateway starts the count again. */
+export const GATEWAY_NAMED_RETRY_MS = [30_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000]
 /** The longest stderr line kept before it is written in pieces. */
 const STDERR_LINE_MAX = 64 * 1024
 const STABLE_MS = 30_000
@@ -128,6 +131,8 @@ export function createGatewaySupervisor(d: {
     return run
   }
   const nextBackoff = (): number => GATEWAY_BACKOFF_MS[failures++] ?? GATEWAY_RETRY_MS
+  let namedFailures = 0
+  const nextNamedWait = (): number => GATEWAY_NAMED_RETRY_MS[Math.min(namedFailures++, GATEWAY_NAMED_RETRY_MS.length - 1)]
   const argsFor = (s: RemoteSettings): string[] => ['runtime', 'gateway', '--listen', s.listen, '--port', String(s.port)]
 
   const failed = (code: string, message: string, retryMs: number): void => {
@@ -167,7 +172,7 @@ export function createGatewaySupervisor(d: {
         if (r.stopping || left) return
         if (r.readyAt !== null && now() - r.readyAt >= STABLE_MS) failures = 0
         // A failure the Gateway named (a bind or identity problem) does not get better in a second: the 30 s cadence.
-        if (r.failure) return failed(r.failure.code, r.failure.message, GATEWAY_RETRY_MS)
+        if (r.failure) return failed(r.failure.code, r.failure.message, nextNamedWait())
         failed('GATEWAY_EXITED', spawnError ? `could not start the Gateway: ${spawnError}` : `the Gateway ${how}`, nextBackoff())
       }
     }
@@ -177,6 +182,7 @@ export function createGatewaySupervisor(d: {
         ready: (f) => {
           if (r.ended || r.stopping) return
           r.readyAt = now()
+          namedFailures = 0
           d.log(`remote: the Gateway listens on ${f.address}:${f.port} (pid ${proc.pid ?? '?'})`)
           set({ state: 'ready', listen: s.listen, port: f.port, fingerprint: f.fingerprint })
         },
