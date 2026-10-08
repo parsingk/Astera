@@ -146,6 +146,21 @@ const SESSION = {
     detail: 'It does not remove the worktrees afterwards.',
     flags: [RUN_ARG('<runId>', 'the run whose worktrees to merge')]
   },
+  'runs-changed-files': {
+    summary: 'the files a run, or one of its tasks, changed, from git',
+    detail:
+      '`git.files` lists each file the run changed since it began, from git on the machine it runs on: `id` (what `runs-diff` takes), `path`, `oldPath` for a rename, `status` (added, modified, deleted or renamed), and `additions` and `deletions`, or `binary`. While the run is still at work it includes uncommitted edits to tracked files. `reported` is what its workers said they changed. `git` is null with `unavailable` when there is no git list: not-recorded for a run from before this was kept, git-failed when git could not read it.',
+    flags: [{ name: 'id', value: '<runId>', required: true, about: 'the run' }, { name: 'task', value: '<taskId>', about: 'only what this task changed' }]
+  },
+  'runs-diff': {
+    summary: 'the diff of one changed file, as git diff prints it',
+    detail: 'The file is named by its id from `runs-changed-files`, never by a path. A diff over 1 MiB is cut at a line and `truncated` says so.',
+    flags: [
+      { name: 'id', value: '<runId>', required: true, about: 'the run' },
+      { name: 'file', value: '<fileId>', required: true, about: 'the id from runs-changed-files' },
+      { name: 'task', value: '<taskId>', about: 'the task the list was read for' }
+    ]
+  },
   'runs-git-record': {
     summary: 'record the git range a run or one attempt worked over',
     detail: 'The Host records it itself; anyone else is refused. One of --runId and --dispatchId, with --base or --head.',

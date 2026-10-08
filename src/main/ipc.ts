@@ -93,6 +93,7 @@ import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
+import { readChanges, readFileDiff } from '../core/git/changes'
 import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
@@ -3143,6 +3144,9 @@ export function registerIpc(
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
+      // A local Run's changed files and diffs (remote runtime design Phase 10), from this machine's git, as the Host
+      // reads them for a remote one.
+      changes: { read: (repo, base, head) => readChanges(repo, base, head), diff: (repo, base, head, f) => readFileDiff(repo, base, head, f) },
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
       // now serialises writes too, but what that prevents is inversion when two flows overlap; within a
       // single flow, waiting for the previous write before re-reading is still the caller's
@@ -4508,7 +4512,10 @@ export function registerIpc(
     'run-merge': 'run',
     'run-pause': 'run',
     'run-resume': 'run',
-    'run-delete': 'id'
+    'run-delete': 'id',
+    // Phase 10: the renderer names the Run as `runId`; a file of another project's Run is not read through this door.
+    'runs-changed-files': 'runId',
+    'runs-diff': 'runId'
   }
   const TASK_ID_ARG: Record<string, string[]> = {
     'task-update': ['id'],

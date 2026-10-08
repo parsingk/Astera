@@ -25,6 +25,9 @@ export const CONTROLLER_READ_COMMANDS = [
   // Phase 6: a remote Jobs view's own reads, folded and paged on the Runtime (X1-05).
   'jobs-view',
   'runs-timeline',
+  // Phase 10: a Run's changed files and one file's diff by id, from the Runtime's git.
+  'runs-changed-files',
+  'runs-diff',
   // Phase 9a: a remote session's facts (remoteSessions.ts).
   'sessions-facts',
   'sessions-conversation',

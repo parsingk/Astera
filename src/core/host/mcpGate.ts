@@ -25,7 +25,10 @@ export const MCP_READ_COMMANDS = [
   'understanding-list',
   'understanding-get',
   // wait_for_run (MCP P2-D): the long poll under `astera runs follow`, which never writes.
-  'runs-follow'
+  'runs-follow',
+  // Phase 10: a Run's changed files and one file's diff by id, read from git and never written.
+  'runs-changed-files',
+  'runs-diff'
 ] as const
 
 export const MCP_CONTROL_COMMANDS = [

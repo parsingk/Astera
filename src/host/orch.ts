@@ -518,6 +518,8 @@ export function createHostOrch(a: {
   /** How It Works records (MCP P2-C), passed through to `hostOrchDeps`. Absent: the `understanding-*`
    *  commands answer 409. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
+  /** A Run's changed files and diffs from this Host's git (remote runtime design Phase 10). */
+  changes?: OrchServerDeps['changes']
   /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
    *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
   journal?: (Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> & Partial<Pick<HostJournal, 'busy'>>) | null
@@ -756,6 +758,7 @@ export function createHostOrch(a: {
       ...(a.createSession ? { createSession: a.createSession } : {}),
       ...(a.github ? { github: a.github } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+      ...(a.changes ? { changes: a.changes } : {}),
       workUnits: a.workUnits?.() ?? null,
       ...(a.journal ? { journalTimeline: (runId: string, st: OrchState) => a.journal!.timeline(runId, st) } : {}),
       onEffect: () => {

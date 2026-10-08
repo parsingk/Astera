@@ -47,6 +47,8 @@ import {
   type Res
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
+import { rangesFor } from './changedFiles'
+import type { ChangedFile } from '../git/changes'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
 import { stateWord } from './cliHuman'
@@ -610,6 +612,13 @@ export interface OrchServerDeps {
    *  over a base, and the worktree's uncommitted change count (throws when git cannot read it).
    *  **Only the Host injects it**: gh runs on the Host's PATH and login. Absent, the `github-*`
    *  commands answer 409. */
+  /** A Run's changed files and one file's diff from this machine's git (remote runtime design Phase 10):
+   *  `core/git/changes.ts` over a repo and a range. The Host and the app both inject it. Absent, `runs-changed-files`
+   *  and `runs-diff` answer 409. */
+  changes?: {
+    read(repo: string, base: string, head: string | null): Promise<ChangedFile[] | null>
+    diff(repo: string, base: string, head: string | null, f: ChangedFile): Promise<{ diff: string; truncated: boolean } | null>
+  }
   github?: {
     run: GhRunner
     worktreeOf?(path: string): WorktreeInfo | null
@@ -2187,6 +2196,47 @@ export async function handleCommand(
     }
     // **Where each Task stands in completion, read and never run** (MCP design §3). Not public: the
     // MCP get_completion tool reads it; the CLI's `runs checks` stays the public view of the same run.
+    // **A Run's changed files from git, beside what its workers said** (remote runtime design Phase 10, D10.1): the
+    // first of `rangesFor`'s ranges git answers. `unavailable` says why there is no git list: no range was recorded
+    // (the work predates Phase 10), or git could not read any of them (the folder and the commits are gone).
+    case 'runs-changed-files': {
+      const runId = str(args.runId) ?? str(args.id)
+      if (!runId) return bad('--id is required: the run whose changed files to read')
+      const taskId = str(args.taskId) ?? str(args.task) ?? undefined
+      const found = rangesFor(s, runId, taskId)
+      if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
+      if (!deps.changes) return conflict('changed files are read where the run lives, and this caller cannot read git there')
+      const head = { runId, ...(taskId ? { taskId } : {}), reported: found.reported }
+      if (found.ranges.length === 0) return okBody({ ...head, git: null, unavailable: 'not-recorded' })
+      for (const r of found.ranges) {
+        const files = await deps.changes.read(r.repo, r.base, r.head)
+        if (files) return okBody({ ...head, git: { files, base: r.base, head: r.head } })
+      }
+      return okBody({ ...head, git: null, unavailable: 'git-failed' })
+    }
+    // **One file's diff, by the id `runs-changed-files` gave it, never a path** (§4.8): the same range's list is read
+    // again and the id looked up in it, so a caller can only ever see a file that range changed.
+    case 'runs-diff': {
+      const runId = str(args.runId) ?? str(args.id)
+      if (!runId) return bad('--id is required: the run the file changed in')
+      const fileId = str(args.fileId) ?? str(args.file)
+      if (!fileId) return bad('--file is required: a file id from runs-changed-files')
+      const taskId = str(args.taskId) ?? str(args.task) ?? undefined
+      const found = rangesFor(s, runId, taskId)
+      if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
+      if (!deps.changes) return conflict('diffs are read where the run lives, and this caller cannot read git there')
+      for (const r of found.ranges) {
+        const files = await deps.changes.read(r.repo, r.base, r.head)
+        if (!files) continue
+        const file = files.find((f) => f.id === fileId)
+        if (!file) return notFound(`no changed file ${fileId} in run ${runId}; read runs-changed-files again`)
+        const d = await deps.changes.diff(r.repo, r.base, r.head, file)
+        return d ? okBody({ file, ...d }) : conflict(`git could not produce the diff of ${file.path}`)
+      }
+      return found.ranges.length === 0
+        ? notFound(`run ${runId} has no recorded git range`)
+        : conflict(`git could not read the changes of run ${runId}`)
+    }
     case 'runs-completion': {
       const id = str(args.id)
       if (!id) return bad('--id is required')

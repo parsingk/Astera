@@ -449,7 +449,8 @@ const NOT_FORWARDED = [
   'createSession',
   'journalTimeline',
   'github',
-  'readUnderstanding'
+  'readUnderstanding',
+  'changes'
 ] as const
 
 /** Every name the groups above classify between them. Nothing is unsupplied any more: the four
@@ -584,7 +585,10 @@ const EFFECTFUL: Record<Classified, boolean> = {
   github: false,
   // NOT_FORWARDED as well (MCP P2-C): a read of this Host's profile's understanding.json, never the
   // app's. It never writes the file and leaves nothing outside the call.
-  readUnderstanding: false
+  readUnderstanding: false,
+  // NOT_FORWARDED as well (remote runtime design Phase 10): git reads on this Host's machine, never the app's. It
+  // runs `git diff` and leaves nothing outside the call.
+  changes: false
 }
 
 /** The names an action really travels under, narrowed to the effectful ones — the NESTED groups
@@ -700,6 +704,8 @@ export function hostOrchDeps(a: {
   /** How It Works records (MCP P2-C): this Host's profile's understanding.json, read per call. Absent:
    *  the `understanding-*` commands answer 409, as a caller that is not the Host. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
+  /** A Run's changed files and diffs from this Host's git (Phase 10). Absent: the two commands answer 409. */
+  changes?: OrchServerDeps['changes']
   /** The Host's own session work units (HOST_TRACKS, E2 §5), asked whether it is their writer at every
    *  call. Null or absent (no spawner): `trackingEnabled` and `sessionTasks.*` only forward, as before. */
   workUnits?: (Pick<HostWorkUnits, 'isWriter' | 'trackingEnabled'> & {
@@ -1275,6 +1281,7 @@ export function hostOrchDeps(a: {
     ...(a.journalTimeline ? { journalTimeline: a.journalTimeline } : {}),
     ...(github ? { github } : {}),
     ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+    ...(a.changes ? { changes: a.changes } : {}),
     ...(a.checkWaits
       ? {
           enterCheckWait: (runId: string, sessionId: string) => a.checkWaits!.enter(runId, sessionId),

@@ -73,6 +73,7 @@ import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
+import { readChanges, readFileDiff } from '../core/git/changes'
 import { createMcpHttpSupervisor } from './mcpHttp'
 import { createGatewaySupervisor } from './gatewaySupervisor'
 import { attachGatewayLink } from './gatewayLink'
@@ -604,7 +605,7 @@ async function main(): Promise<void> {
           bootId,
           platform: process.platform,
           pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
-          capabilities: ['remote.jobs', 'remote.retry', 'pty.seq', 'pty.checkpoint']
+          capabilities: ['remote.jobs', 'remote.retry', 'remote.changed-files', 'remote.diff', 'pty.seq', 'pty.checkpoint']
         }),
         log: (m) => log.write(m),
         onReady: events.ready,
@@ -694,6 +695,8 @@ async function main(): Promise<void> {
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.
     readUnderstanding: () => readUnderstandingFile(path.join(profileDir, 'understanding.json')),
+    // A Run's changed files and diffs (remote runtime design Phase 10), from this machine's git.
+    changes: { read: (repo, base, head) => readChanges(repo, base, head), diff: (repo, base, head, f) => readFileDiff(repo, base, head, f) },
     local: spawner,
     // Host journal (J1, J3, J4): the commits, the load's cleanup, journal-append and journal-reload.
     journal: hostJournal,
