@@ -71,7 +71,8 @@ import { freePort, killTree, processStartTimes } from './workspace/native'
 import { defaultGhRunner } from '../core/github/gh'
 import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
-import { isCleanWorktree } from '../core/worktrees/git'
+import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
+import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createMcpHttpSupervisor } from './mcpHttp'
 import { createGatewaySupervisor } from './gatewaySupervisor'
 import { attachGatewayLink } from './gatewayLink'
@@ -303,8 +304,12 @@ async function main(): Promise<void> {
   //
   // `server` and `orch` are assigned below; its closures only run inside an operation, long after both
   // exist.
+  // Phase 10: the git range each Run and attempt worked over, recorded as the state moves and around every merge.
+  // Made below, once `orch` exists to record through; the worktrees' merge hooks read it when a merge runs.
+  let runGit: RunGitRecorder | null = null
   const worktrees = createHostWorktrees({
     profileDir,
+    integrateHooks: () => runGit,
     homeDir: os.homedir(),
     ptys: registry,
     procs,
@@ -632,7 +637,10 @@ async function main(): Promise<void> {
     hasApp: () => server.hasApp(),
     // Every commit goes to the clients, so the app can swap its mirror (design §5). Greeted sockets
     // only, which `broadcast` already guarantees.
-    onState: (state, version) => server.broadcast({ t: 'orch-state', state, version }),
+    onState: (state, version) => {
+      server.broadcast({ t: 'orch-state', state, version })
+      runGit?.onState(state)
+    },
     // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
     // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
     // silence, and a person looking for why nothing happened has nothing to read.
@@ -720,6 +728,21 @@ async function main(): Promise<void> {
     // `runtime-reload` and `runtime-status`, and revocation closing live connections (remote runtime design §2.9, §3.3).
     gateway,
     closeControllerConns: (conns) => gateway.link()?.closeConns(conns)
+  })
+  runGit = createRunGitRecorder({
+    record: (args) => orch.handle('runs-git-record', args),
+    headOf: async (cwd) => {
+      const r = await realGit(['rev-parse', 'HEAD'], { cwd })
+      return r.ok ? r.stdout : null
+    },
+    mergeBase: async (cwd, ref) => {
+      const r = await realGit(['merge-base', 'HEAD', ref], { cwd })
+      return r.ok ? r.stdout : null
+    },
+    baseRefOf: (p) => worktrees.infoOf(p)?.baseRef ?? null,
+    // A folder that is gone fails its git read, which records nothing: no synchronous probe on the Host's one thread.
+    isDir: (p) => p !== '',
+    log: (m) => log.write(m)
   })
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and

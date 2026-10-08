@@ -61,6 +61,9 @@ export interface HostWorktreesDeps {
   git?: typeof realGit
   /** The clock of the merge records (R24); an ISO string. */
   now?: () => string
+  /** Phase 10: told before a merge (the heads of what is merged) and after it (the head of where it went), so each
+   *  Run keeps its git range once its worktree is reaped. Read at each merge; null while there is none. */
+  integrateHooks?: () => { beforeIntegrate(into: string, paths: string[]): Promise<void>; afterIntegrate(into: string): Promise<void> } | null
 }
 
 export interface HostWorktrees {
@@ -309,8 +312,13 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
 
   /** The one integrateWorktrees call both doors go through, so the loop's merges and `mergeWorktrees`
    *  announce and record a merge alike. */
-  const integrateInto = (into: string, paths: string[], opts: Parameters<typeof integrateWorktrees>[2]): Promise<Integration> =>
-    integrateWorktrees(into, paths, opts, { log: d.log, gitOp, reap, git: d.git })
+  const integrateInto = async (into: string, paths: string[], opts: Parameters<typeof integrateWorktrees>[2]): Promise<Integration> => {
+    const hooks = d.integrateHooks?.() ?? null
+    await hooks?.beforeIntegrate(into, paths).catch((e) => d.log(`git range before a merge into ${into}: ${message(e)}`))
+    const result = await integrateWorktrees(into, paths, opts, { log: d.log, gitOp, reap, git: d.git })
+    await hooks?.afterIntegrate(into).catch((e) => d.log(`git range after a merge into ${into}: ${message(e)}`))
+    return result
+  }
   const deps = worktreeDeps({
     integrate: integrateInto,
     reap,
