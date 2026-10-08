@@ -18,6 +18,44 @@ export interface RuntimesDeps {
   hostname(): string
   now(): string
   version: string
+  /** How long one step of a pairing (connect and redeem, then connect and sign in) may take; PAIR_STEP_MS when left out. */
+  timeoutMs?: number
+}
+
+/** Second pass RR-5: a mistyped or firewalled address held a pairing for the OS's connect wait (two minutes on Linux), and
+ *  a Runtime that never answered held it for good. */
+export const PAIR_STEP_MS = 30_000
+
+/** Connects, runs `f` on the link and closes it, all within `ms`; past it the link is closed and the step is
+ *  RUNTIME_OFFLINE. */
+function boundedStep<T>(d: RuntimesDeps, to: { host: string; port: number; pin: string }, f: (link: RuntimeLink) => Promise<T>): Promise<T> {
+  const ms = d.timeoutMs ?? PAIR_STEP_MS
+  let link: RuntimeLink | null = null
+  let late = false
+  const work = (async () => {
+    const l = await d.connect(to)
+    if (late) {
+      l.close()
+      throw new Error('late')
+    }
+    link = l
+    try {
+      return await f(l)
+    } finally {
+      l.close()
+    }
+  })()
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => {
+      late = true
+      ;(link as RuntimeLink | null)?.close()
+      reject(Object.assign(new Error(`the Runtime did not answer within ${Math.round(ms / 1000)} s`), { code: 'RUNTIME_OFFLINE' }))
+    }, ms)
+    work.then(
+      (v) => (clearTimeout(t), resolve(v)),
+      (e) => (clearTimeout(t), reject(e))
+    )
+  })
 }
 
 type Result = { ok: true; body: unknown } | { ok: false; error: CliError }
@@ -101,24 +139,14 @@ async function add(args: Record<string, unknown>, d: RuntimesDeps): Promise<Resu
   // The pin is checked on the TLS handshake, before any frame (§3.2): a different key never sees the code.
   let paired: { clientId: string; token: string }
   try {
-    const link = await d.connect({ host: address, port, pin: fingerprint })
-    try {
-      paired = await link.redeem(code, name, client)
-    } finally {
-      link.close()
-    }
+    paired = await boundedStep(d, { host: address, port, pin: fingerprint }, (link) => link.redeem(code, name, client))
   } catch (e) {
     return failure(codeOfError(e), `pairing with ${address}:${port} failed: ${messageOf(e)}`)
   }
   // A new connection with the new token reads who the Runtime is and what this pairing may do.
   let hello: Awaited<ReturnType<RuntimeLink['auth']>>
   try {
-    const link = await d.connect({ host: address, port, pin: fingerprint })
-    try {
-      hello = await link.auth(paired.token, client)
-    } finally {
-      link.close()
-    }
+    hello = await boundedStep(d, { host: address, port, pin: fingerprint }, (link) => link.auth(paired.token, client))
   } catch (e) {
     // The code is spent and the Runtime keeps a pairing whose token is now lost (review M5): say how to clear it.
     return failure(codeOfError(e), `paired with ${address}:${port}, but the first sign-in failed: ${messageOf(e)}. ${LEFT_BEHIND}`)

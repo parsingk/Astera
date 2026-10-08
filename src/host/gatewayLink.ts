@@ -134,6 +134,9 @@ export function attachGatewayLink(o: {
       case 'gateway-failed':
         return o.onFailed(f)
       case 'auth': {
+        // Not before the paired clients are read (second pass RR-7): a refusal here is final for the controller.
+        const l = o.controllers.loading()
+        if (l) await l
         const r = o.controllers.authenticate(f.tokenHash)
         if (!r) return send({ t: 'authed', conn: f.conn, ok: false })
         o.controllers.bind(o.linkGen, f.conn, r.clientId)

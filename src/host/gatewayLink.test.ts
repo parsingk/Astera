@@ -19,12 +19,12 @@ const HELLO = {
 
 type Seen = { cmd: string; args: Record<string, unknown>; sessionId: string; from?: OrchCaller; request?: string; retry?: true }
 
-const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) => Promise<{ status: number; body: unknown }>; ptys?: PtyRegistry; streamPerKey?: number } = {}) => {
+const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) => Promise<{ status: number; body: unknown }>; ptys?: PtyRegistry; streamPerKey?: number; controllers?: ReturnType<typeof createControllerRegistry> } = {}) => {
   const input = new PassThrough()
   const output = o.output ?? new PassThrough()
   const frames: Array<Record<string, unknown>> = []
   if (!o.output) output.on('data', (d: Buffer) => d.toString().split('\n').filter(Boolean).forEach((l) => frames.push(JSON.parse(l))))
-  const controllers = createControllerRegistry()
+  const controllers = o.controllers ?? createControllerRegistry()
   const calls: Seen[] = []
   const logs: string[] = []
   const events: string[] = []
@@ -71,6 +71,29 @@ describe('attachGatewayLink (remote runtime design §2.4, §3.3)', () => {
     ])
     expect(s.controllers.principalFor(1, 'c1')).toMatchObject({ clientId: c.clientId })
   })
+  // Second pass RR-7: a sign-in that arrived while the Host was still reading its paired clients (right after a restart,
+  // the secret store's checks take a while on Windows) was refused as final, and the controller gave up.
+  it('answers a sign-in that arrives while the paired clients are still loading once they are loaded', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const controllers = createControllerRegistry({
+      records: {
+        load: async () => {
+          await gate
+          return [{ clientId: 'cli_1', name: 'laptop', tokenHash: sha256Base64url('tok'), permission: 'read-only', createdAt: '2026-10-08T00:00:00.000Z', lastSeenAt: null }]
+        },
+        save: async () => {}
+      }
+    })
+    void controllers.load()
+    const s = await setup({ controllers })
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url('tok') })
+    await s.settle()
+    release()
+    await s.settle()
+    expect(s.frames).toMatchObject([{ t: 'authed', conn: 'c1', ok: true }])
+  })
+
   it('runs a call as the bound principal only, whatever the frame claimed (Review Focus 1)', async () => {
     const s = await setup()
     const c = await s.pairClient('full-control')

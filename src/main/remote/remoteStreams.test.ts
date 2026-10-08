@@ -96,6 +96,22 @@ describe('createRemoteStreams', () => {
     expect(r.sent).toEqual([['session:remote-gone', { sessionId: 'rt_x:s1', code: 'RUNTIME_NOT_FOUND', message: 'no runtime rt_x' }]])
   })
 
+  // Second pass RR-10: a client lookup that threw (an unreadable registry) left the entry with nothing subscribed and sent
+  // nothing, and the tab stayed blank.
+  it('a client lookup that throws reports the stream gone and keeps nothing', async () => {
+    const sent: Array<[string, unknown]> = []
+    const streams = createRemoteStreams({
+      clientOf: async () => {
+        throw new Error('the registry could not be read')
+      },
+      send: (channel, payload) => void sent.push([channel, payload])
+    })
+    expect(await streams.attach('rt_1', 's1', 'pty-1')).toBe(false)
+    expect(sent).toEqual([['session:remote-gone', { sessionId: 'rt_1:s1', code: 'RUNTIME_OFFLINE', message: 'the registry could not be read' }]])
+    await streams.rebind('rt_1')
+    expect(sent).toHaveLength(1)
+  })
+
   it('a re-paired Runtime gets its streams subscribed again on its new client; a removed one reports them gone', async () => {
     const r = rig()
     await r.streams.attach('rt_1', 's1', 'pty-1')

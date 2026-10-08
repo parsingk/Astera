@@ -168,6 +168,17 @@ describe('openMcpRuntimes', () => {
     expect(await r.linkFor('nope')).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
   })
 
+  // Second pass RR-9: each remote tool call opened the registry again (a locked sweep and ACL checks on Windows) and read
+  // the token. While the registry file is as it was, the kept link answers without either, as the app does.
+  it('a call while the registry is unchanged reads neither the registry nor the token again', async () => {
+    opened.length = 0
+    const r = rts()
+    await r.linkFor('rt_a')
+    await fs.writeFile(path.join(dir, 'runtimes', 'rt_a.token'), 'tok-z')
+    await r.linkFor('rt_a')
+    expect(opened.map((t) => t.token)).toEqual(['tok-a'])
+  })
+
   // Final review I6: a re-pair (new token or key for the same Runtime) reaches a running MCP server at its next call.
   it('opens a new link when the Runtime was paired again', async () => {
     opened.length = 0

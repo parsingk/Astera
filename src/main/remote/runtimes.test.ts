@@ -124,6 +124,19 @@ describe('a client replaced or removed is announced', () => {
     expect(changed).toEqual(['rt_a', 'rt_a'])
   })
 
+  // Second pass M2-7: a Runtime removed with `astera runtimes remove` while the app ran kept its client and its link.
+  it('a Runtime removed outside the app has its client closed and announced at the next lookup', async () => {
+    const o = opener()
+    const changed: string[] = []
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: o.open, onClientChange: (id) => void changed.push(id) })
+    await r.client('rt_a')
+    await (await controllerRegistry(dir)).remove('rt_a')
+    expect(await r.client('rt_a')).toMatchObject({ code: 'RUNTIME_NOT_FOUND' })
+    await new Promise((res) => setTimeout(res, 0))
+    expect(o.closed).toEqual(['tok-a'])
+    expect(changed).toEqual(['rt_a'])
+  })
+
   // Performance audit M4: every remote call looked its Runtime up again, reading and checking the registry and the
   // token file. While the registry file is as it was, the kept client answers without reading either.
   it('a call while the registry is unchanged reads neither the registry nor the token again', async () => {

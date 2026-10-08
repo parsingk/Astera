@@ -135,6 +135,25 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     const next = await g.connect()
     await expect(next.auth('good-token', {})).resolves.toMatchObject({ runtimeId: 'rt_test' })
   })
+  // Second pass RR-4: a redeeming connection was never announced, so its close never reached the Host and a pairing
+  // the dropped controller would have taken was left on the Runtime.
+  it('tells the Host when a connection closes while its pairing is being redeemed', async () => {
+    const g = await start({}, () => {})
+    const l = await g.connect()
+    void l.redeem('CODE', 'laptop', {}).catch(() => {})
+    await until(() => g.seen.some((f) => f.t === 'redeem'))
+    const conn = g.seen.find((f) => f.t === 'redeem')!.conn
+    l.close()
+    await until(() => g.seen.some((f) => f.t === 'conn-closed' && f.conn === conn))
+  })
+  // Second pass RR-6: a Host that never answered an `auth` or a `redeem` held the connection open for good, the
+  // controller's pings keeping it alive.
+  it('closes a connection whose sign-in the Host does not answer in time', async () => {
+    const g = await start({ answerMs: 100, pingMs: 30 }, () => {})
+    const l = await g.connect()
+    void l.auth('good-token', {}).catch(() => {})
+    expect(await l.closed).toMatchObject({ code: 'REMOTE_TIMEOUT' })
+  })
   it('closes a peer that stops answering pings', async () => {
     const g = await start({ pingMs: 40, silenceMs: 120 })
     const l = await g.connect({ answerPings: false })

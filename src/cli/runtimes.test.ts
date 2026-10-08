@@ -130,6 +130,29 @@ describe('astera runtimes (remote runtime design §4.4, §4.5)', () => {
     const r = await runRuntimesCommand('runtimes-add', { pair }, h.d)
     expect(r).toMatchObject({ ok: false, error: { message: expect.stringMatching(/runtime revoke/) } })
   })
+  // Second pass RR-5: a mistyped or firewalled address held the Pair button for the OS's connect wait, and a Runtime that
+  // took the code and never answered held it for good.
+  it('a Runtime that does not answer the pairing in time is RUNTIME_OFFLINE, and the connection is closed', async () => {
+    let closed = 0
+    const h = deps({
+      connect: async () => ({
+        redeem: () => new Promise(() => {}),
+        auth: () => new Promise(() => {}),
+        call: async () => ({ status: 200, body: {} }),
+        close: () => void closed++,
+        closed: new Promise(() => {})
+      }),
+      timeoutMs: 30
+    })
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    expect(await runRuntimesCommand('runtimes-add', { pair }, h.d)).toMatchObject({ ok: false, error: { code: 'RUNTIME_OFFLINE' } })
+    expect(closed).toBe(1)
+  })
+  it('a connect that never completes is RUNTIME_OFFLINE in time', async () => {
+    const h = deps({ connect: () => new Promise(() => {}), timeoutMs: 30 })
+    const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })
+    expect(await runRuntimesCommand('runtimes-add', { pair }, h.d)).toMatchObject({ ok: false, error: { code: 'RUNTIME_OFFLINE' } })
+  })
   it('an unreachable Runtime is RUNTIME_OFFLINE', async () => {
     const h = deps({ connect: async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) } })
     const pair = formatPairing({ address: '10.0.0.2', port: 47831, code: 'GOODCODE01', fingerprint: FP })

@@ -17,6 +17,8 @@ export interface GatewayLimits {
   connections: number
   inFlight: number
   firstFrameMs: number
+  /** How long the Host has to answer an `auth` or a `redeem` (second pass RR-6). */
+  answerMs: number
   pingMs: number
   silenceMs: number
   queuePerConn: number
@@ -28,6 +30,7 @@ export const GATEWAY_LIMITS: GatewayLimits = {
   connections: 16,
   inFlight: 32,
   firstFrameMs: 10_000,
+  answerMs: 30_000,
   pingMs: 15_000,
   silenceMs: 45_000,
   queuePerConn: 8 << 20,
@@ -137,6 +140,14 @@ export async function startGateway(o: {
     closeConn(c, code)
   }
 
+  /** Closes `c` if it is still in `state` once the Host has had answerMs to answer it. */
+  const awaitHost = (c: Conn, state: 'authing' | 'redeeming'): void => {
+    c.timers.push(
+      setTimeout(() => {
+        if (c.state === state) refuse(c, 'REMOTE_TIMEOUT', 'the Runtime did not answer the sign-in in time')
+      }, lim.answerMs).unref()
+    )
+  }
   const onControllerFrame = (c: Conn, v: unknown): void => {
     c.heard = now()
     const f = parseControllerFrame(v)
@@ -146,6 +157,7 @@ export async function startGateway(o: {
     if (c.state === 'new' && f.t === 'auth') {
       c.state = 'authing'
       c.announced = true
+      awaitHost(c, 'authing')
       return toHost({ t: 'auth', conn: c.id, tokenHash: sha256Base64url(f.token) })
     }
     if (c.state === 'new' && f.t === 'redeem') {
@@ -154,6 +166,9 @@ export async function startGateway(o: {
       if (recent.length >= lim.redeemPerMinute) return refuse(c, 'RUNTIME_BUSY', 'too many pairing attempts from this address; wait a minute')
       redeems.set(from, [...recent, now()])
       c.state = 'redeeming'
+      // Announced too (second pass RR-4): its close must reach the Host, which takes back a pairing nobody received.
+      c.announced = true
+      awaitHost(c, 'redeeming')
       return toHost({ t: 'redeem', conn: c.id, code: f.code, name: f.name })
     }
     if (f.t === 'subscribe' || f.t === 'unsubscribe') {

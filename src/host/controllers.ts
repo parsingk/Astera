@@ -45,6 +45,8 @@ export function controllerRecordsFile(store: SecretStore): ControllerRecordsFile
 export interface ControllerRegistry {
   /** Reads the records file into memory. Writes wait for it, so none can save a set missing the loaded clients. */
   load(): Promise<void>
+  /** The load that is running, settling either way; null when none is (second pass RR-7). */
+  loading(): Promise<void> | null
   /** A one-time code for `astera runtime pair`. Only its hash is kept; the code itself goes to the caller alone. */
   createPairing(a: { permission: ControllerPermission; name?: string }): { code: string; expiresAt: string }
   /** The code a controller sent over the pinned link. A right one makes a client record and its token, once. */
@@ -126,6 +128,7 @@ export function createControllerRegistry(
         }
       )
     },
+    loading: () => (loading ? loading.catch(() => {}) : null),
     createPairing: ({ permission, name }) => {
       const code = newCode()
       const expiresAt = now() + CODE_TTL_MS

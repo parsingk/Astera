@@ -74,7 +74,15 @@ export function createRemoteRuntimes(a: {
     const r = await reg()
     const found = resolveRuntime(await r.list(), runtimeId)
     // By id only from the app: a name is for a person typing a command, and a view keys its data by id.
-    if ('code' in found || found.runtimeId !== runtimeId) return { code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime has the id ${runtimeId}` }
+    if ('code' in found || found.runtimeId !== runtimeId) {
+      // Removed outside this app (`astera runtimes remove`, second pass M2-7): its client and link go too.
+      if (held) {
+        held.client.close()
+        clients.delete(runtimeId)
+        setTimeout(() => a.onClientChange?.(runtimeId), 0)
+      }
+      return { code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime has the id ${runtimeId}` }
+    }
     const token = await r.token(found.runtimeId)
     if (token === null) return { code: 'RUNTIME_NOT_FOUND', message: `${found.name} has no token on this machine; pair it again` }
     const pairing = `${found.address}:${found.port}:${found.fingerprint}:${createHash('sha256').update(token).digest('hex')}`

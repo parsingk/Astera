@@ -88,7 +88,13 @@ export function createRemoteStreams(a: {
     const s = streams.get(key)
     if (!s) return false
     const mine = s.gen
-    const client = await a.clientOf(s.runtimeId)
+    let client: Awaited<ReturnType<typeof a.clientOf>>
+    try {
+      client = await a.clientOf(s.runtimeId)
+    } catch (e) {
+      // A lookup that throws is said too (second pass RR-10): the tab stayed blank with nothing subscribed.
+      client = { code: 'RUNTIME_OFFLINE', message: e instanceof Error ? e.message : String(e) }
+    }
     // Detached or replaced while the client was being found.
     if (streams.get(key)?.gen !== mine) return false
     if (!('subscribePty' in client)) {
