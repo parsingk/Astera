@@ -27,3 +27,9 @@ export function draftOf(sessionId: string): string {
 export function forgetDraft(sessionId: string): void {
   drafts.delete(sessionId)
 }
+
+/** Forgets the drafts of sessions that went (performance audit, renderer): a closed session's draft used to stay for
+ *  the app's life, since only sending it took it away. */
+export function forgetDrafts(gone: ReadonlySet<string>): void {
+  for (const id of gone) drafts.delete(id)
+}

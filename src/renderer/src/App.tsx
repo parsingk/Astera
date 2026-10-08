@@ -47,6 +47,8 @@ import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { pollWhileVisible } from './lib/visiblePoll'
+import { dropKeys } from './lib/dropKeys'
+import { forgetDrafts } from './components/conversation/drafts'
 import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
 import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resumeRun, type ActionUi } from './lib/jobActions'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
@@ -750,6 +752,27 @@ export default function App(): React.JSX.Element {
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
+  // A session that went takes its marks with it (performance audit, renderer): the working mark, the roll and schedule
+  // banners and the composer draft were kept for every session the app ever showed. Only ids that were in the list and
+  // left it: a mark can arrive for a new session before the list names it.
+  const shownSessionIds = useRef<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    const now = new Set(sessions.map((s) => s.id))
+    const gone = new Set([...shownSessionIds.current].filter((id) => !now.has(id)))
+    shownSessionIds.current = now
+    if (gone.size === 0) return
+    setBusy((p) => dropKeys(p, gone))
+    setRollStates((p) => dropKeys(p, gone))
+    setSchedStates((p) => dropKeys(p, gone))
+    forgetDrafts(gone)
+  }, [sessions])
+  const shownRemoteKeys = useRef<ReadonlySet<string>>(new Set())
+  useEffect(() => {
+    const now = new Set(remoteSessions.map((r) => r.key))
+    const gone = new Set([...shownRemoteKeys.current].filter((k) => !now.has(k)))
+    shownRemoteKeys.current = now
+    if (gone.size > 0) setRemoteStatus((p) => dropKeys(p, gone))
+  }, [remoteSessions])
   // Every session whose roll-state / schedule push listener has decided banner state at least once. A
   // seed reply is dropped for a session already in the set: an invoke reply and a push have no order
   // between them, so a push — including an 'off'/'none' that removed the banner — is always the fresher

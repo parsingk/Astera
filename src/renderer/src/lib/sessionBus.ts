@@ -36,6 +36,18 @@ const observers = new Map<string, Set<Listener>>()
 export type Checkpoint = { state: string; pending: string; cols: number; rows: number; exitCode?: number }
 const resetListeners = new Map<string, (c: Checkpoint) => void>()
 const heldCheckpoints = new Map<string, Checkpoint>()
+/** How long output for a discarded session is dropped (performance audit, renderer): a closed tab's kill settles after
+ *  the discard, and its last output used to make the buffer again, held for the app's life. */
+export const DISCARD_SETTLE_MS = 10_000
+/** Discarded session id → until when its output is dropped. A view attaching takes the id back at once. */
+const discarded = new Map<string, number>()
+const droppedNow = (sessionId: string): boolean => {
+  const until = discarded.get(sessionId)
+  if (until === undefined) return false
+  if (Date.now() <= until) return true
+  discarded.delete(sessionId)
+  return false
+}
 let initialized = false
 
 export function init(): void {
@@ -44,6 +56,7 @@ export function init(): void {
   window.api.on('session:data', ({ sessionId, data }) => {
     const listener = listeners.get(sessionId)
     if (listener) listener(data)
+    else if (droppedNow(sessionId)) return
     else {
       const next = (buffers.get(sessionId) ?? '') + data
       buffers.set(sessionId, next.length > BUFFER_TRIM_AT ? next.slice(-BUFFER_CAP) : next)
@@ -63,6 +76,7 @@ export function init(): void {
   // A remote tab's checkpoint replaces everything held for it: what came before is in the checkpoint's state.
   window.api.on('session:reset', ({ sessionId, ...c }) => {
     buffers.delete(sessionId)
+    if (!resetListeners.has(sessionId) && droppedNow(sessionId)) return
     const fn = resetListeners.get(sessionId)
     if (fn) fn(c)
     else heldCheckpoints.set(sessionId, c)
@@ -80,6 +94,7 @@ export function init(): void {
 }
 
 export function attach(sessionId: string, listener: Listener): () => void {
+  discarded.delete(sessionId)
   const buffered = buffers.get(sessionId)
   // 넘겨준 재생분은 이 차례가 끝날 때까지 쥐고 있는다. StrictMode(dev)는 마운트 직후 effect 를
   // 걷었다가 다시 거는데, 그 사이에 버려지는 첫 터미널이 재생분을 가져가 버리면 남는 터미널은
@@ -105,6 +120,7 @@ export function attach(sessionId: string, listener: Listener): () => void {
 /** A remote tab's view registers for its checkpoints **before** it attaches, so a held checkpoint reaches it ahead of
  *  the output held after it. Returns the unregister. */
 export function onReset(sessionId: string, fn: (c: Checkpoint) => void): () => void {
+  discarded.delete(sessionId)
   const held = heldCheckpoints.get(sessionId)
   if (held) {
     heldCheckpoints.delete(sessionId)
@@ -135,6 +151,10 @@ export function observe(sessionId: string, fn: Listener): () => void {
 }
 
 export function discard(sessionId: string): void {
+  // Settled discards are forgotten here, so the map holds only the last few seconds' worth
+  const now = Date.now()
+  for (const [id, until] of discarded) if (now > until) discarded.delete(id)
+  discarded.set(sessionId, now + DISCARD_SETTLE_MS)
   listeners.delete(sessionId)
   buffers.delete(sessionId)
   resetListeners.delete(sessionId)
