@@ -972,6 +972,9 @@ export function registerIpc(
   // reload.
   // Phase 9b: remote session tab streams, made below with the Runtime clients; declared here for the reload observer.
   let remoteStreams: RemoteStreams | null = null
+  /** What the old document held that nobody will let go of (second pass M2-4: a reload never unsubscribed its GitHub and
+   *  usage panels, and both polls ran on for the app's life). */
+  const onNewDocument: Array<() => void> = []
   win.webContents.on('did-start-navigation', (...args: unknown[]) => {
     const first = typeof args[0] === 'object' && args[0] !== null ? (args[0] as Record<string, unknown>) : null
     const isMainFrame = typeof first?.isMainFrame === 'boolean' ? first.isMainFrame : args[3]
@@ -981,6 +984,7 @@ export function registerIpc(
     // The new document has no remote session tabs (Phase 9b review I2): their streams would keep the Runtime sending
     // output nobody shows, and a tab opened again would get its tail with no checkpoint before it.
     remoteStreams?.close()
+    for (const forget of onNewDocument) forget()
   })
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
@@ -1834,16 +1838,24 @@ export function registerIpc(
     }
   })
   // run output and status to the renderer
-  core.run.onData = (e) => send('run:data', e)
+  // Batched as session output is (second pass M2-6: one message per pty chunk), and flushed before the status or exit
+  // that must follow the last of it.
+  const runBatcher = new DataBatcher(16, (runId, data) => send('run:data', { runId, data }))
+  const terminalBatcher = new DataBatcher(16, (id, data) => send('terminal:data', { id, data }))
+  core.run.onData = (e) => runBatcher.push(e.runId, e.data)
   core.run.onStatus = (e) => {
+    runBatcher.flush()
     send('run:status', e)
     // A validation run's exit comes through this one channel too — RunManager has one onStatus.
     // Every other run's exit flows in as well; TaskValidator ignores a runId that is not a queue head.
     if (e.status === 'exited') orchValidator?.onRunExit({ runId: e.runId, exitCode: e.exitCode ?? 1 })
   }
   // project terminal output and exit to the renderer
-  core.terminal.onData = (e) => send('terminal:data', e)
-  core.terminal.onExit = (e) => send('terminal:exit', e)
+  core.terminal.onData = (e) => terminalBatcher.push(e.id, e.data)
+  core.terminal.onExit = (e) => {
+    terminalBatcher.flush()
+    send('terminal:exit', e)
+  }
   // 트랜스크립트가 바뀌었다는 신호는 이 하나뿐이다 — HistoryIndex 가 계정의 기록 디렉터리를 감시하고
   // 이미 Work Unit 이 쓰려던 것과 같은 값(150ms 디바운스 · 1000ms 상한)으로 접어서 부른다. 감시자를
   // 하나 더 세우지 않고 여기에 얹는다.
@@ -4135,6 +4147,7 @@ export function registerIpc(
     send
   })
   void githubPrs.start()
+  onNewDocument.push(() => githubPrs.stop())
   ipcMain.handle('github.status', () => githubPrs.status())
   ipcMain.handle('github.recheck', () => githubPrs.recheck())
   ipcMain.handle('github.prs', () => githubPrs.prs())
@@ -4153,6 +4166,7 @@ export function registerIpc(
     store: core.accountUsage,
     send
   })
+  onNewDocument.push(() => accountUsage.stop())
   ipcMain.handle('usage.accounts', () => accountUsage.usage())
   ipcMain.on('usage.subscribe', () => accountUsage.subscribe())
   ipcMain.on('usage.unsubscribe', () => accountUsage.unsubscribe())

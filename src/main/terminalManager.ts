@@ -101,7 +101,9 @@ export class TerminalManager {
     const live: LiveTerminal = { ...info, pty, buffer: '' }
     this.terminals.set(info.id, live)
     pty.onData((data) => {
-      live.buffer = (live.buffer + data).slice(-OUTPUT_LIMIT)
+      // Cut once it is twice the cap, not on every chunk (second pass M2-6); `list` hands out the last OUTPUT_LIMIT.
+      live.buffer += data
+      if (live.buffer.length > 2 * OUTPUT_LIMIT) live.buffer = live.buffer.slice(-OUTPUT_LIMIT)
       this.onData?.({ id: info.id, data })
     })
     pty.onExit(({ exitCode }) => {
@@ -164,7 +166,7 @@ export class TerminalManager {
   list(projectPath: string): TerminalBuffer[] {
     return [...this.terminals.values()]
       .filter((t) => t.projectPath === projectPath)
-      .map((t) => ({ id: t.id, buffer: t.buffer }))
+      .map((t) => ({ id: t.id, buffer: t.buffer.slice(-OUTPUT_LIMIT) }))
   }
 
   /** App shutdown (will-quit). Closes the terminals whose ptys are this process's own children and

@@ -164,7 +164,9 @@ export class RunManager {
     this.runs.set(status.runId, live)
     this.onStatus?.({ ...status }) // Report the start as a status event too, so the list and the badge refresh
     pty.onData((data) => {
-      live.buffer = (live.buffer + data).slice(-OUTPUT_LIMIT)
+      // Cut once it is twice the cap, not on every chunk (second pass M2-6); readers take the last OUTPUT_LIMIT.
+      live.buffer += data
+      if (live.buffer.length > 2 * OUTPUT_LIMIT) live.buffer = live.buffer.slice(-OUTPUT_LIMIT)
       this.onData?.({ runId: status.runId, data })
       // The first loopback address the run prints is what its tab offers to preview. Read from the
       // buffer's tail rather than this chunk, because a dev server's banner is written in pieces and a
@@ -334,7 +336,7 @@ export class RunManager {
   }
 
   recentOutput(runId: string): string {
-    return this.runs.get(runId)?.buffer ?? ''
+    return this.runs.get(runId)?.buffer.slice(-OUTPUT_LIMIT) ?? ''
   }
 
   /** Settles when the run finishes, with its exit code. `null` for a runId this manager does not

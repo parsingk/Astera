@@ -99,6 +99,11 @@ export function defaultSpawnChecks(log: (m: string) => void = probeLog): SpawnCh
   }
 }
 
+/** Exited sessions this manager keeps, newest first (second pass M2-5): the app keeps them for resume and tab lookup,
+ *  and kept every one for its whole life, while every orchestration fold and busy change copies the list. The Host's
+ *  number for ended sessions (host/registry.ts ENDED_SESSIONS_KEPT). */
+export const EXITED_SESSIONS_KEPT = 256
+
 /** How long a folder `prepare` confirmed is trusted by `spawn` without being looked at again. A
  *  roll prepares before its kill and spawns right after it, so a minute is plenty. */
 const CWD_CONFIRMED_MS = 60_000
@@ -124,6 +129,8 @@ interface LiveSession {
 
 export class SessionManager {
   private sessions = new Map<string, LiveSession>()
+  /** Exited sessions, oldest exit first: past EXITED_SESSIONS_KEPT the oldest record goes (second pass M2-5). */
+  private exitedOrder = new Set<string>()
   onData?: (e: { sessionId: string; data: string }) => void
   onExit?: (e: { sessionId: string; exitCode: number }) => void
 
@@ -410,6 +417,7 @@ export class SessionManager {
       // Do not resume a dead PTY — the child is already reaped so there is nothing to release, and
       // the timer must not be left outliving the session.
       this.clearResumeFailsafe(live)
+      this.keepExited(info.id)
       this.onExit?.({ sessionId: info.id, exitCode })
     })
     return { ...info }
@@ -593,7 +601,20 @@ export class SessionManager {
     const live = this.sessions.get(id)
     if (!live || live.info.status !== 'exited') return false
     this.sessions.delete(id)
+    this.exitedOrder.delete(id)
     return true
+  }
+
+  /** Marks `id` the newest exited session and drops the oldest past EXITED_SESSIONS_KEPT. A record adopted alive again
+   *  since it was marked is skipped: only an exited one goes. */
+  private keepExited(id: string): void {
+    this.exitedOrder.delete(id)
+    this.exitedOrder.add(id)
+    for (const old of this.exitedOrder) {
+      if (this.exitedOrder.size <= EXITED_SESSIONS_KEPT) return
+      this.exitedOrder.delete(old)
+      if (this.sessions.get(old)?.info.status === 'exited') this.sessions.delete(old)
+    }
   }
 
   /** The running sessions this app has to end when it quits: the ones whose pty is this process's own

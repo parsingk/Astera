@@ -67,6 +67,20 @@ const startOpts = (over: Partial<Parameters<RunManager['start']>[0]> = {}) => ({
   ...over
 })
 
+// Second pass M2-6: the buffer was cut on every chunk, a 200 KB copy each; it is cut once it is twice that, and what
+// a reader gets is the same last 200,000 characters.
+describe('RunManager recent output', () => {
+  it('is the last 200,000 characters however much was written', () => {
+    const { mgr, spawned } = setup()
+    const st = mgr.start(startOpts())
+    for (let i = 0; i < 50; i++) spawned[0].pty.dataCb(String(i % 10).repeat(10_000))
+    spawned[0].pty.dataCb('end')
+    const out = mgr.recentOutput(st.runId)
+    expect(out).toHaveLength(200_000)
+    expect(out.endsWith('9'.repeat(10_000) + 'end')).toBe(true)
+  })
+})
+
 describe('RunManager', () => {
   it('start spawns a PTY and reports running, with data flowing out under the runId', () => {
     const { mgr, spawned } = setup()

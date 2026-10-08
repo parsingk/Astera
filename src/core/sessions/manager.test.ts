@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
 import { PTY_LOST_SIGHT_EXIT_CODE, type PtyFactory, type PtyLike, type PtySpawnOptions } from './pty'
-import { SessionManager, prependToPath, type SpawnChecks } from './manager'
+import { SessionManager, EXITED_SESSIONS_KEPT, prependToPath, type SpawnChecks } from './manager'
 import { createGitBashResolver } from './gitBash'
 import { PROBE_CACHE_TTL_MS, PROBE_CONCURRENCY, PROBE_TIMEOUT_MS, PathKeyedCache, createProbePool, createProber } from './pathProbe'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
@@ -67,6 +67,25 @@ function setup(highWater = 100, lowWater = 20, homeDir?: string) {
       : new SessionManager(factory, descriptors, highWater, lowWater, homeDir)
   return { manager, spawned }
 }
+
+// Second pass M2-5: the app kept every exited terminal session for its whole life, and every orchestration fold, busy
+// change and Slack write copies the list.
+describe('exited sessions kept', () => {
+  it('keeps the newest EXITED_SESSIONS_KEPT exited sessions', () => {
+    const { manager, spawned } = setup()
+    const ids: string[] = []
+    for (let i = 0; i < EXITED_SESSIONS_KEPT + 2; i++) {
+      ids.push(manager.spawn({ account, cwd: process.cwd() }).id)
+      spawned[i].pty.emitExit(0)
+    }
+    const live = manager.spawn({ account, cwd: process.cwd() }).id
+    const listed = manager.list().map((s) => s.id)
+    expect(listed).toHaveLength(EXITED_SESSIONS_KEPT + 1)
+    expect(listed).not.toContain(ids[1])
+    expect(listed).toContain(ids[2])
+    expect(listed).toContain(live)
+  })
+})
 
 describe('SessionManager', () => {
   // 탭 라벨은 SessionInfo.title 하나를 읽고, Slack 접두사와 데스크톱 알림 제목도 같은 값을 읽는다.

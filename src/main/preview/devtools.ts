@@ -6,6 +6,7 @@
 // application creates, which is what this module does — one window per guest, with the app icon and
 // a title naming the page it is inspecting.
 import { BrowserWindow, ipcMain, webContents, type NativeImage } from 'electron'
+import { wireDevtoolsWindow } from './devtoolsWiring'
 
 /** Guest webContents id → the window hosting its DevTools. Absent means closed. */
 const hosts = new Map<number, BrowserWindow>()
@@ -43,23 +44,8 @@ export function registerPreviewDevTools(icon: NativeImage): void {
     host.on('page-title-updated', (e) => e.preventDefault())
     hosts.set(guestId, host)
 
-    const forget = (): void => {
+    wireDevtoolsWindow(host, guest, () => {
       if (hosts.get(guestId) === host) hosts.delete(guestId)
-    }
-    host.on('closed', () => {
-      forget()
-      // Closing the window is how the user closes DevTools, so the guest has to be told — otherwise it
-      // still believes they are open and the toolbar button stays lit with nothing behind it.
-      if (!guest.isDestroyed() && guest.isDevToolsOpened()) guest.closeDevTools()
-    })
-    // The page closed DevTools from its own side, or the guest went away with the tab.
-    guest.once('devtools-closed', () => {
-      forget()
-      if (!host.isDestroyed()) host.close()
-    })
-    guest.once('destroyed', () => {
-      forget()
-      if (!host.isDestroyed()) host.close()
     })
 
     guest.setDevToolsWebContents(host.webContents)
