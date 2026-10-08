@@ -32,21 +32,28 @@ const seeded = async (): Promise<{ deps: OrchServerDeps; runId: string }> => {
 describe('runs-git-record', () => {
   it('the Host records a Run’s range', async () => {
     const { deps, runId } = await seeded()
-    expect((await host(deps, { runId, base: 'b1', head: 'h1' })).status).toBe(200)
-    expect(deps.getState().runs[0].git).toEqual({ base: 'b1', head: 'h1' })
+    expect((await host(deps, { runId, base: 'b1b1b1b', head: 'c1c1c1c' })).status).toBe(200)
+    expect(deps.getState().runs[0].git).toEqual({ base: 'b1b1b1b', head: 'c1c1c1c' })
   })
   it('anyone but the Host is refused', async () => {
     const { deps, runId } = await seeded()
     for (const sessionId of ['', 'sess-worker', 'astera:app'])
-      expect((await handleCommand(deps, { sessionId }, 'runs-git-record', { runId, base: 'b1' })).status).toBe(403)
+      expect((await handleCommand(deps, { sessionId }, 'runs-git-record', { runId, base: 'b1b1b1b' })).status).toBe(403)
     expect(deps.getState().runs[0].git).toBeUndefined()
   })
   it('needs exactly one id and something to record; an unknown id is 404', async () => {
     const { deps, runId } = await seeded()
-    expect((await host(deps, { base: 'b' })).status).toBe(400)
-    expect((await host(deps, { runId, dispatchId: 'd', base: 'b' })).status).toBe(400)
+    expect((await host(deps, { base: 'bbbbbbb' })).status).toBe(400)
+    expect((await host(deps, { runId, dispatchId: 'd', base: 'bbbbbbb' })).status).toBe(400)
     expect((await host(deps, { runId })).status).toBe(400)
-    expect((await host(deps, { runId: 'run_x', base: 'b' })).status).toBe(404)
-    expect((await host(deps, { dispatchId: 'dsp_x', head: 'h' })).status).toBe(404)
+    expect((await host(deps, { runId: 'run_x', base: 'bbbbbbb' })).status).toBe(404)
+    expect((await host(deps, { dispatchId: 'dsp_x', head: 'ccccccc' })).status).toBe(404)
+  })
+  // Phase 10 review: what is recorded is handed to git as a revision, so it is a commit id and nothing else.
+  it('a value that is not a commit id is refused', async () => {
+    const { deps, runId } = await seeded()
+    for (const bad of ['--output=x', 'HEAD', 'main', 'abc', 'b1b1b1b;rm'])
+      expect((await host(deps, { runId, base: bad })).status).toBe(400)
+    expect(deps.getState().runs[0].git).toBeUndefined()
   })
 })

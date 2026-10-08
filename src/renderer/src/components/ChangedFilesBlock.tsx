@@ -3,8 +3,9 @@
 // computer's Runs and a paired Runtime's: it asks through the Run's door. Paths are the owning machine's, shown as text
 // and never opened or resolved here (v2 §28).
 import { useEffect, useRef, useState } from 'react'
-import type { ChangedFile, ChangedFilesReply } from '../../../core/git/changedFile'
+import type { ChangedFile } from '../../../core/git/changedFile'
 import type { OrchDoor } from '../lib/orchDoor'
+import { changesView, type ChangesView } from '../lib/changesView'
 import { useI18n } from '../i18n/I18nProvider'
 import { DiffView } from './DiffView'
 
@@ -15,17 +16,21 @@ type Diff = { fileId: string; state: 'loading' } | { fileId: string; state: 'sho
 export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; runId: string; taskId?: string }): React.JSX.Element {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  /** undefined: not read yet; a string: the read failed. */
-  const [reply, setReply] = useState<ChangedFilesReply | string | undefined>(undefined)
+  /** undefined: not read yet. */
+  const [view, setView] = useState<ChangesView | undefined>(undefined)
   const [diff, setDiff] = useState<Diff | null>(null)
   // Read through the latest door; a new door object for the same Runtime and project is not a reason to read again.
   const doorRef = useRef(door)
   doorRef.current = door
+  /** Which Run and Task the block shows now: a diff that answers after another was chosen is dropped (review). */
+  const scope = `${runId} ${taskId ?? ''}`
+  const scopeRef = useRef(scope)
+  scopeRef.current = scope
 
   // Another Task, or the Run: closed and forgotten, so one Task's files never show under another.
   useEffect(() => {
     setOpen(false)
-    setReply(undefined)
+    setView(undefined)
     setDiff(null)
   }, [runId, taskId])
 
@@ -33,10 +38,10 @@ export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; run
   useEffect(() => {
     if (!open) return
     let alive = true
-    setReply(undefined)
+    setView(undefined)
     void doorRef.current.command('runs-changed-files', { runId, ...(taskId ? { taskId } : {}) }).then(
-      (r) => alive && setReply(r.status === 200 ? (r.body as ChangedFilesReply) : errorOf(r)),
-      (e) => alive && setReply(String(e))
+      (r) => alive && setView(changesView(r)),
+      (e) => alive && setView({ kind: 'failed', message: String(e) })
     )
     return () => {
       alive = false
@@ -46,20 +51,23 @@ export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; run
   const showDiff = (f: ChangedFile): void => {
     if (diff?.fileId === f.id) return setDiff(null)
     setDiff({ fileId: f.id, state: 'loading' })
+    const asked = scope
+    const mine = (cur: Diff | null): boolean => cur?.fileId === f.id && scopeRef.current === asked
     void doorRef.current.command('runs-diff', { runId, fileId: f.id, ...(taskId ? { taskId } : {}) }).then(
       (r) =>
         setDiff((cur) =>
-          cur?.fileId !== f.id
+          !mine(cur)
             ? cur
             : r.status === 200
               ? { fileId: f.id, state: 'shown', ...(r.body as { diff: string; truncated: boolean }) }
               : { fileId: f.id, state: 'failed', message: errorOf(r) }
         ),
-      (e) => setDiff((cur) => (cur?.fileId !== f.id ? cur : { fileId: f.id, state: 'failed', message: String(e) }))
+      (e) => setDiff((cur) => (!mine(cur) ? cur : { fileId: f.id, state: 'failed', message: String(e) }))
     )
   }
 
-  const files = typeof reply === 'object' ? (reply.git?.files ?? null) : null
+  const reply = view?.kind === 'ok' ? view.reply : null
+  const files = reply?.git?.files ?? null
   const added = files?.reduce((n, f) => n + (f.additions ?? 0), 0) ?? 0
   const removed = files?.reduce((n, f) => n + (f.deletions ?? 0), 0) ?? 0
 
@@ -68,9 +76,10 @@ export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; run
       <button className="detail-completion-head" onClick={() => setOpen((p) => !p)}>
         {open ? t('jobs.changes.hide') : t('jobs.changes.show')}
       </button>
-      {open && reply === undefined && <p className="modal-hint">{t('files.editor.loading')}</p>}
-      {open && typeof reply === 'string' && <p className="warn">{t('jobs.changes.failed', { message: reply })}</p>}
-      {open && typeof reply === 'object' && (
+      {open && view === undefined && <p className="modal-hint">{t('files.editor.loading')}</p>}
+      {open && view?.kind === 'unsupported' && <p className="modal-hint">{t('jobs.changes.unsupported')}</p>}
+      {open && view?.kind === 'failed' && <p className="warn">{t('jobs.changes.failed', { message: view.message })}</p>}
+      {open && reply !== null && (
         <>
           {reply.git === null ? (
             <p className="modal-hint">{t(reply.unavailable === 'not-recorded' ? 'jobs.changes.notRecorded' : 'jobs.changes.gitFailed')}</p>
@@ -79,9 +88,12 @@ export function ChangedFilesBlock({ door, runId, taskId }: { door: OrchDoor; run
           ) : (
             <>
               <p className="modal-hint">
-                {t('jobs.changes.summary', { count: files!.length, added, removed })}
-                {reply.git.head === null && ` · ${t('jobs.changes.live')}`}
+                {t('jobs.changes.summary', { count: reply.git.total, added, removed })}
+                {reply.git.live && ` · ${t('jobs.changes.live')}`}
               </p>
+              {reply.git.total > files!.length && (
+                <p className="modal-hint">{t('jobs.changes.listCut', { shown: files!.length, total: reply.git.total })}</p>
+              )}
               <ul className="changed-files-list">
                 {files!.map((f) => (
                   <li key={f.id}>

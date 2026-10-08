@@ -48,7 +48,7 @@ import {
   type Res
 } from './state'
 import { CLI_PROTOCOL } from './cliOutput'
-import { rangesFor } from './changedFiles'
+import { collectChanges, rangesFor } from './changedFiles'
 import type { ChangedFile } from '../git/changes'
 import type { SwitchedCommand } from './cliAgentContext'
 import { findProject, findProjectByPath, findProjectContaining, jobInProject } from './projects'
@@ -2210,15 +2210,13 @@ export async function handleCommand(
       if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
       if (!deps.changes) return conflict('changed files are read where the run lives, and this caller cannot read git there')
       const head = { runId, ...(taskId ? { taskId } : {}), reported: found.reported }
-      if (found.ranges.length === 0) return okBody({ ...head, git: null, unavailable: 'not-recorded' })
-      for (const r of found.ranges) {
-        const files = await deps.changes.read(r.repo, r.base, r.head)
-        if (files) return okBody({ ...head, git: { files, base: r.base, head: r.head } })
-      }
-      return okBody({ ...head, git: null, unavailable: 'git-failed' })
+      if (found.parts.length === 0) return okBody({ ...head, git: null, unavailable: 'not-recorded' })
+      const got = await collectChanges(found.parts, deps.changes.read)
+      if (!got.read) return okBody({ ...head, git: null, unavailable: 'git-failed' })
+      return okBody({ ...head, git: { files: got.files.map((f) => f.file), live: got.live, total: got.total } })
     }
-    // **One file's diff, by the id `runs-changed-files` gave it, never a path** (§4.8): the same range's list is read
-    // again and the id looked up in it, so a caller can only ever see a file that range changed.
+    // **One file's diff, by the id `runs-changed-files` gave it, never a path** (§4.8): the same list is read again and
+    // the id looked up in it, so a caller can only ever see a file that range changed, read in the range it came from.
     case 'runs-diff': {
       const asked = str(args.runId) ?? str(args.id)
       if (!asked) return bad('--id is required: the run the file changed in')
@@ -2229,17 +2227,14 @@ export async function handleCommand(
       const found = rangesFor(s, runId, taskId)
       if (!found) return notFound(taskId ? `unknown task ${taskId} in run ${runId}` : `unknown run: ${runId}`)
       if (!deps.changes) return conflict('diffs are read where the run lives, and this caller cannot read git there')
-      for (const r of found.ranges) {
-        const files = await deps.changes.read(r.repo, r.base, r.head)
-        if (!files) continue
-        const file = files.find((f) => f.id === fileId)
-        if (!file) return notFound(`no changed file ${fileId} in run ${runId}; read runs-changed-files again`)
-        const d = await deps.changes.diff(r.repo, r.base, r.head, file)
-        return d ? okBody({ file, ...d }) : conflict(`git could not produce the diff of ${file.path}`)
-      }
-      return found.ranges.length === 0
-        ? notFound(`run ${runId} has no recorded git range`)
-        : conflict(`git could not read the changes of run ${runId}`)
+      if (found.parts.length === 0) return notFound(`run ${runId} has no recorded git range`)
+      const got = await collectChanges(found.parts, deps.changes.read)
+      if (!got.read) return conflict(`git could not read the changes of run ${runId}`)
+      const hit = got.files.find((f) => f.file.id === fileId)
+      if (!hit) return notFound(`no changed file ${fileId} in run ${runId}; read runs-changed-files again`)
+      const { taskId: _part, ...asGit } = hit.file
+      const d = await deps.changes.diff(hit.range.repo, hit.range.base, hit.range.head, { ...asGit, id: hit.file.id.split('~')[0] })
+      return d ? okBody({ file: hit.file, ...d }) : conflict(`git could not produce the diff of ${hit.file.path}`)
     }
     case 'runs-completion': {
       const id = str(args.id)
@@ -2566,6 +2561,9 @@ export async function handleCommand(
       const base = str(args.base) ?? undefined
       const head = str(args.head) ?? undefined
       if (base === undefined && head === undefined) return bad('runs-git-record needs a base or a head')
+      // Handed to git as a revision later: a commit id and nothing else (Phase 10 review).
+      if ([base, head].some((v) => v !== undefined && !/^[0-9a-f]{7,64}$/i.test(v)))
+        return bad('runs-git-record takes commit ids: 7 to 64 hex characters')
       const patch = { ...(base !== undefined ? { base } : {}), ...(head !== undefined ? { head } : {}) }
       const r: Res<unknown> = runId !== null ? recordRunGit(s, runId, patch) : recordDispatchGit(s, dispatchId!, patch)
       // Nothing changed: no write, so a recorder that reads the same head twice costs no state version.

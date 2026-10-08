@@ -347,4 +347,22 @@ describe('remote sessions through the client', () => {
     stop()
     expect(stopped).toBe(1)
   })
+
+  // Phase 10 review: a Runtime from before changed files and diffs says so in its hello; the app does not send it the
+  // command only to show its gate's refusal.
+  it('a changed files or diff read is not sent to a Runtime whose hello does not offer it', async () => {
+    const f = fakeLink(async () => ({ status: 200, body: {} }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    for (const cmd of ['runs-changed-files', 'runs-diff'])
+      expect(await c.command(cmd, { runId: 'r' })).toMatchObject({ status: 501, body: { code: 'RUNTIME_CAPABILITY_MISSING' } })
+    expect(f.calls).toEqual([])
+    const offered = fakeLink(async () => ({ status: 200, body: {} }))
+    offered.link.hello = () => ({ ...hello('boot1'), capabilities: ['remote.changed-files', 'remote.diff'] })
+    const c2 = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: offered.link })
+    expect((await c2.command('runs-diff', { runId: 'r', fileId: 'f' })).status).toBe(200)
+    // Not connected yet: nothing is known, so it is sent and the Runtime answers.
+    const fresh = fakeLink(async () => ({ status: 200, body: {} }))
+    fresh.link.hello = () => null
+    expect((await createRemoteRuntimeClient({ runtimeId: 'rt_a', link: fresh.link }).command('runs-changed-files', { runId: 'r' })).status).toBe(200)
+  })
 })

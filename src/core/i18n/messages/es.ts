@@ -1578,7 +1578,7 @@ export const es: Catalog = {
   'jobs.changes.gitFailed': 'git no pudo leer los cambios. Puede que la carpeta de trabajo o sus commits ya no existan.',
   'jobs.changes.empty': 'No cambió ningún archivo.',
   'jobs.changes.summary': '{count} archivos · +{added} −{removed}',
-  'jobs.changes.live': 'sigue en marcha, así que incluye cambios sin commit',
+  'jobs.changes.live': 'leído de la carpeta de trabajo tal como está, con cambios sin commit',
   'jobs.changes.status.added': 'Añadido',
   'jobs.changes.status.modified': 'Modificado',
   'jobs.changes.status.deleted': 'Eliminado',
@@ -1589,5 +1589,8 @@ export const es: Catalog = {
   'jobs.changes.truncated': 'El diff es demasiado grande; solo se muestra el principio.',
   'jobs.changes.diffFailed': 'No se pudo leer el diff: {message}',
   'jobs.changes.reported': 'Informado por el worker',
-  'jobs.changes.reportedNone': 'Los workers no informaron archivos.'
+  'jobs.changes.reportedNone': 'Los workers no informaron archivos.',
+  'jobs.changes.unsupported': 'Este Runtime aún no ofrece los archivos cambiados. Actualiza Astera en ese equipo.',
+  'jobs.changes.listCut': 'Demasiados archivos: se muestran {shown} de {total}.',
+  'jobs.changes.moreRows': 'Mostrar {count} líneas más (quedan {left})'
 }

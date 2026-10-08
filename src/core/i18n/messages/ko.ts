@@ -1997,7 +1997,7 @@ export const ko = {
   'jobs.changes.gitFailed': 'git 으로 변경을 읽지 못했습니다. 작업 폴더나 커밋이 사라졌을 수 있습니다.',
   'jobs.changes.empty': '바뀐 파일이 없습니다.',
   'jobs.changes.summary': '파일 {count}개 · +{added} −{removed}',
-  'jobs.changes.live': '작업 중이라 커밋하지 않은 수정도 포함합니다',
+  'jobs.changes.live': '작업 폴더의 지금 상태라 커밋하지 않은 수정도 포함합니다',
   'jobs.changes.status.added': '추가',
   'jobs.changes.status.modified': '수정',
   'jobs.changes.status.deleted': '삭제',
@@ -2008,5 +2008,8 @@ export const ko = {
   'jobs.changes.truncated': 'diff 가 너무 커서 앞부분만 보여 줍니다.',
   'jobs.changes.diffFailed': 'diff 를 읽지 못했습니다: {message}',
   'jobs.changes.reported': '워커가 보고한 파일',
-  'jobs.changes.reportedNone': '워커가 보고한 파일이 없습니다.'
+  'jobs.changes.reportedNone': '워커가 보고한 파일이 없습니다.',
+  'jobs.changes.unsupported': '이 Runtime 은 바뀐 파일 보기를 아직 지원하지 않습니다. 그 컴퓨터의 Astera 를 업데이트하세요.',
+  'jobs.changes.listCut': '파일이 너무 많아 {total}개 중 {shown}개만 보여 줍니다.',
+  'jobs.changes.moreRows': '{count}줄 더 보기 (남은 {left}줄)'
 } as const

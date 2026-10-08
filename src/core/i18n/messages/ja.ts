@@ -1552,7 +1552,7 @@ export const ja: Catalog = {
   'jobs.changes.gitFailed': 'git で変更を読めませんでした。作業フォルダーかコミットがなくなっている可能性があります。',
   'jobs.changes.empty': '変更されたファイルはありません。',
   'jobs.changes.summary': 'ファイル {count} 件 · +{added} −{removed}',
-  'jobs.changes.live': '作業中のため、コミットしていない修正も含みます',
+  'jobs.changes.live': '作業フォルダーの現在の状態のため、コミットしていない修正も含みます',
   'jobs.changes.status.added': '追加',
   'jobs.changes.status.modified': '変更',
   'jobs.changes.status.deleted': '削除',
@@ -1563,5 +1563,8 @@ export const ja: Catalog = {
   'jobs.changes.truncated': 'diff が大きすぎるため、先頭部分だけを表示します。',
   'jobs.changes.diffFailed': 'diff を読めませんでした: {message}',
   'jobs.changes.reported': 'ワーカーが報告したファイル',
-  'jobs.changes.reportedNone': 'ワーカーが報告したファイルはありません。'
+  'jobs.changes.reportedNone': 'ワーカーが報告したファイルはありません。',
+  'jobs.changes.unsupported': 'この Runtime はまだ変更ファイルの表示に対応していません。そのコンピューターの Astera を更新してください。',
+  'jobs.changes.listCut': 'ファイルが多すぎるため、{total} 件中 {shown} 件だけを表示します。',
+  'jobs.changes.moreRows': 'さらに {count} 行を表示(残り {left} 行)'
 }

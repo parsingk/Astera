@@ -50,3 +50,7 @@ export function diffLines(text: string): DiffRow[] {
   }
   return rows
 }
+
+/** Rows drawn at a time: a diff of a megabyte is tens of thousands of rows, and drawing them all at once stalls the
+ *  window (Phase 10 review I4). The rest come a page at a time on request. */
+export const DIFF_ROWS_STEP = 2_000

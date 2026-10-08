@@ -53,7 +53,7 @@ describe('createRunGitRecorder', () => {
     await settle()
     expect(r.records).toEqual([])
     r.rec.onState(
-      state({ runs: [{ id: 'run1', jobId: 'job1' }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'P', git: { base: 'x' } }] })
+      state({ runs: [{ id: 'run1', jobId: 'job1' }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'P', startedAt: '1', git: { base: 'x' } }] })
     )
     await settle()
     expect(r.records).toEqual([{ runId: 'run1', base: 'p1' }])
@@ -70,8 +70,8 @@ describe('createRunGitRecorder', () => {
     r.rec.onState(state({ runs: [run], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', git: { base: 'd0' }, endedAt: 'x' }] }))
     await settle()
     expect(r.records.slice(1)).toEqual([
-      { dispatchId: 'd1', head: 'd1' },
-      { runId: 'run1', head: 'w1' }
+      { runId: 'run1', head: 'w1' },
+      { dispatchId: 'd1', head: 'd1' }
     ])
   })
 
@@ -113,6 +113,64 @@ describe('createRunGitRecorder', () => {
     await settle()
     await r.rec.beforeIntegrate('P', ['W'])
     expect(r.records).toEqual([])
+  })
+})
+
+// Phase 10 review I1: work from before this phase is not given today's HEAD as its range, a read that failed is tried
+// again, and a state full of attempts does not start every git at once.
+describe('createRunGitRecorder with work it did not see start', () => {
+  it('records no base for an attempt that already ended, and no head for one without a base', async () => {
+    const r = rig({ heads: { D: 'd0', P: 'p0' }, dirs: ['D', 'P'] })
+    r.rec.onState(
+      state({
+        runs: [{ id: 'run1', jobId: 'job1' }],
+        dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1', endedAt: 'x' }]
+      })
+    )
+    await settle()
+    expect(r.records).toEqual([])
+    expect(r.reads).toEqual([])
+  })
+  it('a Run in its own worktree with no attempt open gets a base only from where it forked', async () => {
+    const r = rig({ heads: { W: 'w0' }, dirs: ['W'] })
+    r.rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }] }))
+    await settle()
+    expect(r.records).toEqual([])
+  })
+  it('a read that failed is tried again on a later state', async () => {
+    const r = rig({ dirs: ['D'] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', git: { base: 'b' } }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1' }] })
+    r.rec.onState(s)
+    await settle()
+    expect(r.records).toEqual([])
+    r.heads.D = 'd0'
+    r.rec.onState(s)
+    await settle()
+    expect(r.records).toEqual([{ dispatchId: 'd1', base: 'd0' }])
+  })
+  it('runs at most a few git reads at once', async () => {
+    let inFlight = 0
+    let most = 0
+    const records: unknown[] = []
+    const rec = createRunGitRecorder({
+      record: async (a) => void records.push(a),
+      headOf: async () => {
+        inFlight++
+        most = Math.max(most, inFlight)
+        await new Promise((res) => setTimeout(res, 5))
+        inFlight--
+        return 'h0'
+      },
+      mergeBase: async () => null,
+      baseRefOf: () => null,
+      isDir: () => true,
+      log: () => {}
+    })
+    const dispatches = Array.from({ length: 12 }, (_, i) => ({ id: `d${i}`, taskId: 't1', cwd: `D${i}`, startedAt: '1' }))
+    rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', git: { base: 'b' } }], dispatches }))
+    await new Promise((res) => setTimeout(res, 200))
+    expect(records.length).toBe(12)
+    expect(most).toBeLessThanOrEqual(4)
   })
 })
 

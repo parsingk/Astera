@@ -1499,6 +1499,10 @@ export function createHostOrch(a: {
       return true
     },
     call: async ({ cmd, args, sessionId, from, request, retry }) => {
+      // **The Host's own git record is never taken from a socket** (Phase 10 review): `runs-git-record` trusts the Host's
+      // caller id, and anything on this machine can write that id in a frame. Other commands keep taking it and journal
+      // it as the CLI it came from.
+      if (sessionId === HOST_CALLER && cmd === 'runs-git-record') return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it` } }
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
       // not a 500 — it is no `orch-result` at all, a caller waiting forever, and an unhandled

@@ -80,6 +80,9 @@ const replyOf = (e: RemoteError, change: boolean): { status: number; body: { err
   body: { error: e.message, code: e.code }
 })
 
+/** Commands a Runtime serves only when its hello names the capability (remote runtime design §3.2, Phase 10). */
+const CAPABILITY_OF: Record<string, string> = { 'runs-changed-files': 'remote.changed-files', 'runs-diff': 'remote.diff' }
+
 export function createRemoteRuntimeClient(a: {
   runtimeId: string
   link: RemoteLink
@@ -225,6 +228,12 @@ export function createRemoteRuntimeClient(a: {
       // What a Runtime does not offer is refused here, as the CLI and MCP refuse it (review M-4).
       if (remoteTarget(cmd) === 'no')
         return { status: 501, body: { error: `${cmd} is not available on a remote Runtime`, code: 'RUNTIME_CAPABILITY_MISSING' } }
+      // A read the Runtime's hello does not offer (one from before it, Phase 10 review): said here, not sent to be
+      // refused by its gate in words the person cannot act on.
+      const needs = CAPABILITY_OF[cmd]
+      const offered = a.link.hello()?.capabilities
+      if (needs && offered && !offered.includes(needs))
+        return { status: 501, body: { error: `this Runtime does not offer ${cmd}; update Astera there`, code: 'RUNTIME_CAPABILITY_MISSING' } }
       const change = remoteMutation(cmd)
       const request = change ? mint() : undefined
       const r = heard(await a.link.call(cmd, args, request !== undefined ? { request } : {}))

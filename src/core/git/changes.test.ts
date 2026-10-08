@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { makeRepo, gitSync } from '../worktrees/testRepo'
-import { fileIdOf, readChanges, readFileDiff, type ChangedFile } from './changes'
+import { CHANGES_MAX_FILES, fileIdOf, readChanges, readFileDiff, type ChangedFile } from './changes'
 
 const head = (repo: string): string => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, windowsHide: true, encoding: 'utf8' }).trim()
 const gitDiff = (repo: string, args: string[]): string =>
@@ -123,5 +123,50 @@ describe('readFileDiff', { timeout: 30_000 }, () => {
     expect(r.truncated).toBe(true)
     expect(Buffer.byteLength(r.diff)).toBeLessThanOrEqual(1000)
     expect(r.diff.endsWith('\n')).toBe(true)
+  })
+})
+
+// Phase 10 review: a path is a path, never a pattern; a base or head is a revision, never an option; and neither the
+// list nor a diff is read past its bound.
+describe('git reads are bounded and literal', { timeout: 60_000 }, () => {
+  it('a file whose name is a glob gets its own diff only', async () => {
+    const repo = await makeRepo()
+    await write(repo, '[id].tsx', 'a\n')
+    await write(repo, 'd.tsx', 'a\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    await write(repo, '[id].tsx', 'b\n')
+    await write(repo, 'd.tsx', 'b\n')
+    commit(repo, 'work')
+    const f = byPath((await readChanges(repo, base, head(repo)))!)
+    const d = (await readFileDiff(repo, base, head(repo), f['[id].tsx']))!.diff
+    expect(d).toContain('[id].tsx')
+    expect(d).not.toContain('d.tsx')
+  })
+  it('a base that looks like an option is not taken for one', async () => {
+    const repo = await makeRepo()
+    const out = path.join(repo, 'pwned.txt')
+    expect(await readChanges(repo, `--output=${out}`, null)).toBeNull()
+    await expect(fs.stat(out)).rejects.toThrow()
+  })
+  it('a list longer than the bound is cut and says how many there were', async () => {
+    const repo = await makeRepo()
+    const base = head(repo)
+    for (let i = 0; i < 15; i++) await write(repo, `many/f${i}.txt`, 'x\n')
+    commit(repo, 'many')
+    const r = (await readChanges(repo, base, head(repo), undefined, { maxFiles: 10 }))!
+    expect(r.length).toBe(10)
+    expect((r as ChangedFile[] & { total?: number }).total).toBe(15)
+    expect(CHANGES_MAX_FILES).toBe(2000)
+  })
+  it('a diff past the bound stops git and is cut, however large the file', async () => {
+    const repo = await makeRepo()
+    const base = head(repo)
+    await write(repo, 'huge.txt', 'line of text\n'.repeat(400_000))
+    commit(repo, 'huge')
+    const [f] = (await readChanges(repo, base, head(repo)))!
+    const r = (await readFileDiff(repo, base, head(repo), f, { maxBytes: 64 * 1024 }))!
+    expect(r.truncated).toBe(true)
+    expect(Buffer.byteLength(r.diff)).toBeLessThanOrEqual(64 * 1024)
   })
 })

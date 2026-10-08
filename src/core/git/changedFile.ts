@@ -13,13 +13,22 @@ export interface ChangedFile {
   deletions?: number
   /** git counts no lines in it, and its diff says only that it differs. */
   binary?: true
+  /** In a Run's list: the Task whose own worktree it changed (a parallel Run's Tasks are merged straight into the
+   *  project). Absent for the Run's root and in a Task's own list. */
+  taskId?: string
 }
+
+/** At most this many files in one list; `total` in the reply says how many there were. A Run that committed a build
+ *  folder would otherwise send tens of thousands of rows across the link and into one screen. */
+export const CHANGES_MAX_FILES = 2_000
 
 /** `runs-changed-files`'s answer. `git` is null with `unavailable` when there is no git list. */
 export interface ChangedFilesReply {
   runId: string
   taskId?: string
   reported: string[]
-  git: { files: ChangedFile[]; base: string; head: string | null } | null
+  /** `live`: some part was read from a folder's working tree, uncommitted edits included. `total`: how many files
+   *  changed, more than `files` holds when the list was cut. */
+  git: { files: ChangedFile[]; live: boolean; total: number } | null
   unavailable?: 'not-recorded' | 'git-failed'
 }

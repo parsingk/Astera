@@ -1750,7 +1750,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.changes.gitFailed': 'git could not read the changes. The work folder or its commits may be gone.',
   'jobs.changes.empty': 'No files changed.',
   'jobs.changes.summary': '{count} files · +{added} −{removed}',
-  'jobs.changes.live': 'still at work, so uncommitted edits are included',
+  'jobs.changes.live': 'read from the work folder as it is, uncommitted edits included',
   'jobs.changes.status.added': 'Added',
   'jobs.changes.status.modified': 'Modified',
   'jobs.changes.status.deleted': 'Deleted',
@@ -1761,5 +1761,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.changes.truncated': 'The diff is too large; only its beginning is shown.',
   'jobs.changes.diffFailed': 'Could not read the diff: {message}',
   'jobs.changes.reported': 'Reported by the worker',
-  'jobs.changes.reportedNone': 'The workers reported no files.'
+  'jobs.changes.reportedNone': 'The workers reported no files.',
+  'jobs.changes.unsupported': 'This Runtime does not offer changed files yet. Update Astera on that computer.',
+  'jobs.changes.listCut': 'Too many files: {shown} of {total} are shown.',
+  'jobs.changes.moreRows': 'Show {count} more lines ({left} left)'
 }

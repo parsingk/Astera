@@ -2,14 +2,18 @@
 // happens: `runs-changed-files` and `runs-diff` read it, and nothing in state could rebuild it once a merge reaps the
 // worktree and deletes its branch.
 //
-// - A Run's base: where its own worktree forked from its base branch (`merge-base`), or the project folder's HEAD once
-//   its first attempt starts when it works there directly.
-// - An attempt's base: its folder's HEAD when it is first seen; its head: that folder's HEAD when it ends, which also
-//   moves its Run's head to the Run root's HEAD.
+// - A Run's base: where its own worktree forked from its base branch (`merge-base`); or, while one of its attempts is
+//   open, its root's HEAD (no base branch known, or a Run in the project folder).
+// - An attempt's base: its folder's HEAD while it is open; its head: that folder's HEAD once it ends, which also moves
+//   its Run's head to the Run root's HEAD.
 // - Around a merge: a Run whose worktree is merged gets the head it had before; a Run root merged into gets the head
 //   after, so a Run's range covers its Tasks' merged worktrees.
 //
-// Each read is done once per thing; a failed read is logged and not tried again, and nothing here throws.
+// **Only what it sees happen** (Phase 10 review I1): an attempt that already ended without a base gets none, and no head
+// without a base, so work from before this phase is "not recorded" rather than given today's HEAD as an empty range.
+//
+// A read that fails is logged and tried again on a later state while it still applies; at most READS_AT_ONCE git
+// reads run at a time; nothing here throws.
 import { runRootOf } from '../core/orchestration/integrate'
 import { isSamePath } from '../core/files/tree'
 import type { OrchState } from '../core/orchestration/state'
@@ -31,60 +35,93 @@ export interface RunGitRecorder {
   afterIntegrate(into: string): Promise<void>
 }
 
+const READS_AT_ONCE = 4
+
 export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
-  /** Keys read or being read: `run:<id>:base`, `dsp:<id>:base`, `dsp:<id>:head`. */
+  /** Keys read, being read, or done: `run:<id>:base`, `dsp:<id>:base`, `dsp:<id>:head`. A failed one leaves. */
   const taken = new Set<string>()
   let last: OrchState | null = null
 
+  let running = 0
+  const waiting: Array<() => void> = []
+  const slot = async <T>(work: () => Promise<T>): Promise<T> => {
+    if (running >= READS_AT_ONCE) await new Promise<void>((r) => waiting.push(r))
+    running++
+    try {
+      return await work()
+    } finally {
+      running--
+      waiting.shift()?.()
+    }
+  }
+
+  const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+  const record = async (args: Record<string, string>): Promise<boolean> => {
+    try {
+      await d.record(args)
+      return true
+    } catch (e) {
+      d.log(`git range: ${JSON.stringify(args)} not recorded: ${message(e)}`)
+      return false
+    }
+  }
+  /** Reads once and records what it read; a read with no answer leaves the key, so a later state tries again. */
   const once = (key: string, read: () => Promise<string | null>, write: (sha: string) => Record<string, string>): void => {
     if (taken.has(key)) return
     taken.add(key)
-    void read()
-      .then(async (sha) => {
-        if (sha) await d.record(write(sha))
+    void slot(read)
+      .catch((e) => {
+        d.log(`git range: ${key}: ${message(e)}`)
+        return null
       })
-      .catch((e) => d.log(`git range: ${key} not recorded: ${e instanceof Error ? e.message : String(e)}`))
+      .then(async (sha) => {
+        if (sha && (await record(write(sha)))) return
+        if (!sha) d.log(`git range: ${key}: git had no answer; tried again on a later change`)
+        taken.delete(key)
+      })
   }
   const headIfThere = (p: string): Promise<string | null> => (p && d.isDir(p) ? d.headOf(p) : Promise.resolve(null))
-  const record = async (args: Record<string, string>): Promise<void> => {
-    try {
-      await d.record(args)
-    } catch (e) {
-      d.log(`git range: ${JSON.stringify(args)} not recorded: ${e instanceof Error ? e.message : String(e)}`)
-    }
-  }
 
   return {
     onState: (s) => {
       last = s
       const runOfTask = new Map(s.tasks.map((t) => [t.id, t.runId]))
-      const hasAttempt = new Set(s.dispatches.map((x) => runOfTask.get(x.taskId)))
+      const openRuns = new Set(s.dispatches.filter((x) => x.endedAt === undefined).map((x) => runOfTask.get(x.taskId)))
       for (const run of s.runs) {
         if (run.git?.base !== undefined) continue
-        const job = s.jobs.find((j) => j.id === run.jobId)
-        const root = runRootOf(run, job)
-        if (run.worktree !== undefined) {
-          const ref = d.baseRefOf(run.worktree)
-          once(`run:${run.id}:base`, () => (ref ? d.mergeBase(run.worktree!, ref) : headIfThere(run.worktree!)), (base) => ({ runId: run.id, base }))
-        } else if (hasAttempt.has(run.id)) once(`run:${run.id}:base`, () => headIfThere(root), (base) => ({ runId: run.id, base }))
+        const root = runRootOf(run, s.jobs.find((j) => j.id === run.jobId))
+        const open = openRuns.has(run.id)
+        const ref = run.worktree !== undefined ? d.baseRefOf(run.worktree) : null
+        // Where its worktree forked is true whenever it is read; a root's HEAD only while the work is under way.
+        if (!ref && !open) continue
+        once(
+          `run:${run.id}:base`,
+          async () => (ref ? ((await d.mergeBase(run.worktree!, ref)) ?? (open ? await headIfThere(root) : null)) : headIfThere(root)),
+          (base) => ({ runId: run.id, base })
+        )
       }
       for (const x of s.dispatches) {
-        if (x.git?.base === undefined) once(`dsp:${x.id}:base`, () => headIfThere(x.cwd), (base) => ({ dispatchId: x.id, base }))
-        if (x.endedAt !== undefined && x.git?.head === undefined) {
-          const run = s.runs.find((r) => r.id === runOfTask.get(x.taskId))
-          const root = run ? runRootOf(run, s.jobs.find((j) => j.id === run.jobId)) : ''
-          once(
-            `dsp:${x.id}:head`,
-            async () => {
-              const head = await headIfThere(x.cwd)
-              if (head) await record({ dispatchId: x.id, head })
-              const runHead = run ? await headIfThere(root) : null
-              if (run && runHead) await record({ runId: run.id, head: runHead })
-              return null
-            },
-            () => ({})
-          )
+        if (x.git?.base === undefined) {
+          if (x.endedAt === undefined) once(`dsp:${x.id}:base`, () => headIfThere(x.cwd), (base) => ({ dispatchId: x.id, base }))
+          continue
         }
+        if (x.endedAt === undefined || x.git.head !== undefined) continue
+        const run = s.runs.find((r) => r.id === runOfTask.get(x.taskId))
+        const root = run ? runRootOf(run, s.jobs.find((j) => j.id === run.jobId)) : ''
+        once(
+          `dsp:${x.id}:head`,
+          async () => {
+            const head = await headIfThere(x.cwd)
+            if (!head) return null
+            // The Run's head moves with its attempts, once its own base is known.
+            if (run?.git?.base !== undefined) {
+              const runHead = await headIfThere(root)
+              if (runHead) await record({ runId: run.id, head: runHead })
+            }
+            return head
+          },
+          (head) => ({ dispatchId: x.id, head })
+        )
       }
     },
     beforeIntegrate: async (_into, paths) => {
@@ -93,8 +130,9 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
       for (const p of paths) {
         const run = s.runs.find((r) => r.worktree !== undefined && isSamePath(r.worktree, p))
         if (!run) continue
-        const head = await headIfThere(p).catch(() => null)
+        const head = await slot(() => headIfThere(p)).catch(() => null)
         if (head) await record({ runId: run.id, head })
+        else d.log(`git range: the head of ${p} before its merge could not be read`)
       }
     },
     afterIntegrate: async (into) => {
@@ -102,8 +140,9 @@ export function createRunGitRecorder(d: RunGitRecorderDeps): RunGitRecorder {
       if (!s) return
       const run = s.runs.find((r) => r.worktree !== undefined && isSamePath(r.worktree, into))
       if (!run) return
-      const head = await headIfThere(into).catch(() => null)
+      const head = await slot(() => headIfThere(into)).catch(() => null)
       if (head) await record({ runId: run.id, head })
+      else d.log(`git range: the head of ${into} after a merge could not be read`)
     }
   }
 }

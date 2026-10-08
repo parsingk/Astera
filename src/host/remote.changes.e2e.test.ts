@@ -166,7 +166,7 @@ describe('Remote Runtime Phase 10 acceptance (changed files and diff over the li
 
     const ctl = await controller(rt)
     const live = body<ChangedFilesReply>(await ctl.call('runs-changed-files', { runId }))
-    expect(live.git).toMatchObject({ base, head: null })
+    expect(live.git).toMatchObject({ live: true, total: 6 })
     const byPath = (files: ChangedFile[]) => Object.fromEntries(files.map((f) => [f.path, f]))
     const lf = byPath(live.git!.files)
     expect(Object.keys(lf).sort()).toEqual(['README.md', 'dir/새 이름.txt', 'gone.txt', 'has space/한글.txt', 'img.bin', 'keep.txt'])
@@ -190,7 +190,7 @@ describe('Remote Runtime Phase 10 acceptance (changed files and diff over the li
     g(rt.project, ['branch', '-D', 'feat'])
 
     const after = body<ChangedFilesReply>(await ctl.call('runs-changed-files', { runId }))
-    expect(after.git).toMatchObject({ base, head: tip })
+    expect(after.git).toMatchObject({ live: false, total: 6 })
     expect(Object.keys(byPath(after.git!.files)).sort()).toEqual(Object.keys(lf).sort())
     for (const f of after.git!.files) {
       const d = body<{ diff: string }>(await ctl.call('runs-diff', { runId, fileId: f.id }))

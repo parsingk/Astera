@@ -4552,7 +4552,10 @@ export function registerIpc(
     const runBelongs = (id: string): boolean => owned.has(id)
 
     const runKey = RUN_ID_ARG[cmd]
-    const runId = runKey ? strArg(runKey) : null
+    const named = runKey ? strArg(runKey) : null
+    // A Job id is read as its latest Run, as the commands read it (Phase 10 review I3): otherwise another project's Job
+    // id would be "no such run" here and pass.
+    const runId = named ? (resolveRunId(state, named) ?? named) : null
     if (runId) {
       if (!state.runs.some((r) => r.id === runId)) return null
       return runBelongs(runId) ? null : `run ${runId} does not belong to ${project}`
