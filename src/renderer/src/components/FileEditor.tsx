@@ -22,7 +22,7 @@ import { go } from '@codemirror/lang-go'
 import { languageForExt, sameDocument, type LangKey } from '../../../core/files/edit'
 import type { EditorStateCache } from '../lib/editorStateCache'
 import { FileFindBar } from './FileFindBar'
-import { createEditCoalescer } from '../lib/editCoalescer'
+import { createEchoLedger, createEditCoalescer } from '../lib/editCoalescer'
 
 function langExt(key: LangKey | null): Extension {
   switch (key) {
@@ -214,7 +214,7 @@ export function FileEditor({
   /** 바뀐 텍스트와 **그 텍스트가 속한 경로**를 함께 넘긴다. 경로 없이 텍스트만 넘기면, 프롭이 새
    *  파일로 바뀐 뒤 뷰가 아직 옛 문서를 들고 있는 찰나의 편집이 새 파일의 내용으로 기록된다 — 그 창이
    *  실제로 다른 파일을 덮어썼다. 받는 쪽이 경로로 대상을 찾으면 그 오귀속이 구조적으로 불가능해진다 */
-  onChange: (path: string, next: string, late?: boolean) => void
+  onChange: (path: string, next: string) => void
   onSave: (path: string) => void
   /** 이 에디터의 EditorView 를 밖에 알린다. 마크다운 분할 뷰의 스크롤 동기화가 그 뷰의 스크롤
    *  위치와 줄 배치를 읽어야 해서 열어 둔 통로다. 마운트에서 뷰를, 언마운트에서 null 을 넘긴다.
@@ -235,8 +235,10 @@ export function FileEditor({
   // References to the latest callbacks — the base extensions are built only once, so this avoids staleness
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
-  /** Sends this view's pending edits as late ones (second pass R2-1): before a file switch and at the unmount. */
-  const lateFlushRef = useRef<() => void>(() => {})
+  /** Sends this view's pending edits now (second pass R2-1): before a file switch and at the unmount. */
+  const flushEditsRef = useRef<() => void>(() => {})
+  /** The texts sent to App not yet seen coming back as `content` (final review C1). */
+  const echoesRef = useRef(createEchoLedger())
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
   const onRetireRef = useRef(onRetire)
@@ -277,21 +279,16 @@ export function FileEditor({
     viewRef.current = view
     curPathRef.current = path
     // 이 뷰의 편집이 향할 곳. 경로는 호출 시점에 읽으므로 파일을 갈아타도 따라온다
-    /** Set while a switch or the unmount flushes: App takes that text by its path, though the pane shows another. */
-    let late = false
-    // The text and its path are read when it goes, together: the pairing the path argument exists for holds.
+    // The text and its path are read when it goes, together: the pairing the path argument exists for holds, so App takes
+    // it by its path whatever the pane shows by then.
     const edits = createEditCoalescer({
       read: () => view.state.doc.toString(),
-      send: (text) => onChangeRef.current(curPathRef.current, text, late)
-    })
-    lateFlushRef.current = (): void => {
-      late = true
-      try {
-        edits.flush()
-      } finally {
-        late = false
+      send: (text) => {
+        echoesRef.current.sent(text)
+        onChangeRef.current(curPathRef.current, text)
       }
-    }
+    })
+    flushEditsRef.current = () => edits.flush()
     owners.set(view, {
       changed: () => edits.changed(),
       save: () => {
@@ -326,7 +323,7 @@ export function FileEditor({
     return () => {
       view.scrollDOM.removeEventListener('scroll', onScroll)
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
-      lateFlushRef.current()
+      edits.flush()
       edits.dispose()
       owners.delete(view)
       // As in the path switch below — a state must never be cached with the search panel still open
@@ -354,8 +351,9 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
-      // What was typed in the file being left goes to it first (second pass R2-1).
-      lateFlushRef.current()
+      // What was typed in the file being left goes to it first (second pass R2-1); what comes back is for that file.
+      flushEditsRef.current()
+      echoesRef.current = createEchoLedger()
       // 나가는 상태의 찾기 패널을 닫고 나서 캐시에 넣는다. 열린 채로 캐시되면 나중에 그 파일로
       // 돌아왔을 때 바는 없는데 강조만 남는다 — 강조는 패널이 열려 있는 동안만 그려지기 때문이다
       closeSearchPanel(view)
@@ -372,7 +370,9 @@ export function FileEditor({
     }
     // 같은 비교가 여기에도 걸린다. 문자열을 그대로 비교하면 CRLF 파일은 매 렌더 새 상태로 갈아치워져
     // 되돌리기 이력이 계속 날아간다
-    if (!sameDocument(view.state.doc.toString(), content)) {
+    // Our own text coming back (final review C1): App's render can trail the keys typed since, and taking it for an
+    // outside change replaced the document, losing those keys, the cursor and undo.
+    if (!sameDocument(view.state.doc.toString(), content) && !echoesRef.current.isEcho(content)) {
       // 문서가 바뀌었으니 들고 있던 스크롤 스냅샷은 다른 문서의 위치다. 버리지 않으면 다음 마운트에서
       // 엉뚱한 곳으로 스크롤한다
       lastScrollRef.current = null

@@ -2922,13 +2922,11 @@ export default function App(): React.JSX.Element {
         focused={focused}
         onRetire={retireEditorState}
         onViewChange={(view) => setMdViews((prev) => ({ ...prev, [paneId]: view }))}
-        // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
-        // 갈아타지 않은 옛 문서의 것이므로 버린다
-        // A late one (second pass R2-1) is what was typed in a file the pane is leaving, flushed as it leaves: taken by its
-        // path. The text and the path it carries are read together in the editor.
-        onChange={(fromPath, next, late) => {
+        // Taken by its path, whatever the pane shows by now (second pass R2-1, final review m1): the editor sends its text
+        // a moment after the keys, and reads the text and its path together, so the pair is always one file's.
+        onChange={(fromPath, next) => {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
-          if (!target || (target.id !== f.id && late !== true)) return
+          if (!target) return
           dropReveal(target.id)
           setBufferContent(target.id, next)
         }}

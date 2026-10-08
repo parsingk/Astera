@@ -2,7 +2,7 @@
 // state, drawing App and every pane under it again. The text goes on a short coalesce instead, and anything that
 // reads the buffer (save, close, an outside change) flushes what is pending first.
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { createEditCoalescer, flushPendingEdits, EDIT_COALESCE_MS } from './editCoalescer'
+import { createEchoLedger, createEditCoalescer, flushPendingEdits, EDIT_COALESCE_MS, EDIT_MAX_WAIT_MS } from './editCoalescer'
 
 afterEach(() => vi.useRealTimers())
 
@@ -19,6 +19,25 @@ describe('createEditCoalescer', () => {
     await vi.advanceTimersByTimeAsync(EDIT_COALESCE_MS)
     expect(sent).toEqual(['abc'])
     expect(reads).toBe(1)
+    c.dispose()
+  })
+
+  // Final review C1: the timer was started at the first key and never moved, so a flush landed every 120 ms in the
+  // middle of typing. A burst waits while keys keep coming, up to EDIT_MAX_WAIT_MS.
+  it('waits while keys keep coming, and sends at the latest after the longest wait', async () => {
+    vi.useFakeTimers()
+    const sent: string[] = []
+    const c = createEditCoalescer({ read: () => 't', send: (t) => sent.push(t) })
+    for (let i = 0; i < 5; i++) {
+      c.changed()
+      await vi.advanceTimersByTimeAsync(EDIT_COALESCE_MS - 20)
+    }
+    expect(sent).toEqual([])
+    for (let elapsed = 5 * (EDIT_COALESCE_MS - 20); elapsed < EDIT_MAX_WAIT_MS; elapsed += EDIT_COALESCE_MS - 20) {
+      c.changed()
+      await vi.advanceTimersByTimeAsync(EDIT_COALESCE_MS - 20)
+    }
+    expect(sent).toEqual(['t'])
     c.dispose()
   })
 
@@ -58,5 +77,26 @@ describe('createEditCoalescer', () => {
     flushPendingEdits()
     vi.advanceTimersByTime(EDIT_COALESCE_MS)
     expect(sent).toEqual([])
+  })
+})
+
+// Final review C1: App's copy of the text comes back to the editor after a render that can trail the keys typed since.
+// The editor took that echo for an outside change and replaced its document: keys lost, cursor to the start, undo gone.
+describe('createEchoLedger', () => {
+  it('knows its own text coming back, however late, and an outside text as outside', () => {
+    const l = createEchoLedger()
+    l.sent('abc')
+    l.sent('abcd')
+    expect(l.isEcho('abc')).toBe(true)
+    expect(l.isEcho('abcd')).toBe(true)
+    expect(l.isEcho('from disk')).toBe(false)
+  })
+
+  it('an echo forgets what was sent before it, so an old text returning later is outside', () => {
+    const l = createEchoLedger()
+    l.sent('a')
+    l.sent('ab')
+    expect(l.isEcho('ab')).toBe(true)
+    expect(l.isEcho('a')).toBe(false)
   })
 })

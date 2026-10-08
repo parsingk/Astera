@@ -94,6 +94,27 @@ describe('ensureOnWindowsPath: read the saved Path again when a CLI is missing, 
     expect(probe.calls).toBe(0)
   })
 
+  // Final review I2: a chat spawn never prepares, so its command builder's PATH lookup was cold and synchronous unless
+  // something else had warmed it. Every chat spawn awaits this check, so this check's lookup is the one kept.
+  it("looks this process's names up through the kept lookup, again after the saved Path was read", async () => {
+    const warmed: string[] = []
+    const probe = savedPath('C:\\a;C:\\new')
+    let n = 0
+    await ensureOnWindowsPath(['claude', 'codex'], {
+      env: { PATH: 'C:\\a' } as NodeJS.ProcessEnv,
+      run: probe.run,
+      platform: 'win32',
+      now: () => 9_000_000_000,
+      warm: async (name) => {
+        warmed.push(name)
+        return n++ < 2 && name === 'codex' ? null : `C:\\bin\\${name}.exe`
+      }
+    })
+    expect(warmed.slice(0, 2).sort()).toEqual(['claude', 'codex'])
+    expect(probe.calls).toBe(1)
+    expect(warmed.slice(2).sort()).toEqual(['claude', 'codex'])
+  })
+
   it('does nothing off win32', async () => {
     const probe = savedPath('C:\\x')
     await ensureOnWindowsPath(['claude'], { env: {}, run: probe.run, platform: 'darwin' })

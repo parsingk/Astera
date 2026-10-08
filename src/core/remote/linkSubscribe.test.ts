@@ -234,6 +234,43 @@ describe('RemoteLink.subscribe', () => {
     w.link.close()
   })
 
+  // Final review I1: a stream waiting out a gap when its connection dropped stayed `waiting`, so every frame of its new
+  // subscription was dropped and the tab said "reconnecting" over a stale screen for good.
+  it('a stream waiting out a gap when its connection drops takes its new subscription', async () => {
+    const rt = fakeRuntime()
+    let release: () => void = () => {}
+    const gapSleep = new Promise<void>((r) => (release = r))
+    let sleeps = 0
+    const link = openRemoteLink({
+      target,
+      client: {},
+      connect: rt.connect,
+      // The first sleep is the gap wait, held open; the reconnect's own waits pass at once.
+      sleep: () => (sleeps++ === 0 ? gapSleep : Promise.resolve()),
+      random: () => 0.5
+    })
+    const seen: string[] = []
+    link.subscribe('p1', { onReset: (c) => seen.push(`reset@${c.watermark}`), onEvents: (es) => seen.push(...es.map((e) => `seq${e.seq}`)) })
+    await settle()
+    const sub = rt.asked[0].sub
+    rt.conns[0].push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    rt.conns[0].push({ t: 'checkpoint', sub, checkpoint: cp(2), gap: { firstSeq: 1, lastSeq: 2 } })
+    rt.conns[0].push({ t: 'output-gap', sub, firstSeq: 3, lastSeq: 9, code: 'OUTPUT_GAP' })
+    await settle()
+    rt.conns[0].push({ t: 'output-gap', sub, firstSeq: 3, lastSeq: 9, code: 'OUTPUT_GAP' }) // the second: it waits
+    await settle()
+    rt.conns.at(-1)!.drop()
+    await settle()
+    await settle()
+    const last = rt.conns.at(-1)!
+    last.push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    last.push({ t: 'checkpoint', sub, checkpoint: cp(7), gap: { firstSeq: 1, lastSeq: 7 } })
+    expect(seen).toContain('reset@7')
+    release()
+    await settle()
+    link.close()
+  })
+
   // Phase 9b review I1: a tab says it is reconnecting while its connection is down, and stops saying so once the stream
   // is answered again. The first subscription is not a reconnect.
   it('tells the stream when its connection drops and when it is subscribed again', async () => {

@@ -442,6 +442,23 @@ describe('exited chats kept', () => {
     expect(listed).toContain(ids[2])
     expect(listed).toContain(live)
   })
+
+  // Final review m3: a chat tab whose session was dropped from the list asked for its state on its next mount and got
+  // nothing: no exit banner, no error, no status. Its last state is kept, small, for a longer while.
+  it('a dropped exited chat still answers its last state', () => {
+    const { manager, handles, spawned } = setup()
+    const first = manager.spawn({ account: codexAccount, cwd: 'D:/p' }).id
+    spawned[0].proc.feed('{"jsonrpc":"2.0"}')
+    handles[0].emit({ type: 'exit', code: 7, errorDetail: null })
+    const before = manager.state(first)
+    expect(before).not.toBeNull()
+    for (let i = 1; i <= EXITED_SESSIONS_KEPT; i++) {
+      manager.spawn({ account: codexAccount, cwd: 'D:/p' })
+      handles[i].emit({ type: 'exit', code: 0, errorDetail: null })
+    }
+    expect(manager.list().map((s) => s.id)).not.toContain(first)
+    expect(manager.state(first)).toEqual(before)
+  })
 })
 
 describe('event wiring', () => {

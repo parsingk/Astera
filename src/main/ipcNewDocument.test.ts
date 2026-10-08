@@ -24,6 +24,14 @@ describe('a new document in the window', () => {
     expect(ipc).toContain("core.terminal.onExit = (e) => {\n    terminalBatcher.flush()")
   })
 
+  // Final review m2: a buffer handed out while chunks it already holds still sat in the batcher was followed by those
+  // chunks again: written twice by a view that had subscribed meanwhile. The batch goes first.
+  it('sends what the batchers hold before handing out a buffer', () => {
+    const list = ipc.slice(ipc.indexOf("ipcMain.handle('terminal.list'"))
+    expect(list.slice(0, list.indexOf('\n  })'))).toContain('terminalBatcher.flush()')
+    expect(ipc).toContain("ipcMain.handle('run.output', async (_e, runId: string) => {\n    runBatcher.flush()")
+  })
+
   it('stops the GitHub and the usage polls among them', () => {
     expect(ipc).toContain('onNewDocument.push(() => githubPrs.stop())')
     expect(ipc).toContain('onNewDocument.push(() => accountUsage.stop())')

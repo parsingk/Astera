@@ -109,6 +109,9 @@ export function openRemoteLink(a: {
     gapAt?: number
     /** Waiting out a gap: frames of the old subscription are not applied. */
     waiting?: boolean
+    /** Rises with every subscription and every gap wait: a wait that ends after either is stale and does nothing
+     *  (final review I1: a wait the connection dropped under left the stream `waiting` on its new subscription). */
+    epoch?: number
   }
   const streams = new Map<string, Stream>()
   let streamN = 0
@@ -247,7 +250,9 @@ export function openRemoteLink(a: {
     s.gapAt = t
     if (n === 0) return start(s, link)
     s.waiting = true
+    const mine = (s.epoch = (s.epoch ?? 0) + 1)
     void sleep(GAP_WAITS_MS[Math.min(n - 1, GAP_WAITS_MS.length - 1)]).then(() => {
+      if (s.epoch !== mine) return
       s.waiting = false
       if (!closed && streams.get(s.id) === s && s.on === link) start(s, link)
     })
@@ -259,6 +264,9 @@ export function openRemoteLink(a: {
       return
     }
     s.on = link
+    // A new subscription ends any gap wait still running: its frames are this stream's now.
+    s.waiting = false
+    s.epoch = (s.epoch ?? 0) + 1
     link.subscribe(s.id, s.pty, { ...(s.lastSeq !== null ? { fromSeq: s.lastSeq + 1 } : {}), ...(s.bootId !== null ? { bootId: s.bootId } : {}) }, (f) =>
       onStreamFrame(s, link, f)
     )

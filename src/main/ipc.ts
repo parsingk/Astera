@@ -5129,7 +5129,11 @@ export function registerIpc(
   ipcMain.handle('run.dismiss', async (_e, runId: string) => core.run.dismiss(runId))
   // A run's buffered output, for a panel that mounts after the run started. Same "existing run, no
   // guard" reasoning as run.dismiss.
-  ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
+  // What the batcher holds goes first (final review m2): those chunks are in the buffer handed out here already.
+  ipcMain.handle('run.output', async (_e, runId: string) => {
+    runBatcher.flush()
+    return core.run.recentOutput(runId)
+  })
   ipcMain.handle('run.replay', async (_e, runId: string) => core.run.replay(runId))
   // A console link's path, resolved against the run's own working directory and checked before the
   // renderer is told it exists (main/run/resolveLink.ts). A relative target that is not at the cwd is
@@ -5224,6 +5228,8 @@ export function registerIpc(
     return core.terminal.open(projectPath, cols, rows)
   })
   ipcMain.handle('terminal.list', async (_e, projectPath: string) => {
+    // What the batcher holds goes first (final review m2): those chunks are in the buffers handed out here already.
+    terminalBatcher.flush()
     await assertTerminalPath(projectPath)
     return core.terminal.list(projectPath)
   })

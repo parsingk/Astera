@@ -16,7 +16,7 @@
 // process put it. Windows PowerShell by its absolute path (a bare name is looked up in the working
 // directory first), UTF-8 out so a folder with non-ASCII letters survives.
 import { execFile } from 'node:child_process'
-import { findOnWindowsPathAsync } from './windowsExecutable'
+import { findOnWindowsPathAsync, warmWindowsExecutable } from './windowsExecutable'
 
 const START = '__ASTERA_PATH__'
 const END = '__END__'
@@ -122,18 +122,26 @@ export async function ensureOnWindowsPath(
     now?: () => number
     exists?: (p: string) => Promise<boolean>
     timeoutMs?: number
+    /** This process's lookup, whose answer the command builders read (windowsExecutable.ts `warmWindowsExecutable`). */
+    warm?: (name: string) => Promise<string | null>
   } = {}
 ): Promise<void> {
   const env = o.env ?? process.env
   if ((o.platform ?? process.platform) !== 'win32') return
   // Off the thread and bounded (second pass M2-2): an offline drive on PATH held the app here before every session start.
+  // For this process's own PATH through the kept lookup (final review I2): a chat spawn has no prepare, and this check is
+  // what it awaits, so its builder then finds the answer instead of walking PATH synchronously.
   const lookup = { ...(o.exists ? { exists: o.exists } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) }
-  const found = await Promise.all(names.map((n) => findOnWindowsPathAsync(n, env, lookup)))
+  const kept = o.warm ?? (o.env === undefined && o.exists === undefined ? warmWindowsExecutable : null)
+  const look = (n: string): Promise<string | null> => (kept ? kept(n) : findOnWindowsPathAsync(n, env, lookup))
+  const found = await Promise.all(names.map(look))
   if (found.every((f) => f !== null)) return
   const now = (o.now ?? Date.now)()
   if (now - lastRefresh < REFRESH_MS) return
   lastRefresh = now
-  await completeWindowsPath(env, o.run, 'win32').catch(() => false)
+  const changed = await completeWindowsPath(env, o.run, 'win32').catch(() => false)
+  // A Path that grew is a new key for the kept lookup: looked up again now, off the thread.
+  if (kept && changed !== false) await Promise.all(names.map((n) => kept(n)))
 }
 
 /** Test seam: forget when the saved Path was last read. */
