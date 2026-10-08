@@ -27,6 +27,9 @@ const GRACE_MS = 150
  *  unavailable: a readdir stuck on a dead share never settles, and the menu must not wait on it. The
  *  walk itself is not stopped (Node cannot cancel an fs call); if it finishes later, its list is kept. */
 export const WALK_TIMEOUT_MS = 20_000
+/** How many roots keep their list (performance audit M6): each holds up to MAX_FILES paths, and an app that opened a
+ *  few dozen projects in a week held every one. The least recently searched goes first; it is walked again if asked. */
+export const FILE_INDEX_ROOTS_KEPT = 8
 
 /** How many entries the walk handles between turns it gives the event loop. A folder of thousands of
  *  files comes back from one readdir, and filtering it is a synchronous loop on main. */
@@ -113,6 +116,15 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
   const walkTimeoutMs = deps.walkTimeoutMs ?? WALK_TIMEOUT_MS
   const cache = new Map<string, Entry>()
   const inflight = new Map<string, Walk>()
+  /** Into the cache as the most recently used, past FILE_INDEX_ROOTS_KEPT the oldest out. */
+  const keep = (root: string, e: Entry): void => {
+    cache.delete(root)
+    cache.set(root, e)
+    for (const old of cache.keys()) {
+      if (cache.size <= FILE_INDEX_ROOTS_KEPT) break
+      cache.delete(old)
+    }
+  }
 
   const walk = async (root: string, out: string[]): Promise<void> => {
     // The root is asked about first, within the probe budget. One that does not answer (a dead share)
@@ -173,7 +185,7 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
       )
       .then((r) => {
         if (timer) clearTimeout(timer)
-        cache.set(root, { paths: r.paths, at: now(), unavailable: r.unavailable })
+        keep(root, { paths: r.paths, at: now(), unavailable: r.unavailable })
         inflight.delete(root)
         return r
       })
@@ -192,7 +204,9 @@ export function createFileIndex(now: () => number = Date.now, deps: FileIndexDep
   const fresh = (root: string): Entry | null => {
     const cached = cache.get(root)
     if (!cached) return null
-    return now() - cached.at < (cached.unavailable ? UNAVAILABLE_TTL_MS : TTL_MS) ? cached : null
+    if (now() - cached.at >= (cached.unavailable ? UNAVAILABLE_TTL_MS : TTL_MS)) return null
+    keep(root, cached)
+    return cached
   }
 
   const answer = (paths: string[], query: string, limit: number, unavailable: boolean): FileIndexAnswer =>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createHostRollView, withHostRollHold, installHostRollExit, orchHoldsSession, hostForced, announcesAdopted } from './hostRollView'
+import { createHostRollView, HOST_ROLL_KNOWN_KEPT, withHostRollHold, installHostRollExit, orchHoldsSession, hostForced, announcesAdopted } from './hostRollView'
 import type { OrchState } from '../../core/orchestration/state'
 import type { HostMessage } from '../../core/host/protocol'
 
@@ -143,6 +143,15 @@ describe('createHostRollView (S6 §3.4)', () => {
     await vi.waitFor(() => expect(v.adopting('s2')).toBe(false))
     expect(v.takePendingFork('s2')).toBeNull()
   })
+
+  // Performance audit M10: every session the Host ever pushed a roll state for stayed known for the app's life.
+  it('knows the most recent sessions only', () => {
+    const v = createHostRollView({ adopt: async () => {}, forward: () => {}, log: () => {} })
+    for (let i = 0; i <= HOST_ROLL_KNOWN_KEPT; i++) v.pushed({ t: 'roll-state', event: { sessionId: `s${i}`, state: 'none' } })
+    expect(v.knows('s0')).toBe(false)
+    expect(v.knows(`s${HOST_ROLL_KNOWN_KEPT}`)).toBe(true)
+  })
+
 })
 
 const rolled = { id: 's2', accountId: 'a2', cwd: 'D:/p', status: 'running' as const, title: 't' }

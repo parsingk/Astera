@@ -12,6 +12,7 @@
 import type { HostMessage } from '../../core/host/protocol'
 import type { OrchState } from '../../core/orchestration/state'
 import type { RollStateEvent, SessionInfo } from '../../core/types'
+import { onceBounded } from '../../core/bounded'
 
 type Exit = { sessionId: string; exitCode: number }
 
@@ -19,6 +20,8 @@ type Exit = { sessionId: string; exitCode: number }
 export const HOST_ROLL_SETTLE_MS = 15_000
 /** How often a waiting exit looks at the mirror between pushes. */
 export const HOST_ROLL_POLL_MS = 250
+/** How many session ids `knows` remembers (performance audit M10): one per session the Host ever pushed about. */
+export const HOST_ROLL_KNOWN_KEPT = 4096
 
 export interface HostRollView {
   /** A pushed message; ignores every type but the two roll pushes and `orch-state`. Never throws. */
@@ -76,6 +79,10 @@ export function createHostRollView(d: {
   /** New session id → the old one, while the new half is being adopted. */
   const inFlight = new Map<string, string>()
   const known = new Set<string>()
+  const know = (id: string): void => {
+    known.delete(id)
+    onceBounded(known, id, HOST_ROLL_KNOWN_KEPT)
+  }
   const pendingFork = new Map<string, string>()
   /** Old session id → the check that releases its exits once the mirror moved (I2). */
   const settling = new Map<string, () => void>()
@@ -132,15 +139,15 @@ export function createHostRollView(d: {
       }
       if (m.t === 'roll-state') {
         const e = m.event
-        known.add(e.sessionId)
+        know(e.sessionId)
         if (e.state === 'none') last.delete(e.sessionId)
         else if (e.state !== 'nudged' && e.state !== 'stalled') last.set(e.sessionId, e)
         safe('forwarding a roll state', () => d.forward('session:rollState', e, { orchestration: false }))
         return
       }
       if (m.t !== 'session-rolled') return
-      known.add(m.oldSessionId)
-      known.add(m.info.id)
+      know(m.oldSessionId)
+      know(m.info.id)
       replacing.set(m.oldSessionId, replacing.get(m.oldSessionId) ?? [])
       inFlight.set(m.info.id, m.oldSessionId)
       // Wrapped so a synchronous throw from adopt is the same failed adoption as a rejection.
@@ -190,8 +197,8 @@ export function createHostRollView(d: {
         })
     },
     repointed: (oldId, info, dest) => {
-      known.add(oldId)
-      known.add(info.id)
+      know(oldId)
+      know(info.id)
       repointedBy.set(info.id, oldId)
       const was = last.get(oldId)
       last.delete(oldId)

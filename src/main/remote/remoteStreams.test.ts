@@ -135,4 +135,20 @@ describe('createRemoteStreams', () => {
     const nav = ipc.slice(ipc.indexOf("win.webContents.on('did-start-navigation'"))
     expect(nav.slice(0, nav.indexOf('\n  })'))).toContain('remoteStreams?.close()')
   })
+
+  // Performance audit M10: a stream the Runtime gave up, or one whose Runtime could not be found, stayed in the map until
+  // its tab detached, and a rebind subscribed it again for nothing. It is forgotten once it is reported gone.
+  it('forgets a stream once it is reported gone: a rebind does not subscribe it again', async () => {
+    const r = rig()
+    await r.streams.attach('rt_1', 's1', 'pty-1')
+    r.rt().subs[0].h.onGone!('PTY_NOT_FOUND', 'gone')
+    expect(r.rt().subs[0].stopped).toBe(true)
+    await r.streams.attach('rt_x', 's2', 'pty-2')
+    r.clients.set('rt_x', fakeClient())
+    await r.streams.rebind('rt_1')
+    await r.streams.rebind('rt_x')
+    expect(r.rt().subs).toHaveLength(1)
+    expect(r.clients.get('rt_x')!.subs).toHaveLength(0)
+  })
+
 })

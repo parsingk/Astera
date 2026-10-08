@@ -73,6 +73,8 @@ export function createRemoteStreams(a: {
       },
       onGone: (code, message) => {
         if (!live()) return
+        // Given up: forgotten here too (performance audit M10), so a rebind does not subscribe it again for nothing.
+        drop(key)
         a.send('session:remote-gone', { sessionId: key, code, message })
       },
       onLinkState: (state) => {
@@ -90,6 +92,7 @@ export function createRemoteStreams(a: {
     // Detached or replaced while the client was being found.
     if (streams.get(key)?.gen !== mine) return false
     if (!('subscribePty' in client)) {
+      streams.delete(key)
       a.send('session:remote-gone', { sessionId: key, code: client.code, message: client.message })
       return false
     }

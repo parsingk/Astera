@@ -8,6 +8,7 @@ import {
   addHfAccount, hfEnvFor, importHfAccount, patchHfAccount, readHfAccounts, removeHfAccount, setHfCurrent
 } from '../core/higgsfield/accounts'
 import { findRealHiggsfield, higgsfieldVendorBinary, isHiggsfieldCli } from '../core/higgsfield/shims'
+import { createRealCliFinder } from './realCliFinder'
 import { backupCredentials, realRunner } from '../core/higgsfield/runner'
 import { accountRun, higgsfieldCommand, listWorkspaces, statusRun, type AccountRun, type HfCliIssue, type StatusRun } from '../cli/higgsfield'
 import type { HfWorkspace } from '../core/higgsfield/display'
@@ -78,11 +79,11 @@ async function validCredentials(file: string): Promise<boolean> {
 export function higgsfieldHandlers(deps: {
   profileDir: string
   home: string
-  cliFound: () => boolean
+  cliFound: () => boolean | Promise<boolean>
   runStatus: StatusRun
   runLogin: LoginRun
   /** The CLI program missing, found without running it (default: none). */
-  cliIssue?: () => HfCliIssue | null
+  cliIssue?: () => HfCliIssue | null | Promise<HfCliIssue | null>
   loginTimeoutMs?: number
   /** A guarded real-CLI call under one account (workspace list/set). Default: no CLI. */
   runCli?: AccountRun
@@ -108,7 +109,7 @@ export function higgsfieldHandlers(deps: {
     list(): Promise<HfListResult> {
       // Single-flight: a caller arriving while a list runs gets that list (StrictMode's double mount).
       listing ??= serial(async () => {
-        const issue = deps.cliIssue?.() ?? null
+        const issue = (await deps.cliIssue?.()) ?? null
         // Checked at the moment of each call: an account whose login is running is never asked.
         const run: StatusRun = issue !== null
           ? async () => null
@@ -121,7 +122,7 @@ export function higgsfieldHandlers(deps: {
         return {
           current: body.current,
           accounts: body.accounts.map((x) => ({ ...x, loggingIn: active?.id === x.id })),
-          cliFound: deps.cliFound(),
+          cliFound: await deps.cliFound(),
           cliIssue: issue ?? body.cliIssue ?? null
         }
       }).finally(() => { listing = null })
@@ -252,18 +253,23 @@ export function registerHiggsfieldIpc(
   profileDir: string,
   home: string
 ): void {
-  const findReal = (): string | null =>
-    findRealHiggsfield({ env: process.env, platform: process.platform, skipDirs: [path.join(profileDir, 'orch')], read: readOrNull,
-      accept: (f) => isHiggsfieldCli(f, process.platform, { read: readOrNull }) })
+  // Read asynchronously and answered once for a few seconds (realCliFinder.ts, performance audit M8)
+  const finder = createRealCliFinder({
+    find: (read) =>
+      findRealHiggsfield({ env: process.env, platform: process.platform, skipDirs: [path.join(profileDir, 'orch')], read,
+        accept: (f) => isHiggsfieldCli(f, process.platform, { read: readOrNull }) }),
+    readAsync: (p) => fs.readFile(p, 'utf8').catch(() => null)
+  })
+  const findReal = (): Promise<string | null> => finder.find()
   const vendorOf = (real: string) => higgsfieldVendorBinary(real, process.platform, { read: readOrNull })
-  const cliIssue = (): HfCliIssue | null => {
-    const real = findReal()
+  const cliIssue = async (): Promise<HfCliIssue | null> => {
+    const real = await findReal()
     if (real === null) return null
     const v = vendorOf(real)
     return v.missing && v.binary !== null ? { kind: 'binaryMissing', path: v.binary } : null
   }
   const runLogin: LoginRun = async (id, io) => {
-    const real = findReal()
+    const real = await findReal()
     if (real === null) return { code: 127, lastError: 'the higgsfield CLI was not found on PATH' }
     const v = vendorOf(real)
     if (v.missing) return { code: 127, lastError: `the Higgsfield CLI program is missing (${v.binary})` }
@@ -283,17 +289,17 @@ export function registerHiggsfieldIpc(
   }
   // No stdin for the status calls either: nothing may wait on a terminal that is not there.
   const runStatus: StatusRun = async (id) => {
-    const real = findReal()
+    const real = await findReal()
     if (real === null) return null
     return statusRun(profileDir, process.env, realRunner(real, process.platform, [], { stdin: 'ignore' }))(id)
   }
   const runCli: AccountRun = async (id, args) => {
-    const real = findReal()
+    const real = await findReal()
     if (real === null) return null
     return accountRun(profileDir, process.env, realRunner(real, process.platform, [], { stdin: 'ignore' }))(id, args)
   }
   const h = higgsfieldHandlers({
-    profileDir, home, cliFound: () => findReal() !== null, runStatus, runLogin, cliIssue, runCli
+    profileDir, home, cliFound: async () => (await findReal()) !== null, runStatus, runLogin, cliIssue, runCli
   })
   ipcMain.handle('higgsfield.list', () => h.list())
   ipcMain.handle('higgsfield.add', (_e, label) => h.add(label))

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { createFileIndex } from './fileIndex'
+import { createFileIndex, FILE_INDEX_ROOTS_KEPT } from './fileIndex'
 
 describe('createFileIndex', () => {
   let root: string
@@ -253,5 +253,20 @@ describe('createFileIndex — a root that does not answer', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// Performance audit M6: every project root ever searched kept its list (up to 20,000 paths) for the life of the app.
+describe('createFileIndex — bounded', () => {
+  it('keeps the lists of the most recently searched roots only', async () => {
+    const dirs: Record<string, FakeEntry[]> = {}
+    for (let i = 0; i <= FILE_INDEX_ROOTS_KEPT; i++) dirs[`p${i}`] = [fileEntry(`f${i}.ts`)]
+    const f = fakeFs(dirs)
+    const index = createFileIndex(() => 0, { probe: reachable, readdir: f.readdir, readFile: f.readFile })
+    for (let i = 0; i <= FILE_INDEX_ROOTS_KEPT; i++) await index.search(path.resolve(`/fake/p${i}`), '', 10)
+    await index.search(path.resolve(`/fake/p${FILE_INDEX_ROOTS_KEPT}`), '', 10)
+    expect(f.calls.filter((c) => c === `p${FILE_INDEX_ROOTS_KEPT}`)).toHaveLength(1)
+    expect(await index.search(path.resolve('/fake/p0'), '', 10)).toEqual(['f0.ts'])
+    expect(f.calls.filter((c) => c === 'p0')).toHaveLength(2)
   })
 })
