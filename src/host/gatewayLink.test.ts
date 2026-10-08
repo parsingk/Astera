@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { PassThrough, Writable } from 'node:stream'
 import { SUBS_PER_CONN, attachGatewayLink } from './gatewayLink'
 import { createControllerRegistry, sha256Base64url } from './controllers'
@@ -218,20 +218,22 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     return { ...s, ...p }
   }
   const of = (frames: Array<Record<string, unknown>>, t: string) => frames.filter((f) => f.t === t)
+  /** Waits for a condition rather than a fixed time: the first live terminal loads @xterm/headless, which a loaded CI
+   *  runner takes far longer than 20 ms to do (Windows CI, 2026-10-08). */
+  const eventually = (check: () => void): Promise<void> => vi.waitFor(check, { timeout: 10_000, interval: 10 })
 
   it('a read-only controller subscribes: subscribed, then a checkpoint with the gap, then live output', async () => {
     const s = await ready()
     s.emit('before')
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'checkpoint')).toHaveLength(1))
     expect(of(s.frames, 'subscribed')).toEqual([{ t: 'subscribed', conn: 'c1', sub: 's1', pty: 'p1', bootId: 'boot-1' }])
     const [cp] = of(s.frames, 'checkpoint') as Array<{ checkpoint: { watermark: number; state: string }; gap: unknown }>
     expect(cp.checkpoint.watermark).toBe(1)
     expect(cp.checkpoint.state).toContain('before')
     expect(cp.gap).toEqual({ firstSeq: 1, lastSeq: 1 })
     s.emit('after')
-    await s.settle()
-    expect(of(s.frames, 'pty-out')).toEqual([{ t: 'pty-out', conn: 'c1', sub: 's1', events: [{ seq: 2, kind: 'data', data: 'after' }] }])
+    await eventually(() => expect(of(s.frames, 'pty-out')).toEqual([{ t: 'pty-out', conn: 'c1', sub: 's1', events: [{ seq: 2, kind: 'data', data: 'after' }] }]))
   })
 
   // Phase 8 review I3: a checkpoint is stream output, not control: a large one never trips the link's hard cap.
@@ -254,7 +256,7 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     const row = Array.from({ length: 35 }, (_, x) => `${E}[3${x % 8}mw`).join('')
     for (let i = 0; i < 1000; i++) p.emit(row + String.fromCharCode(13, 10))
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
-    await new Promise((r) => setTimeout(r, 300))
+    await eventually(() => expect(of(lines, 'checkpoint')).toHaveLength(1))
     expect(s.events).not.toContain('hardcap')
     const [cp] = of(lines, 'checkpoint') as Array<{ checkpoint: { state: string } }>
     expect(cp.checkpoint.state.length).toBeGreaterThan(64 * 1024)
@@ -265,7 +267,7 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     s.emit('one')
     s.emit('two')
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1', fromSeq: 2, bootId: 'boot-1' })
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'pty-out')).toHaveLength(1))
     expect(of(s.frames, 'checkpoint')).toEqual([])
     expect(of(s.frames, 'pty-out').flatMap((f) => (f.events as Array<{ seq: number }>).map((e) => e.seq))).toEqual([2])
   })
@@ -274,15 +276,14 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     const s = await ready()
     s.emit('one')
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1', fromSeq: 1, bootId: 'boot-0' })
-    await s.settle()
-    expect(of(s.frames, 'checkpoint')).toHaveLength(1)
+    await eventually(() => expect(of(s.frames, 'checkpoint')).toHaveLength(1))
   })
 
   it('an unknown pty is RUNTIME_NOT_FOUND; an unauthenticated connection RUNTIME_AUTH_FAILED', async () => {
     const s = await ready()
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'nope' })
     s.send({ t: 'subscribe', conn: 'c9', sub: 's2', pty: 'p1' })
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'sub-error')).toHaveLength(2))
     // The refusal for an unauthenticated connection is immediate, the unknown pty's after the replay: compared unordered.
     expect(of(s.frames, 'sub-error').map((f) => [f.sub, f.code]).sort()).toEqual([['s1', 'RUNTIME_NOT_FOUND'], ['s2', 'RUNTIME_AUTH_FAILED']])
   })
@@ -290,18 +291,17 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
   it('the 65th subscription on one connection is RUNTIME_BUSY', async () => {
     const s = await ready()
     for (let i = 0; i < SUBS_PER_CONN + 1; i++) s.send({ t: 'subscribe', conn: 'c1', sub: `s${i}`, pty: 'p1' })
-    await s.settle()
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'subscribed')).toHaveLength(SUBS_PER_CONN))
     expect(of(s.frames, 'sub-error').map((f) => f.code)).toEqual(['RUNTIME_BUSY'])
   })
 
   it('unsubscribe and a closed connection stop the output', async () => {
     const s = await ready()
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'checkpoint')).toHaveLength(1))
     s.send({ t: 'unsubscribe', conn: 'c1', sub: 's1' })
     s.send({ t: 'subscribe', conn: 'c1', sub: 's2', pty: 'p1' })
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'checkpoint')).toHaveLength(2))
     s.send({ t: 'conn-closed', conn: 'c1' })
     await s.settle()
     s.frames.length = 0
@@ -328,9 +328,8 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
     await s.settle()
     for (let i = 0; i < 20; i++) p.emit(`chunk ${i} ${'x'.repeat(40)}`)
-    await new Promise((r) => setTimeout(r, 300))
+    await eventually(() => expect(frames.some((f) => f.t === 'output-gap' && f.sub === 's1')).toBe(true))
     const gap = frames.findIndex((f) => f.t === 'output-gap' && f.sub === 's1')
-    expect(gap).toBeGreaterThan(-1)
     p.emit('after the gap')
     await new Promise((r) => setTimeout(r, 100))
     expect(frames.slice(gap).some((f) => f.t === 'pty-out' && JSON.stringify(f).includes('after the gap'))).toBe(false)
@@ -377,7 +376,7 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
   it('closeConns drops that connection’s subscriptions at once', async () => {
     const s = await ready()
     s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
-    await s.settle()
+    await eventually(() => expect(of(s.frames, 'checkpoint')).toHaveLength(1))
     s.link.closeConns([{ linkGen: 1, conn: 'c1' }])
     s.frames.length = 0
     s.emit('after the revocation')
