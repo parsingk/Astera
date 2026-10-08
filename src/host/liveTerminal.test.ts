@@ -124,16 +124,21 @@ describe('createLiveTerminal checkpoint', () => {
     const gc = (globalThis as { gc?: () => void }).gc
     gc?.()
     const before = process.memoryUsage().heapUsed
+    // CPU time of this process, not the wall clock: a full suite on a loaded machine stretches the wall clock many
+    // times over (21 s measured once against 1.3 s alone), while the work done stays what it is.
+    const cpu0 = process.cpuUsage()
     const t0 = Date.now()
     const terms = Array.from({ length: 20 }, () => createLiveTerminal({ cols: 120, rows: 40 }))
     const ring = createPtyRing()
     for (let sent = 0; sent < each; sent += chunk.length) for (const t of terms) for (const e of ring.push(data(chunk))) t.apply(e)
     await Promise.all(terms.map((t) => t.checkpoint()))
     const ms = Date.now() - t0
+    const cpu = process.cpuUsage(cpu0)
+    const cpuMs = (cpu.user + cpu.system) / 1000
     gc?.()
     const mib = (process.memoryUsage().heapUsed - before) / (1 << 20)
-    console.log(`live terminal budget: 20 x 4 MiB parsed in ${ms} ms, heap +${mib.toFixed(1)} MiB`)
-    expect(ms).toBeLessThan(20_000)
+    console.log(`live terminal budget: 20 x 4 MiB parsed in ${ms} ms (${cpuMs.toFixed(0)} ms CPU), heap +${mib.toFixed(1)} MiB`)
+    expect(cpuMs).toBeLessThan(20_000)
     expect(mib).toBeLessThan(160)
     for (const t of terms) t.dispose()
   }, 120_000)

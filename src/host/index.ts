@@ -140,7 +140,11 @@ async function main(): Promise<void> {
   // The Host is where node-pty lives now. `withExitedPtyGuard`'s job — swallowing a write or resize
   // to a pty that has already gone — is the registry's `live` check here instead: it knows which
   // sessions have exited, and the app across the socket does not.
+  // Made once for this process (remote runtime design §3.2, N11): a client comparing it learns the Host restarted. The
+  // local hello, the Gateway's hello and the pty registry's replays (§3.7) carry the same value.
+  const bootId = randomBytes(16).toString('hex')
   const registry = new PtyRegistry({
+    bootId,
     spawn: (file, args, opts) => {
       // **Checked here, before every spawn, and not once at startup.** The file can go missing while
       // this Host is running — that is exactly what happened on 2026-09-22 — and the Host would not
@@ -281,9 +285,6 @@ async function main(): Promise<void> {
   // Shared with `orch` below so the version the handshake reports and the version `orch-call status`
   // answers never drift apart.
   const hostVersion = process.env.ASTERA_HOST_VERSION ?? '0.0.0'
-  // Made once for this process (remote runtime design §3.2, N11): a client comparing it learns the Host restarted. The
-  // local hello and the Gateway's hello carry the same value.
-  const bootId = randomBytes(16).toString('hex')
 
   /** Session work units (E2 §4): built below, once `orch` exists, and only with a spawner. Declared here
    *  because the worktrees' `git-op` and the rolling's events reach it, and both are built first. */
@@ -593,12 +594,14 @@ async function main(): Promise<void> {
           bootId,
           platform: process.platform,
           pathStyle: process.platform === 'win32' ? 'windows' : 'posix',
-          capabilities: ['remote.jobs', 'remote.retry']
+          capabilities: ['remote.jobs', 'remote.retry', 'pty.seq', 'pty.checkpoint']
         }),
         log: (m) => log.write(m),
         onReady: events.ready,
         onFailed: events.failed,
-        onHardCap: events.hardCap
+        onHardCap: events.hardCap,
+        // Pty subscriptions (remote runtime design §3.7, Phase 8): read only, from this Host's registry.
+        ptys: registry
       }),
     log: (m) => log.write(m)
   })

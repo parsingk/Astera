@@ -230,3 +230,105 @@ describe('the Gateway before the handshake (Phase 3 review)', () => {
     await until(() => g.gw.stats().redeemAddresses === 0)
   })
 })
+
+// Remote runtime design §3.7 and §3.1 (Phase 8): the Gateway forwards a connection's subscriptions to the Host and the
+// Host's stream frames back to that connection alone, each connection with its own stream budget. A controller that
+// stops reading loses only its own streams (OUTPUT_GAP), and the Host is told to stop sending them.
+describe('the Gateway and pty subscriptions (Phase 8)', () => {
+  /** A controller on a raw TLS socket: it sends frames as given and keeps every frame it receives. */
+  const raw = async (port: number) => {
+    const tls = await import('node:tls')
+    const sock = tls.connect({ host: '127.0.0.1', port, rejectUnauthorized: false })
+    await new Promise((r) => sock.once('secureConnect', r))
+    const got: Array<Record<string, unknown>> = []
+    let buf = ''
+    sock.setEncoding('utf8')
+    sock.on('data', (d: string) => {
+      buf += d
+      let nl: number
+      while ((nl = buf.indexOf(String.fromCharCode(10))) >= 0) {
+        got.push(JSON.parse(buf.slice(0, nl)) as Record<string, unknown>)
+        buf = buf.slice(nl + 1)
+      }
+    })
+    sock.on('error', () => {})
+    const send = (m: unknown): void => void sock.write(JSON.stringify(m) + String.fromCharCode(10))
+    return { sock, got, send }
+  }
+  const hostThatStreams = () => {
+    const subs: Array<Record<string, unknown>> = []
+    let reply: (m: unknown) => void = () => {}
+    const host = (f: Record<string, unknown>, r: (m: unknown) => void): void => {
+      reply = r
+      if (f.t === 'auth') r({ t: 'authed', conn: f.conn, ok: f.tokenHash === sha256Base64url('good-token'), hello: HELLO })
+      if (f.t === 'subscribe' || f.t === 'unsubscribe') subs.push(f)
+    }
+    return { host, subs, reply: (m: unknown) => reply(m) }
+  }
+
+  it('forwards a subscription with its connection, and the Host frames back without it', async () => {
+    const h = hostThatStreams()
+    const g = await start({}, h.host)
+    const c = await raw(g.gw.port)
+    c.send({ t: 'auth', token: 'good-token', client: {} })
+    await until(() => c.got.some((f) => f.t === 'hello'))
+    c.send({ t: 'subscribe', sub: 's1', pty: 'p1', fromSeq: 3, bootId: 'b' })
+    await until(() => h.subs.length === 1)
+    const conn = h.subs[0].conn as string
+    expect(h.subs[0]).toEqual({ t: 'subscribe', conn, sub: 's1', pty: 'p1', fromSeq: 3, bootId: 'b' })
+    h.reply({ t: 'subscribed', conn, sub: 's1', pty: 'p1', bootId: 'b' })
+    h.reply({ t: 'pty-out', conn, sub: 's1', events: [{ seq: 3, kind: 'data', data: 'hi' }] })
+    h.reply({ t: 'output-gap', conn, sub: 's1', firstSeq: 4, lastSeq: 9, code: 'OUTPUT_GAP' })
+    await until(() => c.got.some((f) => f.t === 'output-gap'))
+    expect(c.got.filter((f) => f.t !== 'hello' && f.t !== 'ping')).toEqual([
+      { t: 'subscribed', sub: 's1', pty: 'p1', bootId: 'b' },
+      { t: 'pty-out', sub: 's1', events: [{ seq: 3, kind: 'data', data: 'hi' }] },
+      { t: 'output-gap', sub: 's1', firstSeq: 4, lastSeq: 9, code: 'OUTPUT_GAP' }
+    ])
+    c.send({ t: 'unsubscribe', sub: 's1' })
+    await until(() => h.subs.length === 2)
+    expect(h.subs[1]).toEqual({ t: 'unsubscribe', conn, sub: 's1' })
+    c.sock.destroy()
+  })
+
+  it('refuses a subscription before auth', async () => {
+    const h = hostThatStreams()
+    const g = await start({}, h.host)
+    const c = await raw(g.gw.port)
+    c.send({ t: 'subscribe', sub: 's1', pty: 'p1' })
+    await until(() => c.got.some((f) => f.t === 'error'))
+    expect(c.got.find((f) => f.t === 'error')).toMatchObject({ code: 'RUNTIME_AUTH_FAILED' })
+    expect(h.subs).toEqual([])
+    c.sock.destroy()
+  })
+
+  it('a controller that stops reading loses only its own stream, and the Host is told to stop it', async () => {
+    const h = hostThatStreams()
+    const g = await start({ queuePerConn: 256 * 1024 }, h.host)
+    const slow = await raw(g.gw.port)
+    const fast = await raw(g.gw.port)
+    for (const c of [slow, fast]) c.send({ t: 'auth', token: 'good-token', client: {} })
+    await until(() => slow.got.some((f) => f.t === 'hello') && fast.got.some((f) => f.t === 'hello'))
+    slow.send({ t: 'subscribe', sub: 's', pty: 'p1' })
+    fast.send({ t: 'subscribe', sub: 'f', pty: 'p1' })
+    await until(() => h.subs.length === 2)
+    const connOf = (sub: string) => h.subs.find((f) => f.sub === sub)?.conn as string
+    slow.sock.pause()
+    // Output as a busy pty makes it, in bursts the reading connection keeps up with: the stopped one falls behind by
+    // more than its queue (and than what the operating system buffers for it), the reading one never does.
+    const chunk = 'y'.repeat(32 * 1024)
+    const n = 600
+    for (let seq = 1; seq <= n; seq++) {
+      h.reply({ t: 'pty-out', conn: connOf('s'), sub: 's', events: [{ seq, kind: 'data', data: chunk }] })
+      h.reply({ t: 'pty-out', conn: connOf('f'), sub: 'f', events: [{ seq, kind: 'data', data: chunk }] })
+      if (seq % 4 === 0) await new Promise((r) => setTimeout(r, 2))
+    }
+    await until(() => h.subs.some((f) => f.t === 'unsubscribe' && f.sub === 's'), 10_000)
+    await until(() => fast.got.filter((f) => f.t === 'pty-out').length === n, 10_000)
+    expect(fast.got.some((f) => f.t === 'output-gap')).toBe(false)
+    slow.sock.resume()
+    await until(() => slow.got.some((f) => f.t === 'output-gap' && f.sub === 's'), 10_000)
+    slow.sock.destroy()
+    fast.sock.destroy()
+  }, 30_000)
+})

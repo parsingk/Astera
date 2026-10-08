@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { PassThrough, Writable } from 'node:stream'
-import { attachGatewayLink } from './gatewayLink'
+import { SUBS_PER_CONN, attachGatewayLink } from './gatewayLink'
 import { createControllerRegistry, sha256Base64url } from './controllers'
 import type { OrchCaller } from '../core/host/orchProtocol'
+import { PtyRegistry, type RegistryPty } from './registry'
 
 const HELLO = {
   runtimeId: 'rt',
@@ -18,7 +19,7 @@ const HELLO = {
 
 type Seen = { cmd: string; args: Record<string, unknown>; sessionId: string; from?: OrchCaller; request?: string; retry?: true }
 
-const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) => Promise<{ status: number; body: unknown }> } = {}) => {
+const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) => Promise<{ status: number; body: unknown }>; ptys?: PtyRegistry; streamPerKey?: number } = {}) => {
   const input = new PassThrough()
   const output = o.output ?? new PassThrough()
   const frames: Array<Record<string, unknown>> = []
@@ -43,7 +44,9 @@ const setup = async (o: { hardCap?: number; output?: Writable; orch?: (c: Seen) 
     onReady: () => events.push('ready'),
     onFailed: (f) => events.push(`failed:${f.code}`),
     onHardCap: () => events.push('hardcap'),
-    ...(o.hardCap ? { hardCap: o.hardCap } : {})
+    ...(o.hardCap ? { hardCap: o.hardCap } : {}),
+    ...(o.ptys ? { ptys: o.ptys } : {}),
+    ...(o.streamPerKey ? { streamPerKey: o.streamPerKey } : {})
   })
   const send = (m: unknown): void => void input.write(`${JSON.stringify(m)}\n`)
   const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 20))
@@ -182,5 +185,128 @@ describe('large replies on the link (Phase 3 review C1)', () => {
     for (const f of chunks) expect(JSON.stringify(f).length).toBeLessThan(1 << 20)
     expect(chunks.every((f) => f.conn === 'c1')).toBe(true)
     expect(s.frames.some((f) => f.t === 'result')).toBe(false)
+  })
+})
+
+// Remote runtime design §3.7 (Phase 8): a paired controller subscribes to a pty and gets a checkpoint or the events
+// from its seq, then live output; an overflow ends the stream with OUTPUT_GAP; a closed connection drops its streams.
+describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
+  const ptyRig = () => {
+    let emit: (d: string) => void = () => {}
+    let exit: (e: { exitCode: number }) => void = () => {}
+    const pty: RegistryPty = {
+      pid: 1,
+      onData: (cb) => void (emit = cb),
+      onExit: (cb) => void (exit = cb),
+      write: () => {},
+      resize: () => {},
+      kill: () => {},
+      pause: () => {},
+      resume: () => {}
+    }
+    const registry = new PtyRegistry({ spawn: () => pty, log: () => {}, bootId: 'boot-1' })
+    registry.open({ id: 'p1', file: 'sh', args: [], opts: { cwd: 'D:/p', cols: 40, rows: 5, env: {} } })
+    return { registry, emit: (d: string) => emit(d), exit: (c: number) => exit({ exitCode: c }) }
+  }
+  const ready = async (o: { streamPerKey?: number } = {}) => {
+    const p = ptyRig()
+    const s = await setup({ ptys: p.registry, ...o })
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    s.frames.length = 0
+    return { ...s, ...p }
+  }
+  const of = (frames: Array<Record<string, unknown>>, t: string) => frames.filter((f) => f.t === t)
+
+  it('a read-only controller subscribes: subscribed, then a checkpoint with the gap, then live output', async () => {
+    const s = await ready()
+    s.emit('before')
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await s.settle()
+    expect(of(s.frames, 'subscribed')).toEqual([{ t: 'subscribed', conn: 'c1', sub: 's1', pty: 'p1', bootId: 'boot-1' }])
+    const [cp] = of(s.frames, 'checkpoint') as Array<{ checkpoint: { watermark: number; state: string }; gap: unknown }>
+    expect(cp.checkpoint.watermark).toBe(1)
+    expect(cp.checkpoint.state).toContain('before')
+    expect(cp.gap).toEqual({ firstSeq: 1, lastSeq: 1 })
+    s.emit('after')
+    await s.settle()
+    expect(of(s.frames, 'pty-out')).toEqual([{ t: 'pty-out', conn: 'c1', sub: 's1', events: [{ seq: 2, kind: 'data', data: 'after' }] }])
+  })
+
+  it('a held fromSeq on the same boot replays the events and no checkpoint', async () => {
+    const s = await ready()
+    s.emit('one')
+    s.emit('two')
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1', fromSeq: 2, bootId: 'boot-1' })
+    await s.settle()
+    expect(of(s.frames, 'checkpoint')).toEqual([])
+    expect(of(s.frames, 'pty-out').flatMap((f) => (f.events as Array<{ seq: number }>).map((e) => e.seq))).toEqual([2])
+  })
+
+  it('a cursor from an earlier boot gets a checkpoint (OUTPUT_GAP)', async () => {
+    const s = await ready()
+    s.emit('one')
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1', fromSeq: 1, bootId: 'boot-0' })
+    await s.settle()
+    expect(of(s.frames, 'checkpoint')).toHaveLength(1)
+  })
+
+  it('an unknown pty is RUNTIME_NOT_FOUND; an unauthenticated connection RUNTIME_AUTH_FAILED', async () => {
+    const s = await ready()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'nope' })
+    s.send({ t: 'subscribe', conn: 'c9', sub: 's2', pty: 'p1' })
+    await s.settle()
+    // The refusal for an unauthenticated connection is immediate, the unknown pty's after the replay: compared unordered.
+    expect(of(s.frames, 'sub-error').map((f) => [f.sub, f.code]).sort()).toEqual([['s1', 'RUNTIME_NOT_FOUND'], ['s2', 'RUNTIME_AUTH_FAILED']])
+  })
+
+  it('the 65th subscription on one connection is RUNTIME_BUSY', async () => {
+    const s = await ready()
+    for (let i = 0; i < SUBS_PER_CONN + 1; i++) s.send({ t: 'subscribe', conn: 'c1', sub: `s${i}`, pty: 'p1' })
+    await s.settle()
+    await s.settle()
+    expect(of(s.frames, 'sub-error').map((f) => f.code)).toEqual(['RUNTIME_BUSY'])
+  })
+
+  it('unsubscribe and a closed connection stop the output', async () => {
+    const s = await ready()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await s.settle()
+    s.send({ t: 'unsubscribe', conn: 'c1', sub: 's1' })
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's2', pty: 'p1' })
+    await s.settle()
+    s.send({ t: 'conn-closed', conn: 'c1' })
+    await s.settle()
+    s.frames.length = 0
+    s.emit('nobody')
+    await s.settle()
+    expect(of(s.frames, 'pty-out')).toEqual([])
+  })
+
+  it('an overflow ends the stream with output-gap, and nothing more is sent on it', async () => {
+    // A slow Gateway: each line takes a while to be taken, so the stream backs up past its budget, and the gap (a
+    // control line) still goes out once the link drains.
+    const out = new Writable({ highWaterMark: 1, write: (_c, _e, cb) => void setTimeout(cb, 20) })
+    const p = ptyRig()
+    const s = await setup({ ptys: p.registry, output: out, streamPerKey: 64 })
+    const frames: Array<Record<string, unknown>> = []
+    const write = out.write.bind(out)
+    out.write = ((chunk: string, ...rest: unknown[]) => {
+      String(chunk).split(String.fromCharCode(10)).filter(Boolean).forEach((l) => frames.push(JSON.parse(l)))
+      return (write as (c: string, ...r: unknown[]) => boolean)(chunk, ...rest)
+    }) as typeof out.write
+    const c = await s.pairClient('read-only')
+    s.send({ t: 'auth', conn: 'c1', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await s.settle()
+    for (let i = 0; i < 20; i++) p.emit(`chunk ${i} ${'x'.repeat(40)}`)
+    await new Promise((r) => setTimeout(r, 300))
+    const gap = frames.findIndex((f) => f.t === 'output-gap' && f.sub === 's1')
+    expect(gap).toBeGreaterThan(-1)
+    p.emit('after the gap')
+    await new Promise((r) => setTimeout(r, 100))
+    expect(frames.slice(gap).some((f) => f.t === 'pty-out' && JSON.stringify(f).includes('after the gap'))).toBe(false)
   })
 })

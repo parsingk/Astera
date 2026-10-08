@@ -59,6 +59,9 @@ interface Conn {
   timers: Array<ReturnType<typeof setTimeout>>
   /** Whether the Host has been told about this connection, so it must be told when it closes. */
   announced: boolean
+  /** Subscriptions this Gateway ended for falling behind (§3.7): their output is dropped until the controller
+   *  subscribes again under the same id. */
+  ended: Set<string>
 }
 
 export const bindCode = (e: NodeJS.ErrnoException): string => {
@@ -136,6 +139,13 @@ export async function startGateway(o: {
       c.state = 'redeeming'
       return toHost({ t: 'redeem', conn: c.id, code: f.code, name: f.name })
     }
+    if (f.t === 'subscribe' || f.t === 'unsubscribe') {
+      if (c.state !== 'ready') return refuse(c, 'RUNTIME_AUTH_FAILED', 'authenticate before subscribing')
+      // A new subscription under an id this Gateway ended is a resubscribe: its output flows again.
+      c.ended.delete(f.sub)
+      if (f.t === 'unsubscribe') c.out.dropStream(f.sub)
+      return toHost({ ...f, conn: c.id })
+    }
     if (f.t === 'call') {
       if (c.state !== 'ready') return refuse(c, 'RUNTIME_AUTH_FAILED', 'authenticate before calling')
       if (c.inFlight.has(f.id)) return sendTo(c, { t: 'error', code: 'REMOTE_BAD_FRAME', message: 'that call id is already in flight', id: f.id })
@@ -169,6 +179,22 @@ export async function startGateway(o: {
         return closeConn(c, f.code)
       case 'chunk':
         return
+      // A subscription's frames (§3.7) go to that connection alone, without the connection id. Output goes on the
+      // connection's stream lane, so one controller that stops reading fills only its own queue.
+      case 'pty-out': {
+        if (c.ended.has(f.sub) || c.sock.destroyed) return
+        const { conn: _conn, ...frame } = f
+        const last = f.events[f.events.length - 1]?.seq ?? 0
+        return c.out.stream(f.sub, `${JSON.stringify(frame)}\n`, last)
+      }
+      case 'subscribed':
+      case 'checkpoint':
+      case 'output-gap':
+      case 'sub-error': {
+        if (f.t === 'output-gap' || f.t === 'sub-error') c.out.dropStream(f.sub)
+        const { conn: _conn, ...frame } = f
+        return sendTo(c, frame)
+      }
     }
   }
 
@@ -220,7 +246,20 @@ export async function startGateway(o: {
       heard: now(),
       timers: [],
       announced: false,
-      out: createLaneWriter(sock, { hardCap: lim.queuePerConn, onHardCap: () => sock.destroy() })
+      ended: new Set(),
+      // Control and bulk past the cap mean a peer that reads nothing at all: it goes. Stream output past its share is
+      // dropped per subscription instead (§3.1): the controller hears OUTPUT_GAP and the Host stops sending it.
+      out: createLaneWriter(sock, {
+        hardCap: lim.queuePerConn,
+        onHardCap: () => sock.destroy(),
+        streamPerKey: lim.queuePerConn,
+        streamTotal: lim.queuePerConn,
+        onStreamOverflow: (sub, lost) => {
+          c.ended.add(sub)
+          toHost({ t: 'unsubscribe', conn: c.id, sub })
+          sendTo(c, { t: 'output-gap', sub, firstSeq: lost.firstSeq, lastSeq: lost.lastSeq, code: 'OUTPUT_GAP' })
+        }
+      })
     }
     if (conns.size >= lim.connections) {
       c.out.control(`${JSON.stringify({ t: 'error', code: 'RUNTIME_BUSY', message: `at most ${lim.connections} controllers at once` })}\n`)

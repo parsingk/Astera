@@ -21,6 +21,36 @@ export type ControllerFrame =
   | { t: 'call'; id: string; cmd: string; args: Record<string, unknown>; request?: string; retry?: true }
   | { t: 'ping' }
   | { t: 'pong' }
+  /** A pty's output from `fromSeq` on (§3.7); without it, or from another boot, a checkpoint first. */
+  | { t: 'subscribe'; sub: string; pty: string; fromSeq?: number; bootId?: string }
+  | { t: 'unsubscribe'; sub: string }
+
+/** A pty event as it travels (host/ptyRing.ts PtyEvent). */
+export type RemotePtyEvent =
+  | { seq: number; kind: 'data'; data: string }
+  | { seq: number; kind: 'resize'; cols: number; rows: number }
+  | { seq: number; kind: 'exit'; code: number | null }
+
+/** A pty checkpoint as it travels (host/liveTerminal.ts PtyCheckpoint): write `state`, then `pending`, then the events
+ *  after `watermark`. */
+export interface RemoteCheckpoint {
+  watermark: number
+  cols: number
+  rows: number
+  state: string
+  pending: string
+  exitCode?: number | null
+}
+
+/** What a subscription is sent (§3.7), on both hops: the Host's frames carry `conn`, the Gateway's do not. An
+ *  `output-gap` ends the stream (an overflow): the controller subscribes again from its last seq. A gap at subscribe
+ *  time travels in the checkpoint instead. */
+export type SubscriptionFrame =
+  | { t: 'subscribed'; sub: string; pty: string; bootId: string }
+  | { t: 'pty-out'; sub: string; events: RemotePtyEvent[] }
+  | { t: 'checkpoint'; sub: string; checkpoint: RemoteCheckpoint; gap: { firstSeq: number; lastSeq: number } }
+  | { t: 'output-gap'; sub: string; firstSeq: number; lastSeq: number; code: 'OUTPUT_GAP' }
+  | { t: 'sub-error'; sub: string; code: string; message: string }
 
 export interface HelloFrame {
   t: 'hello'
@@ -46,6 +76,7 @@ export type ServerFrame =
   | { t: 'closing'; code: string }
   | { t: 'ping' }
   | { t: 'pong' }
+  | SubscriptionFrame
 
 /** Gateway to Host, over the link. */
 export type GatewayLinkFrame =
@@ -55,6 +86,8 @@ export type GatewayLinkFrame =
   | { t: 'redeem'; conn: string; code: string; name: string }
   | { t: 'call'; conn: string; id: string; cmd: string; args: Record<string, unknown>; request?: string; retry?: true }
   | { t: 'conn-closed'; conn: string }
+  | { t: 'subscribe'; conn: string; sub: string; pty: string; fromSeq?: number; bootId?: string }
+  | { t: 'unsubscribe'; conn: string; sub: string }
 
 /** Host to Gateway, over the link. */
 export type HostLinkFrame =
@@ -64,6 +97,7 @@ export type HostLinkFrame =
   | { t: 'close-conn'; conn: string; code: string }
   /** A piece of a result too large for one link line (§3.1): the Gateway puts the pieces together. */
   | { t: 'chunk'; conn: string; ref: string; i: number; n: number; data: string }
+  | (SubscriptionFrame & { conn: string })
 
 type Fail = { error: string }
 const fail = (error: string): Fail => ({ error })
@@ -107,6 +141,77 @@ const call = (v: Record<string, unknown>): Omit<Extract<ControllerFrame, { t: 'c
   }
 }
 
+const seqOk = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1
+const sizeOk = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 10_000
+
+/** A subscription's own fields, the same on both hops. */
+const subscribe = (v: Record<string, unknown>): { sub: string; pty: string; fromSeq?: number; bootId?: string } | Fail => {
+  if (!str(v.sub, ID_MAX) || v.sub === '') return fail('subscribe needs a sub id')
+  if (!str(v.pty, ID_MAX) || v.pty === '') return fail('subscribe needs a pty')
+  if (v.fromSeq !== undefined && !seqOk(v.fromSeq)) return fail('fromSeq is a whole number from 1')
+  if (v.bootId !== undefined && (!str(v.bootId, ID_MAX) || v.bootId === '')) return fail('bootId must be a short string')
+  return { sub: v.sub, pty: v.pty, ...(v.fromSeq !== undefined ? { fromSeq: v.fromSeq as number } : {}), ...(v.bootId !== undefined ? { bootId: v.bootId as string } : {}) }
+}
+
+const ptyEvent = (v: unknown): RemotePtyEvent | null => {
+  if (!isObj(v) || !seqOk(v.seq)) return null
+  if (v.kind === 'data' && str(v.data)) return { seq: v.seq, kind: 'data', data: v.data }
+  if (v.kind === 'resize' && sizeOk(v.cols) && sizeOk(v.rows)) return { seq: v.seq, kind: 'resize', cols: v.cols, rows: v.rows }
+  if (v.kind === 'exit' && (v.code === null || Number.isInteger(v.code))) return { seq: v.seq, kind: 'exit', code: v.code as number | null }
+  return null
+}
+
+const checkpoint = (v: unknown): RemoteCheckpoint | null => {
+  if (!isObj(v) || !Number.isInteger(v.watermark) || (v.watermark as number) < 0 || !sizeOk(v.cols) || !sizeOk(v.rows)) return null
+  // The state is sent in chunks when it is large (§3.1), so it is bounded by the reassembly, not by a string field.
+  if (typeof v.state !== 'string' || !str(v.pending)) return null
+  return {
+    watermark: v.watermark as number,
+    cols: v.cols,
+    rows: v.rows,
+    state: v.state,
+    pending: v.pending,
+    ...(v.exitCode !== undefined && (v.exitCode === null || Number.isInteger(v.exitCode)) ? { exitCode: v.exitCode as number | null } : {})
+  }
+}
+
+/** The Host's subscription frames, read by the Gateway (the controller library reads the same shapes). */
+export function parseSubscriptionFrame(v: Record<string, unknown>): SubscriptionFrame | Fail {
+  if (!str(v.sub, ID_MAX) || v.sub === '') return fail(`${String(v.t)} needs a sub id`)
+  const sub = v.sub
+  switch (v.t) {
+    case 'subscribed':
+      if (!str(v.pty, ID_MAX) || !str(v.bootId, ID_MAX)) return fail('bad subscribed')
+      return { t: 'subscribed', sub, pty: v.pty, bootId: v.bootId }
+    case 'pty-out': {
+      if (!Array.isArray(v.events) || v.events.length > 4096) return fail('bad pty-out')
+      const events: RemotePtyEvent[] = []
+      for (const e of v.events) {
+        const ok = ptyEvent(e)
+        if (!ok) return fail('bad pty event')
+        events.push(ok)
+      }
+      return { t: 'pty-out', sub, events }
+    }
+    case 'checkpoint': {
+      const cp = checkpoint(v.checkpoint)
+      const gap = v.gap
+      if (!cp || !isObj(gap) || !Number.isInteger(gap.firstSeq) || !Number.isInteger(gap.lastSeq)) return fail('bad checkpoint')
+      return { t: 'checkpoint', sub, checkpoint: cp, gap: { firstSeq: gap.firstSeq as number, lastSeq: gap.lastSeq as number } }
+    }
+    case 'output-gap':
+      if (!Number.isInteger(v.firstSeq) || !Number.isInteger(v.lastSeq)) return fail('bad output-gap')
+      return { t: 'output-gap', sub, firstSeq: v.firstSeq as number, lastSeq: v.lastSeq as number, code: 'OUTPUT_GAP' }
+    case 'sub-error':
+      if (!str(v.code, 64) || !str(v.message, 1024)) return fail('bad sub-error')
+      return { t: 'sub-error', sub, code: v.code, message: v.message }
+    default:
+      return fail('not a subscription frame')
+  }
+}
+
+const SUBSCRIPTION_FRAMES = new Set(['subscribed', 'pty-out', 'checkpoint', 'output-gap', 'sub-error'])
+
 export function parseControllerFrame(v: unknown): ControllerFrame | Fail {
   if (!isObj(v)) return fail('a frame is an object')
   switch (v.t) {
@@ -127,6 +232,13 @@ export function parseControllerFrame(v: unknown): ControllerFrame | Fail {
     case 'ping':
     case 'pong':
       return { t: v.t }
+    case 'subscribe': {
+      const sub = subscribe(v)
+      return 'error' in sub ? sub : { t: 'subscribe', ...sub }
+    }
+    case 'unsubscribe':
+      if (!str(v.sub, ID_MAX) || v.sub === '') return fail('unsubscribe needs a sub id')
+      return { t: 'unsubscribe', sub: v.sub }
     default:
       return fail(`unknown frame type ${JSON.stringify(String(v.t)).slice(0, 40)}`)
   }
@@ -159,6 +271,14 @@ export function parseLinkFrame(v: unknown, from: 'gateway' | 'host'): GatewayLin
       case 'conn-closed':
         if (!conn) return fail('bad conn-closed')
         return { t: 'conn-closed', conn }
+      case 'subscribe': {
+        if (!conn) return fail('subscribe needs a conn')
+        const sub = subscribe(v)
+        return 'error' in sub ? sub : { t: 'subscribe', conn, ...sub }
+      }
+      case 'unsubscribe':
+        if (!conn || !str(v.sub, ID_MAX) || v.sub === '') return fail('bad unsubscribe')
+        return { t: 'unsubscribe', conn, sub: v.sub }
       default:
         return fail(`unknown link frame ${JSON.stringify(String(v.t)).slice(0, 40)}`)
     }
@@ -195,6 +315,11 @@ export function parseLinkFrame(v: unknown, from: 'gateway' | 'host'): GatewayLin
       if (!conn || !str(v.ref, ID_MAX) || !Number.isInteger(v.i) || !Number.isInteger(v.n) || !str(v.data, FRAME_CAP)) return fail('bad chunk')
       return { t: 'chunk', conn, ref: v.ref, i: v.i as number, n: v.n as number, data: v.data }
     default:
+      if (typeof v.t === 'string' && SUBSCRIPTION_FRAMES.has(v.t)) {
+        if (!conn) return fail(`${v.t} needs a conn`)
+        const f = parseSubscriptionFrame(v)
+        return 'error' in f ? f : { ...f, conn }
+      }
       return fail(`unknown link frame ${JSON.stringify(String(v.t)).slice(0, 40)}`)
   }
 }
