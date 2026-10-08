@@ -147,6 +147,7 @@ import { HostRuntimeNotice } from './components/HostRuntimeNotice'
 import { House, PanelLeft, Settings, X } from 'lucide-react'
 import { deleteKey, isMac as isMacPlatform, modKey } from './lib/platformKeys'
 import { backdropProps } from './lib/backdrop'
+import { createTouched } from './lib/touched'
 
 sessionBus.init()
 
@@ -693,6 +694,8 @@ export default function App(): React.JSX.Element {
   // explicitly, so pressing it while they are still empty strings would overwrite an already-stored
   // token, channel, and webhook with null in one go. (When there was a single field, patch()
   // preserving undefined protected the rest; that is no longer the case.)
+  /** Settings fields changed since the modal opened (audit UI-7). */
+  const settingsTouched = useRef(createTouched())
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   // 에이전트 권한 모드. **기본이 yolo 라 초기값도 true 다** — false 로 두면 모달이 열리는 순간
@@ -1302,28 +1305,36 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     if (!showSettings) return
+    // What the person changes from here on keeps their value when a read below lands after it (audit UI-7).
+    settingsTouched.current.clear()
     setSlackSaved(false)
     setSlackLoaded(false)
-    void window.api.slack.getConfig().then((c) => {
-      setSlackUrl(c.webhookUrl ?? '')
-      setSlackBotToken(c.botToken ?? '')
-      setSlackChannelId(c.channelId ?? '')
-      setSlackAppToken(c.appToken ?? '')
-      setSlackMemberId(c.memberId ?? '')
-      setSlackLoaded(true)
-    })
+    void window.api.slack.getConfig().then(
+      (c) => {
+        settingsTouched.current.unless('slack', () => {
+          setSlackUrl(c.webhookUrl ?? '')
+          setSlackBotToken(c.botToken ?? '')
+          setSlackChannelId(c.channelId ?? '')
+          setSlackAppToken(c.appToken ?? '')
+          setSlackMemberId(c.memberId ?? '')
+        })
+        setSlackLoaded(true)
+      },
+      // Said, and Save stays off (audit UI-7): saving the empty fields would erase the configuration it could not read.
+      (err) => toast.error(err instanceof Error ? err.message : String(err))
+    )
     void window.api.worktrees.getRoot().then(setWtRoot)
     // Work unit tracking. Nothing outside this modal reads it, so there is no mount-time fetch to keep
     // honest — this is the only read.
-    void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
+    void window.api.settings.getWorkUnitTrackingEnabled().then((v) => settingsTouched.current.unless('workUnits', () => setWorkUnitTrackingEnabled(v)))
     // 권한 모드도 같은 갈래다 — 이 모달 밖에서 읽는 곳이 없으므로 마운트 시점 읽기는 두지 않는다.
     void window.api.settings
       .getAgentPermissionMode()
-      .then((m) => setAgentYolo(m === 'yolo'))
-    void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
-    void window.api.settings.getAgentAppEnabled().then(setAgentAppEnabled)
+      .then((m) => settingsTouched.current.unless('agentYolo', () => setAgentYolo(m === 'yolo')))
+    void window.api.settings.getAgentBrowserEnabled().then((v) => settingsTouched.current.unless('agentBrowser', () => setAgentBrowserEnabled(v)))
+    void window.api.settings.getAgentAppEnabled().then((v) => settingsTouched.current.unless('agentApp', () => setAgentAppEnabled(v)))
     // Re-syncs the new-session default too — the mount-time read above is what it keeps honest.
-    void window.api.settings.getDefaultSessionKind().then(setDefaultSessionKind)
+    void window.api.settings.getDefaultSessionKind().then((v) => settingsTouched.current.unless('defaultKind', () => setDefaultSessionKind(v)))
     // Re-read on open beside the effect below, which is what keeps it current the rest of the time:
     // the Info row wants the freshest answer at the moment it is drawn, and this costs nothing.
     void window.api.host.status().then(setHostStatus)
@@ -4935,6 +4946,7 @@ export default function App(): React.JSX.Element {
                         onChange={(v) => {
                           const next = v as SessionKind
                           const prev = defaultSessionKind
+                          settingsTouched.current.touch('defaultKind')
                           setDefaultSessionKind(next) // an optimistic update — reverted below on failure
                           void window.api.settings.setDefaultSessionKind(next).catch((err) => {
                             setDefaultSessionKind(prev)
@@ -4972,6 +4984,7 @@ export default function App(): React.JSX.Element {
                           checked={agentYolo}
                           onChange={(e) => {
                             const next = e.target.checked
+                            settingsTouched.current.touch('agentYolo')
                             setAgentYolo(next)
                             void window.api.settings
                               .setAgentPermissionMode(next ? 'yolo' : 'manual')
@@ -5003,6 +5016,7 @@ export default function App(): React.JSX.Element {
                           checked={agentBrowserEnabled}
                           onChange={(e) => {
                             const next = e.target.checked
+                            settingsTouched.current.touch('agentBrowser')
                             setAgentBrowserEnabled(next)
                             void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
                               setAgentBrowserEnabled(!next)
@@ -5028,6 +5042,7 @@ export default function App(): React.JSX.Element {
                           checked={agentAppEnabled}
                           onChange={(e) => {
                             const next = e.target.checked
+                            settingsTouched.current.touch('agentApp')
                             setAgentAppEnabled(next)
                             void window.api.settings.setAgentAppEnabled(next).catch((err) => {
                               setAgentAppEnabled(!next)
@@ -5061,6 +5076,7 @@ export default function App(): React.JSX.Element {
                           checked={workUnitTrackingEnabled}
                           onChange={(e) => {
                             const next = e.target.checked
+                            settingsTouched.current.touch('workUnits')
                             setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
                             void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
                               setWorkUnitTrackingEnabled(!next)
@@ -5304,6 +5320,7 @@ export default function App(): React.JSX.Element {
                       value={slackUrl}
                       placeholder="https://hooks.slack.com/services/…"
                       onChange={(e) => {
+                        settingsTouched.current.touch('slack')
                         setSlackUrl(e.target.value)
                         setSlackSaved(false)
                       }}
@@ -5319,6 +5336,7 @@ export default function App(): React.JSX.Element {
                       value={slackBotToken}
                       placeholder="xoxb-…"
                       onChange={(e) => {
+                        settingsTouched.current.touch('slack')
                         setSlackBotToken(e.target.value)
                         setSlackSaved(false)
                       }}
@@ -5330,6 +5348,7 @@ export default function App(): React.JSX.Element {
                       value={slackChannelId}
                       placeholder="C0123456789"
                       onChange={(e) => {
+                        settingsTouched.current.touch('slack')
                         setSlackChannelId(e.target.value)
                         setSlackSaved(false)
                       }}
@@ -5342,6 +5361,7 @@ export default function App(): React.JSX.Element {
                       value={slackAppToken}
                       placeholder="xapp-…"
                       onChange={(e) => {
+                        settingsTouched.current.touch('slack')
                         setSlackAppToken(e.target.value)
                         setSlackSaved(false)
                       }}
@@ -5358,6 +5378,7 @@ export default function App(): React.JSX.Element {
                       value={slackMemberId}
                       placeholder="U0123456789"
                       onChange={(e) => {
+                        settingsTouched.current.touch('slack')
                         setSlackMemberId(e.target.value)
                         setSlackSaved(false)
                       }}

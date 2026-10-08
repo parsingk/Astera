@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Account, Provider } from '../../../core/types'
 import { PROVIDERS } from '../../../core/providers/meta'
 import { defaultAccountIdOf } from '../../../core/accounts/defaultAccount'
+import { createLatest, settledPairs } from '../lib/latest'
 
 /** Queries the login state and email per account. Shared by the sidebar and the settings Accounts tab.
  *  Re-queries on window focus — this picks up a login or logout done in another window. */
@@ -15,16 +16,16 @@ export function useAccountStatus(accounts: Account[]): {
 
   useEffect(() => {
     let cancelled = false
+    // The newest round only, and an account that fails is left out rather than failing the round (audit UI-8).
+    const latest = createLatest()
+    const ids = accounts.map((a) => a.id)
     const loadAccountStatus = (): void => {
-      void Promise.all(
-        accounts.map(async (a) => [a.id, await window.api.accounts.loginStatus(a.id)] as const)
-      ).then((pairs) => {
-        if (!cancelled) setLoginMap(Object.fromEntries(pairs))
+      const ticket = latest.next()
+      void settledPairs(ids, (id) => window.api.accounts.loginStatus(id)).then((m) => {
+        if (!cancelled && latest.isCurrent(ticket)) setLoginMap(m)
       })
-      void Promise.all(
-        accounts.map(async (a) => [a.id, await window.api.accounts.email(a.id)] as const)
-      ).then((pairs) => {
-        if (!cancelled) setEmailMap(Object.fromEntries(pairs))
+      void settledPairs(ids, (id) => window.api.accounts.email(id)).then((m) => {
+        if (!cancelled && latest.isCurrent(ticket)) setEmailMap(m)
       })
     }
     loadAccountStatus()

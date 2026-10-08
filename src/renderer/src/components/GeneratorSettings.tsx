@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Account } from '../../../core/types'
 import type { ModelDescriptor } from '../../../core/models/types'
 import type { GeneratorSettings as GeneratorSettingsValue } from '../../../core/understanding/generatorSettings'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { Select } from './Select'
+import { createLatest } from '../lib/latest'
 
 /** 설명을 누가·무엇으로 만드는가 (설계 D2·D4).
  *
@@ -28,19 +29,24 @@ export function GeneratorSettings(): React.JSX.Element {
     void window.api.accounts.list().then(setAccounts)
   }, [])
 
+  /** The newest listing asked (audit UI-6): an older account's answer landing late must not show its models. */
+  const latestList = useRef(createLatest())
   const loadModels = useCallback(async (accountId: string, refresh: boolean): Promise<void> => {
+    const ticket = latestList.current.next()
     setLoading(true)
     setListError(null)
     try {
       const r = await window.api.settings.listModels(accountId, refresh)
+      if (!latestList.current.isCurrent(ticket)) return
       setModels(r.models)
       setListError(r.error ?? null)
     } catch (err) {
+      if (!latestList.current.isCurrent(ticket)) return
       // IPC 자체가 실패한 경우 — 어댑터는 던지지 않으므로 여기 오는 것은 배선 문제다
       setModels([])
       setListError(err instanceof Error ? err.message : String(err))
     } finally {
-      setLoading(false)
+      if (latestList.current.isCurrent(ticket)) setLoading(false)
     }
   }, [])
 

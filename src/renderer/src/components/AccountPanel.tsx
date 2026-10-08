@@ -155,6 +155,9 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         if (!r.ok) toast.error(t('account.add.syncFailed', { detail: tm(r.message ?? null) ?? '' }))
       }
       setAddOpen(false)
+    } catch (err) {
+      // Said, and the dialog stays for another try (audit UI-10).
+      toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setAdding(false)
     }
@@ -173,10 +176,20 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
 
   const submitImport = async (): Promise<void> => {
     const label = importLabel.trim()
-    if (!label || !importDir) return
-    await window.api.accounts.import({ label, configDir: importDir, provider: importProvider })
-    setImportDir(null)
+    if (!label || !importDir || importFormBusy) return
+    setImportFormBusy(true)
+    try {
+      await window.api.accounts.import({ label, configDir: importDir, provider: importProvider })
+      setImportDir(null)
+    } catch (err) {
+      // A folder gone or unreadable is said, not left unhandled (audit UI-10).
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setImportFormBusy(false)
+    }
   }
+  /** The import form's submit in flight (audit UI-10). */
+  const [importFormBusy, setImportFormBusy] = useState(false)
 
   return (
     <section className="account-panel">

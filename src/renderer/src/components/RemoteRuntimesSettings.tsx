@@ -19,16 +19,33 @@ export function RemoteRuntimesSettings({ onChanged }: { /** A Runtime was paired
   const [busy, setBusy] = useState(false)
 
   const reload = useCallback((): void => {
+    // A fresh list says how each Runtime is now: an old ping's line no longer stands over it (audit UI-9).
+    setPings({})
     void window.api.remote.list().then(setPaired, () => setPaired([]))
     void window.api.remote.thisMachine().then(setMine, () => setMine(null))
   }, [])
   useEffect(reload, [reload])
 
   const ping = async (id: string): Promise<void> => {
-    const r = await window.api.remote.ping(id)
-    setPings((p) => ({ ...p, [id]: pingLine(r, t as never) }))
-    reload()
+    if (pinging.has(id)) return
+    setPinging((s) => new Set(s).add(id))
+    try {
+      const r = await window.api.remote.ping(id)
+      reload()
+      setPings((p) => ({ ...p, [id]: pingLine(r, t as never) }))
+    } catch (err) {
+      // Said, not left unhandled (audit UI-9).
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setPinging((s) => {
+        const n = new Set(s)
+        n.delete(id)
+        return n
+      })
+    }
   }
+  /** Runtimes with a ping in flight (audit UI-9). */
+  const [pinging, setPinging] = useState<Set<string>>(new Set())
   const remove = async (r: RemoteRuntimeInfo): Promise<void> => {
     const ok = await confirmModal({
       title: t('settings.remote.paired.remove'),
@@ -54,6 +71,9 @@ export function RemoteRuntimesSettings({ onChanged }: { /** A Runtime was paired
       setName('')
       reload()
       onChanged?.()
+    } catch (err) {
+      // Said, not left unhandled (audit UI-9).
+      toast.error(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
     }
