@@ -4,7 +4,7 @@
 //
 // Everything it needs arrives in the environment, because it has no `app.getPath('userData')` to ask.
 import childProcess from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, promises as fsp, readFileSync, rmSync } from 'node:fs'
 import { defaultCwdProbe, setProbeLog } from '../core/sessions/pathProbe'
 import { createRequire } from 'node:module'
 import os from 'node:os'
@@ -727,7 +727,11 @@ async function main(): Promise<void> {
     // After the driver's own after-load pass: what the profile already held, so work under way when this Host started
     // is recorded before anything changes (Phase 11). The load stays lazy; this only hears that it happened.
     onLoaded: () => {
-      wiring?.orchHooks?.onLoaded?.()
+      try {
+        wiring?.orchHooks?.onLoaded?.()
+      } catch (err) {
+        log.write(`the Host's after-load pass failed to start: ${String(err)}`)
+      }
       runGit?.onState(orch.state())
     },
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
@@ -749,8 +753,8 @@ async function main(): Promise<void> {
       return r.ok ? r.stdout : null
     },
     baseRefOf: (p) => worktrees.infoOf(p)?.baseRef ?? null,
-    // A folder that is gone fails its git read, which records nothing: no synchronous probe on the Host's one thread.
-    isDir: (p) => p !== '',
+    // Asynchronous, so a folder on a dead share does not stop the Host's one thread; a folder that is gone is settled.
+    isDir: (p) => fsp.stat(p).then((st) => st.isDirectory(), () => false),
     log: (m) => log.write(m)
   })
 

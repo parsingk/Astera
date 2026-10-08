@@ -139,12 +139,59 @@ describe('createRunGitRecorder with work it did not see start', () => {
     expect(r.reads.filter((x) => x.startsWith('head W'))).toEqual([])
   })
   // Phase 11 measurement: a Run worktree the registry does not list (made outside it, or its entry lost) still forks
-  // from the project: where it parts from the project's HEAD.
-  it('a Run worktree the registry does not know forks where it parts from the project', async () => {
+  // from the project: where it parts from the project's HEAD, while its work is under way (review I1: never for a Run
+  // that is not, whose fork point the project may have moved past).
+  it('a Run worktree the registry does not know forks where it parts from the project, while an attempt is open', async () => {
+    const r = rig({ heads: { P: 'p9' }, bases: { 'W p9': 'fork0' }, dirs: ['W', 'P', 'D'] })
+    r.rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1', git: { base: 'x' } }] }))
+    await settle()
+    expect(r.records).toEqual([{ runId: 'run1', base: 'fork0' }])
+  })
+  it('a Run worktree the registry does not know, with no attempt open, is not read at all', async () => {
     const r = rig({ heads: { P: 'p9' }, bases: { 'W p9': 'fork0' }, dirs: ['W', 'P'] })
     r.rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }] }))
     await settle()
-    expect(r.records).toEqual([{ runId: 'run1', base: 'fork0' }])
+    expect(r.records).toEqual([])
+    expect(r.reads).toEqual([])
+  })
+  // Phase 11 review C1: a merged Run's worktree is reaped while state keeps its path. Reading it fails the same way on
+  // every change, so it is read once, never again, and nothing is logged as a retry.
+  it('a worktree folder that is gone is not read again on later changes', async () => {
+    const r = rig({ baseRefs: { W: 'main' }, dirs: ['P'] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }] })
+    for (let i = 0; i < 3; i++) {
+      r.rec.onState(s)
+      await settle()
+    }
+    expect(r.records).toEqual([])
+    expect(r.reads).toEqual([])
+  })
+  it('an ended attempt whose folder is gone is not read again for its head', async () => {
+    const r = rig({ dirs: [] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', git: { base: 'b' } }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'D', startedAt: '1', endedAt: 'x', git: { base: 'd0' } }] })
+    for (let i = 0; i < 3; i++) {
+      r.rec.onState(s)
+      await settle()
+    }
+    expect(r.reads).toEqual([])
+  })
+  it('a fresh Run worktree with no work yet is recorded at its fork point', async () => {
+    const r = rig({ baseRefs: { W: 'main' }, bases: { 'W main': 'tip0' }, heads: { W: 'tip0' }, dirs: ['W'] })
+    r.rec.onState(state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }] }))
+    await settle()
+    expect(r.records).toEqual([{ runId: 'run1', base: 'tip0' }])
+  })
+  // Phase 11 review I1: a branch already merged into its base parts from it at its own tip, an empty range; that is
+  // "not recorded" for work from before Phase 10, never "no changes".
+  it('a Run worktree already merged into its base gets no base, and is not read again', async () => {
+    const r = rig({ baseRefs: { W: 'main' }, bases: { 'W main': 'tip0' }, heads: { W: 'tip0' }, dirs: ['W'] })
+    const s = state({ runs: [{ id: 'run1', jobId: 'job1', worktree: 'W' }], dispatches: [{ id: 'd1', taskId: 't1', cwd: 'W', startedAt: '1', endedAt: '2', git: { base: 'x', head: 'y' } }] })
+    for (let i = 0; i < 3; i++) {
+      r.rec.onState(s)
+      await settle()
+    }
+    expect(r.records).toEqual([])
+    expect(r.reads.filter((x) => x.startsWith('merge-base'))).toEqual(['merge-base W main'])
   })
   it('a read that failed is tried again on a later state', async () => {
     const r = rig({ dirs: ['D'] })
@@ -194,7 +241,8 @@ describe('the Host wires the recorder', () => {
   // Phase 11 measurement: a Host started on a profile with work under way records it before anything changes.
   it('feeds it the loaded state once, when the Host first loads it', () => {
     const index = read('index.ts')
-    expect(index).toMatch(/onLoaded: \(\) => \{\s*wiring\?\.orchHooks\?\.onLoaded\?\.\(\)\s*runGit\?\.onState\(orch\.state\(\)\)/)
+    // Each on its own (review M4): a driver pass that throws does not cost the recorder the loaded state.
+    expect(index).toMatch(/onLoaded: \(\) => \{\s*try \{\s*wiring\?\.orchHooks\?\.onLoaded\?\.\(\)\s*\} catch[\s\S]{0,160}?\}\s*runGit\?\.onState\(orch\.state\(\)\)/)
     // The load stays lazy (createHostOrch): index.ts never asks for it.
     expect(index).not.toContain('orch.ready()')
   })

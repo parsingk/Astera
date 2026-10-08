@@ -664,10 +664,8 @@ const serveDeps = (a: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; home:
     },
     startHostChild: () => {
       const planned = hostSpawnPlanFor({ profileDir, platform: a.platform, env: a.env })
-      if ('error' in planned) {
-        logToStderr(`astera runtime serve: ${planned.error.message}`)
-        return { wait: Promise.resolve(1), kill: () => {} }
-      }
+      // No CLI paths and the like: a configuration no restart changes (exit 78).
+      if ('error' in planned) return { unusable: planned.error.message }
       // In the foreground: a child of this process, so a service manager that stops `serve` stops the Host with it.
       const child = spawn(planned.plan.command, planned.plan.args, { ...planned.plan.options, detached: false, stdio: 'ignore' })
       const wait = new Promise<number | null>((resolve) => {
@@ -1299,10 +1297,12 @@ export async function main(): Promise<void> {
         code: 'INVALID_ARGUMENTS',
         message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
       })
-    // `serve` runs until SIGTERM or SIGINT and always ends with 0 (design §2.9): its Host's crashes are its own business.
+    // `serve` ends with 0 after SIGTERM or SIGINT, 75 when an update began, 78 for a configuration it cannot use (design
+    // §2.9); its Host's crashes are its own business and never end it.
+    // FAIL_SEAM:exempt — 75 and 78 are what an OS supervisor reads (restart, or give up), not a failed command: there is
+    // no envelope for a foreground service, and serve has already said why on stderr.
     if (parsed.cmd === 'runtime-serve') {
-      await runServe(serveDeps({ env: process.env, platform: process.platform, home: homedir() }))
-      process.exit(0)
+      process.exit(await runServe(serveDeps({ env: process.env, platform: process.platform, home: homedir() })))
     }
     const done = await runRuntimeCommand(parsed.cmd, parsed.args, runtimeDeps({ env: process.env, platform: process.platform, home: homedir(), noKeepalive: parsed.noKeepalive }))
     if (!done.ok) fail(done.error)

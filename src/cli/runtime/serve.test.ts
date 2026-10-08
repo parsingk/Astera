@@ -6,7 +6,7 @@ import type { RemoteSettings } from '../../core/remote/settings'
  * A fake machine for `serve`: each step of the loop sleeps through `sleep`, which records the wait and, after
  * `stopAfter` sleeps, delivers SIGTERM. A Host child exits with the codes the test lines up.
  */
-const rig = (o: { enabled?: boolean; hostAnswers?: boolean[]; exits?: Array<number | null>; hold?: boolean; stopAfter?: number }) => {
+const rig = (o: { enabled?: boolean; hostAnswers?: boolean[]; exits?: Array<number | null>; hold?: boolean; holds?: boolean[]; unusable?: string; stopAfter?: number }) => {
   const waits: number[] = []
   const events: string[] = []
   const answers = [...(o.hostAnswers ?? [])]
@@ -15,9 +15,10 @@ const rig = (o: { enabled?: boolean; hostAnswers?: boolean[]; exits?: Array<numb
   let children = 0
   const deps: ServeDeps = {
     settings: async (): Promise<RemoteSettings> => ({ enabled: o.enabled ?? true, listen: '127.0.0.1', port: 47831 }),
-    hold: () => o.hold ?? false,
+    hold: () => (o.holds && o.holds.length > 0 ? o.holds.shift()! : (o.hold ?? false)),
     hostAnswers: async () => answers.shift() ?? false,
     startHostChild: () => {
+      if (o.unusable) return { unusable: o.unusable }
       children++
       events.push('start')
       const code = exits.length > 0 ? exits.shift()! : 'never'
@@ -88,5 +89,27 @@ describe('astera runtime serve (remote runtime design §2.9, X1-13)', () => {
     r.signal()
     expect(await done).toBe(0)
     expect(r.events).toContain('kill:SIGTERM')
+  })
+
+  // Phase 11 review I4: what the docs and the OS recipes count on. An update that begins while serve runs ends it with
+  // 75, its Host told to stop first, so nothing of the old version holds the install folder and the supervisor starts
+  // the new one; a configuration it cannot use ends it with 78 instead of a restart loop.
+  it('a hold that appears while it runs ends it with 75 once its Host has left', async () => {
+    // The update path retires the Host (it leaves with 0); the next look sees the hold the app wrote.
+    const r = rig({ holds: [false, true], hostAnswers: [false], exits: [0], stopAfter: 50 })
+    expect(await runServe(r.deps)).toBe(75)
+    expect(r.children()).toBe(1)
+    expect(r.events.some((e) => e.includes('update'))).toBe(true)
+  })
+  it('a serve started under a hold waits for it, and is not ended by it', async () => {
+    const r = rig({ holds: [true, true, false], hostAnswers: [false, false, false], exits: [null], stopAfter: 3 })
+    expect(await runServe(r.deps)).toBe(0)
+    expect(r.waits.slice(0, 2)).toEqual([10_000, 10_000])
+  })
+  it('a configuration it cannot use ends it with 78, and starts nothing', async () => {
+    const r = rig({ unusable: 'the CLI paths are missing: open the Astera app once' })
+    expect(await runServe(r.deps)).toBe(78)
+    expect(r.children()).toBe(0)
+    expect(r.events.some((e) => e.includes('CLI paths are missing'))).toBe(true)
   })
 })

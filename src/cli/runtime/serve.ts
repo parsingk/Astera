@@ -16,8 +16,9 @@ export interface ServeDeps {
   /** Whether an update hold is valid now (core/remote/updateHold.ts). */
   hold(): boolean
   hostAnswers(): Promise<boolean>
-  /** A Host in the foreground: a child of this process, not detached, logging to host.log. */
-  startHostChild(): ServeHostChild
+  /** A Host in the foreground: a child of this process, not detached, logging to host.log; or why this machine's
+   *  configuration cannot start one at all (no CLI paths), which no retry would change. */
+  startHostChild(): ServeHostChild | { unusable: string }
   sleep(ms: number): Promise<void>
   /** Registers what SIGTERM and SIGINT do. */
   onSignal(fn: () => void): void
@@ -30,11 +31,18 @@ export const SERVE_BACKOFF_MS = [1_000, 2_000, 5_000]
 export const SERVE_RETRY_MS = 30_000
 const STABLE_MS = 30_000
 
-/** Runs until SIGTERM or SIGINT, then answers 0. */
+/** What `serve` exits with (design §2.9): 0 after SIGTERM or SIGINT; 75 when an update began while it ran, so its
+ *  supervisor starts it again on the new version; 78 for a configuration it cannot use. */
+export const SERVE_EXIT = { stopped: 0, updated: 75, unusable: 78 } as const
+
+/** Runs until SIGTERM or SIGINT (0), an update that begins while it runs (75), or a configuration it cannot use (78). */
 export async function runServe(d: ServeDeps): Promise<number> {
   let stopping = false
   let child: ServeHostChild | null = null
   let failures = 0
+  /** It has looked once with no update hold: a hold seen after that is an update that began while it ran. A serve
+   *  started under a hold (an installer still at work) waits for it instead. */
+  let ranFree = false
   d.onSignal(() => {
     stopping = true
     // Forwarded: the Host leaves the way it leaves on its own signal, ending its sessions' pipes cleanly.
@@ -49,7 +57,20 @@ export async function runServe(d: ServeDeps): Promise<number> {
       await d.sleep(SERVE_POLL_MS)
       continue
     }
-    if (!s.enabled || d.hold()) {
+    if (d.hold()) {
+      if (ranFree) {
+        // Leaving releases every file of this version, which the installer is about to replace (on Windows a running
+        // program cannot be); the supervisor starts the new one, which waits out the rest of the hold.
+        // Its Host is gone by now: the update path writes the hold and then retires the Host, and this look runs only between
+        // children.
+        d.log('an update began; leaving so the new version can start (exit 75)')
+        return SERVE_EXIT.updated
+      }
+      await d.sleep(SERVE_POLL_MS)
+      continue
+    }
+    ranFree = true
+    if (!s.enabled) {
       await d.sleep(SERVE_POLL_MS)
       continue
     }
@@ -59,7 +80,12 @@ export async function runServe(d: ServeDeps): Promise<number> {
     }
     if (stopping) break
     const startedAt = d.now()
-    child = d.startHostChild()
+    const started = d.startHostChild()
+    if ('unusable' in started) {
+      d.log(`no Host can start here: ${started.unusable} (exit 78)`)
+      return SERVE_EXIT.unusable
+    }
+    child = started
     const code = await child.wait
     child = null
     if (stopping) break
@@ -77,5 +103,5 @@ export async function runServe(d: ServeDeps): Promise<number> {
     d.log(`the Host exited with ${code ?? 'a signal'}; starting another in ${wait / 1000} s`)
     await d.sleep(wait)
   }
-  return 0
+  return SERVE_EXIT.stopped
 }

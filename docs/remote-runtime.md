@@ -41,7 +41,10 @@ Notifications for a Job on a Runtime follow the Runtime machine's own Slack sett
 ## Where it runs
 
 The Runtime is a machine with the Astera app installed: Windows, macOS, or Linux from the `.deb` in a desktop session
-(a Linux server with no desktop, no X11 or Wayland, waits for v1.1). Any of the three can be a controller.
+(a Linux server with no desktop, no X11 or Wayland, waits for v1.1). The desktop session is for setting it up: the app
+installs Astera's command line and signs the accounts in. Once set up, the OS recipes below keep it running across
+reboots without anyone logged in on Linux, and from your login on Windows and macOS. Any of the three can be a
+controller.
 
 Use a private network: your LAN, a VPN, or Tailscale. Do not forward the Runtime's port to the internet. Astera offers
 no relay and opens no port for you.
@@ -60,8 +63,10 @@ astera runtime pair --name laptop            a one-time pairing string, valid 10
 identity the first time (a key and certificate kept owner-only in the profile), starts a Host if none runs, and waits
 until it listens. Every later Host start, by the app or a command, listens again while Remote is on.
 
-**Projects.** A controller starts Jobs and sessions only in the Runtime's registered projects; a folder that is not one
-is refused. Register them on the Runtime, with `astera projects add` or in the app.
+**Projects.** A controller starts sessions only in the Runtime's registered projects; a folder that is not one is
+refused. Register them on the Runtime, with `astera projects add` or in the app. Jobs are not held to projects: a
+full-control controller can run a Job in any folder of the Runtime, and the app lists it under "Unregistered" for that
+Runtime.
 
 **Accounts.** The Claude and Codex accounts a Runtime uses are signed in on the Runtime machine, in the Astera app, once.
 A controller picks among them; no credential ever travels to or from the controller.
@@ -150,37 +155,60 @@ authority, which is the pairing's: the MCP settings limit MCP clients, not the p
 
 ## Keep it running: OS recipes
 
-`astera runtime serve` keeps exactly one Host running on this profile while Remote is on, restarts a Host that
-crashes (after 1, 2, 5, then 30 seconds), and exits 75 when Astera was updated so its supervisor starts it again on the
-new version. It never turns Remote on by itself: run `astera runtime start` once first. Each recipe below starts
-`serve` when the user logs in and restarts it whenever it exits with a non-zero code.
+`astera runtime serve` keeps exactly one Host running on this profile while Remote is on and restarts a Host that
+crashes (after 1, 2, 5, then 30 seconds). It exits 0 when it is stopped (SIGTERM, Ctrl+C); 75 when an update begins
+while it runs (the app writes an update hold and retires the Host), so nothing of the old version stays open and its
+supervisor starts the new one; and 78 when this machine cannot start a Host at all (Astera's command line was never set
+up there). A `serve` started during an update waits for it to finish. It never turns Remote on by itself: run
+`astera runtime start` once first. Each recipe below starts `serve` and starts it again after any exit but 0 and 78.
 
 On a Runtime supervised this way, run `astera runtime stop` before `astera host stop`: while Remote is on, `serve`
 starts a new Host after a stop.
 
 ### Windows
 
-A logon task for your own user that runs a hidden PowerShell loop around `astera runtime serve`, in PowerShell:
+A logon task for your own user that runs a small PowerShell script around `astera runtime serve`. Save the script as
+`%LOCALAPPDATA%\astera\runtime-serve.ps1`:
 
 ```powershell
-$loop     = "while (`$true) { & '$env:LOCALAPPDATA\astera\bin\astera.cmd' runtime serve; " +
-            "if (`$LASTEXITCODE -eq 0) { break }; Start-Sleep 5 }"
+param([string]$Astera = "$env:LOCALAPPDATA\astera\bin\astera.cmd", [string]$Hold = "$env:APPDATA\astera\host\update-hold")
+while ($true) {
+  # An update in progress: start nothing until its hold ends, so no file of the old version is held.
+  if (Test-Path $Hold) {
+    $until = (Get-Content $Hold -Raw | ConvertFrom-Json).until
+    if ($until -gt [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) { Start-Sleep 10; continue }
+  }
+  # Astera's command line is gone (uninstalled, or turned off in Settings): stop rather than retry.
+  if (-not (Test-Path $Astera)) { exit 1 }
+  & $Astera runtime serve
+  # 0: stopped on purpose. 78: a configuration no restart changes. Anything else (75 after an update, a crash): again.
+  if ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 78) { exit $LASTEXITCODE }
+  Start-Sleep 5
+}
+```
+
+Then register the task, in PowerShell:
+
+```powershell
+$script   = "$env:LOCALAPPDATA\astera\runtime-serve.ps1"
 $action   = New-ScheduledTaskAction -Execute 'powershell.exe' `
-            -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -Command `"$loop`""
+            -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`""
 $trigger  = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
             -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName 'Astera Runtime' -Action $action -Trigger $trigger -Settings $settings
 ```
 
-The loop is the restart: Task Scheduler's own "restart on failure" does not restart a task whose program exits with
-an error code, so the loop starts `serve` again 5 seconds after any non-zero exit (a crash, or 75 after an update) and
-ends when `serve` exits 0. A task for your own user needs no administrator. A task that runs before you log in (the
-"run whether the user is logged on or not" kind, S4U) needs an administrator to register, so this recipe starts at
-login. Measured on Windows 11 with a standard user: the task registers, runs with no window, `serve` brings a killed
-Host back within 20 seconds and the loop brings a killed `serve` back within 12.
+The script is the restart: Task Scheduler's own "restart on failure" does not restart a task whose program exits with
+an error code. `astera.cmd` runs from the app's install folder, so the script waits out an update's hold and `serve`
+leaves when one begins: the installer then finds no Astera program running. A task for your own user needs no
+administrator. A task that runs before you log in (the "run whether the user is logged on or not" kind, S4U) needs an
+administrator to register, so this recipe starts at login. Measured on Windows 11 with a standard user: the task
+registers and runs with no window; `serve` brought a killed Host back within 20 seconds and the loop a killed `serve`
+within 12; the script waited out a hold, ran again after a 75, and stopped at 0, at 78 and when `astera.cmd` was gone.
 
-Remove it with `Unregister-ScheduledTask -TaskName 'Astera Runtime'`.
+To remove it, unregister the task first (`Unregister-ScheduledTask -TaskName 'Astera Runtime'`), then delete the script;
+do this before you uninstall Astera or turn its command line off.
 
 ### macOS
 
@@ -252,9 +280,12 @@ renames and Unicode names included.
   different key from then on.
 - Each controller has its own token, kept owner-only on both sides, never printed, never in an argument or the
   environment. Revoking it closes its connections at once.
-- A controller reads and changes Jobs, Runs, Tasks and sessions by their ids. It cannot read or write an arbitrary
-  file, list a folder, or run a shell on the Runtime. A Run's changed files and diffs come from git, by file ids the
-  Runtime gave.
+- A controller reads and changes Jobs, Runs, Tasks and sessions by their ids. It has no command to read or write an
+  arbitrary file, list a folder, or run a shell on the Runtime. A Run's changed files and diffs come from git, by file
+  ids the Runtime gave.
+- **Full control is the Runtime user's power.** A full-control controller starts agents and terminal sessions there and
+  types into them, and those run any command the Runtime's user can, in any folder that user can reach. Pair with full
+  control only a controller you would trust with that user account; pair the rest read-only.
 - Logs on both sides never carry tokens, pairing codes or terminal output.
 
 ## When an answer is lost
@@ -293,19 +324,18 @@ list the newest Jobs or runs on that Runtime before trying again.
 
 | Code | Exit | Meaning |
 |---|---|---|
-| `RUNTIME_NOT_FOUND` | 4 | no paired Runtime has that id or name, or a name matches two |
+| `RUNTIME_NOT_FOUND` | 4 | no paired Runtime has that id or name, or a name matches two; for a remote terminal, the pty is not on the Runtime any more |
 | `RUNTIME_OFFLINE` | 3 | the Runtime could not be reached |
 | `RUNTIME_AUTH_FAILED` | 5 | the Runtime does not know this controller: revoked, or never paired |
 | `RUNTIME_IDENTITY_CHANGED` | 5 | the Runtime's key is not the one pinned at pairing |
 | `RUNTIME_PROTOCOL_MISMATCH` | 9 | the two machines speak different remote protocols; update the older |
-| `RUNTIME_PROJECT_NOT_FOUND` | 4 | that project is not registered on the Runtime |
-| `RUNTIME_ACCOUNT_NOT_FOUND` | 4 | that account does not exist on the Runtime |
 | `RUNTIME_CAPABILITY_MISSING` | 9 | the command has no remote form, or that Runtime cannot do it |
 | `RUNTIME_BUSY` | 6 | too many connections or calls in flight on the Runtime; try again shortly |
 | `RUNTIME_PERMISSION_DENIED` | 5 | a read-only pairing asked for a change |
 | `RUNTIME_OUTCOME_UNKNOWN` | 6 | an answer was lost and the Runtime cannot say whether the change ran |
 | `REMOTE_TIMEOUT` | 7 | no answer in time; the command may still finish |
-| `REMOTE_OPERATION_CONFLICT` | 6 | refused because of the Runtime's current state |
 | `REMOTE_REPLY_TOO_LARGE` | 1 | the answer was over 64 MiB |
 
-The code is in `error.code` of the envelope; read it from there, never from the sentence.
+The code is in `error.code` of the envelope; read it from there, never from the sentence. `RUNTIME_PROJECT_NOT_FOUND`,
+`RUNTIME_ACCOUNT_NOT_FOUND` and `REMOTE_OPERATION_CONFLICT` are reserved names this version does not send: a missing
+project or account, or a refusal because of the Runtime's state, comes back with the Runtime's own error.

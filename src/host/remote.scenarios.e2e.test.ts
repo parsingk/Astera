@@ -18,7 +18,7 @@ import { controllerRecordsFile, createControllerRegistry } from './controllers'
 import { emptyState } from '../core/orchestration/state'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { buildCertificate, certificatePem, spkiSha256 } from '../core/remote/cert'
-import { connectRuntime } from '../core/remote/client'
+import { connectRuntime, type RuntimeLink } from '../core/remote/client'
 import { openRemoteLink, type RemoteLink } from '../core/remote/link'
 import { startGateway } from '../cli/runtime/gateway'
 
@@ -69,6 +69,9 @@ async function host(bootId: string, port = 0) {
     onState: () => {},
     log: () => {},
     controllers,
+    // The sign-in probe reads the account's credential, on the Runtime, the same on every OS this suite runs on (macOS
+    // asks the keychain for Claude in the real one).
+    isLoggedIn: async (acct) => (await fs.readFile(path.join(acct.configDir, '.credentials.json'), 'utf8')).includes('accessToken'),
     sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() }
   })
   await orch.ready()
@@ -99,19 +102,29 @@ async function host(bootId: string, port = 0) {
   return { orch, controllers, port: started.port, stop }
 }
 
-async function controller(rt: Awaited<ReturnType<typeof host>>): Promise<RemoteLink> {
+/** A paired controller whose connection a test can cut: `drop()` closes the live one, and the link reconnects on its own
+ *  with the same token at the next call, as after a network loss. */
+async function controller(rt: Awaited<ReturnType<typeof host>>): Promise<RemoteLink & { drop(): Promise<void> }> {
   const pairing = rt.controllers.createPairing({ permission: 'full-control' })
   const first = await connectRuntime({ host: '127.0.0.1', port: rt.port, pin: identity.spkiSha256 })
   const paired = await first.redeem(pairing.code, 'laptop', {})
   first.close()
+  let current: RuntimeLink | null = null
   const l = openRemoteLink({
     target: { runtimeId: 'rt_v1', address: '127.0.0.1', port: rt.port, fingerprint: identity.spkiSha256, token: paired.token },
     client: { surface: 'cli' },
+    connect: async (c) => (current = await connectRuntime(c)),
     sleep: async (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 50))),
     random: () => 0.5
   })
   cleanups.push(() => l.close())
-  return l
+  return Object.assign(l, {
+    drop: async () => {
+      const was = current
+      was?.close()
+      await was?.closed
+    }
+  })
 }
 
 const body = <T>(r: unknown): T => (r as { body: T }).body
@@ -137,11 +150,12 @@ describe('Remote Runtime v1 scenarios (v1 §29)', { timeout: 60_000 }, () => {
     const rt = await host('boot-1')
     const ctl = await controller(rt)
     const runId = body<{ id: string }>(await ctl.call('run-create', { objective: 'keeps going', cwd: dir })).id
-    ctl.close()
+    // The network goes: the connection is gone, the pairing and the link are not.
+    await ctl.drop()
     // Meanwhile, on the Runtime: the work moves on with no controller.
     expect(status(await rt.orch.handle('runs-stop', { id: runId }))).toBe(200)
-    const back = await controller(rt)
-    expect(body<{ paused?: boolean }>(await back.call('runs-get', { id: runId })).paused).toBe(true)
+    // Back: the same link reconnects with its token and reads where the Runtime stands.
+    expect(body<{ paused?: boolean }>(await ctl.call('runs-get', { id: runId })).paused).toBe(true)
   })
 
   it('Account Rolling: what a controller reads about accounts carries no credential', async () => {
@@ -149,7 +163,8 @@ describe('Remote Runtime v1 scenarios (v1 §29)', { timeout: 60_000 }, () => {
     const ctl = await controller(rt)
     const accounts = await ctl.call('accounts-list', {})
     expect(status(accounts)).toBe(200)
-    expect(JSON.stringify(accounts)).toContain('acc_rt')
+    // The Runtime read the credential to say the account is signed in (review M1: the probe ran), and sent only that.
+    expect(body<Array<{ id: string; signedIn?: boolean }>>(accounts)).toEqual([expect.objectContaining({ id: 'acc_rt', signedIn: true })])
     expect(JSON.stringify(accounts)).not.toContain(SECRET)
     const state = await ctl.call('state-get', {})
     expect(status(state)).toBe(200)
