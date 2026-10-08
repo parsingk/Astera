@@ -22,7 +22,7 @@ import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/
 import { runningCount } from '../../../core/orchestration/running'
 import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
-import type { OrchDoor } from '../lib/orchDoor'
+import { replyNote, type OrchDoor } from '../lib/orchDoor'
 import { confirmModal } from '../lib/confirm'
 import { CompletionBlock } from './CompletionBlock'
 import { toast } from '../lib/toast'
@@ -309,7 +309,7 @@ export function RunDetail({
     return () => {
       cancelled = true
     }
-  }, [authoring])
+  }, [authoring, door])
   useEffect(() => {
     if (!authoring) {
       setRunConfigs(null) // 다음에 지을 때 다시 받도록 비운다 — 그 사이 설정이 바뀌었을 수 있다
@@ -499,7 +499,7 @@ export function RunDetail({
     setBusy(RUN_START)
     try {
       const reply = await door.command('run-start', { run: runId })
-      if (reply.status >= 400) toast.error(t('jobs.run.startFailed'))
+      if (reply.status >= 400) toast.error(replyNote(reply, t as never, t('jobs.run.startFailed')))
     } catch {
       toast.error(t('jobs.run.startFailed'))
     } finally {
@@ -541,7 +541,7 @@ export function RunDetail({
           typeof reply.body === 'object' && reply.body !== null && 'error' in reply.body
             ? String((reply.body as { error: unknown }).error)
             : String(reply.status)
-        toast.error(t('jobs.run.mergeFailed', { reason }))
+        toast.error(replyNote(reply, t as never, t('jobs.run.mergeFailed', { reason })))
         return
       }
       const merged =
@@ -614,7 +614,7 @@ export function RunDetail({
         agent: provider,
         account: accountId
       })
-      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+      if (reply.status >= 400) toast.error(replyNote(reply, t as never, t('jobs.node.failed')))
     } catch {
       toast.error(t('jobs.node.failed'))
     } finally {
@@ -647,7 +647,7 @@ export function RunDetail({
       // starting, or because the Host could not confirm the kill, says what to do next.
       if (reply.status >= 400) {
         const why = (reply.body as { error?: unknown } | null)?.error
-        toast.error(typeof why === 'string' ? t('jobs.node.stopFailed', { detail: why }) : t('jobs.node.failed'))
+        toast.error(replyNote(reply, t as never, typeof why === 'string' ? t('jobs.node.stopFailed', { detail: why }) : t('jobs.node.failed')))
       }
     } catch (err) {
       toast.error(t('jobs.node.stopFailed', { detail: errText(err) }))
@@ -677,7 +677,7 @@ export function RunDetail({
         id: taskId,
         convergence: 'off'
       })
-      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+      if (reply.status >= 400) toast.error(replyNote(reply, t as never, t('jobs.node.failed')))
     } catch {
       toast.error(t('jobs.node.failed'))
     } finally {
@@ -696,7 +696,7 @@ export function RunDetail({
         id: taskId,
         status: 'ready'
       })
-      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+      if (reply.status >= 400) toast.error(replyNote(reply, t as never, t('jobs.node.failed')))
     } catch {
       toast.error(t('jobs.node.failed'))
     } finally {
@@ -719,7 +719,7 @@ export function RunDetail({
         question: trimmed
       })
       if (reply.status >= 400) {
-        setGateError(t('jobs.node.failed'))
+        setGateError(replyNote(reply, t as never, t('jobs.node.failed')))
         return
       }
       setAsking(null)
@@ -760,7 +760,7 @@ export function RunDetail({
         resolution: trimmed
       })
       if (reply.status >= 400) {
-        setGateError(t('jobs.node.failed'))
+        setGateError(replyNote(reply, t as never, t('jobs.node.failed')))
         return
       }
       // 설계 §5(V4): 소진 Gate 에 "한 번 더 수정" 으로 답했는데 그 수정을 열지 못하는 경우가 있다 —

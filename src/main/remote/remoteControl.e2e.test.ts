@@ -181,8 +181,9 @@ describe('Remote Runtime Phase 7 acceptance (design §6 Phase 7)', { timeout: 30
     await gw?.close()
     gw = null
     const r = await a.router.command('proj_key', 'run-start', { run: 'run_x' }, 'rt_p7')
-    expect(r.status).toBeGreaterThanOrEqual(500)
-    expect(JSON.stringify(r.body)).toMatch(/RUNTIME_OFFLINE|REMOTE_TIMEOUT|RUNTIME_OUTCOME_UNKNOWN/)
+    // The Gateway is gone before anything is sent, so the change certainly did not run: 503 RUNTIME_OFFLINE, not the
+    // "may have run" 409 of a lost answer.
+    expect(r).toMatchObject({ status: 503, body: { code: 'RUNTIME_OFFLINE' } })
     expect(a.local).toEqual([])
     a.runtimes.close()
   })

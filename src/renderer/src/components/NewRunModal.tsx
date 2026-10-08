@@ -3,7 +3,7 @@ import type { Account, ScheduleRule } from '../../../core/types'
 import { DEFAULT_BLOCKING_SEVERITY } from '../../../core/orchestration/convergence'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
-import type { OrchDoor } from '../lib/orchDoor'
+import { formFailure, type OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
 
@@ -50,13 +50,15 @@ export function NewRunModal({
   const [convergence, setConvergence] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** The create may have gone through on a Runtime whose answer was lost: not sent again from this form. */
+  const [locked, setLocked] = useState(false)
 
   const create = async (): Promise<void> => {
     const trimmed = objective.trim()
     // busy 로 다시 걸러 이중 클릭이 Run 을 두 개 만들지 못하게 한다 — 버튼의 disabled 는 같은
     // 프레임에 반영되지 않을 수 있어 여기서도 확인한다.
     // 계정도 함께 본다 — 아래 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석)
-    if (!trimmed || !coordinatorAccountId || busy || cwd === null) return
+    if (!trimmed || !coordinatorAccountId || busy || cwd === null || locked) return
     setBusy(true)
     setError(null)
     try {
@@ -89,7 +91,9 @@ export function NewRunModal({
       })
       if (reply.status >= 400) {
         // 실패해도 모달은 닫지 않는다 — 닫으면 사용자는 눌러도 아무 일도 없었다고 여긴다
-        setError(t('jobs.new.failed'))
+        const f = formFailure(reply, t as never, 'jobs.new.failed')
+        setError(f.message)
+        if (f.lock) setLocked(true)
         return
       }
       onCreated((reply.body as { id: string }).id)
@@ -163,7 +167,8 @@ export function NewRunModal({
             />
             <p className="modal-hint">{t('jobs.new.coordinatorHint')}</p>
             {accounts.length === 0 && (
-              <p className="warn-text">{t('jobs.task.accountEmpty')}</p>
+              // A Runtime's accounts are added on that machine: "add one under Settings" here would not help.
+              <p className="warn-text">{door.runtimeId ? t('jobs.runtime.noAccounts') : t('jobs.task.accountEmpty')}</p>
             )}
           </div>
         )}
@@ -218,7 +223,7 @@ export function NewRunModal({
             className="primary"
             // 코디네이터 계정 없이는 만들 수 없다 — 이 폼은 관리자 있는 Run 만 만든다
             disabled={
-              busy || cwd === null || !objective.trim() || !coordinatorAccountId || (scheduled && schedule === null)
+              busy || locked || cwd === null || !objective.trim() || !coordinatorAccountId || (scheduled && schedule === null)
             }
             onClick={() => void create()}
           >

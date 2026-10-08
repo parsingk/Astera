@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { localDoor, remoteDoor, type DoorApi } from './orchDoor'
+import { formFailure, isOutcomeUnknown, localDoor, remoteDoor, replyNote, type DoorApi } from './orchDoor'
 import type { Account } from '../../../core/types'
 
 const acc = (id: string): Account => ({ id, label: id, configDir: `C:/${id}`, color: '#123456', createdAt: 'x', provider: 'claude' })
@@ -98,5 +98,45 @@ describe('the orchestration door (remote runtime design Phase 7, N10)', () => {
     const readOnly = remoteDoor(fakeApi(), { runtimeId: 'rt_a', projectKey: 'p1', permission: 'read-only', readOnlyReason: 'ro', onChanged: () => void changed++ })
     await readOnly.command('run-delete', { id: 'r1' })
     expect(changed).toBe(1)
+  })
+
+  // Phase 7 review I1: a change whose answer was lost may have run; the view reads the Runtime again to find out.
+  it('a change whose outcome is unknown also reads the Runtime again', async () => {
+    let changed = 0
+    const api = fakeApi()
+    api.orch.command = async () => ({ status: 409, body: { error: 'lost', code: 'RUNTIME_OUTCOME_UNKNOWN' } })
+    const d = remoteDoor(api, { runtimeId: 'rt_a', projectKey: 'p1', permission: 'full-control', readOnlyReason: 'ro', onChanged: () => void changed++ })
+    await d.command('run-create', { objective: 'x' })
+    expect(changed).toBe(1)
+  })
+})
+
+// Phase 7 review I1 and M2: what a refused or lost command says, in place of one generic sentence.
+describe('replyNote', () => {
+  const t = (key: string): string => key
+  it('a change whose answer was lost says it may have gone through, never that it failed', () => {
+    const lost = { status: 409, body: { error: 'x', code: 'RUNTIME_OUTCOME_UNKNOWN' } }
+    const timedOut = { status: 409, body: { error: 'x', code: 'REMOTE_TIMEOUT' } }
+    expect(isOutcomeUnknown(lost)).toBe(true)
+    expect(isOutcomeUnknown(timedOut)).toBe(true)
+    expect(isOutcomeUnknown({ status: 504, body: { code: 'REMOTE_TIMEOUT' } })).toBe(false)
+    expect(isOutcomeUnknown({ status: 409, body: { error: 'running' } })).toBe(false)
+    expect(replyNote(lost, t, 'generic')).toBe('jobs.runtime.outcomeUnknown')
+  })
+  it("a permission refusal says the Runtime's reason; an unreachable Runtime says so; anything else is the fallback", () => {
+    expect(replyNote({ status: 403, body: { error: 'this pairing is read only', code: 'RUNTIME_PERMISSION_DENIED' } }, t, 'generic')).toBe('this pairing is read only')
+    expect(replyNote({ status: 503, body: { error: 'down', code: 'RUNTIME_OFFLINE' } }, t, 'generic')).toBe('jobs.runtime.unreachable')
+    expect(replyNote({ status: 400, body: { error: 'bad' } }, t, 'generic')).toBe('generic')
+  })
+})
+
+// Phase 7 review I1: a form whose create may have gone through is not sent again by a second press (a new request id
+// would make a second Job on the Runtime).
+describe('formFailure', () => {
+  const t = (key: string): string => key
+  it('locks the form when the outcome is unknown, and only then', () => {
+    expect(formFailure({ status: 409, body: { code: 'RUNTIME_OUTCOME_UNKNOWN' } }, t, 'jobs.new.failed')).toEqual({ message: 'jobs.runtime.outcomeUnknown', lock: true })
+    expect(formFailure({ status: 400, body: { error: 'bad' } }, t, 'jobs.new.failed')).toEqual({ message: 'jobs.new.failed', lock: false })
+    expect(formFailure({ status: 403, body: { error: 'read only', code: 'RUNTIME_PERMISSION_DENIED' } }, t, 'jobs.new.failed')).toEqual({ message: 'read only', lock: false })
   })
 })

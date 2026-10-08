@@ -2767,7 +2767,7 @@ export default function App(): React.JSX.Element {
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
   // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
   // shortcut key would reach the workbench behind the modal while that field has focus.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen || remoteNewRunOpen
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)

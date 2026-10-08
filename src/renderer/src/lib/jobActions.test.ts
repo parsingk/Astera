@@ -102,6 +102,22 @@ describe('Job actions through a door (remote runtime design Phase 7)', () => {
   it('a Runtime that cannot be asked is a failure, never a success', async () => {
     const u = ui()
     await resumeRun(door({ status: 503, body: { error: 'down', code: 'RUNTIME_OFFLINE' } }), 'r1', u)
-    expect(u.errors).toEqual(['jobs.run.pauseFailed'])
+    expect(u.errors).toEqual(['jobs.runtime.unreachable'])
+  })
+
+  // Phase 7 review I1: a lost answer is not "a worker is running, stop it first".
+  it('a delete whose answer was lost says it may have gone through, not that a worker runs', async () => {
+    const u = ui()
+    await deleteRun(door({ status: 409, body: { error: 'lost', code: 'RUNTIME_OUTCOME_UNKNOWN' } }), snapshot(), 'r1', u)
+    expect(u.errors).toEqual(['jobs.runtime.outcomeUnknown'])
+    const p = ui()
+    await pauseRun(door({ status: 409, body: { error: 'lost', code: 'RUNTIME_OUTCOME_UNKNOWN' } }), 'r1', p)
+    expect(p.errors).toEqual(['jobs.runtime.outcomeUnknown'])
+  })
+  // Phase 7 review M6
+  it('a resume that fails says it could not resume', async () => {
+    const u = ui()
+    await resumeRun(door({ status: 400, body: { error: 'no' } }), 'r1', u)
+    expect(u.errors).toEqual(['jobs.run.resumeFailed'])
   })
 })

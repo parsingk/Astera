@@ -3,7 +3,7 @@
 // The bodies are the App's own, moved: the same confirmations, counts, choices and failure sentences.
 import type { OrchSnapshot } from '../../../core/types'
 import { findRun } from '../../../core/orchestration/snapshot'
-import type { CommandReply, OrchDoor } from './orchDoor'
+import { isOutcomeUnknown, replyNote, type CommandReply, type OrchDoor } from './orchDoor'
 
 export interface ActionUi {
   t(key: string, params?: Record<string, string | number>): string
@@ -19,12 +19,8 @@ export interface ActionUi {
   hide?(paths: string[]): void
 }
 
-/** A read-only pairing's refusal says why in its own words (the door's reason); anything else is `fallback`. */
-const failure = (reply: CommandReply, ui: ActionUi, fallback: string): void => {
-  const body = reply.body as { code?: unknown; error?: unknown } | null
-  if (body?.code === 'RUNTIME_PERMISSION_DENIED' && typeof body.error === 'string') ui.error(body.error)
-  else ui.error(fallback)
-}
+/** A refusal or a lost answer says what it is (orchDoor replyNote); anything else is `fallback`. */
+const failure = (reply: CommandReply, ui: ActionUi, fallback: string): void => ui.error(replyNote(reply, ui.t, fallback))
 
 /** Sends, and shows a failure; a send that throws (IPC) is the same failure. Answers the reply, or null. */
 const send = async (door: OrchDoor, cmd: string, args: Record<string, unknown>, ui: ActionUi, fallback: string): Promise<CommandReply | null> => {
@@ -42,13 +38,14 @@ export async function pauseRun(door: OrchDoor, runId: string, ui: ActionUi): Pro
   if (!ok) return
   const reply = await send(door, 'run-pause', { run: runId }, ui, ui.t('jobs.run.pauseFailed'))
   if (!reply || reply.status < 400) return
-  if (reply.status === 409) ui.error(JSON.stringify(reply.body).includes('worker-retain') ? ui.t('jobs.run.pauseRetained') : ui.t('jobs.run.pauseFailed'))
+  if (reply.status === 409 && !isOutcomeUnknown(reply))
+    ui.error(JSON.stringify(reply.body).includes('worker-retain') ? ui.t('jobs.run.pauseRetained') : ui.t('jobs.run.pauseFailed'))
   else failure(reply, ui, ui.t('jobs.run.pauseFailed'))
 }
 
 export async function resumeRun(door: OrchDoor, runId: string, ui: ActionUi): Promise<void> {
-  const reply = await send(door, 'run-resume', { run: runId }, ui, ui.t('jobs.run.pauseFailed'))
-  if (reply && reply.status >= 400) failure(reply, ui, ui.t('jobs.run.pauseFailed'))
+  const reply = await send(door, 'run-resume', { run: runId }, ui, ui.t('jobs.run.resumeFailed'))
+  if (reply && reply.status >= 400) failure(reply, ui, ui.t('jobs.run.resumeFailed'))
 }
 
 /** Puts a coordinator back on a Run that lost it: `run-start` again, whose meaning is "this Run has a manager" and
@@ -108,7 +105,9 @@ export async function deleteRun(door: OrchDoor, snapshot: OrchSnapshot | null, r
   // answers 409, a common path) must not leave the history hidden with nothing deleted.
   if (reply.status < 400 && answer.checked.includes('hide')) ui.hide?.(wt)
   // The two 409s are told apart by our own server's sentences: a held session is released, not stopped.
-  if (reply.status === 409) ui.error(JSON.stringify(reply.body).includes('worker-retain') ? ui.t('jobs.run.deleteRetained') : ui.t('jobs.run.deleteBusy'))
+  // A lost answer is neither: the delete may have gone through (checked before the 409 split).
+  if (reply.status === 409 && !isOutcomeUnknown(reply))
+    ui.error(JSON.stringify(reply.body).includes('worker-retain') ? ui.t('jobs.run.deleteRetained') : ui.t('jobs.run.deleteBusy'))
   else if (reply.status >= 400) failure(reply, ui, ui.t('jobs.run.deleteFailed'))
   else {
     // Folders the command kept (uncommitted changes after a merge, or a state it could not read) are said, in a

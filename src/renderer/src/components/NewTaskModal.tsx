@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Account, JobTask } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
-import type { OrchDoor } from '../lib/orchDoor'
+import { formFailure, type OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
 import { Select, type SelectOption } from './Select'
 import { X } from 'lucide-react'
@@ -66,6 +66,8 @@ export function NewTaskModal({
   const [review, setReview] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** The Task may have been made on a Runtime whose answer was lost: not sent again from this form. */
+  const [locked, setLocked] = useState(false)
 
   /** 검사 목록의 도우미. runConfigs 가 null(아직 안 온 것)이면 칸 자체를 접으므로(아래 마크업) 여기서는 빈 배열로 본다 */
   const configs = runConfigs ?? []
@@ -120,7 +122,7 @@ export function NewTaskModal({
     // busy 로 다시 걸러 이중 클릭이 Task 를 두 개 만들지 못하게 한다 — NewRunModal.create 와 같은
     // 이유다: 버튼의 disabled 는 같은 프레임에 반영되지 않을 수 있다.
     // 계정도 함께 본다 — 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석).
-    if (!trimmedSpec || accountIds.length === 0 || busy) return
+    if (!trimmedSpec || accountIds.length === 0 || busy || locked) return
     setBusy(true)
     setError(null)
     try {
@@ -144,7 +146,9 @@ export function NewTaskModal({
       if (reply.status >= 400) {
         // 실패해도 폼은 닫지 않는다 — 닫으면 에러를 보여줄 자리가 없고, 사용자는 눌러도 아무 일도
         // 없었다고 여긴다(NewRunModal.create 와 같은 이유).
-        setError(t('jobs.task.failed'))
+        const f = formFailure(reply, t as never, 'jobs.task.failed')
+        setError(f.message)
+        if (f.lock) setLocked(true)
         return
       }
       onCreated()
@@ -255,7 +259,9 @@ export function NewTaskModal({
             <p className="modal-hint">{t('jobs.task.accountHint')}</p>
             {/* 계정이 하나도 등록되지 않았으면 고를 것이 없어 이 Task 를 만들 수 없다 — 칸을
                 감추면 왜 만들기 버튼이 죽어 있는지 화면이 말하지 않는다. */}
-            {accounts.length === 0 && <p className="warn-text">{t('jobs.task.accountEmpty')}</p>}
+            {accounts.length === 0 && (
+              <p className="warn-text">{door.runtimeId ? t('jobs.runtime.noAccounts') : t('jobs.task.accountEmpty')}</p>
+            )}
             {accountIds.length > 0 && <p className="warn-text">{t('jobs.task.accountTrust')}</p>}
           </div>
         )}
@@ -335,7 +341,7 @@ export function NewTaskModal({
         {/* 계정이 없으면 만들 수 없다 — provider 를 알 방법이 없다(accountIds 의 주석) */}
         <button
           className="primary"
-          disabled={busy || !spec.trim() || accountIds.length === 0}
+          disabled={locked || busy || !spec.trim() || accountIds.length === 0}
           onClick={() => void create()}
         >
           {t('jobs.task.create')}

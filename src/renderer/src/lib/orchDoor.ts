@@ -31,6 +31,27 @@ export interface DoorApi {
   run: { list(projectPath: string): Promise<{ configs: RunConfigRow[] }> }
 }
 
+type T = (key: string, params?: Record<string, string | number>) => string
+const codeOf = (r: CommandReply): unknown => (r.body as { code?: unknown } | null)?.code
+
+/** A change whose answer was lost (the link dropped after sending it): it may have run on the Runtime. Main answers
+ *  it as a 409 with RUNTIME_OUTCOME_UNKNOWN, or REMOTE_TIMEOUT for a change (runtimeClient.ts replyOf). */
+export function isOutcomeUnknown(r: CommandReply): boolean {
+  const code = codeOf(r)
+  return code === 'RUNTIME_OUTCOME_UNKNOWN' || (r.status === 409 && code === 'REMOTE_TIMEOUT')
+}
+
+/** What a refused or lost command says (Phase 7 review I1, M2): that it may have gone through, the Runtime's own
+ *  reason for a permission refusal, that the Runtime does not answer, or else `fallback`. */
+export function replyNote(r: CommandReply, t: T, fallback: string): string {
+  if (isOutcomeUnknown(r)) return t('jobs.runtime.outcomeUnknown')
+  const code = codeOf(r)
+  const error = (r.body as { error?: unknown } | null)?.error
+  if (code === 'RUNTIME_PERMISSION_DENIED' && typeof error === 'string') return error
+  if (code === 'RUNTIME_OFFLINE') return t('jobs.runtime.unreachable')
+  return fallback
+}
+
 export function localDoor(api: DoorApi, projectPath: string): OrchDoor {
   return {
     projectKey: projectPath,
@@ -69,7 +90,8 @@ export function remoteDoor(
     command: async (cmd, args) => {
       if (readOnly && remoteMutation(cmd)) return { status: 403, body: { error: a.readOnlyReason, code: 'RUNTIME_PERMISSION_DENIED' } }
       const r = await send(cmd, args)
-      if (ok(r) && remoteMutation(cmd)) a.onChanged?.()
+      // A change that went through, or whose answer was lost (it may have): the view reads the Runtime again.
+      if ((ok(r) || isOutcomeUnknown(r)) && remoteMutation(cmd)) a.onChanged?.()
       return r
     },
     accounts: async () => {
@@ -102,4 +124,10 @@ export function remoteDoor(
       return r && ok(r) && Array.isArray(r.body) ? (r.body as RunConfigRow[]) : []
     }
   }
+}
+
+/** A form's failed submit: what it says (replyNote), and whether the form locks against a second submit, which it
+ *  does when the first may have gone through (a lost answer: pressing again would send a new request, a second Job). */
+export function formFailure(r: CommandReply, t: T, fallbackKey: string): { message: string; lock: boolean } {
+  return { message: replyNote(r, t, t(fallbackKey)), lock: isOutcomeUnknown(r) }
 }
