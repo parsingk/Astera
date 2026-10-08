@@ -14,7 +14,14 @@ import { CHUNK_THRESHOLD, chunksOf, createReassembler } from '../../core/remote/
 import { FRAME_CAP, parseControllerFrame, parseLinkFrame, type HostLinkFrame } from '../../core/remote/frames'
 
 export interface GatewayLimits {
+  /** Connections signed in at once. */
   connections: number
+  /** Connections not signed in yet, in all and from one address (security audit SEC-2): kept apart from the signed-in
+   *  budget, so sockets that say nothing cannot hold paired controllers off. */
+  unauthed: number
+  unauthedPerAddress: number
+  /** Open sockets from one address, before the TLS handshake ends as after. */
+  perAddress: number
   inFlight: number
   firstFrameMs: number
   /** How long the Host has to answer an `auth` or a `redeem` (second pass RR-6). */
@@ -31,6 +38,9 @@ export interface GatewayLimits {
 
 export const GATEWAY_LIMITS: GatewayLimits = {
   connections: 16,
+  unauthed: 8,
+  unauthedPerAddress: 2,
+  perAddress: 8,
   inFlight: 32,
   firstFrameMs: 10_000,
   answerMs: 30_000,
@@ -215,7 +225,11 @@ export async function startGateway(o: {
     switch (f.t) {
       case 'authed':
         if (c.state !== 'authing') return
+        if (f.code === 'RUNTIME_BUSY') return refuse(c, 'RUNTIME_BUSY', 'this pairing already has as many connections open as it may')
         if (!f.ok || !f.hello) return refuse(c, 'RUNTIME_AUTH_FAILED', 'this token is not paired with this Runtime')
+        // The signed-in budget counts signed-in connections only (security audit SEC-2).
+        if ([...conns.values()].filter((x) => x.state === 'ready').length >= lim.connections)
+          return refuse(c, 'RUNTIME_BUSY', `at most ${lim.connections} controllers at once`)
         c.state = 'ready'
         return sendTo(c, f.hello)
       case 'redeemed':
@@ -319,8 +333,11 @@ export async function startGateway(o: {
         }
       })
     }
-    if (conns.size >= lim.connections) {
-      c.out.control(`${JSON.stringify({ t: 'error', code: 'RUNTIME_BUSY', message: `at most ${lim.connections} controllers at once` })}\n`)
+    // Not signed in yet: its own budget, in all and per address (security audit SEC-2), not the signed-in one.
+    const from = sock.remoteAddress ?? '?'
+    const unauthed = [...conns.values()].filter((x) => x.state !== 'ready' && x.state !== 'closing')
+    if (unauthed.length >= lim.unauthed || unauthed.filter((x) => (x.sock.remoteAddress ?? '?') === from).length >= lim.unauthedPerAddress) {
+      c.out.control(`${JSON.stringify({ t: 'error', code: 'RUNTIME_BUSY', message: 'too many connections are signing in at once; try again shortly' })}\n`)
       sock.end()
       setTimeout(() => sock.destroy(), 2000).unref()
       return
@@ -356,7 +373,20 @@ export async function startGateway(o: {
   })
   server.on('tlsClientError', () => {})
   server.maxConnections = lim.connections * 4
+  /** Open sockets per address, for `perAddress`. */
+  const perAddress = new Map<string, number>()
   server.on('connection', (raw) => {
+    const addr = raw.remoteAddress ?? '?'
+    if ((perAddress.get(addr) ?? 0) >= lim.perAddress) {
+      raw.destroy()
+      return
+    }
+    perAddress.set(addr, (perAddress.get(addr) ?? 0) + 1)
+    raw.once('close', () => {
+      const n = (perAddress.get(addr) ?? 1) - 1
+      if (n <= 0) perAddress.delete(addr)
+      else perAddress.set(addr, n)
+    })
     // An address whose attempts are all over a minute old is forgotten (Phase 3 minor), so a stream of addresses that
     // each try once does not grow the record for the Gateway's whole life.
     for (const [addr, times] of redeems) if (times.every((t) => now() - t >= 60_000)) redeems.delete(addr)

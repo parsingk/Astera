@@ -122,12 +122,35 @@ describe('startGateway (remote runtime design §2.3, §3.1, §3.2)', () => {
     await expect(l.call('jobs-list', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
     expect(g.seen.filter((f) => f.t === 'call')).toHaveLength(2)
   })
-  it('refuses a connection over the connection budget with RUNTIME_BUSY', async () => {
+  it('refuses a sign-in over the signed-in budget with RUNTIME_BUSY', async () => {
     const g = await start({ connections: 1 })
     const first = await g.connect()
     await first.auth('good-token', {})
     const second = await g.connect()
-    expect(await second.closed).toMatchObject({ code: 'RUNTIME_BUSY' })
+    await expect(second.auth('good-token', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
+  })
+  // Security audit SEC-2: connections that had not signed in took the 16 controller slots, so anyone who could reach the
+  // port held every paired controller off with sockets that said nothing, opened again each time they were closed.
+  it('connections that have not signed in do not take a signed-in slot', async () => {
+    const g = await start({ connections: 1, unauthedPerAddress: 8 })
+    const idle = [await g.connect(), await g.connect(), await g.connect()]
+    const mine = await g.connect()
+    await expect(mine.auth('good-token', {})).resolves.toMatchObject({ runtimeId: 'rt_test' })
+    expect(idle).toHaveLength(3)
+  })
+  it('an address holds at most unauthedPerAddress connections that have not signed in', async () => {
+    const g = await start({})
+    await g.connect()
+    await g.connect()
+    const third = await g.connect()
+    expect(await third.closed).toMatchObject({ code: 'RUNTIME_BUSY' })
+  })
+  it('passes on a busy answer from the Host as RUNTIME_BUSY', async () => {
+    const g = await start({}, (f, reply) => {
+      if (f.t === 'auth') reply({ t: 'authed', conn: f.conn, ok: false, code: 'RUNTIME_BUSY' })
+    })
+    const l = await g.connect()
+    await expect(l.auth('t', {})).rejects.toMatchObject({ code: 'RUNTIME_BUSY' })
   })
   it('closes a peer that never speaks, and frees its slot (Review Focus 5)', async () => {
     const g = await start({ connections: 1, firstFrameMs: 100 })
@@ -253,6 +276,19 @@ describe('the Gateway before the handshake (Phase 3 review)', () => {
       raw.once('close', () => resolve(Date.now() - t0))
     })
     expect(closedAt).toBeLessThan(2000)
+  })
+  it('an address holds at most perAddress open sockets, the handshake not yet done', async () => {
+    const g = await start({ perAddress: 3 })
+    const raws = Array.from({ length: 4 }, () => {
+      const s = net.connect(g.gw.port, '127.0.0.1')
+      s.on('error', () => {})
+      return s
+    })
+    const closed = await new Promise<number>((resolve) => {
+      raws.forEach((s, i) => s.once('close', () => resolve(i)))
+    })
+    expect(closed).toBe(3)
+    raws.forEach((s) => s.destroy())
   })
   it('leaves a connection that finished its handshake alone after that time', async () => {
     const g = await start({ firstFrameMs: 150 })

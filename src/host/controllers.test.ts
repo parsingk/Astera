@@ -29,6 +29,17 @@ describe('ControllerRegistry (remote runtime design §3.3, §4.4, §4.5)', () =>
     for (let i = 0; i < 5; i++) expect((await r.redeem(wrong, 'x')).ok).toBe(false)
     expect(await r.redeem(code, 'x')).toEqual({ ok: false, reason: 'burned' })
   })
+  // Security audit SEC-2: wrong guesses spend every live code's attempts (a guesser does not say which code it means),
+  // so someone on the network can burn the person's codes. That stays (§4.4); it is counted, so `runtime status` says so.
+  it('counts each code that wrong guesses burned, once', async () => {
+    const r = createControllerRegistry()
+    const { code } = r.createPairing({ permission: 'full-control' })
+    r.createPairing({ permission: 'read-only' })
+    const wrong = code.slice(0, 9) + (code[9] === 'A' ? 'B' : 'A')
+    expect(r.health().burnedCodes).toBe(0)
+    for (let i = 0; i < 7; i++) await r.redeem(wrong, 'x')
+    expect(r.health().burnedCodes).toBe(2)
+  })
   it('names the client as the pairing said, and cleans a name the redeemer sent', async () => {
     const r = createControllerRegistry()
     const named = await r.redeem(r.createPairing({ permission: 'read-only', name: 'office pc' }).code, 'other')

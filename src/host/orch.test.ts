@@ -4556,6 +4556,8 @@ describe('runtime-reload and runtime-status (remote runtime design §2.9)', () =
     const s = await orch.call({ cmd: 'runtime-status', args: {}, sessionId: '', from: { role: 'app', toOthers: () => {} } })
     expect(s.status).toBe(200)
     expect(g.reloads()).toBe(1)
+    // Security audit SEC-2: codes burned by wrong guesses are said where the person looks.
+    expect(s.body).toMatchObject({ health: { burnedCodes: 0 } })
   })
   it('refuses MCP and controllers, takes no request id, and is 501 on a Host without a Gateway', async () => {
     const orch = orchOver({ gateway: gateway().dep })

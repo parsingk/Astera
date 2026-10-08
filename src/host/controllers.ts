@@ -54,6 +54,8 @@ export interface ControllerRegistry {
   /** The record whose token hashes to this, compared in constant time; null for none. */
   authenticate(tokenHash: string): ControllerRecord | null
   bind(linkGen: number, conn: string, clientId: string): void
+  /** How many connections of this link generation are bound to this client. */
+  boundCount(linkGen: number, clientId: string): number
   /** Who a link connection is, from this registry's own binding and record (X1-08); null once unbound or revoked. */
   principalFor(linkGen: number, conn: string): ControllerPrincipal | null
   /** Whether a reply may still go to this connection: its binding still names this client and the client still exists. */
@@ -64,6 +66,8 @@ export interface ControllerRegistry {
   /** Deletes the record and every binding to it, and names the connections to close (design §3.3's order). */
   revoke(clientId: string): Promise<{ revoked: boolean; conns: Array<{ linkGen: number; conn: string }>; saveError?: string }>
   list(): Array<Omit<ControllerRecord, 'tokenHash'>>
+  /** What the person should know about pairing on this Host (security audit SEC-2): how many codes wrong guesses burned. */
+  health(): { burnedCodes: number }
 }
 
 const sameHash = (a: string, b: string): boolean => {
@@ -99,6 +103,8 @@ export function createControllerRegistry(
   }
   /** Pending pairing codes by hash: what a redeem needs, and the attempts wrong guesses have spent. */
   const codes = new Map<string, { expiresAt: number; attempts: number; permission: ControllerPermission; name?: string }>()
+  /** Codes wrong guesses used up, since this Host started. */
+  let burnedCodes = 0
   // A name reaches error text and the client list, so it is one printable line.
   const cleanName = (n: string): string => n.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 64)
   /** `${linkGen}\u0000${conn}` to clientId. */
@@ -144,7 +150,7 @@ export function createControllerRegistry(
         for (const [h, c] of codes) if (now() > c.expiresAt) codes.delete(h)
         // A wrong guess spends one attempt of every live code: the limit is per code, and a guesser does not say
         // which code it is guessing at.
-        for (const c of codes.values()) c.attempts++
+        for (const c of codes.values()) if (++c.attempts === CODE_ATTEMPTS) burnedCodes++
         return { ok: false, reason: 'unknown' }
       }
       codes.delete(hash)
@@ -189,6 +195,11 @@ export function createControllerRegistry(
     bind: (linkGen, conn, clientId) => {
       if (records.has(clientId)) bindings.set(bindKey(linkGen, conn), clientId)
     },
+    boundCount: (linkGen, clientId) => {
+      let n = 0
+      for (const [k, id] of bindings) if (id === clientId && k.startsWith(`${linkGen}\u0000`)) n++
+      return n
+    },
     principalFor: (linkGen, conn) => {
       const clientId = bindings.get(bindKey(linkGen, conn))
       const r = clientId === undefined ? undefined : records.get(clientId)
@@ -222,6 +233,7 @@ export function createControllerRegistry(
         }
       return { revoked, conns }
     },
-    list: () => [...records.values()].map(({ tokenHash: _hidden, ...rest }) => rest)
+    list: () => [...records.values()].map(({ tokenHash: _hidden, ...rest }) => rest),
+    health: () => ({ burnedCodes })
   }
 }

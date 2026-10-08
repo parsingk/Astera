@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { PassThrough, Writable } from 'node:stream'
-import { SUBS_PER_CONN, attachGatewayLink } from './gatewayLink'
+import { CONNS_PER_CLIENT, SUBS_PER_CONN, attachGatewayLink } from './gatewayLink'
 import { createControllerRegistry, sha256Base64url } from './controllers'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import { PtyRegistry, type RegistryPty } from './registry'
@@ -95,6 +95,20 @@ describe('attachGatewayLink (remote runtime design §2.4, §3.3)', () => {
     expect(s.frames).toMatchObject([{ t: 'authed', conn: 'c1', ok: true }])
   })
 
+  // Security audit SEC-2: one paired client, even read-only, could hold every signed-in slot with idle connections.
+  it(`a client already on CONNS_PER_CLIENT connections is answered busy`, async () => {
+    const s = await setup()
+    const c = await s.pairClient('read-only')
+    for (let i = 0; i <= CONNS_PER_CLIENT; i++) s.send({ t: 'auth', conn: `c${i}`, tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    const answers = s.frames.filter((f) => f.t === 'authed')
+    expect(answers.filter((f) => f.ok === true)).toHaveLength(CONNS_PER_CLIENT)
+    expect(answers[CONNS_PER_CLIENT]).toEqual({ t: 'authed', conn: `c${CONNS_PER_CLIENT}`, ok: false, code: 'RUNTIME_BUSY' })
+    s.send({ t: 'conn-closed', conn: 'c0' })
+    s.send({ t: 'auth', conn: 'again', tokenHash: sha256Base64url(c.token) })
+    await s.settle()
+    expect(s.frames.at(-1)).toMatchObject({ t: 'authed', conn: 'again', ok: true })
+  })
   it('runs a call as the bound principal only, whatever the frame claimed (Review Focus 1)', async () => {
     const s = await setup()
     const c = await s.pairClient('full-control')

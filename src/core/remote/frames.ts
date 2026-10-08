@@ -91,7 +91,8 @@ export type GatewayLinkFrame =
 
 /** Host to Gateway, over the link. */
 export type HostLinkFrame =
-  | { t: 'authed'; conn: string; ok: boolean; hello?: HelloFrame }
+  /** `code` RUNTIME_BUSY: the pairing is fine but already holds as many connections as it may (security audit SEC-2). */
+  | { t: 'authed'; conn: string; ok: boolean; hello?: HelloFrame; code?: 'RUNTIME_BUSY' }
   | { t: 'redeemed'; conn: string; ok: boolean; clientId?: string; token?: string; reason?: string }
   | { t: 'result'; conn: string; id: string; status: number; body: unknown; replayed?: true; observed?: true }
   | { t: 'close-conn'; conn: string; code: string }
@@ -286,7 +287,13 @@ export function parseLinkFrame(v: unknown, from: 'gateway' | 'host'): GatewayLin
   switch (v.t) {
     case 'authed':
       if (!conn || typeof v.ok !== 'boolean') return fail('bad authed')
-      return { t: 'authed', conn, ok: v.ok, ...(isObj(v.hello) ? { hello: v.hello as unknown as HelloFrame } : {}) }
+      return {
+        t: 'authed',
+        conn,
+        ok: v.ok,
+        ...(isObj(v.hello) ? { hello: v.hello as unknown as HelloFrame } : {}),
+        ...(v.code === 'RUNTIME_BUSY' ? { code: 'RUNTIME_BUSY' as const } : {})
+      }
     case 'redeemed':
       if (!conn || typeof v.ok !== 'boolean') return fail('bad redeemed')
       return {

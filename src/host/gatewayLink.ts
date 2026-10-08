@@ -22,6 +22,9 @@ import type { PtyEvent } from './ptyRing'
 
 /** The control lane's hard cap (§3.1, DC-2): past it the Gateway is not reading, and it is killed. */
 export const LINK_HARD_CAP = 8 << 20
+/** Connections one paired client may have signed in at once (security audit SEC-2): a CLI, an MCP server and the app
+ *  each hold one, with room for a few commands; past it, one client cannot take every slot the Gateway has. */
+export const CONNS_PER_CLIENT = 8
 /** Subscriptions one connection may hold (§3.1). */
 export const SUBS_PER_CONN = 64
 /** Output one pty stream may have waiting on the link (§3.1, N2). */
@@ -154,6 +157,7 @@ export function attachGatewayLink(o: {
         if (l) await l
         const r = o.controllers.authenticate(f.tokenHash)
         if (!r) return send({ t: 'authed', conn: f.conn, ok: false })
+        if (o.controllers.boundCount(o.linkGen, r.clientId) >= CONNS_PER_CLIENT) return send({ t: 'authed', conn: f.conn, ok: false, code: 'RUNTIME_BUSY' })
         o.controllers.bind(o.linkGen, f.conn, r.clientId)
         return send({ t: 'authed', conn: f.conn, ok: true, hello: { t: 'hello', ...o.hello(), permission: r.permission } })
       }

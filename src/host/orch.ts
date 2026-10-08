@@ -1749,7 +1749,10 @@ export function createHostOrch(a: {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
           if (!a.gateway) return { status: 501, body: { error: 'this Host does not run the Remote Gateway' } }
           if (cmd === 'runtime-reload') await a.gateway.reload({ now: true })
-          return { status: 200, body: { gateway: a.gateway.status(), clients: a.controllers?.list() ?? [] } }
+          return {
+            status: 200,
+            body: { gateway: a.gateway.status(), clients: a.controllers?.list() ?? [], ...(a.controllers ? { health: a.controllers.health() } : {}) }
+          }
         }
         if (cmd === 'pair-create' || cmd === 'clients-list' || cmd === 'clients-revoke') {
           if (from?.role !== 'app' && from?.role !== 'cli') return { status: 403, body: { error: `${cmd} is for this machine's app and CLI only` } }
