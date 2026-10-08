@@ -11,6 +11,7 @@ import path from 'node:path'
 import { readFileRetrying, renameRetrying } from '../renameRetry'
 import type { ExternalGitChange } from '../git/types'
 import type { SessionWorkUnit, TranscriptCursor } from './types'
+import { keepDamaged, readStoreFile, StoreUnread } from '../storeFile'
 
 /** 설계 §9 의 ProjectGitSnapshot — "Astera 가 마지막으로 알던 git 상태"(EG §4).
  *
@@ -138,20 +139,29 @@ export class WorkUnitStore {
     // Stamped before the read: taken after, a write landing between the two would be taken for the
     // file this store read, and refresh() would never adopt it.
     const stamp = await this.stamp(this.filePath)
-    try {
-      parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-        // No file is an empty store, also for a store that held something: an app switching back to
-        // writer (E2 §6) must not start from what it held before a Host took the file over and removed it.
-        this.state = { projects: {} }
-        this.seen = null
-        this.stale = false
-        return { recovered: false }
-      }
-      return this.recover()
+    // A file that could not be read is not damaged (audit U-1): an app becoming the writer reads it the instant an
+    // older Host may be renaming it, and taking EPERM for damage erased every open unit at the next write.
+    const r = await readStoreFile(this.filePath)
+    if (r.kind === 'missing') {
+      // No file is an empty store, also for a store that held something: an app switching back to
+      // writer (E2 §6) must not start from what it held before a Host took the file over and removed it.
+      this.state = { projects: {} }
+      this.seen = null
+      this.stale = false
+      this.unread = null
+      return { recovered: false }
     }
-    if (!isValid(parsed)) return this.recover()
+    if (r.kind === 'unreadable') {
+      this.unread = r.error
+      return { recovered: false }
+    }
+    this.unread = null
+    try {
+      parsed = JSON.parse(r.text)
+    } catch {
+      return this.recover(r.text)
+    }
+    if (!isValid(parsed)) return this.recover(r.text)
     migrate(parsed)
     this.state = parsed
     this.seen = stamp
@@ -217,8 +227,9 @@ export class WorkUnitStore {
   }
 
   /** copyFile 을 쓰는 이유: 내용을 읽지 못해서 온 경우(권한 오류)에도 원본을 물려 둘 수 있다 */
-  private async recover(): Promise<{ recovered: boolean }> {
-    await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+  private async recover(text: string): Promise<{ recovered: boolean }> {
+    // The bytes it read, never over an earlier copy (audit U-1).
+    await keepDamaged(this.filePath, text)
     this.state = { projects: {} }
     return { recovered: true }
   }
@@ -234,7 +245,34 @@ export class WorkUnitStore {
     return Object.keys(this.state.projects)
   }
 
+  /** What load could not read, kept until a write reads the file again (audit U-1); null when it was read. */
+  private unread: unknown = null
+
+  /** Before a write over a file load could not read: reads it now and adopts it; throws when it still cannot. */
+  private async readAgain(): Promise<void> {
+    const stamp = await this.stamp(this.filePath)
+    const r = await readStoreFile(this.filePath)
+    if (r.kind === 'unreadable') throw new StoreUnread(this.filePath, r.error)
+    this.unread = null
+    if (r.kind === 'missing') return
+    let parsed: unknown = null
+    try {
+      parsed = JSON.parse(r.text)
+    } catch {
+      /* damaged: kept aside below */
+    }
+    if (!isValid(parsed)) {
+      await this.recover(r.text)
+      return
+    }
+    migrate(parsed)
+    this.state = parsed
+    this.seen = stamp
+    this.stale = false
+  }
+
   set(projectPath: string, value: WorkUnitState): Promise<void> {
+    if (this.unread !== null) return this.readAgain().then(() => this.set(projectPath, value))
     this.state.projects[projectPath] = value
     this.writes += 1
     return this.save()

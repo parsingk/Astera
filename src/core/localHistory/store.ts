@@ -18,6 +18,8 @@ import {
   type HistoryEntry
 } from '../files/localHistory'
 import { gateRoot, type Probe } from '../sessions/pathProbe'
+import { keepDamaged, readStoreFile, StoreUnread } from '../storeFile'
+import { renameRetrying } from '../renameRetry'
 
 const INDEX_FILE = 'index.json'
 
@@ -161,20 +163,60 @@ export class LocalHistoryStore {
   /** The same convention as ProjectSettings and AccountRegistry: ENOENT means empty state, and parse
    *  or schema corruption means empty state plus `{ recovered: true }` after preserving a `.bak`. */
   async load(): Promise<{ recovered: boolean }> {
-    try {
-      const parsed = JSON.parse(await fs.readFile(this.indexPath, 'utf8'))
-      if (!isValidIndex(parsed)) throw new Error('invalid schema')
-      this.byProject = parsed
+    // An index that could not be read is not damaged (audit U-1): the next snapshot reads it again before writing.
+    const read = await readStoreFile(this.indexPath)
+    if (read.kind === 'unreadable') {
+      this.unread = read.error
       return { recovered: false }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.byProject = {}
-        return { recovered: false }
-      }
-      await fs.copyFile(this.indexPath, this.indexPath + '.bak').catch(() => {})
+    }
+    this.unread = null
+    if (read.kind === 'missing') {
+      this.byProject = {}
+      return { recovered: false }
+    }
+    let parsed: unknown = null
+    try {
+      parsed = JSON.parse(read.text)
+    } catch {
+      /* damaged: kept aside below */
+    }
+    if (!isValidIndex(parsed)) {
+      await keepDamaged(this.indexPath, read.text)
       this.byProject = {}
       return { recovered: true }
     }
+    this.byProject = parsed
+    await this.retire(Date.now())
+    return { recovered: false }
+  }
+
+  /** What load could not read, kept until a change reads the index again (audit U-1); null when it was read. */
+  private unread: unknown = null
+
+  private async ensureRead(): Promise<void> {
+    if (this.unread === null) return
+    await this.load()
+    if (this.unread !== null) throw new StoreUnread(this.indexPath, this.unread)
+  }
+
+  /** The retention policy for every project at load (audit U-9): it ran only when the same project deleted something
+   *  again, so a project nobody deleted in again kept its snapshots past 30 days for good. The index first, then the
+   *  folders, in snapshot()'s order and for its reasons. */
+  private async retire(now: number): Promise<void> {
+    const gone: Array<{ key: string; id: string }> = []
+    for (const [key, list] of Object.entries(this.byProject)) {
+      const evictions = selectEvictions(list, now)
+      if (evictions.length === 0) continue
+      this.byProject[key] = list.filter((e) => !evictions.includes(e.id))
+      for (const id of evictions) gone.push({ key, id })
+    }
+    if (gone.length === 0) return
+    try {
+      await this.save()
+    } catch {
+      return
+    }
+    for (const g of gone) await fs.rm(path.join(this.rootDir, projectKey(g.key), g.id), { recursive: true, force: true }).catch(() => {})
   }
 
   /** The delete history for projectPath. Filtered by the normalized path — filtering by projectKey
@@ -200,6 +242,7 @@ export class LocalHistoryStore {
     opts: { onEntry?: () => void } = {}
   ): Promise<HistoryEntry | null> {
     await gateRoot(targetPath, this.gate)
+    await this.ensureRead()
     const { size, entries } = await measure(targetPath, this.maxEntries)
     if (tooLarge(size) || entries > this.maxEntries) return null
     const key = this.adopt(projectPath)
@@ -350,10 +393,24 @@ export class LocalHistoryStore {
     )
   }
 
-  private async save(): Promise<void> {
-    await fs.mkdir(this.rootDir, { recursive: true })
-    const tmp = this.indexPath + '.tmp'
-    await fs.writeFile(tmp, JSON.stringify(this.byProject, null, 2), 'utf8')
-    await fs.rename(tmp, this.indexPath)
+  /** Saves one at a time, each from memory as it is when it starts, through its own temp file (audit U-9): a snapshot
+   *  and a discard saving together shared one `.tmp`, and the second rename failed. */
+  private saving: Promise<void> = Promise.resolve()
+  private save(): Promise<void> {
+    const run = async (): Promise<void> => {
+      await fs.mkdir(this.rootDir, { recursive: true })
+      const tmp = `${this.indexPath}.${process.pid}.${++this.saves}.tmp`
+      await fs.writeFile(tmp, JSON.stringify(this.byProject, null, 2), 'utf8')
+      try {
+        await renameRetrying(tmp, this.indexPath)
+      } catch (e) {
+        await fs.rm(tmp, { force: true }).catch(() => {})
+        throw e
+      }
+    }
+    const next = this.saving.then(run, run)
+    this.saving = next.catch(() => {})
+    return next
   }
+  private saves = 0
 }

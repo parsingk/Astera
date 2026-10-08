@@ -5,6 +5,16 @@ import path from 'node:path'
 import type { ProjectUnderstanding } from './types'
 import { UnderstandingStore } from './store'
 
+/** Audit U-1: makes the store's file answer EBUSY to every read until the returned function is called, the way a file
+ *  another process is renaming answers on win32. */
+const busyWhileLoading = (target: string): (() => void) => {
+  const real = fs.readFile.bind(fs)
+  const spy = vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+    String(p) === target ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+  return () => spy.mockRestore()
+}
+
+
 let dir: string
 let file: string
 
@@ -20,6 +30,20 @@ afterEach(async () => {
 })
 
 describe('UnderstandingStore', () => {
+  it('a file it could not read is not written over: the next write reads it again first, and keeps what it held', async () => {
+    const a = new UnderstandingStore(file)
+    await a.load()
+    await a.set('C:/kept', sample)
+    const b = new UnderstandingStore(file)
+    const release = busyWhileLoading(file)
+    expect((await b.load()).recovered).toBe(false)
+    release()
+    await b.set('C:/new', sample)
+    const c = new UnderstandingStore(file)
+    await c.load()
+    expect(c.get('C:/kept')).toEqual(sample)
+    expect(c.get('C:/new')).toEqual(sample)
+  })
   it('파일이 없으면 빈 상태로 시작한다', async () => {
     const s = new UnderstandingStore(file)
     expect((await s.load()).recovered).toBe(false)
@@ -106,7 +130,10 @@ describe('UnderstandingStore', () => {
     // ENOENT 가 아니라는 점은 어디서나 같고, 이 테스트가 보는 것이 바로 그 구분이다
     await fs.mkdir(file)
     const s = new UnderstandingStore(file)
-    expect((await s.load()).recovered).toBe(true)
+    // Not damage either (audit U-1): nothing was read, so nothing is kept aside or healed, and a write is refused.
+    expect((await s.load()).recovered).toBe(false)
+    await expect(s.set('C:/p', sample)).rejects.toThrow(/could not be read/)
+    expect((await fs.stat(file)).isDirectory()).toBe(true)
   })
 
   it('rides out a rename refused while another process reads the file (EPERM on win32)', async () => {

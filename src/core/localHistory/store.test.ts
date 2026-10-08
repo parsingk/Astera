@@ -22,7 +22,54 @@ async function tmp(prefix: string): Promise<string> {
   return d
 }
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(dirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })))
+})
+
+// Audit U-9: the 30-day and 200 MB retention ran only when the same project deleted something again, so a project
+// nobody deleted in again kept its snapshots for good. A load applies it to every project.
+describe('LocalHistoryStore retention at load', () => {
+  it('drops a project’s snapshots past the age limit when it loads, and their folders', async () => {
+    const root = await tmp('astera-lh-age-')
+    const project = path.join(root, 'proj')
+    await fs.mkdir(project)
+    await fs.writeFile(path.join(project, 'a.txt'), 'a', 'utf8')
+    const store = new LocalHistoryStore(path.join(root, 'local-history'))
+    await store.load()
+    const entry = await store.snapshot(project, path.join(project, 'a.txt'), false)
+    expect(entry).not.toBeNull()
+    const indexFile = (await fs.readdir(path.join(root, 'local-history'))).find((n) => n.endsWith('.json')) as string
+    const indexPath = path.join(root, 'local-history', indexFile)
+    const index = JSON.parse(await fs.readFile(indexPath, 'utf8')) as Record<string, Array<{ deletedAt: number | string }>>
+    for (const list of Object.values(index))
+      for (const e of list) e.deletedAt = typeof e.deletedAt === 'number' ? Date.now() - MAX_AGE_MS - 60_000 : new Date(Date.now() - MAX_AGE_MS - 60_000).toISOString()
+    await fs.writeFile(indexPath, JSON.stringify(index), 'utf8')
+    const again = new LocalHistoryStore(path.join(root, 'local-history'))
+    await again.load()
+    expect(again.list(project)).toEqual([])
+    await expect(fs.stat(path.join(root, 'local-history', projectKey(project), (entry as { id: string }).id))).rejects.toThrow()
+  })
+  // Audit U-1: an index it could not read was taken for damage, and the next snapshot wrote a fresh one over it.
+  it('an index it could not read is not written over', async () => {
+    const root = await tmp('astera-lh-unread-')
+    const project = path.join(root, 'proj')
+    await fs.mkdir(project)
+    await fs.writeFile(path.join(project, 'a.txt'), 'a', 'utf8')
+    await fs.writeFile(path.join(project, 'b.txt'), 'b', 'utf8')
+    const first = new LocalHistoryStore(path.join(root, 'local-history'))
+    await first.load()
+    await first.snapshot(project, path.join(project, 'a.txt'), false)
+    const real = fs.readFile.bind(fs)
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      String(p).endsWith('.json') ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+    const second = new LocalHistoryStore(path.join(root, 'local-history'))
+    expect((await second.load()).recovered).toBe(false)
+    spy.mockRestore()
+    await second.snapshot(project, path.join(project, 'b.txt'), false)
+    const third = new LocalHistoryStore(path.join(root, 'local-history'))
+    await third.load()
+    expect(third.list(project)).toHaveLength(2)
+  })
 })
 
 /** symlink 생성 실패가 권한 문제(EPERM/EACCES)면 실패가 아니라 스킵으로 처리한다 —
@@ -352,11 +399,12 @@ describe('LocalHistoryStore.snapshot', () => {
     const key = Object.keys(idx)[0]
     idx[key][0].deletedAt = Date.now() - MAX_AGE_MS - 1000
     await fs.writeFile(idxPath, JSON.stringify(idx), 'utf8')
-    await store.load() // 방금 손으로 고친 index.json을 다시 읽어 인메모리에 반영
-
     const projHash = (await fs.readdir(historyDir)).find((n) => n !== 'index.json')!
     const oldSnapDir = path.join(historyDir, projHash, oldEntry!.id)
     await expect(fs.access(oldSnapDir)).resolves.toBeUndefined() // 축출 전에는 존재
+    // Audit U-9: the load that reads it applies the retention now, not only the next snapshot.
+    await store.load()
+    await expect(fs.access(oldSnapDir)).rejects.toThrow()
 
     const newTarget = path.join(projDir, 'new.txt')
     await fs.writeFile(newTarget, 'new', 'utf8')

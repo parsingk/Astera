@@ -4,6 +4,16 @@ import os from 'node:os'
 import path from 'node:path'
 import { WorkUnitStore, type WorkUnitState } from './store'
 
+/** Audit U-1: makes the store's file answer EBUSY to every read until the returned function is called, the way a file
+ *  another process is renaming answers on win32. */
+const busyWhileLoading = (target: string): (() => void) => {
+  const real = fs.readFile.bind(fs)
+  const spy = vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+    String(p) === target ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+  return () => spy.mockRestore()
+}
+
+
 let dir: string
 let file: string
 
@@ -41,6 +51,20 @@ afterEach(async () => {
 })
 
 describe('WorkUnitStore', () => {
+  it('a file it could not read is not written over: the next write reads it again first, and keeps what it held', async () => {
+    const a = new WorkUnitStore(file)
+    await a.load()
+    await a.set('kept', sample)
+    const b = new WorkUnitStore(file)
+    const release = busyWhileLoading(file)
+    expect((await b.load()).recovered).toBe(false)
+    release()
+    await b.set('new', sample)
+    const c = new WorkUnitStore(file)
+    await c.load()
+    expect(c.get('kept')).toEqual(sample)
+    expect(c.get('new')).toEqual(sample)
+  })
   it('파일이 없으면 빈 상태로 시작한다', async () => {
     const s = new WorkUnitStore(file)
     expect((await s.load()).recovered).toBe(false)
@@ -134,7 +158,9 @@ describe('WorkUnitStore', () => {
   it('읽을 수 없는 파일은 "아직 없음"이 아니다 — 다음 쓰기가 덮어쓰면 안 된다', async () => {
     await fs.mkdir(file) // 파일 자리에 디렉터리. readFile 이 던지는 코드는 플랫폼마다 다르지만
     const s = new WorkUnitStore(file) // ENOENT 가 아니라는 점은 어디서나 같다
-    expect((await s.load()).recovered).toBe(true)
+    // Not damage either (audit U-1): nothing was read, so nothing is kept aside or healed, and a write is refused.
+    expect((await s.load()).recovered).toBe(false)
+    await expect(s.set('D:\\p', sample)).rejects.toThrow(/could not be read/)
   })
 
   it('쓰기가 한 번 실패해도 다음 쓰기는 진행된다 — 큐가 얼어붙지 않는다', async () => {

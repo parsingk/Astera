@@ -1,9 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { HandoffStore, HANDOFF_KEEP_MAX } from './store'
 import type { Handoff } from '../../core/handoff/types'
+
+/** Audit U-1: makes the store's file answer EBUSY to every read until the returned function is called, the way a file
+ *  another process is renaming answers on win32. */
+const busyWhileLoading = (target: string): (() => void) => {
+  const real = fs.readFile.bind(fs)
+  const spy = vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+    String(p) === target ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+  return () => spy.mockRestore()
+}
+
 
 let dir: string
 let file: string
@@ -32,6 +42,21 @@ const memo = (sessionId: string, createdAt = '2026-09-08T09:00:00.000Z'): Handof
 })
 
 describe('HandoffStore', () => {
+  it('a file it could not read is not written over: a save reads it again first, and keeps the memos it held', async () => {
+    const a = new HandoffStore(file)
+    await a.load()
+    await a.save(memo('s-kept'))
+    const b = new HandoffStore(file)
+    const release = busyWhileLoading(file)
+    expect((await b.load()).recovered).toBe(false)
+    expect(b.lookup('s-kept')).toEqual({ state: 'unknown' })
+    release()
+    await b.save(memo('s-new'))
+    const c = new HandoffStore(file)
+    await c.load()
+    expect(c.lookup('s-kept').state).toBe('found')
+    expect(c.lookup('s-new').state).toBe('found')
+  })
   it('before load, every lookup is unknown', () => {
     const s = new HandoffStore(file)
     expect(s.lookup('s-1')).toEqual({ state: 'unknown' })

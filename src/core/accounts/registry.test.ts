@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -349,5 +349,39 @@ describe('AccountRegistry', () => {
       await registryFor(file).load()
       expect(await fs.readFile(file, 'utf8')).toBe(original)
     })
+  })
+})
+
+// Audit U-1 and U-12: an accounts.json it could not read (a rename under way, on win32) was taken for damage, and the next
+// add wrote a list of one over it; a save refused by a rename left the account in memory though the file never got it.
+describe('AccountRegistry when its file is busy', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('a file it could not read is not written over: the next change reads it again first', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-acc-busy-'))
+    const file = path.join(dir, 'accounts.json')
+    const a = new AccountRegistry(file, path.join(dir, 'root'))
+    await a.load()
+    await a.create({ label: 'kept' })
+    const real = fs.readFile.bind(fs)
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      String(p) === file ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+    const b = new AccountRegistry(file, path.join(dir, 'root'))
+    expect((await b.load()).recovered).toBe(false)
+    spy.mockRestore()
+    await b.create({ label: 'new' })
+    const c = new AccountRegistry(file, path.join(dir, 'root'))
+    await c.load()
+    expect(c.list().map((x) => x.label).sort()).toEqual(['kept', 'new'])
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+  it('an account whose save failed is not kept in memory', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-acc-save-'))
+    const r = new AccountRegistry(path.join(dir, 'accounts.json'), path.join(dir, 'root'))
+    await r.load()
+    vi.spyOn(fs, 'rename').mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }))
+    await expect(r.create({ label: 'lost' })).rejects.toThrow()
+    expect(r.list()).toEqual([])
+    vi.restoreAllMocks()
+    await fs.rm(dir, { recursive: true, force: true })
   })
 })

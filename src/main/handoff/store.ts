@@ -11,6 +11,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Handoff, HandoffLookup } from '../../core/handoff/types'
+import { keepDamaged, readStoreFile, StoreUnread } from '../../core/storeFile'
 
 /** Sessions kept, newest first by createdAt. Two hundred is months of ordinary use; the file stays
  *  small (a memo is bounded by HANDOFF_DOCUMENT_MAX) and nothing ever reads a memo for a session
@@ -73,26 +74,37 @@ export class HandoffStore {
   }
 
   async load(): Promise<{ recovered: boolean }> {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.known = true
-        return { recovered: false }
-      }
-      return this.recover()
+    // A file that could not be read is not damaged (audit U-1): it stays unknown, and the next save reads it again
+    // before writing, so its memos are never replaced by one.
+    const r = await readStoreFile(this.filePath)
+    if (r.kind === 'missing') {
+      this.known = true
+      this.unread = null
+      return { recovered: false }
     }
-    if (!isValid(parsed)) return this.recover()
+    if (r.kind === 'unreadable') {
+      this.unread = r.error
+      return { recovered: false }
+    }
+    this.unread = null
+    let parsed: unknown = null
+    try {
+      parsed = JSON.parse(r.text)
+    } catch {
+      return this.recover(r.text)
+    }
+    if (!isValid(parsed)) return this.recover(r.text)
     this.state = parsed
     this.known = true
     return { recovered: false }
   }
 
-  /** copyFile rather than rename, so a file we could not even read (a permission error) is still
-   *  kept aside for a person to look at. */
-  private async recover(): Promise<{ recovered: boolean }> {
-    await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+  /** What load could not read, kept until a save reads the file again (audit U-1); null when it was read. */
+  private unread: unknown = null
+
+  /** The bytes it read, kept aside and never over an earlier copy (audit U-1). */
+  private async recover(text: string): Promise<{ recovered: boolean }> {
+    await keepDamaged(this.filePath, text)
     this.state = { version: 1, memos: {} }
     this.known = false
     return { recovered: true }
@@ -110,6 +122,10 @@ export class HandoffStore {
    *  saves in flight would otherwise each build on the state before the other. */
   save(memo: Handoff): Promise<void> {
     const run = async (): Promise<void> => {
+      if (this.unread !== null) {
+        await this.load()
+        if (this.unread !== null) throw new StoreUnread(this.filePath, this.unread)
+      }
       const merged = { ...this.state.memos, [memo.sessionId]: memo }
       const kept = Object.values(merged)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))

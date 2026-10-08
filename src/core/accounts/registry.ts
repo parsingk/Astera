@@ -8,6 +8,8 @@ import { makeDescriptors, type ProviderDescriptor } from '../providers/descripto
 import { DEFAULT_ACCOUNT_PLACEHOLDER_LABEL } from './detect'
 import { nextAccountColor } from './colors'
 import { isLoggedIn } from './loginCheck'
+import { keepDamaged, readStoreFile, StoreUnread } from '../storeFile'
+import { renameRetrying } from '../renameRetry'
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
 
@@ -65,8 +67,17 @@ export class AccountRegistry {
   }
 
   async load(): Promise<{ recovered: boolean }> {
+    // A file that could not be read is not damaged (audit U-1): it was taken for damage, the list started empty, and the
+    // next add wrote a list of one over every account. It is marked unread, and the next change reads it again first.
+    const read = await readStoreFile(this.filePath)
+    if (read.kind === 'unreadable') {
+      this.unread = read.error
+      return { recovered: false }
+    }
+    this.unread = null
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
+      if (read.kind === 'missing') throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      const parsed = JSON.parse(read.text)
       // If even one element is missing a required field such as configDir, a spawn could go out with
       // CLAUDE_CONFIG_DIR=undefined and contaminate an account, so a single misshaped element makes the whole
       // file corrupt.
@@ -95,8 +106,9 @@ export class AccountRegistry {
         return { recovered: false }
       }
       // Preserve the corrupt copy, then start from an empty list. The exclusions go with it on purpose:
-      // with no accounts left, detection finding those directories again is the way back.
-      await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+      // with no accounts left, detection finding those directories again is the way back. The bytes read, never
+      // over an earlier copy (audit U-1).
+      if (read.kind === 'text') await keepDamaged(this.filePath, read.text)
       this.accounts = []
       this.dismissed = []
       return { recovered: true }
@@ -113,7 +125,33 @@ export class AccountRegistry {
     return account
   }
 
+  /** What load could not read, kept until a change reads the file again (audit U-1); null when it was read. */
+  private unread: unknown = null
+
+  /** Before a change over a file load could not read: reads it again, and refuses the change when it still cannot. */
+  private async ensureRead(): Promise<void> {
+    if (this.unread === null) return
+    await this.load()
+    if (this.unread !== null) throw new StoreUnread(this.filePath, this.unread)
+  }
+
+  /** Runs a change, and puts memory back when its save fails (audit U-12): the account stayed in the list though the
+   *  file never got it, and adding it again made a second folder. */
+  private async changing<T>(change: () => T): Promise<T> {
+    const before = { accounts: this.accounts.map((a) => ({ ...a })), dismissed: [...this.dismissed] }
+    const out = change()
+    try {
+      await this.save()
+    } catch (e) {
+      this.accounts = before.accounts
+      this.dismissed = before.dismissed
+      throw e
+    }
+    return out
+  }
+
   async create(input: { label: string; color?: string; provider?: Provider }): Promise<Account> {
+    await this.ensureRead()
     const provider = providerOf(input)
     const root = this.roots[provider]
     const configDir = await this.uniqueDir(root, slugify(input.label))
@@ -122,6 +160,7 @@ export class AccountRegistry {
   }
 
   async import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account> {
+    await this.ensureRead()
     const stat = await fs.stat(input.configDir) // throws when it is missing
     if (!stat.isDirectory()) throw new Error(`not a directory: ${input.configDir}`)
     // A folder already registered is that account, not a second one. Checked after the await and right
@@ -134,11 +173,13 @@ export class AccountRegistry {
   }
 
   async remove(id: string): Promise<void> {
+    await this.ensureRead()
     const account = this.get(id) // verifies it exists
-    this.accounts = this.accounts.filter((a) => a.id !== id)
-    const norm = comparablePath(account.configDir)
-    if (!this.dismissed.some((d) => comparablePath(d) === norm)) this.dismissed.push(account.configDir)
-    await this.save()
+    await this.changing(() => {
+      this.accounts = this.accounts.filter((a) => a.id !== id)
+      const norm = comparablePath(account.configDir)
+      if (!this.dismissed.some((d) => comparablePath(d) === norm)) this.dismissed.push(account.configDir)
+    })
   }
 
   /** Gives a fresh colour to every account whose colour an earlier one already holds, and answers whether
@@ -173,6 +214,7 @@ export class AccountRegistry {
   async syncPlaceholderLabels(
     resolveEmail: (account: Account) => Promise<string | null>
   ): Promise<void> {
+    await this.ensureRead()
     let changed = false
     for (const account of this.accounts) {
       if (account.label !== DEFAULT_ACCOUNT_PLACEHOLDER_LABEL) continue
@@ -207,12 +249,13 @@ export class AccountRegistry {
       color: color ?? nextAccountColor(this.accounts.map((a) => a.color)),
       createdAt: new Date().toISOString()
     }
-    this.accounts.push(account)
-    // Registering this directory again overrides the earlier unregister — a registered account must never
-    // sit in the exclusion list, or re-adding it by hand would leave detection permanently blind to it
-    this.dismissed = this.dismissed.filter((d) => comparablePath(d) !== comparablePath(configDir))
-    await this.save()
-    return account
+    return this.changing(() => {
+      this.accounts.push(account)
+      // Registering this directory again overrides the earlier unregister — a registered account must never
+      // sit in the exclusion list, or re-adding it by hand would leave detection permanently blind to it
+      this.dismissed = this.dismissed.filter((d) => comparablePath(d) !== comparablePath(configDir))
+      return account
+    })
   }
 
   private async uniqueDir(root: string, slug: string): Promise<string> {
@@ -228,13 +271,20 @@ export class AccountRegistry {
 
   private async save(): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = this.filePath + '.tmp'
+    // Its own temp file and the rename retried (audit U-12): the Host reads accounts.json at every spawn, and on win32
+    // a rename over a file being read is refused for that moment.
+    const tmp = `${this.filePath}.${process.pid}.tmp`
     await fs.writeFile(
       tmp,
       JSON.stringify({ version: 1, accounts: this.accounts, dismissedDirs: this.dismissed }, null, 2),
       'utf8'
     )
-    await fs.rename(tmp, this.filePath)
+    try {
+      await renameRetrying(tmp, this.filePath)
+    } catch (e) {
+      await fs.rm(tmp, { force: true }).catch(() => {})
+      throw e
+    }
     this.onChanged?.(this.list())
   }
 }

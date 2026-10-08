@@ -11,6 +11,7 @@ import type { ProjectUnderstanding } from './types'
 // refuses exactly what this store does.
 import { isValid, type StoreShape } from './read'
 import { renameRetrying } from '../renameRetry'
+import { keepDamaged, readStoreFile, StoreUnread } from '../storeFile'
 
 export class UnderstandingStore {
   private state: StoreShape = { projects: {} }
@@ -34,19 +35,53 @@ export class UnderstandingStore {
     // Stamped before the read: taken after, a write landing between the two would be taken for the file
     // this store read, and refresh() would never adopt it.
     const stamp = await this.stamp(this.filePath)
-    try {
-      parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
-    } catch (e) {
-      // **ENOENT 만 "아직 없다" 다.** 나머지 읽기 오류(EACCES·EPERM·EISDIR)를 같이 삼키면, 읽지
-      // 못한 기존 파일을 다음 set() 이 조용히 덮어쓴다 — 사용자에게 아무 신호 없이 데이터가 사라진다.
-      // OrchestrationStore.load 가 같은 이유로 이 갈래를 가른다.
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false, unstuck: [], interrupted: [] }
-      return this.recover()
+    // **ENOENT 만 "아직 없다" 다**, and a file that could not be read is not damaged either (audit U-1): it was
+    // taken for damage, the store started empty, and the next set() erased every project's records. It is marked
+    // unread instead, and the next write reads it again first (readAgain).
+    const r = await readStoreFile(this.filePath)
+    if (r.kind === 'missing') {
+      this.unread = null
+      return { recovered: false, unstuck: [], interrupted: [] }
     }
-    if (!isValid(parsed)) return this.recover()
+    if (r.kind === 'unreadable') {
+      this.unread = r.error
+      return { recovered: false, unstuck: [], interrupted: [] }
+    }
+    this.unread = null
+    try {
+      parsed = JSON.parse(r.text)
+    } catch {
+      return this.recover(r.text)
+    }
+    if (!isValid(parsed)) return this.recover(r.text)
     this.state = parsed
     this.seen = stamp
     return { recovered: false, ...this.unstick() }
+  }
+
+  /** What load could not read, kept until a write reads the file again (audit U-1); null when it was read. */
+  private unread: unknown = null
+
+  /** Before a write over a file load could not read: reads it now, and adopts it; throws when it still cannot be
+   *  read, so nothing is written over it. */
+  private async readAgain(): Promise<void> {
+    const stamp = await this.stamp(this.filePath)
+    const r = await readStoreFile(this.filePath)
+    if (r.kind === 'unreadable') throw new StoreUnread(this.filePath, r.error)
+    this.unread = null
+    if (r.kind === 'missing') return
+    let parsed: unknown = null
+    try {
+      parsed = JSON.parse(r.text)
+    } catch {
+      /* damaged: kept aside below */
+    }
+    if (!isValid(parsed)) {
+      await this.recover(r.text)
+      return
+    }
+    this.state = parsed
+    this.seen = stamp
   }
 
   /** Reads the file again **only when another process wrote it** since this store last loaded or saved
@@ -95,19 +130,22 @@ export class UnderstandingStore {
   }
 
   set(projectPath: string, value: ProjectUnderstanding): Promise<void> {
+    if (this.unread !== null) return this.readAgain().then(() => this.set(projectPath, value))
     this.state.projects[projectPath] = value
     this.writes += 1
     return this.save()
   }
 
   remove(projectPath: string): Promise<void> {
+    if (this.unread !== null) return this.readAgain().then(() => this.remove(projectPath))
     delete this.state.projects[projectPath]
     this.writes += 1
     return this.save()
   }
 
   private save(): Promise<void> {
-    const snapshot = JSON.stringify(this.state, null, 2)
+    // Compact (audit U-3): the file is rewritten whole on every change, and indenting it made it a third larger.
+    const snapshot = JSON.stringify(this.state)
     const run = async (): Promise<void> => {
       // Its own temp file (E1 §2): the Host and an app can both hold a store over this file, and a shared
       // `.tmp` would let one process rename the other's half-written snapshot into place.
@@ -148,8 +186,9 @@ export class UnderstandingStore {
    *  참조가 남고, 그것은 처음부터 다시 하는 것보다 나쁜 상태다.
    *
    *  copyFile 을 쓰는 이유: 내용을 읽지 못해서 온 경우(권한 오류)에도 원본을 물려 둘 수 있다. */
-  private async recover(): Promise<{ recovered: boolean; unstuck: string[]; interrupted: string[] }> {
-    await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+  private async recover(text: string): Promise<{ recovered: boolean; unstuck: string[]; interrupted: string[] }> {
+    // The bytes it read, never over an earlier copy (audit U-1).
+    await keepDamaged(this.filePath, text)
     this.state = { projects: {} }
     return { recovered: true, unstuck: [], interrupted: [] }
   }
