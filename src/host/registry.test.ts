@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, type RegistryPty } from './registry'
+import { PtyRegistry, SCROLLBACK_CHARS, DEAD_ENTRIES_KEPT, EXITED_RETAIN_MS, EXITED_RINGS_MAX, EXITED_RING_BYTES_MAX, type RegistryPty } from './registry'
 import type { PtyMeta } from '../core/host/protocol'
+import { RING_EVENT_COST } from './ptyRing'
 
 const meta = (over: Partial<PtyMeta> = {}): PtyMeta => ({ kind: 'terminal', id: 'trm_1', restore: { projectPath: 'D:/p' }, ...over })
 
@@ -235,22 +236,29 @@ describe('PtyRegistry', () => {
     expect(h.r.list()[0].meta).toBeNull()
   })
 
+  // The ring replaced the tail (remote runtime design §3.7): it keeps whole events, each costing its text plus
+  // RING_EVENT_COST, and drops the oldest once over the bound.
   it('keeps the newest output and drops the oldest once the buffer is full', () => {
     const p = fakePty()
-    const h = registry({ pty: p, scrollback: 10 })
+    const h = registry({ pty: p, scrollback: 2 * (7 + RING_EVENT_COST) - 1 })
     h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
     p.emit('abcdefg')
     p.emit('hijklmn')
-    expect(h.r.buffer('p1')).toBe('efghijklmn')
-    expect(h.r.buffer('p1')).toHaveLength(10)
+    expect(h.r.buffer('p1')).toBe('hijklmn')
+    const q = fakePty()
+    const roomy = registry({ pty: q, scrollback: 2 * (7 + RING_EVENT_COST) })
+    roomy.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    q.emit('abcdefg')
+    q.emit('hijklmn')
+    expect(roomy.r.buffer('p1')).toBe('abcdefghijklmn')
   })
 
-  it('survives a single chunk larger than the whole buffer', () => {
+  it('keeps a single chunk larger than the whole buffer whole: output nobody has seen is not cut', () => {
     const p = fakePty()
     const h = registry({ pty: p, scrollback: 5 })
     h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
     p.emit('0123456789')
-    expect(h.r.buffer('p1')).toBe('56789')
+    expect(h.r.buffer('p1')).toBe('0123456789')
   })
 
   // The Host outlives the app, and a Run finishing every minute would otherwise leave a quarter of a
@@ -302,12 +310,13 @@ describe('PtyRegistry', () => {
     expect(logs.some((m) => m.includes('p1') && m.includes('AttachConsole'))).toBe(true)
   })
 
-  it('a scrollback of zero keeps almost nothing, rather than turning the cap off', () => {
+  it('a scrollback of zero keeps only the newest event, rather than turning the cap off', () => {
     const p = fakePty()
     const h = registry({ pty: p, scrollback: 0 })
     h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
-    p.emit('0123456789')
-    expect(h.r.buffer('p1').length).toBeLessThanOrEqual(1)
+    p.emit('01234')
+    p.emit('56789')
+    expect(h.r.buffer('p1')).toBe('56789')
   })
 
   it('reports data and exit to its subscriber, with the id', () => {
@@ -686,5 +695,127 @@ describe('PtyRegistry.onMeta (Slack in the Host, P7)', () => {
     off()
     r.note('p1', { x: 2 })
     expect(heard).toEqual(['p1', 'p1'])
+  })
+})
+
+// Remote runtime design §3.7 (N1, X1-02): every pty keeps a ring of seq'd events and a live terminal, and an exited one
+// is still readable for 10 minutes within the exited budget.
+describe('PtyRegistry ring, live terminal and replay (Phase 8)', () => {
+  const made = (o: { now?: () => number; bootId?: string } = {}) => {
+    const ptys: Array<ReturnType<typeof fakePty>> = []
+    const r = new PtyRegistry({
+      spawn: () => {
+        const p = fakePty()
+        ptys.push(p)
+        return p
+      },
+      log: () => {},
+      now: o.now,
+      bootId: o.bootId ?? 'boot-a'
+    })
+    return { r, ptys, open: (id: string) => (r.open({ id, file: 'sh', args: [], opts }), ptys[ptys.length - 1]) }
+  }
+
+  it('output, resize and exit are ring events in order, and onEvent hears each', () => {
+    const { r, open } = made()
+    const heard: string[] = []
+    r.onEvent((id, e) => heard.push(`${id}:${e.seq}:${e.kind}`))
+    const p = open('a')
+    p.emit('hi')
+    r.resize('a', 100, 30)
+    p.exit(0)
+    expect(heard).toEqual(['a:1:data', 'a:2:resize', 'a:3:exit'])
+  })
+
+  it('buffer keeps its meaning: the output while alive, empty once ended', () => {
+    const { r, open } = made()
+    const p = open('a')
+    p.emit('hello ')
+    p.emit('world')
+    expect(r.buffer('a')).toBe('hello world')
+    p.exit(0)
+    expect(r.buffer('a')).toBe('')
+  })
+
+  it('a held fromSeq on the same boot replays the events and no gap', async () => {
+    const { r, open } = made()
+    const p = open('a')
+    p.emit('one')
+    p.emit('two')
+    const got = await r.replayFrom('a', { fromSeq: 2, bootId: 'boot-a' })
+    expect(got?.gap).toBeNull()
+    expect(got?.checkpoint).toBeNull()
+    expect(got?.events.map((e) => e.seq)).toEqual([2])
+  })
+
+  it('no fromSeq, an evicted one, or another boot gives a gap, a checkpoint and the events after its watermark', async () => {
+    const { r, open } = made()
+    const p = open('a')
+    p.emit('one')
+    p.emit('two')
+    for (const ask of [{}, { fromSeq: 1, bootId: 'boot-b' }, { fromSeq: 99, bootId: 'boot-a' }]) {
+      const got = await r.replayFrom('a', ask)
+      expect(got?.gap).not.toBeNull()
+      expect(got?.checkpoint?.watermark).toBe(2)
+      expect(got?.events).toEqual([])
+    }
+  })
+
+  it('output after the exit is still a ring event', () => {
+    const { r, open } = made()
+    const heard: string[] = []
+    r.onEvent((_id, e) => heard.push(e.kind))
+    const p = open('a')
+    p.exit(1)
+    p.emit('late')
+    expect(heard).toEqual(['exit', 'data'])
+  })
+
+  it('an exited pty answers for 10 minutes, then is cleared', async () => {
+    let t = 0
+    const { r, open } = made({ now: () => t })
+    const p = open('a')
+    p.emit('bye')
+    p.exit(0)
+    t = EXITED_RETAIN_MS - 1
+    r.sweepExited()
+    expect(await r.replayFrom('a', {})).not.toBeNull()
+    expect((await r.readScreen('a', 10))?.screen).toEqual(['bye'])
+    t = EXITED_RETAIN_MS + 1
+    r.sweepExited()
+    expect(await r.replayFrom('a', {})).toBeNull()
+    expect(await r.readScreen('a', 10)).toBeNull()
+  })
+
+  it('more exited rings than the budget allows clears the oldest first', async () => {
+    let t = 0
+    const { r, open } = made({ now: () => t })
+    for (let i = 0; i <= EXITED_RINGS_MAX; i++) {
+      t = i
+      const p = open(`p${i}`)
+      p.emit('x')
+      p.exit(0)
+    }
+    expect(await r.replayFrom('p0', {})).toBeNull()
+    expect(await r.replayFrom('p1', {})).not.toBeNull()
+  })
+
+  it('exited rings over the byte budget clear the oldest first', async () => {
+    let t = 0
+    // A small byte budget and a large count budget, so the bytes decide (EXITED_RING_BYTES_MAX in production).
+    const ptys: Array<ReturnType<typeof fakePty>> = []
+    const r = new PtyRegistry({ spawn: () => (ptys.push(fakePty()), ptys[ptys.length - 1]), log: () => {}, now: () => t, exitedBudget: { rings: 1000, bytes: 1_000_000 } })
+    const open = (id: string) => (r.open({ id, file: 'sh', args: [], opts }), ptys[ptys.length - 1])
+    expect(EXITED_RING_BYTES_MAX).toBe(64 << 20)
+    const big = 'z'.repeat(200_000)
+    const n = Math.ceil(1_000_000 / (big.length * 2)) + 1
+    for (let i = 0; i < n; i++) {
+      t = i
+      const p = open(`b${i}`)
+      p.emit(big)
+      p.exit(0)
+    }
+    expect(await r.replayFrom('b0', {})).toBeNull()
+    expect(await r.replayFrom(`b${n - 1}`, {})).not.toBeNull()
   })
 })

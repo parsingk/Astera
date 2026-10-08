@@ -6,6 +6,11 @@
 import type { PtyEntry, PtyMeta, PtyOpenOptions } from '../core/host/protocol'
 // Imports nothing itself, so it adds nothing to the Host bundle but the one pattern.
 import { isOnlyTerminalReports } from '../core/terminal/reports'
+import { randomBytes } from 'node:crypto'
+// The ring and the live terminal (remote runtime design §3.7): the terminal loads @xterm/headless lazily.
+import { createPtyRing, type PtyEvent, type PtyRing } from './ptyRing'
+import { createLiveTerminal, type LiveTerminal, type PtyCheckpoint } from './liveTerminal'
+import type { SessionScreen } from '../core/orchestration/command'
 
 /** How much of a dead session's screen goes into the log. A couple of lines is what says which of
  *  "not found", "refused", "printed an error" happened; a whole scrollback in a log file is a
@@ -60,6 +65,12 @@ export const SCROLLBACK_CHARS = 256_000
  *  the spawner's `held`, `sessionExitCode` and the handover sweep read them. */
 export const DEAD_ENTRIES_KEPT = 64
 
+/** How long an exited pty's ring and live terminal stay readable (N1): a controller that was away sees the end. */
+export const EXITED_RETAIN_MS = 10 * 60 * 1000
+/** The exited-ring budget (§3.1): at most this many exited rings, and this many bytes of them; the oldest go first. */
+export const EXITED_RINGS_MAX = 64
+export const EXITED_RING_BYTES_MAX = 64 << 20
+
 interface Entry {
   id: string
   pty: RegistryPty
@@ -69,7 +80,12 @@ interface Entry {
    *  (host S3 ruling R8): only a session's note carries a cwd, and a run or a shell tab in a worktree
    *  holds that folder just as much. */
   cwd: string
-  buffer: string
+  /** Every event with its seq (§3.7), the tail's replacement; null once an exited pty's retention ended. */
+  ring: PtyRing | null
+  /** The live terminal fed every ring event; null with the ring. */
+  term: LiveTerminal | null
+  /** When it exited (deps.now), for the exited retention. */
+  exitedAt: number | null
   alive: boolean
   /** The size the app last gave this pty — at spawn, then at every resize. `sessions read` renders
    *  the scrollback at it (host/sessions.ts), because the bytes were painted for that size. */
@@ -85,7 +101,7 @@ interface Entry {
    *  reply), never the Host's own (a nudge, a spawn's or a roll's prompt). A finished Run's sessions end
    *  once nobody has typed into them for a while (dispatchLoop.ts, FINISHED_RUN_GRACE_MS). */
   lastPersonWriteAt: number | null
-  /** How the pty ended, or null while it is alive. Kept after the buffer is dropped, because the
+  /** How the pty ended, or null while it is alive. Kept after the ring is cleared, because the
    *  Host's exit handling asks for it after the fact (`sessionExitCode`). */
   exitCode: number | null
   /** Whether this pty has been sent its kill. **One kill per pty, ever** (2026-10-01): node-pty 1.1.0's
@@ -111,6 +127,17 @@ export interface PtyRegistryDeps {
    *  `killTree`: taskkill /T /F on win32, the process group elsewhere). What a repeat kill escalates
    *  to. Left out, a repeat is only logged. */
   killTree?: (pid: number) => Promise<void>
+  /** This Host process's boot id (hello's `bootId`): a replay asked with another one starts from a checkpoint. */
+  bootId?: string
+  /** The exited-ring budget, for tests; EXITED_RINGS_MAX and EXITED_RING_BYTES_MAX otherwise. */
+  exitedBudget?: { rings: number; bytes: number }
+}
+
+/** A replay for a subscriber (§3.7): the events from its seq, or a gap, a checkpoint and the events after it. */
+export interface PtyReplay {
+  gap: { firstSeq: number; lastSeq: number } | null
+  checkpoint: PtyCheckpoint | null
+  events: PtyEvent[]
 }
 
 export class PtyRegistry {
@@ -125,18 +152,34 @@ export class PtyRegistry {
    *  Host, P7). Neither the spawner nor the app's bridge needs this; the Host's Slack does, to register a
    *  session the moment its pty opens and to rename it from its note. */
   private readonly metaCbs = new Set<(id: string, meta: PtyMeta, why: 'open' | 'note') => void>()
+  private readonly eventCbs = new Set<(id: string, e: PtyEvent) => void>()
   /** Listeners that have thrown, by kind, so each is logged once and not on every chunk. */
-  private readonly failedCbs = { data: new Set<unknown>(), exit: new Set<unknown>(), meta: new Set<unknown>() }
+  private readonly failedCbs = { data: new Set<unknown>(), exit: new Set<unknown>(), meta: new Set<unknown>(), event: new Set<unknown>() }
   private readonly deps: PtyRegistryDeps
-  /** `slice(-0)` returns the whole string, so a scrollback of 0 would turn the cap off rather than
-   *  down. One character is the smallest honest answer to "keep almost nothing". Computed once here,
-   *  rather than as a field initializer, because a field initializer reading `this.deps` would run
-   *  before the constructor assigns it. */
+  /** The ring's bound in UTF-16 units (SCROLLBACK_CHARS unless a test injects one); one at the least. */
   private readonly scrollback: number
+  readonly bootId: string
 
   constructor(deps: PtyRegistryDeps) {
     this.deps = deps
     this.scrollback = Math.max(1, deps.scrollback ?? SCROLLBACK_CHARS)
+    this.bootId = deps.bootId ?? randomBytes(16).toString('hex')
+  }
+
+  /** Every pty event with its seq, after the ring and the live terminal have it (§3.7). */
+  onEvent(cb: (id: string, e: PtyEvent) => void): () => void {
+    this.eventCbs.add(cb)
+    return () => this.eventCbs.delete(cb)
+  }
+
+  /** Appends to the ring, applies to the terminal, then tells the listeners: that order, so a listener that asks for
+   *  a replay finds the event already there. */
+  private record(entry: Entry, e: Parameters<PtyRing['push']>[0]): void {
+    if (!entry.ring) return
+    for (const ev of entry.ring.push(e)) {
+      entry.term?.apply(ev)
+      for (const cb of this.eventCbs) this.tell(cb, 'event', entry.id, () => cb(entry.id, ev))
+    }
   }
 
   /** Adds a listener; every one registered hears every chunk. Returns the unsubscribe. */
@@ -192,7 +235,9 @@ export class PtyRegistry {
       pid: pty.pid,
       meta: a.meta ?? null,
       cwd: a.opts.cwd,
-      buffer: '',
+      ring: createPtyRing({ bound: this.scrollback }),
+      term: createLiveTerminal({ cols: a.opts.cols, rows: a.opts.rows }),
+      exitedAt: null,
       alive: true,
       cols: a.opts.cols,
       rows: a.opts.rows,
@@ -203,26 +248,29 @@ export class PtyRegistry {
       treeKillSent: false
     }
     this.entries.set(a.id, entry)
+    this.sweepExited()
     pty.onData((d) => {
       // The same shape TerminalManager's own buffer uses: append, then keep the tail. **Only while
       // alive**: ConPTY can deliver output after the exit, and an ended entry is kept (a session for
       // good), so a buffer refilled then would be kept for the rest of the Host's life with no reader.
       // The listeners still hear it.
-      if (entry.alive) entry.buffer = (entry.buffer + d).slice(-this.scrollback)
+      // Output after the exit is still a ring event (§3.7): node-pty can deliver it, and a controller replaying the
+      // end sees it. The ring is bounded and goes with the exited retention.
+      this.record(entry, { kind: 'data', data: d })
       for (const cb of this.dataCbs) this.tell(cb, 'data', a.id, () => cb(a.id, d))
     })
     pty.onExit(({ exitCode }) => {
       entry.alive = false
       entry.exitCode = exitCode
-      // **A session that ended badly leaves its last screen here.** The buffer is cleared on the next
-      // line and the Host is the only place it exists — the app may not even be running — so without
+      // **A session that ended badly leaves its last screen here.** The ring goes with the exited retention
+      // and the Host is the only place it exists — the app may not even be running — so without
       // this an exit is a timestamp and an exit code, and when the pty layer cannot supply the code
       // either it is a timestamp. That is exactly what a Job worker dying a second after it started
       // looked like from the outside: three identical `exited undefined` lines and no way to tell
       // whether the command was not found, refused to run, or printed something and gave up.
       // Only an unclean exit: a 0 is the ordinary end of a session, and its screen belongs to the
       // person who was reading it, not to a log that outlives them.
-      if (exitCode !== 0) this.deps.log(`pty ${a.id} last screen: ${lastScreen(entry.buffer)}`)
+      if (exitCode !== 0) this.deps.log(`pty ${a.id} last screen: ${lastScreen(entry.ring?.text() ?? '')}`)
       // The scrollback goes with the session. The Host outlives the app, so an entry kept for the rest
       // of the Host's life is a quarter of a million characters kept for the rest of the Host's life,
       // and a project that runs a build every minute would leave a great many of them. The entry
@@ -232,12 +280,16 @@ export class PtyRegistry {
       // spawner's `held`, `sessionExitCode` and the handover sweep ask for it by session id at any
       // later time; any other ended entry stays until DEAD_ENTRIES_KEPT newer ones have ended
       // (`pruneEnded`, M4).
-      entry.buffer = ''
+      // The ring and the live terminal stay for EXITED_RETAIN_MS within the exited budget (§3.7, N1), then go
+      // (sweepExited); `buffer` already answers empty for an ended pty.
+      this.record(entry, { kind: 'exit', code: typeof exitCode === 'number' ? exitCode : null })
+      entry.exitedAt = this.now()
       this.deps.log(`pty ${a.id} exited ${exitCode}`)
       for (const cb of this.exitCbs) this.tell(cb, 'exit', a.id, () => cb(a.id, exitCode))
       // After the listeners, which read this entry's note. It is the newest ended one now, so it is
       // never the one that goes.
       if (entry.meta?.kind !== 'session') this.pruneEnded(a.id)
+      this.sweepExited()
     })
     this.deps.log(`pty ${a.id} started, pid ${pty.pid}`)
     // After the entry is in place and its handlers are set, so a listener that asks the registry about
@@ -251,11 +303,76 @@ export class PtyRegistry {
    *  a dev server opened at the Host's start and ending after a day of builds is the newest ended
    *  entry, and a late `pty-attach` for it must still be answered with its exit. Set and Map
    *  operations only, so nothing here can throw into node-pty's exit callback. */
+  private now(): number {
+    return (this.deps.now ?? Date.now)()
+  }
+
+  private clearRing(e: Entry | undefined): void {
+    if (!e) return
+    e.term?.dispose()
+    e.term = null
+    e.ring = null
+  }
+
+  /** Clears exited rings past EXITED_RETAIN_MS, then the oldest exited ones while over the exited budget (§3.1). No
+   *  timer: it runs when a pty opens or exits and before every replay or read, so an expired ring is never served, and
+   *  the budget bounds what waits for the next of those. */
+  sweepExited(): void {
+    const budget = this.deps.exitedBudget ?? { rings: EXITED_RINGS_MAX, bytes: EXITED_RING_BYTES_MAX }
+    const now = this.now()
+    const exited: Entry[] = []
+    for (const e of this.entries.values()) {
+      if (e.alive || !e.ring || e.exitedAt === null) continue
+      if (now - e.exitedAt > EXITED_RETAIN_MS) this.clearRing(e)
+      else exited.push(e)
+    }
+    exited.sort((x, y) => (x.exitedAt ?? 0) - (y.exitedAt ?? 0))
+    // UTF-16 units are two bytes each.
+    let bytes = exited.reduce((n, e) => n + (e.ring?.cost() ?? 0) * 2, 0)
+    while (exited.length > 0 && (exited.length > budget.rings || bytes > budget.bytes)) {
+      const old = exited.shift() as Entry
+      bytes -= (old.ring?.cost() ?? 0) * 2
+      this.clearRing(old)
+    }
+  }
+
+  /** What a subscriber is sent (§3.7). With a `fromSeq` the ring still holds and the same `bootId`: the events from
+   *  it. Otherwise a gap, a checkpoint of the live terminal, and every event after its watermark. null for a pty
+   *  never here or whose exited retention ended. Never a checkpoint with a hole after it: if the ring no longer holds
+   *  the event after the watermark (the terminal lagged that far), a newer checkpoint is taken. */
+  async replayFrom(id: string, a: { fromSeq?: number; bootId?: string }): Promise<PtyReplay | null> {
+    this.sweepExited()
+    const e = this.entries.get(id)
+    if (!e?.ring || !e.term) return null
+    if (a.fromSeq !== undefined && a.bootId === this.bootId) {
+      const events = e.ring.since(a.fromSeq)
+      if (events) return { gap: null, checkpoint: null, events }
+    }
+    for (let tries = 0; tries < 8; tries++) {
+      const term = e.term
+      const ring = e.ring
+      if (!term || !ring) return null
+      const checkpoint = await term.checkpoint()
+      const events = ring.since(checkpoint.watermark + 1)
+      if (events) return { gap: { firstSeq: a.bootId === this.bootId && a.fromSeq !== undefined ? a.fromSeq : 1, lastSeq: checkpoint.watermark }, checkpoint, events }
+    }
+    this.deps.log(`pty ${id}: no checkpoint without a hole after it in 8 tries`)
+    return null
+  }
+
+  /** The live terminal's screen and up to `lines` rows above it, or null for a pty never here or cleared. */
+  async readScreen(id: string, lines: number): Promise<SessionScreen | null> {
+    this.sweepExited()
+    const term = this.entries.get(id)?.term
+    return term ? term.read(lines) : null
+  }
+
   private pruneEnded(id: string): void {
     this.endedOrder.add(id)
     for (const old of this.endedOrder) {
       if (this.endedOrder.size <= DEAD_ENTRIES_KEPT) return
       this.endedOrder.delete(old)
+      this.clearRing(this.entries.get(old))
       this.entries.delete(old)
     }
   }
@@ -265,7 +382,7 @@ export class PtyRegistry {
    *  broadcast among them) and then escape into node-pty's own event handler, where nothing catches it
    *  and the Host exits with every pty it holds. Logged once per listener and kind, because a
    *  listener that throws on one chunk usually throws on every chunk. */
-  private tell(cb: unknown, kind: 'data' | 'exit' | 'meta', id: string, call: () => void): void {
+  private tell(cb: unknown, kind: 'data' | 'exit' | 'meta' | 'event', id: string, call: () => void): void {
     try {
       call()
     } catch (err) {
@@ -309,6 +426,8 @@ export class PtyRegistry {
     e.pty.resize(cols, rows)
     e.cols = cols
     e.rows = rows
+    // A ring event at its place in the output (§3.7): a replay applies it there, so rows painted before keep their width.
+    this.record(e, { kind: 'resize', cols, rows })
   }
 
   /** The size recorded by `open` and `resize`, or null for an id that was never here. */
@@ -368,12 +487,13 @@ export class PtyRegistry {
     this.tellMeta(id, e.meta, 'note')
   }
 
-  /** The scrollback, or empty for an id that was never here — and empty, too, for one that has ended,
-   *  which drops its buffer as it goes. Nothing reads a dead session's output: an app that was attached
-   *  already received it, and one that was not is forbidden to attach to a dead entry, because a handle
-   *  built on one would never deliver the exit that already happened. */
+  /** The ring's output (today's tail, for `pty-attach`), or empty for an id that was never here, and empty, too, for
+   *  one that has ended. An app attaching to a dead entry is forbidden, because a handle built on one would never
+   *  deliver the exit that already happened. An exited pty's ring is still kept for remote subscribers and
+   *  `sessions-read` (replayFrom, readScreen), within the exited retention. */
   buffer(id: string): string {
-    return this.entries.get(id)?.buffer ?? ''
+    const e = this.entries.get(id)
+    return e?.alive && e.ring ? e.ring.text() : ''
   }
 
   /** The note this pty was opened with, or null for one opened without a note or never here. A map
