@@ -229,7 +229,12 @@ describe('Remote Runtime Phase 8 acceptance (design §6 Phase 8, X1-02)', { time
     rt.out(`${ESC}]0;ti`)
     rt.out(`tle${BEL}plain ${ESC}[3`)
     c.online()
-    await new Promise((r) => setTimeout(r, 200))
+    // The rest of the CSI only after the reconnect's checkpoint arrived, so that checkpoint is taken inside it.
+    const end = Date.now() + 10_000
+    while (c.resets.length < 2) {
+      if (Date.now() > end) throw new Error('no checkpoint after the reconnect')
+      await new Promise((r) => setTimeout(r, 10))
+    }
     rt.out(`1mred${ESC}[0m end`)
     expect(await c.view(await lastSeqOf(rt))).toEqual(await rt.reference())
     // The ring no longer held where the view left off, so it recovered through a checkpoint taken inside the CSI.

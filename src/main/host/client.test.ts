@@ -267,7 +267,7 @@ describe('HostClient', () => {
     const c = new HostClient({ hostKey, address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
     c.start()
     await settled(c, (s) => s.connected)
-    expect(c.status().features).toEqual(['proc', 'ping'])
+    expect(c.status().features).toEqual(['proc', 'ping', 'pty-seq'])
     await c.stop()
   })
 
