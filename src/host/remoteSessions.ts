@@ -42,7 +42,7 @@ const ended = (id: string): Reply => ({ status: 409, body: { error: `session ${i
 export interface RemoteSessionDeps {
   ptys: Pick<PtyRegistry, 'write' | 'resize' | 'kill' | 'metaOf' | 'lastWrite'>
   procs: Pick<ProcRegistry, 'list'>
-  sessions: Pick<HostSessions, 'listSessions' | 'sessionTurn'>
+  sessions: Pick<HostSessions, 'listSessions' | 'sessionTurn' | 'sessionById'>
   /** The local sockets that hold this pty (exits.ts `holdersOf`): a resize yields to them (N17). null when this Host
    *  cannot tell (it keeps no holders), and then a resize is not applied (review M1). */
   holdersOf(ptyId: string): number[] | null
@@ -65,8 +65,11 @@ export interface RemoteSessions {
 }
 
 export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
+  /** One session by id: computed for it alone where the registry can (performance audit H4), else from the list. */
+  const byId = async (id: string): Promise<HostSession | null> =>
+    d.sessions.sessionById ? d.sessions.sessionById(id) : ((await d.sessions.listSessions()).find((s) => s.id === id) ?? null)
   const facts = createSessionFacts({
-    listSessions: () => d.sessions.listSessions(),
+    sessionById: byId,
     sessionTurn: async (id) => (d.sessions.sessionTurn ? d.sessions.sessionTurn(id) : null),
     statusLinePayload: d.statusLinePayload,
     rolloutOf: (ptyId) => {
@@ -77,8 +80,7 @@ export function createRemoteSessions(d: RemoteSessionDeps): RemoteSessions {
     chats: d.chats,
     ...(d.readTail ? { readTail: d.readTail } : {})
   })
-  const find = async (id: unknown): Promise<HostSession | null> =>
-    typeof id === 'string' && id !== '' ? ((await d.sessions.listSessions()).find((s) => s.id === id) ?? null) : null
+  const find = async (id: unknown): Promise<HostSession | null> => (typeof id === 'string' && id !== '' ? byId(id) : null)
 
   const noteOf = (s: HostSession): Record<string, unknown> => {
     if (s.ptyId) return (d.ptys.metaOf(s.ptyId)?.restore ?? {}) as Record<string, unknown>

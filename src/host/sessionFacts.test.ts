@@ -17,7 +17,7 @@ const row = (over: Partial<HostSession> & Pick<HostSession, 'id' | 'kind'>): Hos
 })
 
 const deps = (over: Partial<SessionFactsDeps> = {}): SessionFactsDeps => ({
-  listSessions: async () => [],
+  sessionById: async () => null,
   sessionTurn: async () => null,
   statusLinePayload: async () => null,
   rolloutOf: () => null,
@@ -35,7 +35,7 @@ describe('createSessionFacts', () => {
     const s = row({ id: 'c1', kind: 'terminal', provider: 'claude', ptyId: 'p1' })
     const f = createSessionFacts(
       deps({
-        listSessions: async () => [s],
+        sessionById: async (id) => (id === s.id ? s : null),
         sessionTurn: async () => ({ alive: true, state: 'waiting', prompt: 'permission' }),
         statusLinePayload: async () => ({ model: { display_name: 'Opus' }, context_window: { used_percentage: 40, context_window_size: 200000 } })
       })
@@ -47,7 +47,7 @@ describe('createSessionFacts', () => {
 
   it('a Codex terminal before any turn is unknown, never idle; its prompt is unknown', async () => {
     const s = row({ id: 'x1', kind: 'terminal', provider: 'codex', ptyId: 'p2' })
-    const f = createSessionFacts(deps({ listSessions: async () => [s], rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines: [], mtimeMs: 0 }) }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines: [], mtimeMs: 0 }) }))
     expect(await f.factsOf('x1')).toMatchObject({ status: 'unknown', prompt: 'unknown' })
   })
 
@@ -56,7 +56,7 @@ describe('createSessionFacts', () => {
     const done = '2026-10-08T01:00:00.000Z'
     const lines = [ev('task_started', '2026-10-08T00:59:00.000Z'), ev('task_complete', done)]
     let wrote: number | null = null
-    const f = createSessionFacts(deps({ listSessions: async () => [s], rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: Date.parse(done) }), lastWrite: () => wrote }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: Date.parse(done) }), lastWrite: () => wrote }))
     expect((await f.factsOf('x1'))?.status).toBe('waiting')
     // Input since may be a turn or a few keys and nothing more: the rollout has not said, so the Host does not guess.
     wrote = Date.parse(done) + 5_000
@@ -72,7 +72,7 @@ describe('createSessionFacts', () => {
       line({ timestamp: 't', type: 'turn_context', payload: { model: 'gpt-5-codex' } }),
       ev('token_count', 't', { info: { total_token_usage: { total_tokens: 1000 }, last_token_usage: { total_tokens: 500 }, model_context_window: 100000 } })
     ]
-    const f = createSessionFacts(deps({ listSessions: async () => [s], rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: 0 }) }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: 0 }) }))
     const got = await f.factsOf('x1')
     expect(got?.model).toBe('gpt-5-codex')
     expect(got?.usage?.context).not.toBeNull()
@@ -86,7 +86,7 @@ describe('createSessionFacts', () => {
       chosenModelOf: () => 'sonnet',
       subscribe: () => () => {}
     }
-    const f = createSessionFacts(deps({ listSessions: async () => [s], chats: chats as never }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), chats: chats as never }))
     expect(await f.factsOf('h1')).toMatchObject({ status: 'waiting', prompt: 'permission', model: 'sonnet' })
     // The open request itself rides along, so a controller can show the card and answer it (sessions-answer).
     expect((await f.factsOf('h1'))?.requests).toEqual([{ id: 'r1', kind: 'approval', about: { tool: 'Bash' }, decisions: ['allow', 'deny'] }])
@@ -96,7 +96,7 @@ describe('createSessionFacts', () => {
     const s = row({ id: 'h1', kind: 'chat', provider: 'codex', procId: 'q1' })
     let turn: { alive: boolean; status: 'idle' | 'working' | 'waiting'; error: null } | null = null
     const chats = { turnOf: () => turn, requests: () => [], chosenModelOf: () => null, subscribe: () => () => {} }
-    const f = createSessionFacts(deps({ listSessions: async () => [s], chats: chats as never }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), chats: chats as never }))
     expect((await f.factsOf('h1'))?.status).toBe('unknown')
     turn = { alive: true, status: 'idle', error: null }
     expect((await f.factsOf('h1'))?.status).toBe('idle')
@@ -104,14 +104,14 @@ describe('createSessionFacts', () => {
 
   it('an ended session is not alive and its status unknown; an id never here is null', async () => {
     const s = row({ id: 'c1', kind: 'terminal', provider: 'claude', ptyId: 'p1', alive: false })
-    const f = createSessionFacts(deps({ listSessions: async () => [s], sessionTurn: async () => ({ alive: false, state: 'unknown', prompt: null }) }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), sessionTurn: async () => ({ alive: false, state: 'unknown', prompt: null }) }))
     expect(await f.factsOf('c1')).toMatchObject({ alive: false, status: 'unknown' })
     expect(await f.factsOf('nobody')).toBeNull()
   })
 
   it('a session whose account is gone has no sources and every fact unknown', async () => {
     const s = row({ id: 'c1', kind: 'terminal', ptyId: 'p1' })
-    const f = createSessionFacts(deps({ listSessions: async () => [s] }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null) }))
     expect(await f.factsOf('c1')).toMatchObject({ status: 'unknown', prompt: 'unknown', usage: null, model: null })
   })
 
@@ -121,7 +121,7 @@ describe('createSessionFacts', () => {
     const aborted = '2026-10-08T01:00:00.000Z'
     const lines = [ev('task_started', '2026-10-08T00:59:00.000Z'), ev('turn_aborted', aborted)]
     let wrote: number | null = null
-    const f = createSessionFacts(deps({ listSessions: async () => [s], rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: 0 }), lastWrite: () => wrote }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: 0 }), lastWrite: () => wrote }))
     expect((await f.factsOf('x1'))?.status).toBe('waiting')
     wrote = Date.parse(aborted) + 1_000
     expect((await f.factsOf('x1'))?.status).toBe('unknown')
@@ -132,7 +132,7 @@ describe('createSessionFacts', () => {
   it('an ended chat with a turn record left has an unknown prompt', async () => {
     const s = row({ id: 'h1', kind: 'chat', provider: 'claude', procId: 'q1', alive: false })
     const chats = { turnOf: () => ({ alive: false, status: 'idle' as const, error: null }), requests: () => [], chosenModelOf: () => null, subscribe: () => () => {} }
-    const f = createSessionFacts(deps({ listSessions: async () => [s], chats: chats as never }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), chats: chats as never }))
     expect(await f.factsOf('h1')).toMatchObject({ status: 'unknown', prompt: 'unknown' })
   })
   // Phase 9a review M6: a Claude chat's usage comes from its usage events alone. One the Host has not seen since these
@@ -149,7 +149,7 @@ describe('createSessionFacts', () => {
         return () => {}
       }
     }
-    const f = createSessionFacts(deps({ listSessions: async () => [s], chats: chats as never }))
+    const f = createSessionFacts(deps({ sessionById: async (id) => (id === s.id ? s : null), chats: chats as never }))
     expect((await f.factsOf('h1'))?.usage).toBeNull()
     emit('h1', { type: 'usage', context: { usedTokens: 50_000, windowByModel: { 'claude-sonnet-4-5': 200_000 } } })
     expect((await f.factsOf('h1'))?.usage?.context).not.toBeNull()

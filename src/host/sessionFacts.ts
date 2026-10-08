@@ -36,7 +36,8 @@ export interface SessionFacts {
 }
 
 export interface SessionFactsDeps {
-  listSessions(): Promise<HostSession[]>
+  /** The one session asked about (performance audit H4: never the whole list for one id). */
+  sessionById(id: string): Promise<HostSession | null>
   sessionTurn(id: string): Promise<SessionTurn | null>
   statusLinePayload(sessionId: string): Promise<unknown | null>
   /** The rollout a Codex terminal writes, from its pty's note; null before it is known. */
@@ -131,7 +132,7 @@ export function createSessionFacts(d: SessionFactsDeps): { factsOf(id: string): 
 
   return {
     factsOf: async (id) => {
-      const s = (await d.listSessions()).find((x) => x.id === id)
+      const s = await d.sessionById(id)
       if (!s) return null
       const sources = s.sources ?? NO_SOURCES
       const base: SessionFacts = { id: s.id, alive: s.alive, status: 'unknown', prompt: 'unknown', usage: null, model: null, sources }

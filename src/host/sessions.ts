@@ -45,6 +45,8 @@ import type { ProcRegistry } from './procRegistry'
  *  the Host always has them. */
 export interface HostSessions {
   listSessions(): Promise<HostSession[]>
+  /** One session by its id, or null; the same row `listSessions` has for it, computed for it alone. */
+  sessionById?(id: string): Promise<HostSession | null>
   readSession(id: string, lines: number): Promise<SessionScreen>
   sendSession(id: string, text: string, enter: boolean): Promise<void>
   /** A chat session's last `turns` turns, oldest first; `[]` when there is no file to read yet. */
@@ -217,6 +219,17 @@ export function registrySessions(a: {
   }
 
   return {
+    // One session's row, building nothing for the others (performance audit H4: a remote keystroke names one).
+    sessionById: async (id) => {
+      const terminals = a.ptys.list().filter((e) => e.meta?.kind === 'session' && e.meta.id === id)
+      const chats = a.procs.list().filter((e) => e.meta?.kind === 'chat' && e.meta.id === id)
+      if (terminals.length === 0 && chats.length === 0) return null
+      const [states, accounts] = await Promise.all([Promise.all(terminals.map(stateOf)), a.accounts().catch(() => [] as Account[])])
+      const providers = new Map(accounts.map((x) => [x.id, x.provider ?? 'claude'] as const))
+      const rows = [...terminals.map((e, i) => rowOf(e, 'terminal', states[i], providers)), ...chats.map((e) => rowOf(e, 'chat', 'unknown', providers))]
+      // The live one, as the list keeps it.
+      return rows.find((r) => r.alive) ?? rows[0]
+    },
     listSessions: async () => {
       const terminals = a.ptys.list().filter((e) => e.meta?.kind === 'session')
       const [states, accounts] = await Promise.all([Promise.all(terminals.map(stateOf)), a.accounts().catch(() => [] as Account[])])

@@ -105,6 +105,21 @@ const harness = (size: { cols: number; rows: number } = { cols: 80, rows: 24 }, 
   return { ptys, procs, agent, shell, openChat, procsMade, sessions: registrySessions({ ptys, procs, hookEventsDir, accounts: async () => accounts }) }
 }
 
+// Performance audit H4: a remote keystroke, resize, stop or facts read names one session; finding it must not build
+// every session's row (each reads its hook file).
+describe('registrySessions — one by id', () => {
+  it('answers the same row the list has, and none for an id it does not hold', async () => {
+    const { sessions, agent, procsMade, openChat } = harness()
+    for (const id of ['ses-1', 'chat-1']) expect(await sessions.sessionById!(id)).toEqual((await sessions.listSessions()).find((s) => s.id === id))
+    expect(await sessions.sessionById!('nobody')).toBeNull()
+    agent.exit(0)
+    procsMade[0].exit(1)
+    openChat('proc-b')
+    expect(await sessions.sessionById!('ses-1')).toMatchObject({ alive: false })
+    expect(await sessions.sessionById!('chat-1')).toMatchObject({ alive: true, procId: 'proc-b' })
+  })
+})
+
 describe('registrySessions — list', () => {
   // **Agent sessions only.** A plain shell tab and a run configuration are ptys too, but neither is a
   // session a person or an agent talks to: the tab has no account, and the run is a build.
