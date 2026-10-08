@@ -57,7 +57,31 @@ afterEach(async () => {
 
 const eventually = (check: () => void | Promise<void>): Promise<void> => vi.waitFor(check, { timeout: 10_000, interval: 20 })
 
-async function runtime() {
+/** A chat the Host writes, with one open approval card: what the Host's chat manager answers about it. */
+function hostChat() {
+  const answered: unknown[] = []
+  const killed: string[] = []
+  let open = true
+  return {
+    answered,
+    killed,
+    chats: {
+      turnOf: (id: string) => (id === 'chat-1' ? { alive: killed.length === 0, status: (open ? 'waiting' : 'working') as 'waiting' | 'working', error: null } : null),
+      requests: (id: string) => (id === 'chat-1' && open ? [{ id: 'r1', kind: 'approval' as const, about: { tool: 'Bash' }, decisions: ['accept', 'decline'] }] : []),
+      chosenModelOf: () => 'sonnet',
+      subscribe: () => () => {},
+      kill: (id: string) => void killed.push(id),
+      answerCard: async (id: string, request: string, answer: unknown) => {
+        answered.push([id, request, answer])
+        open = false
+      },
+      has: (id: string) => id === 'chat-1',
+      isWriter: (id: string) => id === 'chat-1'
+    }
+  }
+}
+
+async function runtime(o: { chats?: ReturnType<typeof hostChat>['chats'] } = {}) {
   const made = new Map<string, { sent: string[]; sizes: Array<[number, number]>; killed: boolean; emit(d: string): void }>()
   let next = ''
   const ptys = new PtyRegistry({
@@ -80,7 +104,7 @@ async function runtime() {
     log: () => {},
     bootId: 'boot-p9'
   })
-  const procs = new ProcRegistry({ spawn: () => ({ pid: 2, onLine: () => {}, onExit: () => {}, write: () => {}, kill: () => {} }) as unknown as RegistryProc, log: () => {} })
+  const procs = new ProcRegistry({ spawn: (): RegistryProc => ({ pid: 2, onData: () => {}, onExit: () => {}, write: () => {}, kill: () => {} }), log: () => {} })
   const hooks = path.join(dir, 'hook-events')
   await fs.mkdir(hooks, { recursive: true })
   const accounts: Account[] = [
@@ -95,9 +119,11 @@ async function runtime() {
     procs,
     sessions,
     holdersOf: () => (held ? [7] : []),
+    hasApp: () => false,
+    askApp: async () => null,
     statusLinePayload: async (sid) => (sid === 'claude-1' ? { transcript_path: transcript, model: { display_name: 'Opus' } } : null),
     accounts: async () => accounts,
-    chats: null
+    chats: (o.chats ?? null) as never
   })
   const orch = createHostOrch({
     profileDir: dir,
@@ -142,7 +168,9 @@ async function runtime() {
     return made.get(ptyId)!
   }
   const hook = (sessionId: string, payload: unknown): void => appendFileSync(path.join(hooks, `${sessionId}.jsonl`), JSON.stringify(payload) + NL)
-  return { port: started.port, controllers, open, hook, transcript, setHeld: (v: boolean) => void (held = v) }
+  const openChat = (procId: string, sessionId: string, accountId: string): void =>
+    void procs.open({ id: procId, file: 'agent', args: [], opts: { cwd: dir, env: {} }, meta: { kind: 'chat', id: sessionId, restore: { accountId, cwd: dir, title: sessionId } } })
+  return { port: started.port, controllers, open, openChat, hook, transcript, setHeld: (v: boolean) => void (held = v) }
 }
 
 async function controller(rt: Awaited<ReturnType<typeof runtime>>, permission: 'read-only' | 'full-control' = 'full-control'): Promise<RemoteLink> {
@@ -223,6 +251,26 @@ describe('Remote Runtime Phase 9a acceptance (remote sessions over the link)', {
     const link = await controller(rt, 'read-only')
     const rows = body<Array<{ id: string; rolledFrom?: string; ptyId?: string }>>(await link.call('sessions-list', {}))
     expect(rows.find((r) => r.rolledFrom === 'claude-1')).toMatchObject({ id: 'claude-2', ptyId: 'pty-new' })
+  })
+
+  // Phase 9a review M11: a chat session over the link, end to end: listed with its process, its facts carry the open
+  // card, an answer reaches the chat the Host writes, and a stop ends it.
+  it('a controller finds a chat, reads its open card in its facts, answers it and stops the chat', async () => {
+    const chat = hostChat()
+    const rt = await runtime({ chats: chat.chats })
+    rt.openChat('proc-h', 'chat-1', 'cl')
+    const link = await controller(rt)
+    const rows = body<Array<{ id: string; kind: string; procId?: string; sources?: unknown }>>(await link.call('sessions-list', {}))
+    expect(rows.find((r) => r.id === 'chat-1')).toMatchObject({ kind: 'chat', procId: 'proc-h', sources: { status: 'chat', prompt: 'chat' } })
+    const facts = body<{ status: string; prompt: string; model: string; requests: Array<{ id: string }> }>(await link.call('sessions-facts', { id: 'chat-1' }))
+    expect(facts).toMatchObject({ status: 'waiting', prompt: 'permission', model: 'sonnet' })
+    expect(facts.requests.map((r) => r.id)).toEqual(['r1'])
+    const answer = { kind: 'approval', decision: 'accept' }
+    expect(await link.call('sessions-answer', { id: 'chat-1', request: 'r1', answer })).toMatchObject({ status: 200, body: { answered: true } })
+    expect(chat.answered).toEqual([['chat-1', 'r1', answer]])
+    expect(body<{ prompt: string }>(await link.call('sessions-facts', { id: 'chat-1' })).prompt).toBe(null)
+    expect(body(await link.call('sessions-stop', { id: 'chat-1' }))).toEqual({ stopped: true })
+    expect(chat.killed).toEqual(['chat-1'])
   })
 
   it('a read-only pairing reads but cannot drive', async () => {

@@ -138,4 +138,14 @@ describe('announceChatProc — proc-opened, to chat-takeover apps only', () => {
     announceChatProc({ broadcast: () => { throw new Error('socket gone') } }, 'proc_1', (m) => logs.push(m))
     expect(logs.join(' ')).toContain('proc_1')
   })
+
+  // Phase 9a review M10: a controller that just made a session must be able to subscribe to it, even when the row is not
+  // listed yet: the answer carries its pty or process, provider and sources all the same.
+  it('a row not listed yet still carries the pty or process, the provider and the sources', async () => {
+    const r = rig({ list: async () => [], ptyOf: () => 'pty_9' })
+    const term = await r.start({ kind: 'terminal', accountId: 'acc_c', cwd: '/p', rollAccountIds: [] } as never)
+    expect(term).toMatchObject({ id: 'term_1', ptyId: 'pty_9', provider: 'claude', sources: { status: 'hooks', conversation: 'transcript' } })
+    const chat = await r.start({ kind: 'chat', accountId: 'acc_c', cwd: '/p', rollAccountIds: [], unattended: 'hold' } as never)
+    expect(chat).toMatchObject({ id: 'chat_1', procId: 'proc_1', provider: 'claude', sources: { status: 'chat' } })
+  })
 })

@@ -28,7 +28,7 @@ import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
-import { createRemoteSessions } from './remoteSessions'
+import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
@@ -196,6 +196,9 @@ async function main(): Promise<void> {
    *  `exits` getter reads it, and a `const` below that getter would throw in its temporal dead zone if a
    *  chain ever decided before the assignment. Null until then, and null for good without a spawner. */
   let exits: HostExits | null = null
+  /** A Runtime's sessions as controllers read and drive them (remote runtime Phase 9a); built with the orch below and
+   *  let go with the Host (its chat subscription, review M5). */
+  let remoteSessions: RemoteSessions | null = null
   /** Every way out goes through here, and it ends the process whatever happened on the way. An earlier
    *  version put `process.exit(0)` after `killAll()` inside a `.then()` that nothing caught, and on
    *  win32 that was not theoretical: node-pty's ConPTY kill runs a helper process to enumerate the
@@ -230,6 +233,7 @@ async function main(): Promise<void> {
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
     void slackWiring?.dispose()
+    remoteSessions?.dispose()
     // Before the close, so a Host that is on its way out is not offered up as one to end. A failure
     // here costs nothing: the app checks the executable behind the pid before acting on it, and a
     // record this Host left behind names a pid that is about to stop existing.
@@ -639,16 +643,21 @@ async function main(): Promise<void> {
     sessions: hostSessions,
     // A Runtime's sessions as a controller reads and drives them (remote runtime Phase 9a): facts from the hooks, the
     // statusline, the rollouts and the chats; input and stop through the registries; a resize that yields to an app
-    // holding the pty (no exits yet means no app, so none holds one).
-    remoteSessions: createRemoteSessions({
+    // holding the pty.
+    remoteSessions: (remoteSessions = createRemoteSessions({
       ptys: registry,
       procs,
       sessions: hostSessions,
-      holdersOf: (ptyId) => exits?.holdersOf(ptyId) ?? [],
+      // Who holds a pty, from the exits tracker; a Host that keeps none cannot tell, and then a controller's resize is
+      // not applied (review M1): the person at this machine may be looking at it.
+      holdersOf: (ptyId) => (exits ? exits.holdersOf(ptyId) : null),
+      // A chat the app writes is answered through it (review I2).
+      hasApp: () => server.hasApp(),
+      askApp: (act, args) => server.act(act, args),
       statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
       accounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
       chats: rollingWiring?.chats ?? null
-    }),
+    })),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({
@@ -660,6 +669,7 @@ async function main(): Promise<void> {
       probeCwd: defaultCwdProbe,
       announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),
       list: () => hostSessions.listSessions(),
+      ptyOf: (id) => registry.sessionPty(id),
       log: (m) => log.write(m)
     }),
     // The `github-*` commands (MCP P2-B): the user's gh on this Host's PATH, and a Run's branch from this

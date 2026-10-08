@@ -1809,7 +1809,14 @@ export function createHostOrch(a: {
           const answered = await understandingRegenerate(args, from, marks)
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
-        // **Answered by the Host, like the two above — but on *this* side of the receipt line.**
+        // **A remote session's changes** (Phase 9a): below the receipt line, so a retried input, stop or answer replays
+        // its answer instead of acting twice. Each marks an effect only when it acted.
+        if (REMOTE_SESSION_CHANGES.has(cmd)) {
+          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1))
+          const answered = changed ? await changed : { status: 501, body: { error: `${cmd} is not answered by this Host` } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Answered by the Host, like the ones above — but on *this* side of the receipt line.**
         //
         // Beside them in every other respect: nobody's `case` in `handleCommand` runs, and a Host too
         // old to know it answers 501, which `codeForStatus` turns into exit 9 for free (§8).
@@ -1824,13 +1831,6 @@ export function createHostOrch(a: {
         //
         // **And the state is not loaded for it.** Receipts are not in the state file (§4), so a `ready()`
         // here would read a file to answer a question the file has nothing to say about.
-        // **A remote session's changes** (Phase 9a): below the receipt line, so a retried input, stop or answer replays
-        // its answer instead of acting twice. Each marks an effect only when it acted.
-        if (REMOTE_SESSION_CHANGES.has(cmd)) {
-          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1))
-          const answered = changed ? await changed : { status: 501, body: { error: `${cmd} is not answered by this Host` } }
-          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
-        }
         if (cmd === 'requests-show') {
           const shown = requestsShow(args, receiptCaller(sessionId, from))
           return claimed === null ? shown : settleRequest(claimed, cmd, marks, shown)

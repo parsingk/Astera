@@ -26,6 +26,7 @@ import { checkCwd, type ProbeResult } from '../core/sessions/pathProbe'
 import { LAUNCH_FORBIDDEN } from '../core/sessions/commands'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
 import { providerOf } from '../core/providers/meta'
+import { sourcesOf } from './sessions'
 
 export function createHostSessionStarter(d: {
   /** Null for a Host started without the agent CLI paths: it starts no session. */
@@ -45,18 +46,33 @@ export function createHostSessionStarter(d: {
   announceProc(procId: string): void
   /** The Host's session rows, `sessions list`'s. */
   list(): Promise<HostSession[]>
+  /** The pty a terminal session runs in (registry `sessionPty`), for a row not listed yet. */
+  ptyOf?(sessionId: string): string | null
   log(m: string): void
 }): (o: SessionCreate) => Promise<HostSession> {
-  const rowOf = async (info: SessionInfo, kind: HostSession['kind']): Promise<HostSession> =>
-    (await d.list()).find((r) => r.id === info.id && r.alive) ?? {
+  // A row not listed yet still names its pty or process, provider and sources, so a controller that just made the
+  // session can subscribe to it and read its facts (Phase 9a review M10).
+  const rowOf = async (info: SessionInfo, kind: HostSession['kind']): Promise<HostSession> => {
+    const listed = (await d.list()).find((r) => r.id === info.id && r.alive)
+    if (listed) return listed
+    const account = info.accountId ? ((await d.readAccounts().catch(() => [])).find((a) => a.id === info.accountId) ?? null) : null
+    const provider = account ? providerOf(account) : undefined
+    const ptyId = kind === 'terminal' ? (d.ptyOf?.(info.id) ?? null) : null
+    const procId = kind === 'chat' ? (d.chats?.procOf(info.id) ?? null) : null
+    return {
       id: info.id,
       kind,
       title: info.title ?? null,
       accountId: info.accountId ?? null,
       cwd: info.cwd ?? null,
       alive: true,
-      state: 'unknown'
+      state: 'unknown',
+      ...(ptyId ? { ptyId } : {}),
+      ...(procId ? { procId } : {}),
+      ...(provider ? { provider } : {}),
+      sources: sourcesOf(kind, provider)
     }
+  }
 
   const terminal = async (o: SessionCreate): Promise<HostSession> => {
     if (!d.spawner)

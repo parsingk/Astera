@@ -51,15 +51,16 @@ describe('createSessionFacts', () => {
     expect(await f.factsOf('x1')).toMatchObject({ status: 'unknown', prompt: 'unknown' })
   })
 
-  it('a Codex terminal is waiting after a completed turn, working after input since or a turn started', async () => {
+  it('a Codex terminal is waiting after a completed turn, unknown after input since, working once a turn started', async () => {
     const s = row({ id: 'x1', kind: 'terminal', provider: 'codex', ptyId: 'p2' })
     const done = '2026-10-08T01:00:00.000Z'
     const lines = [ev('task_started', '2026-10-08T00:59:00.000Z'), ev('task_complete', done)]
     let wrote: number | null = null
     const f = createSessionFacts(deps({ listSessions: async () => [s], rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: Date.parse(done) }), lastWrite: () => wrote }))
     expect((await f.factsOf('x1'))?.status).toBe('waiting')
+    // Input since may be a turn or a few keys and nothing more: the rollout has not said, so the Host does not guess.
     wrote = Date.parse(done) + 5_000
-    expect((await f.factsOf('x1'))?.status).toBe('working')
+    expect((await f.factsOf('x1'))?.status).toBe('unknown')
     wrote = null
     lines.push(ev('task_started', '2026-10-08T01:01:00.000Z'))
     expect((await f.factsOf('x1'))?.status).toBe('working')
@@ -112,5 +113,47 @@ describe('createSessionFacts', () => {
     const s = row({ id: 'c1', kind: 'terminal', ptyId: 'p1' })
     const f = createSessionFacts(deps({ listSessions: async () => [s] }))
     expect(await f.factsOf('c1')).toMatchObject({ status: 'unknown', prompt: 'unknown', usage: null, model: null })
+  })
+
+  // Phase 9a review I1: an interrupted turn ends the turn; a write with no turn mark after it says nothing certain.
+  it('a Codex turn interrupted (turn_aborted) is waiting; a write after the last turn mark is unknown, not working', async () => {
+    const s = row({ id: 'x1', kind: 'terminal', provider: 'codex', ptyId: 'p2' })
+    const aborted = '2026-10-08T01:00:00.000Z'
+    const lines = [ev('task_started', '2026-10-08T00:59:00.000Z'), ev('turn_aborted', aborted)]
+    let wrote: number | null = null
+    const f = createSessionFacts(deps({ listSessions: async () => [s], rolloutOf: () => 'D:/r.jsonl', readTail: async () => ({ lines, mtimeMs: 0 }), lastWrite: () => wrote }))
+    expect((await f.factsOf('x1'))?.status).toBe('waiting')
+    wrote = Date.parse(aborted) + 1_000
+    expect((await f.factsOf('x1'))?.status).toBe('unknown')
+    lines.length = 0
+    expect((await f.factsOf('x1'))?.status).toBe('unknown')
+  })
+  // Phase 9a review M3: an ended chat says nothing about a prompt either.
+  it('an ended chat with a turn record left has an unknown prompt', async () => {
+    const s = row({ id: 'h1', kind: 'chat', provider: 'claude', procId: 'q1', alive: false })
+    const chats = { turnOf: () => ({ alive: false, status: 'idle' as const, error: null }), requests: () => [], chosenModelOf: () => null, subscribe: () => () => {} }
+    const f = createSessionFacts(deps({ listSessions: async () => [s], chats: chats as never }))
+    expect(await f.factsOf('h1')).toMatchObject({ status: 'unknown', prompt: 'unknown' })
+  })
+  // Phase 9a review M6: a Claude chat's usage comes from its usage events alone. One the Host has not seen since these
+  // facts began (a Host restarted under a running chat) is null, never a stale figure, until the chat's next turn ends.
+  it('a Claude chat has no usage until a usage event, then the last one; its exit forgets it', async () => {
+    const s = row({ id: 'h1', kind: 'chat', provider: 'claude', procId: 'q1' })
+    let emit: (sid: string, e: unknown) => void = () => {}
+    const chats = {
+      turnOf: () => ({ alive: true, status: 'idle' as const, error: null }),
+      requests: () => [],
+      chosenModelOf: () => 'claude-sonnet-4-5',
+      subscribe: (fn: (sid: string, e: unknown) => void) => {
+        emit = fn
+        return () => {}
+      }
+    }
+    const f = createSessionFacts(deps({ listSessions: async () => [s], chats: chats as never }))
+    expect((await f.factsOf('h1'))?.usage).toBeNull()
+    emit('h1', { type: 'usage', context: { usedTokens: 50_000, windowByModel: { 'claude-sonnet-4-5': 200_000 } } })
+    expect((await f.factsOf('h1'))?.usage?.context).not.toBeNull()
+    emit('h1', { type: 'exit' })
+    expect((await f.factsOf('h1'))?.usage).toBeNull()
   })
 })

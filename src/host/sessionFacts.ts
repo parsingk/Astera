@@ -4,10 +4,12 @@
 // demand, so it runs whether or not Slack or Account Rolling is on.
 //
 // - Claude terminal: status and prompt from its hook events (`sessionTurn`), usage and model from its statusline.
-// - Codex terminal: status from the end of its rollout (a turn started is working, a turn completed is waiting, input
-//   written after that is working again), no prompt source, usage and model from the rollout.
+// - Codex terminal: status from the end of its rollout (a turn started is working; a turn completed or interrupted is
+//   waiting; input written after that is unknown, since a few keys are not a turn and the rollout has not said), no
+//   prompt source, usage and model from the rollout.
 // - Chat: status from the chat's turn, prompt from its open request, model from the chat, usage from the last usage
-//   event it sent (Claude; Codex chats send none).
+//   event it sent (Claude; Codex chats send none). Only events seen since these facts began count: a chat whose last
+//   turn ended before (a Host restarted under it) has no usage until its next turn ends, rather than a stale figure.
 import { stat } from 'node:fs/promises'
 import type { HostSession, SessionSources } from '../core/orchestration/command'
 import type { SessionUsage } from '../core/types'
@@ -66,7 +68,8 @@ function lastTurnMark(lines: string[]): { kind: 'started' | 'complete'; at: numb
     if (o?.type !== 'event_msg') continue
     const t = o.payload?.type
     const at = typeof o.timestamp === 'string' ? Date.parse(o.timestamp) : NaN
-    if (t === 'task_complete') return { kind: 'complete', at }
+    // An interrupted turn (Esc) ends as surely as a finished one (review I1).
+    if (t === 'task_complete' || t === 'turn_aborted') return { kind: 'complete', at }
     if (t === 'task_started' || t === 'user_message') return { kind: 'started', at }
   }
   return null
@@ -90,8 +93,8 @@ export function createSessionFacts(d: SessionFactsDeps): { factsOf(id: string): 
     const wrote = s.ptyId ? d.lastWrite(s.ptyId) : null
     let status: SessionFacts['status'] = 'unknown'
     if (mark?.kind === 'started') status = 'working'
-    else if (mark?.kind === 'complete') status = wrote !== null && Number.isFinite(mark.at) && wrote > mark.at ? 'working' : 'waiting'
-    else if (wrote !== null) status = 'working'
+    // Written to since the turn ended: a turn may have begun, or only a few keys were typed. Unknown, not a guess.
+    else if (mark?.kind === 'complete') status = wrote !== null && Number.isFinite(mark.at) && wrote > mark.at ? 'unknown' : 'waiting'
     const usage = sessionUsageOf(contextFromLines(tail.lines), limitStateFromLines(tail.lines, Date.now()))
     return { ...base, status: s.alive ? status : 'unknown', usage, model: extractCodexModel(tail.lines).model }
   }
@@ -119,7 +122,7 @@ export function createSessionFacts(d: SessionFactsDeps): { factsOf(id: string): 
     return {
       ...base,
       status: turn && turn.alive ? turn.status : 'unknown',
-      prompt: turn ? (open ? (open.kind === 'approval' ? 'permission' : 'question') : null) : 'unknown',
+      prompt: turn && turn.alive ? (open ? (open.kind === 'approval' ? 'permission' : 'question') : null) : 'unknown',
       usage: context ? chatSessionUsage({ context, model, limits: null, account: null }) : null,
       model,
       requests

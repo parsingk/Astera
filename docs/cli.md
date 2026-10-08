@@ -864,7 +864,16 @@ and `warning` says why: the Host then fails every MCP call until the file is rep
 **`sessions` reaches the agent sessions the Host holds**: each tab in which Astera runs Claude Code
 or Codex, and each chat session. A session's id is the one `ASTERA_SESSION` holds inside it, and
 `sessions list` prints it beside `kind` (`terminal` or `chat`), `title`, `accountId`, `cwd`,
-`alive` and `state`. Ended sessions stay listed with `alive: false` until the Host stops. Plain shell tabs and run
+`alive` and `state`, and, when the Host knows them:
+
+- `provider`, `claude` or `codex`, the session's account's agent. It is left out when the account is gone.
+- `rolledFrom`, the id of the session this one replaced when its account was rolled over. Follow it to
+  find the conversation that came before.
+- `sources`, where the Host reads each fact of the session: `status`, `prompt`, `usage` and
+  `conversation`. Each is `hooks`, `statusline`, `rollout`, `transcript` or `chat`, or `none` when that
+  agent and kind give the Host no way to read it. A fact with no source is reported unknown, never idle.
+
+Ended sessions stay listed with `alive: false` until the Host stops. Plain shell tabs and run
 configurations are not agent sessions, and are not listed.
 
 **`state` says whether a session is `working`, `waiting` or `unknown`.** The Host reads it from the
@@ -1067,7 +1076,8 @@ command from. It answers the new session as `sessions list` shows it, and its `i
 `sessions read` and `sessions send` take.
 
 ```json
-{"ok":true,"data":{"id":"…","kind":"terminal","title":"fix the build","accountId":"acc_1","cwd":"D:\\repo","alive":true,"state":"unknown"}}
+{"ok":true,"data":{"id":"…","kind":"terminal","title":"fix the build","accountId":"acc_1","cwd":"D:\\repo","alive":true,"state":"unknown",
+  "provider":"claude","sources":{"status":"hooks","prompt":"hooks","usage":"statusline","conversation":"transcript"}}}
 ```
 
 - **A terminal session (the default, `--kind terminal`)** is started the way the Host starts a worker:
