@@ -120,7 +120,15 @@ export interface HostServerDeps {
   maxLine?: number
   /** The Host process's boot id, in every hello; made once in index.ts (remote runtime design §3.2, N11). */
   bootId?: string
+  /** What one client may leave unread before it is let go (performance audit H1): a client that stopped reading
+   *  would otherwise hold every byte of output written to it in this process. 64 MiB when left out. */
+  maxQueuedBytes?: number
 }
+
+/** Broadcasts a CLI never reads (it reads the answers to its own calls only, cli/run.ts): every session's output, its
+ *  exits and chat lines, and the whole state. Sent to one, they cost a parse of each in every waiting `astera` call. */
+const NOT_FOR_CLI: ReadonlySet<string> = new Set(['pty-data', 'pty-exit', 'pty-opened', 'proc-line', 'proc-opened', 'proc-exit', 'orch-state'])
+const MAX_QUEUED_BYTES = 64 * 1024 * 1024
 
 /** What the `orch-state` throttle measures gaps with and waits on. `after` returns its cancel. */
 export interface StateClock {
@@ -403,11 +411,17 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     })
   }
   /** Every message to a socket goes through here, so nothing overtakes a held `orch-state`. */
+  const queueCap = deps.maxQueuedBytes ?? MAX_QUEUED_BYTES
   const writeTo = (s: net.Socket, m: HostMessage, line: () => string): void => {
     if (s.destroyed) return
     if (m.t === 'orch-state') return pushState(s, line)
     if (m.t !== 'pty-data' && m.t !== 'proc-line') flushState(s)
     s.write(line())
+    // A client that reads nothing is let go before its unread output is this process's problem (audit H1).
+    if (s.writableLength > queueCap) {
+      deps.log.write(`a client left ${s.writableLength} bytes unread; closing it`)
+      s.destroy()
+    }
   }
   /** `encodeLine` once, on first use, for a message that may go to several sockets or to none. */
   const lazyLine = (m: HostMessage): (() => string) => {
@@ -839,8 +853,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       }),
     broadcast: (m, to) => {
       const line = lazyLine(m)
+      const notForCli = NOT_FOR_CLI.has(m.t)
       for (const s of greetedSockets) {
         if (s.destroyed || isMcp(s)) continue
+        if (notForCli && roles.get(s) === 'cli') continue
         if (to && !to(yields.get(s) ?? new Set<string>(), features.get(s) ?? new Set<string>())) continue
         writeTo(s, m, line)
       }

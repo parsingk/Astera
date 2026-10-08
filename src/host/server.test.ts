@@ -44,6 +44,7 @@ const server = async (
     hostKey?: HostServerDeps['hostKey']
     maxLine?: HostServerDeps['maxLine']
     bootId?: HostServerDeps['bootId']
+    maxQueuedBytes?: HostServerDeps['maxQueuedBytes']
   } = {}
 ): Promise<{
   s: HostServer
@@ -79,6 +80,7 @@ const server = async (
     stateClock: over.stateClock,
     hostKey: over.hostKey,
     maxLine: over.maxLine,
+    ...(over.maxQueuedBytes !== undefined ? { maxQueuedBytes: over.maxQueuedBytes } : {}),
     bootId: over.bootId,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
@@ -426,6 +428,52 @@ describe('startHostServer', () => {
     expect(got[1]).toEqual({ t: 'pty-data', id: 'p1', data: 'output' })
   })
 
+  // Performance audit H1: a CLI reads only the answers to its own calls, so the terminal output, chat lines and whole
+  // state pushes of every session are not sent to it (a worker's `astera ask` waiting ten minutes parsed all of them).
+  it('sends a CLI none of the broadcasts it never reads, and an app all of them', async () => {
+    const h = await server()
+    const connect = async (role?: 'cli') => {
+      const got: Array<{ t: string }> = []
+      const sock = net.connect(h.address)
+      const read = createLineReader({ onMessage: (v) => got.push(v as { t: string }), onBadLine: () => {}, onHandlerError: () => {} })
+      sock.setEncoding('utf8')
+      sock.on('data', read)
+      await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+      sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0', ...(role ? { role } : {}) }))
+      return { got, sock }
+    }
+    const cli = await connect('cli')
+    const legacy = await connect()
+    await new Promise((r) => setTimeout(r, 100))
+    for (const m of [
+      { t: 'pty-data', id: 'p1', data: 'output' },
+      { t: 'pty-exit', id: 'p1', exitCode: 0 },
+      { t: 'proc-line', id: 'c1', line: '{}' }
+    ] as HostMessage[])
+      h.s.broadcast(m)
+    await new Promise((r) => setTimeout(r, 100))
+    cli.sock.destroy()
+    legacy.sock.destroy()
+    expect(cli.got.map((m) => m.t)).toEqual(['hello'])
+    expect(legacy.got.map((m) => m.t)).toEqual(['hello', 'pty-data', 'pty-exit', 'proc-line'])
+  })
+
+  // Performance audit H1: a client that stopped reading (paused, in a debugger) must not grow the Host's memory by
+  // every byte of output; past its budget it is let go.
+  it('closes a client whose unread output passes its budget', async () => {
+    const h = await server({ maxQueuedBytes: 64 * 1024 })
+    const sock = net.connect(h.address)
+    await new Promise<void>((resolve) => sock.on('connect', () => resolve()))
+    sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }))
+    await new Promise((r) => setTimeout(r, 100))
+    sock.pause()
+    const closed = new Promise<void>((resolve) => sock.on('close', () => resolve()))
+    for (let i = 0; i < 200; i++) h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'x'.repeat(16 * 1024) })
+    await Promise.race([closed, new Promise((r) => setTimeout(r, 3000))])
+    expect(h.s.clients()).toBe(0)
+    sock.destroy()
+  })
+
   // A client on another protocol is told so and nothing else. The same rule the address's version
   // suffix exists for (core/host/protocol.ts): an app that cannot speak this protocol must not be
   // handed this protocol's messages.
@@ -579,13 +627,14 @@ describe('startHostServer', () => {
       mcp.send({ t: 'ping', seq: 7 })
       expect(await mcp.next()).toEqual({ t: 'pong', seq: 7 })
     })
-    // An MCP link lives for hours; it reads nothing pushed, so it is sent no terminal output and no state.
-    it('is sent no broadcast, while a cli socket is', async () => {
+    // An MCP link lives for hours; it reads nothing pushed, so it is sent no terminal output and no state. Nor is a
+    // CLI (performance audit H1); an app is.
+    it('is sent no broadcast, while an app socket is', async () => {
       const h = await start()
       const mcp = await h.connect('mcp')
-      const cli = await h.connect('cli')
+      const app = await h.connect('app')
       h.s.broadcast({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
-      expect(await cli.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
+      expect(await app.next()).toEqual({ t: 'pty-data', id: 'p1', data: 'a terminal line' })
       expect(await mcp.next(150)).toBeUndefined()
     })
     it("is sent no other caller's state push, and still gets its own orch-result", async () => {
@@ -1499,23 +1548,25 @@ describe('orch-state pushes to a client that reads the latest', () => {
     }
   })
 
-  it('sends the first at once and then only the newest of a burst, to an app and to a CLI', async () => {
+  // A CLI is sent no state at all (performance audit H1: it reads none); an app that reads the latest gets the first of
+  // a burst at once and then only the newest.
+  it('sends the first at once and then only the newest of a burst to an app, and none to a CLI', async () => {
     const c = fakeClock()
     const h = await server({ stateClock: c.clock })
     const app = await connectAs(h.address, latest)
     const cli = await connectAs(h.address, { role: 'cli' })
     for (let v = 1; v <= 5; v++) h.s.broadcast(st(v))
-    for (const x of [app, cli]) expect(versionOf(await x.ch.next())).toBe(1)
-    for (const x of [app, cli]) expect(await x.ch.next(QUIET_MS)).toBeUndefined()
-    // One trailing timer per socket, each no longer than the gap.
-    expect(c.live()).toBe(2)
+    expect(versionOf(await app.ch.next())).toBe(1)
+    expect(await app.ch.next(QUIET_MS)).toBeUndefined()
+    expect(await cli.ch.next(QUIET_MS)).toBeUndefined()
+    // One trailing timer, for the app, no longer than the gap.
+    expect(c.live()).toBe(1)
     for (const t of c.timers) expect(t.ms).toBeLessThanOrEqual(ORCH_STATE_PUSH_MS)
     c.at.now += ORCH_STATE_PUSH_MS
     c.fire()
-    for (const x of [app, cli]) {
-      expect(versionOf(await x.ch.next())).toBe(5)
-      expect(await x.ch.next(QUIET_MS)).toBeUndefined()
-    }
+    expect(versionOf(await app.ch.next())).toBe(5)
+    expect(await app.ch.next(QUIET_MS)).toBeUndefined()
+    expect(await cli.ch.next(QUIET_MS)).toBeUndefined()
     app.sock.end()
     cli.sock.end()
   })
