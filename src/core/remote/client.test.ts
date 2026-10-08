@@ -44,3 +44,35 @@ describe('connectRuntime heartbeat (remote runtime design §3.1, N14)', () => {
     expect(srv.got.join('')).toContain('"t":"ping"')
   })
 })
+
+// Phase 8 review M9: subscription frames are validated before they reach a stream, and a refused stream's handler goes.
+describe('connectRuntime subscriptions', () => {
+  it('passes valid frames to the stream, drops malformed ones, and forgets a refused stream', async () => {
+    let peer: tls.TLSSocket | null = null
+    const server = tls.createServer({ key: identity.key, cert: identity.cert, minVersion: 'TLSv1.3' }, (s) => {
+      peer = s
+      s.on('error', () => {})
+    })
+    servers.push(server)
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    const link = await connectRuntime({ host: '127.0.0.1', port: (server.address() as { port: number }).port, pin: identity.pin })
+    const got: Array<Record<string, unknown>> = []
+    link.subscribe?.('s1', 'p1', {}, (f) => void got.push(f as unknown as Record<string, unknown>))
+    const until = async (ok: () => boolean): Promise<void> => {
+      for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 10))
+    }
+    await until(() => peer !== null)
+    const say = (m: unknown): void => void (peer as unknown as tls.TLSSocket).write(JSON.stringify(m) + String.fromCharCode(10))
+    say({ t: 'pty-out', sub: 's1', events: [{ seq: 'x', kind: 'data', data: 'bad' }] })
+    say({ t: 'pty-out', sub: 's1', events: [{ seq: 1, kind: 'data', data: 'good' }] })
+    await until(() => got.length >= 1)
+    say({ t: 'sub-error', sub: 's1', code: 'RUNTIME_NOT_FOUND', message: 'gone' })
+    say({ t: 'pty-out', sub: 's1', events: [{ seq: 2, kind: 'data', data: 'after' }] })
+    await until(() => got.length >= 2)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(got.map((f) => f.t)).toEqual(['pty-out', 'sub-error'])
+    expect(JSON.stringify(got[0])).toContain('good')
+    link.close()
+    ;(peer as unknown as tls.TLSSocket).destroy()
+  })
+})

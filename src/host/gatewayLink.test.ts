@@ -372,4 +372,16 @@ describe('attachGatewayLink pty subscriptions (Phase 8)', () => {
     expect(of(s.frames, 'output-gap')).toMatchObject([{ sub: 's1' }])
     expect(of(s.frames, 'pty-out')).toEqual([])
   })
+
+  // Phase 8 review M9: a revoked connection streams nothing more, without waiting for the Gateway to report it closed.
+  it('closeConns drops that connection’s subscriptions at once', async () => {
+    const s = await ready()
+    s.send({ t: 'subscribe', conn: 'c1', sub: 's1', pty: 'p1' })
+    await s.settle()
+    s.link.closeConns([{ linkGen: 1, conn: 'c1' }])
+    s.frames.length = 0
+    s.emit('after the revocation')
+    await s.settle()
+    expect(of(s.frames, 'pty-out')).toEqual([])
+  })
 })

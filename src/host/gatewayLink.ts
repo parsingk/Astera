@@ -261,7 +261,12 @@ export function attachGatewayLink(o: {
 
   return {
     closeConns: (conns) => {
-      for (const c of conns) if (c.linkGen === o.linkGen) send({ t: 'close-conn', conn: c.conn, code: 'RUNTIME_AUTH_FAILED' })
+      for (const c of conns) {
+        if (c.linkGen !== o.linkGen) continue
+        // Its streams stop now, not when the Gateway reports the connection closed (review M9).
+        for (const sub of [...subs.values()]) if (sub.conn === c.conn) dropSub(sub.key)
+        send({ t: 'close-conn', conn: c.conn, code: 'RUNTIME_AUTH_FAILED' })
+      }
     },
     detach: () => {
       detached = true

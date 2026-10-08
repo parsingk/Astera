@@ -5,7 +5,7 @@ import type { TLSSocket } from 'node:tls'
 import { createLineReader } from '../../host/framing'
 import { connectPinned } from './pin'
 import { createReassembler, type ChunkFrame } from './chunks'
-import { FRAME_CAP, type ClientInfo, type HelloFrame, type ServerFrame, type SubscriptionFrame } from './frames'
+import { FRAME_CAP, parseSubscriptionFrame, type ClientInfo, type HelloFrame, type ServerFrame, type SubscriptionFrame } from './frames'
 
 export interface CallReply {
   status: number
@@ -120,9 +120,16 @@ export async function connectRuntime(o: {
       case 'pty-out':
       case 'checkpoint':
       case 'output-gap':
-      case 'sub-error':
-        streams.get(f.sub)?.(f)
+      case 'sub-error': {
+        // Checked as the Gateway checks the Host's (review M9): a malformed frame never reaches a view.
+        const ok = parseSubscriptionFrame(f as unknown as Record<string, unknown>)
+        if ('error' in ok) return
+        const to = streams.get(ok.sub)
+        // A refused stream is over: its handler goes, so nothing later under its id reaches it.
+        if (ok.t === 'sub-error') streams.delete(ok.sub)
+        to?.(ok)
         return
+      }
       default:
         return
     }
