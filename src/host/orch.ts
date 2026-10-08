@@ -1045,6 +1045,10 @@ export function createHostOrch(a: {
     from: OrchCaller | undefined
   ): Promise<{ status: number; body: unknown }> => {
     await ready()
+    // A caller already holding this version is told so, without the state (performance audit M2): a remote Run detail
+    // asks on every open. Never for a boot ask, whose findings are the point of it.
+    if (typeof args.since === 'number' && args.since === version && args.boot !== true)
+      return { status: 200, body: { unchanged: true, version } }
     // A controller gets the sanitized state and never the boot findings (remote runtime design §3.6).
     if (from?.role === 'controller') return { status: 200, body: { state: sanitizeForController(store.get()), boot: null, version } }
     // Not a 403: asking for the state is allowed, and this caller is getting it. What it is not

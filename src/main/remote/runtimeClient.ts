@@ -62,6 +62,8 @@ const EMPTY_DETAIL: RunDetail = { events: [], layers: [], deps: {}, cyclic: [] }
 const TIMELINE_PAGE = 200
 /** The most events the Runtime gives in one answer (host/remoteReads.ts TIMELINE_PAGE_MAX). */
 const TIMELINE_MAX = 1000
+/** How many Runs' last timelines are kept for an unreachable Runtime (performance audit M5). */
+const TIMELINES_KEPT = 16
 
 /** A link failure as a command's reply: the Runtime may or may not have run it, so it is a 409 then, and a 503 when
  *  the Runtime could not be asked at all. */
@@ -111,8 +113,18 @@ export function createRemoteRuntimeClient(a: {
   /** Each project's read number and the newest one that answered: an older answer landing later is not kept over it. */
   const askedByKey = new Map<string, number>()
   const keptByKey = new Map<string, number>()
-  /** The last timeline the Runtime gave per Run, shown while it cannot give one (as the list keeps its last). */
+  /** The last timeline the Runtime gave per Run, shown while it cannot give one (as the list keeps its last). Only the
+   *  most recently opened Runs' (performance audit M5): a Run detail is opened, read and closed, and an app open for a
+   *  week would otherwise hold every timeline it ever showed. */
   const lastTimeline = new Map<string, RunDetail['events']>()
+  const keepTimeline = (id: string, events: RunDetail['events']): void => {
+    lastTimeline.delete(id)
+    lastTimeline.set(id, events)
+    for (const old of lastTimeline.keys()) {
+      if (lastTimeline.size <= TIMELINES_KEPT) break
+      lastTimeline.delete(old)
+    }
+  }
 
   const view = (): RuntimeView => ({ runtimeId: a.runtimeId, offline: m.offline, stale: m.stale, version: m.version, ...(m.error ? { error: m.error } : {}) })
 
@@ -120,9 +132,21 @@ export function createRemoteRuntimeClient(a: {
    *  offline or stale over a newer success (review I-2). */
   let asked = 0
   let settled = 0
+  /** The state, or only word that it has not moved when this mirror is from the same boot (performance audit M2: a Run
+   *  detail asks on every open, and the whole state crossed the link each time). An unchanged answer is taken only if
+   *  the boot is still the one the version was quoted for; a Runtime that restarted meanwhile is asked again in full. */
+  const ask = async (): Promise<RemoteError | { status: number; body: unknown }> => {
+    const boot = a.link.hello()?.bootId ?? null
+    const holds = m.state !== null && boot !== null && boot === m.bootId
+    const r = heard(await a.link.call('state-get', holds ? { since: m.version } : {}))
+    if (!holds || r instanceof RemoteError || r.status !== 200) return r
+    const unchanged = (r.body as { unchanged?: unknown } | null)?.unchanged === true
+    if (!unchanged || (a.link.hello()?.bootId ?? null) === boot) return r
+    return heard(await a.link.call('state-get', {}))
+  }
   const refresh = async (): Promise<RemoteMirror> => {
     const mine = ++asked
-    const r = heard(await a.link.call('state-get', {}))
+    const r = await ask()
     if (mine < settled) return m
     settled = mine
     if (r instanceof RemoteError) {
@@ -192,7 +216,7 @@ export function createRemoteRuntimeClient(a: {
       const t = heard(await a.link.call('runs-timeline', { runId: id, limit, ...(a.lang ? { lang: a.lang() } : {}) }))
       const ok = !(t instanceof RemoteError) && t.status === 200
       const page = ok ? (t.body as { events?: RunDetail['events']; nextCursor?: number | null; journalBusy?: boolean }) : null
-      if (page?.events) lastTimeline.set(id, page.events)
+      if (page?.events) keepTimeline(id, page.events)
       const more = page?.nextCursor !== undefined && page.nextCursor !== null
       // The Runtime gives at most TIMELINE_MAX events in one answer: past it, the detail says so instead of offering a
       // page that would bring nothing more.

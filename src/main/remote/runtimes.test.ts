@@ -123,4 +123,15 @@ describe('a client replaced or removed is announced', () => {
     await new Promise((res) => setTimeout(res, 0))
     expect(changed).toEqual(['rt_a', 'rt_a'])
   })
+
+  // Performance audit M4: every remote call looked its Runtime up again, reading and checking the registry and the
+  // token file. While the registry file is as it was, the kept client answers without reading either.
+  it('a call while the registry is unchanged reads neither the registry nor the token again', async () => {
+    const o = opener()
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: o.open })
+    await r.client('rt_a')
+    await fs.writeFile(path.join(dir, 'runtimes', 'rt_a.token'), 'tok-z')
+    await r.client('rt_a')
+    expect(o.opened.map((t) => t.token)).toEqual(['tok-a'])
+  })
 })

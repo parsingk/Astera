@@ -3,6 +3,8 @@
 // pairing dialog fill it). Kept per pairing: a re-pair (a new token or key for the same Runtime) opens a new client and
 // closes the old, as MCP's kept links do.
 import { createHash } from 'node:crypto'
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
 import type { RuntimeRegistry } from '../../core/runtimes/registry'
 import os from 'node:os'
@@ -39,7 +41,20 @@ export function createRemoteRuntimes(a: {
    *  that it closed, so their owner subscribes them again (Phase 9b remoteStreams `rebind`). */
   onClientChange?(runtimeId: string): void
 }): RemoteRuntimes {
-  const clients = new Map<string, { client: RemoteRuntimeClient; pairing: string }>()
+  const clients = new Map<string, { client: RemoteRuntimeClient; pairing: string; stamp: string | null }>()
+  /** The registry file as last seen (performance audit M4). Every remote call looks its Runtime up, and a lookup reads
+   *  and checks the registry and the token file; while this file is unchanged a kept client is still the pairing it
+   *  was made for, since a pairing (here or by `astera runtimes add|remove` elsewhere) always rewrites it. One stat
+   *  instead of two checked reads. Null when it cannot be read: then nothing is reused. */
+  const registryFile = path.join(a.profileDir, 'runtimes', 'runtimes.json')
+  const stampOf = async (): Promise<string | null> => {
+    try {
+      const st = await fs.stat(registryFile)
+      return `${st.ino}:${st.mtimeMs}:${st.ctimeMs}:${st.size}`
+    } catch {
+      return null
+    }
+  }
   /** Opened once (review I-4): opening takes the store's lock and sweeps it, which a read on every call must not do. */
   let registry: Promise<RuntimeRegistry> | null = null
   const reg = (): Promise<RuntimeRegistry> => {
@@ -53,6 +68,9 @@ export function createRemoteRuntimes(a: {
   const pending = new Map<string, Promise<Found>>()
 
   const lookup = async (runtimeId: string): Promise<Found> => {
+    const stamp = await stampOf()
+    const held = clients.get(runtimeId)
+    if (held && stamp !== null && held.stamp === stamp) return held.client
     const r = await reg()
     const found = resolveRuntime(await r.list(), runtimeId)
     // By id only from the app: a name is for a person typing a command, and a view keys its data by id.
@@ -61,7 +79,10 @@ export function createRemoteRuntimes(a: {
     if (token === null) return { code: 'RUNTIME_NOT_FOUND', message: `${found.name} has no token on this machine; pair it again` }
     const pairing = `${found.address}:${found.port}:${found.fingerprint}:${createHash('sha256').update(token).digest('hex')}`
     const kept = clients.get(found.runtimeId)
-    if (kept?.pairing === pairing) return kept.client
+    if (kept?.pairing === pairing) {
+      kept.stamp = stamp
+      return kept.client
+    }
     kept?.client.close()
     const target: RemoteTarget = { runtimeId: found.runtimeId, address: found.address, port: found.port, fingerprint: found.fingerprint, token }
     const link = (
@@ -69,7 +90,7 @@ export function createRemoteRuntimes(a: {
       ((t) => openRemoteLink({ target: t, client: { name: 'astera app', version: a.version, surface: 'desktop' }, reconnectForMs: APP_RECONNECT_FOR_MS }))
     )(target)
     const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link, ...(a.lang ? { lang: a.lang } : {}) })
-    clients.set(found.runtimeId, { client, pairing })
+    clients.set(found.runtimeId, { client, pairing, stamp })
     // After this lookup settles, so the owner's own client() finds the new client rather than this pending lookup.
     if (kept) setTimeout(() => a.onClientChange?.(found.runtimeId), 0)
     return client

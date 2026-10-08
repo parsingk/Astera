@@ -365,4 +365,77 @@ describe('remote sessions through the client', () => {
     fresh.link.hello = () => null
     expect((await createRemoteRuntimeClient({ runtimeId: 'rt_a', link: fresh.link }).command('runs-changed-files', { runId: 'r' })).status).toBe(200)
   })
+
+  // Performance audit M2: a Run detail read the Runtime's whole state on every open and every refetch. The second read
+  // on the same boot says which version it holds, and an unchanged Runtime answers without the state.
+  it('asks for the state only when it moved: the version it holds goes along on the same boot', async () => {
+    const a = seeded()
+    const asked: Array<Record<string, unknown>> = []
+    let version = 2
+    const f = fakeLink((cmd, args) => {
+      if (cmd === 'state-get') {
+        asked.push(args)
+        if (args.since === version) return { status: 200, body: { unchanged: true, version } }
+        return { status: 200, body: { state: a.state, version } }
+      }
+      return { status: 200, body: { runId: a.runId, events: [], nextCursor: null } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    await c.runDetail(a.runId)
+    const d = await c.runDetail(a.runId)
+    expect(asked).toEqual([{}, { since: 2 }])
+    expect(d.layers.flat()).toContain(a.taskId)
+    expect(c.mirror()).toMatchObject({ version: 2, offline: false })
+    version = 3
+    await c.refresh()
+    expect(asked[2]).toEqual({ since: 2 })
+    expect(c.mirror().version).toBe(3)
+    // A new boot starts its versions again: nothing it holds is quoted to it.
+    f.reboot('boot2')
+    await c.refresh()
+    expect(asked[3]).toEqual({})
+  })
+
+  it('an unchanged answer from a Runtime that restarted meanwhile is not taken: it asks again in full', async () => {
+    const a = seeded()
+    const asked: Array<Record<string, unknown>> = []
+    const f = fakeLink((cmd, args) => {
+      asked.push(args)
+      if (args.since !== undefined) {
+        f.reboot('boot2')
+        return { status: 200, body: { unchanged: true, version: 2 } }
+      }
+      return { status: 200, body: { state: a.state, version: 2 } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    await c.refresh()
+    await c.refresh()
+    expect(asked).toEqual([{}, { since: 2 }, {}])
+    expect(c.mirror()).toMatchObject({ bootId: 'boot2', version: 2 })
+  })
+
+  // Performance audit M5: the last timeline of every Run ever opened was kept for the life of the app.
+  it('keeps the last timeline of the most recently opened Runs only', async () => {
+    let s = seeded().state
+    const jobId = s.jobs[0].id
+    for (let i = 0; i < 20; i++) {
+      const r = startJobRun(s, jobId, NOW)
+      if (!r.ok) throw new Error(r.error)
+      s = r.state
+    }
+    const ids = s.runs.map((r) => r.id)
+    let up = true
+    const f = fakeLink((cmd, args) => {
+      if (!up && cmd === 'runs-timeline') return new RemoteError('RUNTIME_OFFLINE', 'down')
+      if (cmd === 'runs-timeline') return { status: 200, body: { runId: args.runId, events: [{ at: NOW, kind: 'note', text: `kept ${String(args.runId)}` }], nextCursor: null } }
+      return { status: 200, body: { state: s, version: 1 } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    for (const id of ids) await c.runDetail(id)
+    up = false
+    const newest = await c.runDetail(ids[ids.length - 1])
+    expect(JSON.stringify(newest.events)).toContain('kept')
+    const oldest = await c.runDetail(ids[0])
+    expect(JSON.stringify(oldest.events)).not.toContain('kept')
+  })
 })

@@ -703,6 +703,18 @@ describe('createHostOrch', () => {
       return { taskId: task.value.id, dispatchId: dsp.value.id }
     }
 
+    // Performance audit M2: a remote Run detail asked for the whole state on every open. A caller that names the version
+    // it holds is told it is still current, without the state.
+    it('answers unchanged, without the state, to a caller already holding this version', async () => {
+      await seed()
+      const orch = orchOver()
+      const first = (await orch.call({ cmd: 'state-get', args: {}, sessionId: '' })).body as { version: number }
+      const same = await orch.call({ cmd: 'state-get', args: { since: first.version }, sessionId: '' })
+      expect(same).toEqual({ status: 200, body: { unchanged: true, version: first.version } })
+      const older = await orch.call({ cmd: 'state-get', args: { since: first.version - 1 }, sessionId: '' })
+      expect((older.body as { state?: OrchState }).state).toBeDefined()
+    })
+
     it('상태를 통째로 답한다', async () => {
       const { jobId } = await seed()
       const r = await orchOver().call({ cmd: 'state-get', args: {}, sessionId: '' })
