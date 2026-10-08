@@ -12,7 +12,7 @@ import { promises as fs, existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createLostGateGuard, type LostGateGuard } from './lostGateGuard'
-import { APP_LEFT_GRACE_MS, createHostDriving, type HostDriving } from './driving'
+import { APP_LEFT_GRACE_MS, TICKS_SKIPPED_BEFORE_SAYING, createHostDriving, type HostDriving } from './driving'
 import { createHostOrch, type HostOrch } from './orch'
 import type { HostLocal } from './spawner'
 import { emptyState, type OrchState } from '../core/orchestration/state'
@@ -457,10 +457,26 @@ describe('createHostDriving', () => {
     for (let i = 0; i < 5; i++) h.driving.kick('test')
     await new Promise((r) => setTimeout(r, 20))
     expect(h.heldReads()).toBe(1)
+    // Final review M2: the joined kicks run one more pass, held here like the first, and no third.
+    h.releaseRead(0)
+    await vi.waitFor(() => expect(h.heldReads()).toBe(2))
+    h.gateReads.hold = false
+    h.releaseRead(1)
+    await h.settle()
+    expect(h.heldReads()).toBe(2)
+  })
+  // Final review M7: a tick that never ends held every later tick off without a word.
+  it('says so when ticks keep finding the last one still running', async () => {
+    const h = await rig({ readyTasks: 0 })
+    await h.load()
+    h.gateReads.hold = true
+    void h.tickNow()
+    for (let i = 0; i < TICKS_SKIPPED_BEFORE_SAYING; i++) void h.tickNow()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(h.logs.filter((l) => l.includes('still running'))).toHaveLength(1)
     h.gateReads.hold = false
     h.releaseRead(0)
     await h.settle()
-    expect(h.heldReads()).toBe(1)
   })
   it('a tick that comes while one runs does nothing', async () => {
     const h = await rig({ readyTasks: 0 })

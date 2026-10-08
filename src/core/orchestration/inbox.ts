@@ -122,7 +122,7 @@ export interface NudgeMemo {
 
 /** The sessions to nudge now, and the memory to keep (audit OR-2). New mail is nudged at once; the same mail again only
  *  after a wait that grows; a session with nothing unread is forgotten. */
-export function planNudges<T extends { sessionId: string; messageIds: string[] }>(
+export function planNudges<T extends { runId: string; sessionId: string; messageIds: string[] }>(
   mail: T[],
   memo: ReadonlyMap<string, NudgeMemo>,
   now: number
@@ -130,19 +130,25 @@ export function planNudges<T extends { sessionId: string; messageIds: string[] }
   const next = new Map<string, NudgeMemo>()
   const due: T[] = []
   for (const m of mail) {
+    const key = nudgeKey(m)
     const ids = [...m.messageIds].sort().join(',')
-    const before = memo.get(m.sessionId)
-    const fresh = !before || before.ids !== ids || ids.split(',').some((id) => !before.ids.split(',').includes(id))
+    const before = memo.get(key)
+    // New mail is a message not nudged about before (final review M3): an ack that leaves fewer is not.
+    const known = new Set(before ? before.ids.split(',') : [])
+    const fresh = !before || m.messageIds.some((id) => !known.has(id))
     if (fresh) {
       due.push(m)
-      next.set(m.sessionId, { ids, at: now, times: 1 })
+      next.set(key, { ids, at: now, times: 1 })
       continue
     }
     const wait = NUDGE_AGAIN_MS[Math.min(before.times - 1, NUDGE_AGAIN_MS.length - 1)]
     if (now - before.at >= wait) {
       due.push(m)
-      next.set(m.sessionId, { ids, at: now, times: before.times + 1 })
-    } else next.set(m.sessionId, before)
+      next.set(key, { ids, at: now, times: before.times + 1 })
+    } else next.set(key, { ...before, ids })
   }
   return { due, memo: next }
 }
+
+/** A nudge's memory is per Run and session (final review M4): one session named by two Runs kept overwriting one. */
+export const nudgeKey = (m: { runId: string; sessionId: string }): string => `${m.runId}\u0000${m.sessionId}`

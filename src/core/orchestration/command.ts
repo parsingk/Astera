@@ -2544,11 +2544,33 @@ export async function handleCommand(
       if (starting) return starting
       // 세션을 닫는 것은 부수 효과이고 상태를 쓰지 않는다 — 상태에서 닫히는 것은 아래
       // pauseSchedule 이 한꺼번에 한다(run-delete 가 releaseWorker 를 쓰는 순서와 같다).
-      for (const d of open.filter(releases)) await deps.releaseWorker({ dispatchId: d.id })
+      const done = new Set<string>()
+      for (const d of open.filter(releases)) {
+        await deps.releaseWorker({ dispatchId: d.id })
+        done.add(d.id)
+      }
       // On the state as it is now (audit OR-3): each release waits up to 5 s, and what landed meanwhile (a worker's
-      // report, a message, a rolling record) is kept, as runs-stop and run-delete keep it.
-      const latest = deps.getState()
-      if (!latest.jobs.some((j) => j.id === id)) return notFound(`unknown job: ${id}`)
+      // report, a message, a rolling record) is kept, as runs-stop and run-delete keep it. A worker placed meanwhile
+      // is released too, and one retained meanwhile refuses the pause (final review M5); a few rounds at most.
+      let latest = deps.getState()
+      for (let round = 0; round < 3; round++) {
+        if (!latest.jobs.some((j) => j.id === id)) return notFound(`unknown job: ${id}`)
+        const fam = new Set(latest.runs.filter((r) => r.jobId === id).map((r) => r.id))
+        const nowOpen = latest.dispatches.filter((d) => {
+          if (d.outcome || d.endedAt) return false
+          const runId = latest.tasks.find((t) => t.id === d.taskId)?.runId
+          return runId !== undefined && fam.has(runId)
+        })
+        if (nowOpen.some((d) => d.retained))
+          return conflict(`refusing to pause while a dispatch is held by worker-retain — release it first`)
+        const late = nowOpen.filter((d) => !done.has(d.id) && releases(d))
+        if (late.length === 0) break
+        for (const d of late) {
+          await deps.releaseWorker({ dispatchId: d.id })
+          done.add(d.id)
+        }
+        latest = deps.getState()
+      }
       return commit(pauseSchedule(latest, id, now))
     }
     case 'run-resume': {

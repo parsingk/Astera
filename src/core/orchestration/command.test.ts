@@ -4196,6 +4196,21 @@ describe('run-pause', () => {
     expect(deps.getState().messages.map((m) => m.id)).toContain('msg_late')
     expect(deps.getState().dispatches[0].workerState).toBe('stopped')
   })
+  // Final review M5: a worker placed while the others were being released was closed as stopped with its session
+  // still running. What opened meanwhile is released too, and a worker retained meanwhile refuses the pause.
+  it('releases a worker placed while the others were being released', async () => {
+    const { deps, templateId, released } = await runningSchedule()
+    let placed = false
+    deps.releaseWorker = async (a: { dispatchId: string }) => {
+      released.push(a.dispatchId)
+      if (placed) return
+      placed = true
+      const cur = deps.getState()
+      await deps.setState({ ...cur, dispatches: [...cur.dispatches, { ...cur.dispatches[0], id: 'dsp_late', sessionId: 'sess_late', startedAt: NOW, endedAt: undefined, outcome: undefined, workerState: 'ready' }] })
+    }
+    expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)
+    expect(released).toEqual(['dsp_running', 'dsp_late'])
+  })
   it('도는 세션을 닫고 Dispatch 를 stopped 로 남긴다', async () => {
     const { deps, templateId, released } = await runningSchedule()
     expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)

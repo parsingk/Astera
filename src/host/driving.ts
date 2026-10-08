@@ -93,6 +93,9 @@ export const STALL_CONFIRM_MS = 5000
  *  that read it here. */
 export { APP_LEFT_GRACE_MS }
 
+/** Ticks that may find the last one still running before the Host says so (final review M7). */
+export const TICKS_SKIPPED_BEFORE_SAYING = 4
+
 export function createHostDriving(d: {
   profileDir: string
   orch: Pick<HostOrch, 'handle' | 'internalDeps' | 'loaded' | 'drainOnce' | 'state'>
@@ -449,16 +452,21 @@ export function createHostDriving(d: {
     }
     kicking = true
     void (async () => {
-      do {
-        kickAgain = false
-        await compute()
-        await pass()
-      } while (kickAgain)
-    })()
-      .catch((err) => log(`the driver's pass (${why}) failed: ${String(err)}`))
-      .finally(() => {
+      try {
+        do {
+          kickAgain = false
+          await compute()
+          await pass()
+        } while (kickAgain)
+      } catch (err) {
+        log(`the driver's pass (${why}) failed: ${String(err)}`)
+      } finally {
+        // In the same step as the last pass ends (final review M1): a kick in between is not dropped, and a kick
+        // joined into a pass that threw still gets its own.
         kicking = false
-      })
+      }
+      if (kickAgain) kick(why)
+    })()
   }
 
   /** The live session ids this Host's registry holds — the spec sweep's live set. */
@@ -470,8 +478,15 @@ export function createHostDriving(d: {
 
   /** Whether a tick runs (audit OR-5): one that takes longer than the interval is not overlapped by the next. */
   let ticking = false
+  /** Ticks in a row that found one still running: said once it is TICKS_SKIPPED_BEFORE_SAYING (final review M7). */
+  let skipped = 0
   const tick = async (): Promise<void> => {
-    if (ticking) return
+    if (ticking) {
+      if (++skipped === TICKS_SKIPPED_BEFORE_SAYING)
+        log(`a tick is still running after ${skipped} more came due: schedules, nudges and checks wait for it`)
+      return
+    }
+    skipped = 0
     ticking = true
     try {
       // **Forget a gone app's pid promptly** (final review I1): the server's `lastAppPid` probes the pid

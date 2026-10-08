@@ -149,6 +149,18 @@ describe('planNudges', () => {
     expect(at(NUDGE_AGAIN_MS[0] + NUDGE_AGAIN_MS[1], [m(['a'])])).toEqual(['coord1'])
     expect(at(NUDGE_AGAIN_MS[0] + NUDGE_AGAIN_MS[1] + 1, [m(['a', 'b'])])).toEqual(['coord1'])
   })
+  // Final review M3: a partial ack shrank the set, which read as new mail and nudged at once.
+  it('an ack that leaves fewer unread is not new mail', () => {
+    const r1 = planNudges([m(['a', 'b'])], new Map(), 0)
+    expect(planNudges([m(['a'])], r1.memo, 15_000).due).toEqual([])
+  })
+  // Final review M4: one session named by two Runs had its memory overwritten by each in turn.
+  it('keeps one memory per Run and session', () => {
+    const two = [m(['a']), { runId: 'run_2', sessionId: 'coord1', messageIds: ['b'] }]
+    const r1 = planNudges(two, new Map(), 0)
+    expect(r1.due).toHaveLength(2)
+    expect(planNudges(two, r1.memo, 15_000).due).toEqual([])
+  })
   it('forgets a session with nothing unread', () => {
     const r1 = planNudges([m(['a'])], new Map(), 0)
     expect(planNudges([], r1.memo, 1).memo.size).toBe(0)

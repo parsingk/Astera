@@ -24,7 +24,7 @@ import { providerOf } from '../../providers/meta'
 import type { Account } from '../../types'
 import { nameForRun, nameForTask } from '../../worktrees/naming'
 import { firesDue } from '../fire'
-import { NO_COORDINATOR_ANSWER, planNudges, type NudgeMemo, unattendedQuestions, unreadUpwardMail } from '../inbox'
+import { NO_COORDINATOR_ANSWER, nudgeKey, planNudges, type NudgeMemo, unattendedQuestions, unreadUpwardMail } from '../inbox'
 import {
   buildIntegrationSpec,
   integrationTaskFor,
@@ -56,6 +56,8 @@ export const ORCH_FIRE_TICK_MS = 15_000
  *  즉 이 문턱을 넘는 것은 "루프를 놓았다" 의 신호에 가깝다. 틱이 15초이므로 실제 깨우기는
  *  90~105초 사이에 일어난다. */
 export const COORDINATOR_NUDGE_MS = 90_000
+/** How often a worktree the reap gave up on is tried again, quietly (final review I2). */
+export const REAP_QUIET_RETRY_MS = 60 * 60_000
 
 /** The idle workers of finished Runs (audit OR-1): each Dispatch closed, not retained, the latest of its session, and of
  *  a Task the finished Run owns. One sweep with its indexes built once; it walked every Dispatch per finished Run and
@@ -378,39 +380,38 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     const s = c.getState()
     for (const id of [...releaseRetry.keys()]) if (!c.sessionAlive(id)) releaseRetry.delete(id)
     for (const { runId, dispatch: d } of idleWorkersOf(s)) {
-      const run = { id: runId }
-      {
-        // **Asked again on the state as it is now** (fix round 1): each release below awaits, and a Run
-        // reopened, a Dispatch reused or a worker retained meanwhile must not lose its session to the
-        // snapshot this pass started from.
-        const current = c.getState()
-        const now = current.runs.find((r) => r.id === run.id)
-        if (!now || !idleIn(current, run.id, d.id)) continue
-        if (!c.sessionAlive(d.sessionId)) continue
-        const nowMs = c.nowMs()
-        if (!graceOver(current, now, d.sessionId, nowMs)) continue
-        const retry = releaseRetry.get(d.sessionId)
-        if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
-        if (!c.mayStart()) return
-        if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
-          retry.gaveUp = true
-          log(`run=${run.id}: gave up releasing its worker ${d.sessionId} (dispatch ${d.id}) after ${retry.tries} attempts`)
-          continue
-        }
-        const { entry, wait } = nextTry(retry, nowMs)
-        releaseRetry.set(d.sessionId, entry)
-        const what = `run=${run.id} finished: its idle worker ${d.sessionId} (dispatch ${d.id})`
-        const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
-        try {
-          const r = await c.handle('worker-release', { dispatch: d.id })
-          log(
-            r.status >= 400
-              ? `${what} was not released: ${JSON.stringify(r.body)}${again}`
-              : `${what} was released${again}`
-          )
-        } catch (e) {
-          log(`${what} could not be released: ${String(e)}${again}`)
-        }
+      // **Asked again on the state as it is now** (fix round 1): each release below awaits, and a Run
+      // reopened, a Dispatch reused or a worker retained meanwhile must not lose its session to the
+      // snapshot this pass started from.
+      // The cheap question first (final review I1): a month of history is mostly sessions long gone, and the check
+      // on the current state sweeps that history again.
+      if (!c.sessionAlive(d.sessionId)) continue
+      const current = c.getState()
+      const now = current.runs.find((r) => r.id === runId)
+      if (!now || !idleIn(current, runId, d.id)) continue
+      const nowMs = c.nowMs()
+      if (!graceOver(current, now, d.sessionId, nowMs)) continue
+      const retry = releaseRetry.get(d.sessionId)
+      if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
+      if (!c.mayStart()) return
+      if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+        retry.gaveUp = true
+        log(`run=${runId}: gave up releasing its worker ${d.sessionId} (dispatch ${d.id}) after ${retry.tries} attempts`)
+        continue
+      }
+      const { entry, wait } = nextTry(retry, nowMs)
+      releaseRetry.set(d.sessionId, entry)
+      const what = `run=${runId} finished: its idle worker ${d.sessionId} (dispatch ${d.id})`
+      const again = `; asked again in ${Math.round(wait / 1000)}s unless the session is gone by then`
+      try {
+        const r = await c.handle('worker-release', { dispatch: d.id })
+        log(
+          r.status >= 400
+            ? `${what} was not released: ${JSON.stringify(r.body)}${again}`
+            : `${what} was released${again}`
+        )
+      } catch (e) {
+        log(`${what} could not be released: ${String(e)}${again}`)
       }
     }
   }
@@ -903,13 +904,15 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
         for (const w of r.worktrees) {
           const nowMs = c.nowMs()
           const retry = reapRetry.get(w)
-          if (retry && (retry.gaveUp || nowMs < retry.nextAt)) continue
-          if (retry && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+          if (retry && nowMs < retry.nextAt) continue
+          if (retry && !retry.gaveUp && retry.capped >= COORDINATOR_STOP_RETRY_CAP_TRIES) {
+            // Said once, then tried again quietly every hour (final review I2): a worker someone held, or a folder
+            // a window kept open, lets it go later, and a driver (often the Host) lives for days.
             retry.gaveUp = true
-            log(`run=${r.runId}: gave up removing its worktree ${w} after ${retry.tries} attempts`)
-            continue
+            log(`run=${r.runId}: gave up removing its worktree ${w} after ${retry.tries} attempts; trying again hourly`)
           }
           if (await c.reap(w)) reapRetry.delete(w)
+          else if (retry?.gaveUp) reapRetry.set(w, { ...retry, nextAt: nowMs + REAP_QUIET_RETRY_MS })
           else reapRetry.set(w, nextTry(retry, nowMs).entry)
         }
     } finally {
@@ -1065,19 +1068,20 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     const planned = planNudges(unreadUpwardMail(c.getState(), { nowMs: c.nowMs(), staleMs: COORDINATOR_NUDGE_MS }), before, c.nowMs())
     nudgeMemo = planned.memo
     // A nudge not typed is not remembered as one: the next tick may type it.
-    const notTyped = (sessionId: string): void => {
-      const was = before.get(sessionId)
-      if (was) nudgeMemo.set(sessionId, was)
-      else nudgeMemo.delete(sessionId)
+    const notTyped = (m: { runId: string; sessionId: string }): void => {
+      const key = nudgeKey(m)
+      const was = before.get(key)
+      if (was) nudgeMemo.set(key, was)
+      else nudgeMemo.delete(key)
     }
     for (const m of planned.due) {
       if (c.sessionBusy(m.sessionId) === true) {
-        notTyped(m.sessionId)
+        notTyped(m)
         continue
       }
       // 세션이 없으면(사용자가 닫았다) 깨울 것이 없다 — 그 자리는 되띄우기가 맡는다.
       if (!c.sessionAlive(m.sessionId)) {
-        notTyped(m.sessionId)
+        notTyped(m)
         continue
       }
       // **영어다.** 코디네이터는 영어로 인계받았다(handover.ts) — 롤링이 워커의 재개 문구를

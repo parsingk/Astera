@@ -80,6 +80,8 @@ interface RigOpts {
   reapableChild?: boolean
   /** The reap fails, as a locked worktree on Windows does. */
   reapFails?: boolean
+  /** Every session is gone (a month of finished Runs whose workers ended long ago). */
+  deadSessions?: boolean
 }
 
 const TEMPLATE_ID = 'job_sched'
@@ -232,7 +234,7 @@ function rig(o: RigOpts = {}) {
       return !o.reapFails
     },
     isRegisteredWorktree: (p) => p === '/wt-child',
-    sessionAlive: () => true,
+    sessionAlive: () => !o.deadSessions,
     sessionBusy: () => false,
     typeInto: (_id, text) => {
       typed.push(text)
@@ -539,7 +541,29 @@ describe('createDispatchLoop', () => {
     h.clock += COORDINATOR_STOP_RETRY_MAX_MS
     await pass()
     expect(h.reaped).toHaveLength(tried)
-    expect(h.logs.some((l) => l.includes('gave up removing'))).toBe(true)
+    expect(h.logs.filter((l) => l.includes('gave up removing'))).toHaveLength(1)
+    // Final review I2: giving up was for good, though a held worker released or a folder closed later lets it go. It is
+    // tried again quietly every hour.
+    h.clock += 60 * 60_000
+    await pass()
+    expect(h.reaped).toHaveLength(tried + 1)
+    expect(h.logs.filter((l) => l.includes('gave up removing'))).toHaveLength(1)
+  })
+
+  // Final review I1: each candidate was checked again on the current state before the cheap "is its session alive",
+  // and that check swept the whole history again: a month of finished Runs cost Dispatches squared per commit.
+  it('a month of finished Runs whose workers are gone is passed over quickly', async () => {
+    const h = rig({ deadSessions: true })
+    const s = h.state()
+    const runs = Array.from({ length: 300 }, (_, i) => ({ id: `run_old${i}`, jobId: s.runs[0].jobId, ordinal: i + 2, createdAt: NOW }))
+    const tasks = runs.flatMap((r) => Array.from({ length: 5 }, (_, j) => ({ ...s.tasks[0], id: `${r.id}_t${j}`, runId: r.id, status: 'completed' as const })))
+    const dispatches = tasks.map((t, i) => ({ id: `dsp_old${i}`, taskId: t.id, sessionId: `sess_old${i}`, provider: 'claude' as const, accountId: 'accA', cwd: '/w', specPath: '/s', startedAt: NOW, endedAt: NOW, outcome: 'succeeded' as const, workerState: 'stopped' as const, retained: false }))
+    h.setState({ ...s, runs: [...s.runs, ...runs], tasks: [...s.tasks, ...tasks], dispatches: [...s.dispatches, ...dispatches] } as OrchState)
+    h.clock = NOW_MS + 60 * 60_000
+    const t0 = performance.now()
+    await h.loop.run()
+    await h.settle()
+    expect(performance.now() - t0).toBeLessThan(1500)
   })
 
   // Review m5: a process that stopped driving mid-pass does not go on to the reap — the new driver's
