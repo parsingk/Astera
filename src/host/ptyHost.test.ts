@@ -236,4 +236,15 @@ describe('attachPtyHost pty-seq and pauses (Phase 8)', () => {
     h.handle.socketGone(3)
     expect(h.paused()).toBe(before)
   })
+
+  // Phase 8 review M7: an exited pty's pauses are forgotten with it.
+  it('a pty that exits is no longer tracked as paused: a later close resumes nothing', () => {
+    const h = rig()
+    h.send({ t: 'pty-pause', id: 'p1' }, 3)
+    h.pty.exit(0)
+    expect(h.handle.pausedHeld()).toBe(0)
+    const before = h.resumes()
+    h.handle.socketGone(3)
+    expect(h.resumes()).toBe(before)
+  })
 })

@@ -16,6 +16,8 @@ export type PtyHandler = ((m: ClientMessage, send: (h: HostMessage) => void, fro
   /** A socket closed: every pty it paused and did not resume is resumed, unless another socket still holds it paused
    *  (remote runtime design §3.7, N2). A dead app no longer leaves its terminals frozen. */
   socketGone(socket: number): void
+  /** How many ptys some socket holds paused (tests). */
+  pausedHeld(): number
 }
 
 export function attachPtyHost(a: {
@@ -30,8 +32,9 @@ export function attachPtyHost(a: {
     if (e.kind === 'data') a.broadcast({ t: 'pty-data', id, data: e.data, seq: e.seq }, (_y, f) => f.has(HOST_FEATURE_PTY_SEQ))
   })
   a.registry.onExit((id, exitCode) => a.broadcast({ t: 'pty-exit', id, exitCode }))
-  /** Which sockets hold each pty paused. */
+  /** Which sockets hold each pty paused. An exited pty's go with it (review M7). */
   const pausedBy = new Map<string, Set<number>>()
+  a.registry.onExit((id) => void pausedBy.delete(id))
 
   const handler = (m: ClientMessage, send: (h: HostMessage) => void, from?: { socket: number }): boolean => {
     switch (m.t) {
@@ -95,6 +98,7 @@ export function attachPtyHost(a: {
     }
   }
   return Object.assign(handler, {
+    pausedHeld: () => pausedBy.size,
     socketGone: (socket: number): void => {
       for (const [id, by] of [...pausedBy]) {
         if (!by.delete(socket)) continue
