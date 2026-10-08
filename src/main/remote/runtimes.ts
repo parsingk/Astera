@@ -5,7 +5,10 @@
 import { createHash } from 'node:crypto'
 import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../../core/remote/link'
 import type { RuntimeRegistry } from '../../core/runtimes/registry'
-import { controllerRegistry, resolveRuntime } from '../../cli/runtimes'
+import os from 'node:os'
+import { controllerRegistry, resolveRuntime, runRuntimesCommand } from '../../cli/runtimes'
+import { connectRuntime } from '../../core/remote/client'
+import type { RemoteRuntimeInfo } from '../../core/types'
 import { createRemoteRuntimeClient, type RemoteRuntimeClient } from './runtimeClient'
 
 /** How long a lost call from the app keeps trying to reach the Runtime again: a view waiting on it shows offline after
@@ -14,6 +17,12 @@ export const APP_RECONNECT_FOR_MS = 10_000
 
 export interface RemoteRuntimes {
   client(runtimeId: string): Promise<RemoteRuntimeClient | { code: string; message: string }>
+  /** The paired Runtimes, never with their tokens (Settings › Remote Runtimes). */
+  list(): Promise<RemoteRuntimeInfo[]>
+  /** Pairs from the string `astera runtime pair` printed there (the CLI's own `runtimes add`). */
+  add(pairing: string, name?: string): Promise<{ ok: true; runtime: Record<string, unknown> } | { ok: false; code: string; message: string }>
+  /** Forgets a Runtime here; it does not revoke the pairing there (§4.5). */
+  remove(runtimeId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   close(): void
 }
 
@@ -60,6 +69,40 @@ export function createRemoteRuntimes(a: {
   }
 
   return {
+    list: async () => {
+      const r = await reg()
+      return (await r.list()).map((p) => {
+        const c = clients.get(p.runtimeId)?.client
+        return {
+          runtimeId: p.runtimeId,
+          name: p.name,
+          address: p.address,
+          port: p.port,
+          permission: p.permission,
+          lastSeenAt: p.lastSeenAt,
+          // Unknown until this app asked it something; then what the last answer said.
+          offline: !c ? null : c.mirror().offline ? true : c.mirror().at === null ? null : false
+        }
+      })
+    },
+    add: async (pairing, name) => {
+      const done = await runRuntimesCommand('runtimes-add', { pair: pairing, ...(name ? { name } : {}) }, {
+        registry: reg,
+        connect: (o) => connectRuntime(o),
+        hostname: () => os.hostname(),
+        now: () => new Date().toISOString(),
+        version: a.version
+      })
+      return done.ok ? { ok: true, runtime: done.body as Record<string, unknown> } : { ok: false, code: done.error.code, message: done.error.message }
+    },
+    remove: async (runtimeId) => {
+      const r = await reg()
+      if (!(await r.list()).some((p) => p.runtimeId === runtimeId)) return { ok: false, code: 'RUNTIME_NOT_FOUND', message: `no paired Runtime has the id ${runtimeId}` }
+      await r.remove(runtimeId)
+      clients.get(runtimeId)?.client.close()
+      clients.delete(runtimeId)
+      return { ok: true }
+    },
     client: (runtimeId) => {
       const inFlight = pending.get(runtimeId)
       if (inFlight) return inFlight

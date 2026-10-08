@@ -86,14 +86,55 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
     expect(m.state).not.toBeNull()
   })
 
-  it("list folds the mirror's runs for the path and says which runtime it is", async () => {
-    const a = seeded()
-    const f = fakeLink(() => ({ status: 200, body: { state: a.state, version: 2 } }))
+  // Phase 6: the Runtime folds (jobs-view, X1-05); main keeps the last answer per project for when it is offline.
+  it('list asks jobs-view for the project, and keeps the last answer stale while the Runtime is away', async () => {
+    let up = true
+    const f = fakeLink((cmd, args) => {
+      if (!up) return new RemoteError('RUNTIME_OFFLINE', 'down')
+      if (cmd === 'jobs-view') return { status: 200, body: { snapshot: { runs: [{ id: 'job_1', objective: `in ${String(args.project)}` }], projectFolderBusy: false } } }
+      return { status: 200, body: { state: seeded().state, version: 2 } }
+    })
     const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
-    const snap = await c.list('/srv/repo')
-    expect(snap.runs.length).toBeGreaterThan(0)
-    expect(snap.runtime).toEqual({ runtimeId: 'rt_a', offline: false, stale: false, version: 2 })
-    expect((await c.list('/elsewhere')).runs).toEqual([])
+    const snap = await c.list('p1')
+    expect(f.calls.find((x) => x.cmd === 'jobs-view')?.args).toEqual({ project: 'p1' })
+    expect(snap.runs).toEqual([{ id: 'job_1', objective: 'in p1' }])
+    expect(snap.runtime).toMatchObject({ runtimeId: 'rt_a', offline: false, stale: false })
+    up = false
+    const later = await c.list('p1')
+    expect(later.runs).toEqual([{ id: 'job_1', objective: 'in p1' }])
+    expect(later.runtime).toMatchObject({ offline: true, stale: true })
+    expect((await c.list('p2')).runs).toEqual([])
+  })
+
+  it('runDetail pages the Runtime timeline: one page, then more pages as asked, with older marked', async () => {
+    const a = seeded()
+    const asked: Array<Record<string, unknown>> = []
+    const f = fakeLink((cmd, args) => {
+      if (cmd === 'runs-timeline') {
+        asked.push(args)
+        return { status: 200, body: { runId: a.runId, events: [{ at: NOW, kind: 'note', text: 'x' }], nextCursor: 1 } }
+      }
+      return { status: 200, body: { state: a.state, version: 2 } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    const d = await c.runDetail(a.runId, { journalPages: 2 })
+    expect(asked[0]).toEqual({ runId: a.runId, limit: 400 })
+    expect(d.events).toHaveLength(1)
+    expect(d.journal).toEqual({ busy: false, older: true, capped: false })
+    expect(d.layers.flat()).toContain(a.taskId)
+  })
+
+  it("projects lists the Runtime's projects and then the unregistered entry", async () => {
+    const f = fakeLink(() => ({ status: 200, body: [{ id: 'p1', name: 'repo', path: '/srv/repo', addedAt: NOW }] }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect(await c.projects()).toEqual([{ id: 'p1', name: 'repo', path: '/srv/repo' }, { id: 'unregistered', name: null, path: null }])
+  })
+
+  it('ping answers the hello, or the code', async () => {
+    const ok = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: fakeLink(() => ({ status: 200, body: [] })).link })
+    expect(await ok.ping()).toMatchObject({ ok: true, hello: { runtimeId: 'rt_a', bootId: 'boot1' } })
+    const down = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: fakeLink(() => new RemoteError('RUNTIME_OFFLINE', 'down')).link })
+    expect(await down.ping()).toEqual({ ok: false, code: 'RUNTIME_OFFLINE', message: 'down' })
   })
 
   it('command passes the reply through, carries a request id only for a change, and refreshes after one', async () => {
@@ -124,7 +165,7 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
     const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
     const d = await c.runDetail(a.runId)
     expect(d.layers.flat()).toContain(a.taskId)
-    expect(await c.runDetail('run_nope')).toEqual({ events: [], layers: [], deps: {}, cyclic: [] })
+    expect(await c.runDetail('run_nope')).toMatchObject({ events: [], layers: [], deps: {}, cyclic: [] })
     expect(await c.completion('run_nope', a.taskId)).toBeNull()
   })
 
@@ -153,7 +194,7 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
   it('a refused state-get with no mirror is offline with the refusal named', async () => {
     const f = fakeLink(() => ({ status: 503, body: { error: 'the Host is down', code: 'RUNTIME_OFFLINE' } }))
     const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
-    const snap = await c.list('/srv/repo')
+    const snap = await c.list('p1')
     expect(snap.runtime).toMatchObject({ offline: true, error: { status: 503, code: 'RUNTIME_OFFLINE' } })
   })
   // Phase 5 review M-2: a change that ran is reported as run even when the refresh after it fails.

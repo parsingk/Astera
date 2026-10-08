@@ -735,6 +735,18 @@ export interface OrchSnapshot {
   runtime?: RuntimeView
 }
 
+/** A paired Runtime as Settings › Remote Runtimes lists it (remote runtime design Phase 6): never its token. */
+export interface RemoteRuntimeInfo {
+  runtimeId: string
+  name: string
+  address: string
+  port: number
+  permission: 'read-only' | 'full-control'
+  lastSeenAt: string | null
+  /** null until this app has asked it anything since it started. */
+  offline: boolean | null
+}
+
 /** What a remote reply says about its Runtime beside the data (remote runtime design §2.7, §3.6). */
 export interface RuntimeView {
   runtimeId: string
@@ -1807,6 +1819,20 @@ export interface OrchApi {
   unwatch(): Promise<void>
 }
 
+/** Settings › Remote Runtimes and the Jobs view's runtime and project selectors (remote runtime design Phase 6). */
+export interface RemoteApi {
+  list(): Promise<RemoteRuntimeInfo[]>
+  /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
+  add(pairing: string, name?: string): Promise<{ ok: true; runtime: Record<string, unknown> } | { ok: false; code: string; message: string }>
+  /** Forgets a Runtime on this computer; it does not revoke the pairing there. */
+  remove(runtimeId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
+  ping(runtimeId: string): Promise<{ ok: true; hello: { runtimeId: string; displayName: string; asteraVersion: string; platform: string; bootId: string } | null } | { ok: false; code: string; message: string }>
+  /** The Runtime's projects, then `{ id: 'unregistered' }` for Jobs in folders that are no project. */
+  projects(runtimeId: string): Promise<Array<{ id: string; name: string | null; path: string | null }>>
+  /** This computer as a Runtime: whether Remote is on, the Gateway, the paired controllers. null when the Host cannot say. */
+  thisMachine(): Promise<{ gateway: { state: string; [k: string]: unknown }; clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null }> } | null>
+}
+
 export interface UnderstandingApi {
   /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
   get(projectPath: string): Promise<ProjectUnderstanding | null>
@@ -1905,6 +1931,8 @@ export type RendererApi = CoreApi & {
   app: AppControlApi
   keys: KeysApi
   orch: OrchApi
+  /** Remote Runtimes (remote runtime design Phase 6): Settings › Remote Runtimes and the Jobs view's selectors. */
+  remote: RemoteApi
   understanding: UnderstandingApi
   sessionTasks: SessionTaskApi
   /** Astera Host (slice 1). The Host owns nothing yet — this reports whether the channel to it is

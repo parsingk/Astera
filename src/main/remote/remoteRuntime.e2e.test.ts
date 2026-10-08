@@ -150,7 +150,7 @@ describe('Remote Runtime Phase 5 acceptance (design §6 Phase 5)', { timeout: 30
     const remote = createRemoteRuntimes({ profileDir: laptopDir, version: '9.9.9' })
     try {
       const router = createOrchRouter({ local: l.local, remote })
-      const snap = await router.list('D:/p', 'rt_p4')
+      const snap = await router.list('unregistered', 'rt_p4')
       expect(snap.runtime).toMatchObject({ runtimeId: 'rt_p4', offline: false })
       expect(JSON.stringify(snap)).toContain('already here')
       expect(l.calls).toEqual([])
@@ -185,11 +185,11 @@ describe('Remote Runtime Phase 5 acceptance (design §6 Phase 5)', { timeout: 30
     const remote = createRemoteRuntimes({ profileDir: laptopDir, version: '9.9.9' })
     try {
       const router = createOrchRouter({ local: l.local, remote })
-      expect((await router.list('D:/p', 'rt_p4')).runs.length).toBeGreaterThan(0)
+      expect((await router.list('unregistered', 'rt_p4')).runs.length).toBeGreaterThan(0)
       link?.detach()
       await gw?.close()
       gw = null
-      const after = await router.list('D:/p', 'rt_p4')
+      const after = await router.list('unregistered', 'rt_p4')
       expect(after.runtime).toMatchObject({ runtimeId: 'rt_p4', offline: true, stale: true })
       expect(after.runs.length).toBeGreaterThan(0)
       expect(await router.list('D:/p')).toEqual({ runs: [], projectFolderBusy: false })

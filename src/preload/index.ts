@@ -346,6 +346,14 @@ const api = {
     command: invoke('orch.command'),
     unwatch: invoke('orch.unwatch')
   },
+  remote: {
+    list: invoke('remote.list'),
+    add: invoke('remote.add'),
+    remove: invoke('remote.remove'),
+    ping: invoke('remote.ping'),
+    projects: invoke('remote.projects'),
+    thisMachine: invoke('remote.thisMachine')
+  },
   understanding: {
     get: invoke('understanding.get'),
     regenerate: invoke('understanding.regenerate')

@@ -11,9 +11,9 @@
 import { randomUUID } from 'node:crypto'
 import { RemoteError } from '../../core/remote/client'
 import type { RemoteLink } from '../../core/remote/link'
+import type { HelloFrame } from '../../core/remote/frames'
 import { remoteMutation, remoteTarget } from '../../core/remote/targets'
 import { resolveRunId, type OrchState } from '../../core/orchestration/state'
-import { snapshotFor } from '../../core/orchestration/view'
 import { layersOf } from '../../core/orchestration/graph'
 import { timelineFor } from '../../core/orchestration/timeline'
 import { completionForTaskOf } from '../../core/orchestration/completion'
@@ -38,14 +38,21 @@ export interface RemoteRuntimeClient {
   runtimeId: string
   mirror(): RemoteMirror
   refresh(): Promise<RemoteMirror>
-  list(projectPath: string): Promise<OrchSnapshot & { runtime: RuntimeView }>
-  runDetail(runId: string): Promise<RunDetail>
+  /** `projectKey`: a project id of the Runtime, or 'unregistered' (jobs-view, Phase 6). */
+  list(projectKey: string): Promise<OrchSnapshot & { runtime: RuntimeView }>
+  runDetail(runId: string, opts?: { journalPages?: unknown }): Promise<RunDetail>
+  /** The Runtime's projects, then the entry for Jobs in folders that are no project (D1.5). [] when it cannot say. */
+  projects(): Promise<Array<{ id: string; name: string | null; path: string | null }>>
+  /** Whether the Runtime answers now, and who it says it is. */
+  ping(): Promise<{ ok: true; hello: HelloFrame | null } | { ok: false; code: string; message: string }>
   completion(runId: string, taskId: string): Promise<CompletionDetail | null>
   command(cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }>
   close(): void
 }
 
 const EMPTY_DETAIL: RunDetail = { events: [], layers: [], deps: {}, cyclic: [] }
+/** One journal page of a remote timeline, as the local one reads a page of journal rows. */
+const TIMELINE_PAGE = 200
 
 /** A link failure as a command's reply: the Runtime may or may not have run it, so it is a 409 then, and a 503 when
  *  the Runtime could not be asked at all. */
@@ -73,6 +80,8 @@ export function createRemoteRuntimeClient(a: {
   const now = a.now ?? Date.now
   const mint = a.mintRequest ?? (() => `desk_${randomUUID()}`)
   let m: RemoteMirror = { state: null, version: 0, bootId: null, offline: false, stale: false, at: null }
+  /** The Runtime's last jobs-view answer per project, shown stale while it cannot be reached. */
+  const lastByKey = new Map<string, OrchSnapshot>()
 
   const view = (): RuntimeView => ({ runtimeId: a.runtimeId, offline: m.offline, stale: m.stale, version: m.version, ...(m.error ? { error: m.error } : {}) })
 
@@ -110,22 +119,52 @@ export function createRemoteRuntimeClient(a: {
     runtimeId: a.runtimeId,
     mirror: () => m,
     refresh,
-    list: async (projectPath) => {
-      await refresh()
-      // Path-free inputs only (D1.5, D1.7): no session the laptop knows, no laptop worktree registry, no laptop disk.
-      // The Runtime's own grouping and existence facts arrive with `jobs-view` in Phase 6.
-      const snap: OrchSnapshot = m.state
-        ? snapshotFor(m.state, projectPath, () => false, [], () => null, () => true)
-        : { runs: [], projectFolderBusy: false }
-      return { ...snap, runtime: view() }
+    list: async (projectKey) => {
+      // The Runtime folds (jobs-view, X1-05): its path rules, worktrees, sessions and disk, never this machine's. The
+      // last answer per project is kept, so an unreachable Runtime shows what it last said, marked stale (D1.6).
+      const r = await a.link.call('jobs-view', { project: projectKey })
+      const last = lastByKey.get(projectKey)
+      const kept = last ?? { runs: [], projectFolderBusy: false }
+      const base = { runtimeId: a.runtimeId, version: m.version }
+      if (r instanceof RemoteError) return { ...kept, runtime: { ...base, offline: true, stale: last !== undefined } }
+      if (r.status !== 200) {
+        const code = (r.body as { code?: unknown } | null)?.code
+        const error = { status: r.status, ...(typeof code === 'string' ? { code } : {}) }
+        // A project the Runtime does not know is an answer, not an outage.
+        return { ...kept, runtime: { ...base, offline: r.status !== 404, stale: last !== undefined, error } }
+      }
+      const snap = ((r.body as { snapshot?: OrchSnapshot } | null)?.snapshot ?? { runs: [], projectFolderBusy: false }) as OrchSnapshot
+      lastByKey.set(projectKey, snap)
+      return { ...snap, runtime: { ...base, offline: false, stale: false } }
     },
-    runDetail: async (runId) => {
+    runDetail: async (runId, opts) => {
       await refresh()
       const state = m.state
       if (!state) return EMPTY_DETAIL
       const id = resolveRunId(state, runId)
+      // A Job that has not run yet has its definition's picture and no record (the local rule).
       if (id === undefined) return state.runs.some((r) => r.id === runId) ? { events: [], ...layersOf(state, runId) } : EMPTY_DETAIL
-      return { events: timelineFor(state, id, () => false), ...layersOf(state, id) }
+      // The Runtime's timeline (runs-timeline), its journal rows and session links included, a page per journal page.
+      const pages = typeof opts?.journalPages === 'number' && opts.journalPages >= 1 ? Math.floor(opts.journalPages) : 1
+      const t = await a.link.call('runs-timeline', { runId: id, limit: TIMELINE_PAGE * pages })
+      const ok = !(t instanceof RemoteError) && t.status === 200
+      const page = ok ? (t.body as { events?: RunDetail['events']; nextCursor?: number | null }) : null
+      return {
+        events: page?.events ?? timelineFor(state, id, () => false),
+        ...layersOf(state, id),
+        journal: { busy: false, older: page?.nextCursor !== undefined && page.nextCursor !== null, capped: false }
+      }
+    },
+    projects: async () => {
+      const r = await a.link.call('projects-list', {})
+      if (r instanceof RemoteError || r.status !== 200 || !Array.isArray(r.body)) return []
+      const list = (r.body as Array<{ id: string; name?: string; path?: string }>).map((p) => ({ id: p.id, name: p.name ?? null, path: p.path ?? null }))
+      return [...list, { id: 'unregistered', name: null, path: null }]
+    },
+    ping: async () => {
+      const r = await a.link.call('projects-list', {})
+      if (r instanceof RemoteError) return { ok: false, code: r.code, message: r.message }
+      return { ok: true, hello: a.link.hello() }
     },
     completion: async (runId, taskId) => {
       await refresh()

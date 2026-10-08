@@ -68,7 +68,7 @@ export function createOrchRouter(a: {
         ? opts === undefined
           ? a.local.runDetail(projectPath, runId)
           : a.local.runDetail(projectPath, runId, opts)
-        : guarded(runtimeId!, 'runDetail', EMPTY_DETAIL, (c) => c.runDetail(runId), () => EMPTY_DETAIL),
+        : guarded(runtimeId!, 'runDetail', EMPTY_DETAIL, (c) => c.runDetail(runId, opts), () => EMPTY_DETAIL),
     completion: (projectPath, runId, taskId, runtimeId) =>
       isLocalRuntime(runtimeId)
         ? a.local.completion(projectPath, runId, taskId)

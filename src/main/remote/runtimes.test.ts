@@ -63,4 +63,26 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     expect(a).toBe(b)
     expect(o.opened).toHaveLength(1)
   })
+
+  // Phase 6: what Settings › Remote Runtimes shows and does.
+  it('list shows each paired Runtime without its token, with offline unknown until asked', async () => {
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: opener().open })
+    const listed = await r.list()
+    expect(listed).toEqual([expect.objectContaining({ runtimeId: 'rt_a', name: 'Office', offline: null })])
+    expect(JSON.stringify(listed)).not.toContain('tok-a')
+  })
+  it('remove forgets a Runtime and closes its client; an unknown id is NOT_FOUND', async () => {
+    const o = opener()
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: o.open })
+    await r.client('rt_a')
+    expect(await r.remove('rt_a')).toEqual({ ok: true })
+    expect(o.closed).toEqual(['tok-a'])
+    expect(await r.list()).toEqual([])
+    expect(await r.remove('rt_a')).toMatchObject({ ok: false, code: 'RUNTIME_NOT_FOUND' })
+  })
+  it('add refuses a string that is not a pairing string, storing nothing', async () => {
+    const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: opener().open })
+    expect(await r.add('hello')).toMatchObject({ ok: false, code: 'INVALID_ARGUMENTS' })
+    expect((await r.list()).map((x) => x.runtimeId)).toEqual(['rt_a'])
+  })
 })

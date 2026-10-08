@@ -4634,6 +4634,36 @@ export function registerIpc(
     log: orchLog
   })
   ipcMain.handle('orch.list', (_e, projectPath: string, runtimeId?: string) => orchRouter.list(projectPath, runtimeId))
+  // Settings › Remote Runtimes and the Jobs view's selectors (remote runtime design Phase 6). A runtime id that is not a
+  // string names nothing; every answer is the client's or the registry's own, never a local fallback.
+  ipcMain.handle('remote.list', () => remoteRuntimes.list())
+  ipcMain.handle('remote.add', (_e, pairing: unknown, name?: unknown) =>
+    typeof pairing === 'string'
+      ? remoteRuntimes.add(pairing, typeof name === 'string' && name !== '' ? name : undefined)
+      : { ok: false, code: 'INVALID_ARGUMENTS', message: 'a pairing string is needed' }
+  )
+  ipcMain.handle('remote.remove', (_e, runtimeId: unknown) =>
+    typeof runtimeId === 'string' ? remoteRuntimes.remove(runtimeId) : { ok: false, code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
+  )
+  ipcMain.handle('remote.ping', async (_e, runtimeId: unknown) => {
+    if (typeof runtimeId !== 'string') return { ok: false, code: 'RUNTIME_NOT_FOUND', message: 'a runtime id is a string' }
+    const c = await remoteRuntimes.client(runtimeId)
+    return 'code' in c ? { ok: false, code: c.code, message: c.message } : c.ping()
+  })
+  ipcMain.handle('remote.projects', async (_e, runtimeId: unknown) => {
+    if (typeof runtimeId !== 'string') return []
+    const c = await remoteRuntimes.client(runtimeId)
+    return 'code' in c ? [] : c.projects()
+  })
+  // This computer as a Runtime: the local Host's own answer (runtime-status), or null when it cannot say.
+  ipcMain.handle('remote.thisMachine', async () => {
+    try {
+      const r = await orchCall({ cmd: 'runtime-status', args: {}, sessionId: '' })
+      return r.status === 200 ? r.body : null
+    } catch {
+      return null
+    }
+  })
   ipcMain.handle('orch.runDetail', (_e, projectPath: string, runId: string, opts?: { journalPages?: unknown }, runtimeId?: string) =>
     orchRouter.runDetail(projectPath, runId, opts, runtimeId)
   )
