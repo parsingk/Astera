@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { InstallableCli } from '../../../core/install/cliInstall'
+import { appendCapped } from '../lib/appendCapped'
 
 /** Where an install attempt is. `unseen` is the one case that asks for a restart: the installer said
  *  it succeeded and the machine still cannot find the program, which no amount of waiting fixes. */
@@ -49,7 +50,8 @@ export function useCliInstall(onInstalled: (installed: { claude: boolean; codex:
   useEffect(() => {
     return window.api.on('cli:install', (e) => {
       if (e.kind === 'done') return // the handler's own answer settles the phase; this would race it
-      setLog((prev) => prev + e.text)
+      // Kept to its newest 200 000 characters (audit UI-13).
+      setLog((prev) => appendCapped(prev, e.text, 200_000))
     })
   }, [])
 

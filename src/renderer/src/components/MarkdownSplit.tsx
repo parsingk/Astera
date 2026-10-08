@@ -106,10 +106,12 @@ export function MarkdownSplit({
   // markdown 이 거짓이면 프리뷰 자체가 그려지지 않으므로(아래 렌더 참고) rebuildAnchors 는
   // previewElRef.current 가 없어 즉시 no-op 이지만, 매 키입력마다 rAF 를 예약하는 낭비까지 막으려고
   // 여기서 먼저 게이트한다.
+  // After typing pauses, not on every keystroke (audit UI-14): each rebuild reads every anchor's offsetTop, a forced
+  // layout of the whole preview.
   useEffect(() => {
     if (!markdown) return
-    const id = requestAnimationFrame(rebuildAnchors)
-    return () => cancelAnimationFrame(id)
+    const id = setTimeout(rebuildAnchors, 150)
+    return () => clearTimeout(id)
   }, [markdown, text, mode, ratio])
 
   // 폭이 바뀌면 줄바꿈이 달라져 offsetTop 이 전부 움직인다

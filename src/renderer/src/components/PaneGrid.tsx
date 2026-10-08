@@ -7,6 +7,7 @@ import {
   countLeaves,
   dropZoneOf,
   leaves,
+  setRatio,
   splitBoundaries,
   type DropZone,
   type PaneLeaf,
@@ -191,9 +192,13 @@ export function PaneGrid({
   // A tab starts on the terminal. There is no setting for that any more: the one that used to seed it
   // shared its two words with the session kind, and people reached for it meaning "open new sessions
   // as 대화" — so it became the default *kind* instead, and this choice is the tab bar's toggle alone.
-  const paneLeaves = layout ? leaves(layout) : []
-  const rects: Map<string, Rect> = layout ? computeRects(layout) : new Map()
-  const bounds = layout ? splitBoundaries(layout) : []
+  // A divider being dragged moves here, frame by frame, and reaches App once at the release (audit UI-1): each frame went
+  // to App's setLayout, and the whole app was drawn again sixty times a second for as long as the drag lasted.
+  const [dragRatio, setDragRatio] = useState<{ splitId: string; ratio: number } | null>(null)
+  const shown = layout && dragRatio ? setRatio(layout, dragRatio.splitId, dragRatio.ratio) : layout
+  const paneLeaves = shown ? leaves(shown) : []
+  const rects: Map<string, Rect> = shown ? computeRects(shown) : new Map()
+  const bounds = shown ? splitBoundaries(shown) : []
   const full = layout ? countLeaves(layout) >= MAX_PANES : false
   // Session → the group holding that session (absent means it is off screen). The tree holds tab ids,
   // so each one is read back through parseTab and only the session tabs are kept
@@ -738,9 +743,12 @@ export function PaneGrid({
                     }
               let rafId = 0
               let latest = 0
+              let moved = false
+              const ratioNow = (): number => clampRatio((latest - areaPx.start) / areaPx.size, areaPx.size)
               const apply = (): void => {
                 rafId = 0
-                onSetRatio(b.splitId, clampRatio((latest - areaPx.start) / areaPx.size, areaPx.size))
+                moved = true
+                setDragRatio({ splitId: b.splitId, ratio: ratioNow() })
               }
               const onMove = (ev: PointerEvent): void => {
                 if (ev.pointerId !== startId) return
@@ -749,11 +757,11 @@ export function PaneGrid({
               }
               const onUp = (ev: PointerEvent): void => {
                 if (ev.pointerId !== startId) return
-                // The last move is applied, not dropped (audit UI-4): the drag ends where it was let go.
-                if (rafId) {
-                  cancelAnimationFrame(rafId)
-                  apply()
-                }
+                // The last move is applied, not dropped (audit UI-4): the drag ends where it was let go, and App hears it once.
+                if (rafId) cancelAnimationFrame(rafId)
+                if (moved || rafId) onSetRatio(b.splitId, ratioNow())
+                rafId = 0
+                setDragRatio(null)
                 window.removeEventListener('pointermove', onMove)
                 window.removeEventListener('pointerup', onUp)
                 window.removeEventListener('pointercancel', onUp)

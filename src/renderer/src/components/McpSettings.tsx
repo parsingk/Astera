@@ -448,8 +448,20 @@ function McpHttpSection(): React.JSX.Element | null {
 
   useEffect(() => {
     void loadMcpHttp(setHttp, t)
-    const off = window.api.on('mcpHttp:state', setView)
-    void window.api.mcpHttp.status().then(setView, () => setView({ host: false, reason: 'none' }))
+    // A push is newer than the status asked at mount (audit UI-14): the answer that lands after one is dropped.
+    let pushed = false
+    const off = window.api.on('mcpHttp:state', (v) => {
+      pushed = true
+      setView(v)
+    })
+    void window.api.mcpHttp.status().then(
+      (v) => {
+        if (!pushed) setView(v)
+      },
+      () => {
+        if (!pushed) setView({ host: false, reason: 'none' })
+      }
+    )
     return off
     // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, as the settings above
   }, [])

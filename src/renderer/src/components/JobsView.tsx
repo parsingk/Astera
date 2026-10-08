@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
+import { clockFor } from '../lib/runClock'
 import type { JobRow, JobTask, OrchHostGate, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { formatElapsed, formatRemaining } from '../../../core/orchestration/elapsed'
@@ -130,7 +131,7 @@ function ConvergenceChipView({
 /** Run 하나의 카드 — 머리말·띠·도는 줄·Gate 줄·아래 한 줄. **JobsView 에서 뽑아낸 것이고 그리는
  *  것이 달라지지 않았다.** 뽑은 이유는 예약 템플릿의 회차를 같은 모양으로 그려야 해서다: 한 벌을
  *  두 자리에서 쓰지 않으면 두 벌이 갈라진다. */
-function RunCard({
+function RunCardImpl({
   run,
   open,
   onToggle,
@@ -145,7 +146,8 @@ function RunCard({
 }: {
   run: JobRow
   open: boolean
-  onToggle: () => void
+  /** With the card's own id, so the parent can hand the same function to every card (audit UI-11). */
+  onToggle: (runId: string) => void
   /** 예약 회차라면 그 번호. 평범한 Run 에는 없다 */
   ordinal?: number
   nowMs: number
@@ -179,7 +181,7 @@ function RunCard({
       key={run.id}
       className={`jobs-run${open ? '' : ' collapsed'}${run.sharesProjectFolder ? ' shared-folder' : ''}`}
     >
-      <div className="jobs-run-head" onClick={() => onToggle()}>
+      <div className="jobs-run-head" onClick={() => onToggle(run.id)}>
         <span className="jobs-caret">{open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
         {/* 예약 회차의 번호. 한 템플릿의 회차들은 목표가 같아서(spawnScheduledRun 이 복사한다)
             제목만으로는 서로 구별되지 않는다 — 이 칩이 그것을 구별하는 유일한 표시다.
@@ -388,6 +390,9 @@ const fmtNext = (ms: number): string =>
  *  무엇보다 outcome 을 빌릴 수 없다: outcomeOf 는 배치되지 않는 Task 를 terminal 로 보지 않아
  *  템플릿에 늘 'running' 을 준다 — 그것을 그리면 안 도는 것에 도는 점이 붙는다. 회차는 평범한
  *  Run 이므로 그 안에서 RunCard 를 그대로 쓴다. */
+/** Drawn again only when what it shows changed (audit UI-11): the sidebar's once-a-second tick drew every card. */
+const RunCard = memo(RunCardImpl)
+
 function ScheduleCard({
   run,
   open,
@@ -518,9 +523,9 @@ function ScheduleCard({
                 key={kid.id}
                 run={kid}
                 open={!collapsed.has(kid.id)}
-                onToggle={() => onToggleChild(kid.id)}
+                onToggle={onToggleChild}
                 ordinal={kid.fireOrdinal}
-                nowMs={nowMs}
+                nowMs={clockFor(kid, nowMs)}
                 canOpenSession={canOpenSession}
                 onOpenSession={onOpenSession}
                 onOpenRun={onOpenRun}
@@ -663,14 +668,15 @@ export function JobsView({
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
   // component ever rendered, opens by default rather than needing to be found and expanded by hand.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const toggle = (runId: string): void => {
+  // One function for every card (audit UI-11), so a memoized card is not drawn again for a new closure.
+  const toggle = useCallback((runId: string): void => {
     setCollapsed((prev) => {
       const next = new Set(prev)
       if (next.has(runId)) next.delete(runId)
       else next.add(runId)
       return next
     })
-  }
+  }, [])
 
   // 도는 것이 없으면 타이머도 없다 — 아무것도 안 변하는 화면을 1초마다 다시 그릴 이유가 없다.
   // 조건을 스냅샷에서 뽑는 덕분에 마지막 워커가 끝나면 다음 푸시에서 저절로 꺼진다.
@@ -800,8 +806,8 @@ export function JobsView({
             key={run.id}
             run={run}
             open={!collapsed.has(run.id)}
-            onToggle={() => toggle(run.id)}
-            nowMs={nowMs}
+            onToggle={toggle}
+            nowMs={clockFor(run, nowMs)}
             canOpenSession={canOpenSession}
             onOpenSession={onOpenSession}
             onOpenRun={onOpenRun}
