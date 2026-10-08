@@ -28,6 +28,7 @@ import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
+import { createRemoteSessions } from './remoteSessions'
 import { attachPtyHost } from './ptyHost'
 import { attachProcHost } from './procHost'
 import { ProcRegistry } from './procRegistry'
@@ -636,6 +637,17 @@ async function main(): Promise<void> {
     // plus the hook event files the sessions' own hooks append under this profile (read only), and
     // the profile's accounts.json for where a Claude chat session's transcript lives (read only).
     sessions: hostSessions,
+    // A Runtime's sessions as a controller reads and drives them (remote runtime Phase 9a): facts from the hooks, the
+    // statusline, the rollouts and the chats; input and stop through the registries; a resize that yields to an app
+    // holding the pty (no exits yet means no app, so none holds one).
+    remoteSessions: createRemoteSessions({
+      ptys: registry,
+      procs,
+      sessions: hostSessions,
+      holdersOf: (ptyId) => exits?.holdersOf(ptyId) ?? [],
+      statusLinePayload: (sid) => (spawner ? spawner.statusLinePayload(sid) : Promise.resolve(null)),
+      chats: rollingWiring?.chats ?? null
+    }),
     // `sessions create` (CLI spec §14): the spawner's path for a terminal session, the chat manager's for
     // a chat one (sessionCreate.ts). Without a spawner both refuse with 6.
     createSession: createHostSessionStarter({

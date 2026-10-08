@@ -1,6 +1,7 @@
 // The Host's orchestration: the real command layer over the real store (host control plane design
 // §5, §6). This is what replaces the wire slice's `version`-only stub — `server.ts` calls
 // `OrchCall.call` and did not change when it did.
+import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } from './remoteSessions'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { stat } from 'node:fs/promises'
@@ -429,6 +430,9 @@ export function createHostOrch(a: {
   log(message: string): void
   /** The agent sessions this Host holds, for `astera sessions` (orchDeps' HOST_SESSIONS). */
   sessions: HostSessions
+  /** A Runtime's sessions as a controller reads and drives them (remote runtime Phase 9a, remoteSessions.ts). Absent:
+   *  those commands answer 501. */
+  remoteSessions?: RemoteSessions
   /** The Host's own spawner (orchDeps' HOST_LOCAL). Null or absent when the Host was started without
    *  the CLI paths, and then every one of those calls takes its pre-S2 route. */
   local?: HostLocal | null
@@ -1551,6 +1555,7 @@ export function createHostOrch(a: {
             cmd === 'state-get' ||
             cmd === 'jobs-view' ||
             cmd === 'runs-timeline' ||
+            REMOTE_SESSION_READS.has(cmd) ||
             cmd === 'validation-stop' ||
             cmd === 'roll-state' ||
             cmd === 'roll-force' ||
@@ -1583,6 +1588,11 @@ export function createHostOrch(a: {
         if (cmd === 'state-get') return await stateGet(args, from)
         // **A remote Jobs view's two reads** (remote runtime design Phase 6, X1-05): folded and paged here, with this
         // Runtime's own path rules and facts, so a controller never folds with its own. Read only; anyone may ask.
+        // **A remote session's reads** (Phase 9a): read only, beside the Jobs view's.
+        if (REMOTE_SESSION_READS.has(cmd)) {
+          const read = a.remoteSessions?.read(cmd, args)
+          return read ? await read : { status: 501, body: { error: `${cmd} is not answered by this Host` } }
+        }
         if (cmd === 'jobs-view' || cmd === 'runs-timeline') {
           await ready()
           const worktrees = a.worktrees?.list?.() ?? []
@@ -1814,6 +1824,13 @@ export function createHostOrch(a: {
         //
         // **And the state is not loaded for it.** Receipts are not in the state file (§4), so a `ready()`
         // here would read a file to answer a question the file has nothing to say about.
+        // **A remote session's changes** (Phase 9a): below the receipt line, so a retried input, stop or answer replays
+        // its answer instead of acting twice. Each marks an effect only when it acted.
+        if (REMOTE_SESSION_CHANGES.has(cmd)) {
+          const changed = a.remoteSessions?.change(cmd, args, () => void (marks.effects += 1))
+          const answered = changed ? await changed : { status: 501, body: { error: `${cmd} is not answered by this Host` } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
         if (cmd === 'requests-show') {
           const shown = requestsShow(args, receiptCaller(sessionId, from))
           return claimed === null ? shown : settleRequest(claimed, cmd, marks, shown)

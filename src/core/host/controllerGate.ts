@@ -25,6 +25,8 @@ export const CONTROLLER_READ_COMMANDS = [
   // Phase 6: a remote Jobs view's own reads, folded and paged on the Runtime (X1-05).
   'jobs-view',
   'runs-timeline',
+  // Phase 9a: a remote session's facts (remoteSessions.ts).
+  'sessions-facts',
   'questions-list',
   'questions-get',
   'run-configs-list',
@@ -59,7 +61,12 @@ export const CONTROLLER_CONTROL_COMMANDS = [
   'gate-resolve',
   'questions-answer',
   'sessions-create',
-  'sessions-send'
+  'sessions-send',
+  // Phase 9a: raw input, a resize that yields to a local viewer, stop, and a chat card's answer (remoteSessions.ts).
+  'sessions-input',
+  'sessions-resize',
+  'sessions-stop',
+  'sessions-answer'
 ] as const
 
 const READ: ReadonlySet<string> = new Set(CONTROLLER_READ_COMMANDS)
