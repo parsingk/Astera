@@ -180,7 +180,8 @@ describe('LocalHistoryStore.snapshot — 파일 수 상한', () => {
       expect(store.list(projDir)).toEqual([])
       await expect(fs.access(path.join(historyDir, 'index.json'))).rejects.toThrow()
     },
-    60_000
+    // 실제 파일 5,001개: 전체 테스트가 도는 바쁜 기계에서 62.5초가 걸린 적이 있다(2026-10-08).
+    180_000
   )
 
   it('상한과 같은 수까지는 스냅샷한다(상한은 주입할 수 있다)', async () => {
