@@ -1514,5 +1514,18 @@ export const ja: Catalog = {
   'remote.session.gone': 'このセッションの出力を受け取れません: {message}',
   'remote.session.ended': 'セッションが終了しました (終了コード {code})',
   'remote.session.sizeHeld': 'そのコンピューターでこのセッションが表示されているため、端末のサイズはそちらに合わせられます。',
-  'remote.session.noPty': 'Runtime がこのセッションの端末をまだ知らせていません'
+  'remote.session.noPty': 'Runtime がこのセッションの端末をまだ知らせていません',
+  'remote.session.failed': 'Runtime が拒否しました: {message}',
+  'remote.session.stop': 'Runtime で終了',
+  'remote.session.stopTitle': 'このセッションを Runtime で終了しますか?',
+  'remote.session.stopBody': 'そのコンピューターで動いているエージェントが停止します。タブを閉じるだけならセッションは動き続けます。',
+  'remote.session.readOnlyAnswer': 'このセッションは回答を待っていますが、読み取り専用のペアリングではここから回答できません。',
+  'remote.session.notReadable': 'このセッションの会話はまだ Runtime で読めません。',
+  'remote.session.status.working': '作業中',
+  'remote.session.status.waiting': '回答待ち',
+  'remote.session.status.idle': '待機',
+  'remote.session.status.unknown': '状態不明',
+  'remote.session.earlier': '以前の会話',
+  'remote.session.chatEnded': 'このセッションは Runtime で終了しました。',
+  'remote.session.composer': 'Runtime のセッションへのメッセージ'
 }

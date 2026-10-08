@@ -1959,5 +1959,18 @@ export const ko = {
   'remote.session.gone': '이 세션의 출력을 받을 수 없습니다: {message}',
   'remote.session.ended': '세션이 끝났습니다 (종료 코드 {code})',
   'remote.session.sizeHeld': '그 컴퓨터에서 이 세션을 보고 있어 터미널 크기는 그쪽에 맞춰집니다.',
-  'remote.session.noPty': 'Runtime 이 이 세션의 터미널을 아직 알려 주지 않았습니다'
+  'remote.session.noPty': 'Runtime 이 이 세션의 터미널을 아직 알려 주지 않았습니다',
+  'remote.session.failed': 'Runtime 이 거절했습니다: {message}',
+  'remote.session.stop': '원격에서 종료',
+  'remote.session.stopTitle': '이 세션을 Runtime 에서 끝낼까요?',
+  'remote.session.stopBody': '그 컴퓨터에서 돌고 있는 에이전트가 멈춥니다. 탭만 닫으면 세션은 계속 돕니다.',
+  'remote.session.readOnlyAnswer': '이 세션이 답을 기다리고 있지만, 읽기 전용으로 짝지어서 여기서는 답할 수 없습니다.',
+  'remote.session.notReadable': '이 세션의 대화는 아직 Runtime 에서 읽을 수 없습니다.',
+  'remote.session.status.working': '작업 중',
+  'remote.session.status.waiting': '답을 기다림',
+  'remote.session.status.idle': '대기',
+  'remote.session.status.unknown': '상태 알 수 없음',
+  'remote.session.earlier': '이전 대화',
+  'remote.session.chatEnded': '이 세션은 Runtime 에서 끝났습니다.',
+  'remote.session.composer': 'Runtime 의 세션에 보낼 메시지'
 } as const

@@ -1712,5 +1712,18 @@ export const en: Record<keyof typeof ko, string> = {
   'remote.session.gone': 'This session\'s output cannot be received: {message}',
   'remote.session.ended': 'The session ended (exit code {code})',
   'remote.session.sizeHeld': 'Someone is viewing this session on that computer, so its terminal size follows theirs.',
-  'remote.session.noPty': 'the Runtime has not named this session\'s terminal yet'
+  'remote.session.noPty': 'the Runtime has not named this session\'s terminal yet',
+  'remote.session.failed': 'The Runtime refused it: {message}',
+  'remote.session.stop': 'End on the Runtime',
+  'remote.session.stopTitle': 'End this session on the Runtime?',
+  'remote.session.stopBody': 'The agent running on that computer stops. Closing the tab alone leaves the session running.',
+  'remote.session.readOnlyAnswer': 'This session is waiting for an answer, but a read-only pairing cannot give one from here.',
+  'remote.session.notReadable': 'This session\'s conversation cannot be read on the Runtime yet.',
+  'remote.session.status.working': 'Working',
+  'remote.session.status.waiting': 'Waiting',
+  'remote.session.status.idle': 'Idle',
+  'remote.session.status.unknown': 'Status unknown',
+  'remote.session.earlier': 'Earlier',
+  'remote.session.chatEnded': 'This session has ended on the Runtime.',
+  'remote.session.composer': 'A message for the session on the Runtime'
 }

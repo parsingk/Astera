@@ -7,7 +7,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { toast } from "../../lib/toast";
 import type { MessageKey } from "../../../../core/i18n";
 import { PROVIDER_META, type Provider } from "../../../../core/providers/meta";
-import type { ApprovalDecision, ChatRequest } from "../../../../core/chat/types";
+import type { ApprovalDecision, ChatAnswer, ChatRequest } from "../../../../core/chat/types";
 import { allAnswered, emptyAnswers, setOther, togglePick, type Answer } from "../../../../core/prompts/askUserQuestion";
 import { forgetOtherAskAnswers, recallAskAnswers, rememberAskAnswers } from "./askDrafts";
 import { QuestionCard } from "./QuestionCard";
@@ -17,7 +17,12 @@ export interface ChatRequestCardProps {
   request: ChatRequest;
   /** Which CLI this session runs, so the card can name it in its title rather than say Codex always. */
   provider: Provider;
+  /** Where the answer goes. A local chat's goes to this app's chat manager; a remote session's to its Runtime's
+   *  `sessions-answer` (Phase 9b). Rejects with what to tell the person. */
+  answer?: (requestId: string, answer: ChatAnswer) => Promise<void>;
 }
+
+type AnswerFn = (requestId: string, answer: ChatAnswer) => Promise<void>;
 
 /** The order the three decisions are offered in when a request lists them, least to most final —
  *  filtered to whatever `request.decisions` actually carries (a shell command offers all three; a
@@ -38,23 +43,26 @@ const errorMessageOf = (err: unknown): string => (err instanceof Error ? err.mes
  * disappears the moment the pane's own state drops the request (Task 10 unmounts it), so nothing here
  * has to notice that on its own.
  */
-export function ChatRequestCard({ sessionId, request, provider }: ChatRequestCardProps): ReactNode {
+export function ChatRequestCard({ sessionId, request, provider, answer }: ChatRequestCardProps): ReactNode {
+  const send: AnswerFn = answer ?? ((requestId, a) => window.api.chat.answer(sessionId, requestId, a).then(() => undefined));
   // The one place this card's CLI name is read off the provider — PROVIDER_META is the single source
   // of truth for it (AccountPanel.tsx reads the same field the same way).
   const who = PROVIDER_META[provider].displayName;
   if (request.kind === "question")
-    return <QuestionRequestCard sessionId={sessionId} request={request} who={who} />;
-  return <ApprovalRequestCard sessionId={sessionId} request={request} who={who} />;
+    return <QuestionRequestCard sessionId={sessionId} request={request} who={who} send={send} />;
+  return <ApprovalRequestCard sessionId={sessionId} request={request} who={who} send={send} />;
 }
 
 function QuestionRequestCard({
   sessionId,
   request,
-  who
+  who,
+  send
 }: {
   sessionId: string;
   request: Extract<ChatRequest, { kind: "question" }>;
   who: string;
+  send: AnswerFn;
 }): ReactNode {
   const { t } = useI18n();
   const key = `${sessionId}|${request.id}`;
@@ -86,7 +94,7 @@ function QuestionRequestCard({
   const submit = async (): Promise<void> => {
     setSubmitting(true);
     try {
-      await window.api.chat.answer(sessionId, request.id, { kind: "question", answers });
+      await send(request.id, { kind: "question", answers });
     } catch (err) {
       setSubmitting(false);
       toast.error(t("chat.notice.error", { message: errorMessageOf(err) }));
@@ -111,11 +119,13 @@ function QuestionRequestCard({
 function ApprovalRequestCard({
   sessionId,
   request,
-  who
+  who,
+  send
 }: {
   sessionId: string;
   request: Extract<ChatRequest, { kind: "approval" }>;
   who: string;
+  send: AnswerFn;
 }): ReactNode {
   const { t } = useI18n();
   const [busy, setBusy] = useState(false);
@@ -123,7 +133,7 @@ function ApprovalRequestCard({
   const decide = async (decision: ApprovalDecision): Promise<void> => {
     setBusy(true);
     try {
-      await window.api.chat.answer(sessionId, request.id, { kind: "approval", decision });
+      await send(request.id, { kind: "approval", decision });
     } catch (err) {
       setBusy(false);
       toast.error(t("chat.notice.error", { message: errorMessageOf(err) }));

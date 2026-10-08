@@ -825,6 +825,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .remote-session-banners { position: absolute; left: 8px; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; z-index: 2; }
 .remote-session-banner { align-self: flex-start; padding: 4px 8px; border-radius: 4px; background: var(--elevated); color: var(--text-dim); font-size: 12px; }
 .remote-session-banner.is-error { background: var(--danger-bg); color: var(--danger); }
+.remote-chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--text-dim); }
+.remote-chat-spacer { flex: 1; }
+.remote-chat-status.is-waiting { color: var(--warn); }
+.remote-chat-status.is-working { color: var(--accent); }
+.remote-chat-note { color: var(--text-faint); font-size: 12px; }
+.remote-chat-note.is-block { padding: 6px 12px; border-bottom: 1px solid var(--line-soft); }
+.remote-chat-button { font-size: 12px; padding: 2px 8px; }
+.remote-chat-button.is-danger { color: var(--danger); }
 /* the rolling progress banner — an overlay at the top of the terminal */
 .roll-banner {
   position: absolute;

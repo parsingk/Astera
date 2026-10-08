@@ -1540,5 +1540,18 @@ export const es: Catalog = {
   'remote.session.gone': 'No se puede recibir la salida de esta sesión: {message}',
   'remote.session.ended': 'La sesión terminó (código {code})',
   'remote.session.sizeHeld': 'Alguien está viendo esta sesión en ese equipo, así que el tamaño del terminal sigue al suyo.',
-  'remote.session.noPty': 'el Runtime aún no ha indicado el terminal de esta sesión'
+  'remote.session.noPty': 'el Runtime aún no ha indicado el terminal de esta sesión',
+  'remote.session.failed': 'El Runtime lo rechazó: {message}',
+  'remote.session.stop': 'Terminar en el Runtime',
+  'remote.session.stopTitle': '¿Terminar esta sesión en el Runtime?',
+  'remote.session.stopBody': 'El agente que corre en ese equipo se detiene. Cerrar solo la pestaña deja la sesión en marcha.',
+  'remote.session.readOnlyAnswer': 'Esta sesión espera una respuesta, pero un emparejamiento de solo lectura no puede darla desde aquí.',
+  'remote.session.notReadable': 'La conversación de esta sesión aún no se puede leer en el Runtime.',
+  'remote.session.status.working': 'Trabajando',
+  'remote.session.status.waiting': 'Esperando',
+  'remote.session.status.idle': 'Inactiva',
+  'remote.session.status.unknown': 'Estado desconocido',
+  'remote.session.earlier': 'Anteriores',
+  'remote.session.chatEnded': 'Esta sesión terminó en el Runtime.',
+  'remote.session.composer': 'Un mensaje para la sesión en el Runtime'
 }
