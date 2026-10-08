@@ -26,6 +26,8 @@ function look(t: Terminal): unknown {
   }
   return {
     active: t.buffer.active.type,
+    // Whether the cursor shows (DECTCEM): not in the public API, read the way liveTerminal.ts reads it.
+    hidden: (t as unknown as { _core: { coreService: { isCursorHidden: boolean } } })._core.coreService.isCursorHidden,
     cursor: [t.buffer.active.cursorX, t.buffer.active.cursorY],
     size: [t.cols, t.rows],
     normal: rows(t.buffer.normal),
@@ -104,6 +106,34 @@ describe('createLiveTerminal checkpoint', () => {
   it('a checkpoint after the exit carries its code', async () => {
     const r = await recover(20, 5, [data('bye'), { kind: 'exit', code: 3 }], 2)
     expect(r.cp.exitCode).toBe(3)
+    expect(r.got).toEqual(r.want)
+  })
+
+  // Phase 8 review I1: state the serialize addon leaves out, which full-screen programs rely on.
+  const E = String.fromCharCode(27)
+  const NL = String.fromCharCode(13, 10)
+  it('a scroll region set before the checkpoint still confines later output', async () => {
+    const r = await recover(20, 8, [data(`top${NL}`), data(`${E}[3;6r${E}[6;1H`), data(`a${NL}b${NL}c${NL}d${NL}e${NL}`)], 2)
+    expect(r.got).toEqual(r.want)
+  })
+  it('the DEC line-drawing charset active at the checkpoint still draws lines', async () => {
+    const r = await recover(20, 4, [data(`${E}(0lqk`), data('x mj')], 1)
+    expect(r.got).toEqual(r.want)
+  })
+  it('a shifted-in G1 charset stays shifted in', async () => {
+    const r = await recover(20, 4, [data(`${E})0${String.fromCharCode(14)}lq`), data(`k${String.fromCharCode(15)}lq`)], 1)
+    expect(r.got).toEqual(r.want)
+  })
+  it('a cursor saved before the checkpoint is restored after it', async () => {
+    const r = await recover(20, 6, [data(`${E}[3;5H${E}7${E}[1;1Hhome`), data(`${E}8saved`)], 1)
+    expect(r.got).toEqual(r.want)
+  })
+  it('origin mode set before the checkpoint still places the cursor within the region', async () => {
+    const r = await recover(20, 8, [data(`${E}[3;7r${E}[?6h`), data(`${E}[2;2Hin`)], 1)
+    expect(r.got).toEqual(r.want)
+  })
+  it('a hidden cursor stays hidden', async () => {
+    const r = await recover(20, 4, [data(`${E}[?25lworking`), data('...')], 1)
     expect(r.got).toEqual(r.want)
   })
 

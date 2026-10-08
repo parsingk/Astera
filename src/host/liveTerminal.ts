@@ -39,6 +39,65 @@ export interface LiveTerminal {
 }
 
 type Mods = { Terminal: typeof HeadlessTerminal; SerializeAddon: typeof Serializer }
+
+/** The xterm internals the addon does not serialize (Phase 8 review I1), read from `_core`. @xterm/headless is pinned to
+ *  6.0.0; liveTerminal.test.ts fails if a field moves. */
+type Core = {
+  buffer: { scrollTop: number; scrollBottom: number; savedX?: number; savedY?: number }
+  coreService: { isCursorHidden: boolean; decPrivateModes: { origin: boolean } }
+  _charsetService: { glevel: number; _charsets: Array<object | undefined> }
+}
+const coreOf = (t: HeadlessTerminal): Core | null => {
+  const c = (t as unknown as { _core?: Core })._core
+  return c?.buffer && c.coreService && c._charsetService ? c : null
+}
+/** Each charset table xterm holds, by the final byte that designates it: the table objects are shared, so a scratch
+ *  terminal designating each one names them. */
+const DESIGNATORS = '0AB4C5RQKYE6ZH7=`'
+let charsetNames: Map<object, string> | null = null
+const charsetName = (T: typeof HeadlessTerminal, table: object): string | null => {
+  if (!charsetNames) {
+    charsetNames = new Map()
+    const scratch = new T({ cols: 2, rows: 1, allowProposedApi: true })
+    const core = coreOf(scratch)
+    for (const ch of DESIGNATORS) {
+      ;(scratch as unknown as { _core: { _inputHandler: { selectCharset(id: string): void } } })._core._inputHandler.selectCharset(`(${ch}`)
+      const got = core?._charsetService._charsets[0]
+      if (got) charsetNames.set(got, ch)
+    }
+    scratch.dispose()
+  }
+  return charsetNames.get(table) ?? null
+}
+
+/** What `state` needs after it so a fresh terminal stands where this one does: the scroll region, the saved cursor, the
+ *  designated charsets and the one shifted in, origin mode, the cursor's place and whether it shows. */
+function stateSuffix(T: typeof HeadlessTerminal, t: HeadlessTerminal): string {
+  const core = coreOf(t)
+  if (!core) return ''
+  const E = String.fromCharCode(27)
+  let out = ''
+  const { scrollTop, scrollBottom, savedX, savedY } = core.buffer
+  if (scrollTop !== 0 || scrollBottom !== t.rows - 1) out += `${E}[${scrollTop + 1};${scrollBottom + 1}r`
+  // DECSC remembers where it was; placed there and saved again, with origin mode still off so the place is absolute.
+  if (savedX !== undefined && savedY !== undefined && (savedX !== 0 || savedY !== 0)) out += `${E}[${savedY + 1};${savedX + 1}H${E}7`
+  const cs = core._charsetService
+  for (let g = 0; g < 4; g++) {
+    const table = cs._charsets[g]
+    const name = table ? charsetName(T, table) : null
+    if (name) out += `${E}${'()*+'[g]}${name}`
+  }
+  if (cs.glevel === 1) out += String.fromCharCode(14)
+  else if (cs.glevel === 2) out += `${E}n`
+  else if (cs.glevel === 3) out += `${E}o`
+  const origin = core.coreService.decPrivateModes.origin
+  if (origin) out += `${E}[?6h`
+  const buf = t.buffer.active
+  const row = buf.cursorY - (origin ? scrollTop : 0)
+  out += `${E}[${row + 1};${Math.min(buf.cursorX, t.cols - 1) + 1}H`
+  if (core.coreService.isCursorHidden) out += `${E}[?25l`
+  return out
+}
 let mods: Promise<Mods> | null = null
 const load = (): Promise<Mods> =>
   (mods ??= (async () => {
@@ -79,7 +138,9 @@ export function createLiveTerminal(o: { cols: number; rows: number }): LiveTermi
       })
   }
 
+  let T: typeof HeadlessTerminal | null = null
   const ready: Promise<HeadlessTerminal> = load().then((m) => {
+    T = m.Terminal
     const t = new m.Terminal({ cols: Math.max(1, o.cols), rows: Math.max(1, o.rows), scrollback: TERMINAL_SCROLLBACK, allowProposedApi: true })
     serializer = new m.SerializeAddon()
     t.loadAddon(serializer)
@@ -104,7 +165,7 @@ export function createLiveTerminal(o: { cols: number; rows: number }): LiveTermi
         watermark: mark,
         cols: t.cols,
         rows: t.rows,
-        state: serializer ? serializer.serialize({ scrollback: TERMINAL_SCROLLBACK }) : '',
+        state: serializer ? serializer.serialize({ scrollback: TERMINAL_SCROLLBACK }) + stateSuffix(T as typeof HeadlessTerminal, t) : '',
         pending: tracker.pending(),
         ...(exited ? { exitCode } : {})
       })),
