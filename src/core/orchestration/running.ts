@@ -38,7 +38,11 @@ export const isTerminal = (t: Task): boolean =>
  *  대가: 모두 끝난 뒤 Task 가 추가되면 completed 가 running 으로 되돌아간다. 진행률 숫자도 같은
  *  방식으로 움직이므로 정직한 표시라고 본다. */
 export function outcomeOf(state: OrchState, runId: string): RunOutcome {
-  const tasks = tasksOwnedBy(state, runId)
+  return outcomeOfTasks(tasksOwnedBy(state, runId))
+}
+
+/** outcomeOf for Tasks already gathered (the Jobs sidebar fold indexes them once, performance audit M1) */
+export function outcomeOfTasks(tasks: readonly Task[]): RunOutcome {
   if (tasks.length === 0) return 'running'
   if (!tasks.every(isTerminal)) return 'running'
   return tasks.some((t) => t.status === 'failed') ? 'failed' : 'completed'

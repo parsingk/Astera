@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { timelineFor, eventCountFor, timelineWith } from './timeline'
+import { timelineFor, eventCountFor, eventCountsOf, timelineWith } from './timeline'
 import type { JobEvent } from '../types'
 import { emptyState } from './state'
 import type { OrchState } from './state'
@@ -271,5 +271,36 @@ describe('timelineWith', () => {
     const merged = timelineWith(s, s.runs[0].id, () => false, extra)
     expect(merged.map((e) => e.kind).indexOf('recovery')).toBeGreaterThan(merged.map((e) => e.kind).indexOf('run-created'))
     expect(timelineWith(s, s.runs[0].id, () => false, [])).toEqual(timelineFor(s, s.runs[0].id, () => false))
+  })
+})
+
+// Performance audit M1: the Jobs sidebar fold counts every Run's events on every commit. Counting them all in one pass
+// must give exactly what each Run's timeline holds, or the push that a new event should let through never comes.
+describe('eventCountsOf', () => {
+  it('gives every Run the length of its own timeline, in one pass', () => {
+    const resumes: ResumeEntry[] = [
+      { stoppedAt: T(5), fromAccountId: 'a', reason: 'waiting', resumedAt: T(6), toAccountId: 'b' },
+      { stoppedAt: T(7), fromAccountId: 'b', reason: 'waiting' }
+    ]
+    const s = state({
+      runs: [run('r1'), run('r2'), run('r3')],
+      tasks: [task('t1', 'r1'), task('t2', 'r1'), task('t3', 'r2')],
+      dispatches: [{ ...dispatch('d1', 't1'), resumes }, dispatch('d2', 't3'), dispatch('d3', 'gone')],
+      messages: [
+        { ...message('m1', 'r1', 'status'), dispatchId: 'd1' },
+        message('m2', 'r1', 'heartbeat'),
+        message('m3', 'r2', 'decision_gate'),
+        message('m4', 'r2', 'question'),
+        message('m5', 'nope', 'status')
+      ],
+      gates: [
+        { ...gate('g1', 't1'), resolvedAt: T(8), resolution: 'yes' },
+        { ...gate('g2', 't3'), runId: 'r2' }
+      ]
+    })
+    const counts = eventCountsOf(s)
+    for (const r of s.runs) expect(counts.get(r.id) ?? 0).toBe(timelineFor(s, r.id, anySession).length)
+    expect(counts.get('nope') ?? 0).toBe(0)
+    expect(eventCountFor(s, 'r1')).toBe(timelineFor(s, 'r1', anySession).length)
   })
 })

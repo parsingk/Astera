@@ -9,6 +9,7 @@ import {
   MAX_REVIEW_ROUNDS,
   type CheckResult,
   type Dispatch,
+  type Job,
   type ReviewSeverity,
   type Task
 } from './types'
@@ -39,7 +40,11 @@ export function checkConfigIdsOf(task: Pick<Task, 'validateConfigIds' | 'validat
  *  정책은 계획의 것이라 회차가 아니라 Job 에서 읽는다 — 같은 Job 의 두 회차가 다른 수렴 정책으로
  *  도는 일은 없다. */
 export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolicy | null {
-  const job = task.runId === undefined ? undefined : jobOfRunId(s, task.runId)
+  return policyOfJob(task.runId === undefined ? undefined : jobOfRunId(s, task.runId))
+}
+
+/** policyOf for a Job already found (the Jobs sidebar fold indexes Runs and Jobs once, performance audit M1) */
+export function policyOfJob(job: Job | undefined): ResolvedPolicy | null {
   if (!job?.convergence) return null
   return {
     maxFixAttempts: job.convergence.maxFixAttempts ?? FAILURE_LIMIT,
@@ -60,13 +65,19 @@ export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolic
  *  **아직 도는 수리는 판정이 없어도 센다.** 빼면 앱이 그 옆에 두 번째 수리를 연다 — 이 수가 "지금
  *  열어도 되는가" 를 정하는 데 쓰이기 때문이다(`routeFailure`). */
 export const repairCountOf = (s: OrchState, taskId: string): number =>
-  s.dispatches.filter(
-    (d) => d.taskId === taskId && d.repair !== undefined && (d.outcome !== undefined || d.endedAt === undefined)
-  ).length
+  repairCountIn(s.dispatches.filter((d) => d.taskId === taskId))
+
+/** repairCountOf over one Task's Dispatches already gathered (performance audit M1) */
+export const repairCountIn = (ds: readonly Dispatch[]): number =>
+  ds.filter((d) => d.repair !== undefined && (d.outcome !== undefined || d.endedAt === undefined)).length
 
 /** 보고를 낸(outcome 있는) 검토 Dispatch 수. 유실된 검토는 라운드를 먹지 않는다 */
 export const reviewRoundOf = (s: OrchState, taskId: string): number =>
-  s.dispatches.filter((d) => d.taskId === taskId && d.review === true && d.outcome !== undefined).length
+  reviewRoundIn(s.dispatches.filter((d) => d.taskId === taskId))
+
+/** reviewRoundOf over one Task's Dispatches already gathered (performance audit M1) */
+export const reviewRoundIn = (ds: readonly Dispatch[]): number =>
+  ds.filter((d) => d.review === true && d.outcome !== undefined).length
 
 /** 검토가 아닌 것 중 가장 늦게 시작한 Dispatch — repair 가 이어받을 세션과 retryOf 의 출처 */
 export const latestImplDispatch = (s: OrchState, taskId: string): Dispatch | undefined =>

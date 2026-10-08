@@ -10,15 +10,15 @@
 // either fails (files/tree.ts's node:path import has no declarations there) or "succeeds" by adding
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
-import { findProject, findProjectByPath } from './projects'
-import { runsWorkingIn, runWorktrees } from './integrate'
+import { findProjectByPath } from './projects'
+import { runsWorkingIn, runWorktreesFrom } from './integrate'
 import type { JobRow, JobTask, OrchSnapshot, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import { coordinatorStarting, type OrchState } from './state'
-import { eventCountFor } from './timeline'
-import { isTerminal, outcomeOf, tasksOwnedBy } from './running'
-import { policyOf, repairCountOf, reviewRoundOf } from './convergence'
-import type { Job, JobRun, Task } from './types'
+import { eventCountsOf } from './timeline'
+import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy } from './running'
+import { policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
+import type { Dispatch, Gate, Job, JobRun, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
  *
@@ -50,6 +50,8 @@ export function jobsForProject(
   worktrees: WorktreeInfo[]
 ): Job[] {
   const project = findProjectByPath(state, projectPath)
+  // The registered ids, once, rather than a search of every project per Job (performance audit M1)
+  const projectIds = new Set(state.projects.map((p) => p.id))
   return state.jobs
     .filter((r) => {
       // **`projectId` wins, but only when it resolves.** A Run made since projects were registered
@@ -58,7 +60,7 @@ export function jobsForProject(
       // Run: the derivation below is what every Run made before this field used, so it is the answer
       // that was already correct rather than a guess, and a Job that vanishes from the list is worse
       // than one listed by its folder.
-      if (r.projectId !== undefined && findProject(state, r.projectId))
+      if (r.projectId !== undefined && projectIds.has(r.projectId))
         return r.projectId === project?.id
       return isSamePath(projectPath, repoPathOf(worktrees, r.cwd))
     })
@@ -72,7 +74,10 @@ export function jobsForProject(
  *  attempt. (The direction document's mock reads "5/7 … 78%"; 5/7 is 71% — the ratio here is the
  *  plain one, not that figure.) */
 export function progressOf(state: OrchState, runId: string): { done: number; total: number } {
-  const tasks = tasksOwnedBy(state, runId)
+  return progressOfTasks(tasksOwnedBy(state, runId))
+}
+
+const progressOfTasks = (tasks: readonly Task[]): { done: number; total: number } => {
   return { done: tasks.filter((t) => t.status === 'completed').length, total: tasks.length }
 }
 
@@ -112,21 +117,18 @@ export { isTerminal, outcomeOf }
  *  the tab they sat next to stops being worth opening. Keeping the lookups apart is how each one
  *  says what it means rather than what it happens to equal. */
 function jobTaskOf(
-  state: OrchState,
+  ix: FoldIndex,
   task: Task,
   isKnownSession: (sessionId: string) => boolean
 ): JobTask {
-  const dispatches = state.dispatches
-    .filter((d) => d.taskId === task.id)
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  const own = ix.dispatchesByTask.get(task.id) ?? []
+  const dispatches = [...own].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   const latest = dispatches[dispatches.length - 1]
   // 열린 Dispatch 만이 "지금 도는 중"을 말할 수 있다. 위 주석대로 이것은 latest 와 같은 레코드가
   // 되지만, 같아지는 것이 규칙(Task 당 열린 Dispatch 하나)의 결과일 뿐이므로 뜻이 다른 두 조회를
   // 하나로 합치지 않는다 — 합치면 그 규칙이 바뀌는 날 조용히 틀린다.
   const running = dispatches.find((d) => !d.outcome && !d.endedAt)
-  const open = state.gates
-    .filter((g) => g.taskId === task.id && g.status === 'open')
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const open = [...(ix.openGatesByTask.get(task.id) ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   // waiting 은 running 에서만 읽는다 — latest 를 쓰면 끝난 Dispatch 의 열린 항목(앱이 꺼져
   // outcome_unknown 으로 닫힌 경우)이 "아직 기다리는 중"으로 보인다. 그 Dispatch 는 이미 끝났으므로
   // 아무도 그 리셋을 기다리지 않는다.
@@ -138,7 +140,7 @@ function jobTaskOf(
   const done = entries.filter((e) => e.resumedAt !== undefined).length
   // 수렴 판정은 policyOf 다 — `convergence !== undefined` 가 아니다(Plan 1 설계 §18): 손으로 null 을 적어 둔 Run 이
   // "켜진 것" 으로 읽히면 안 된다. 기본값이 채워진 정책이라 화면이 3/2 를 지어내지 않는다.
-  const policy = policyOf(state, task)
+  const policy = policyOfJob(task.runId === undefined ? undefined : ix.jobOfRun(task.runId))
   return {
     id: task.id,
     title: task.title,
@@ -201,15 +203,91 @@ function jobTaskOf(
             // 분모는 예산이므로 여기서 맞춘다: 크래시 쪽은 유령이 부풀린 값이라 셀 것이 아니고, grantedExtra 쪽은
             // 예산을 실제로 다 썼으므로 3/3 이 진행을 속이는 거짓말이 아니다. grantedExtra 를 스냅숏에 실어
             // "3/3 (+1 허락)" 같은 별도 문구를 쓰는 것이 더 나은 답이지만 다음 조각의 Completion 블록 몫이다.
-            repairs: Math.min(repairCountOf(state, task.id), policy.maxFixAttempts),
+            repairs: Math.min(repairCountIn(own), policy.maxFixAttempts),
             maxFixAttempts: policy.maxFixAttempts,
-            reviewRound: reviewRoundOf(state, task.id),
+            reviewRound: reviewRoundIn(own),
             maxReviewRounds: policy.maxReviewRounds,
             repairing: running?.repair ?? null,
             stopped: task.convergenceOff === true
           }
         }
       : {})
+  }
+}
+
+/** The lists one fold reads, grouped once (performance audit M1). The fold runs after every commit on main's thread,
+ *  and it used to filter every list once per row and once per Task. Every group keeps state order, which is the order
+ *  each filter it replaces gave, so a sort with ties lands where it did. */
+interface FoldIndex {
+  /** tasksOwnedBy: a Task under its Run's id and under its Job's id */
+  owned: Map<string, Task[]>
+  tasksByRun: Map<string, Task[]>
+  tasksByJob: Map<string, Task[]>
+  dispatchesByTask: Map<string, Dispatch[]>
+  /** runWorktrees' Dispatches: those of every Task with that Run id */
+  dispatchesByRun: Map<string, Dispatch[]>
+  openGatesByTask: Map<string, Gate[]>
+  runsByJob: Map<string, JobRun[]>
+  /** jobOf: the first Job under that id */
+  jobById: Map<string, Job>
+  /** jobOfRunId: the first Run under that id, then its Job */
+  jobOfRun: (runId: string) => Job | undefined
+  eventCounts: Map<string, number>
+}
+
+function foldIndex(state: OrchState): FoldIndex {
+  const push = <K, V>(m: Map<K, V[]>, k: K, v: V): void => {
+    const xs = m.get(k)
+    if (xs === undefined) m.set(k, [v])
+    else xs.push(v)
+  }
+  const owned = new Map<string, Task[]>()
+  const tasksByRun = new Map<string, Task[]>()
+  const tasksByJob = new Map<string, Task[]>()
+  const runsOfTask = new Map<string, Set<string>>()
+  for (const t of state.tasks) {
+    if (t.runId !== undefined) {
+      push(owned, t.runId, t)
+      push(tasksByRun, t.runId, t)
+      const runs = runsOfTask.get(t.id)
+      if (runs === undefined) runsOfTask.set(t.id, new Set([t.runId]))
+      else runs.add(t.runId)
+    }
+    if (t.jobId !== undefined) {
+      if (t.jobId !== t.runId) push(owned, t.jobId, t)
+      push(tasksByJob, t.jobId, t)
+    }
+  }
+  const dispatchesByTask = new Map<string, Dispatch[]>()
+  const dispatchesByRun = new Map<string, Dispatch[]>()
+  for (const d of state.dispatches) {
+    push(dispatchesByTask, d.taskId, d)
+    for (const runId of runsOfTask.get(d.taskId) ?? []) push(dispatchesByRun, runId, d)
+  }
+  const openGatesByTask = new Map<string, Gate[]>()
+  for (const g of state.gates) if (g.status === 'open') push(openGatesByTask, g.taskId, g)
+  const runsByJob = new Map<string, JobRun[]>()
+  const runById = new Map<string, JobRun>()
+  for (const r of state.runs) {
+    push(runsByJob, r.jobId, r)
+    if (!runById.has(r.id)) runById.set(r.id, r)
+  }
+  const jobById = new Map<string, Job>()
+  for (const j of state.jobs) if (!jobById.has(j.id)) jobById.set(j.id, j)
+  return {
+    owned,
+    tasksByRun,
+    tasksByJob,
+    dispatchesByTask,
+    dispatchesByRun,
+    openGatesByTask,
+    runsByJob,
+    jobById,
+    jobOfRun: (runId) => {
+      const run = runById.get(runId)
+      return run ? jobById.get(run.jobId) : undefined
+    },
+    eventCounts: eventCountsOf(state)
   }
 }
 
@@ -248,6 +326,7 @@ export function snapshotFor(
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
   const workingHere = runsWorkingIn(state, projectPath)
+  const ix = foldIndex(state)
 
   /**
    * 한 줄을 만든다. **Job 줄과 회차 줄이 같은 함수에서 나온다** — 화면에서 둘은 같은 모양이고,
@@ -262,8 +341,11 @@ export function snapshotFor(
     // **줄의 id 는 다르다.** Job 줄은 언제나 Job 의 id 다 — 사람이 그 줄에서 여는 것도 지우는 것도
     // 계획이지 한 회차가 아니다. 회차 줄만 회차의 id 를 쓴다.
     const rowId = asJob ? job.id : (run?.id ?? job.id)
-    const { done, total } = progressOf(state, ownerId)
-    const worktreesOf = (run ? runWorktrees(state, run.id) : []).filter(exists)
+    const ownedTasks = ix.owned.get(ownerId) ?? []
+    const { done, total } = progressOfTasks(ownedTasks)
+    const worktreesOf = (
+      run ? runWorktreesFrom(run, ix.jobById.get(run.jobId)?.cwd, ix.dispatchesByRun.get(run.id) ?? []) : []
+    ).filter(exists)
     return {
       id: rowId,
       objective: job.objective,
@@ -281,14 +363,14 @@ export function snapshotFor(
       run.coordinatorSessionId === undefined &&
       run.paused !== true &&
       !coordinatorStarting(run, nowMs) &&
-      outcomeOf(state, run.id) === 'running'
+      outcomeOfTasks(ix.owned.get(run.id) ?? []) === 'running'
         ? { coordinatorMissing: true }
         : {}),
       concurrency: job.concurrency,
-      outcome: outcomeOf(state, ownerId),
+      outcome: outcomeOfTasks(ownedTasks),
       done,
       total,
-      eventCount: eventCountFor(state, ownerId),
+      eventCount: ix.eventCounts.get(ownerId) ?? 0,
       // 내가 그 폴더에 있고, 나 말고도 있는가. 크기만 보면 남의 얽힘까지 내 줄에 그리게 된다
       sharesProjectFolder: workingHere.has(ownerId) && workingHere.size > 1,
       ...(job.pendingStart ? { pendingStart: true } : {}),
@@ -308,18 +390,16 @@ export function snapshotFor(
         : {}),
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
-      tasks: state.tasks
-        .filter((t) => (run ? t.runId === run.id : t.jobId === job.id))
+      tasks: [...((run ? ix.tasksByRun.get(run.id) : ix.tasksByJob.get(job.id)) ?? [])]
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-        .map((t) => jobTaskOf(state, t, isKnownSession))
+        .map((t) => jobTaskOf(ix, t, isKnownSession))
     }
   }
 
   // 최신 회차가 먼저. 번호가 같으면(옛 파일에서 온 회차는 번호가 없어 1 로 읽힌다) 만든 시각으로
   // 가른다 — 목록의 순서가 입력 순서에 기대면 안 된다.
   const runsOf = (job: Job): JobRun[] =>
-    state.runs
-      .filter((r) => r.jobId === job.id)
+    [...(ix.runsByJob.get(job.id) ?? [])]
       .sort((a, b) => b.ordinal - a.ordinal || b.createdAt.localeCompare(a.createdAt))
 
   const runs = jobsForProject(state, projectPath, worktrees).map((job): JobRow => {

@@ -9,7 +9,7 @@
 // 렌더러는 이미 접힌 값(JobEvent[])만 IPC 로 받는다.
 import type { JobEvent, JobEventKind } from '../types'
 import { jobOf, type OrchState } from './state'
-import type { MessageType } from './types'
+import type { Dispatch, MessageType } from './types'
 
 /** 같은 시각을 가진 이벤트들의 두 번째 정렬 기준. 한 번의 쓰기가 여러 레코드에 같은 now 를 찍으므로
  *  (applyValidationResult 는 Task 를 옮기면서 메시지를 밀어 넣는다) 시각만으로는 순서가 정해지지
@@ -51,6 +51,9 @@ function collect(
   if (!run) return []
   const tasks = state.tasks.filter((t) => t.runId === runId)
   const titleOf = new Map(tasks.map((t) => [t.id, t.title]))
+  // One map rather than a search of every Dispatch per message (performance audit M1)
+  const dispatchById = new Map<string, Dispatch>()
+  for (const d of state.dispatches) if (!dispatchById.has(d.id)) dispatchById.set(d.id, d)
   const events: JobEvent[] = [
     { at: run.createdAt, kind: 'run-created', sourceId: run.id, summary: jobOf(state, run)?.objective ?? '' }
   ]
@@ -112,7 +115,7 @@ function collect(
   for (const m of state.messages) {
     if (m.runId !== runId || SKIP.has(m.type)) continue
     // 메시지가 가리키는 Dispatch 의 세션 — 그 워커의 탭으로 가는 길이다
-    const d = m.dispatchId ? state.dispatches.find((x) => x.id === m.dispatchId) : undefined
+    const d = m.dispatchId ? dispatchById.get(m.dispatchId) : undefined
     events.push({
       at: m.createdAt,
       kind: 'message',
@@ -183,5 +186,40 @@ export function timelineWith(
  *  갈라지면 증상은 "질문이 도착해도 사이드바가 갱신되지 않는다"뿐이고 원인을 찾을 단서가 없다.
  *  세션 판정은 개수에 영향이 없으므로 아무것도 모른다고 넘긴다. */
 export function eventCountFor(state: OrchState, runId: string): number {
-  return collect(state, runId, () => false).length
+  return eventCountsOf(state).get(runId) ?? 0
+}
+
+/** Every Run's event count, in one pass over the state (performance audit M1): the Jobs sidebar fold asks it for every
+ *  row on every commit, and `collect` per Run walked every list once per row.
+ *
+ *  **This is the second copy of collect's selection rule**, which the comment above warns about; a test holds the two
+ *  together (timeline.test.ts, `eventCountsOf`: every Run's count is its timeline's length). A change to what collect
+ *  emits changes this too: one run-created per Run, one per Task of the Run, per Dispatch of those Tasks one plus one
+ *  per stop and one per resume, one per message of the Run that is not in SKIP, per Gate one plus one if resolved. */
+export function eventCountsOf(state: OrchState): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const r of state.runs) counts.set(r.id, 1)
+  const add = (runId: string, n: number): void => {
+    const c = counts.get(runId)
+    if (c !== undefined) counts.set(runId, c + n)
+  }
+  // A Task id names the Runs whose Task it is (one, unless a hand-edited file repeats an id)
+  const runsOfTask = new Map<string, string[]>()
+  for (const t of state.tasks) {
+    if (t.runId === undefined || !counts.has(t.runId)) continue
+    add(t.runId, 1)
+    const runs = runsOfTask.get(t.id)
+    if (runs === undefined) runsOfTask.set(t.id, [t.runId])
+    else if (!runs.includes(t.runId)) runs.push(t.runId)
+  }
+  for (const d of state.dispatches) {
+    const runs = runsOfTask.get(d.taskId)
+    if (runs === undefined) continue
+    let n = 1
+    for (const e of d.resumes ?? []) n += e.resumedAt !== undefined ? 2 : 1
+    for (const runId of runs) add(runId, n)
+  }
+  for (const m of state.messages) if (!SKIP.has(m.type)) add(m.runId, 1)
+  for (const g of state.gates) add(g.runId, g.resolvedAt ? 2 : 1)
+  return counts
 }

@@ -10,7 +10,7 @@
 // 조회 앞에서 빠진다).
 import { isSamePath } from '../files/tree'
 import { jobOf, type OrchState } from './state'
-import type { Job, JobRun, Task } from './types'
+import type { Dispatch, Job, JobRun, Task } from './types'
 
 /** 의존 하나가 남긴 워크트리 — 그 의존 Task 의 id 와 그것이 돌았던 폴더 */
 interface WorktreeDep {
@@ -92,13 +92,17 @@ export function runWorktrees(s: OrchState, runId: string): string[] {
   const taskIds = new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id))
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return []
+  return runWorktreesFrom(run, jobOf(s, run)?.cwd, s.dispatches.filter((d) => taskIds.has(d.taskId)))
+}
+
+/** runWorktrees with the Run's Job folder and its Tasks' Dispatches (in state order) already gathered — the Jobs
+ *  sidebar fold indexes them once (performance audit M1). */
+export function runWorktreesFrom(run: JobRun, jobCwd: string | undefined, dispatches: readonly Dispatch[]): string[] {
   // 프로젝트 폴더는 계획의 것이다. **없을 수도 있는 값으로 다룬다** — 고아 회차(Job 기록이 사라진
   // 것)에 빈 문자열을 쓰면 isSamePath 가 path.resolve('') 로 프로세스의 cwd 를 집어, 엉뚱한 폴더가
   // 이 목록에서 빠진다.
-  const jobCwd = jobOf(s, run)?.cwd
   const out: string[] = []
-  for (const d of s.dispatches) {
-    if (!taskIds.has(d.taskId)) continue
+  for (const d of dispatches) {
     if (jobCwd !== undefined && isSamePath(d.cwd, jobCwd)) continue
     if (!out.some((p) => isSamePath(p, d.cwd))) out.push(d.cwd)
   }
@@ -202,9 +206,15 @@ export function isIntegrationTask(t: Task): boolean {
  *  것으로도 세면 안 된다. */
 export function runsWorkingIn(s: OrchState, cwd: string): Set<string> {
   const runIds = new Set<string>()
+  // The first Task under each id, as a search would find it, built once rather than searched per Dispatch (M1)
+  let runOfTask: Map<string, string | undefined> | null = null
   for (const d of s.dispatches) {
     if (d.outcome || d.endedAt || !isSamePath(d.cwd, cwd)) continue
-    const runId = s.tasks.find((t) => t.id === d.taskId)?.runId
+    if (runOfTask === null) {
+      runOfTask = new Map()
+      for (const t of s.tasks) if (!runOfTask.has(t.id)) runOfTask.set(t.id, t.runId)
+    }
+    const runId = runOfTask.get(d.taskId)
     if (runId !== undefined) runIds.add(runId)
   }
   return runIds

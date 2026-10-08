@@ -145,7 +145,8 @@ import type { ChatAnswer, ChatContextUsage, RateLimitInfo } from '../core/chat/t
 import { chatSessionUsage } from '../core/usage/chatSession'
 import { isPermissionMode, isUnattendedPermission } from '../core/chat/types'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
-import { sameSnapshot, snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
+import { snapshotFor, jobsForProject, outcomeOf } from '../core/orchestration/view'
+import { createOrchPush } from './orchPush'
 import { ensureProject } from '../core/orchestration/projects'
 import { resolveRunId } from '../core/orchestration/state'
 import { runRecordInputOf } from '../core/orchestration/runRecord'
@@ -1423,20 +1424,17 @@ export function registerIpc(
    *  Holds the **repository** path, not the path the renderer sent: orch.list runs it through
    *  repoPathOf first (see there). Storing the mapped value rather than the raw one is what keeps the
    *  push and the reply agreeing — pushOrchState folds on this variable, so a subscription armed for
-   *  a worktree's repo must not later be pushed for the worktree itself. */
-  let orchProject: string | null = null
-  /** The snapshot the renderer is currently holding for orchProject — whatever was last handed over,
-   *  by orch.list's return value or by a push. Kept so an unchanged fold can be dropped instead of
-   *  re-sent (see sameSnapshot); null means it holds nothing for this project yet. */
-  let orchSent: OrchSnapshot | null = null
+   *  a worktree's repo must not later be pushed for the worktree itself.
+   *
+   *  That project, and the snapshot the renderer holds for it (kept so an unchanged fold is dropped
+   *  instead of re-sent), live in `orchPushes` below (main/orchPush.ts): orch.list calls its `watch`,
+   *  orch.unwatch its `unwatch`, and every commit its `push`, which folds once per tick (audit M1). */
   /** Bumped by every call that settles the subscription (orch.list, orch.unwatch). orch.list captures
    *  it before its await and re-checks after: **state set before an await is not state you may trust
    *  after it.** Without the re-check, unwatch racing an in-flight list re-arms a subscription the
    *  renderer has turned off (and nothing turns it off again), and two overlapping list calls can
    *  settle in the wrong order, leaving main pushing project A to a renderer showing B. */
   let orchRequest = 0
-  /** The last state pushOrchState folded, so a presence answer that lands later can fold it again. */
-  let orchLastPushed: OrchState | null = null
   /** 워크트리 폴더가 아직 있는가 — 비동기로 묻고, 시간 제한이 있고, 캐시된다(core/worktrees/presence.ts).
    *  **푸시 경로는 캐시만 읽는다.** 동기 existsSync 였을 때는 네트워크 공유·OneDrive·`\\wsl$` 위의
    *  워크트리 하나가 모든 setState 마다 메인 스레드를 20~60초씩 세웠다. 답이 아직 없으면 unknown 이고
@@ -1445,7 +1443,7 @@ export function registerIpc(
   const worktreePresence = new PresenceCache({
     onChange: createPresenceRepush<OrchState>({
       // orch.list 가 접은 상태는 pushOrchState 를 지나지 않으므로 지금 상태를 먼저 읽는다
-      current: () => (orch ? orch.deps.getState() : orchLastPushed),
+      current: () => (orch ? orch.deps.getState() : orchPushes.lastPushed()),
       push: (state) => pushOrchState(state),
       log: orchLog
     }),
@@ -1472,23 +1470,15 @@ export function registerIpc(
       (p) => worktreePresence.peek(p) !== 'missing'
     )
   }
-  const pushOrchState = (state: OrchState): void => {
-    orchLastPushed = state
-    if (orchProject === null) return // the renderer has not asked for a project, or it unwatched
-    // The push is a notification and runs inside the awaited setState (below), so a throw here would
-    // reject a write that has **already been persisted** — every CLI command would start answering
-    // 500 for a state change that in fact succeeded. The fold reads fields the store does not
-    // validate on load (a Dispatch with no startedAt reaches localeCompare), so this is reachable.
-    // Logged rather than swallowed: a fold that throws is a real defect and has to be findable.
-    try {
-      const next = orchSnapshotOf(state, orchProject)
-      if (orchSent !== null && sameSnapshot(orchSent, next)) return
-      orchSent = next
-      send('orch:state', next)
-    } catch (err) {
-      orchLog(`orch:state push failed project=${orchProject}: ${String(err)}`)
-    }
-  }
+  // The push is a notification hung off the awaited setState (below). It folds later in the tick, so a fold that
+  // throws (it reads fields the store does not validate on load) can no longer reject a write already persisted;
+  // orchPush logs it rather than swallowing it, because a fold that throws is a real defect and has to be findable.
+  const orchPushes = createOrchPush({
+    fold: orchSnapshotOf,
+    send: (snapshot) => send('orch:state', snapshot),
+    log: orchLog
+  })
+  const pushOrchState = (state: OrchState): void => orchPushes.push(state)
   /** Why the Jobs view has nothing to draw, when the reason is the Host (see `OrchHostGate`). Null
    *  whenever the snapshot's own emptiness is the honest answer: before `bootOrch` runs at all (every
    *  toggle off — nobody is waiting on anything), and again once it has succeeded. */
@@ -4434,10 +4424,9 @@ export function registerIpc(
     // still gets the project it asked for; what it does not get is the subscription, because
     // something more recent already decided what that should be.
     if (request !== orchRequest) return snapshot
-    orchProject = project
     // Recorded as what the renderer now holds — the return value is exactly that, so the dedupe stays
     // correct across a project switch instead of comparing against the previous project's fold.
-    orchSent = snapshot
+    orchPushes.watch(project, snapshot)
     return snapshot
   }
   // 스냅샷에 태우지 않고 따로 읽는 이유는 크기다 — Message.body 에는 검증 출력 꼬리가 실리므로
@@ -4611,7 +4600,7 @@ export function registerIpc(
       // 구독이 없을 때만 정규화로 물러난다(렌더러가 아직 목록을 부르지 않았거나 껐다) — 그때는
       // 비교할 "보여 준 것" 이 없다. assertAllowedPath 는 위에서 **받은 경로 그대로**에 걸린다:
       // 렌더러가 어떤 경로를 부를 수 있는가는 다른 물음이고, 이 매핑이 그것을 넓혀서는 안 된다.
-      const project = orchProject ?? repoPathOf(core.worktrees.list(), projectPath)
+      const project = orchPushes.project() ?? repoPathOf(core.worktrees.list(), projectPath)
       const mismatch = orchOwnerMismatch(orch.deps.getState(), project, cmd, args ?? {})
       if (mismatch) {
         // 조용히 버려지지 않는다 — orch.runDetail 이 소유권 불일치를 거부할 때 남기는 것과 같은
@@ -4719,8 +4708,7 @@ export function registerIpc(
   // otherwise that list lands afterwards and re-arms what was just turned off.
   ipcMain.handle('orch.unwatch', () => {
     orchRequest++
-    orchProject = null
-    orchSent = null
+    orchPushes.unwatch()
   })
 
   // How It Works: understanding.json persistence. Unlike OrchestrationStore above (built inside

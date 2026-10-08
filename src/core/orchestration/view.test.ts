@@ -1015,3 +1015,65 @@ describe('snapshotFor — 검사 결과와 자동 수정 진행', () => {
     expect(taskOf(s).gate).toEqual({ id: 'g1', question: 'q', kind: 'convergence-exhausted' })
   })
 })
+
+// Performance audit M1: the fold runs after every commit, on main's thread. It used to filter every list once per row
+// and per Task (and look up each message's Dispatch in the whole list), so a project with a few hundred Runs spent
+// most of each commit here. The fold reads each list a fixed number of times, however many Runs there are.
+describe('snapshotFor cost', () => {
+  const big = (n: number): OrchState => {
+    const runs: LegacyRun[] = []
+    const tasks: Task[] = []
+    const dispatches: Dispatch[] = []
+    const messages: Message[] = []
+    const gates: Gate[] = []
+    for (let i = 0; i < n; i++) {
+      runs.push(run(`r${i}`, absPath('proj')))
+      for (let j = 0; j < 3; j++) {
+        const t = task(`t${i}_${j}`, `r${i}`, j === 0 ? 'completed' : 'dispatched')
+        tasks.push(t)
+        dispatches.push({ ...dispatch(`d${i}_${j}`, t.id, `s${i}_${j}`, '2026-08-18T01:00:00.000Z'), cwd: absPath(`wt${i}`) })
+        messages.push({ ...message(`m${i}_${j}`, `r${i}`, 'status'), dispatchId: `d${i}_${j}` })
+      }
+      gates.push({ ...gate(`g${i}`, `t${i}_1`, 'q', '2026-08-18T02:00:00.000Z'), runId: `r${i}` })
+    }
+    return { ...withRuns(runs, tasks), dispatches, messages, gates }
+  }
+  const counted = (s: OrchState): { state: OrchState; reads: () => number } => {
+    let reads = 0
+    const wrap = <T>(xs: T[]): T[] =>
+      new Proxy(xs, {
+        get(t, k, r) {
+          if (typeof k === 'symbol' || isNaN(Number(k))) {
+            if (k !== 'length' && k !== 'constructor') reads++
+          }
+          return Reflect.get(t, k, r)
+        }
+      })
+    const state = Object.fromEntries(
+      Object.entries(s).map(([k, v]) => [k, Array.isArray(v) ? wrap(v) : v])
+    ) as unknown as OrchState
+    return { state, reads: () => reads }
+  }
+  const fold = (s: OrchState) => snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist, 0)
+
+  it('reads each list a fixed number of times, however many Runs there are', () => {
+    const small = counted(big(5))
+    fold(small.state)
+    const large = counted(big(60))
+    fold(large.state)
+    expect(large.reads()).toBe(small.reads())
+  })
+
+  it('folds a large state to the same rows as before', () => {
+    const s = big(12)
+    const { state } = counted(s)
+    expect(fold(state)).toEqual(fold(s))
+    const rows = fold(s).runs
+    expect(rows).toHaveLength(12)
+    const r0 = rows.find((r) => r.id.length > 0 && r.tasks.some((t) => t.id === 't0_1'))!
+    expect(r0.done).toBe(1)
+    expect(r0.total).toBe(3)
+    expect(r0.eventCount).toBeGreaterThan(0)
+    expect(r0.tasks.find((t) => t.id === 't0_1')?.gate?.id).toBe('g0')
+  })
+})
