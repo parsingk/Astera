@@ -929,11 +929,12 @@ Where the hooks cannot see, `state` can lag or be wrong:
   `working` standing until you type, and a `Stop` hook that makes Claude carry on leaves `waiting`
   standing while it works.
 
-**`sessions read` shows what the session's tab shows.** The Host replays the session's recent output
-into a terminal emulator at the tab's current size and returns what that terminal displays:
+**`sessions read` shows what the session's tab shows.** The Host keeps a terminal emulator for every
+session that has seen all of its output at every size, and returns what that terminal displays:
 `data.screen` is the visible rows, top first, with the empty rows below the last painted one left
-off, and `data.scrollback` is up to `--lines` rows (default 200, at most 10000) from just above the screen, oldest
-first. Each row is the text of its cells with trailing spaces trimmed; colours and other styling are
+off, and `data.scrollback` is up to `--lines` rows (default 200) from just above the screen, oldest
+first. The terminal keeps 1,000 rows above the screen, so a larger `--lines` returns at most 1,000. A session that
+ended reads as its last screen for 10 minutes after it ended. Each row is the text of its cells with trailing spaces trimmed; colours and other styling are
 not included. `data.cols` and `data.rows` are the size it was rendered at. `data.screenWrapped` and
 `data.scrollbackWrapped` hold one mark per row of `screen` and `scrollback`: `true` when that row
 continues the one above it, because the terminal wrapped a line wider than the tab; join them to get
