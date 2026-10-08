@@ -654,13 +654,12 @@ export function JobsView({
   onRestartCoordinator: (runId: string) => void
   /** A paired Runtime's Jobs (remote runtime design Phase 6): its empty view says the Runtime has none here. */
   remote?: boolean
-  /** Why the controls are off (a read-only pairing, Phase 7): every control is drawn disabled with this as its title,
-   *  and it is said once above the list. Absent: the controls act. */
+  /** Why the controls are off (a read-only pairing, Phase 7): every control is drawn disabled with this as its title.
+   *  The sentence itself is said once, by the runtime selector above the list. Absent: the controls act. */
   disabledReason?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const acts = { onPauseRun, onResumeRun, onDeleteRun, onRestartCoordinator }
-  const reasonLine = disabledReason !== undefined ? <p className="jobs-disabled-reason">{disabledReason}</p> : null
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
   // component ever rendered, opens by default rather than needing to be found and expanded by hand.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -748,7 +747,6 @@ export function JobsView({
     return (
       <div className="jobs-empty">
         {stallLine}
-        {reasonLine}
         {/* A paired Runtime's empty view says the Runtime has no Jobs here, not "create one here". */}
         <p>{remote ? t('jobs.runtime.empty') : hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
         {!remote && (
@@ -772,7 +770,6 @@ export function JobsView({
     <section className="jobs-view">
       {stallLine}
       {/* 목록 위, 첫 자식 — 아이콘을 새로 만들지 않는다: '+' 글자로 충분하다 */}
-      {reasonLine}
       <button className="jobs-new" disabled={disabledReason !== undefined} title={disabledReason} onClick={onNewRun}>
         + {t('jobs.new.open')}
       </button>

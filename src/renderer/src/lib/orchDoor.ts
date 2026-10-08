@@ -47,7 +47,17 @@ export function localDoor(api: DoorApi, projectPath: string): OrchDoor {
 /** The signed-in flag the Runtime gave with each of its accounts, kept beside the Account the forms take. */
 const signedIn = new WeakMap<Account, boolean>()
 
-export function remoteDoor(api: DoorApi, a: { runtimeId: string; projectKey: string; permission: string; readOnlyReason: string }): OrchDoor {
+export function remoteDoor(
+  api: DoorApi,
+  a: {
+    runtimeId: string
+    projectKey: string
+    permission: string
+    readOnlyReason: string
+    /** A change went through: the view reads the Runtime again now, since it pushes nothing to this app yet. */
+    onChanged?(): void
+  }
+): OrchDoor {
   // An unknown permission level is read only, as the Runtime's own gate reads it (controllerGate).
   const readOnly = a.permission !== 'full-control'
   const send = (cmd: string, args: Record<string, unknown>): Promise<CommandReply> => api.orch.command(a.projectKey, cmd, args, a.runtimeId)
@@ -58,7 +68,9 @@ export function remoteDoor(api: DoorApi, a: { runtimeId: string; projectKey: str
     readOnlyReason: readOnly ? a.readOnlyReason : null,
     command: async (cmd, args) => {
       if (readOnly && remoteMutation(cmd)) return { status: 403, body: { error: a.readOnlyReason, code: 'RUNTIME_PERMISSION_DENIED' } }
-      return send(cmd, args)
+      const r = await send(cmd, args)
+      if (ok(r) && remoteMutation(cmd)) a.onChanged?.()
+      return r
     },
     accounts: async () => {
       // Never this computer's accounts: a Runtime that cannot say has none to offer here.

@@ -55,3 +55,11 @@ export function remoteNewJobFolder(projects: Array<{ id: string; path: string | 
 export function controlReason(permission: string | undefined, t: T): string | null {
   return permission === 'full-control' ? null : tt(t)('jobs.runtime.readOnlyReason')
 }
+
+/** Whether an open detail closes because its Run is not in the list. A paired Runtime's list is read, not pushed, so
+ *  a Run just made there is missing until the next read: its detail closes only once the Run was seen and then went.
+ *  This computer's list is pushed, so a missing Run is gone (the local rule, unchanged). */
+export function detailRunGone(a: { remote: boolean; found: boolean; seen: boolean }): boolean {
+  if (a.found) return false
+  return a.remote ? a.seen : true
+}

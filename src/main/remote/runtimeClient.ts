@@ -177,8 +177,9 @@ export function createRemoteRuntimeClient(a: {
       const state = m.state
       if (!state) return EMPTY_DETAIL
       const id = resolveRunId(state, runId)
-      // A Job that has not run yet has its definition's picture and no record (the local rule).
-      if (id === undefined) return state.runs.some((r) => r.id === runId) ? { events: [], ...layersOf(state, runId) } : EMPTY_DETAIL
+      // A Job that has not run yet has its definition's picture and no record (the local rule, ipc.ts: layersOf takes a
+      // Job id; an id that names nothing draws nothing).
+      if (id === undefined) return { events: [], ...layersOf(state, runId) }
       // The Runtime's timeline (runs-timeline), its journal rows and session links included, a page per journal page.
       const pages = typeof opts?.journalPages === 'number' && opts.journalPages >= 1 ? Math.floor(opts.journalPages) : 1
       const limit = Math.min(TIMELINE_PAGE * pages, TIMELINE_MAX)

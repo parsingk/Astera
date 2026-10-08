@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { LOCAL, controlReason, isRemoteRuntime, offlineNote, projectOptions, remoteDetailKey, remoteNewJobFolder, remotePollReady, runtimeOptions } from './remoteJobs'
+import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, projectOptions, remoteDetailKey, remoteNewJobFolder, remotePollReady, runtimeOptions } from './remoteJobs'
 import type { OrchSnapshot } from '../../../core/types'
 
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -74,5 +74,17 @@ describe('remote Job control (Phase 7)', () => {
     expect(controlReason('full-control', t)).toBeNull()
     expect(controlReason('admin', t)).toBe('jobs.runtime.readOnlyReason')
     expect(controlReason(undefined, t)).toBe('jobs.runtime.readOnlyReason')
+  })
+})
+
+// Phase 7 hand check: a Run made on a Runtime is not in the view's list until the next read, so its detail does not
+// close for being missing before it was ever there. Once seen, a Run that goes (deleted there) closes it.
+describe('closing a detail whose Run is gone', () => {
+  it('a remote detail closes only for a Run it has seen; a local one as before', () => {
+    expect(detailRunGone({ remote: true, found: false, seen: false })).toBe(false)
+    expect(detailRunGone({ remote: true, found: false, seen: true })).toBe(true)
+    expect(detailRunGone({ remote: true, found: true, seen: true })).toBe(false)
+    expect(detailRunGone({ remote: false, found: false, seen: false })).toBe(true)
+    expect(detailRunGone({ remote: false, found: true, seen: false })).toBe(false)
   })
 })

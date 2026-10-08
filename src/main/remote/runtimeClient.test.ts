@@ -308,3 +308,18 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
     expect(c.status()).toEqual({ offline: true, lastSeenAt: new Date(5_000).toISOString() })
   })
 })
+
+// Phase 7 hand check: a Job made from the app has not run yet; its detail draws its definition Tasks, as the local one.
+describe('runDetail of a Job that has not run', () => {
+  it('draws the definition Tasks of a Job with no Run', async () => {
+    const job = createJob(emptyState(), { objective: 'not run yet', cwd: '/srv/repo' }, NOW)
+    if (!job.ok) throw new Error(job.error)
+    const task = createTask(job.state, { jobId: job.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    if (!task.ok) throw new Error(task.error)
+    const f = fakeLink(() => ({ status: 200, body: { state: task.state, version: 2 } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    const d = await c.runDetail(job.value.id)
+    expect(d.layers.flat()).toEqual([task.value.id])
+    expect(d.events).toEqual([])
+  })
+})

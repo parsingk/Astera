@@ -43,7 +43,7 @@ import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
-import { LOCAL, controlReason, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
+import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
 import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resumeRun, type ActionUi } from './lib/jobActions'
@@ -2649,19 +2649,22 @@ export default function App(): React.JSX.Element {
   /** A paired Runtime's permission as this app was told at pairing; an unknown one is read only (controllerGate). */
   const permissionOf = (runtimeId: string): string => pairedRuntimes.find((r) => r.runtimeId === runtimeId)?.permission ?? 'read-only'
   const readOnlyReason = t('jobs.runtime.readOnlyReason')
+  /** Bumped when a change on a paired Runtime went through: the remote list is read again now (it is not pushed). */
+  const [remoteRefresh, setRemoteRefresh] = useState(0)
+  const onRemoteChanged = useRef(() => setRemoteRefresh((n) => n + 1)).current
   /** Where the open detail's commands, accounts and run configurations go (lib/orchDoor.ts, Phase 7). */
   const detailPermission = openRun?.runtimeId ? permissionOf(openRun.runtimeId) : ''
   const detailDoor = useMemo<OrchDoor | null>(() => {
     if (!openRun) return null
     if (!openRun.runtimeId) return localDoor(window.api, openRun.projectPath)
-    return remoteDoor(window.api, { runtimeId: openRun.runtimeId, projectKey: openRun.projectPath, permission: detailPermission, readOnlyReason })
+    return remoteDoor(window.api, { runtimeId: openRun.runtimeId, projectKey: openRun.projectPath, permission: detailPermission, readOnlyReason, onChanged: onRemoteChanged })
   }, [openRun?.runtimeId, openRun?.projectPath, detailPermission, readOnlyReason])
   /** The remote Jobs view's door: the selected Runtime and its project (Phase 7). */
   const remoteViewPermission = isRemoteRuntime(jobsRuntime) ? permissionOf(jobsRuntime) : ''
   const remoteViewDoor = useMemo<OrchDoor | null>(
     () =>
       isRemoteRuntime(jobsRuntime) && remoteProject !== null
-        ? remoteDoor(window.api, { runtimeId: jobsRuntime, projectKey: remoteProject, permission: remoteViewPermission, readOnlyReason })
+        ? remoteDoor(window.api, { runtimeId: jobsRuntime, projectKey: remoteProject, permission: remoteViewPermission, readOnlyReason, onChanged: onRemoteChanged })
         : null,
     [jobsRuntime, remoteProject, remoteViewPermission, readOnlyReason]
   )
@@ -2738,12 +2741,20 @@ export default function App(): React.JSX.Element {
   // 두는 이유는 openRun·orchSnapshot 선언보다 아래여야 하기 때문이다 — 위로 옮기면 TDZ
   // ReferenceError 로 죽는다(타입체크는 못 잡는다). 여기서도 orchSnapshot === null 은 "없다"가
   // 아니다 — 아직 첫 조회가 오지 않았을 뿐이면 닫지 않는다.
+  // Whether the open detail's Run has been in its list since it opened (detailRunGone).
+  const openRunSeen = useRef(false)
+  useEffect(() => {
+    openRunSeen.current = false
+  }, [openRun?.runId, openRun?.runtimeId])
   useEffect(() => {
     if (!openRun) return
     const snap = openRun.runtimeId ? remoteSnapshot : orchSnapshot
     if ((!openRun.runtimeId && openRun.projectPath !== currentProject) || snap === null) return
     // 위와 같은 이유로 findRun 이다 — `runs.some` 이면 회차의 상세 창이 열린 다음 프레임에 닫힌다.
-    if (!findRun(snap, openRun.runId)) setOpenRun(null)
+    const found = findRun(snap, openRun.runId) !== undefined
+    if (found) openRunSeen.current = true
+    // A paired Runtime's Run just made there is not in the list until the next read: not closed for that.
+    if (detailRunGone({ remote: !!openRun.runtimeId, found, seen: openRunSeen.current })) setOpenRun(null)
   }, [openRun, currentProject, orchSnapshot, remoteSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
@@ -3493,7 +3504,7 @@ export default function App(): React.JSX.Element {
       alive = false
       stop()
     }
-  }, [jobsOpen, sidebarOpen, jobsRuntime, remoteProject, remoteProjectFor, replyGate])
+  }, [jobsOpen, sidebarOpen, jobsRuntime, remoteProject, remoteProjectFor, replyGate, remoteRefresh])
 
   // 배경 재생성이 끝나면 main 이 밀어 준다 — 그 결과가 화면에 닿는 유일한 길이다. 재생성은
   // 작업 단위가 닫힐 때 저절로 돌고 수십 초가 걸리므로, 이것이 없으면 새 설명은 사용자가 프로젝트를

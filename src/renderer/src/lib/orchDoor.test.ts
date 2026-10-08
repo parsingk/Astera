@@ -82,4 +82,21 @@ describe('the orchestration door (remote runtime design Phase 7, N10)', () => {
     expect(await d.runConfigs('r1')).toEqual([])
     expect(api.calls.some((c) => !c.startsWith('orch.command'))).toBe(false)
   })
+
+  // Phase 7 hand check: a Runtime pushes nothing to this app yet, so a change that went through asks the view to read
+  // the Runtime again now rather than at the next poll (a new Job's detail would close before it appeared).
+  it('says when a change went through, and only then', async () => {
+    let changed = 0
+    const ok = remoteDoor(fakeApi(), { runtimeId: 'rt_a', projectKey: 'p1', permission: 'full-control', readOnlyReason: 'ro', onChanged: () => void changed++ })
+    await ok.command('run-create', { objective: 'x' })
+    expect(changed).toBe(1)
+    await ok.command('dispatch-show', { task: 't' })
+    await ok.accounts()
+    expect(changed).toBe(1)
+    const refused = remoteDoor(fakeApi({}, 409), { runtimeId: 'rt_a', projectKey: 'p1', permission: 'full-control', readOnlyReason: 'ro', onChanged: () => void changed++ })
+    await refused.command('run-delete', { id: 'r1' })
+    const readOnly = remoteDoor(fakeApi(), { runtimeId: 'rt_a', projectKey: 'p1', permission: 'read-only', readOnlyReason: 'ro', onChanged: () => void changed++ })
+    await readOnly.command('run-delete', { id: 'r1' })
+    expect(changed).toBe(1)
+  })
 })
