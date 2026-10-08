@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { SessionKind } from '../../../core/types'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { Film, Globe, Image as ImageIcon, MessageSquare, Monitor, Repeat, Terminal } from 'lucide-react'
+import { endRenameOnce } from '../lib/renameOnce'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
  *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
@@ -180,6 +181,8 @@ export function WorkbenchTabs({
   const { t } = useI18n()
   // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
   const [dragId, setDragId] = useState<string | null>(null)
+  /** Which rename already ended (audit UI-2), cleared when a rename begins. */
+  const renameEnd = useRef({ ended: null as string | null })
   const [dropAt, setDropAt] = useState<number | null>(null)
 
   const endDrag = (): void => {
@@ -323,14 +326,22 @@ export function WorkbenchTabs({
               onClick={(ev) => ev.stopPropagation()}
               onMouseDown={(ev) => ev.stopPropagation()}
               onDoubleClick={(ev) => ev.stopPropagation()}
-              onFocus={(ev) => ev.currentTarget.select()}
+              onFocus={(ev) => {
+                renameEnd.current.ended = null
+                ev.currentTarget.select()
+              }}
               onKeyDown={(ev) => {
                 // 전역 단축키와 탭 순환에서 격리한다 — 파일 탐색기의 이름 고치기와 같은 규칙
                 ev.stopPropagation()
-                if (ev.key === 'Enter') onRenameEnd(tab.tabId, ev.currentTarget.value)
-                else if (ev.key === 'Escape') onRenameEnd(tab.tabId, null)
+                const value = ev.currentTarget.value
+                // Once per rename (audit UI-2): the blur as the input unmounts would end it again with the typed text.
+                if (ev.key === 'Enter') endRenameOnce(renameEnd.current, tab.tabId, () => onRenameEnd(tab.tabId, value))
+                else if (ev.key === 'Escape') endRenameOnce(renameEnd.current, tab.tabId, () => onRenameEnd(tab.tabId, null))
               }}
-              onBlur={(ev) => onRenameEnd(tab.tabId, ev.currentTarget.value)}
+              onBlur={(ev) => {
+                const value = ev.currentTarget.value
+                endRenameOnce(renameEnd.current, tab.tabId, () => onRenameEnd(tab.tabId, value))
+              }}
             />
           ) : (
             <span className="tab-title">{tab.title}</span>

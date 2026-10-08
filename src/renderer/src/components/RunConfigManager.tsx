@@ -30,6 +30,7 @@ import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
 import { AlertTriangle, ChevronDown, ChevronUp, Copy, FolderPlus, Minus, Plus, Search } from 'lucide-react'
+import { backdropProps } from '../lib/backdrop'
 
 /** The error element of a refused Apply — SaveConfigsResult's own shape, not restated, so a reason
  *  added to SaveReason without a `run.manager.reason.*` catalogue entry fails typecheck here instead
@@ -307,7 +308,7 @@ export function RunConfigManager({
   }
 
   return (
-    <div className="modal-backdrop" onClick={requestClose}>
+    <div className="modal-backdrop" {...backdropProps(requestClose)}>
       <div className="modal rcm" onClick={(e) => e.stopPropagation()}>
         <h2>{t('run.manager.title')}</h2>
         <div className="rcm-panes">

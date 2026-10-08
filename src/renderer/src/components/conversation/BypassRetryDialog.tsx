@@ -3,6 +3,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../../../core/i18n";
+import { backdropProps } from '../../lib/backdrop'
 
 /** design §4 F5's confirmation — the one deliberate exception to this branch's one-or-two-line rule
  *  (S1). Pressing the exit banner's button never retries anything by itself; it opens this, because
@@ -77,7 +78,7 @@ export function BypassRetryDialog({
   const lineSuffix = line.trim() === "" ? undefined : `: ${line}`;
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop" {...backdropProps(onCancel)}>
       {/* Announced as a dialog, not as an unlabelled box of paragraphs. This one earns the attributes
           more than most: it is a consent prompt whose whole point is that the person read what they
           are giving up before pressing, and a screen reader that walks past it as plain text buries

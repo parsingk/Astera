@@ -10,6 +10,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import * as hiddenProjects from '../lib/hiddenProjects'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
+import { backdropProps } from '../lib/backdrop'
 
 const PAGE = 50
 const SEEN_KEY = 'cm.historySeen'
@@ -536,7 +537,7 @@ export function HistoryBrowser({
         />
       )}
       {preview && (
-        <div className="modal-backdrop" onClick={closePreview}>
+        <div className="modal-backdrop" {...backdropProps(closePreview)}>
           <div className="modal preview" onClick={(e) => e.stopPropagation()}>
             <h2>
               {t('history.entry.preview')} {preview.truncated && t('history.preview.truncated')}

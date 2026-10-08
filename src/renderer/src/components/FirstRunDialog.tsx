@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { SessionKind } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
+import { backdropProps } from '../lib/backdrop'
 
 /**
  * The one question a first run asks: what a new session is.
@@ -37,7 +38,7 @@ export function FirstRunDialog({
   }, [onDismiss])
 
   return (
-    <div className="modal-backdrop" onClick={onDismiss}>
+    <div className="modal-backdrop" {...backdropProps(onDismiss)}>
       <div className="modal first-run" onClick={(e) => e.stopPropagation()}>
         <h2>{t('firstRun.title')}</h2>
         <p className="confirm-text confirm-body">{t('firstRun.body')}</p>

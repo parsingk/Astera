@@ -8,6 +8,7 @@ import { useAccountUsage } from '../hooks/useAccountUsage'
 import { ProviderBadge } from './ProviderBadge'
 import { FolderGlyph } from './FolderGlyph'
 import { AccountRow } from './AccountRow'
+import { backdropProps } from '../lib/backdrop'
 
 interface DetectItem {
   configDir: string
@@ -233,7 +234,7 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}
       </ul>
       {addOpen && (
-        <div className="modal-backdrop" onClick={() => setAddOpen(false)}>
+        <div className="modal-backdrop" {...backdropProps(() => setAddOpen(false))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{t('account.add.title')}</h2>
             <form
@@ -282,7 +283,7 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         </div>
       )}
       {importDir && (
-        <div className="modal-backdrop" onClick={() => setImportDir(null)}>
+        <div className="modal-backdrop" {...backdropProps(() => setImportDir(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{t('account.import.title')}</h2>
             <form
@@ -318,7 +319,7 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         </div>
       )}
       {detectItems && (
-        <div className="modal-backdrop" onClick={() => setDetectItems(null)}>
+        <div className="modal-backdrop" {...backdropProps(() => setDetectItems(null))}>
           <div className="modal detect" onClick={(e) => e.stopPropagation()}>
             <h2>{t('account.detect.title')}</h2>
             {detectItems.length === 0 ? (

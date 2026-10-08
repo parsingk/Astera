@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { createSessionArgs, refOf, remoteCall, type RemoteSessionRef, type RemoteSessionRow } from '../lib/remoteSessions'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
+import { backdropProps } from '../lib/backdrop'
 
 interface RemoteAccount {
   id: string
@@ -110,7 +111,7 @@ export function RemoteSessionsDialog({
   const canStart = !readOnly && !starting && accountId !== '' && cwd !== ''
 
   return (
-    <div className="modal-backdrop" onClick={() => !starting && onCancel()}>
+    <div className="modal-backdrop" {...backdropProps(() => !starting && onCancel())}>
       <div className="modal new-session remote-sessions" onClick={(e) => e.stopPropagation()}>
         <h2>{t('remote.sessions.title')}</h2>
         <div className="field">

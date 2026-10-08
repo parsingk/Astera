@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { settle, subscribe, type PendingConfirm } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'
+import { backdropProps } from '../lib/backdrop'
 
 /** Where confirmation modals are displayed — mounted exactly once, at App's root. It only subscribes to
  *  the store (lib/confirm), so the asking side does nothing but await confirmModal(...). The cancel paths
@@ -35,7 +36,7 @@ export function ConfirmHost(): React.JSX.Element | null {
   if (!pending) return null
 
   return (
-    <div className="modal-backdrop" onClick={() => settle(false)}>
+    <div className="modal-backdrop" {...backdropProps(() => settle(false))}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>{pending.title}</h2>
         <p className="confirm-text confirm-body">{pending.body}</p>

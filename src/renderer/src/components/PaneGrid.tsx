@@ -721,6 +721,8 @@ export function PaneGrid({
               e.preventDefault()
               const host = hostRef.current
               if (!host) return
+              // Only this pointer moves and ends the drag (audit UI-4), as the sidebar's resizer does.
+              const startId = e.pointerId
               const hostRect = host.getBoundingClientRect()
               // Converts the sub-area this split divides (area, in %) into px so the ratio is taken within
               // that area. A nested split divides only the area its parent gave it, not the whole screen
@@ -741,11 +743,17 @@ export function PaneGrid({
                 onSetRatio(b.splitId, clampRatio((latest - areaPx.start) / areaPx.size, areaPx.size))
               }
               const onMove = (ev: PointerEvent): void => {
+                if (ev.pointerId !== startId) return
                 latest = b.dir === 'row' ? ev.clientX : ev.clientY
                 if (!rafId) rafId = requestAnimationFrame(apply)
               }
-              const onUp = (): void => {
-                if (rafId) cancelAnimationFrame(rafId)
+              const onUp = (ev: PointerEvent): void => {
+                if (ev.pointerId !== startId) return
+                // The last move is applied, not dropped (audit UI-4): the drag ends where it was let go.
+                if (rafId) {
+                  cancelAnimationFrame(rafId)
+                  apply()
+                }
                 window.removeEventListener('pointermove', onMove)
                 window.removeEventListener('pointerup', onUp)
                 window.removeEventListener('pointercancel', onUp)

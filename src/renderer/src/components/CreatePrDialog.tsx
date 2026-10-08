@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { BranchRef, WorktreeListItem } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
+import { backdropProps } from '../lib/backdrop'
 
 type Failure = { kind: string; detail: string; pushed: boolean; stage: 'push' | 'create' }
 
@@ -119,7 +120,7 @@ export function CreatePrDialog({
   if (!baseItems.some((i) => i.value === base)) baseItems.unshift({ value: base, label: base })
 
   return (
-    <div className="modal-backdrop" onClick={() => !busy && onCancel()}>
+    <div className="modal-backdrop" {...backdropProps(() => !busy && onCancel())}>
       <div className="modal create-pr" onClick={(e) => e.stopPropagation()}>
         {busy && (
           <div className="loading-overlay">

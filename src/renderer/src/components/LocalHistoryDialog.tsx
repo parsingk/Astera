@@ -3,6 +3,7 @@ import type { LocalHistoryEntry } from '../../../core/types'
 import { errText } from '../hooks/useFileOps'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
+import { backdropProps } from '../lib/backdrop'
 
 /** Byte size in human-readable units. This repo has no shared size formatter (checked by grep), so it
  *  stays a local helper used only in this file — extracting it into a pure module and registering that
@@ -107,7 +108,7 @@ export function LocalHistoryDialog({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" {...backdropProps(onClose)}>
       <div className="modal local-history" onClick={(e) => e.stopPropagation()}>
         <h2>Local History</h2>
         {entries === null ? (

@@ -146,6 +146,7 @@ import type { FileChange } from '../../core/files/changeBatch'
 import { HostRuntimeNotice } from './components/HostRuntimeNotice'
 import { House, PanelLeft, Settings, X } from 'lucide-react'
 import { deleteKey, isMac as isMacPlatform, modKey } from './lib/platformKeys'
+import { backdropProps } from './lib/backdrop'
 
 sessionBus.init()
 
@@ -4612,7 +4613,7 @@ export default function App(): React.JSX.Element {
               {!layout && (
                 <button
                   className="placeholder primary"
-                  disabled={!canStart}
+                  disabled={!canStart()}
                   onClick={() => {
                     if (canStart()) setShowNew(true)
                   }}
@@ -4842,7 +4843,7 @@ export default function App(): React.JSX.Element {
         />
       )}
       {showSettings && (
-        <div className="modal-backdrop" onClick={() => setShowSettings(false)}>
+        <div className="modal-backdrop" {...backdropProps(() => setShowSettings(false))}>
           <div className="modal settings" onClick={(e) => e.stopPropagation()}>
             <div className="settings-header">
               <h2>{t('settings.title')}</h2>

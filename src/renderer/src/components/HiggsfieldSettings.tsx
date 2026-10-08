@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { hfAccountTitle, hfWorkspaceLabel } from '../../../core/higgsfield/display'
+import { backdropProps } from '../lib/backdrop'
 
 type HfList = Awaited<ReturnType<typeof window.api.higgsfield.list>>
 type HfAccountRow = HfList['accounts'][number]
@@ -220,7 +221,7 @@ export function HiggsfieldSettings(): React.JSX.Element {
       </div>
       <span className="settings-hint">{t('higgsfield.importNote')}</span>
       {removeTarget && (
-        <div className="modal-backdrop" onClick={() => setRemoveTarget(null)}>
+        <div className="modal-backdrop" {...backdropProps(() => setRemoveTarget(null))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{t('higgsfield.remove')}</h2>
             <p className="confirm-text">{t('higgsfield.removeConfirm', { label: removeTarget.label })}</p>

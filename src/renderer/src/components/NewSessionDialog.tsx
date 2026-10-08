@@ -32,6 +32,7 @@ import { Select, type SelectOption } from './Select'
 import { ScheduleFields } from './ScheduleFields'
 import { StartingOverlay } from './WorktreeCreateStatus'
 import { X } from 'lucide-react'
+import { backdropProps } from '../lib/backdrop'
 
 const SOFT_LIMIT = 12
 const MAX_ROLL_ACCOUNTS = 3
@@ -459,7 +460,7 @@ export function NewSessionDialog({
     // While starting, an outside click does not close this — the worktree creation and spawn already
     // under way are not cancelled, so if only the modal disappears the user mistakes it for a cancel.
     // Cancelling a worktree creation is the overlay's own Cancel button.
-    <div className="modal-backdrop" onClick={() => !starting && onCancel()}>
+    <div className="modal-backdrop" {...backdropProps(() => !starting && onCancel())}>
       <div className="modal new-session" onClick={(e) => e.stopPropagation()}>
         {starting && (
           <StartingOverlay

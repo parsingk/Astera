@@ -7,6 +7,7 @@ import { useChatAvailability } from '../hooks/useChatAvailability'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
+import { backdropProps } from '../lib/backdrop'
 
 /** Modal for resuming a session from history. Only logged-in accounts appear as candidates and the
  *  original account is preselected. Picking a different account makes ipc copy the transcript into that
@@ -158,7 +159,7 @@ export function ResumeDialog({
   }
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
+    <div className="modal-backdrop" {...backdropProps(onCancel)}>
       <div className="modal resume" onClick={(e) => e.stopPropagation()}>
         <h2>{t('session.resume.title')}</h2>
         {/* Heads the form as its own ruled-off section, as in NewSessionDialog: the way the resumed

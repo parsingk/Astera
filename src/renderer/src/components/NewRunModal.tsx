@@ -6,6 +6,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { formFailure, type OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
+import { backdropProps } from '../lib/backdrop'
 
 /** 사이드바의 '+ 새 작업'이 여는 폼. 여기서 만든 Run 은 앱이 스스로 돌린다 — 워커를 붙이고
  *  검증·병합까지 미는 스케줄러는 이미 있고(Task 1~6), 이 컴포넌트는 그 스케줄러가 볼 첫 Run 하나를
@@ -108,7 +109,7 @@ export function NewRunModal({
   }
 
   return (
-    <div className="modal-backdrop" onClick={() => !busy && onClose()}>
+    <div className="modal-backdrop" {...backdropProps(() => !busy && onClose())}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>{t('jobs.new.title')}</h2>
         {/* 전제조건이라 폼보다 앞에 둔다. 워커는 언제나 워크트리에서 일하고 워크트리는 git 의
