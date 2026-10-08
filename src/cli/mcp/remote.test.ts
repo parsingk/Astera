@@ -185,7 +185,7 @@ describe('openMcpRuntimes', () => {
     const r = rts()
     await r.linkFor('rt_a')
     const reg = await controllerRegistry(dir)
-    await reg.add({ runtimeId: 'rt_a', name: 'Office', address: '10.0.0.2', port: 47831, fingerprint: 'G'.repeat(43), permission: 'full-control', createdAt: 'y', lastSeenAt: null }, 'tok-b')
+    await reg.add({ runtimeId: 'rt_a', name: 'Office', address: '10.0.0.2', port: 47831, fingerprint: 'G'.repeat(43), permission: 'full-control', createdAt: 'y', lastSeenAt: null }, 'tok-b', { replace: true })
     await r.linkFor('rt_a')
     expect(opened.map((t) => t.token)).toEqual(['tok-a', 'tok-b'])
     expect(opened[1].fingerprint).toBe('G'.repeat(43))
