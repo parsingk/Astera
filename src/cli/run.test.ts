@@ -812,6 +812,21 @@ describe('renderOk / renderErr', () => {
     expect(renderOk('jobs-list', jobs, 'quiet')).toBe('job_1')
   })
 
+  // Security audit SEC-9: a Runtime's Job titles, turns and errors reached the person's terminal as they came, so an
+  // escape sequence in one could rewrite the screen, disguise a link (OSC 8) or set the clipboard (OSC 52). Human and
+  // quiet output drop control characters, line breaks and tabs aside; JSON escapes them already.
+  it('human 과 quiet 은 제어 문자를 내지 않는다', () => {
+    const E = String.fromCharCode(27)
+    const BEL = String.fromCharCode(7)
+    const evil = [{ id: `job_1${E}[2K`, objective: `fix ${E}]52;c;ZXZpbA==${BEL}it\r${String.fromCharCode(0x9b)}31m`, outcome: 'running', progress: { done: 1, total: 2 } }]
+    const human = renderOk('jobs-list', evil, 'human')
+    expect(human).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/)
+    expect(human).toContain('fix ]52;c;ZXZpbA==it31m')
+    expect(renderOk('jobs-list', evil, 'quiet')).toBe('job_1[2K')
+    expect(renderErr({ code: 'FAILED', message: `no ${E}]8;;http://x${BEL}link` }, 'human')).toBe('error: no ]8;;http://xlink')
+    expect(renderOk('jobs-list', evil, 'json')).toContain('\\u001b')
+  })
+
   // 사람용이 없는 명령은 JSON 으로 되돌린다 — 억지로 표를 씨우면 가이드가 시키는 것을 못 읽는다
   it('사람용이 없는 명령은 human 에서도 JSON 이다', () => {
     const out = renderOk('dispatch-show', { id: 'd1' }, 'human')

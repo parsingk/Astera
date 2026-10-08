@@ -11,7 +11,7 @@ import os, { homedir } from 'node:os'
 import { leadingGlobals, parseArgs } from '../core/orchestration/cliArgs'
 import { publicFor } from '../core/orchestration/cliPublic'
 import { spelledCommand, unknownFlagError, usageFor } from '../core/orchestration/cliUsage'
-import { humanFor, quietFor } from '../core/orchestration/cliHuman'
+import { humanFor, quietFor, terminalSafe } from '../core/orchestration/cliHuman'
 import { answerFromFile, fileAnswerable, readStateFile } from '../core/orchestration/stateFile'
 import { connectHost, type ConnectFailure, type HostConnection } from '../core/host/connect'
 import { HOST_FEATURE_ORCH, HOST_FEATURE_PING, HOST_FEATURE_REQUESTS, HOST_PROTOCOL } from '../core/host/protocol'
@@ -185,11 +185,12 @@ export function connectFailureEnd(a: {
 export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: ReplayMark = null): string {
   if (mode === 'json') return okEnvelope(cmd, body, mark)
   const data = dataFor(cmd, body)
-  if (mode === 'quiet') return quietFor(data)
+  // What a person's terminal shows carries no control characters (security audit SEC-9); JSON escapes them already.
+  if (mode === 'quiet') return terminalSafe(quietFor(data))
   // **사람용 두 모드는 표시를 싣지 않는다.** 재생의 요점은 첫 답을 받은 것과 구별되지 않는 것이고,
   // 그것이 재생이었다는 사실은 봉투를 읽는 쪽 — 즉 스크립트 — 의 것이다. `--quiet` 는 id 목록이라
   // 얹을 자리조차 없다. 사람용이 없어 봉투로 되돌아가는 명령은 봉투이므로 그때는 실린다.
-  return humanFor(cmd, data) ?? okEnvelope(cmd, body, mark)
+  return terminalSafe(humanFor(cmd, data) ?? okEnvelope(cmd, body, mark))
 }
 
 /**
@@ -202,8 +203,8 @@ export function renderOk(cmd: string, body: unknown, mode: OutputMode, mark: Rep
 export function renderErr(e: CliError, mode: OutputMode, cmd?: string, mark: ReplayMark = null): string {
   if (mode === 'json') return errEnvelope(e, cmd, mark)
   const steps = nextStepsFor({ code: e.code, cmd, details: e.details })
-  return [`error: ${e.message}`, ...(steps.length === 0 ? [] : ['try:', ...steps.map((s) => `  ${s}`)])].join(
-    '\n'
+  return terminalSafe(
+    [`error: ${e.message}`, ...(steps.length === 0 ? [] : ['try:', ...steps.map((s) => `  ${s}`)])].join('\n')
   )
 }
 
