@@ -62,6 +62,9 @@ interface Conn {
   /** Subscriptions this Gateway ended for falling behind (§3.7): their output is dropped until the controller
    *  subscribes again under the same id. */
   ended: Set<string>
+  /** Subscriptions asked for and not yet answered by the Host: output under their id is from an earlier stream until
+   *  the Host's `subscribed` or `sub-error` marks where the new one starts (Phase 8 review I5). */
+  awaiting: Set<string>
 }
 
 export const bindCode = (e: NodeJS.ErrnoException): string => {
@@ -155,9 +158,12 @@ export async function startGateway(o: {
     }
     if (f.t === 'subscribe' || f.t === 'unsubscribe') {
       if (c.state !== 'ready') return refuse(c, 'RUNTIME_AUTH_FAILED', 'authenticate before subscribing')
-      // A new subscription under an id this Gateway ended is a resubscribe: its output flows again.
+      // A new subscription under an id this Gateway ended is a resubscribe: its output flows again once the Host has
+      // answered it (anything before that answer belongs to the stream it replaces).
       c.ended.delete(f.sub)
-      if (f.t === 'unsubscribe') c.out.dropStream(f.sub)
+      c.out.dropStream(f.sub)
+      if (f.t === 'subscribe') c.awaiting.add(f.sub)
+      else c.awaiting.delete(f.sub)
       return toHost({ ...f, conn: c.id })
     }
     if (f.t === 'call') {
@@ -196,18 +202,19 @@ export async function startGateway(o: {
       // A subscription's frames (§3.7) go to that connection alone, without the connection id. Output goes on the
       // connection's stream lane, so one controller that stops reading fills only its own queue.
       case 'pty-out': {
-        if (c.ended.has(f.sub)) return
+        if (c.ended.has(f.sub) || c.awaiting.has(f.sub)) return
         const { conn: _conn, ...frame } = f
         return streamTo(c, f.sub, frame, f.events[f.events.length - 1]?.seq ?? 0, false)
       }
       case 'checkpoint': {
-        if (c.ended.has(f.sub)) return
+        if (c.ended.has(f.sub) || c.awaiting.has(f.sub)) return
         const { conn: _conn, ...frame } = f
         return streamTo(c, f.sub, frame, f.checkpoint.watermark, true)
       }
       case 'subscribed':
       case 'output-gap':
       case 'sub-error': {
+        if (f.t === 'subscribed' || f.t === 'sub-error') c.awaiting.delete(f.sub)
         if (f.t === 'output-gap' || f.t === 'sub-error') c.out.dropStream(f.sub)
         const { conn: _conn, ...frame } = f
         return sendTo(c, frame)
@@ -264,6 +271,7 @@ export async function startGateway(o: {
       timers: [],
       announced: false,
       ended: new Set(),
+      awaiting: new Set(),
       // Control and bulk past the cap mean a peer that reads nothing at all: it goes. Stream output past its share is
       // dropped per subscription instead (§3.1): the controller hears OUTPUT_GAP and the Host stops sending it.
       out: createLaneWriter(sock, {

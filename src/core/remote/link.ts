@@ -175,6 +175,9 @@ export function openRemoteLink(a: {
         // Nothing at or below what was handed on: a replay can overlap what came before it.
         const fresh = s.lastSeq === null ? f.events : f.events.filter((e) => e.seq > (s.lastSeq as number))
         if (fresh.length === 0) return
+        // An event that does not follow the last one means a hole (review I5): applying it would show a wrong screen
+        // with no way back. Not applied; the stream is asked for again from where the view is.
+        if (s.lastSeq !== null && fresh[0].seq !== s.lastSeq + 1) return start(s, link)
         s.lastSeq = fresh[fresh.length - 1].seq
         s.h.onEvents(fresh)
         return

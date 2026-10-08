@@ -321,6 +321,7 @@ describe('the Gateway and pty subscriptions (Phase 8)', () => {
     c.send({ t: 'subscribe', sub: 's1', pty: 'p1' })
     await until(() => h.subs.length === 1)
     const conn = h.subs[0].conn as string
+    h.reply({ t: 'subscribed', conn, sub: 's1', pty: 'p1', bootId: 'b' })
     c.sock.pause()
     const chunk = 'q'.repeat(32 * 1024)
     // More than the operating system buffers for a socket that is not read (tens of MB on Windows loopback).
@@ -335,6 +336,25 @@ describe('the Gateway and pty subscriptions (Phase 8)', () => {
     expect(c.got.some((f) => f.t === 'output-gap')).toBe(false)
     c.sock.destroy()
   }, 30_000)
+
+  // Phase 8 review I5: output the Host wrote for an earlier stream under the same id, before it answered the new
+  // subscription, is not forwarded: the Host's `subscribed` marks where the new stream starts.
+  it('drops a subscription’s output until the Host answers it', async () => {
+    const h = hostThatStreams()
+    const g = await start({}, h.host)
+    const c = await raw(g.gw.port)
+    c.send({ t: 'auth', token: 'good-token', client: {} })
+    await until(() => c.got.some((f) => f.t === 'hello'))
+    c.send({ t: 'subscribe', sub: 's1', pty: 'p1' })
+    await until(() => h.subs.length === 1)
+    const conn = h.subs[0].conn as string
+    h.reply({ t: 'pty-out', conn, sub: 's1', events: [{ seq: 9, kind: 'data', data: 'stale' }] })
+    h.reply({ t: 'subscribed', conn, sub: 's1', pty: 'p1', bootId: 'b' })
+    h.reply({ t: 'pty-out', conn, sub: 's1', events: [{ seq: 3, kind: 'data', data: 'fresh' }] })
+    await until(() => c.got.some((f) => f.t === 'pty-out'))
+    expect(c.got.filter((f) => f.t === 'pty-out').map((f) => (f.events as Array<{ data: string }>)[0].data)).toEqual(['fresh'])
+    c.sock.destroy()
+  })
 
   it('refuses a subscription before auth', async () => {
     const h = hostThatStreams()
@@ -358,6 +378,8 @@ describe('the Gateway and pty subscriptions (Phase 8)', () => {
     fast.send({ t: 'subscribe', sub: 'f', pty: 'p1' })
     await until(() => h.subs.length === 2)
     const connOf = (sub: string) => h.subs.find((f) => f.sub === sub)?.conn as string
+    // The Host answers each subscription first, as it does (gatewayLink.ts): output before that is an earlier stream's.
+    for (const sub of ['s', 'f']) h.reply({ t: 'subscribed', conn: connOf(sub), sub, pty: 'p1', bootId: 'b' })
     slow.sock.pause()
     // Output as a busy pty makes it, in bursts the reading connection keeps up with: the stopped one falls behind by
     // more than its queue (and than what the operating system buffers for it), the reading one never does.

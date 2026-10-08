@@ -159,4 +159,20 @@ describe('RemoteLink.subscribe', () => {
     expect(slept[2]).toBeGreaterThan(slept[0])
     w.link.close()
   })
+
+  // Phase 8 review I5: an event that does not follow the last one means a hole; it is not applied, and the stream is
+  // asked for again from where the view is.
+  it('an event past a hole is not applied, and the stream resubscribes from the last seq', async () => {
+    const rt = fakeRuntime()
+    const w = watch(rt)
+    await settle()
+    const sub = rt.asked[0].sub
+    rt.conns[0].push({ t: 'subscribed', sub, pty: 'p1', bootId: 'boot1' })
+    rt.conns[0].push({ t: 'checkpoint', sub, checkpoint: cp(2), gap: { firstSeq: 1, lastSeq: 2 } })
+    rt.conns[0].push({ t: 'pty-out', sub, events: [data(5)] })
+    await settle()
+    expect(w.seen).toEqual(['reset@2'])
+    expect(rt.asked.at(-1)).toMatchObject({ t: 'subscribe', sub, fromSeq: 3 })
+    w.link.close()
+  })
 })
