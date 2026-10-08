@@ -22,6 +22,7 @@ import { go } from '@codemirror/lang-go'
 import { languageForExt, sameDocument, type LangKey } from '../../../core/files/edit'
 import type { EditorStateCache } from '../lib/editorStateCache'
 import { FileFindBar } from './FileFindBar'
+import { createEditCoalescer } from '../lib/editCoalescer'
 
 function langExt(key: LangKey | null): Extension {
   switch (key) {
@@ -54,7 +55,8 @@ function langExt(key: LangKey | null): Extension {
  *  사이로 옮기는 것이 이 설계의 핵심(되돌리기 보존)이므로, 상태 쪽을 인스턴스에서 떼어 내는 것이
  *  맞는 방향이다. */
 interface EditorOwner {
-  change: (text: string) => void
+  /** The document changed (a person's edit); its text goes to App on a short coalesce (second pass R2-1). */
+  changed: () => void
   save: () => void
   /** The user clicked inside the view — a pending "reveal this line" request must not move a cursor
    *  they have since placed */
@@ -124,7 +126,7 @@ const sharedBase: Extension[] = [
   ]),
   EditorView.updateListener.of((u) => {
     // Propagate user edits only: setState (a programmatic replacement) has an empty transactions array, so it is excluded
-    if (u.docChanged && u.transactions.length > 0) owners.get(u.view)?.change(u.state.doc.toString())
+    if (u.docChanged && u.transactions.length > 0) owners.get(u.view)?.changed()
   }),
   // Keeps the find bar's count honest. Costs nothing while the bar is closed — the owner drops it.
   EditorView.updateListener.of((u) => {
@@ -212,7 +214,7 @@ export function FileEditor({
   /** 바뀐 텍스트와 **그 텍스트가 속한 경로**를 함께 넘긴다. 경로 없이 텍스트만 넘기면, 프롭이 새
    *  파일로 바뀐 뒤 뷰가 아직 옛 문서를 들고 있는 찰나의 편집이 새 파일의 내용으로 기록된다 — 그 창이
    *  실제로 다른 파일을 덮어썼다. 받는 쪽이 경로로 대상을 찾으면 그 오귀속이 구조적으로 불가능해진다 */
-  onChange: (path: string, next: string) => void
+  onChange: (path: string, next: string, late?: boolean) => void
   onSave: (path: string) => void
   /** 이 에디터의 EditorView 를 밖에 알린다. 마크다운 분할 뷰의 스크롤 동기화가 그 뷰의 스크롤
    *  위치와 줄 배치를 읽어야 해서 열어 둔 통로다. 마운트에서 뷰를, 언마운트에서 null 을 넘긴다.
@@ -233,6 +235,8 @@ export function FileEditor({
   // References to the latest callbacks — the base extensions are built only once, so this avoids staleness
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
+  /** Sends this view's pending edits as late ones (second pass R2-1): before a file switch and at the unmount. */
+  const lateFlushRef = useRef<() => void>(() => {})
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
   const onRetireRef = useRef(onRetire)
@@ -273,9 +277,27 @@ export function FileEditor({
     viewRef.current = view
     curPathRef.current = path
     // 이 뷰의 편집이 향할 곳. 경로는 호출 시점에 읽으므로 파일을 갈아타도 따라온다
+    /** Set while a switch or the unmount flushes: App takes that text by its path, though the pane shows another. */
+    let late = false
+    // The text and its path are read when it goes, together: the pairing the path argument exists for holds.
+    const edits = createEditCoalescer({
+      read: () => view.state.doc.toString(),
+      send: (text) => onChangeRef.current(curPathRef.current, text, late)
+    })
+    lateFlushRef.current = (): void => {
+      late = true
+      try {
+        edits.flush()
+      } finally {
+        late = false
+      }
+    }
     owners.set(view, {
-      change: (text) => onChangeRef.current(curPathRef.current, text),
-      save: () => onSaveRef.current(curPathRef.current),
+      changed: () => edits.changed(),
+      save: () => {
+        edits.flush()
+        onSaveRef.current(curPathRef.current)
+      },
       interact: () => onInteractRef.current?.(),
       // Ctrl+F never hides the replace row that Ctrl+H opened — the bar decides, from wantReplace
       find: (withReplace) => setFind((cur) => ({ replace: withReplace, nonce: (cur?.nonce ?? 0) + 1 })),
@@ -304,6 +326,8 @@ export function FileEditor({
     return () => {
       view.scrollDOM.removeEventListener('scroll', onScroll)
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
+      lateFlushRef.current()
+      edits.dispose()
       owners.delete(view)
       // As in the path switch below — a state must never be cached with the search panel still open
       closeSearchPanel(view)
@@ -330,6 +354,8 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
+      // What was typed in the file being left goes to it first (second pass R2-1).
+      lateFlushRef.current()
       // 나가는 상태의 찾기 패널을 닫고 나서 캐시에 넣는다. 열린 채로 캐시되면 나중에 그 파일로
       // 돌아왔을 때 바는 없는데 강조만 남는다 — 강조는 패널이 열려 있는 동안만 그려지기 때문이다
       closeSearchPanel(view)

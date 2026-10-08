@@ -15,6 +15,12 @@ describe('nextGitStatus', () => {
     expect(nextGitStatus(prev, map)).toEqual({ fileState: map, stale: false })
   })
 
+  // Second pass R2-8: every watcher batch asked git again and the answer always replaced the map, so the explorer
+  // drew again with nothing changed while an agent wrote files. The same badges keep the same object.
+  it('an answer with the same badges keeps the map it had', () => {
+    expect(nextGitStatus(prev, { '/r/a.ts': 'modified' }).fileState).toBe(prev)
+  })
+
   it('an empty answer is a clean tree, not unknown', () => {
     expect(nextGitStatus(prev, {})).toEqual({ fileState: {}, stale: false })
   })

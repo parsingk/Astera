@@ -98,36 +98,65 @@ export function foldChatEvent(state: NonNullable<ChatPaneState>, event: ChatEven
  * that arrive first are queued and folded onto the answer, in the order they arrived, the moment it
  * lands — so the state this returns is never older than what has already come in.
  */
+/** How long a pane waits before asking for its state again after a read that failed (second pass R2-6). */
+export const CHAT_STATE_RETRY_MS = 2_000
+
+/** The hook's work, without React: listens, asks for the state, folds the events that came meanwhile onto it, then
+ *  folds each event as it comes. A read that fails is asked again after CHAT_STATE_RETRY_MS, and the events held for it
+ *  go (the next answer is newer than they are): before, a rejected read left the pane stateless and queued every later
+ *  event for its whole life. Returns the stop. */
+export function followChatState(o: {
+  ask: () => Promise<ChatPaneState>
+  on: (cb: (e: ChatEvent) => void) => () => void
+  set: (next: ChatPaneState | ((prev: ChatPaneState) => ChatPaneState)) => void
+}): () => void {
+  let alive = true
+  let settled = false
+  let queued: ChatEvent[] = []
+  let retry: ReturnType<typeof setTimeout> | undefined
+  const off = o.on((event) => {
+    if (!alive) return
+    if (!settled) {
+      queued.push(event)
+      return
+    }
+    o.set((prev) => (prev === null ? prev : foldChatEvent(prev, event)))
+  })
+  const read = (): void => {
+    queued = []
+    o.ask().then(
+      (initial) => {
+        if (!alive) return
+        settled = true
+        o.set(queued.reduce<ChatPaneState>((acc, event) => (acc === null ? acc : foldChatEvent(acc, event)), initial))
+        queued = []
+      },
+      () => {
+        if (alive) retry = setTimeout(read, CHAT_STATE_RETRY_MS)
+      }
+    )
+  }
+  read()
+  return () => {
+    alive = false
+    clearTimeout(retry)
+    off()
+  }
+}
+
 export function useChatState(sessionId: string, enabled: boolean): ChatPaneState {
   const [state, setState] = useState<ChatPaneState>(null)
 
   useEffect(() => {
     setState(null)
     if (!enabled) return
-
-    let alive = true
-    let settled = false
-    const queued: ChatEvent[] = []
-
-    const off = window.api.on('chat:event', ({ sessionId: id, event }) => {
-      if (!alive || id !== sessionId) return
-      if (!settled) {
-        queued.push(event)
-        return
-      }
-      setState((prev) => (prev === null ? prev : foldChatEvent(prev, event)))
+    return followChatState({
+      ask: () => window.api.chat.state(sessionId),
+      on: (cb) => window.api.on('chat:event', ({ sessionId: id, event }) => {
+        if (id === sessionId) cb(event)
+      }),
+      set: setState
     })
-
-    void window.api.chat.state(sessionId).then((initial) => {
-      if (!alive) return
-      settled = true
-      setState(queued.reduce<ChatPaneState>((acc, event) => (acc === null ? acc : foldChatEvent(acc, event)), initial))
-    })
-
-    return () => {
-      alive = false
-      off()
-    }
   }, [sessionId, enabled])
 
   return state

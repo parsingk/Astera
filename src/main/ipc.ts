@@ -1840,11 +1840,17 @@ export function registerIpc(
   // run output and status to the renderer
   // Batched as session output is (second pass M2-6: one message per pty chunk), and flushed before the status or exit
   // that must follow the last of it.
-  const runBatcher = new DataBatcher(16, (runId, data) => send('run:data', { runId, data }))
+  /** Each run's output length after its last chunk, sent with the batch it ends (second pass R2-7). */
+  const runEnds = new Map<string, number>()
+  const runBatcher = new DataBatcher(16, (runId, data) => send('run:data', { runId, data, end: runEnds.get(runId) }))
   const terminalBatcher = new DataBatcher(16, (id, data) => send('terminal:data', { id, data }))
-  core.run.onData = (e) => runBatcher.push(e.runId, e.data)
+  core.run.onData = (e) => {
+    runEnds.set(e.runId, e.end)
+    runBatcher.push(e.runId, e.data)
+  }
   core.run.onStatus = (e) => {
     runBatcher.flush()
+    if (e.status === 'exited') runEnds.delete(e.runId)
     send('run:status', e)
     // A validation run's exit comes through this one channel too — RunManager has one onStatus.
     // Every other run's exit flows in as well; TaskValidator ignores a runId that is not a queue head.
@@ -5124,6 +5130,7 @@ export function registerIpc(
   // A run's buffered output, for a panel that mounts after the run started. Same "existing run, no
   // guard" reasoning as run.dismiss.
   ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
+  ipcMain.handle('run.replay', async (_e, runId: string) => core.run.replay(runId))
   // A console link's path, resolved against the run's own working directory and checked before the
   // renderer is told it exists (main/run/resolveLink.ts). A relative target that is not at the cwd is
   // also tried under the usual source roots. No path guard on the arguments themselves: the guard is

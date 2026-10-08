@@ -2,9 +2,10 @@
 // agent's app on a desktop the person never sees, in the agent's violet frame, with the helper that is
 // running, a Stop and a Close. The person watches; they do not drive. The stage reports its size, and
 // the Host gives the app's window that size, so the picture fills the stage (src/core/workspace/size.ts).
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { mirrorStatus, type MirrorEntry, type SessionSizeReporters } from '../lib/workspaceMirror'
+import { mirrorFrames } from '../lib/mirrorFrames'
 
 export function AppMirrorPane(props: {
   sessionTitle: string
@@ -53,6 +54,9 @@ export function AppMirrorPane(props: {
     }
   }, [sizes, sessionId])
   const m = props.mirror
+  // The picture from its own store (second pass R2-3): a frame each second draws this pane, not the whole app.
+  const subscribeFrame = useCallback((cb: () => void) => mirrorFrames.subscribe(props.sessionId, cb), [props.sessionId])
+  const frame = useSyncExternalStore(subscribeFrame, () => mirrorFrames.get(props.sessionId)) ?? m?.frame ?? null
   const open = m?.open === true
   const s = mirrorStatus(m)
   const status = 'params' in s ? t(s.key, s.params) : t(s.key)
@@ -69,12 +73,12 @@ export function AppMirrorPane(props: {
         </button>
       </div>
       <div ref={stage} className={`app-mirror-stage${open ? '' : ' closed'}${m?.running ? ' running' : ''}`}>
-        {m?.frame ? (
+        {frame ? (
           <img
             className="app-mirror-frame"
-            src={`data:image/jpeg;base64,${m.frame.jpeg}`}
-            width={m.frame.width}
-            height={m.frame.height}
+            src={`data:image/jpeg;base64,${frame.jpeg}`}
+            width={frame.width}
+            height={frame.height}
             alt={t('workspace.pane.alt')}
             draggable={false}
           />

@@ -19,7 +19,12 @@ export function nextGitStatus(
   prev: Record<string, GitState>,
   result: Record<string, GitState> | null
 ): { fileState: Record<string, GitState>; stale: boolean } {
-  return result === null ? { fileState: prev, stale: true } : { fileState: result, stale: false }
+  if (result === null) return { fileState: prev, stale: true }
+  // The same badges keep the same map (second pass R2-8): every watcher batch asks again, and a new object drew the
+  // explorer again with nothing changed.
+  const keys = Object.keys(result)
+  const same = keys.length === Object.keys(prev).length && keys.every((k) => prev[k] === result[k])
+  return { fileState: same ? prev : result, stale: false }
 }
 
 /**

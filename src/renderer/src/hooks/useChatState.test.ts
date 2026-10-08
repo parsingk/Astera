@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { foldChatEvent } from './useChatState'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { foldChatEvent, followChatState } from './useChatState'
 import type { ChatState } from '../../../core/chat/types'
 
 const base: ChatState = {
@@ -13,6 +13,58 @@ const base: ChatState = {
   truncated: true,
   provider: 'codex'
 }
+
+// Second pass R2-6: a `chat.state` that rejected (the Host dropping as the pane mounted) left the pane with no state
+// for good, and every later event for the session queued, unbounded, for the pane's life.
+describe('followChatState', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('asks again after a read that failed, folding only what came after the read that answered', async () => {
+    vi.useFakeTimers()
+    let asked = 0
+    let emit: (e: never) => void = () => {}
+    let state: unknown = null
+    const stop = followChatState({
+      ask: async () => {
+        if (asked++ === 0) throw new Error('the Host went')
+        return base
+      },
+      on: (cb) => {
+        emit = cb as never
+        return () => {}
+      },
+      set: (next) => {
+        state = typeof next === 'function' ? (next as (p: unknown) => unknown)(state) : next
+      }
+    })
+    emit({ type: 'status', status: 'working' } as never) // before the failed read: the answer that comes has it
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state).toBeNull()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(asked).toBe(2)
+    expect(state).toMatchObject({ status: 'idle' })
+    emit({ type: 'status', status: 'working' } as never)
+    expect(state).toMatchObject({ status: 'working' })
+    stop()
+  })
+
+  it('stops asking once stopped', async () => {
+    vi.useFakeTimers()
+    let asked = 0
+    const stop = followChatState({
+      ask: async () => {
+        asked++
+        throw new Error('down')
+      },
+      on: () => () => {},
+      set: () => {}
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    stop()
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(asked).toBe(1)
+  })
+})
 
 describe('foldChatEvent', () => {
   it('a status event carrying truncated ends the guess; one without it leaves the flag alone', () => {

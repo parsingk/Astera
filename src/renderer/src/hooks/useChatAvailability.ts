@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { HostStatus } from '../../../core/types'
 import { HOST_FEATURE_PROC } from '../../../core/host/protocol'
+import { pollWhileVisible } from '../lib/visiblePoll'
+import { sameOrNext } from '../lib/remoteSessions'
 
 export interface ChatAvailability {
   /** Whether the Host has announced the proc-* family a chat session's line process needs. */
@@ -50,23 +52,33 @@ export function chatAvailabilityOf(a: { hostOk: boolean; answered: boolean }): C
  * The fallback-to-터미널 effect stays in each dialog rather than moving in here — it writes their own
  * `kind` state, which is theirs to own.
  */
+/** The dialogs' Host poll (second pass R2-5): every two seconds while the window shows, and a read that fails is
+ *  dropped (the next one asks again) rather than left an unhandled rejection. Returns the stop. */
+export function startHostStatusPoll(
+  ask: () => Promise<HostStatus>,
+  take: (s: HostStatus) => void,
+  doc: EventTarget & { hidden: boolean } = document
+): () => void {
+  let stopped = false
+  const stop = pollWhileVisible(() => {
+    ask().then(
+      (s) => {
+        if (!stopped) take(s)
+      },
+      () => {}
+    )
+  }, 2000, doc)
+  return () => {
+    stopped = true
+    stop()
+  }
+}
+
 export function useChatAvailability(): ChatAvailability {
   const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    const poll = (): void => {
-      void window.api.host.status().then((s) => {
-        if (!cancelled) setHostStatus(s)
-      })
-    }
-    poll()
-    const id = setInterval(poll, 2000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  // An unchanged status keeps its object, so the dialog does not draw again for nothing.
+  useEffect(() => startHostStatusPoll(() => window.api.host.status(), (s) => setHostStatus((prev) => sameOrNext(prev, s))), [])
 
   const hostOk = !!hostStatus && hostStatus.connected && hostStatus.features.includes(HOST_FEATURE_PROC)
   // A null status is the poll not having come back yet — the one state that is neither yes nor no.

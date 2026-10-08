@@ -813,7 +813,7 @@ export interface CoreEvents {
   'cli:install':
     | { cli: 'claude' | 'codex'; kind: 'start' | 'out'; text: string }
     | { cli: 'claude' | 'codex'; kind: 'done'; code: number | null }
-  'run:data': { runId: string; data: string } // run output, per run
+  'run:data': { runId: string; data: string; end?: number } // run output, per run; `end`: the run's output length after it
   'run:status': RunStatus // run state change (running/stopping/exited)
   /** The run the console should move to. A chain's first run is what run.start returns and what the
    *  panel opens on; this arrives later, when the configuration the user actually pressed ▶ on starts.
@@ -1527,6 +1527,9 @@ export interface CoreApi {
     dismiss(runId: string): Promise<void>
     // The run's buffered output (last 200 KB) — what RunPanel replays when it mounts after the start
     output(runId: string): Promise<string>
+    // The same output with the run's whole output length at its end, which RunPanel joins with the live chunks' `end`
+    // so nothing that raced the replay is written twice (second pass R2-7)
+    replay(runId: string): Promise<{ text: string; end: number }>
     // Whether `target`, as printed in this run's output, names a file this app may open — resolved
     // against the run's working directory, guarded, stat-ed (main/run/resolveLink.ts). null is the
     // ordinary answer; the console's link provider underlines only what comes back non-null.

@@ -17,7 +17,7 @@ describe('a new document in the window', () => {
   // output is batched; a chatty dev server cost a message per chunk. Batched the same way, and flushed before the exit or
   // status that must follow the last output.
   it('batches terminal and Run output, flushing it before an exit or a status', () => {
-    expect(ipc).toContain("core.run.onData = (e) => runBatcher.push(e.runId, e.data)")
+    expect(ipc).toContain("runBatcher.push(e.runId, e.data)")
     expect(ipc).toContain("core.terminal.onData = (e) => terminalBatcher.push(e.id, e.data)")
     const status = ipc.slice(ipc.indexOf('core.run.onStatus = (e) => {'))
     expect(status.slice(0, status.indexOf('\n  }'))).toContain('runBatcher.flush()')

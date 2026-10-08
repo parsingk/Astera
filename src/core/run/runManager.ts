@@ -18,6 +18,8 @@ interface LiveRun {
   status: RunStatus
   pty: PtyLike
   buffer: string
+  /** Characters of output the run has written in all, past what the buffer still holds (second pass R2-7) */
+  written: number
   /** Where the PTY was started — what a relative path in the output is relative to (run.resolveLink) */
   cwd: string
   /** Settles when pty.onExit fires — what restart() waits on before starting the replacement */
@@ -51,7 +53,7 @@ export interface StartOpts {
  *  TerminalManager has for terminals. Unrelated to claude sessions. */
 export class RunManager {
   private runs = new Map<string, LiveRun>()
-  onData?: (e: { runId: string; data: string }) => void
+  onData?: (e: { runId: string; data: string; end: number }) => void
   onStatus?: (e: RunStatus) => void
 
   constructor(
@@ -160,14 +162,15 @@ export class RunManager {
     const exited = new Promise<void>((resolve) => {
       settle = resolve
     })
-    const live: LiveRun = { status, pty, buffer: '', cwd, exited }
+    const live: LiveRun = { status, pty, buffer: '', written: 0, cwd, exited }
     this.runs.set(status.runId, live)
     this.onStatus?.({ ...status }) // Report the start as a status event too, so the list and the badge refresh
     pty.onData((data) => {
       // Cut once it is twice the cap, not on every chunk (second pass M2-6); readers take the last OUTPUT_LIMIT.
       live.buffer += data
       if (live.buffer.length > 2 * OUTPUT_LIMIT) live.buffer = live.buffer.slice(-OUTPUT_LIMIT)
-      this.onData?.({ runId: status.runId, data })
+      live.written += data.length
+      this.onData?.({ runId: status.runId, data, end: live.written })
       // The first loopback address the run prints is what its tab offers to preview. Read from the
       // buffer's tail rather than this chunk, because a dev server's banner is written in pieces and a
       // URL can be split across two writes; and only until one is found, so a server that logs every
@@ -333,6 +336,13 @@ export class RunManager {
   /** Every run that is still alive, across projects — the global badge. A stopping run is alive. */
   listActive(): RunStatus[] {
     return [...this.runs.values()].filter((r) => r.status.status !== 'exited').map((r) => ({ ...r.status }))
+  }
+
+  /** The recent output and the run's whole output length at its end: a console joins it with live chunks by their
+   *  `end` and writes nothing twice (second pass R2-7). */
+  replay(runId: string): { text: string; end: number } {
+    const live = this.runs.get(runId)
+    return { text: live?.buffer.slice(-OUTPUT_LIMIT) ?? '', end: live?.written ?? 0 }
   }
 
   recentOutput(runId: string): string {

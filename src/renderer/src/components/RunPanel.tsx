@@ -12,6 +12,7 @@ import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
 import { copyTextFor } from '../../../core/terminal/copy'
 import { RunFindBar } from './RunFindBar'
+import { createReplayJoin } from '../lib/runReplay'
 
 /** The app's amber, which both the find highlights and the console's selection colour are built from.
  *  Read from the theme rather than hardcoded; the fallback is the value every shipped theme defines. */
@@ -161,13 +162,21 @@ export function RunPanel({
       resolvePath: (target) => window.api.run.resolveLink(runId, target).then((r) => r?.path ?? null, () => null),
       onOpenFile: (path, at) => onOpenFileRef.current(path, at)
     })
-    // Reconnect: replay the buffered output first (the cancelled guard prevents a write after a switch or unmount)
+    // Reconnect: replay the buffered output first (the cancelled guard prevents a write after a switch or unmount). Live
+    // output that raced the replay is held and written past where the replay ends (second pass R2-7: it was written
+    // twice, out of order).
     let cancelled = false
-    void window.api.run.output(runId).then((recent) => {
-      if (!cancelled && recent) term.write(recent)
-    })
+    const join = createReplayJoin((s) => term.write(s))
+    void window.api.run.replay(runId).then(
+      (r) => {
+        if (!cancelled) join.replay(r.text, r.end)
+      },
+      () => {
+        if (!cancelled) join.replay('', 0)
+      }
+    )
     const off = window.api.on('run:data', (e) => {
-      if (e.runId === runId) term.write(e.data)
+      if (e.runId === runId) join.live(e.data, e.end)
     })
     const input = term.onData((d) => window.api.run.write(runId, d))
     let resizeTimer: ReturnType<typeof setTimeout> | undefined

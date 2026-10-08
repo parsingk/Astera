@@ -1,5 +1,36 @@
 import { describe, it, expect } from 'vitest'
-import { chatAvailabilityOf } from './useChatAvailability'
+import { chatAvailabilityOf, startHostStatusPoll } from './useChatAvailability'
+import { vi, afterEach } from 'vitest'
+
+// Second pass R2-5: the dialogs' Host poll took a new object every two seconds (drawing the dialog again with nothing
+// changed), went on while the window was hidden, and a rejected read was an unhandled rejection every two seconds.
+describe('startHostStatusPoll', () => {
+  afterEach(() => vi.useRealTimers())
+  const doc = (hidden: boolean) => Object.assign(new EventTarget(), { hidden })
+
+  it('asks nothing while the window is hidden', async () => {
+    vi.useFakeTimers()
+    const ask = vi.fn(async () => ({ ok: true }))
+    const stop = startHostStatusPoll(ask as never, () => {}, doc(true))
+    await vi.advanceTimersByTimeAsync(10_000)
+    stop()
+    expect(ask).toHaveBeenCalledTimes(1)
+  })
+
+  it('a rejected read is not an unhandled rejection, and the next read still lands', async () => {
+    vi.useFakeTimers()
+    let n = 0
+    const took: unknown[] = []
+    const ask = async (): Promise<{ ok: boolean }> => {
+      if (n++ === 0) throw new Error('the Host went')
+      return { ok: true }
+    }
+    const stop = startHostStatusPoll(ask as never, (s) => took.push(s), doc(false))
+    await vi.advanceTimersByTimeAsync(2_000)
+    stop()
+    expect(took).toEqual([{ ok: true }])
+  })
+})
 
 describe('chatAvailabilityOf', () => {
   it('any account is enabled when the Host speaks proc', () => {

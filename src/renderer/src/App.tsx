@@ -19,7 +19,9 @@ import { invalidateImageCache } from './components/MarkdownPreview'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
-import { applyWorkspaceEvent, createSessionSizeReporters, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './lib/workspaceMirror'
+import { createSessionSizeReporters, mirrorsFromList, newlyOpened, openSessionIds, placeAppTabs, removeAppTab, type Mirrors } from './lib/workspaceMirror'
+import { flushPendingEdits } from './lib/editCoalescer'
+import { mirrorFrames, takeWorkspaceEvent } from './lib/mirrorFrames'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { jobsStall, jobsStallRecheckInMs } from '../../core/orchestration/jobsView'
@@ -765,6 +767,13 @@ export default function App(): React.JSX.Element {
     setRollStates((p) => dropKeys(p, gone))
     setSchedStates((p) => dropKeys(p, gone))
     forgetDrafts(gone)
+    // Their workspace mirrors and pictures too (second pass R2-2: kept for every session that ever opened one).
+    const mirrorsLeft = dropKeys(mirrorsRef.current, gone)
+    if (mirrorsLeft !== mirrorsRef.current) {
+      mirrorsRef.current = mirrorsLeft
+      setMirrors(mirrorsLeft)
+    }
+    mirrorFrames.drop(gone)
   }, [sessions])
   const shownRemoteKeys = useRef<ReadonlySet<string>>(new Set())
   useEffect(() => {
@@ -1882,9 +1891,13 @@ export default function App(): React.JSX.Element {
 
   const setBufferContent = (id: string, content: string): void => {
     setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content } } : prev))
+    // The ref too, at once: a save or a close that flushed the editor reads it in the same turn (second pass R2-1).
+    const cur = fileBuffersRef.current[id]
+    if (cur) fileBuffersRef.current = { ...fileBuffersRef.current, [id]: { ...cur, content } }
   }
 
   const saveFile = (id: string): void => {
+    flushPendingEdits()
     const buf = fileBuffersRef.current[id]
     const tab = fileTabsRef.current.find((t) => t.id === id)
     if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return
@@ -1925,6 +1938,7 @@ export default function App(): React.JSX.Element {
 
   const closeFileTab = async (id: string): Promise<void> => {
     // Decided outside the updater — avoids StrictMode double-invocation side effects (the existing convention)
+    flushPendingEdits()
     const buf = fileBuffersRef.current[id]
     if (buf && !buf.readOnly && buf.content !== buf.savedContent) {
       const title = fileTabsRef.current.find((t) => t.id === id)?.title
@@ -2022,7 +2036,9 @@ export default function App(): React.JSX.Element {
       // A picture, not a process: dropping the tab is the whole close. The workspace itself is closed
       // only by the pane's Close button (workspace-close). The mirror entry stays, so the next frame of
       // a workspace that is still open does not put the tab back: only a workspace that opens again
-      // does (newlyOpened reads a transition, not a presence).
+      // does (newlyOpened reads a transition, not a presence). Its picture goes (second pass R2-2): a frame still
+      // coming brings the next one.
+      mirrorFrames.drop([ref.id])
       dropTabFromTree(tabId)
       return
     }
@@ -2119,6 +2135,8 @@ export default function App(): React.JSX.Element {
       if (c.kind !== 'change' && c.kind !== 'add') return
       void window.api.files.read(c.path).then(
         (d) => {
+          // What is typed but not yet sent counts as edited: a reload must not take it (second pass R2-1).
+          flushPendingEdits()
           const b = fileBuffersRef.current[id]
           if (!b) return
           const verdict = classifyExternalChange(toLf(d.content), b.savedContent, b.content !== b.savedContent && !b.readOnly)
@@ -2146,6 +2164,7 @@ export default function App(): React.JSX.Element {
   // Fully closing the explorer — the header ✕. Returns to session mode, clearing file tabs and the pin
   const closeExplorer = async (): Promise<void> => {
     // The header ✕ means a full close. With dirty tabs, confirm once and then clear the file tabs and buffers too
+    flushPendingEdits()
     const hasDirty = fileTabsRef.current.some((t) => {
       const b = fileBuffersRef.current[t.id]
       return b && !b.readOnly && b.content !== b.savedContent
@@ -2905,9 +2924,11 @@ export default function App(): React.JSX.Element {
         onViewChange={(view) => setMdViews((prev) => ({ ...prev, [paneId]: view }))}
         // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
         // 갈아타지 않은 옛 문서의 것이므로 버린다
-        onChange={(fromPath, next) => {
+        // A late one (second pass R2-1) is what was typed in a file the pane is leaving, flushed as it leaves: taken by its
+        // path. The text and the path it carries are read together in the editor.
+        onChange={(fromPath, next, late) => {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
-          if (!target || target.id !== f.id) return
+          if (!target || (target.id !== f.id && late !== true)) return
           dropReveal(target.id)
           setBufferContent(target.id, next)
         }}
@@ -3054,6 +3075,8 @@ export default function App(): React.JSX.Element {
   const openAppTabsRef = useRef(openAppTabs)
   openAppTabsRef.current = openAppTabs
   const takeMirrors = (next: Mirrors, prev: Mirrors): void => {
+    // A frame for an open workspace changes nothing here: it went to mirrorFrames (second pass R2-3).
+    if (next === prev) return
     mirrorsRef.current = next
     setMirrors(next)
     const opened = newlyOpened(prev, next)
@@ -3588,10 +3611,11 @@ export default function App(): React.JSX.Element {
       async () => {
         const token = replyGate.begin('jobs', jobsRuntime)
         const snapshot = await window.api.orch.list(project, jobsRuntime)
-        if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot(snapshot)
+        // An unchanged answer keeps the object App holds (second pass R2-4), so nothing below draws again for it.
+        if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot((prev) => sameOrNext(prev, snapshot))
         // The paired list too: a Runtime's reach and last answer for the choice, and one removed elsewhere.
         const paired = await window.api.remote.list().catch(() => null)
-        if (alive && paired) setPairedRuntimes(paired)
+        if (alive && paired) setPairedRuntimes((prev) => sameOrNext(prev, paired))
       },
       REMOTE_JOBS_POLL_MS,
       { paused: () => document.hidden }
@@ -3736,9 +3760,17 @@ export default function App(): React.JSX.Element {
   useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url }) => openAgentTabRef.current(sessionId, cwd, url)), [])
   // The agent app workspaces (agent workspace design): the live ones once at mount, then every change.
   useEffect(() => {
-    void window.api.workspace.list().then((list) => takeMirrors({ ...mirrorsRef.current, ...mirrorsFromList(list) }, mirrorsRef.current))
+    void window.api.workspace.list().then((list) => {
+      const listed = mirrorsFromList(list)
+      // The frames go to their store, not into the state (second pass R2-3).
+      for (const [id, m] of Object.entries(listed)) {
+        if (m.frame) mirrorFrames.set(id, m.frame)
+        listed[id] = { ...m, frame: null }
+      }
+      takeMirrors({ ...mirrorsRef.current, ...listed }, mirrorsRef.current)
+    })
   }, [])
-  useEffect(() => window.api.on('workspace:event', (e) => takeMirrors(applyWorkspaceEvent(mirrorsRef.current, e), mirrorsRef.current)), [])
+  useEffect(() => window.api.on('workspace:event', (e) => takeMirrors(takeWorkspaceEvent(mirrorsRef.current, e, mirrorFrames), mirrorsRef.current)), [])
   useEffect(() => window.api.on('preview:agentTabClose', ({ sessionId }) => closeAgentTabRef.current(sessionId)), [])
   useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => {
     setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))

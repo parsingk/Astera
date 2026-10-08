@@ -14,20 +14,46 @@ import type { AccountUsage } from '../../../core/types'
  * pushes the whole map whenever it changes. A failed fetch is silent by design (§9) — the row falls
  * back to its remembered reading, or to nothing.
  */
+/** The hook's reads without React (second pass R2-9): the map main holds, then each pushed map. A first read that
+ *  lands after a push is older than it and is dropped, and nothing is set once stopped. Returns the stop. */
+export function followAccountUsage(o: {
+  ask: () => Promise<Record<string, AccountUsage>>
+  on: (cb: (m: Record<string, AccountUsage>) => void) => () => void
+  set: (m: Record<string, AccountUsage>) => void
+}): () => void {
+  let alive = true
+  let pushed = false
+  const off = o.on((m) => {
+    if (!alive) return
+    pushed = true
+    o.set(m)
+  })
+  o.ask().then(
+    (m) => {
+      if (alive && !pushed) o.set(m)
+    },
+    () => {}
+  )
+  return () => {
+    alive = false
+    off()
+  }
+}
+
 export function useAccountUsage(): Record<string, AccountUsage> {
   const [usage, setUsage] = useState<Record<string, AccountUsage>>({})
 
   useEffect(() => {
     // The map main already holds, so a remount draws immediately rather than waiting for the tick
     // this subscribe is about to start.
-    void window.api.usage
-      .accounts()
-      .then(setUsage)
-      .catch(() => {})
-    const off = window.api.on('usage:accounts-updated', setUsage)
+    const stop = followAccountUsage({
+      ask: () => window.api.usage.accounts(),
+      on: (cb) => window.api.on('usage:accounts-updated', cb),
+      set: setUsage
+    })
     window.api.usage.subscribe()
     return () => {
-      off()
+      stop()
       window.api.usage.unsubscribe()
     }
   }, [])

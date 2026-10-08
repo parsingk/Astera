@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { highlightCode, classHighlighter } from '@lezer/highlight'
 import type { Language } from '@codemirror/language'
 import { javascriptLanguage } from '@codemirror/lang-javascript'
@@ -454,13 +454,15 @@ export function MarkdownPreview({
   // fix. It runs inside this useMemo, i.e. during render, and this app has no ErrorBoundary anywhere —
   // an uncaught throw here would blank the entire window, not just the preview. This is the one surface
   // whose whole input is untrusted, so it is the one place that has to contain it.
+  // Parsed at a lower priority than typing (second pass R2-1): the whole document was parsed again on every keystroke.
+  const shownText = useDeferredValue(text)
   const blocks = useMemo<MdBlock[] | null>(() => {
     try {
-      return parseMarkdown(text)
+      return parseMarkdown(shownText)
     } catch {
       return null
     }
-  }, [text])
+  }, [shownText])
   const keyRef = useRef(0)
   keyRef.current = 0
   const nextKey = (): number => keyRef.current++
