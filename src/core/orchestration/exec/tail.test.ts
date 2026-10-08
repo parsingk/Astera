@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { WorkerTails, TAIL_UNTRACKED, TAIL_EMPTY, TAIL_DEFAULT_LIMIT } from './tail'
+import { cutTail } from '../taskOutput'
 
 const never = (): boolean => false // 아무 dispatch도 종단에 이르지 않았다
 const always = (): boolean => true // 전부 종단
@@ -258,3 +259,27 @@ describe('WorkerTails', () => {
     })
   })
 })
+
+// Performance audit H6: a busy worker prints hundreds of chunks a second. Cutting the tail to its cap on every chunk
+// copied the whole tail each time; it is cut once it is twice the cap, and a read cuts what it returns. What a read
+// gives is the same as cutting every time.
+describe('WorkerTails cuts in batches with the same reads', () => {
+  it('reads the same as a tail cut on every chunk, for a long stream of small and large chunks', () => {
+    const cap = 1000
+    // What a read gave when the tail was cut on every chunk.
+    let kept = ''
+    const cutEvery = (chunk: string): void => void (kept = cutTail(kept + chunk, cap))
+    const expected = (): string => kept.replace(/\n+$/, '').split('\n').slice(-100000).join('\n')
+    const t = new WorkerTails(cap)
+    t.start({ dispatchId: 'd', sessionId: 's' }, () => false)
+    for (let i = 0; i < 3000; i++) {
+      const chunk = i % 97 === 0 ? `${'y'.repeat(700)}\n` : `line ${i} ${'x'.repeat(i % 13)}\n`
+      t.push('s', chunk)
+      cutEvery(chunk)
+      if (i % 250 === 0) expect(t.read('d', 100000)).toBe(expected())
+    }
+    expect(t.read('d', 100000)).toBe(expected())
+    expect(t.heldChars('d')).toBeLessThanOrEqual(2 * cap)
+  })
+})
+

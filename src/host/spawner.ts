@@ -50,6 +50,7 @@ import type { PtyRegistry } from './registry'
 import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
 import { setBounded } from '../core/bounded'
+import { dispatchLookup } from '../core/orchestration/dispatchIndex'
 /** Which session each attempt was started on, for the newest this many (audit H5); an older attempt's tail is long gone. */
 const STARTED_ON_KEPT = 2048
 
@@ -269,6 +270,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const settingsPath = path.join(profileDir, 'app-settings.json')
   const accountsPath = path.join(profileDir, 'accounts.json')
   const tails = new WorkerTails()
+  const dispatchById = dispatchLookup(() => d.getState())
   /** dispatchId → the session this Host started it on. The Host's tail follows that session only: an
    *  app-side roll rekeys the Dispatch and re-points the app's own tail (its onRolled), not this one. */
   const startedOn = new Map<string, string>()
@@ -852,10 +854,11 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       tails.start(
         { dispatchId, sessionId, previousSessionId },
         (id) => {
-          const x = d.getState().dispatches.find((y) => y.id === id)
+          const x = dispatchById(id)
           return x === undefined || x.endedAt !== undefined || x.outcome !== undefined
         },
-        (id) => d.getState().dispatches.find((y) => y.id === id)?.endedAt !== undefined
+        // Asked for every output chunk: through the index, not a scan of every attempt (audit H6).
+        (id) => dispatchById(id)?.endedAt !== undefined
       )
     }
   }

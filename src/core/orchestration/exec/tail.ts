@@ -128,18 +128,31 @@ export class WorkerTails {
     // whose tail alone the readers' secret filter does not recognise.
     // A tail that is one line longer than the cap is cut to nothing, which is not "no output yet".
     const joined = prev + stripAnsi(data)
+    // Cut once it is twice the cap, not on every chunk (performance audit H6): a cut copies the whole tail, and a busy
+    // worker prints hundreds of chunks a second. `read` cuts what it returns, so a read is the same either way.
+    if (joined.length <= 2 * this.cap) {
+      this.buffers.set(dispatchId, joined)
+      return
+    }
     const next = cutTail(joined, this.cap)
     if (next === '' && joined !== '') this.cutToNothing.add(dispatchId)
     else this.cutToNothing.delete(dispatchId)
     this.buffers.set(dispatchId, next)
   }
 
+  /** How many characters a dispatch's tail holds now: at most twice the cap. */
+  heldChars(dispatchId: string): number {
+    return this.buffers.get(dispatchId)?.length ?? 0
+  }
+
   /** The last `limit` lines of that dispatch. Not tracked, still empty, and has content each get a
    *  different wording. */
   read(dispatchId: string, limit?: number): string {
-    const tail = this.buffers.get(dispatchId)
-    if (tail === undefined) return TAIL_UNTRACKED
-    if (tail === '') return this.cutToNothing.has(dispatchId) ? '' : TAIL_EMPTY
+    const held = this.buffers.get(dispatchId)
+    if (held === undefined) return TAIL_UNTRACKED
+    const tail = held.length > this.cap ? cutTail(held, this.cap) : held
+    // Cut to nothing: one line longer than the cap, now or at the last cut.
+    if (tail === '') return held !== '' || this.cutToNothing.has(dispatchId) ? '' : TAIL_EMPTY
     // 0, negatives, fractions, and NaN fall back to the default instead of silently becoming 1 line
     const n = Number.isInteger(limit) && (limit as number) > 0 ? (limit as number) : TAIL_DEFAULT_LIMIT
     // Strip the trailing newline first — without it, the empty last element that split produces

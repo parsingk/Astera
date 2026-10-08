@@ -18,6 +18,7 @@ import { coordinatorLaunchPrompt } from '../handover'
 import type { OrchCoordinator } from './coordinator'
 import type { WorkerTails } from './tail'
 import { coordinatorBriefName } from './specFiles'
+import { dispatchLookup } from '../dispatchIndex'
 
 export type StartWorkerArgs = Parameters<OrchServerDeps['startWorker']>[0]
 export type StartWorkerResult = Awaited<ReturnType<OrchServerDeps['startWorker']>>
@@ -115,13 +116,15 @@ export async function startWorkerWithChain(
   // previous dispatch's tail freezes where it is. Only a dispatch that has reached a terminal
   // state is eligible for eviction — a live worker's tail is not dropped even past the cap (see
   // tail.ts).
+  const dispatchById = dispatchLookup(() => ctx.getState())
   ctx.tails.start(
     { dispatchId: a.dispatchId, sessionId: started.sessionId },
     (id) => {
-      const d = ctx.getState().dispatches.find((x) => x.id === id)
+      const d = dispatchById(id)
       return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
     },
-    (id) => ctx.getState().dispatches.find((x) => x.id === id)?.endedAt !== undefined
+    // Asked for every output chunk: through the index, not a scan of every attempt (audit H6).
+    (id) => dispatchById(id)?.endedAt !== undefined
   )
   return started
 }
