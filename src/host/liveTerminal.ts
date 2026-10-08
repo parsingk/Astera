@@ -1,0 +1,146 @@
+// A live terminal per pty (remote runtime design §3.7, C3 X1-02). Every ring event is applied to an `@xterm/headless`
+// terminal in order, and after each write callback the terminal's **watermark** is the seq of the last event it
+// applied. A checkpoint is that terminal serialized with `@xterm/addon-serialize` (both buffers, cursor, attributes,
+// the modes the addon covers) at its watermark, plus the text of an escape sequence still open there (escapeState.ts):
+// a client that writes `state`, then `pending`, then every event after the watermark sees what a continuously attached
+// terminal shows. Made on demand, never stored on disk.
+//
+// The packages are CommonJS and loaded lazily, as sessions.ts's render did: under Node's dynamic import their exports
+// arrive on `default` only, while the test runner hands back named exports.
+import type { Terminal as HeadlessTerminal } from '@xterm/headless'
+import type { SerializeAddon as Serializer } from '@xterm/addon-serialize'
+import type { SessionScreen } from '../core/orchestration/command'
+import type { PtyEvent } from './ptyRing'
+import { createEscapeTracker } from './escapeState'
+
+/** Rows kept above the screen (DC-7): what `sessions-read` returns at most. */
+export const TERMINAL_SCROLLBACK = 1_000
+
+export interface PtyCheckpoint {
+  /** The seq of the last event in `state`. */
+  watermark: number
+  cols: number
+  rows: number
+  /** The terminal serialized at the watermark. */
+  state: string
+  /** An escape sequence open at the watermark, written after `state`: '' when none is. */
+  pending: string
+  /** Present once the exit event was applied. */
+  exitCode?: number | null
+}
+
+export interface LiveTerminal {
+  apply(e: PtyEvent): void
+  watermark(): number
+  checkpoint(): Promise<PtyCheckpoint>
+  /** The screen and up to `lines` rows above it (at most TERMINAL_SCROLLBACK), as `sessions-read` answers. */
+  read(lines: number): Promise<SessionScreen>
+  dispose(): void
+}
+
+type Mods = { Terminal: typeof HeadlessTerminal; SerializeAddon: typeof Serializer }
+let mods: Promise<Mods> | null = null
+const load = (): Promise<Mods> =>
+  (mods ??= (async () => {
+    const h: typeof import('@xterm/headless') & { default?: typeof import('@xterm/headless') } = await import('@xterm/headless')
+    const s: typeof import('@xterm/addon-serialize') & { default?: typeof import('@xterm/addon-serialize') } = await import('@xterm/addon-serialize')
+    return { Terminal: (h.default ?? h).Terminal, SerializeAddon: (s.default ?? s).SerializeAddon }
+  })())
+
+export function createLiveTerminal(o: { cols: number; rows: number }): LiveTerminal {
+  let term: HeadlessTerminal | null = null
+  let serializer: Serializer | null = null
+  let disposed = false
+  let mark = 0
+  let exited = false
+  let exitCode: number | null = null
+  const tracker = createEscapeTracker()
+  /** Events applied before the packages loaded, in order. */
+  const early: PtyEvent[] = []
+
+  const applyNow = (t: HeadlessTerminal, e: PtyEvent): void => {
+    // The tracker and the watermark move in the write callback, so both stand where the parser stands.
+    if (e.kind === 'data')
+      t.write(e.data, () => {
+        tracker.feed(e.data)
+        mark = e.seq
+      })
+    // A resize and the exit keep their place in the order: after the writes before them have been parsed.
+    else if (e.kind === 'resize')
+      t.write('', () => {
+        if (!disposed) t.resize(Math.max(1, e.cols), Math.max(1, e.rows))
+        mark = e.seq
+      })
+    else
+      t.write('', () => {
+        exited = true
+        exitCode = e.code
+        mark = e.seq
+      })
+  }
+
+  const ready: Promise<HeadlessTerminal> = load().then((m) => {
+    const t = new m.Terminal({ cols: Math.max(1, o.cols), rows: Math.max(1, o.rows), scrollback: TERMINAL_SCROLLBACK, allowProposedApi: true })
+    serializer = new m.SerializeAddon()
+    t.loadAddon(serializer)
+    term = t
+    for (const e of early.splice(0)) applyNow(t, e)
+    if (disposed) t.dispose()
+    return t
+  })
+  /** Resolves inside a write callback queued after every event applied so far: the terminal stands at the watermark. */
+  const settled = <T>(f: (t: HeadlessTerminal) => T): Promise<T> =>
+    ready.then((t) => new Promise<T>((resolve) => t.write('', () => resolve(f(t)))))
+
+  return {
+    apply: (e) => {
+      if (disposed) return
+      if (term) applyNow(term, e)
+      else early.push(e)
+    },
+    watermark: () => mark,
+    checkpoint: () =>
+      settled((t) => ({
+        watermark: mark,
+        cols: t.cols,
+        rows: t.rows,
+        state: serializer ? serializer.serialize({ scrollback: TERMINAL_SCROLLBACK }) : '',
+        pending: tracker.pending(),
+        ...(exited ? { exitCode } : {})
+      })),
+    read: (lines) =>
+      settled((t) => {
+        const want = Math.max(0, Math.min(TERMINAL_SCROLLBACK, Math.floor(lines)))
+        const buf = t.buffer.active
+        const row = (y: number): string => buf.getLine(y)?.translateToString(true) ?? ''
+        // A row the terminal wrapped onto from the one above (a line wider than the tab): a reader joins them to get
+        // the line back, as the MCP layer does before it redacts.
+        const wrapped = (y: number): boolean => buf.getLine(y)?.isWrapped ?? false
+        const screen: string[] = []
+        const screenWrapped: boolean[] = []
+        for (let y = buf.baseY; y < buf.baseY + t.rows; y++) {
+          screen.push(row(y))
+          screenWrapped.push(wrapped(y))
+        }
+        // The rows below the last thing painted are not content: a shell prompt sits at the top of an otherwise empty
+        // screen.
+        while (screen.length > 0 && screen[screen.length - 1] === '') {
+          screen.pop()
+          screenWrapped.pop()
+        }
+        const scrollback: string[] = []
+        const scrollbackWrapped: boolean[] = []
+        for (let y = Math.max(0, buf.baseY - want); y < buf.baseY; y++) {
+          scrollback.push(row(y))
+          scrollbackWrapped.push(wrapped(y))
+        }
+        return { cols: t.cols, rows: t.rows, screen, scrollback, screenWrapped, scrollbackWrapped }
+      }),
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      early.length = 0
+      term?.dispose()
+    }
+  }
+}
