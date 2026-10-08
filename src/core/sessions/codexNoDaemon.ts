@@ -16,10 +16,10 @@
 // `--help` names it. The answer is kept per binary (its real path, modification time and size, so an
 // update is asked again) and for TTL_MS at most, which is what catches an update of a posix codex this
 // module finds by name and cannot stat.
-import { spawnSync } from 'node:child_process'
-import { realpathSync, statSync } from 'node:fs'
+import { execFile, spawnSync } from 'node:child_process'
+import { promises as fsp, realpathSync, statSync } from 'node:fs'
 import type { ResolveExecutable, SpawnCommand } from './commands'
-import { resolveWindowsExecutable, windowsSpawn } from './windowsExecutable'
+import { resolveWindowsExecutable, warmWindowsExecutable, windowsSpawn } from './windowsExecutable'
 
 const TTL_MS = 10 * 60 * 1000
 /** `codex --help` answers in about 80 ms; a binary that has not answered in this long is not asked again
@@ -38,6 +38,25 @@ function runHelp(cmd: SpawnCommand): string | null {
   return r.status === 0 && typeof r.stdout === 'string' ? r.stdout : null
 }
 
+/** `runHelp` off the calling thread (second pass M2-1): what a spawn's prepare runs, so the spawn finds the answer. */
+function runHelpAsync(cmd: SpawnCommand): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(cmd.file, cmd.args, { windowsHide: true, encoding: 'utf8', timeout: HELP_TIMEOUT_MS }, (err, stdout) =>
+      resolve(err ? null : stdout)
+    )
+  })
+}
+
+async function fileIdentityAsync(file: string): Promise<string> {
+  try {
+    const real = await fsp.realpath(file)
+    const st = await fsp.stat(real)
+    return `${real}|${st.mtimeMs}|${st.size}`
+  } catch {
+    return file
+  }
+}
+
 /** What changes when codex is updated: the standalone install's bin is a link to the current release
  *  folder, so the real path moves; an npm install rewrites the shim in place, so the time and size do. */
 function fileIdentity(file: string): string {
@@ -50,19 +69,34 @@ function fileIdentity(file: string): string {
   }
 }
 
+/** The sync answer a command builder reads, and `warm`, which a spawn's prepare awaits first so that answer is ready. */
+export type CodexNoDaemonProbe = (() => boolean) & { warm(): Promise<void> }
+
 export function makeCodexNoDaemonProbe(o: {
   platform: NodeJS.Platform
   resolve?: ResolveExecutable
   run?: (cmd: SpawnCommand) => string | null
   identity?: (file: string) => string
+  resolveAsync?: (name: string) => Promise<string | null>
+  runAsync?: (cmd: SpawnCommand) => Promise<string | null>
+  identityAsync?: (file: string) => Promise<string>
   now?: () => number
-}): () => boolean {
+}): CodexNoDaemonProbe {
   const resolve = o.resolve ?? resolveWindowsExecutable
   const run = o.run ?? runHelp
   const identity = o.identity ?? fileIdentity
+  const resolveAsync = o.resolveAsync ?? warmWindowsExecutable
+  const runAsync = o.runAsync ?? runHelpAsync
+  const identityAsync = o.identityAsync ?? fileIdentityAsync
   const now = o.now ?? Date.now
   let known: { key: string; at: number; supported: boolean } | null = null
-  return () => {
+  const fresh = (key: string): boolean => known !== null && known.key === key && now() - known.at < TTL_MS
+  const learn = (key: string, help: string | null): boolean => {
+    const supported = help !== null && /(^|\s)--no-daemon\b/.test(help)
+    known = { key, at: now(), supported }
+    return supported
+  }
+  const probe = (): boolean => {
     let cmd: SpawnCommand
     let key: string
     if (o.platform === 'win32') {
@@ -75,19 +109,37 @@ export function makeCodexNoDaemonProbe(o: {
       cmd = { file: 'codex', args: ['--help'] }
       key = 'codex'
     }
-    if (known && known.key === key && now() - known.at < TTL_MS) return known.supported
-    const help = run(cmd)
-    const supported = help !== null && /(^|\s)--no-daemon\b/.test(help)
-    known = { key, at: now(), supported }
-    return supported
+    if (fresh(key)) return (known as { supported: boolean }).supported
+    // A spawn nobody prepared: asked here, synchronously, as before.
+    return learn(key, run(cmd))
   }
+  const warm = async (): Promise<void> => {
+    try {
+      let cmd: SpawnCommand
+      let key: string
+      if (o.platform === 'win32') {
+        const found = await resolveAsync('codex')
+        if (found === null) return
+        cmd = windowsSpawn('codex', ['--help'], () => found)
+        key = await identityAsync(found)
+      } else {
+        cmd = { file: 'codex', args: ['--help'] }
+        key = 'codex'
+      }
+      if (fresh(key)) return
+      learn(key, await runAsync(cmd))
+    } catch {
+      /* the spawn's own sync answer stands */
+    }
+  }
+  return Object.assign(probe, { warm })
 }
 
-const shared = new Map<NodeJS.Platform, () => boolean>()
+const shared = new Map<NodeJS.Platform, CodexNoDaemonProbe>()
 
 /** One probe per platform for the whole process: every SessionManager, the Host's spawner and its
  *  checks build descriptors of their own, and asking the binary once is enough for all of them. */
-export function codexNoDaemonProbe(platform: NodeJS.Platform): () => boolean {
+export function codexNoDaemonProbe(platform: NodeJS.Platform): CodexNoDaemonProbe {
   let probe = shared.get(platform)
   if (!probe) {
     probe = makeCodexNoDaemonProbe({ platform })

@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process'
 import type { DetectCandidate } from '../types'
 import { buildClaudeCommand, buildCodexCommand, type CommandBuilder } from '../sessions/commands'
 import { codexNoDaemonProbe } from '../sessions/codexNoDaemon'
+import { warmWindowsExecutable } from '../sessions/windowsExecutable'
 import { readAccountEmail, detectConfigDirs } from '../accounts/detect'
 import { readCodexEmail, detectCodexConfigDirs } from '../accounts/detectCodex'
 import { syncClaudeSettings, syncCodexSettings, type SyncResult } from '../accounts/settingsSync'
@@ -41,6 +42,9 @@ export interface ProviderDescriptor extends ProviderMeta {
   /** The accounts root directory name — the caller (core.ts) assembles the absolute path */
   accountsRootName: string
   buildCommand: CommandBuilder
+  /** What `buildCommand` would otherwise look up synchronously, looked up first off the thread: a spawn's prepare awaits
+   *  it (second pass M2-1, M2-2). Never rejects. */
+  prepare?(): Promise<void>
   readEmail(configDir: string, homeDir: string): Promise<string | null>
   detect(opts: { homeDir: string; excludeDirs: string[] }): Promise<DetectCandidate[]>
   /** Copies this provider's settings from one of its accounts into another. The source is that provider's
@@ -100,8 +104,11 @@ export function makeDescriptors(
   keychainHas = makeSecurityKeychainHas(runSecurity),
   /** Whether codex takes `--no-daemon` (sessions/codexNoDaemon.ts). A seam for the same reason: the
    *  real one runs the codex on this machine's PATH. */
-  codexNoDaemon: () => boolean = codexNoDaemonProbe(platform)
+  codexNoDaemon: (() => boolean) & { warm?(): Promise<void> } = codexNoDaemonProbe(platform)
 ): Record<Provider, ProviderDescriptor> {
+  const warmCli = async (name: string): Promise<void> => {
+    if (platform === 'win32') await warmWindowsExecutable(name)
+  }
   const claudeIsLoggedIn = claudeLoginProbe({
     platform,
     homeDir,
@@ -118,6 +125,7 @@ export function makeDescriptors(
       isLoggedIn: claudeIsLoggedIn,
       accountsRootName: '.claude-accounts',
       buildCommand: buildClaudeCommand(platform),
+      prepare: () => warmCli('claude'),
       readEmail: readAccountEmail,
       detect: (o) => detectConfigDirs({ ...o, isLoggedIn: claudeIsLoggedIn }),
       syncSettings: syncClaudeSettings,
@@ -133,6 +141,10 @@ export function makeDescriptors(
       isLoggedIn: fileMarkerProbe('auth.json'),
       accountsRootName: '.codex-accounts',
       buildCommand: buildCodexCommand(platform, undefined, codexNoDaemon),
+      prepare: async () => {
+        await warmCli('codex')
+        await codexNoDaemon.warm?.()
+      },
       // readCodexEmail takes only configDir — this just wraps it to fit the descriptor shape (the original function is unchanged)
       readEmail: (configDir) => readCodexEmail(configDir),
       detect: detectCodexConfigDirs,

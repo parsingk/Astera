@@ -9,6 +9,7 @@ const EXE = 'C:\\Users\\me\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.
 
 function harness(o: { platform?: NodeJS.Platform; help?: string | null; found?: string | null } = {}) {
   const runs: SpawnCommand[] = []
+  const asyncRuns: SpawnCommand[] = []
   let help = o.help === undefined ? HELP_WITH : o.help
   let id = 'v1'
   let t = 0
@@ -19,12 +20,19 @@ function harness(o: { platform?: NodeJS.Platform; help?: string | null; found?: 
       runs.push(cmd)
       return help
     },
+    runAsync: async (cmd) => {
+      asyncRuns.push(cmd)
+      return help
+    },
+    resolveAsync: async () => (o.found === undefined ? EXE : o.found),
     identity: (file) => `${file}|${id}`,
+    identityAsync: async (file) => `${file}|${id}`,
     now: () => t
   })
   return {
     probe,
     runs,
+    asyncRuns,
     setHelp: (h: string | null) => (help = h),
     update: (v: string) => (id = v),
     advance: (ms: number) => (t += ms)
@@ -63,6 +71,26 @@ describe('makeCodexNoDaemonProbe', () => {
   })
   it('says no when the help could not be read', () => {
     expect(harness({ help: null }).probe()).toBe(false)
+  })
+
+  // Second pass M2-1: the first codex session after a start, an update or ten minutes ran `codex --help` synchronously on
+  // the app's one thread, up to five seconds. A warm in the spawn's prepare asks it asynchronously first.
+  it('a warm asks asynchronously, and the spawn after it runs nothing', async () => {
+    const h = harness()
+    await h.probe.warm()
+    expect(h.asyncRuns).toHaveLength(1)
+    expect(h.probe()).toBe(true)
+    expect(h.runs).toEqual([])
+  })
+
+  it('a warm does not ask again while the answer is fresh, and asks again for a changed binary', async () => {
+    const h = harness()
+    await h.probe.warm()
+    await h.probe.warm()
+    expect(h.asyncRuns).toHaveLength(1)
+    h.update('v2')
+    await h.probe.warm()
+    expect(h.asyncRuns).toHaveLength(2)
   })
 
   it('asks once per binary', () => {

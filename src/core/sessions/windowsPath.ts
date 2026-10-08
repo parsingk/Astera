@@ -16,7 +16,7 @@
 // process put it. Windows PowerShell by its absolute path (a bare name is looked up in the working
 // directory first), UTF-8 out so a folder with non-ASCII letters survives.
 import { execFile } from 'node:child_process'
-import { findOnWindowsPath } from './windowsExecutable'
+import { findOnWindowsPathAsync } from './windowsExecutable'
 
 const START = '__ASTERA_PATH__'
 const END = '__END__'
@@ -115,11 +115,21 @@ let lastRefresh = -Infinity
  */
 export async function ensureOnWindowsPath(
   names: readonly string[],
-  o: { env?: NodeJS.ProcessEnv; run?: RunProbe; platform?: NodeJS.Platform; now?: () => number } = {}
+  o: {
+    env?: NodeJS.ProcessEnv
+    run?: RunProbe
+    platform?: NodeJS.Platform
+    now?: () => number
+    exists?: (p: string) => Promise<boolean>
+    timeoutMs?: number
+  } = {}
 ): Promise<void> {
   const env = o.env ?? process.env
   if ((o.platform ?? process.platform) !== 'win32') return
-  if (names.every((n) => findOnWindowsPath(n, env) !== null)) return
+  // Off the thread and bounded (second pass M2-2): an offline drive on PATH held the app here before every session start.
+  const lookup = { ...(o.exists ? { exists: o.exists } : {}), ...(o.timeoutMs ? { timeoutMs: o.timeoutMs } : {}) }
+  const found = await Promise.all(names.map((n) => findOnWindowsPathAsync(n, env, lookup)))
+  if (found.every((f) => f !== null)) return
   const now = (o.now ?? Date.now)()
   if (now - lastRefresh < REFRESH_MS) return
   lastRefresh = now

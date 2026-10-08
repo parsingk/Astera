@@ -209,7 +209,7 @@ import { createFileIndex } from './fileIndex'
 import { filterFilePaths } from '../core/files/fileMatch'
 import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFrom } from '../core/files/tree'
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
-import { resolveWindowsExecutable, windowsSpawn } from '../core/sessions/windowsExecutable'
+import { warmWindowsExecutable, windowsSpawn } from '../core/sessions/windowsExecutable'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
 import { claudeCliRunner, claudeResumeTarget } from '../core/sessions/claudeBackground'
 import { cliEnvFor } from '../core/sessions/cliEnv'
@@ -7653,14 +7653,15 @@ export function registerIpc(
   ipcMain.handle('system.checkCli', async (_e, cwd?: string) => {
     // A CLI installed since this app started is looked for on the Path Windows keeps too (windowsPath.ts)
     await ensureOnWindowsPath(['claude', 'codex'])
-    const check =(cli: string): Promise<{ ok: boolean; version?: string; error?: string }> =>
-      new Promise((resolve) => {
+    const check = async (cli: string): Promise<{ ok: boolean; version?: string; error?: string }> => {
+      // Off the thread (second pass M2-2): an offline drive on PATH held the app at every folder pick.
+      const found = process.platform === 'win32' ? await warmWindowsExecutable(cli) : null
+      return new Promise((resolve) => {
         const spawn =
           process.platform === 'win32'
-            ? (() => {
-                const found = resolveWindowsExecutable(cli)
-                return found === null ? null : { ...windowsSpawn(cli, ['--version'], () => found), shell: false }
-              })()
+            ? found === null
+              ? null
+              : { ...windowsSpawn(cli, ['--version'], () => found), shell: false }
             : { file: cli, args: ['--version'], shell: true }
         if (spawn === null) return resolve({ ok: false })
         execFile(
@@ -7677,6 +7678,7 @@ export function registerIpc(
           }
         )
       })
+    }
     const [claude, codex] = await Promise.all([check('claude'), check('codex')])
     return { claude, codex }
   })

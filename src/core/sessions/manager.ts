@@ -171,6 +171,10 @@ export class SessionManager {
       for (const [k, v] of this.preparedGitBash) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedGitBash.delete(k)
       this.preparedGitBash.set(pathValueOf(env), { bash, timedOut, at: now })
     }
+    // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
+    await descriptorOf(this.descriptors, opts.account)
+      .prepare?.()
+      .catch(() => {})
   }
 
   private cwdConfirmed(cwd: string): boolean {

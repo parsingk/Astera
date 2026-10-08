@@ -1198,6 +1198,25 @@ describe('SessionManager.prepare — the spawn path never waits on a sync probe'
     await Promise.all(hung)
   })
 
+  // Second pass M2-1, M2-2: the provider's own lookups (its CLI on PATH, codex's --no-daemon) run in prepare, off the
+  // thread, so the spawn after it finds their answers.
+  it("prepare runs the provider's own prepare", async () => {
+    let prepared = 0
+    const d = makeDescriptors('win32')
+    const descriptors = { ...d, claude: { ...d.claude, prepare: async () => void prepared++ }, codex: { ...d.codex, prepare: async () => void prepared++ } }
+    const full: SpawnChecks = {
+      cwd: async () => 'present',
+      gitBash: createGitBashResolver(async () => 'absent'),
+      platform: 'linux',
+      now: Date.now,
+      syncExists: () => true,
+      log: () => {}
+    }
+    const manager = new SessionManager(() => new FakePty(), descriptors, 100, 20, 'C:\\Users\\tester', undefined, [], { PATH: 'C:\\a' }, full)
+    await manager.prepare({ account, cwd: 'C:\\work\\proj' })
+    expect(prepared).toBe(1)
+  })
+
   it('a folder that is not there is still CWD_MISSING, in the wording the caller asks for', async () => {
     const { manager } = withChecks({ cwd: async () => 'absent' })
     await expect(manager.prepare({ account, cwd: 'Z:\\gone' })).rejects.toThrow('CWD_MISSING: Z:\\gone')

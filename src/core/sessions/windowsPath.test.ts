@@ -83,6 +83,17 @@ describe('ensureOnWindowsPath: read the saved Path again when a CLI is missing, 
     expect(probe.calls).toBe(2)
   })
 
+  // Second pass M2-2: the "is it on PATH" check looked at every PATH folder synchronously before each session start.
+  it('does not wait on a PATH folder that does not answer', async () => {
+    const probe = savedPath('C:\\a')
+    const env = { PATH: 'Z:\\dead;C:\\a', PATHEXT: '.EXE' } as NodeJS.ProcessEnv
+    const exists = (p: string): Promise<boolean> => (p.startsWith('Z:') ? new Promise(() => {}) : Promise.resolve(p.toLowerCase() === 'c:\\a\\claude.exe'))
+    const t0 = Date.now()
+    await ensureOnWindowsPath(['claude'], { env, run: probe.run, platform: 'win32', exists, timeoutMs: 50 })
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(probe.calls).toBe(0)
+  })
+
   it('does nothing off win32', async () => {
     const probe = savedPath('C:\\x')
     await ensureOnWindowsPath(['claude'], { env: {}, run: probe.run, platform: 'darwin' })
