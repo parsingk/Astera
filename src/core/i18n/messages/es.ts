@@ -74,6 +74,7 @@ export const es: Catalog = {
   'jobs.runtime.lastSeen': 'Visto por última vez {at}',
   'jobs.runtime.project': 'Proyecto en {name}',
   'jobs.runtime.unregistered': 'Carpetas sin registrar',
+  'jobs.runtime.empty': 'Este Runtime no tiene trabajos en este proyecto.',
   'jobs.runtime.noProjects': 'Este Runtime no tiene proyectos.',
   'jobs.runtime.readOnly': 'Solo lectura: los Jobs de otro equipo se cambian allí, o desde la línea de comandos con --runtime.',
   'jobs.runtime.slack': 'Las notificaciones de este Job siguen la configuración de Slack del propio equipo Runtime.',

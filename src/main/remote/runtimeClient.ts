@@ -41,8 +41,9 @@ export interface RemoteRuntimeClient {
   /** `projectKey`: a project id of the Runtime, or 'unregistered' (jobs-view, Phase 6). */
   list(projectKey: string): Promise<OrchSnapshot & { runtime: RuntimeView }>
   runDetail(runId: string, opts?: { journalPages?: unknown }): Promise<RunDetail>
-  /** The Runtime's projects, then the entry for Jobs in folders that are no project (D1.5). [] when it cannot say. */
-  projects(): Promise<Array<{ id: string; name: string | null; path: string | null }>>
+  /** The Runtime's projects, then the entry for Jobs in folders that are no project (D1.5). null when it cannot be
+   *  asked (review I3): an unreachable Runtime is never a Runtime with no projects. */
+  projects(): Promise<Array<{ id: string; name: string | null; path: string | null }> | null>
   /** Whether the Runtime answers now, and who it says it is. */
   ping(): Promise<{ ok: true; hello: HelloFrame | null } | { ok: false; code: string; message: string }>
   completion(runId: string, taskId: string): Promise<CompletionDetail | null>
@@ -53,6 +54,8 @@ export interface RemoteRuntimeClient {
 const EMPTY_DETAIL: RunDetail = { events: [], layers: [], deps: {}, cyclic: [] }
 /** One journal page of a remote timeline, as the local one reads a page of journal rows. */
 const TIMELINE_PAGE = 200
+/** The most events the Runtime gives in one answer (host/remoteReads.ts TIMELINE_PAGE_MAX). */
+const TIMELINE_MAX = 1000
 
 /** A link failure as a command's reply: the Runtime may or may not have run it, so it is a 409 then, and a 503 when
  *  the Runtime could not be asked at all. */
@@ -76,12 +79,16 @@ export function createRemoteRuntimeClient(a: {
   link: RemoteLink
   now?(): number
   mintRequest?(): string
+  /** This app's language, for the Runtime's journal rows (review I6). English when left out. */
+  lang?(): string
 }): RemoteRuntimeClient {
   const now = a.now ?? Date.now
   const mint = a.mintRequest ?? (() => `desk_${randomUUID()}`)
   let m: RemoteMirror = { state: null, version: 0, bootId: null, offline: false, stale: false, at: null }
   /** The Runtime's last jobs-view answer per project, shown stale while it cannot be reached. */
   const lastByKey = new Map<string, OrchSnapshot>()
+  /** When this app last had an answer from the Runtime (review I4): what "last seen" says, not the pairing time. */
+  let lastSeen: number | null = null
 
   const view = (): RuntimeView => ({ runtimeId: a.runtimeId, offline: m.offline, stale: m.stale, version: m.version, ...(m.error ? { error: m.error } : {}) })
 
@@ -123,9 +130,10 @@ export function createRemoteRuntimeClient(a: {
       // The Runtime folds (jobs-view, X1-05): its path rules, worktrees, sessions and disk, never this machine's. The
       // last answer per project is kept, so an unreachable Runtime shows what it last said, marked stale (D1.6).
       const r = await a.link.call('jobs-view', { project: projectKey })
+      if (!(r instanceof RemoteError)) lastSeen = now()
       const last = lastByKey.get(projectKey)
       const kept = last ?? { runs: [], projectFolderBusy: false }
-      const base = { runtimeId: a.runtimeId, version: m.version }
+      const base = { runtimeId: a.runtimeId, version: m.version, ...(lastSeen !== null ? { lastSeenAt: new Date(lastSeen).toISOString() } : {}) }
       if (r instanceof RemoteError) return { ...kept, runtime: { ...base, offline: true, stale: last !== undefined } }
       if (r.status !== 200) {
         const code = (r.body as { code?: unknown } | null)?.code
@@ -146,18 +154,24 @@ export function createRemoteRuntimeClient(a: {
       if (id === undefined) return state.runs.some((r) => r.id === runId) ? { events: [], ...layersOf(state, runId) } : EMPTY_DETAIL
       // The Runtime's timeline (runs-timeline), its journal rows and session links included, a page per journal page.
       const pages = typeof opts?.journalPages === 'number' && opts.journalPages >= 1 ? Math.floor(opts.journalPages) : 1
-      const t = await a.link.call('runs-timeline', { runId: id, limit: TIMELINE_PAGE * pages })
+      const limit = Math.min(TIMELINE_PAGE * pages, TIMELINE_MAX)
+      const t = await a.link.call('runs-timeline', { runId: id, limit, ...(a.lang ? { lang: a.lang() } : {}) })
       const ok = !(t instanceof RemoteError) && t.status === 200
       const page = ok ? (t.body as { events?: RunDetail['events']; nextCursor?: number | null }) : null
+      const more = page?.nextCursor !== undefined && page.nextCursor !== null
+      // The Runtime gives at most TIMELINE_MAX events in one answer: past it, the detail says so instead of offering a
+      // page that would bring nothing more.
+      const capped = more && limit >= TIMELINE_MAX
       return {
         events: page?.events ?? timelineFor(state, id, () => false),
         ...layersOf(state, id),
-        journal: { busy: false, older: page?.nextCursor !== undefined && page.nextCursor !== null, capped: false }
+        journal: { busy: false, older: more && !capped, capped }
       }
     },
     projects: async () => {
       const r = await a.link.call('projects-list', {})
-      if (r instanceof RemoteError || r.status !== 200 || !Array.isArray(r.body)) return []
+      if (r instanceof RemoteError || r.status !== 200 || !Array.isArray(r.body)) return null
+      lastSeen = now()
       const list = (r.body as Array<{ id: string; name?: string; path?: string }>).map((p) => ({ id: p.id, name: p.name ?? null, path: p.path ?? null }))
       return [...list, { id: 'unregistered', name: null, path: null }]
     },

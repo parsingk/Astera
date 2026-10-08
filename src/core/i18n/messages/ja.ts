@@ -74,6 +74,7 @@ export const ja: Catalog = {
   'jobs.runtime.lastSeen': '最終接続 {at}',
   'jobs.runtime.project': '{name} のプロジェクト',
   'jobs.runtime.unregistered': '未登録のフォルダー',
+  'jobs.runtime.empty': 'この Runtime のこのプロジェクトにジョブはありません。',
   'jobs.runtime.noProjects': 'この Runtime にはプロジェクトがありません。',
   'jobs.runtime.readOnly': '読み取り専用: 別のコンピューターの Job はそのコンピューターで、またはコマンドラインで --runtime を付けて変更します。',
   'jobs.runtime.slack': 'この Job の通知は Runtime マシン自身の Slack 設定に従います。',

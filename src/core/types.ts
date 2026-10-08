@@ -757,6 +757,8 @@ export interface RuntimeView {
   version: number
   /** The Runtime answered and refused the read (its Host down, say): never an empty, healthy Runtime. */
   error?: { status: number; code?: string }
+  /** When this app last had an answer from it (ISO), for the offline line; absent before the first. */
+  lastSeenAt?: string
 }
 
 export interface CoreEvents {
@@ -1827,8 +1829,9 @@ export interface RemoteApi {
   /** Forgets a Runtime on this computer; it does not revoke the pairing there. */
   remove(runtimeId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }>
   ping(runtimeId: string): Promise<{ ok: true; hello: { runtimeId: string; displayName: string; asteraVersion: string; platform: string; bootId: string } | null } | { ok: false; code: string; message: string }>
-  /** The Runtime's projects, then `{ id: 'unregistered' }` for Jobs in folders that are no project. */
-  projects(runtimeId: string): Promise<Array<{ id: string; name: string | null; path: string | null }>>
+  /** The Runtime's projects, then `{ id: 'unregistered' }` for Jobs in folders that are no project. null when the
+   *  Runtime cannot be asked now (never an empty list for an unreachable one). */
+  projects(runtimeId: string): Promise<Array<{ id: string; name: string | null; path: string | null }> | null>
   /** This computer as a Runtime: whether Remote is on, the Gateway, the paired controllers. null when the Host cannot say. */
   thisMachine(): Promise<{ gateway: { state: string; [k: string]: unknown }; clients: Array<{ clientId: string; name: string; permission: string; lastSeenAt: string | null }> } | null>
 }

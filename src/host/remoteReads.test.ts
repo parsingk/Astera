@@ -8,6 +8,7 @@ import { createHostOrch } from './orch'
 import { createJob, createTask, emptyState, startJobRun, type OrchState } from '../core/orchestration/state'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import type { JobEvent } from '../core/types'
+import { foldsPathCase } from '../core/files/paths'
 
 const NOW = '2026-10-08T00:00:00.000Z'
 let dir: string
@@ -73,7 +74,8 @@ describe('jobs-view (remote runtime design §2.7, X1-05)', () => {
       stateWith([{ id: 'upper', path: '/srv/Repo' }, { id: 'lower', path: '/srv/repo' }], [{ objective: 'upper job', cwd: '/srv/Repo' }, { objective: 'lower job', cwd: '/srv/repo' }])
     )
     const upper = objectives((await h.ask('jobs-view', { project: 'upper' })).body)
-    if (process.platform === 'win32') expect(upper).toEqual(['lower job', 'upper job'])
+    // The Runtime's own rule (review I2): Windows and macOS fold case, Linux does not.
+    if (foldsPathCase()) expect(upper).toEqual(['lower job', 'upper job'])
     else expect(upper).toEqual(['upper job'])
   })
 
@@ -101,5 +103,19 @@ describe('runs-timeline (remote runtime design Phase 6)', () => {
   it('an unknown run is 404', async () => {
     const h = await host(stateWith([], []))
     expect((await h.ask('runs-timeline', { runId: 'run_nope' })).status).toBe(404)
+  })
+})
+
+// Phase 6 review I6: the journal rows are rendered in the language the controller asks for.
+describe('runs-timeline language', () => {
+  it('passes the asked language to the journal rows', async () => {
+    const { runsTimelineOf } = await import('./remoteReads')
+    const s = stateWith([], [{ objective: 'j', cwd: '/srv/repo' }])
+    const langs: string[] = []
+    runsTimelineOf(s, { runId: s.runs[0].id, lang: 'ko' }, {
+      aliveSessionIds: new Set(), worktrees: [], nextFireOf: () => null, exists: () => true,
+      journalTimeline: (_id, _st, lang) => (langs.push(String(lang)), [])
+    })
+    expect(langs).toEqual(['ko'])
   })
 })

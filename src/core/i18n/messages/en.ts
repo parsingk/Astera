@@ -108,6 +108,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.runtime.lastSeen': 'Last seen {at}',
   'jobs.runtime.project': 'Project on {name}',
   'jobs.runtime.unregistered': 'Unregistered folders',
+  'jobs.runtime.empty': 'No Jobs on this Runtime for this project.',
   'jobs.runtime.noProjects': 'This Runtime has no projects.',
   'jobs.runtime.readOnly': 'Read only: Jobs on another computer are changed there, or from the command line with --runtime.',
   'jobs.runtime.slack': "Notifications for this Job follow the Runtime machine's own Slack settings.",

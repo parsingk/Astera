@@ -44,6 +44,7 @@ import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, isRemoteRuntime, offlineNote } from './lib/remoteJobs'
+import { startSerialPoll } from './lib/serialPoll'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
 import { CreativeHubSettings } from './components/CreativeHubSettings'
@@ -389,6 +390,8 @@ const HOST_STATUS_POLL_MS = 30_000
 const DETAIL_BUSY_RETRY_MS = 2_000
 /** How often a paired Runtime's Jobs are asked again while its view is open: it pushes nothing to this app yet. */
 const REMOTE_JOBS_POLL_MS = 5_000
+/** Where a Runtime that has not yet answered starts: its Jobs in folders that are no project (review I3). */
+const UNREGISTERED_PROJECT = { id: 'unregistered', name: null, path: null }
 
 /** "7m", "2h" — a coarse uptime is all this row needs; it is a sign of life, not a metric, which is
  *  also why the unit is not translated. */
@@ -3419,39 +3422,44 @@ export default function App(): React.JSX.Element {
     setOpenRun((o) => (o?.runtimeId ? null : o))
     if (!isRemoteRuntime(jobsRuntime)) return
     let alive = true
-    void window.api.remote.projects(jobsRuntime).then(
-      (list) => {
-        if (!alive) return
-        setRemoteProjects(list)
-        setRemoteProject(list[0]?.id ?? null)
-      },
-      () => {
-        if (alive) setRemoteProjects([])
+    let stop: () => void = () => {}
+    // An unreachable Runtime has no answer, not an empty list (review I3): until it answers, the view asks for its
+    // unregistered Jobs, which main answers with the last list it had, marked offline, and asks again later.
+    stop = startSerialPoll(async () => {
+      const list = await window.api.remote.projects(jobsRuntime).catch(() => null)
+      if (!alive) return
+      if (list === null) {
+        setRemoteProjects((p) => p ?? [UNREGISTERED_PROJECT])
+        setRemoteProject((p) => p ?? UNREGISTERED_PROJECT.id)
+        return
       }
-    )
+      stop()
+      setRemoteProjects(list)
+      setRemoteProject((p) => (p !== null && list.some((x) => x.id === p) ? p : (list[0]?.id ?? null)))
+    }, REMOTE_JOBS_POLL_MS)
     return () => {
       alive = false
+      stop()
     }
   }, [jobsRuntime])
+  // Another project's Jobs are not this one's: nothing of the last one is drawn while the new one is asked.
+  useEffect(() => {
+    setRemoteSnapshot(null)
+  }, [remoteProject])
   // **The remote list**: asked now and every few seconds, since a Runtime pushes nothing to this app yet, and drawn
   // only through the reply gate. An unreachable Runtime answers with its last list marked offline (main keeps it).
   useEffect(() => {
     if (!jobsOpen || !sidebarOpen || !isRemoteRuntime(jobsRuntime) || remoteProject === null) return
     let alive = true
-    const ask = (): void => {
+    // One request at a time (review C1): a Runtime slower than the interval still has its offline answer drawn.
+    const stop = startSerialPoll(async () => {
       const token = replyGate.begin('jobs', jobsRuntime)
-      void window.api.orch.list(remoteProject, jobsRuntime).then(
-        (snapshot) => {
-          if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot(snapshot)
-        },
-        () => {}
-      )
-    }
-    ask()
-    const timer = setInterval(ask, REMOTE_JOBS_POLL_MS)
+      const snapshot = await window.api.orch.list(remoteProject, jobsRuntime)
+      if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot(snapshot)
+    }, REMOTE_JOBS_POLL_MS)
     return () => {
       alive = false
-      clearInterval(timer)
+      stop()
     }
   }, [jobsOpen, sidebarOpen, jobsRuntime, remoteProject, replyGate])
 
@@ -4196,7 +4204,10 @@ export default function App(): React.JSX.Element {
                   offline={offlineNote(
                     remoteSnapshot?.runtime,
                     pairedRuntimes.find((r) => r.runtimeId === jobsRuntime)?.name ?? jobsRuntime,
-                    pairedRuntimes.find((r) => r.runtimeId === jobsRuntime)?.lastSeenAt ?? null,
+                    // The last answer this app had (review I4); the pairing time only before any answer.
+                    remoteSnapshot?.runtime?.lastSeenAt ??
+                      pairedRuntimes.find((r) => r.runtimeId === jobsRuntime)?.lastSeenAt ??
+                      null,
                     t as never,
                     (iso) => new Date(iso).toLocaleString()
                   )}

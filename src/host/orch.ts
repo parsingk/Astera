@@ -4,8 +4,8 @@
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { stat } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import { jobsViewOf, runsTimelineOf, type RuntimeFacts } from './remoteReads'
+import { createPresence } from './presence'
 import { handleCommand, handleExit, type OrchServerDeps } from '../core/orchestration/command'
 import { OrchestrationStore, isValidState, type OrchLoadResult } from '../core/orchestration/store'
 import { applyPendingReports, readPendingReports, type QueuedReport } from '../core/orchestration/pendingDrain'
@@ -1030,6 +1030,9 @@ export function createHostOrch(a: {
    * for Tasks that have moved on. `null` is the honest answer there: nothing was lost, because the
    * Host never went away.
    */
+  /** Which folders still exist, for jobs-view (review I5): asked off this thread and remembered. */
+  const folders = createPresence()
+
   const stateGet = async (
     args: Record<string, unknown>,
     from: OrchCaller | undefined
@@ -1582,12 +1585,16 @@ export function createHostOrch(a: {
         // Runtime's own path rules and facts, so a controller never folds with its own. Read only; anyone may ask.
         if (cmd === 'jobs-view' || cmd === 'runs-timeline') {
           await ready()
+          const worktrees = a.worktrees?.list?.() ?? []
+          // Asked asynchronously with a deadline, never stat'ed on this thread (review I5): a folder not answered yet
+          // counts as present, and the next ask has its answer.
+          if (cmd === 'jobs-view') await folders.check(worktrees.map((w) => w.path))
           const facts: RuntimeFacts = {
             aliveSessionIds: a.aliveSessionIds(),
-            worktrees: a.worktrees?.list?.() ?? [],
+            worktrees,
             nextFireOf: (id) => a.nextFireOf?.(id) ?? null,
-            exists: (p) => existsSync(p),
-            journalTimeline: (id, st) => a.journal?.timeline(id, st) ?? []
+            exists: (p) => folders.peek(p) !== 'missing',
+            journalTimeline: (id, st, lang) => a.journal?.timeline(id, st, lang) ?? []
           }
           return cmd === 'jobs-view' ? jobsViewOf(store.get(), args.project, facts) : runsTimelineOf(store.get(), args, facts)
         }

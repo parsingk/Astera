@@ -737,10 +737,13 @@ export function JobsView({
     return (
       <div className="jobs-empty">
         {stallLine}
-        <p>{hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
-        <p className="jobs-empty-hint">
-          {hasProject ? t('jobs.empty.hint') : t('jobs.noProject.hint')}
-        </p>
+        {/* A remote Runtime's view creates nothing here (Phase 6): its own line, never "create one here". */}
+        <p>{readOnly ? t('jobs.runtime.empty') : hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
+        {!readOnly && (
+          <p className="jobs-empty-hint">
+            {hasProject ? t('jobs.empty.hint') : t('jobs.noProject.hint')}
+          </p>
+        )}
         {/* 아무것도 없을 때가 만들고 싶을 때다 — 목록이 생긴 뒤의 자리(아래)와 같은 버튼.
             hasProject 로 가드하는 이유는 위 hasProject 의 주석대로다: 그때 이 버튼을 누르면
             만들 자리도 없는 newRunOpen 이 true 로 남아 전역 단축키를 죽인다. */}

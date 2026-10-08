@@ -4621,7 +4621,7 @@ export function registerIpc(
   // **Which Host each orchestration call goes to** (remote runtime design §2.7, D1.1): no runtimeId, or 'local', runs
   // the four bodies above exactly as before; a paired Runtime's id goes to its client in main/remote, so none of the
   // guards, fallbacks or writes above can run for it (D1.6, D1.7), and its replies never reach 'orch:state'.
-  const remoteRuntimes = createRemoteRuntimes({ profileDir: app.getPath('userData'), version: app.getVersion() })
+  const remoteRuntimes = createRemoteRuntimes({ profileDir: app.getPath('userData'), version: app.getVersion(), lang: () => core.lang })
   app.once('will-quit', () => remoteRuntimes.close())
   const orchRouter = createOrchRouter({
     local: {
@@ -4651,9 +4651,9 @@ export function registerIpc(
     return 'code' in c ? { ok: false, code: c.code, message: c.message } : c.ping()
   })
   ipcMain.handle('remote.projects', async (_e, runtimeId: unknown) => {
-    if (typeof runtimeId !== 'string') return []
+    if (typeof runtimeId !== 'string') return null
     const c = await remoteRuntimes.client(runtimeId)
-    return 'code' in c ? [] : c.projects()
+    return 'code' in c ? null : c.projects()
   })
   // This computer as a Runtime: the local Host's own answer (runtime-status), or null when it cannot say.
   ipcMain.handle('remote.thisMachine', async () => {

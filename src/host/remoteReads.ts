@@ -20,7 +20,8 @@ export interface RuntimeFacts {
   worktrees: WorktreeInfo[]
   nextFireOf(runId: string): number | null
   exists(p: string): boolean
-  journalTimeline(runId: string, state: OrchState): JobEvent[]
+  /** The journal's rows in `lang` (review I6: a controller asks in its own language). */
+  journalTimeline(runId: string, state: OrchState, lang?: string): JobEvent[]
 }
 
 export const UNREGISTERED = 'unregistered'
@@ -52,13 +53,13 @@ export function jobsViewOf(s: OrchState, project: unknown, f: RuntimeFacts): Rep
   return { status: 200, body: { snapshot: fold(s, p.path, f) } }
 }
 
-export function runsTimelineOf(s: OrchState, args: { runId?: unknown; cursor?: unknown; limit?: unknown }, f: RuntimeFacts): Reply {
+export function runsTimelineOf(s: OrchState, args: { runId?: unknown; cursor?: unknown; limit?: unknown; lang?: unknown }, f: RuntimeFacts): Reply {
   if (typeof args.runId !== 'string' || args.runId === '') return { status: 400, body: { error: 'runs-timeline needs --run-id' } }
   const id = resolveRunId(s, args.runId)
   if (id === undefined) return { status: 404, body: { error: `unknown run: ${args.runId}` } }
   let journal: JobEvent[] = []
   try {
-    journal = f.journalTimeline(id, s)
+    journal = f.journalTimeline(id, s, typeof args.lang === 'string' ? args.lang : undefined)
   } catch {
     journal = []
   }

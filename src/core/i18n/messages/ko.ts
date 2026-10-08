@@ -112,6 +112,7 @@ export const ko = {
   'jobs.runtime.lastSeen': '마지막 연결 {at}',
   'jobs.runtime.project': '{name} 의 프로젝트',
   'jobs.runtime.unregistered': '등록되지 않은 폴더',
+  'jobs.runtime.empty': '이 Runtime 의 이 프로젝트에는 작업이 없습니다.',
   'jobs.runtime.noProjects': '이 Runtime 에 프로젝트가 없습니다.',
   'jobs.runtime.readOnly': '읽기 전용: 다른 컴퓨터의 Job 은 그 컴퓨터에서, 또는 명령줄에서 --runtime 으로 바꿉니다.',
   'jobs.runtime.slack': '이 Job 의 알림은 Runtime 컴퓨터의 Slack 설정을 따릅니다.',

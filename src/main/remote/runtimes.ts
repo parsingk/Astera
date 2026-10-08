@@ -33,6 +33,8 @@ export function createRemoteRuntimes(a: {
   version: string
   /** Test seam: the controller link for a target. */
   open?(t: RemoteTarget): RemoteLink
+  /** This app's language, for the Runtime's journal rows (review I6). */
+  lang?(): string
 }): RemoteRuntimes {
   const clients = new Map<string, { client: RemoteRuntimeClient; pairing: string }>()
   /** Opened once (review I-4): opening takes the store's lock and sweeps it, which a read on every call must not do. */
@@ -63,7 +65,7 @@ export function createRemoteRuntimes(a: {
       a.open ??
       ((t) => openRemoteLink({ target: t, client: { name: 'astera app', version: a.version, surface: 'desktop' }, reconnectForMs: APP_RECONNECT_FOR_MS }))
     )(target)
-    const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link })
+    const client = createRemoteRuntimeClient({ runtimeId: found.runtimeId, link, ...(a.lang ? { lang: a.lang } : {}) })
     clients.set(found.runtimeId, { client, pairing })
     return client
   }

@@ -20,6 +20,7 @@ import type { OrchState } from '../core/orchestration/state'
 import type { PromptWriteEvent } from '../core/orchestration/exec/coordinator'
 import type { GitSummaryDeps } from '../core/orchestration/exec/gitSummary'
 import type { ContinuityEvent } from '../core/continuity/events'
+import { isLang, type Lang } from '../core/i18n'
 import type { RecoveryActionRow } from '../core/continuity/journal'
 import type { ReconcilerJournal } from '../core/recovery/reconciler'
 
@@ -66,7 +67,8 @@ export interface HostJournal {
    *  "cannot say", and a write lands nothing. A failed write is logged and answers its empty value. */
   reconcilerJournal: ReconcilerJournal
   /** J7: the rows the timeline shows, read through a JournalReader; [] when off. Never throws. */
-  timeline(runId: string, state: OrchState): JobEvent[]
+  /** `lang`: the reader's language (a remote controller's, Phase 6); English when left out. */
+  timeline(runId: string, state: OrchState, lang?: string): JobEvent[]
   close(): void
 }
 
@@ -369,10 +371,11 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
         d.log(`continuity: re-reading the settings at an app's greeting failed: ${String(err)}`)
       }
     },
-    timeline: (runId, state) => {
+    timeline: (runId, state, lang) => {
+      const as = (isLang(lang) ? lang : 'en') as Lang
       if (!settings.enabled) return []
       try {
-        const lines = journalTimeline(rowsOf(runId), state, 'en')
+        const lines = journalTimeline(rowsOf(runId), state, as)
         followBusy = false
         return lines
       } catch (err) {
@@ -383,7 +386,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
             d.log(`continuity: reading run ${runId}'s journal rows failed: the journal is busy, the rows last read stand in (${String(err)})`)
           followBusy = true
           const hit = rowsCache.get(runId)
-          return hit ? journalTimeline(hit.rows, state, 'en') : []
+          return hit ? journalTimeline(hit.rows, state, as) : []
         }
         d.log(`continuity: reading run ${runId}'s journal rows failed: ${String(err)}`)
         return []

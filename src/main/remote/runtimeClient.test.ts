@@ -216,4 +216,38 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
     expect(await c.command('state-put', {})).toMatchObject({ status: 501, body: { code: 'RUNTIME_CAPABILITY_MISSING' } })
     expect(f.calls).toEqual([])
   })
+
+  // Phase 6 review I3: a Runtime that cannot list its projects says so, rather than answering an empty list.
+  it('projects answers null when the Runtime cannot be asked', async () => {
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: fakeLink(() => new RemoteError('RUNTIME_OFFLINE', 'down')).link })
+    expect(await c.projects()).toBeNull()
+  })
+  // Phase 6 review I4: last seen is the last answer this app had, not the pairing time.
+  it('the view carries when the Runtime last answered this app', async () => {
+    let up = true
+    let clock = 1_000_000
+    const f = fakeLink(() => (up ? { status: 200, body: { snapshot: { runs: [], projectFolderBusy: false } } } : new RemoteError('RUNTIME_OFFLINE', 'down')))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link, now: () => clock })
+    await c.list('p1')
+    clock += 60_000
+    up = false
+    const later = await c.list('p1')
+    expect(later.runtime.lastSeenAt).toBe(new Date(1_000_000).toISOString())
+  })
+  // Phase 6 review I6: the Runtime renders its journal rows in this app's language.
+  it("runDetail asks the Runtime's timeline in the language it is given", async () => {
+    const a = seeded()
+    const asked: Array<Record<string, unknown>> = []
+    const f = fakeLink((cmd, args) => (cmd === 'runs-timeline' ? (asked.push(args), { status: 200, body: { events: [], nextCursor: null } }) : { status: 200, body: { state: a.state, version: 2 } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link, lang: () => 'ko' })
+    await c.runDetail(a.runId)
+    expect(asked[0]).toMatchObject({ lang: 'ko' })
+  })
+  // Phase 6 review minor: past the Runtime's page cap, the detail says it is capped instead of offering more.
+  it('marks the timeline capped once the pages asked reach the Runtime cap', async () => {
+    const a = seeded()
+    const f = fakeLink((cmd) => (cmd === 'runs-timeline' ? { status: 200, body: { events: [], nextCursor: 1000 } } : { status: 200, body: { state: a.state, version: 2 } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect((await c.runDetail(a.runId, { journalPages: 5 })).journal).toEqual({ busy: false, older: false, capped: true })
+  })
 })
