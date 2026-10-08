@@ -3,13 +3,13 @@ import type { RemoteApi, RemoteRuntimeInfo } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 import { confirmModal } from '../lib/confirm'
-import { failureLine, pingLine, thisMachineLine } from './remoteRuntimesText'
+import { failureLine, pairedStateLine, pingLine, thisMachineLine } from './remoteRuntimesText'
 
 type ThisMachine = Awaited<ReturnType<RemoteApi['thisMachine']>>
 
 /** Settings › Remote Runtimes (remote runtime design Phase 6): this computer as a Runtime, the Runtimes it is paired
  *  with, and pairing a new one from the string `astera runtime pair` printed there. The token stays in main. */
-export function RemoteRuntimesSettings(): React.JSX.Element {
+export function RemoteRuntimesSettings({ onChanged }: { /** A Runtime was paired or removed: the Jobs view reads its list again. */ onChanged?: () => void } = {}): React.JSX.Element {
   const { t } = useI18n()
   const [mine, setMine] = useState<ThisMachine | undefined>(undefined)
   const [paired, setPaired] = useState<RemoteRuntimeInfo[] | null>(null)
@@ -39,6 +39,7 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
     const done = await window.api.remote.remove(r.runtimeId)
     if (!done.ok) toast.error(failureLine(done, t as never))
     reload()
+    onChanged?.()
   }
   const pair = async (): Promise<void> => {
     setBusy(true)
@@ -52,6 +53,7 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
       setPairing('')
       setName('')
       reload()
+      onChanged?.()
     } finally {
       setBusy(false)
     }
@@ -94,7 +96,11 @@ export function RemoteRuntimesSettings(): React.JSX.Element {
             <span>
               {r.name} · {r.address}:{r.port} · {r.permission === 'read-only' ? t('settings.remote.paired.readOnly') : t('settings.remote.paired.fullControl')} ·{' '}
               {r.lastSeenAt ? t('settings.remote.paired.lastSeen', { at: new Date(r.lastSeenAt).toLocaleString() }) : t('settings.remote.paired.neverSeen')}
-              {pings[r.runtimeId] && <span className="settings-hint"> · {pings[r.runtimeId]}</span>}
+              {pings[r.runtimeId] ? (
+                <span className="settings-hint"> · {pings[r.runtimeId]}</span>
+              ) : (
+                pairedStateLine(r, t as never) && <span className="settings-hint"> · {pairedStateLine(r, t as never)}</span>
+              )}
             </span>
             <span>
               <button className="settings-gen-refresh" onClick={() => void ping(r.runtimeId)}>

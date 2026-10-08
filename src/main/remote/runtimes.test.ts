@@ -71,6 +71,20 @@ describe('createRemoteRuntimes (remote runtime design §2.7, D1.1)', () => {
     expect(listed).toEqual([expect.objectContaining({ runtimeId: 'rt_a', name: 'Office', offline: null })])
     expect(JSON.stringify(listed)).not.toContain('tok-a')
   })
+  // Phase 6 review minor: what the list says about a Runtime is what this app last heard from it.
+  it('list says offline and last seen from the last call this app made', async () => {
+    const r = createRemoteRuntimes({
+      profileDir: dir,
+      version: '1.4.8',
+      open: () => ({ hello: () => null, call: async () => ({ status: 200, body: [] }), close: () => {} })
+    })
+    const c = await r.client('rt_a')
+    if ('code' in c) throw new Error(c.code)
+    await c.projects()
+    const [listed] = await r.list()
+    expect(listed.offline).toBe(false)
+    expect(listed.lastSeenAt).not.toBeNull()
+  })
   it('remove forgets a Runtime and closes its client; an unknown id is NOT_FOUND', async () => {
     const o = opener()
     const r = createRemoteRuntimes({ profileDir: dir, version: '1.4.8', open: o.open })

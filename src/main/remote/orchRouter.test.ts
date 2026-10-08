@@ -26,6 +26,7 @@ const fakeClient = (): RemoteRuntimeClient & { seen: string[] } => {
     completion: async (r, t) => (seen.push(`completion:${r}:${t}`), null),
     command: async (c) => (seen.push(`command:${c}`), { status: 200, body: { remote: true } }),
     projects: async () => [],
+    status: () => ({ offline: false, lastSeenAt: null }),
     ping: async () => ({ ok: true, hello: null }),
     close: () => {}
   }

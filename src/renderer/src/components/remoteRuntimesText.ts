@@ -22,6 +22,11 @@ export function pingLine(p: Ping, t: T): string {
   return tt('settings.remote.paired.online', { version: p.hello?.asteraVersion ?? '?', platform: p.hello?.platform ?? '?' })
 }
 
+/** A paired Runtime that did not answer the last time this app asked it, or null (review minor). */
+export function pairedStateLine(r: { offline: boolean | null }, t: T): string | null {
+  return r.offline === true ? (t as (k: string) => string)('settings.remote.paired.notAnswering') : null
+}
+
 /** A refusal as a person reads it: its code, then its sentence. */
 export function failureLine(r: { ok: false; code: string; message: string }, t: T): string {
   return (t as (k: string, p?: Record<string, string | number>) => string)('settings.remote.failed', { code: r.code, message: r.message })

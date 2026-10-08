@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createHostOrch } from './orch'
-import { createJob, createTask, emptyState, startJobRun, type OrchState } from '../core/orchestration/state'
+import { closeDispatch, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
 import type { OrchCaller } from '../core/host/orchProtocol'
 import type { JobEvent } from '../core/types'
 import { foldsPathCase } from '../core/files/paths'
@@ -117,5 +117,77 @@ describe('runs-timeline language', () => {
       journalTimeline: (_id, _st, lang) => (langs.push(String(lang)), [])
     })
     expect(langs).toEqual(['ko'])
+  })
+})
+
+// Phase 6 review minors, all fixed in place rather than deferred.
+describe('jobs-view and runs-timeline, review minors', () => {
+  it('a Job in a subfolder of a project is listed under that project, never under unregistered (jobInProject)', async () => {
+    const h = await host(stateWith([{ id: 'p1', path: '/srv/repo' }], [{ objective: 'root', cwd: '/srv/repo' }, { objective: 'sub', cwd: '/srv/repo/pkg' }, { objective: 'loose', cwd: '/srv/other' }]))
+    expect(objectives((await h.ask('jobs-view', { project: 'p1' })).body)).toEqual(['root', 'sub'])
+    expect(objectives((await h.ask('jobs-view', { project: 'unregistered' })).body)).toEqual(['loose'])
+  })
+
+  it("a schedule's next fire is shown when this Host does not drive it (the app on that machine does)", async () => {
+    const made = createJob(stateWith([{ id: 'p1', path: '/srv/repo' }], []), { objective: 'nightly', cwd: '/srv/repo', schedule: { kind: 'interval', minutes: 60 } }, NOW)
+    if (!made.ok) throw new Error(made.error)
+    const h = await host(made.state)
+    const runs = ((await h.ask('jobs-view', { project: 'p1' })).body as { snapshot: { runs: Array<{ objective: string; nextFireAt?: number }> } }).snapshot.runs
+    expect(runs.find((r) => r.objective === 'nightly')?.nextFireAt).toBe(Date.parse(NOW) + 60 * 60_000)
+  })
+
+  it("answers with this Host's state version, so the view's version is the Runtime's own", async () => {
+    const h = await host(stateWith([{ id: 'p1', path: '/srv/repo' }], []))
+    expect(typeof ((await h.ask('jobs-view', { project: 'p1' })).body as { version?: unknown }).version).toBe('number')
+  })
+
+  it('a worktree folder deleted from disk is not counted, one that is there is', async () => {
+    let s = stateWith([{ id: 'p1', path: '/srv/repo' }], [{ objective: 'j', cwd: '/srv/repo' }])
+    const gone = path.join(dir, 'wt-gone')
+    for (const cwd of [gone, dir]) {
+      const d = openDispatch(s, { taskId: s.tasks[0].id, provider: 'claude', accountId: 'a', sessionId: `ses_${s.dispatches.length}`, cwd, specPath: 's' }, NOW)
+      if (!d.ok) throw new Error(d.error)
+      s = d.state
+      const c = closeDispatch(s, { sessionId: d.value.sessionId, exitCode: 1 }, NOW)
+      if (!c.ok) throw new Error(c.error)
+      s = c.state
+    }
+    const h = await host(s)
+    const row = ((await h.ask('jobs-view', { project: 'p1' })).body as { snapshot: { runs: Array<{ worktrees?: string[] }> } }).snapshot.runs[0]
+    expect(row.worktrees).toEqual([dir])
+  })
+
+  it('a session the Host still holds keeps its link in the timeline, a gone one does not', async () => {
+    let s = stateWith([], [{ objective: 'j', cwd: '/srv/repo' }])
+    const d = openDispatch(s, { taskId: s.tasks[0].id, provider: 'claude', accountId: 'a', sessionId: 'ses_live', cwd: '/srv/repo', specPath: 's' }, NOW)
+    if (!d.ok) throw new Error(d.error)
+    s = d.state
+    const linked = async (alive: string[]): Promise<string[]> => {
+      const h = await host(s, { alive })
+      const body = (await h.ask('runs-timeline', { runId: s.runs[0].id })).body as { events: Array<{ sessionId?: string }> }
+      return body.events.flatMap((e) => (e.sessionId ? [e.sessionId] : []))
+    }
+    expect(await linked(['ses_live'])).toContain('ses_live')
+    expect(await linked([])).toEqual([])
+  })
+
+  it('the older page is exactly the events before the newest page', async () => {
+    const s = stateWith([], [{ objective: 'j', cwd: '/srv/repo' }])
+    const runId = s.runs[0].id
+    const journal = Array.from({ length: 5 }, (_, i): JobEvent => ({ at: `2026-10-08T01:00:0${i}.000Z`, kind: 'recovery', text: `row ${i}` }) as unknown as JobEvent)
+    const h = await host(s, { journal: () => journal })
+    const all = ((await h.ask('runs-timeline', { runId, limit: 1000 })).body as { events: unknown[] }).events
+    const newest = ((await h.ask('runs-timeline', { runId, limit: 3 })).body as { events: unknown[] }).events
+    const older = ((await h.ask('runs-timeline', { runId, limit: 1000, cursor: 3 })).body as { events: unknown[]; nextCursor: number | null })
+    expect([...older.events, ...newest]).toEqual(all)
+    expect(older.nextCursor).toBeNull()
+  })
+
+  it("says when the journal was busy, so the controller asks again (the local detail's rule)", async () => {
+    const { runsTimelineOf } = await import('./remoteReads')
+    const s = stateWith([], [{ objective: 'j', cwd: '/srv/repo' }])
+    const facts = { aliveSessionIds: new Set<string>(), worktrees: [], nextFireOf: () => null, exists: () => true, journalTimeline: () => [] }
+    expect((runsTimelineOf(s, { runId: s.runs[0].id }, { ...facts, journalBusy: () => true }).body as { journalBusy?: boolean }).journalBusy).toBe(true)
+    expect((runsTimelineOf(s, { runId: s.runs[0].id }, facts).body as { journalBusy?: boolean }).journalBusy).toBe(false)
   })
 })

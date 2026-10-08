@@ -516,7 +516,7 @@ export function createHostOrch(a: {
   readUnderstanding?: OrchServerDeps['readUnderstanding']
   /** The Host's Job Journal (hostJournal.ts). Absent: nothing is journaled here, `journal-append` and
    *  `journal-reload` answer 501, and `runs follow` shows no journal rows. */
-  journal?: Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> | null
+  journal?: (Pick<HostJournal, 'committed' | 'loaded' | 'append' | 'reload' | 'timeline'> & Partial<Pick<HostJournal, 'busy'>>) | null
   /** How It Works in the Host (hostUnderstanding.ts, E1 §3, §4): handed every Run a commit finishes, and
    *  the app's `understanding-unit` and the app's and MCP's `understanding-regenerate`. Absent: this Host
    *  records no Run, and both calls answer 501. */
@@ -1588,15 +1588,21 @@ export function createHostOrch(a: {
           const worktrees = a.worktrees?.list?.() ?? []
           // Asked asynchronously with a deadline, never stat'ed on this thread (review I5): a folder not answered yet
           // counts as present, and the next ask has its answer.
-          if (cmd === 'jobs-view') await folders.check(worktrees.map((w) => w.path))
+          // The registry's folders and every folder a Run worked in: a Job row counts only the worktrees still there.
+          if (cmd === 'jobs-view') await folders.check([...worktrees.map((w) => w.path), ...store.get().dispatches.map((d) => d.cwd)])
           const facts: RuntimeFacts = {
             aliveSessionIds: a.aliveSessionIds(),
             worktrees,
             nextFireOf: (id) => a.nextFireOf?.(id) ?? null,
             exists: (p) => folders.peek(p) !== 'missing',
-            journalTimeline: (id, st, lang) => a.journal?.timeline(id, st, lang) ?? []
+            journalTimeline: (id, st, lang) => a.journal?.timeline(id, st, lang) ?? [],
+            journalBusy: () => a.journal?.busy?.() ?? false,
+            nowMs: Date.parse(a.now())
           }
-          return cmd === 'jobs-view' ? jobsViewOf(store.get(), args.project, facts) : runsTimelineOf(store.get(), args, facts)
+          if (cmd === 'runs-timeline') return runsTimelineOf(store.get(), args, facts)
+          const view = jobsViewOf(store.get(), args.project, facts)
+          // The state version the view was folded from: the controller's view says the Runtime's own (review minor).
+          return view.status === 200 ? { status: 200, body: { ...(view.body as object), version } } : view
         }
         // **Answered here, beside the two above, and for the same reason (Host S3, §3.1).** None of
         // the four `worktree-*` names goes through `handleCommand` — the app is their only caller

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { failureLine, pingLine, thisMachineLine } from './remoteRuntimesText'
+import { failureLine, pairedStateLine, pingLine, thisMachineLine } from './remoteRuntimesText'
 
 /** A t that shows the key and its params, so each assertion names the sentence it expects. */
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -22,5 +22,14 @@ describe('Settings › Remote Runtimes text (remote runtime design Phase 6)', ()
     expect(failureLine({ ok: false, code: 'RUNTIME_IDENTITY_CHANGED', message: 'a different key' }, t)).toBe(
       'settings.remote.failed {"code":"RUNTIME_IDENTITY_CHANGED","message":"a different key"}'
     )
+  })
+})
+
+// Phase 6 review minor: the list says a paired Runtime did not answer the last time this app asked it.
+describe('a paired Runtime state line', () => {
+  it('says it did not answer only when the last call went unanswered', () => {
+    expect(pairedStateLine({ offline: true }, t)).toBe('settings.remote.paired.notAnswering')
+    expect(pairedStateLine({ offline: false }, t)).toBeNull()
+    expect(pairedStateLine({ offline: null }, t)).toBeNull()
   })
 })

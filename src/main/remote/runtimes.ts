@@ -81,9 +81,10 @@ export function createRemoteRuntimes(a: {
           address: p.address,
           port: p.port,
           permission: p.permission,
-          lastSeenAt: p.lastSeenAt,
-          // Unknown until this app asked it something; then what the last answer said.
-          offline: !c ? null : c.mirror().offline ? true : c.mirror().at === null ? null : false
+          // What this app last heard, by any call (Phase 6 review minor); the registry's time before any.
+          lastSeenAt: c?.status().lastSeenAt ?? p.lastSeenAt,
+          // Unknown until this app asked it something; then whether the last call was answered.
+          offline: c ? c.status().offline : null
         }
       })
     },

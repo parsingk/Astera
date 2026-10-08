@@ -44,6 +44,9 @@ export interface RemoteRuntimeClient {
   /** The Runtime's projects, then the entry for Jobs in folders that are no project (D1.5). null when it cannot be
    *  asked (review I3): an unreachable Runtime is never a Runtime with no projects. */
   projects(): Promise<Array<{ id: string; name: string | null; path: string | null }> | null>
+  /** What this app last heard from the Runtime, by any call: offline null before the first answer or failure, and when
+   *  one last answered (ISO). Settings and the runtime selector show it (Phase 6 review minor). */
+  status(): { offline: boolean | null; lastSeenAt: string | null }
   /** Whether the Runtime answers now, and who it says it is. */
   ping(): Promise<{ ok: true; hello: HelloFrame | null } | { ok: false; code: string; message: string }>
   completion(runId: string, taskId: string): Promise<CompletionDetail | null>
@@ -87,8 +90,23 @@ export function createRemoteRuntimeClient(a: {
   let m: RemoteMirror = { state: null, version: 0, bootId: null, offline: false, stale: false, at: null }
   /** The Runtime's last jobs-view answer per project, shown stale while it cannot be reached. */
   const lastByKey = new Map<string, OrchSnapshot>()
+  const lastVersionByKey = new Map<string, number>()
   /** When this app last had an answer from the Runtime (review I4): what "last seen" says, not the pairing time. */
   let lastSeen: number | null = null
+  /** Whether the last call of any kind went unanswered; null before the first. */
+  let lastOffline: boolean | null = null
+  /** Notes what a call heard: an answer of any status is the Runtime answering. */
+  const heard = <R>(r: R): R => {
+    const lost = r instanceof RemoteError
+    lastOffline = lost
+    if (!lost) lastSeen = now()
+    return r
+  }
+  /** Each project's read number and the newest one that answered: an older answer landing later is not kept over it. */
+  const askedByKey = new Map<string, number>()
+  const keptByKey = new Map<string, number>()
+  /** The last timeline the Runtime gave per Run, shown while it cannot give one (as the list keeps its last). */
+  const lastTimeline = new Map<string, RunDetail['events']>()
 
   const view = (): RuntimeView => ({ runtimeId: a.runtimeId, offline: m.offline, stale: m.stale, version: m.version, ...(m.error ? { error: m.error } : {}) })
 
@@ -98,7 +116,7 @@ export function createRemoteRuntimeClient(a: {
   let settled = 0
   const refresh = async (): Promise<RemoteMirror> => {
     const mine = ++asked
-    const r = await a.link.call('state-get', {})
+    const r = heard(await a.link.call('state-get', {}))
     if (mine < settled) return m
     settled = mine
     if (r instanceof RemoteError) {
@@ -129,11 +147,15 @@ export function createRemoteRuntimeClient(a: {
     list: async (projectKey) => {
       // The Runtime folds (jobs-view, X1-05): its path rules, worktrees, sessions and disk, never this machine's. The
       // last answer per project is kept, so an unreachable Runtime shows what it last said, marked stale (D1.6).
-      const r = await a.link.call('jobs-view', { project: projectKey })
-      if (!(r instanceof RemoteError)) lastSeen = now()
+      const mine = (askedByKey.get(projectKey) ?? 0) + 1
+      askedByKey.set(projectKey, mine)
+      const r = heard(await a.link.call('jobs-view', { project: projectKey }))
       const last = lastByKey.get(projectKey)
       const kept = last ?? { runs: [], projectFolderBusy: false }
-      const base = { runtimeId: a.runtimeId, version: m.version, ...(lastSeen !== null ? { lastSeenAt: new Date(lastSeen).toISOString() } : {}) }
+      const answered = !(r instanceof RemoteError) && r.status === 200 ? (r.body as { version?: unknown } | null)?.version : undefined
+      // The version the Runtime folded this answer from (review minor), else the one the last kept answer had.
+      const version = typeof answered === 'number' ? answered : (lastVersionByKey.get(projectKey) ?? m.version)
+      const base = { runtimeId: a.runtimeId, version, ...(lastSeen !== null ? { lastSeenAt: new Date(lastSeen).toISOString() } : {}) }
       if (r instanceof RemoteError) return { ...kept, runtime: { ...base, offline: true, stale: last !== undefined } }
       if (r.status !== 200) {
         const code = (r.body as { code?: unknown } | null)?.code
@@ -142,7 +164,12 @@ export function createRemoteRuntimeClient(a: {
         return { ...kept, runtime: { ...base, offline: r.status !== 404, stale: last !== undefined, error } }
       }
       const snap = ((r.body as { snapshot?: OrchSnapshot } | null)?.snapshot ?? { runs: [], projectFolderBusy: false }) as OrchSnapshot
-      lastByKey.set(projectKey, snap)
+      // Kept only if no newer read of this project answered first (review minor).
+      if (mine > (keptByKey.get(projectKey) ?? 0)) {
+        keptByKey.set(projectKey, mine)
+        lastByKey.set(projectKey, snap)
+        lastVersionByKey.set(projectKey, version)
+      }
       return { ...snap, runtime: { ...base, offline: false, stale: false } }
     },
     runDetail: async (runId, opts) => {
@@ -155,28 +182,31 @@ export function createRemoteRuntimeClient(a: {
       // The Runtime's timeline (runs-timeline), its journal rows and session links included, a page per journal page.
       const pages = typeof opts?.journalPages === 'number' && opts.journalPages >= 1 ? Math.floor(opts.journalPages) : 1
       const limit = Math.min(TIMELINE_PAGE * pages, TIMELINE_MAX)
-      const t = await a.link.call('runs-timeline', { runId: id, limit, ...(a.lang ? { lang: a.lang() } : {}) })
+      const t = heard(await a.link.call('runs-timeline', { runId: id, limit, ...(a.lang ? { lang: a.lang() } : {}) }))
       const ok = !(t instanceof RemoteError) && t.status === 200
-      const page = ok ? (t.body as { events?: RunDetail['events']; nextCursor?: number | null }) : null
+      const page = ok ? (t.body as { events?: RunDetail['events']; nextCursor?: number | null; journalBusy?: boolean }) : null
+      if (page?.events) lastTimeline.set(id, page.events)
       const more = page?.nextCursor !== undefined && page.nextCursor !== null
       // The Runtime gives at most TIMELINE_MAX events in one answer: past it, the detail says so instead of offering a
       // page that would bring nothing more.
       const capped = more && limit >= TIMELINE_MAX
       return {
-        events: page?.events ?? timelineFor(state, id, () => false),
+        // Unreachable: the rows it last gave, journal rows included, rather than the mirror's bare projection.
+        events: page?.events ?? lastTimeline.get(id) ?? timelineFor(state, id, () => false),
         ...layersOf(state, id),
-        journal: { busy: false, older: more && !capped, capped }
+        // A busy journal gave the rows it last read: the app asks again, as for a local busy journal.
+        journal: { busy: page?.journalBusy === true, older: more && !capped, capped }
       }
     },
     projects: async () => {
-      const r = await a.link.call('projects-list', {})
+      const r = heard(await a.link.call('projects-list', {}))
       if (r instanceof RemoteError || r.status !== 200 || !Array.isArray(r.body)) return null
-      lastSeen = now()
       const list = (r.body as Array<{ id: string; name?: string; path?: string }>).map((p) => ({ id: p.id, name: p.name ?? null, path: p.path ?? null }))
       return [...list, { id: 'unregistered', name: null, path: null }]
     },
+    status: () => ({ offline: lastOffline, lastSeenAt: lastSeen === null ? null : new Date(lastSeen).toISOString() }),
     ping: async () => {
-      const r = await a.link.call('projects-list', {})
+      const r = heard(await a.link.call('projects-list', {}))
       if (r instanceof RemoteError) return { ok: false, code: r.code, message: r.message }
       return { ok: true, hello: a.link.hello() }
     },
@@ -193,7 +223,7 @@ export function createRemoteRuntimeClient(a: {
         return { status: 501, body: { error: `${cmd} is not available on a remote Runtime`, code: 'RUNTIME_CAPABILITY_MISSING' } }
       const change = remoteMutation(cmd)
       const request = change ? mint() : undefined
-      const r = await a.link.call(cmd, args, request !== undefined ? { request } : {})
+      const r = heard(await a.link.call(cmd, args, request !== undefined ? { request } : {}))
       if (r instanceof RemoteError) return replyOf(r, change)
       // The change ran: a refresh that fails after it must not turn its answer into "could not be asked" (review M-2).
       if (r.status >= 200 && r.status < 300 && change) await refresh().catch(() => undefined)

@@ -468,10 +468,13 @@ describe('createHostJournal', () => {
     try {
       for (let i = 0; i < 5; i++) expect(j.timeline('run_1', after)).toEqual(first)
       expect(busyLines()).toBe(1)
+      // A remote detail asks again on this (Phase 6 review minor: a busy journal on the Host).
+      expect(j.busy()).toBe(true)
     } finally {
       spy.mockRestore()
     }
     expect(j.timeline('run_1', after)).toEqual(first)
+    expect(j.busy()).toBe(false)
     // A new spell after a read that worked is a new line.
     spy = vi.spyOn(JournalReader.prototype, 'changeMark').mockImplementation(busy)
     try {

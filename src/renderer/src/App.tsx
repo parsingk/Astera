@@ -43,7 +43,7 @@ import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
-import { LOCAL, isRemoteRuntime, offlineNote } from './lib/remoteJobs'
+import { LOCAL, isRemoteRuntime, offlineNote, remoteDetailKey, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
@@ -2454,7 +2454,11 @@ export default function App(): React.JSX.Element {
   // the remote project never becomes `currentProject`, and the remote snapshot never mixes with `orchSnapshot`, so
   // with "This computer" selected every local path, call and push is what it was.
   const [jobsRuntime, setJobsRuntime] = useState<string>(LOCAL)
-  const [pairedRuntimes, setPairedRuntimes] = useState<Array<{ runtimeId: string; name: string; lastSeenAt: string | null }>>([])
+  const [pairedRuntimes, setPairedRuntimes] = useState<Array<{ runtimeId: string; name: string; lastSeenAt: string | null; offline: boolean | null }>>([])
+  /** Bumped when Settings pairs or removes a Runtime: the paired list is read again (review minor). */
+  const [pairedChanged, setPairedChanged] = useState(0)
+  /** Which Runtime `remoteProject` is a project of: the poll never asks one Runtime for another's (review minor). */
+  const [remoteProjectFor, setRemoteProjectFor] = useState<string | null>(null)
   const [remoteProjects, setRemoteProjects] = useState<Array<{ id: string; name: string | null; path: string | null }> | null>(null)
   const [remoteProject, setRemoteProject] = useState<string | null>(null)
   const [remoteSnapshot, setRemoteSnapshot] = useState<OrchSnapshot | null>(null)
@@ -2662,6 +2666,10 @@ export default function App(): React.JSX.Element {
    *  처음부터 비어 있어 정확히 그 경로에 닿았다 — 그 판단은 틀렸다. */
   const [newRunOpen, setNewRunOpen] = useState(false)
 
+  // A remote Run's detail: read from the latest remote snapshot, asked again only when its key changes.
+  const remoteSnapshotRef = useRef(remoteSnapshot)
+  remoteSnapshotRef.current = remoteSnapshot
+  const remoteRowKey = openRun?.runtimeId ? remoteDetailKey(remoteSnapshot, openRun.runId) : ''
   // 기록 모달이 열려 있는 동안 이벤트를 다시 읽는다. **이 자리에 있어야 한다** — 의존성 배열은
   // 렌더 중에 평가되므로, currentProject 선언보다 위에 두면 TDZ ReferenceError 로 죽는다(타입체크는
   // 잡지 못한다).
@@ -2675,7 +2683,7 @@ export default function App(): React.JSX.Element {
     // 줄이 남지 않는다. 모달을 닫는 것은 아래의 리셋 효과다(이 가드는 로그만 지킨다).
     if (!openRun) return
     // A paired Runtime's Run is read from that Runtime and its own snapshot; a local one keeps its project guard.
-    const detailSnapshot = openRun.runtimeId ? remoteSnapshot : orchSnapshot
+    const detailSnapshot = openRun.runtimeId ? remoteSnapshotRef.current : orchSnapshot
     if (!openRun.runtimeId && openRun.projectPath !== currentProject) return
     // 스냅샷에 없는 Run 도 부르지 않는다 — worktree 제거나 astera reset 으로 Run 이 사라지면
     // 프로젝트는 그대로인데 main 은 접근 위반과 똑같이 생긴 `run X does not belong to Y` 를 로그에
@@ -2699,7 +2707,8 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [openRun, currentProject, orchSnapshot, remoteSnapshot, journalPagesFor, detailRetry])
+    // A remote Run's detail is asked again on its own row and the Runtime's reach (remoteDetailKey), not on each poll.
+  }, [openRun, currentProject, orchSnapshot, remoteRowKey, journalPagesFor, detailRetry])
   // 저널이 바빴다(stage 3 T1) — main 은 기다리지 않고 마지막으로 읽은 줄을 줬다. 잠시 뒤에 다시 묻는다.
   // 답이 여전히 바쁘면 다음 답이 또 한 번을 잡는다. 창을 닫거나 답이 바뀌면 타이머를 걷는다.
   useEffect(() => {
@@ -3408,7 +3417,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (!jobsOpen || !sidebarOpen) return
     void window.api.remote.list().then(setPairedRuntimes, () => setPairedRuntimes([]))
-  }, [jobsOpen, sidebarOpen])
+  }, [jobsOpen, sidebarOpen, pairedChanged])
   // A Runtime removed in Settings falls back to this computer.
   useEffect(() => {
     if (isRemoteRuntime(jobsRuntime) && !pairedRuntimes.some((r) => r.runtimeId === jobsRuntime)) setJobsRuntime(LOCAL)
@@ -3418,6 +3427,7 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     setRemoteProjects(null)
     setRemoteProject(null)
+    setRemoteProjectFor(null)
     setRemoteSnapshot(null)
     setOpenRun((o) => (o?.runtimeId ? null : o))
     if (!isRemoteRuntime(jobsRuntime)) return
@@ -3431,11 +3441,13 @@ export default function App(): React.JSX.Element {
       if (list === null) {
         setRemoteProjects((p) => p ?? [UNREGISTERED_PROJECT])
         setRemoteProject((p) => p ?? UNREGISTERED_PROJECT.id)
+        setRemoteProjectFor(jobsRuntime)
         return
       }
       stop()
       setRemoteProjects(list)
       setRemoteProject((p) => (p !== null && list.some((x) => x.id === p) ? p : (list[0]?.id ?? null)))
+      setRemoteProjectFor(jobsRuntime)
     }, REMOTE_JOBS_POLL_MS)
     return () => {
       alive = false
@@ -3449,19 +3461,28 @@ export default function App(): React.JSX.Element {
   // **The remote list**: asked now and every few seconds, since a Runtime pushes nothing to this app yet, and drawn
   // only through the reply gate. An unreachable Runtime answers with its last list marked offline (main keeps it).
   useEffect(() => {
-    if (!jobsOpen || !sidebarOpen || !isRemoteRuntime(jobsRuntime) || remoteProject === null) return
+    if (!remotePollReady({ open: jobsOpen && sidebarOpen, runtimeId: jobsRuntime, project: remoteProject, projectFor: remoteProjectFor })) return
+    const project = remoteProject as string
     let alive = true
     // One request at a time (review C1): a Runtime slower than the interval still has its offline answer drawn.
-    const stop = startSerialPoll(async () => {
-      const token = replyGate.begin('jobs', jobsRuntime)
-      const snapshot = await window.api.orch.list(remoteProject, jobsRuntime)
-      if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot(snapshot)
-    }, REMOTE_JOBS_POLL_MS)
+    // Nothing is asked while the window is hidden; the first turn after it shows asks again.
+    const stop = startSerialPoll(
+      async () => {
+        const token = replyGate.begin('jobs', jobsRuntime)
+        const snapshot = await window.api.orch.list(project, jobsRuntime)
+        if (alive && replyGate.accept('jobs', jobsRuntime, token, jobsRuntimeRef.current)) setRemoteSnapshot(snapshot)
+        // The paired list too: a Runtime's reach and last answer for the choice, and one removed elsewhere.
+        const paired = await window.api.remote.list().catch(() => null)
+        if (alive && paired) setPairedRuntimes(paired)
+      },
+      REMOTE_JOBS_POLL_MS,
+      { paused: () => document.hidden }
+    )
     return () => {
       alive = false
       stop()
     }
-  }, [jobsOpen, sidebarOpen, jobsRuntime, remoteProject, replyGate])
+  }, [jobsOpen, sidebarOpen, jobsRuntime, remoteProject, remoteProjectFor, replyGate])
 
   // 배경 재생성이 끝나면 main 이 밀어 준다 — 그 결과가 화면에 닿는 유일한 길이다. 재생성은
   // 작업 단위가 닫힐 때 저절로 돌고 수십 초가 걸리므로, 이것이 없으면 새 설명은 사용자가 프로젝트를
@@ -5314,7 +5335,7 @@ export default function App(): React.JSX.Element {
                 )}
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
-                {settingsTab === 'remote' && <RemoteRuntimesSettings />}
+                {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>

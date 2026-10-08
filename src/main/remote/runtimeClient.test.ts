@@ -250,4 +250,61 @@ describe('createRemoteRuntimeClient (remote runtime design §2.7, §3.6)', () =>
     const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
     expect((await c.runDetail(a.runId, { journalPages: 5 })).journal).toEqual({ busy: false, older: false, capped: true })
   })
+  // Phase 6 review minor: of two overlapping reads of one project, the newer answer is the one kept.
+  it("keeps a project's newer answer when an older one lands later", async () => {
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    let n = 0
+    let up = true
+    const f = fakeLink(async () => {
+      if (!up) return new RemoteError('RUNTIME_OFFLINE', 'down')
+      const mine = ++n
+      if (mine === 1) await held
+      return { status: 200, body: { snapshot: { runs: [{ id: `answer ${mine}` }], projectFolderBusy: false }, version: mine } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    const slow = c.list('p1')
+    await c.list('p1')
+    release()
+    await slow
+    up = false
+    const kept = await c.list('p1')
+    expect(kept.runs).toEqual([{ id: 'answer 2' }])
+    expect(kept.runtime.version).toBe(2)
+  })
+  it("the view's version is the one the Runtime folded it from", async () => {
+    const f = fakeLink(() => ({ status: 200, body: { snapshot: { runs: [], projectFolderBusy: false }, version: 41 } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect((await c.list('p1')).runtime.version).toBe(41)
+  })
+  it("a busy journal on the Runtime is the detail's busy, so the app asks again", async () => {
+    const a = seeded()
+    const f = fakeLink((cmd) => (cmd === 'runs-timeline' ? { status: 200, body: { events: [], nextCursor: null, journalBusy: true } } : { status: 200, body: { state: a.state, version: 2 } }))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    expect((await c.runDetail(a.runId)).journal?.busy).toBe(true)
+  })
+  it('a timeline the Runtime cannot give now keeps the rows it last gave', async () => {
+    const a = seeded()
+    const row = { at: NOW, kind: 'recovery', text: 'journal row' }
+    let up = true
+    const f = fakeLink((cmd) => {
+      if (cmd === 'runs-timeline') return up ? { status: 200, body: { events: [row], nextCursor: null } } : new RemoteError('RUNTIME_OFFLINE', 'down')
+      return { status: 200, body: { state: a.state, version: 2 } }
+    })
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link })
+    await c.runDetail(a.runId)
+    up = false
+    expect((await c.runDetail(a.runId)).events).toEqual([row])
+  })
+  it('status says whether the last call of any kind was answered, and when one last was', async () => {
+    let up = true
+    const f = fakeLink(() => (up ? { status: 200, body: [] } : new RemoteError('RUNTIME_OFFLINE', 'down')))
+    const c = createRemoteRuntimeClient({ runtimeId: 'rt_a', link: f.link, now: () => 5_000 })
+    expect(c.status()).toEqual({ offline: null, lastSeenAt: null })
+    await c.projects()
+    expect(c.status()).toEqual({ offline: false, lastSeenAt: new Date(5_000).toISOString() })
+    up = false
+    await c.list('p1')
+    expect(c.status()).toEqual({ offline: true, lastSeenAt: new Date(5_000).toISOString() })
+  })
 })

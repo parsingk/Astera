@@ -44,3 +44,19 @@ describe('startSerialPoll', () => {
     stop()
   })
 })
+
+// Phase 6 review: nothing is asked while the window is hidden; asking resumes when it shows again.
+describe('startSerialPoll paused', () => {
+  it('skips asking while paused and asks again once it is not', async () => {
+    vi.useFakeTimers()
+    let calls = 0
+    let hidden = true
+    const stop = startSerialPoll(async () => void calls++, 1_000, { paused: () => hidden })
+    await vi.advanceTimersByTimeAsync(3_500)
+    expect(calls).toBe(0)
+    hidden = false
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toBe(1)
+    stop()
+  })
+})

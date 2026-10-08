@@ -69,6 +69,9 @@ export interface HostJournal {
   /** J7: the rows the timeline shows, read through a JournalReader; [] when off. Never throws. */
   /** `lang`: the reader's language (a remote controller's, Phase 6); English when left out. */
   timeline(runId: string, state: OrchState, lang?: string): JobEvent[]
+  /** Whether the last `timeline` met a busy journal and answered with the rows last read: a remote detail then asks
+   *  again, as the local one does on `journal.busy` (Phase 6 review minor). */
+  busy(): boolean
   close(): void
 }
 
@@ -392,6 +395,7 @@ export function createHostJournal(d: HostJournalDeps): HostJournal {
         return []
       }
     },
+    busy: () => followBusy,
     close: () =>
       guarded('closing', () => {
         shut = true
