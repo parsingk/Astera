@@ -132,6 +132,11 @@ describe('createLiveTerminal checkpoint', () => {
     const r = await recover(20, 8, [data(`${E}[3;7r${E}[?6h`), data(`${E}[2;2Hin`)], 1)
     expect(r.got).toEqual(r.want)
   })
+  // Phase 8 review M1, against a real terminal: a line feed inside an open CSI is executed once, not again on recovery.
+  it('a C0 control inside a CSI split at the checkpoint is executed once', async () => {
+    const r = await recover(20, 6, [data(`A${E}[3${String.fromCharCode(10)}`), data('1mB')], 1)
+    expect(r.got).toEqual(r.want)
+  })
   it('a hidden cursor stays hidden', async () => {
     const r = await recover(20, 4, [data(`${E}[?25lworking`), data('...')], 1)
     expect(r.got).toEqual(r.want)
