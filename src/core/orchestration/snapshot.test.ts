@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findRun, runIdToMerge } from './snapshot'
+import { findRun, runDetailKey, runIdToMerge } from './snapshot'
 import type { JobRow, OrchSnapshot } from '../types'
 
 const jobRun = (id: string, over: Partial<JobRow> = {}): JobRow => ({
@@ -55,5 +55,20 @@ describe('runIdToMerge', () => {
   it('a Run row gives the id it was opened with', () => {
     expect(runIdToMerge(jobRun('run_b'), 'run_b')).toBe('run_b')
     expect(runIdToMerge(undefined, 'run_b')).toBe('run_b')
+  })
+})
+
+// Performance audit R5: an open Run detail was read again on every push of the project's snapshot, whichever Run moved.
+// Its key moves only with the open Run's own row.
+describe('runDetailKey', () => {
+  const row = (id: string, eventCount: number) => ({ id, objective: id, concurrency: 1, outcome: 'running' as const, done: 0, total: 1, eventCount, sharesProjectFolder: false, tasks: [] })
+  it('moves with the open Run’s row only', () => {
+    const a = { runs: [row('r1', 1), row('r2', 1)], projectFolderBusy: false }
+    const other = { runs: [row('r1', 1), row('r2', 5)], projectFolderBusy: true }
+    const mine = { runs: [row('r1', 2), row('r2', 1)], projectFolderBusy: false }
+    expect(runDetailKey(other, 'r1')).toBe(runDetailKey(a, 'r1'))
+    expect(runDetailKey(mine, 'r1')).not.toBe(runDetailKey(a, 'r1'))
+    expect(runDetailKey(null, 'r1')).not.toBe(runDetailKey(a, 'r1'))
+    expect(runDetailKey(a, 'gone')).not.toBe(runDetailKey(a, 'r1'))
   })
 })

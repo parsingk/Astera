@@ -4,7 +4,7 @@
 // session that began waiting is reported for a notification. Polled, not pushed (ledger ruling): the Host's facts are
 // read on demand there.
 import { useEffect, useRef } from 'react'
-import { factsStatus, factsTransition, followRolls, pruneBaseline, readFacts, refOf, remoteCall, type RemoteFacts, type RemoteSessionRef, type RemoteSessionRow } from '../lib/remoteSessions'
+import { factsStatus, factsTransition, followRolls, pollEvery, pruneBaseline, readFacts, refOf, remoteCall, type RemoteFacts, type RemoteSessionRef, type RemoteSessionRow } from '../lib/remoteSessions'
 
 export const REMOTE_WATCH_MS = 3_000
 
@@ -25,7 +25,6 @@ export function useRemoteSessionWatch(o: {
   useEffect(() => {
     if (!any) return
     let stopped = false
-    let timer: ReturnType<typeof setTimeout> | undefined
     /** The last facts per tab: the first read is a baseline, so opening a waiting session does not notify. */
     const last = new Map<string, RemoteFacts>()
     const tick = async (): Promise<void> => {
@@ -60,12 +59,13 @@ export function useRemoteSessionWatch(o: {
           last.set(ref.key, facts)
         })
       )
-      if (!stopped) timer = setTimeout(() => void tick(), REMOTE_WATCH_MS)
     }
-    void tick()
+    // A read that throws does not end the watch (pollEvery; performance audit R3). It keeps its pace while the window is
+    // hidden: a question waiting in a remote tab is what it notifies about, and that matters most then.
+    const stop = pollEvery(tick, REMOTE_WATCH_MS)
     return () => {
       stopped = true
-      clearTimeout(timer)
+      stop()
     }
   }, [any])
 }

@@ -46,6 +46,7 @@ import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
+import { pollWhileVisible } from './lib/visiblePoll'
 import { localDoor, remoteDoor, type OrchDoor } from './lib/orchDoor'
 import { deleteRun, pauseRun, restartCoordinator as restartRunCoordinator, resumeRun, type ActionUi } from './lib/jobActions'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
@@ -72,7 +73,7 @@ import type {
 // so it comes from its own module — the same import UnderstandingView.tsx uses.
 import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
-import { findRun } from '../../core/orchestration/snapshot'
+import { findRun, runDetailKey } from '../../core/orchestration/snapshot'
 import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
 import { toolbarState, upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
@@ -127,7 +128,7 @@ import {
   type PaneNode
 } from '../../core/panes/tree'
 import { browserTab, fileTab, isRemoteSessionKey, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
-import { canStartSession, followAction, remoteCall, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
+import { canStartSession, followAction, remoteCall, sameOrNext, type RemoteFacts, type RemoteSessionRef } from './lib/remoteSessions'
 import { useRemoteSessionWatch } from './hooks/useRemoteSessionWatch'
 import { placeMediaTab, placeTab } from '../../core/panes/place'
 import { mediaKindOf } from '../../core/files/media'
@@ -531,7 +532,7 @@ export default function App(): React.JSX.Element {
       void window.api.host
         .status()
         .then((s) => {
-          if (current) setHostStatus(s)
+          if (current) setHostStatus((held) => sameOrNext(held, s))
         })
         .catch(() => {})
     }
@@ -2480,6 +2481,8 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
+  const orchSnapshotRef = useRef(orchSnapshot)
+  orchSnapshotRef.current = orchSnapshot
   // **A paired Runtime in the Jobs view** (remote runtime design Phase 6, D1.4, D1.5). Every value here is its own:
   // the remote project never becomes `currentProject`, and the remote snapshot never mixes with `orchSnapshot`, so
   // with "This computer" selected every local path, call and push is what it was.
@@ -2674,6 +2677,7 @@ export default function App(): React.JSX.Element {
   const remoteSnapshotRef = useRef(remoteSnapshot)
   remoteSnapshotRef.current = remoteSnapshot
   const remoteRowKey = openRun?.runtimeId ? remoteDetailKey(remoteSnapshot, openRun.runId) : ''
+  const localRowKey = openRun && !openRun.runtimeId ? runDetailKey(orchSnapshot, openRun.runId) : ''
   /** A paired Runtime's permission as this app was told at pairing; an unknown one is read only (controllerGate). */
   const permissionOf = (runtimeId: string): string => pairedRuntimes.find((r) => r.runtimeId === runtimeId)?.permission ?? 'read-only'
   const readOnlyReason = t('jobs.runtime.readOnlyReason')
@@ -2761,7 +2765,7 @@ export default function App(): React.JSX.Element {
     // 줄이 남지 않는다. 모달을 닫는 것은 아래의 리셋 효과다(이 가드는 로그만 지킨다).
     if (!openRun) return
     // A paired Runtime's Run is read from that Runtime and its own snapshot; a local one keeps its project guard.
-    const detailSnapshot = openRun.runtimeId ? remoteSnapshotRef.current : orchSnapshot
+    const detailSnapshot = openRun.runtimeId ? remoteSnapshotRef.current : orchSnapshotRef.current
     if (!openRun.runtimeId && openRun.projectPath !== currentProject) return
     // 스냅샷에 없는 Run 도 부르지 않는다 — worktree 제거나 astera reset 으로 Run 이 사라지면
     // 프로젝트는 그대로인데 main 은 접근 위반과 똑같이 생긴 `run X does not belong to Y` 를 로그에
@@ -2785,8 +2789,9 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-    // A remote Run's detail is asked again on its own row and the Runtime's reach (remoteDetailKey), not on each poll.
-  }, [openRun, currentProject, orchSnapshot, remoteRowKey, journalPagesFor, detailRetry])
+    // A remote Run's detail is asked again on its own row and the Runtime's reach (remoteDetailKey), not on each poll; a
+    // local one on its own row (runDetailKey), not on every push of the project's snapshot (performance audit R5).
+  }, [openRun, currentProject, localRowKey, remoteRowKey, journalPagesFor, detailRetry])
   // 저널이 바빴다(stage 3 T1) — main 은 기다리지 않고 마지막으로 읽은 줄을 줬다. 잠시 뒤에 다시 묻는다.
   // 답이 여전히 바쁘면 다음 답이 또 한 번을 잡는다. 창을 닫거나 답이 바뀌면 타이머를 걷는다.
   useEffect(() => {
@@ -3534,7 +3539,10 @@ export default function App(): React.JSX.Element {
       setRemoteProjects(list)
       setRemoteProject((p) => (p !== null && list.some((x) => x.id === p) ? p : (list[0]?.id ?? null)))
       setRemoteProjectFor(jobsRuntime)
-    }, REMOTE_JOBS_POLL_MS)
+    }, REMOTE_JOBS_POLL_MS, {
+      // Not asked while nobody sees it (performance audit, small): a hidden window, or the Jobs view closed
+      paused: () => document.hidden || !jobsOpenRef.current || !sidebarOpenRef.current
+    })
     return () => {
       alive = false
       stop()
@@ -4032,17 +4040,18 @@ export default function App(): React.JSX.Element {
       void window.api.usage
         .session(usageSessionId)
         .then((u) => {
-          if (!cancelled) setUsage(u)
+          // The same figures keep the held state (performance audit R2): a new object every 3 s re-rendered the app.
+          if (!cancelled) setUsage((held) => sameOrNext(held, u))
         })
         .catch(() => {})
     }
-    load()
-    const timer = setInterval(load, 3_000)
+    // Nothing asked while the window is hidden; asked again as it shows (pollWhileVisible).
+    const stop = pollWhileVisible(load, 3_000)
     const onFocus = (): void => load()
     window.addEventListener('focus', onFocus)
     return () => {
       cancelled = true
-      clearInterval(timer)
+      stop()
       window.removeEventListener('focus', onFocus)
     }
   }, [usageSessionId])
