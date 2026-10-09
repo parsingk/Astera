@@ -114,7 +114,10 @@ export async function runRuntimeCommand(cmd: string, args: Record<string, unknow
     }
     case 'runtime-pair': {
       if (d.agentSession) return agentRefusal(cmd)
-      const permission = args.readOnly === true ? 'read-only' : 'full-control'
+      // Read-only unless full control is asked for: a code that leaks then gives nobody this user's power (R6).
+      // `--read-only` stays accepted for the scripts that passed it; with `--full-control` it is a contradiction.
+      if (args.fullControl === true && args.readOnly === true) return failure('INVALID_ARGUMENTS', 'give --full-control or --read-only, not both')
+      const permission = args.fullControl === true ? 'full-control' : 'read-only'
       // Everything a pairing string needs is checked before a code is made (Phase 3 minor): a code nobody can redeem,
       // while Remote is off, is not handed out.
       const s = await d.readSettings()

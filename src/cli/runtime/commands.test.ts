@@ -97,6 +97,18 @@ describe('astera runtime (remote runtime design §2.9)', () => {
       body: { pairing: `astera-pair:v1:192.168.0.7:47831:ABCDE23456:${FP}`, address: '192.168.0.7', port: 47831, code: 'ABCDE23456', fingerprint: FP, permission: 'read-only' }
     })
   })
+  // A pairing is read-only unless full control is asked for: a code that leaks then gives no one this user's power.
+  it('pair is read-only by default, full control only with --full-control, and both flags are refused', async () => {
+    const m = machine({ hostUp: true })
+    await m.deps.writeSettings({ enabled: true })
+    await m.deps.ensureIdentity('127.0.0.1')
+    expect(await runRuntimeCommand('runtime-pair', {}, m.deps)).toMatchObject({ ok: true, body: { permission: 'read-only' } })
+    expect(await runRuntimeCommand('runtime-pair', { readOnly: true }, m.deps)).toMatchObject({ ok: true, body: { permission: 'read-only' } })
+    expect(await runRuntimeCommand('runtime-pair', { fullControl: true }, m.deps)).toMatchObject({ ok: true, body: { permission: 'full-control' } })
+    const calls = m.order.filter((x) => x === 'call:pair-create').length
+    expect(await runRuntimeCommand('runtime-pair', { fullControl: true, readOnly: true }, m.deps)).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENTS' } })
+    expect(m.order.filter((x) => x === 'call:pair-create').length).toBe(calls)
+  })
   // Phase 3 minor: no code is made while Remote is off, since nobody could redeem it.
   it('pair refuses while Remote is off, and makes no code', async () => {
     const m = machine({ hostUp: true })

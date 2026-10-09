@@ -82,7 +82,7 @@ export const ja: Catalog = {
   'jobs.runtime.noAccounts': 'この Runtime には選べるアカウントがありません。そのコンピューターでアカウントを追加してください。',
   'jobs.run.resumeFailed': 'スケジュールを再開できませんでした。',
   'jobs.runtime.noProjects': 'この Runtime にはプロジェクトがありません。',
-  'jobs.runtime.readOnlyReason': '読み取り専用: このコンピューターはこの Runtime を見るだけのペアリングです。Job を変更するにはフルコントロールで再度ペアリングしてください。',
+  'jobs.runtime.readOnlyReason': '読み取り専用: このコンピューターはこの Runtime を見るだけのペアリングです。Job を変更するには、そのコンピューターで astera runtime pair --full-control を実行し、フルコントロールで再度ペアリングしてください。',
   'jobs.runtime.control': 'ここでの操作は {name} で実行されます。',
   'jobs.runtime.noFolder': '未登録フォルダーには Job を作るフォルダーがありません。Runtime のプロジェクトを選んでください。',
   'jobs.runtime.slack': 'この Job の通知は Runtime マシン自身の Slack 設定に従います。',

@@ -56,7 +56,7 @@ On the machine that will do the work, with the Astera app installed and its comm
 ```text
 astera runtime start --listen 100.64.0.5     listen on that address (default 127.0.0.1, port 47831)
 astera projects add --path D:\work\repo        a folder the controllers may run in
-astera runtime pair --name laptop            a one-time pairing string, valid 10 minutes
+astera runtime pair --full-control --name laptop   a one-time pairing string, valid 10 minutes
 ```
 
 `--listen` takes an address of that machine, such as its Tailscale or LAN address. `start` makes this machine's
@@ -76,7 +76,8 @@ A controller picks among them; no credential ever travels to or from the control
 Pair with the string the Runtime prints. `astera runtime pair` prints one string,
 `astera-pair:v1:<address>:<port>:<code>:<fingerprint>`, and its parts. The code is a secret that works once, for 10
 minutes, and five wrong tries burn it. Give the string to the controller directly; do not paste it into a chat or a
-ticket. `--read-only` pairs a controller that may read but not change anything.
+ticket. A pairing is read-only unless `--full-control` is given: a read-only controller may read but not change
+anything. Give full control only to a controller that runs Jobs or sessions there.
 
 In the app: Settings › Remote Runtimes, paste the string, Pair. From the command line:
 
@@ -295,7 +296,7 @@ renames and Unicode names included.
   ids the Runtime gave.
 - **Full control is the Runtime user's power.** A full-control controller starts agents and terminal sessions there and
   types into them, and those run any command the Runtime's user can, in any folder that user can reach. Pair with full
-  control only a controller you would trust with that user account; pair the rest read-only.
+  control only a controller you would trust with that user account; the rest keep the read-only default.
 - Logs on both sides never carry tokens, pairing codes or terminal output.
 - Connections that have not signed in have a budget of their own, and few from one address, so sockets that say nothing
   cannot hold paired controllers off. One pairing holds at most twelve connections at once, and a controller closes a

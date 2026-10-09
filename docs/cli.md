@@ -495,7 +495,7 @@ sides). On the machine that does the work:
 
 ```text
 astera runtime start --listen 100.64.0.5     listen on that address (default 127.0.0.1, port 47831)
-astera runtime pair --name laptop            a one-time pairing string, valid 10 minutes
+astera runtime pair --full-control --name laptop   a one-time pairing string, valid 10 minutes
 astera runtime clients                       who is paired
 astera runtime revoke --id <clientId>        unpair one and close its connections now
 astera runtime stop                          stop listening; the Host and its Jobs keep running
@@ -511,8 +511,8 @@ The pairing string carries a secret code and this machine's fingerprint. Give it
 through a chat or a ticket. The other machine checks the fingerprint before it sends anything, so a different machine
 answering at that address is refused. Five wrong codes burn the code.
 
-Listen on a private network, a VPN or Tailscale. Do not forward the port to the internet. A paired controller with
-read-only permission can read Jobs, Runs and Tasks but not change them.
+Listen on a private network, a VPN or Tailscale. Do not forward the port to the internet. A pairing is read-only
+unless `--full-control` is given; a read-only controller can read Jobs, Runs and Tasks but not change them.
 
 ## Command reference
 
@@ -538,7 +538,7 @@ astera host    start  [--replace]
 
 astera runtime status | stop | clients | serve
 astera runtime start   [--listen <addr>] [--port <n>]
-astera runtime pair    [--read-only] [--name <n>]
+astera runtime pair    [--full-control | --read-only] [--name <n>]
 astera runtime revoke  --id <clientId>
 
 astera runtimes list

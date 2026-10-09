@@ -631,7 +631,7 @@ const MEANING: Record<CliErrorCode, string> = {
   RUNTIME_ACCOUNT_NOT_FOUND: 'the account does not exist on that Runtime',
   RUNTIME_CAPABILITY_MISSING: 'the command has no --runtime form, or that Runtime cannot do it',
   RUNTIME_BUSY: 'the Runtime refused for now: too many connections or calls in flight',
-  RUNTIME_PERMISSION_DENIED: "refused by the Runtime's pairing: a read-only controller asked for a change",
+  RUNTIME_PERMISSION_DENIED: "refused by the Runtime's pairing: a read-only controller asked for a change; a pairing made with `astera runtime pair --full-control` on the Runtime may change things",
   RUNTIME_OUTCOME_UNKNOWN: 'a change was sent and its answer lost, and the Runtime cannot say whether it ran; list before trying again',
   REMOTE_TIMEOUT: 'the Runtime did not answer in time; the command may still finish',
   REMOTE_OPERATION_CONFLICT: 'refused by the Runtime because of current state',

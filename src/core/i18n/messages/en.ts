@@ -116,7 +116,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.runtime.noAccounts': 'This Runtime offers no accounts. Add one on that computer.',
   'jobs.run.resumeFailed': 'Could not resume the schedule.',
   'jobs.runtime.noProjects': 'This Runtime has no projects.',
-  'jobs.runtime.readOnlyReason': 'Read only: this computer is paired with this Runtime to watch. To change its Jobs, pair again with full control.',
+  'jobs.runtime.readOnlyReason': 'Read only: this computer is paired with this Runtime to watch. To change its Jobs, pair again with full control: run astera runtime pair --full-control on that computer.',
   'jobs.runtime.control': 'Actions here run on {name}.',
   'jobs.runtime.noFolder': "Unregistered folders have no folder to make a Job in. Pick one of the Runtime's projects.",
   'jobs.runtime.slack': "Notifications for this Job follow the Runtime machine's own Slack settings.",

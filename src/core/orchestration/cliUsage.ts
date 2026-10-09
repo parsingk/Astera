@@ -143,9 +143,10 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runtime-pair': {
     summary: 'a one-time pairing string for another machine (valid 10 minutes)',
     detail:
-      'Prints astera-pair:v1:<address>:<port>:<code>:<fingerprint> and its parts. It carries a secret code: give it to the other machine directly and do not paste it anywhere else. Five wrong codes burn it. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
+      'Prints astera-pair:v1:<address>:<port>:<code>:<fingerprint> and its parts. It carries a secret code: give it to the other machine directly and do not paste it anywhere else. Five wrong codes burn it. The pairing is read-only unless --full-control is given. Refused with 5 inside an agent session (ASTERA_SESSION is set).',
     flags: [
-      { name: 'read-only', about: 'the controller may read but not change anything' },
+      { name: 'full-control', about: 'the controller may also change things: run Jobs, start sessions, type into them' },
+      { name: 'read-only', about: 'the controller may read but not change anything (the default)' },
       { name: 'name', value: '<n>', about: 'what to call the controller in `runtime clients`' }
     ]
   },

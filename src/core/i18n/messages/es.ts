@@ -82,7 +82,7 @@ export const es: Catalog = {
   'jobs.runtime.noAccounts': 'Este Runtime no ofrece cuentas. Agregue una en ese equipo.',
   'jobs.run.resumeFailed': 'No se pudo reanudar la programación.',
   'jobs.runtime.noProjects': 'Este Runtime no tiene proyectos.',
-  'jobs.runtime.readOnlyReason': 'Solo lectura: este equipo está emparejado con este Runtime solo para ver. Para cambiar sus Jobs, vuelva a emparejarlo con control total.',
+  'jobs.runtime.readOnlyReason': 'Solo lectura: este equipo está emparejado con este Runtime solo para ver. Para cambiar sus Jobs, vuelva a emparejarlo con control total: ejecute astera runtime pair --full-control en ese equipo.',
   'jobs.runtime.control': 'Las acciones aquí se ejecutan en {name}.',
   'jobs.runtime.noFolder': 'Las carpetas no registradas no tienen una carpeta donde crear un Job. Elija uno de los proyectos del Runtime.',
   'jobs.runtime.slack': 'Las notificaciones de este Job siguen la configuración de Slack del propio equipo Runtime.',

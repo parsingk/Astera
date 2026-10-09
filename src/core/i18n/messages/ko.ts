@@ -120,7 +120,7 @@ export const ko = {
   'jobs.runtime.noAccounts': '이 Runtime 에 고를 계정이 없습니다. 그 컴퓨터에서 계정을 추가하세요.',
   'jobs.run.resumeFailed': '예약을 다시 시작하지 못했습니다.',
   'jobs.runtime.noProjects': '이 Runtime 에 프로젝트가 없습니다.',
-  'jobs.runtime.readOnlyReason': '읽기 전용: 이 컴퓨터는 이 Runtime 을 보기만 하도록 페어링되어 있습니다. 작업을 바꾸려면 전체 제어로 다시 페어링하세요.',
+  'jobs.runtime.readOnlyReason': '읽기 전용: 이 컴퓨터는 이 Runtime 을 보기만 하도록 페어링되어 있습니다. 작업을 바꾸려면 그 컴퓨터에서 astera runtime pair --full-control 을 실행해 전체 제어로 다시 페어링하세요.',
   'jobs.runtime.control': '여기서 하는 동작은 {name} 에서 실행됩니다.',
   'jobs.runtime.noFolder': '미등록 폴더에는 작업을 만들 폴더가 없습니다. 그 Runtime 의 프로젝트를 고르세요.',
   'jobs.runtime.slack': '이 Job 의 알림은 Runtime 컴퓨터의 Slack 설정을 따릅니다.',
