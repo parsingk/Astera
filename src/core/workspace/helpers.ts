@@ -157,8 +157,8 @@ export const NO_CDP = 'no CDP connection'
 const NOTHING_LAUNCHED = 'nothing launched: call launch() first'
 const CTRL = 2
 const DRAG_START_MS = 5_000
-/** How long a desk with its own pointer (Linux) waits for the CDP press to start a drag before it
- *  drags with that pointer instead (drag()). */
+/** How long a desk with its own pointer (Linux) waits, once the page has handled the CDP move, for
+ *  the CDP press to start a drag before it drags with that pointer instead (drag()). */
 export const DRAG_CDP_MS = 2_000
 /** How long `launch` waits, after the port answers, for the page to finish parsing. A page that has
  *  not settled by then is handed over as it is: the page helpers speak for themselves. */
@@ -516,9 +516,12 @@ export function workspaceHelpers(deps: HelperDeps, ctx: RunContext): Record<stri
       await cdp.send('Input.setInterceptDrags', { enabled: true })
       try {
         await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: from.x, y: from.y, button: 'left', buttons: 1, clickCount: 1 })
-        const intercepted = intercept(real ? DRAG_CDP_MS : DRAG_START_MS)
+        const intercepted = intercept(DRAG_START_MS)
         await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: to.x, y: to.y, button: 'left', buttons: 1 })
-        let got = await intercepted
+        // The pointer's wait is timed from the move's answer, which comes once the page has handled it: on
+        // Xvfb that took 2.4 s, and a wait timed from before the move dropped the drag it started (CI run
+        // 37986116530).
+        let got = real ? await Promise.race([intercepted, new Promise<{ ok: false }>((r) => setTimeout(() => r({ ok: false }), DRAG_CDP_MS))]) : await intercepted
         if (!got.ok && real) {
           // The CDP press was ended before the move reached the page (on Xvfb, by any pointer event X
           // sends the window; CI run 36310700864). The same drag with the display's own pointer: real

@@ -500,7 +500,7 @@ describe('drag and drop inside the page', () => {
     expect(seq).toEqual([
       'Input.setInterceptDrags:true',
       'Input.dispatchMouseEvent:mousePressed',
-      `wait:Input.dragIntercepted:${DRAG_CDP_MS}`,
+      'wait:Input.dragIntercepted:5000',
       'Input.dispatchMouseEvent:mouseMoved',
       'Input.dispatchMouseEvent:mouseReleased',
       'wait:Input.dragIntercepted:5000',
@@ -510,6 +510,42 @@ describe('drag and drop inside the page', () => {
       'Input.setInterceptDrags:false'
     ])
     expect(f.r.cdp.calls.find((c) => c.params?.type === 'drop')?.params).toMatchObject({ x: 300, y: 400, data: f.data })
+  })
+
+  it('on a desk with its own pointer, gives a move that reaches the page late its own wait before dragging with the pointer', async () => {
+    // CI run 37986116530: on Xvfb the CDP move reached the page 2.4 s after the press, past a wait timed
+    // from before the move, so the drag it started was dropped and the pointer's press found none.
+    const r = rig()
+    const presses: unknown[] = []
+    r.desk.pointer = { press: async (a) => void presses.push(a), release: async () => {} }
+    await r.h.launch({ command: 'app' })
+    r.cdp.evaluates({ x: 10, y: 20 }, { x: 300, y: 400 })
+    const data = { items: [{ mimeType: 'text/plain', data: 'card-1' }], dragOperationsMask: 1 }
+    let reach: () => void = () => {}
+    const reached = new Promise<void>((res) => (reach = res))
+    const send = r.cdp.send.bind(r.cdp)
+    r.cdp.send = async (method, params) => {
+      const out = await send(method, params)
+      if (params?.type === 'mouseMoved') await reached
+      return out
+    }
+    r.cdp.waitEvent = (_method, ms) =>
+      new Promise((res, rej) => {
+        const t = setTimeout(() => rej(new Error('timed out')), ms)
+        void reached.then(() => (clearTimeout(t), res({ data })))
+      })
+    vi.useFakeTimers()
+    try {
+      const done = r.h.drag('#card', '#column')
+      await vi.advanceTimersByTimeAsync(DRAG_CDP_MS + 400)
+      reach()
+      await vi.advanceTimersByTimeAsync(0)
+      await done
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(presses).toEqual([])
+    expect(r.cdp.calls.find((c) => c.params?.type === 'drop')?.params).toMatchObject({ x: 300, y: 400, data })
   })
 
   it('names a source neither press starts a drag from, and still lets the real button go', async () => {
