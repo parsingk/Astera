@@ -129,6 +129,9 @@ export async function markClaudeProjectTrusted(
     // replaced by this one trust entry.
     const read = await readStoreFile(file)
     if (read.kind === 'unreadable') throw read.error
+    // A file that is there but blank is one caught mid-write, not an empty state (final review M-1): written over, the
+    // whole state would be one trust entry, and the good .bak replaced by the blank copy first.
+    if (read.kind === 'text' && read.text.trim() === '') throw new Error(`${file} is blank; not written over`)
     const existing = read.kind === 'text' ? read.text : ''
     const next = upsertClaudeTrust(existing, workspacePath)
     if (next === existing) return

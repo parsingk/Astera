@@ -3400,7 +3400,7 @@ export default function App(): React.JSX.Element {
   // 누르면 새 프로젝트 이름 아래에서 이전 프로젝트의 기능이 열린다. 두 갈래 모두 루트를 함께 실어
   // 그 값이 어느 프로젝트의 것인지를 캐시가 스스로 말하게 한다.
   // Read while it is shown (audit UI-12); a change pushed meanwhile is read when it is next shown.
-  const wantUnderstanding = needsUnderstanding({ hiwOpen, activeKind: activeTab?.kind })
+  const wantUnderstanding = needsUnderstanding({ hiwOpen, activeKind: activeTab?.kind, recordTabs: recordTabs.length })
   useEffect(() => {
     if (!currentProject) return setUnderstanding(null)
     if (!wantUnderstanding) return
@@ -5287,7 +5287,10 @@ export default function App(): React.JSX.Element {
                       ))}
                     </div>
                   ))}
-                {settingsTab === 'slack' && <SlackSettings />}
+                {/* Kept while Settings is open (final review M-6): switching tabs unmounted it and dropped what was typed. */}
+                <div hidden={settingsTab !== 'slack'}>
+                  <SlackSettings />
+                </div>
                 {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
                 {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}

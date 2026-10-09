@@ -193,11 +193,18 @@ export class LocalHistoryStore {
   /** What load could not read, kept until a change reads the index again (audit U-1); null when it was read. */
   private unread: unknown = null
 
-  private async ensureRead(): Promise<void> {
-    if (this.unread === null) return
-    await this.load()
-    if (this.unread !== null) throw new StoreUnread(this.indexPath, this.unread)
+  private ensureRead(): Promise<void> {
+    if (this.unread === null) return Promise.resolve()
+    // One re-read for every snapshot waiting on it (final review I-6).
+    this.recovering ??= (async () => {
+      await this.load()
+      if (this.unread !== null) throw new StoreUnread(this.indexPath, this.unread)
+    })().finally(() => {
+      this.recovering = null
+    })
+    return this.recovering
   }
+  private recovering: Promise<void> | null = null
 
   /** The retention policy for every project at load (audit U-9): it ran only when the same project deleted something
    *  again, so a project nobody deleted in again kept its snapshots past 30 days for good. The index first, then the

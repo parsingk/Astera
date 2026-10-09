@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { binaryMissingIn, realRunner } from './runner'
+import { binaryMissingIn, realRunner, stopOnMissingBinary } from './runner'
 
 describe('binaryMissingIn', () => {
   it('reads the path from the npm launcher\'s "binary not found" line', () => {
@@ -68,5 +68,19 @@ describe('realRunner time limit', () => {
     expect(r.code).not.toBe(0)
     expect(r.stderr).toMatch(/did not finish within/)
     expect(Date.now() - t0).toBeLessThan(8000)
+  })
+})
+
+// Final review I-3: hf-proxy wraps its runner in stopOnMissingBinary, which dropped the time limit, so an agent's
+// side calls still hung for good. The wrapper passes it on.
+describe('stopOnMissingBinary', () => {
+  it('passes the time limit on to the runner it wraps', async () => {
+    const seen: Array<{ timeoutMs?: number } | undefined> = []
+    const run = stopOnMissingBinary(async (_a, _e, _t, o) => {
+      seen.push(o)
+      return { code: 0, stdout: '', stderr: '' }
+    })
+    await run(['x'], {}, false, { timeoutMs: 123 })
+    expect(seen).toEqual([{ timeoutMs: 123 }])
   })
 })

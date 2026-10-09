@@ -385,3 +385,43 @@ describe('AccountRegistry when its file is busy', () => {
     await fs.rm(dir, { recursive: true, force: true })
   })
 })
+
+describe('AccountRegistry, final review', () => {
+  afterEach(() => vi.restoreAllMocks())
+  // I-5: the start-up label repair asked the registry to read an unreadable accounts.json again and threw, and the app
+  // never opened its window. The repair waits for a registry that could read its file.
+  it('the label repair does nothing, and does not throw, while the file could not be read', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-acc-i5-'))
+    const file = path.join(dir, 'accounts.json')
+    await fs.writeFile(file, JSON.stringify({ version: 1, accounts: [] }), 'utf8')
+    const real = fs.readFile.bind(fs)
+    vi.spyOn(fs, 'readFile').mockImplementation(((p: unknown, ...rest: unknown[]) =>
+      String(p) === file ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as typeof fs.readFile)
+    const r = new AccountRegistry(file, path.join(dir, 'root'))
+    await r.load()
+    await expect(r.syncPlaceholderLabels(async () => 'me@x')).resolves.toBeUndefined()
+    vi.restoreAllMocks()
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+  // M-5: two changes in flight each took a snapshot to roll back to; the first one's failure rolled the second away.
+  it('a failed change leaves the change made beside it', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-acc-m5-'))
+    const r = new AccountRegistry(path.join(dir, 'accounts.json'), path.join(dir, 'root'))
+    await r.load()
+    const realRename = fs.rename.bind(fs)
+    let first = true
+    vi.spyOn(fs, 'rename').mockImplementation((async (a: unknown, b: unknown) => {
+      if (first) {
+        first = false
+        await new Promise((res) => setTimeout(res, 30))
+        throw Object.assign(new Error('i/o'), { code: 'EIO' })
+      }
+      return realRename(a as string, b as string)
+    }) as typeof fs.rename)
+    const results = await Promise.allSettled([r.create({ label: 'lost' }), r.create({ label: 'kept' })])
+    vi.restoreAllMocks()
+    expect(results.map((x) => x.status)).toEqual(['rejected', 'fulfilled'])
+    expect(r.list().map((a) => a.label)).toEqual(['kept'])
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+})

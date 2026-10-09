@@ -65,6 +65,18 @@ describe('WorkUnitStore', () => {
     expect(c.get('kept')).toEqual(sample)
     expect(c.get('new')).toEqual(sample)
   })
+  // Final review M-2: a file gone by the time a write read it again kept what memory held; load empties memory for that
+  // case on purpose (E2 §6), and the re-read does the same.
+  it('a write after an unreadable load, with the file gone meanwhile, starts from empty', async () => {
+    const s = new WorkUnitStore(file)
+    await s.set('old', sample)
+    const release = busyWhileLoading(file)
+    await s.load()
+    release()
+    await fs.rm(file)
+    await s.set('new', sample)
+    expect(s.projectPaths()).toEqual(['new'])
+  })
   it('파일이 없으면 빈 상태로 시작한다', async () => {
     const s = new WorkUnitStore(file)
     expect((await s.load()).recovered).toBe(false)

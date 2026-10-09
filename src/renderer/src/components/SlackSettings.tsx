@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { slackMode } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
+import { createTouched } from '../lib/touched'
 
 export function SlackSettings(): React.JSX.Element {
   const { t } = useI18n()
@@ -20,21 +21,20 @@ export function SlackSettings(): React.JSX.Element {
   // token, channel, and webhook with null in one go. (When there was a single field, patch()
   // preserving undefined protected the rest; that is no longer the case.)
   const [slackLoaded, setSlackLoaded] = useState(false)
-  /** Whether a field was changed before the configuration was read (audit UI-7): the read then does not overwrite it. */
-  const touched = useRef(false)
+  /** The fields changed before the configuration was read (audit UI-7), each on its own (final review I-4): one flag
+   *  for all five left the other four empty, and Save then sent them as null over the stored ones. */
+  const touched = useRef(createTouched())
 
   useEffect(() => {
     let cancelled = false
     void window.api.slack.getConfig().then(
       (c) => {
         if (cancelled) return
-        if (!touched.current) {
-          setSlackUrl(c.webhookUrl ?? '')
-          setSlackBotToken(c.botToken ?? '')
-          setSlackChannelId(c.channelId ?? '')
-          setSlackAppToken(c.appToken ?? '')
-          setSlackMemberId(c.memberId ?? '')
-        }
+        touched.current.unless('url', () => setSlackUrl(c.webhookUrl ?? ''))
+        touched.current.unless('bot', () => setSlackBotToken(c.botToken ?? ''))
+        touched.current.unless('channel', () => setSlackChannelId(c.channelId ?? ''))
+        touched.current.unless('app', () => setSlackAppToken(c.appToken ?? ''))
+        touched.current.unless('member', () => setSlackMemberId(c.memberId ?? ''))
         setSlackLoaded(true)
       },
       // Said, and Save stays off (audit UI-7): saving the empty fields would erase the configuration it could not read.
@@ -54,7 +54,7 @@ export function SlackSettings(): React.JSX.Element {
           value={slackUrl}
           placeholder="https://hooks.slack.com/services/…"
           onChange={(e) => {
-            touched.current = true
+            touched.current.touch('url')
             setSlackUrl(e.target.value)
             setSlackSaved(false)
           }}
@@ -70,7 +70,7 @@ export function SlackSettings(): React.JSX.Element {
           value={slackBotToken}
           placeholder="xoxb-…"
           onChange={(e) => {
-            touched.current = true
+            touched.current.touch('bot')
             setSlackBotToken(e.target.value)
             setSlackSaved(false)
           }}
@@ -82,7 +82,7 @@ export function SlackSettings(): React.JSX.Element {
           value={slackChannelId}
           placeholder="C0123456789"
           onChange={(e) => {
-            touched.current = true
+            touched.current.touch('channel')
             setSlackChannelId(e.target.value)
             setSlackSaved(false)
           }}
@@ -95,7 +95,7 @@ export function SlackSettings(): React.JSX.Element {
           value={slackAppToken}
           placeholder="xapp-…"
           onChange={(e) => {
-            touched.current = true
+            touched.current.touch('app')
             setSlackAppToken(e.target.value)
             setSlackSaved(false)
           }}
@@ -112,7 +112,7 @@ export function SlackSettings(): React.JSX.Element {
           value={slackMemberId}
           placeholder="U0123456789"
           onChange={(e) => {
-            touched.current = true
+            touched.current.touch('member')
             setSlackMemberId(e.target.value)
             setSlackSaved(false)
           }}

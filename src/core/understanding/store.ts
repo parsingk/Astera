@@ -64,7 +64,17 @@ export class UnderstandingStore {
 
   /** Before a write over a file load could not read: reads it now, and adopts it; throws when it still cannot be
    *  read, so nothing is written over it. */
-  private async readAgain(): Promise<void> {
+  /** One re-read for every write waiting on it (final review I-6): two re-reads let the later one adopt the file as it
+   *  was before the first write landed, and its save erased that write. */
+  private recovering: Promise<void> | null = null
+  private readAgain(): Promise<void> {
+    this.recovering ??= this.readAgainOnce().finally(() => {
+      this.recovering = null
+    })
+    return this.recovering
+  }
+
+  private async readAgainOnce(): Promise<void> {
     const stamp = await this.stamp(this.filePath)
     const r = await readStoreFile(this.filePath)
     if (r.kind === 'unreadable') throw new StoreUnread(this.filePath, r.error)

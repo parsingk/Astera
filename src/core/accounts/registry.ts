@@ -129,25 +129,41 @@ export class AccountRegistry {
   private unread: unknown = null
 
   /** Before a change over a file load could not read: reads it again, and refuses the change when it still cannot. */
-  private async ensureRead(): Promise<void> {
-    if (this.unread === null) return
-    await this.load()
-    if (this.unread !== null) throw new StoreUnread(this.filePath, this.unread)
+  private ensureRead(): Promise<void> {
+    if (this.unread === null) return Promise.resolve()
+    // One re-read for every change waiting on it (final review I-6).
+    this.recovering ??= (async () => {
+      await this.load()
+      if (this.unread !== null) throw new StoreUnread(this.filePath, this.unread)
+    })().finally(() => {
+      this.recovering = null
+    })
+    return this.recovering
   }
+  private recovering: Promise<void> | null = null
+
+  /** Changes one after another (final review M-5): each takes its rollback snapshot when it starts, so one failing
+   *  never rolls back the change made beside it. */
+  private changeQueue: Promise<unknown> = Promise.resolve()
 
   /** Runs a change, and puts memory back when its save fails (audit U-12): the account stayed in the list though the
    *  file never got it, and adding it again made a second folder. */
-  private async changing<T>(change: () => T): Promise<T> {
-    const before = { accounts: this.accounts.map((a) => ({ ...a })), dismissed: [...this.dismissed] }
-    const out = change()
-    try {
-      await this.save()
-    } catch (e) {
-      this.accounts = before.accounts
-      this.dismissed = before.dismissed
-      throw e
+  private changing<T>(change: () => T): Promise<T> {
+    const run = async (): Promise<T> => {
+      const before = { accounts: this.accounts.map((a) => ({ ...a })), dismissed: [...this.dismissed] }
+      const out = change()
+      try {
+        await this.save()
+      } catch (e) {
+        this.accounts = before.accounts
+        this.dismissed = before.dismissed
+        throw e
+      }
+      return out
     }
-    return out
+    const next = this.changeQueue.then(run, run)
+    this.changeQueue = next.catch(() => undefined)
+    return next
   }
 
   async create(input: { label: string; color?: string; provider?: Provider }): Promise<Account> {
@@ -214,7 +230,12 @@ export class AccountRegistry {
   async syncPlaceholderLabels(
     resolveEmail: (account: Account) => Promise<string | null>
   ): Promise<void> {
-    await this.ensureRead()
+    // A repair waits for a file it could read (final review I-5): thrown here, at start-up, the app never opened.
+    try {
+      await this.ensureRead()
+    } catch {
+      return
+    }
     let changed = false
     for (const account of this.accounts) {
       if (account.label !== DEFAULT_ACCOUNT_PLACEHOLDER_LABEL) continue
@@ -250,6 +271,10 @@ export class AccountRegistry {
       createdAt: new Date().toISOString()
     }
     return this.changing(() => {
+      // Asked again inside the queue (final review M-5): two imports of one folder in flight register it once.
+      const norm = comparablePath(configDir)
+      const existing = this.accounts.find((a) => comparablePath(a.configDir) === norm)
+      if (existing) return existing
       this.accounts.push(account)
       // Registering this directory again overrides the earlier unregister — a registered account must never
       // sit in the exclusion list, or re-adding it by hand would leave detection permanently blind to it
@@ -269,11 +294,12 @@ export class AccountRegistry {
     }
   }
 
+  private saves = 0
   private async save(): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     // Its own temp file and the rename retried (audit U-12): the Host reads accounts.json at every spawn, and on win32
     // a rename over a file being read is refused for that moment.
-    const tmp = `${this.filePath}.${process.pid}.tmp`
+    const tmp = `${this.filePath}.${process.pid}.${++this.saves}.tmp`
     await fs.writeFile(
       tmp,
       JSON.stringify({ version: 1, accounts: this.accounts, dismissedDirs: this.dismissed }, null, 2),

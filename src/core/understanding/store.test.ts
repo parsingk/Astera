@@ -44,6 +44,21 @@ describe('UnderstandingStore', () => {
     expect(c.get('C:/kept')).toEqual(sample)
     expect(c.get('C:/new')).toEqual(sample)
   })
+  // Final review I-6: two writes after an unreadable load each read the file again; the later read took the file as it
+  // was before the first write landed, and its save erased that write.
+  it('two writes after an unreadable load both land', async () => {
+    const a = new UnderstandingStore(file)
+    await a.load()
+    await a.set('C:/kept', sample)
+    const b = new UnderstandingStore(file)
+    const release = busyWhileLoading(file)
+    await b.load()
+    release()
+    await Promise.all([b.set('C:/one', sample), b.set('C:/two', sample)])
+    const c = new UnderstandingStore(file)
+    await c.load()
+    expect(c.projectKeys().sort()).toEqual(['C:/kept', 'C:/one', 'C:/two'])
+  })
   it('파일이 없으면 빈 상태로 시작한다', async () => {
     const s = new UnderstandingStore(file)
     expect((await s.load()).recovered).toBe(false)

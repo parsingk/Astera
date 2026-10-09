@@ -85,7 +85,8 @@ export function realRunner(file: string, platform: NodeJS.Platform, lead: string
       let grace: NodeJS.Timeout | undefined
       const onAbort = (): void => {
         stderr += '\nhiggsfield: cancelled'
-        child.kill()
+        // The whole tree (final review M-8), as the time limit's kill.
+        killProcessTree(child)
         // After a kill, the exit is the answer: a process the child started may still hold the pipes open.
         child.once('exit', (code) => finish(code))
         grace = setTimeout(() => finish(1, '\nhiggsfield: the process did not exit after the kill'), opts.killGraceMs ?? 5000)
@@ -133,9 +134,10 @@ export class HfBinaryMissing extends Error {
  *  more is started). The guards rethrow it, so no login file is restored and no account marked. */
 export function stopOnMissingBinary(run: HfRunner): HfRunner {
   let missing: string | null = null
-  return async (args, env, tee) => {
+  return async (args, env, tee, o) => {
     if (missing !== null) throw new HfBinaryMissing(missing)
-    const r = await run(args, env, tee)
+    // The time limit passes through (final review I-3): dropped here, hf-proxy's side calls had none.
+    const r = await run(args, env, tee, o)
     missing = binaryMissingIn(r)
     if (missing !== null) throw new HfBinaryMissing(missing)
     return r

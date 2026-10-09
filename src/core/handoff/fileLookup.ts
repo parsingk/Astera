@@ -37,6 +37,8 @@ export function lookupHandoffFile(filePath: string, sessionId: string): HandoffL
     readers.set(filePath, reader)
   }
   const read = reader()
+  // A passing read error is not kept until the file next changes (final review M-4): asked again next time.
+  if ('state' in read && read.state === 'unknown') readers.delete(filePath)
   if ('state' in read) return { state: read.state }
   const memo = Object.hasOwn(read.memos, sessionId) ? read.memos[sessionId] : undefined
   return isObj(memo) && memo.sessionId === sessionId ? { state: 'found', memo: memo as unknown as Handoff } : { state: 'none' }

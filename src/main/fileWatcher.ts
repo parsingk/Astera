@@ -126,6 +126,8 @@ export class FileWatcher {
     if (this.platform === 'win32') {
       if (this.quiet > 0) return // quietWhile opens it when the work ends
       if (await this.openNative()) return
+      // The app's own work began while the identity was asked: quietWhile opens the handle when it ends.
+      if (this.quiet > 0) return
     }
     this.watcher = chokidar.watch(root, {
       ignoreInitial: true,
@@ -145,8 +147,10 @@ export class FileWatcher {
     // Read before the handle opens (watchedDir.ts): a root replaced in between reads as replaced. Off the thread
     // (audit U-14): a synchronous stat of a root on a dead share froze the window.
     const rootId = await this.identity(root)
-    // Unwatched, switched or opened meanwhile.
+    // Unwatched, switched or opened meanwhile, or the app's own work started meanwhile (final review M-3): quietWhile
+    // opens the handle when that work ends.
     if (this.root !== root || this.native) return this.native !== null
+    if (this.quiet > 0) return false
     let checking = false
     try {
       const h = this.watchNative(root, (type, filename) => {

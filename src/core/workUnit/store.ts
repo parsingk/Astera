@@ -249,12 +249,28 @@ export class WorkUnitStore {
   private unread: unknown = null
 
   /** Before a write over a file load could not read: reads it now and adopts it; throws when it still cannot. */
-  private async readAgain(): Promise<void> {
+  /** One re-read for every write waiting on it (final review I-6): two re-reads let the later one adopt the file as it
+   *  was before the first write landed, and its save erased that write. */
+  private recovering: Promise<void> | null = null
+  private readAgain(): Promise<void> {
+    this.recovering ??= this.readAgainOnce().finally(() => {
+      this.recovering = null
+    })
+    return this.recovering
+  }
+
+  private async readAgainOnce(): Promise<void> {
     const stamp = await this.stamp(this.filePath)
     const r = await readStoreFile(this.filePath)
     if (r.kind === 'unreadable') throw new StoreUnread(this.filePath, r.error)
     this.unread = null
-    if (r.kind === 'missing') return
+    if (r.kind === 'missing') {
+      // As load does for a missing file (final review M-2, E2 §6): what memory held is not the file's.
+      this.state = { projects: {} }
+      this.seen = null
+      this.stale = false
+      return
+    }
     let parsed: unknown = null
     try {
       parsed = JSON.parse(r.text)

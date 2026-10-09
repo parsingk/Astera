@@ -142,6 +142,17 @@ describe('markClaudeProjectTrusted', () => {
     vi.restoreAllMocks()
     expect(await fs.readFile(file, 'utf8')).toBe(before)
   })
+  // Final review M-1: a ~/.claude.json that exists but holds nothing (caught mid-write) was read as {}, and the trust
+  // entry written over it, after the good .bak was replaced by the blank copy.
+  it('a file that exists but is blank is left alone, and the call fails', async () => {
+    const dir = await tmpDir()
+    const file = path.join(dir, '.claude.json')
+    await fs.writeFile(file, '   ', 'utf8')
+    await fs.writeFile(file + '.bak', '{"oauthAccount":{}}', 'utf8')
+    await expect(markClaudeProjectTrusted(file, 'D:/wt/a')).rejects.toThrow()
+    expect(await fs.readFile(file, 'utf8')).toBe('   ')
+    expect(await fs.readFile(file + '.bak', 'utf8')).toBe('{"oauthAccount":{}}')
+  })
   // Two starts at once (a coordinator and its worker) each read the file before the other wrote, and one trust was lost.
   it('two marks at once both land', async () => {
     const dir = await tmpDir()

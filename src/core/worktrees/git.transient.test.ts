@@ -107,7 +107,10 @@ describe('git adapter, output limit', () => {
       expect(done).toBeNull()
       expect(child.kill).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(1)
-      expect(child.kill).toHaveBeenCalled()
+      // On win32 the tree goes first through taskkill, and the parent only after it answered (final review I-1);
+      // elsewhere the child is killed at once.
+      if (process.platform === 'win32') expect(mocked.mock.calls[1]?.[0]).toBe('taskkill')
+      else expect(child.kill).toHaveBeenCalled()
       if (process.platform !== 'win32') child.emit('exit', null)
       await vi.advanceTimersByTimeAsync(20)
       expect(done).toEqual({ ok: false, stdout: '', stderr: 'timed out', timedOut: true })

@@ -112,11 +112,13 @@ export function systemWinAcl(exec: Run = defaultRun): WinAcl {
       if (!found) throw new Error('could not read this user’s SID from whoami')
       return found
     })
-    // A failure is not kept (audit U-5): kept, one failed whoami failed every later read and lock of the store.
-    sid.catch(() => {
-      sid = null
+    // A failure is not kept (audit U-5): kept, one failed whoami failed every later read and lock of the store. Only
+    // this request is cleared, never a newer one (final review M-7).
+    const mine = sid
+    mine.catch(() => {
+      if (sid === mine) sid = null
     })
-    return sid
+    return mine
   }
   return {
     userSid,
