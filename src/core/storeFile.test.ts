@@ -25,6 +25,12 @@ describe('readStoreFile', () => {
     expect(await readStoreFile(f)).toMatchObject({ kind: 'unreadable' })
     expect(spy.mock.calls.length).toBeGreaterThan(1)
   })
+  // CI on macOS and Linux: a path under a file answers ENOTDIR there (ENOENT on win32). No file can be at that path, so
+  // it is missing, not unreadable; taken for unreadable, the store refused writes and then dropped what it held.
+  it('takes a path under a file (ENOTDIR) for missing', async () => {
+    vi.spyOn(fs, 'readFile').mockRejectedValue(Object.assign(new Error('not a directory'), { code: 'ENOTDIR' }))
+    expect(await readStoreFile(path.join(dir, 'a.json'))).toEqual({ kind: 'missing' })
+  })
 })
 
 // The .bak was overwritten by each damage, so a second damage in a row lost the only copy of the first.

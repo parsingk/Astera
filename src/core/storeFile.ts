@@ -7,12 +7,14 @@ import { readFileRetrying } from './renameRetry'
 
 export type StoreRead = { kind: 'missing' } | { kind: 'unreadable'; error: unknown } | { kind: 'text'; text: string }
 
-/** The file's text, read with the rename retries; `missing` for ENOENT, `unreadable` for any other error. */
+/** The file's text, read with the rename retries; `missing` for ENOENT and ENOTDIR (a path under a file, which POSIX
+ *  answers where win32 says ENOENT: no file can be there), `unreadable` for any other error. */
 export async function readStoreFile(file: string): Promise<StoreRead> {
   try {
     return { kind: 'text', text: await readFileRetrying(file) }
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { kind: 'missing' }
     return { kind: 'unreadable', error: e }
   }
 }

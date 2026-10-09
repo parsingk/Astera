@@ -418,10 +418,14 @@ describe('AccountRegistry, final review', () => {
       }
       return realRename(a as string, b as string)
     }) as typeof fs.rename)
-    const results = await Promise.allSettled([r.create({ label: 'lost' }), r.create({ label: 'kept' })])
+    // Which create reaches the queue first is not fixed (each makes its folder before it gets there; CI on Windows
+    // swapped them), so the one whose save failed is found from the results rather than assumed.
+    const labels = ['one', 'two']
+    const results = await Promise.allSettled(labels.map((label) => r.create({ label })))
     vi.restoreAllMocks()
-    expect(results.map((x) => x.status)).toEqual(['rejected', 'fulfilled'])
-    expect(r.list().map((a) => a.label)).toEqual(['kept'])
+    expect(results.map((x) => x.status).sort()).toEqual(['fulfilled', 'rejected'])
+    const kept = labels[results.findIndex((x) => x.status === 'fulfilled')]
+    expect(r.list().map((a) => a.label)).toEqual([kept])
     await fs.rm(dir, { recursive: true, force: true })
   })
 })

@@ -181,6 +181,10 @@ describe('Remote Runtime Phase 7 acceptance (design §6 Phase 7)', { timeout: 30
     expect((await a.router.command('proj_key', 'accounts-list', {}, 'rt_p7')).status).toBe(200)
     await gw?.close()
     gw = null
+    // A read first, so the app has seen its connection close (CI on macOS and Linux: a change written in the same turn
+    // as the close went onto a socket the app had not yet seen end, and a write whose connection then ends is honestly
+    // OUTCOME_UNKNOWN). The read is OFFLINE either way, and so is the change after it.
+    expect(await a.router.command('proj_key', 'accounts-list', {}, 'rt_p7')).toMatchObject({ status: 503, body: { code: 'RUNTIME_OFFLINE' } })
     const r = await a.router.command('proj_key', 'run-start', { run: 'run_x' }, 'rt_p7')
     // The Gateway is gone before anything is sent, so the change certainly did not run: 503 RUNTIME_OFFLINE, not the
     // "may have run" 409 of a lost answer.
