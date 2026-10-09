@@ -91,7 +91,8 @@ async function runtime() {
   if ('error' in started) throw new Error(started.error.message)
   gw = started
   const local = { role: 'cli' as const, toOthers: () => {} }
-  /** `astera runtime pair` on the Runtime, as the string it prints. */
+  /** `astera runtime pair` on the Runtime, as the string it prints; full control unless read-only is asked for, as
+   *  most of these tests change things there (the command's own default is read-only). */
   const pairing = async (permission: 'read-only' | 'full-control' = 'full-control'): Promise<string> => {
     const r = await orch.call({ cmd: 'pair-create', args: { permission }, sessionId: '', from: local })
     return formatPairing({ address: '127.0.0.1', port: started.port, code: (r.body as { code: string }).code, fingerprint: identity.spkiSha256 })

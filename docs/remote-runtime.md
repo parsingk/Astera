@@ -339,7 +339,7 @@ list the newest Jobs or runs on that Runtime before trying again.
   If you trust the change, remove the Runtime and pair again with a new string.
 - **`RUNTIME_AUTH_FAILED`.** The Runtime revoked this controller, or its profile lost the pairing. Pair again.
 - **A pairing string is refused.** It works once, for 10 minutes, and five wrong tries burn it. Run
-  `astera runtime pair` again.
+  `astera runtime pair` again, with `--full-control` if this controller is to change things there.
 - **The Runtime does not come back after a reboot.** Check the OS recipe: the task, LaunchAgent or unit exists and
   runs `astera runtime serve`, and Remote is on (`astera runtime status`).
 - **Sessions or workers fail to start on the Runtime.** Sign the Runtime's accounts in there, in the Astera app; under
@@ -357,7 +357,7 @@ list the newest Jobs or runs on that Runtime before trying again.
 | `RUNTIME_PROTOCOL_MISMATCH` | 9 | the two machines speak different remote protocols; update the older |
 | `RUNTIME_CAPABILITY_MISSING` | 9 | the command has no remote form, or that Runtime cannot do it |
 | `RUNTIME_BUSY` | 6 | too many connections or calls in flight on the Runtime; try again shortly |
-| `RUNTIME_PERMISSION_DENIED` | 5 | a read-only pairing asked for a change |
+| `RUNTIME_PERMISSION_DENIED` | 5 | a read-only pairing asked for a change; pair again with `astera runtime pair --full-control` on the Runtime |
 | `RUNTIME_OUTCOME_UNKNOWN` | 6 | an answer was lost and the Runtime cannot say whether the change ran |
 | `REMOTE_TIMEOUT` | 7 | no answer in time; the command may still finish |
 | `REMOTE_REPLY_TOO_LARGE` | 1 | the answer was over 64 MiB |

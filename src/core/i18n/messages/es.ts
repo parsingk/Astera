@@ -64,7 +64,7 @@ export const es: Catalog = {
   'settings.remote.paired.online': 'Responde: Astera {version} en {platform}',
   'settings.remote.paired.offline': 'No responde ({code})',
   'settings.remote.pair.title': 'Emparejar un Runtime',
-  'settings.remote.pair.hint': 'Ejecuta astera runtime pair en ese equipo y pega la cadena astera-pair: que muestra. La cadena lleva un código secreto.',
+  'settings.remote.pair.hint': 'Ejecuta astera runtime pair en ese equipo y pega la cadena astera-pair: que muestra. El emparejamiento es de solo lectura salvo que añadas --full-control allí. La cadena lleva un código secreto.',
   'settings.remote.pair.name': 'Nombre (opcional)',
   'settings.remote.pair.button': 'Emparejar',
   'settings.remote.pair.done': 'Emparejado con {name}.',

@@ -102,7 +102,7 @@ export const ko = {
   'settings.remote.paired.online': '응답합니다: Astera {version}, {platform}',
   'settings.remote.paired.offline': '응답하지 않습니다 ({code})',
   'settings.remote.pair.title': 'Runtime 과 짝짓기',
-  'settings.remote.pair.hint': '그 컴퓨터에서 astera runtime pair 를 실행하고, 출력된 astera-pair: 문자열을 붙여 넣으세요. 이 문자열에는 비밀 코드가 있습니다.',
+  'settings.remote.pair.hint': '그 컴퓨터에서 astera runtime pair 를 실행하고, 출력된 astera-pair: 문자열을 붙여 넣으세요. 그쪽에서 --full-control 을 붙이지 않으면 읽기 전용으로 짝지어집니다. 이 문자열에는 비밀 코드가 있습니다.',
   'settings.remote.pair.name': '이름 (선택)',
   'settings.remote.pair.button': '짝짓기',
   'settings.remote.pair.done': '{name} 과(와) 짝지었습니다.',

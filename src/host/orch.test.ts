@@ -944,6 +944,16 @@ describe('pairing and clients (local only)', () => {
     }
     expect((await orch.call({ cmd: 'pair-create', args: {}, sessionId: '', from: cli })).status).toBe(200)
   })
+  // Final review M1: a caller that names no permission gets the read-only pairing the CLI now defaults to.
+  it('pair-create with no permission makes a read-only pairing', async () => {
+    const controllers = createControllerRegistry()
+    const orch = orchOver({ controllers })
+    const pair = await orch.call({ cmd: 'pair-create', args: {}, sessionId: '', from: cli })
+    expect(pair.body).toMatchObject({ permission: 'read-only' })
+    const got = await controllers.redeem((pair.body as { code: string }).code, 'laptop')
+    if (!got.ok) throw new Error('redeem')
+    expect(controllers.list()).toMatchObject([{ permission: 'read-only' }])
+  })
   it('pair-create refuses a permission it does not know rather than granting full control', async () => {
     const orch = orchOver({ controllers: createControllerRegistry() })
     const r = await orch.call({ cmd: 'pair-create', args: { permission: 'readonly' }, sessionId: '', from: cli })

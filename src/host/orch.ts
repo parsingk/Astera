@@ -1770,7 +1770,8 @@ export function createHostOrch(a: {
             // An unknown level is refused, not widened: the gate denies one, so pairing must not grant one.
             if (args.permission !== undefined && args.permission !== 'read-only' && args.permission !== 'full-control')
               return { status: 400, body: { error: 'permission must be read-only or full-control' } }
-            const permission = args.permission === 'read-only' ? 'read-only' : 'full-control'
+            // Read-only unless full control is named, as the CLI asks (final review M1).
+            const permission = args.permission === 'full-control' ? 'full-control' : 'read-only'
             const name = typeof args.name === 'string' ? args.name : undefined
             // The code goes to the caller and nowhere else: never into a log line (design §4.4).
             return { status: 200, body: { ...a.controllers.createPairing({ permission, ...(name ? { name } : {}) }), permission } }

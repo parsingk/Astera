@@ -405,6 +405,27 @@ describe('hfProxy', () => {
       expect(gets.length).toBe(1)
     })
 
+    // Final review M3/M5: while another process holds the higgsfield lock past the wait, the ledger is not written
+    // without it, and the file already downloaded is still used rather than thrown away.
+    it('uses a downloaded file when the ledger cannot be locked to record it, and writes nothing unlocked', async () => {
+      const { a, b } = await setup()
+      await fs.mkdir(path.join(profile, 'higgsfield'), { recursive: true })
+      const before = JSON.stringify({ uploads: {}, jobs: { [J]: { account: a.id } } })
+      await fs.writeFile(ledgerFile(), before)
+      const { setHfCurrent } = await import('../core/higgsfield/accounts')
+      await setHfCurrent(profile, b.id)
+      const lock = path.join(profile, 'higgsfield', '.lock')
+      const fetchFake = (async () => {
+        await fs.writeFile(lock, JSON.stringify({ pid: process.pid, startedAt: Date.now(), nonce: 'other' }))
+        return new Response('bytes')
+      }) as unknown as typeof fetch
+      await hfProxy({ args: ['generate', 'create', 'k', '--image', J], env: env(), platform: process.platform, home: profile, run: jobRunner([]), fetch: fetchFake, write: (s) => msgs.push(s) })
+      const file = path.join(profile, 'higgsfield', 'assets', `${J}.mp4`)
+      expect((await calls()).find((x) => x.args[1] === 'create').args).toEqual(['generate', 'create', 'k', '--image', file])
+      expect(await fs.readFile(ledgerFile(), 'utf8')).toBe(before)
+      await fs.rm(lock, { force: true })
+    }, 20000)
+
     it('keeps the id and says so once when the download fails', async () => {
       const { a, b } = await setup()
       await fs.mkdir(path.join(profile, 'higgsfield'), { recursive: true })

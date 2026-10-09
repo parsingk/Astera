@@ -64,7 +64,7 @@ export const ja: Catalog = {
   'settings.remote.paired.online': '応答あり: Astera {version}、{platform}',
   'settings.remote.paired.offline': '応答がありません ({code})',
   'settings.remote.pair.title': 'Runtime とペアリング',
-  'settings.remote.pair.hint': 'そのコンピューターで astera runtime pair を実行し、表示された astera-pair: 文字列を貼り付けてください。この文字列には秘密のコードが含まれます。',
+  'settings.remote.pair.hint': 'そのコンピューターで astera runtime pair を実行し、表示された astera-pair: 文字列を貼り付けてください。そちらで --full-control を付けない限り、読み取り専用でペアリングされます。この文字列には秘密のコードが含まれます。',
   'settings.remote.pair.name': '名前 (任意)',
   'settings.remote.pair.button': 'ペアリング',
   'settings.remote.pair.done': '{name} とペアリングしました。',

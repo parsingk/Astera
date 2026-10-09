@@ -361,7 +361,9 @@ const STEPS: Record<
   RUNTIME_ACCOUNT_NOT_FOUND: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} accounts list` : 'astera runtimes list'],
   RUNTIME_CAPABILITY_MISSING: (cmd) => [usageCommandFor(cmd)],
   RUNTIME_BUSY: () => [],
-  RUNTIME_PERMISSION_DENIED: () => [],
+  // Read-only is the default pairing: full control is a new pairing, made on the Runtime (the first line, run there)
+  // and added here (final review I1).
+  RUNTIME_PERMISSION_DENIED: () => ['astera runtime pair --full-control', 'astera runtimes add --pair <string>'],
   // §3.9: whether the first attempt ran cannot be proven; the newest Jobs on that Runtime say.
   RUNTIME_OUTCOME_UNKNOWN: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],
   REMOTE_TIMEOUT: (_cmd, details) => [typeof details.runtime === 'string' ? `astera --runtime ${details.runtime} jobs list` : 'astera runtimes list'],

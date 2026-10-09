@@ -185,7 +185,9 @@ async function bringIdsOver(a: {
           const url = got.code === 0 ? firstMediaUrl(got.stdout) : null
           if (!url) throw new Error('no media url')
           file = await downloadAsset(profileDir, f.id, url, doFetch, { timeoutMs: downloadTimeoutMs })
-          await recordJobFile(profileDir, f.id, file)
+          // The file is here either way: a ledger that could not be locked or written only costs the next run a
+          // download again (final review M3).
+          await recordJobFile(profileDir, f.id, file).catch(() => {})
         }
       }
       if (!file) throw new Error('no file')

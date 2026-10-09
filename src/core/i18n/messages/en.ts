@@ -98,7 +98,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.remote.paired.online': 'Answers: Astera {version} on {platform}',
   'settings.remote.paired.offline': 'Does not answer ({code})',
   'settings.remote.pair.title': 'Pair a Runtime',
-  'settings.remote.pair.hint': 'Run astera runtime pair on that computer and paste the astera-pair: string it prints. The string carries a secret code.',
+  'settings.remote.pair.hint': 'Run astera runtime pair on that computer and paste the astera-pair: string it prints. The pairing only reads unless you add --full-control there. The string carries a secret code.',
   'settings.remote.pair.name': 'Name (optional)',
   'settings.remote.pair.button': 'Pair',
   'settings.remote.pair.done': 'Paired with {name}.',

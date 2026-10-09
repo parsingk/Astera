@@ -16,7 +16,9 @@ export const hfAccountDir = (profileDir: string, id: string): string => path.joi
 const fileOf = (profileDir: string): string => path.join(hfRoot(profileDir), 'accounts.json')
 
 /** Every read-then-write of a file under higgsfield/ holds this (audit U-8): the app, the CLI and hf-proxy write them
- *  from different processes, and each wrote the whole file it read, so a change made meanwhile was lost. */
+ *  from different processes, and each wrote the whole file it read, so a change made meanwhile was lost.
+ *  Not reentrant (final review M4): work inside it calls the unlocked readers and writers, never another function that
+ *  takes it, or it waits on itself until the lock wait runs out. */
 export const hfLocked = <T>(profileDir: string, fn: () => Promise<T>): Promise<T> => withFileLock(hfRoot(profileDir), fn)
 
 export const hfEnvFor = (profileDir: string, id: string) => ({
