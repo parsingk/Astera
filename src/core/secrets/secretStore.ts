@@ -6,6 +6,7 @@ import { constants, lstatSync, promises as fs } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { pidLives as realPidLives } from '../host/pidFile'
+import { takeFileLock } from '../fileLock'
 import { pathChain, posixProblem, symlinkProblem, type StatLike } from './posixCheck'
 import { sddlProblem, systemWinAcl, type WinAcl } from './winAcl'
 
@@ -46,7 +47,6 @@ const NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,79}$/
 const LOCK = 'lock'
 const TMP = '.tmp-'
 const BREAK_GUARD = '.lock-break'
-const GUARD_STALE_MS = 10_000
 
 const missing = (e: unknown): boolean => (e as NodeJS.ErrnoException).code === 'ENOENT'
 
@@ -161,8 +161,6 @@ export function openSecretStore(a: {
 
   const lockFile = path.join(dir, LOCK)
   let swept = false
-  /** Locks this store took and could not remove at release (audit U-5). */
-  const abandoned = new Set<string>()
   /** A write's temp file older than an hour is one whose process died between creating and renaming it. */
   const sweepTemps = async (): Promise<void> => {
     const names = await fs.readdir(dir).catch(() => [] as string[])
@@ -175,96 +173,9 @@ export function openSecretStore(a: {
   const guardFile = path.join(dir, BREAK_GUARD)
   const pause = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-  /**
-   * Removes the lock only if it still holds `seen`. Removers take turns through an O_EXCL guard file, and the only way a
-   * lock disappears is through here (taking one is O_EXCL on the lock itself), so a remover can never delete a lock
-   * that another process took after this one read the old one (Phase 2 review I2). Answers 'busy' when another remover
-   * holds the guard; a guard older than GUARD_STALE_MS was left by a remover that died, and is cleared.
-   */
-  const removeIfUnchanged = async (seen: string): Promise<'removed' | 'changed' | 'busy'> => {
-    try {
-      await (await fs.open(guardFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)).close()
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' && (e as NodeJS.ErrnoException).code !== 'EPERM') throw e
-      const st = await fs.stat(guardFile).catch(() => null)
-      if (st && Date.now() - st.mtimeMs > GUARD_STALE_MS) await fs.rm(guardFile, { force: true })
-      return 'busy'
-    }
-    try {
-      const now = await fs.readFile(lockFile, 'utf8').catch(() => null)
-      if (now !== seen) return 'changed'
-      await fs.rm(lockFile, { force: true })
-      return 'removed'
-    } finally {
-      await fs.rm(guardFile, { force: true })
-    }
-  }
-
-  const takeLock = async (): Promise<() => Promise<void>> => {
-    const mine = JSON.stringify({ pid: process.pid, startedAt: now(), nonce: randomBytes(8).toString('hex') })
-    const deadline = now() + waitMs
-    for (;;) {
-      let created = false
-      try {
-        const h = await fs.open(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
-        created = true
-        try {
-          await h.writeFile(mine)
-        } finally {
-          await h.close()
-        }
-        return async () => {
-          // Released the same way a breaker removes, so a lock that was taken from this holder is never deleted.
-          for (let tries = 0; tries < 200; tries++) {
-            if ((await removeIfUnchanged(mine)) !== 'busy') return
-            await pause(25)
-          }
-          // Left behind (audit U-5): this process's next lock would have waited on it as a live holder's. It is known
-          // as this process's own, and broken at once.
-          abandoned.add(mine)
-        }
-      } catch (e) {
-        // A lock this call made but could not fill would look like a writer mid-fill to everyone else: take it back.
-        if (created) {
-          await fs.rm(lockFile, { force: true })
-          throw e
-        }
-        // Windows answers EPERM, not EEXIST, for a lock whose deletion is still pending.
-        const code = (e as NodeJS.ErrnoException).code
-        if (code !== 'EEXIST' && code !== 'EPERM') throw e
-      }
-      const held = await fs.readFile(lockFile, 'utf8').catch(() => null)
-      if (held !== null) {
-        let stale: boolean
-        if (held === '') {
-          // Its writer may be between creating it and filling it. Judged by the file's own age, so a lock left empty
-          // by a writer that died is broken by the next caller, not waited on forever (Phase 2 review I3).
-          const st = await fs.stat(lockFile).catch(() => null)
-          stale = st !== null && Date.now() - st.mtimeMs > staleMs
-        } else {
-          let owner: { pid?: unknown; startedAt?: unknown } | null = null
-          try {
-            owner = JSON.parse(held) as { pid?: unknown; startedAt?: unknown }
-          } catch {
-            owner = null
-          }
-          stale =
-            !owner ||
-            typeof owner.pid !== 'number' ||
-            typeof owner.startedAt !== 'number' ||
-            !lives(owner.pid) ||
-            now() - owner.startedAt > staleMs
-        }
-        if (abandoned.has(held)) stale = true
-        if (stale && (await removeIfUnchanged(held)) === 'removed') {
-          abandoned.delete(held)
-          continue
-        }
-      }
-      if (now() >= deadline) throw new SecretStoreBusy(dir)
-      await pause(25)
-    }
-  }
+  // The lock itself lives in fileLock.ts, shared with other files several processes write.
+  const takeLock = (): Promise<() => Promise<void>> =>
+    takeFileLock({ lockFile, guardFile, waitMs, staleMs, now, pidLives: lives, busy: () => new SecretStoreBusy(dir) })
 
   /** Windows refuses a rename over a file another process has open for a moment (a lock-free reader, a scanner). */
   const renameRetrying = async (from: string, to: string): Promise<void> => {
