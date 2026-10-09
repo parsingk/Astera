@@ -6,7 +6,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { renameRetrying } from '../renameRetry'
 import { keepDamaged, readStoreFile } from '../storeFile'
-import { hfRoot } from './accounts'
+import { hfLocked, hfRoot } from './accounts'
 import { subIndex } from './credits'
 
 export interface HfAssetLedger {
@@ -39,6 +39,15 @@ export async function recordAfter(profileDir: string, account: string, args: str
   const ids = [...new Set(stdout.match(UUID) ?? [])].map((s) => s.toLowerCase())
   if (!ids.length) return
   const i = subIndex(args)
+  const uploaded = args[i] === 'upload' && args[i + 1] === 'create' && args[i + 2] ? path.resolve(args[i + 2]) : null
+  const job = args[i] === 'generate' && (args[i + 1] === 'create' || args[i + 1] === 'workflow')
+  if (uploaded === null && !job) return
+  // Read and written under the higgsfield lock (audit U-8): two hf-proxy processes recording at once lost one record.
+  await hfLocked(profileDir, () => recordLocked(profileDir, account, ids, uploaded))
+}
+
+/** `uploaded` is the uploaded file's path, or null for a generation's job ids. */
+async function recordLocked(profileDir: string, account: string, ids: string[], uploaded: string | null): Promise<void> {
   // Read strictly before a write (audit U-8): a ledger that could not be read was taken for an empty one, and this write
   // replaced every id it held. Nothing is recorded then; a damaged ledger is kept aside and started afresh.
   const read = await readStoreFile(fileOf(profileDir))
@@ -52,11 +61,8 @@ export async function recordAfter(profileDir: string, account: string, args: str
       await keepDamaged(fileOf(profileDir), read.text)
     }
   }
-  if (args[i] === 'upload' && args[i + 1] === 'create' && args[i + 2]) {
-    for (const id of ids) l.uploads[id] = { account, path: path.resolve(args[i + 2]) }
-  } else if (args[i] === 'generate' && (args[i + 1] === 'create' || args[i + 1] === 'workflow')) {
-    for (const id of ids) l.jobs[id] ??= { account }
-  } else return
+  if (uploaded !== null) for (const id of ids) l.uploads[id] = { account, path: uploaded }
+  else for (const id of ids) l.jobs[id] ??= { account }
   await writeLedger(profileDir, l)
 }
 
@@ -126,9 +132,10 @@ export async function downloadAsset(
 }
 
 /** Record where a job's media was saved. */
-export async function recordJobFile(profileDir: string, id: string, file: string): Promise<void> {
-  const l = await readLedger(profileDir)
-  if (!l.jobs[id]) return
-  l.jobs[id].file = file
-  await writeLedger(profileDir, l)
-}
+export const recordJobFile = (profileDir: string, id: string, file: string): Promise<void> =>
+  hfLocked(profileDir, async () => {
+    const l = await readLedger(profileDir)
+    if (!l.jobs[id]) return
+    l.jobs[id].file = file
+    await writeLedger(profileDir, l)
+  })

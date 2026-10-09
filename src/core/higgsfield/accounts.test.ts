@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  addHfAccount, hfAccountDir, hfEnvFor, importHfAccount, readHfAccounts, removeHfAccount,
+  addHfAccount, hfAccountDir, hfEnvFor, importHfAccount, patchHfAccount, readHfAccounts, removeHfAccount,
   resolveHfAccount, setHfCurrent, writeHfAccounts
 } from './accounts'
 
@@ -97,5 +97,35 @@ describe('removeHfAccount guard', () => {
     }
     expect(await fs.readFile(sentinel, 'utf8')).toBe('x')
     expect((await readHfAccounts(profile)).accounts.map((x) => x.id)).toEqual([a.id])
+  })
+})
+
+// Audit U-8 (ruling reversed): the app, the CLI and hf-proxy change accounts.json from different processes; each read
+// it and wrote it whole, so a change made meanwhile was lost. Every change now reads and writes under one lock.
+describe('account changes made at the same time', () => {
+  it('keeps two patches to two accounts', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const b = await addHfAccount(profile, 'B')
+    await Promise.all([patchHfAccount(profile, a.id, { email: 'a@x' }), patchHfAccount(profile, b.id, { needsLogin: true })])
+    const f = await readHfAccounts(profile)
+    expect(f.accounts.find((x) => x.id === a.id)?.email).toBe('a@x')
+    expect(f.accounts.find((x) => x.id === b.id)?.needsLogin).toBe(true)
+  })
+  it('keeps a patch and a change of the current account', async () => {
+    const a = await addHfAccount(profile, 'A')
+    const b = await addHfAccount(profile, 'B')
+    await Promise.all([setHfCurrent(profile, b.id), patchHfAccount(profile, a.id, { email: 'a@x' })])
+    const f = await readHfAccounts(profile)
+    expect(f.current).toBe(b.id)
+    expect(f.accounts.find((x) => x.id === a.id)?.email).toBe('a@x')
+  })
+  it('keeps both of two accounts added together', async () => {
+    await Promise.all([addHfAccount(profile, 'A'), addHfAccount(profile, 'B')])
+    expect((await readHfAccounts(profile)).accounts.map((x) => x.label).sort()).toEqual(['A', 'B'])
+  })
+  it('keeps an account added while another is removed', async () => {
+    const a = await addHfAccount(profile, 'A')
+    await Promise.all([removeHfAccount(profile, a.id), addHfAccount(profile, 'B')])
+    expect((await readHfAccounts(profile)).accounts.map((x) => x.label)).toEqual(['B'])
   })
 })

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, writeLedger } from './assets'
+import { downloadAsset, firstMediaUrl, foreignIds, readLedger, recordAfter, recordJobFile, writeLedger } from './assets'
 
 const U = '11111111-1111-4111-8111-111111111111'
 const J = '22222222-2222-4222-8222-222222222222'
@@ -107,5 +107,37 @@ describe('recordAfter with a ledger it could not read', () => {
     vi.restoreAllMocks()
     const l = await readLedger(prof)
     expect(Object.keys(l.uploads)).toEqual([A])
+  })
+})
+
+// Audit U-8 (ruling reversed): two processes recording at once each read the ledger and wrote it whole, so the later
+// write dropped what the earlier one added. Every change now reads and writes under one lock.
+describe('ledger changes made at the same time', () => {
+  const U1 = '44444444-4444-4444-8444-444444444444'
+  const U2 = '55555555-5555-4555-8555-555555555555'
+  const J1 = '66666666-6666-4666-8666-666666666666'
+  let prof: string
+  beforeEach(async () => { prof = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hfr-')) })
+
+  it('keeps both of two uploads recorded together', async () => {
+    await Promise.all([
+      recordAfter(prof, 'a', ['upload', 'create', 'C:/one.png'], U1),
+      recordAfter(prof, 'b', ['upload', 'create', 'C:/two.png'], U2)
+    ])
+    expect(Object.keys((await readLedger(prof)).uploads).sort()).toEqual([U1, U2])
+  })
+  it("keeps a job's saved file and an upload recorded beside it", async () => {
+    await recordAfter(prof, 'a', ['generate', 'create', 'k'], J1)
+    await Promise.all([
+      recordJobFile(prof, J1, 'C:/out.mp4'),
+      recordAfter(prof, 'a', ['upload', 'create', 'C:/one.png'], U1)
+    ])
+    const l = await readLedger(prof)
+    expect(l.jobs[J1]?.file).toBe('C:/out.mp4')
+    expect(Object.keys(l.uploads)).toEqual([U1])
+  })
+  it('leaves no lock behind', async () => {
+    await recordAfter(prof, 'a', ['upload', 'create', 'C:/one.png'], U1)
+    expect((await fs.readdir(path.join(prof, 'higgsfield'))).filter((n) => n.startsWith('.lock'))).toEqual([])
   })
 })

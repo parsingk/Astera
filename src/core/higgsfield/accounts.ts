@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { renameRetrying } from '../renameRetry'
+import { withFileLock } from '../fileLock'
 
 export interface HfAccount { id: string; label: string; email?: string; needsLogin?: boolean }
 export interface HfAccountsFile { accounts: HfAccount[]; current: string | null }
@@ -13,6 +14,10 @@ export interface HfAccountsFile { accounts: HfAccount[]; current: string | null 
 export const hfRoot = (profileDir: string): string => path.join(profileDir, 'higgsfield')
 export const hfAccountDir = (profileDir: string, id: string): string => path.join(hfRoot(profileDir), id)
 const fileOf = (profileDir: string): string => path.join(hfRoot(profileDir), 'accounts.json')
+
+/** Every read-then-write of a file under higgsfield/ holds this (audit U-8): the app, the CLI and hf-proxy write them
+ *  from different processes, and each wrote the whole file it read, so a change made meanwhile was lost. */
+export const hfLocked = <T>(profileDir: string, fn: () => Promise<T>): Promise<T> => withFileLock(hfRoot(profileDir), fn)
 
 export const hfEnvFor = (profileDir: string, id: string) => ({
   HIGGSFIELD_CREDENTIALS_PATH: path.join(hfAccountDir(profileDir, id), 'credentials.json'),
@@ -68,7 +73,10 @@ export function resolveHfAccount(f: HfAccountsFile, key: string): HfAccount | 'a
   return undefined
 }
 
-async function append(profileDir: string, label: string, fill: (dir: string) => Promise<void>): Promise<HfAccount> {
+const append = (profileDir: string, label: string, fill: (dir: string) => Promise<void>): Promise<HfAccount> =>
+  hfLocked(profileDir, () => appendLocked(profileDir, label, fill))
+
+async function appendLocked(profileDir: string, label: string, fill: (dir: string) => Promise<void>): Promise<HfAccount> {
   const f = await readHfAccounts(profileDir)
   const account: HfAccount = { id: randomUUID().slice(0, 8), label }
   const dir = hfAccountDir(profileDir, account.id)
@@ -98,33 +106,37 @@ export const importHfAccount = (profileDir: string, label: string, sourceDir: st
   })
 
 export async function removeHfAccount(profileDir: string, id: string): Promise<void> {
-  const f = await readHfAccounts(profileDir)
-  // Before any fs.rm: an id like '..' or '' must never reach a path join.
-  if (!f.accounts.some((a) => a.id === id)) throw new Error(`unknown higgsfield account: ${id}`)
-  const accounts = f.accounts.filter((a) => a.id !== id)
-  // D2: Astera never picks an account the person did not pick, so removing the current one leaves none.
-  const current = f.current === id ? null : f.current
-  await writeHfAccounts(profileDir, { accounts, current })
+  await hfLocked(profileDir, async () => {
+    const f = await readHfAccounts(profileDir)
+    // Before any fs.rm: an id like '..' or '' must never reach a path join.
+    if (!f.accounts.some((a) => a.id === id)) throw new Error(`unknown higgsfield account: ${id}`)
+    const accounts = f.accounts.filter((a) => a.id !== id)
+    // D2: Astera never picks an account the person did not pick, so removing the current one leaves none.
+    const current = f.current === id ? null : f.current
+    await writeHfAccounts(profileDir, { accounts, current })
+  })
   await fs.rm(hfAccountDir(profileDir, id), { recursive: true, force: true })
 }
 
-export async function setHfCurrent(profileDir: string, id: string): Promise<void> {
-  const f = await readHfAccounts(profileDir)
-  if (!f.accounts.some((a) => a.id === id)) throw new Error(`unknown higgsfield account: ${id}`)
-  await writeHfAccounts(profileDir, { ...f, current: id })
-}
+export const setHfCurrent = (profileDir: string, id: string): Promise<void> =>
+  hfLocked(profileDir, async () => {
+    const f = await readHfAccounts(profileDir)
+    if (!f.accounts.some((a) => a.id === id)) throw new Error(`unknown higgsfield account: ${id}`)
+    await writeHfAccounts(profileDir, { ...f, current: id })
+  })
 
-export async function patchHfAccount(
+export const patchHfAccount = (
   profileDir: string,
   id: string,
   patch: Partial<Pick<HfAccount, 'email' | 'needsLogin' | 'label'>>
-): Promise<void> {
-  const f = await readHfAccounts(profileDir)
-  const accounts = f.accounts.map((a) => {
-    if (a.id !== id) return a
-    const next: HfAccount = { ...a, ...patch }
-    if (!next.needsLogin) delete next.needsLogin
-    return next
+): Promise<void> =>
+  hfLocked(profileDir, async () => {
+    const f = await readHfAccounts(profileDir)
+    const accounts = f.accounts.map((a) => {
+      if (a.id !== id) return a
+      const next: HfAccount = { ...a, ...patch }
+      if (!next.needsLogin) delete next.needsLogin
+      return next
+    })
+    await writeHfAccounts(profileDir, { ...f, accounts })
   })
-  await writeHfAccounts(profileDir, { ...f, accounts })
-}
