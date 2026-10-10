@@ -16,4 +16,11 @@ describe('system.installCli', () => {
   it('kills an install still running when the app quits', () => {
     expect(handler).toContain("app.once('will-quit'")
   })
+  // Claude Code's Windows installer leaves PATH alone (cliAfterInstall.test.ts): what was installed is
+  // looked for with findAfterInstall, which puts the documented folder on the user Path.
+  it('finds what it installed with findAfterInstall', () => {
+    const adopt = ipc.slice(ipc.indexOf('const adoptInstalledCli'), start)
+    expect(adopt).toContain('findAfterInstall(cli,')
+    expect(adopt).not.toContain('await locateCli(cli)')
+  })
 })

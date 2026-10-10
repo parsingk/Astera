@@ -9,7 +9,8 @@
 // instead of growing a second copy.
 import { execFile } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { locateCommandFor } from '../core/install/cliInstall'
+import path from 'node:path'
+import { addUserPathCommand, locateCommandFor, unpathedInstallDir, type InstallCommand } from '../core/install/cliInstall'
 import { isVoltaManagedPath, type BypassSignal } from '../core/sessions/retryBypass'
 import type { Provider } from '../core/providers/meta'
 
@@ -34,6 +35,35 @@ export async function locateCli(cli: 'claude' | 'codex'): Promise<string | null>
   // would put a directory on PATH that hides nothing and helps nobody.
   return found !== null && existsSync(found) ? found : null
 }
+
+export interface AfterInstallDeps {
+  platform: string
+  home: string
+  exists: (file: string) => boolean
+  locate: (cli: 'claude' | 'codex') => Promise<string | null>
+  run: (command: InstallCommand) => Promise<boolean>
+}
+
+/**
+ * Where a CLI the app just installed is. When the machine cannot say but the folder its installer
+ * documents holds it (Claude Code on Windows leaves PATH alone: cliInstall.ts's unpathedInstallDir),
+ * that folder is put on the user's own Path first, as the installer's note asks the person to; the app,
+ * the Host and every terminal opened from then on find it there.
+ */
+export async function findAfterInstall(cli: 'claude' | 'codex', deps: AfterInstallDeps): Promise<string | null> {
+  const found = await deps.locate(cli)
+  if (found !== null) return found
+  const dir = unpathedInstallDir(cli, deps.platform, deps.home)
+  if (dir === null) return null
+  const exe = path.win32.join(dir, `${cli}.exe`)
+  if (!deps.exists(exe)) return null
+  if (!(await deps.run(addUserPathCommand(dir)))) return null
+  return (await deps.locate(cli)) ?? exe
+}
+
+/** Runs one of cliInstall.ts's commands, answering whether it ended well. */
+export const runInstallCommand = (c: InstallCommand): Promise<boolean> =>
+  new Promise((resolve) => execFile(c.command, c.args, { timeout: 30_000, windowsHide: true }, (err) => resolve(err === null)))
 
 /**
  * design F5: whether a bypassable toolchain manager is actually in the way of this CLI — checked once,

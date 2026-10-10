@@ -73,7 +73,7 @@ import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
 import { installCommandFor } from '../core/install/cliInstall'
-import { locateCli } from './cliLocate'
+import { findAfterInstall, locateCli, runInstallCommand } from './cliLocate'
 import { mcpClientsStatus, registerMcpClientNow } from './mcpClients'
 import { mcpServerFor, shimPathFor } from '../core/install/mcpRegistration'
 import { prependToPath } from '../core/sessions/manager'
@@ -7753,10 +7753,12 @@ export function registerIpc(
    *
    * So the machine is asked (locateCli, i.e. locateCommandFor), and what it answers is put in front of
    * this process's own PATH. That is enough for everything downstream: `system.checkCli` runs through
-   * PATH, and a spawned session copies this process's environment (core/sessions/manager.ts).
+   * PATH, and a spawned session copies this process's environment (core/sessions/manager.ts). An
+   * installer that leaves PATH alone (Claude Code on Windows) has its documented folder put on the
+   * user's Path first (cliLocate.ts's findAfterInstall).
    */
   const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
-    const found = await locateCli(cli)
+    const found = await findAfterInstall(cli, { platform: process.platform, home: os.homedir(), exists: existsSync, locate: locateCli, run: runInstallCommand })
     if (found === null) return null
     prependToPath(process.env as Record<string, string | undefined>, path.dirname(found))
     return found

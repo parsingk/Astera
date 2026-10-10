@@ -117,3 +117,40 @@ export function locateCommandFor(
   }
   return null
 }
+
+/**
+ * The folder a vendor's installer documents putting its CLI in while it leaves PATH to the person, or
+ * null for one that puts its own folder on PATH.
+ *
+ * Only Claude Code on Windows: its installer writes `%USERPROFILE%\.local\bin\claude.exe` and "prints the
+ * fix with that note but doesn't change PATH itself" (code.claude.com/docs/en/troubleshoot-install, read
+ * 2026-10-10). Without its folder on PATH the app it was installed from could not find it, and said it
+ * was not installed. Codex's installer adds its own folder (measured). On macOS and Linux the same
+ * installer leaves a shell profile line to the person, which this app does not write.
+ */
+export function unpathedInstallDir(cli: InstallableCli, platform: string, home: string): string | null {
+  if (platform === 'win32' && cli === 'claude') return `${home.replace(/[\\/]+$/, '')}\\.local\\bin`
+  return null
+}
+
+/**
+ * Appends a folder to the user's own saved Path, once, the way the vendor's note asks a person to.
+ *
+ * Read and written raw through the registry, so the entries a person wrote with `%VARIABLES%` stay
+ * variables and the value stays expandable (`[Environment]::SetEnvironmentVariable` would write back
+ * every entry expanded); a folder already there, with or without a trailing backslash, changes nothing.
+ * Windows is then told the environment changed, so a terminal opened from now on finds it too.
+ * `key` is the registry key under HKCU, which only a test changes.
+ */
+export function addUserPathCommand(dir: string, key = 'Environment'): InstallCommand {
+  const q = (s: string): string => `'${s.replace(/'/g, "''")}'`
+  const line =
+    `$d = ${q(dir)}; $k = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey(${q(key)}); ` +
+    "$p = [string]$k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'); " +
+    "$parts = @($p -split ';' | Where-Object { $_ -ne '' }); " +
+    "if (-not ($parts | Where-Object { $_.Trim('\"').TrimEnd('\\') -ieq $d.TrimEnd('\\') })) { " +
+    "$k.SetValue('Path', (($parts + $d.TrimEnd('\\')) -join ';'), 'ExpandString'); " +
+    "Add-Type -Namespace Astera -Name Env -MemberDefinition '[DllImport(\"user32.dll\", CharSet = CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, UIntPtr w, string l, uint f, uint t, out UIntPtr r);'; " +
+    "$r = [UIntPtr]::Zero; [void][Astera.Env]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r) }"
+  return { command: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', line], display: line, source: 'this PC' }
+}
