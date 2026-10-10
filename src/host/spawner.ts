@@ -100,6 +100,9 @@ export interface HostSpawnerDeps {
   appKeepsWorktrees(): boolean
   /** Test injection; defaults to existsSync. */
   exists?(p: string): boolean
+  /** What runs Claude Code's capture scripts on win32: the Host's own executable when that is a plain
+   *  Node (the Host runtime's node.exe), absent when the Host runs as the app's Electron. */
+  captureNode?: string
   /** Test injection; defaults to the scan the app's CodexRolloutWatcher runs. */
   findRollout?: typeof findRolloutOnDisk
   /** How often a codex session's rollout is looked for: the watcher's POLL_MS. */
@@ -241,10 +244,15 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   const { profileDir, platform, homeDir, registry, log } = d
   const readAccounts = d.readAccounts ?? readAccountEntries
   const descriptors = makeDescriptors(platform)
-  // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files.
+  // The rule core.ts uses for the app's StatusLineManager, so the two write the same settings files. On
+  // win32 the app names the Host runtime's node.exe, which is what this Host runs from, so its own
+  // executable is the same file — and one that is certain to be there while its sessions run, since a
+  // running image cannot be deleted. A Host started from the app's Electron has none to offer.
   const statusLine = new StatusLineManager(
     profileDir,
-    platform === 'win32' ? 'node' : resolveNodePath(d.env as { PATH?: string }, existsSync, platform)
+    platform === 'win32'
+      ? (d.captureNode ?? 'node')
+      : resolveNodePath(d.env as { PATH?: string }, existsSync, platform)
   )
   const ensured = once(() => statusLine.ensureFiles())
   // The app writes this same file at its start (bootOrch). Both go through the same junction decision

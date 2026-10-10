@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs, watch } from 'node:fs'
+import { existsSync, promises as fs, watch } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { spawn } from 'node:child_process'
 import type { Account } from '../types'
-import { StatusLineManager } from './statusline'
+import { StatusLineManager, captureCommand } from './statusline'
 import { dirIdentity } from '../files/watchedDir'
 
 const account: Account = {
@@ -408,4 +408,116 @@ describe('StatusLineManager.ensureFiles (the Host half)', () => {
     await mgr.startupCleanup()
     expect(await fs.readdir(mgr.hookEventsDir)).toEqual([])
   })
+})
+
+// Claude Code hands a hook's command to Git Bash, or to PowerShell when it finds no Git Bash. The old
+// `"node" "script"` was a ParserError in PowerShell, and a bare `node` was nothing on a PC without
+// Node.js; the line has to read the same in both, under whatever node it is given.
+describe('captureCommand', () => {
+  const W = (...parts: string[]): string => parts.join('\\')
+  const script = W('C:', 'Users', 'a b', 'AppData', 'Roaming', 'astera', 'astera-hook-capture.cjs')
+
+  it('keeps the quoted form, byte for byte, for a path that is not a Windows one', () => {
+    expect(captureCommand('/usr/local/bin/node', '/Users/a/Library/Application Support/astera/x.cjs')).toBe(
+      '"/usr/local/bin/node" "/Users/a/Library/Application Support/astera/x.cjs"'
+    )
+    expect(captureCommand('node', '/home/a/.config/astera/x.cjs')).toBe('"node" "/home/a/.config/astera/x.cjs"')
+  })
+
+  it('leaves a bare node bare and single-quotes the script', () => {
+    expect(captureCommand('node', script)).toBe("node 'C:/Users/a b/AppData/Roaming/astera/astera-hook-capture.cjs'")
+  })
+
+  it('keeps the drive letter of a node path outside its quotes', () => {
+    const exe = W('C:', 'Users', 'a b', 'AppData', 'Local', 'astera', 'host-runtime', 'node-24.15.0-astera-host', 'astera-host.exe')
+    expect(captureCommand(exe, script)).toBe(
+      "C:'/Users/a b/AppData/Local/astera/host-runtime/node-24.15.0-astera-host/astera-host.exe' " +
+        "'C:/Users/a b/AppData/Roaming/astera/astera-hook-capture.cjs'"
+    )
+  })
+
+  it("double-quotes a path with a ' in it, and falls back to the quoted form when $ comes with it", () => {
+    const exe = W('C:', "O'Brien", 'node.exe')
+    expect(captureCommand(exe, W('C:', "O'Brien", 'x.cjs'))).toBe(`C:"/O'Brien/node.exe" "C:/O'Brien/x.cjs"`)
+    expect(captureCommand('node', W('C:', "O'Brien$x", 'x.cjs'))).toBe(`"node" "C:/O'Brien$x/x.cjs"`)
+  })
+
+  it('quotes a UNC script for both shells too', () => {
+    expect(captureCommand('node', W('', '', 'server', 'share', 'astera', 'x.cjs'))).toBe("node '//server/share/astera/x.cjs'")
+  })
+})
+
+describe('StatusLineManager.useNode', () => {
+  let dir: string
+  beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-node-')) })
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }) })
+
+  const commands = async (file: string): Promise<string[]> => {
+    const s = JSON.parse(await fs.readFile(path.join(dir, file), 'utf8'))
+    return [s.statusLine.command, s.hooks.SessionStart[0].hooks[0].command, s.hooks.Stop[0].hooks[0].command]
+  }
+
+  it('rewrites both settings files with the new node', async () => {
+    const mgr = new StatusLineManager(dir)
+    await mgr.init()
+    const node = 'C:\\rt\\astera-host.exe'
+    await mgr.useNode(node)
+    const scripts = ['astera-statusline-capture.cjs', 'astera-session-context.cjs', 'astera-hook-capture.cjs']
+    for (const file of ['astera-statusline-settings.json', 'astera-hooks-settings.json']) {
+      expect(await commands(file)).toEqual(scripts.map((s) => captureCommand(node, path.join(dir, s))))
+    }
+  })
+
+  it('does not touch the files when the node is the one it already has', async () => {
+    const mgr = new StatusLineManager(dir, 'C:\\rt\\astera-host.exe')
+    await mgr.init()
+    const file = path.join(dir, 'astera-hooks-settings.json')
+    await fs.writeFile(file, 'left alone', 'utf8')
+    await mgr.useNode('C:\\rt\\astera-host.exe')
+    expect(await fs.readFile(file, 'utf8')).toBe('left alone')
+  })
+})
+
+// The measurement itself, kept: every command the settings carry, run the way Claude Code runs it,
+// from a profile folder with a space and Hangul in it and under the node running this test (on a
+// stock install that is C:\Program Files\nodejs, a space of its own).
+describe.runIf(process.platform === 'win32')('captureCommand through the shells Claude Code uses on Windows', () => {
+  const bash = 'C:\\Program Files\\Git\\bin\\bash.exe'
+  const shells: Array<[string, string, (cmd: string) => string[]]> = [
+    ['PowerShell', 'powershell.exe', (cmd) => ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', cmd]],
+    ...(existsSync(bash) ? [['Git Bash', bash, (cmd: string) => ['-c', cmd]] as [string, string, (cmd: string) => string[]]] : [])
+  ]
+  let root: string
+  let dir: string
+  let settings: { statusLine: { command: string }; hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-sl-sh-'))
+    dir = path.join(root, 'pro file 프로필')
+    await new StatusLineManager(dir, process.execPath).init()
+    settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-hooks-settings.json'), 'utf8'))
+  })
+  afterEach(async () => { await fs.rm(root, { recursive: true, force: true }) })
+
+  const run = (file: string, args: string[], env: Record<string, string>): Promise<number | null> =>
+    new Promise((resolve, reject) => {
+      const child = spawn(file, args, { env: { ...process.env, ...env }, stdio: ['pipe', 'ignore', 'ignore'] })
+      child.on('error', reject)
+      child.on('close', resolve)
+      child.stdin.end('{"hook_event_name":"Stop","x":"한글"}')
+    })
+
+  for (const [name, file, args] of shells) {
+    it(`runs the hook capture through ${name}`, async () => {
+      const out = path.join(root, 'hook.jsonl')
+      expect(await run(file, args(settings.hooks.Stop[0].hooks[0].command), { ASTERA_HOOK_OUT: out })).toBe(0)
+      const line = JSON.parse((await fs.readFile(out, 'utf8')).trim())
+      expect(line).toMatchObject({ hook_event_name: 'Stop', x: '한글' })
+    }, 30_000)
+
+    it(`runs the statusLine capture through ${name}`, async () => {
+      const out = path.join(root, 'status.json')
+      expect(await run(file, args(settings.statusLine.command), { ASTERA_STATUSLINE_OUT: out })).toBe(0)
+      expect(JSON.parse(await fs.readFile(out, 'utf8'))).toMatchObject({ x: '한글' })
+    }, 30_000)
+  }
 })

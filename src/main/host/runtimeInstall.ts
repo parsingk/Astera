@@ -56,6 +56,36 @@ export function asyncRuntimeFs(fsp: AsyncFs): RuntimeFs {
   }
 }
 
+/** The Node version a shipped `runtime.json` names, or '' when it names none. */
+function manifestNodeVersion(manifest: unknown): string {
+  const node = manifest && typeof manifest === 'object' ? (manifest as { node?: unknown }).node : undefined
+  return typeof node === 'string' ? node.trim() : ''
+}
+
+/**
+ * Where the shipped runtime's executable is installed, whether or not the install has run yet; null
+ * when this build ships none or its manifest cannot be read.
+ *
+ * Claude Code's capture scripts run under it on win32 (core.ts), so a PC without Node.js still gets
+ * its hooks. It is asked before the install lands, so a session opened while the window still says
+ * "Preparing the Astera Host" gets the command it will have once it has; `installHostRuntime`'s answer
+ * corrects it afterwards (ipc.ts, `runtimeInstaller`).
+ */
+export async function shippedHostExe(a: {
+  base: string
+  /** `<resources>\host-runtime`. */
+  shippedRoot: string
+  appVersion: string
+  readFile: AsyncFs['readFile']
+}): Promise<string | null> {
+  try {
+    const nodeVersion = manifestNodeVersion(JSON.parse(await a.readFile(w.join(a.shippedRoot, 'runtime.json'), 'utf8')))
+    return nodeVersion ? hostRuntimePaths({ base: a.base, nodeVersion, appVersion: a.appVersion }).exePath : null
+  } catch {
+    return null
+  }
+}
+
 export interface InstalledRuntime {
   paths: HostRuntimePaths
   incomplete: boolean
@@ -88,9 +118,7 @@ export async function installHostRuntime(a: {
   const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
   try {
     const manifest: unknown = JSON.parse(await a.fs.readFile(w.join(a.shippedRoot, 'runtime.json'), 'utf8'))
-    if (manifest && typeof manifest === 'object' && typeof (manifest as { node?: unknown }).node === 'string') {
-      nodeVersion = (manifest as { node: string }).node.trim()
-    }
+    nodeVersion = manifestNodeVersion(manifest)
     const listed = (manifest as { files?: { node?: unknown; build?: unknown } } | null)?.files
     if (listed) files = { node: strings(listed.node), build: strings(listed.build) }
   } catch {

@@ -372,6 +372,9 @@ async function main(): Promise<void> {
     getState: () => orch.state(),
     log: (m) => log.write(m),
     worktrees,
+    // The Host runtime's node.exe runs the capture scripts (spawner.ts); Electron run as node cannot,
+    // since it needs ELECTRON_RUN_AS_NODE, which no agent may inherit (HOST_ONLY_ENV).
+    captureNode: process.versions.electron ? undefined : process.execPath,
     // R4: an app old enough to have no S3 worktree module of its own still keeps doing this work
     // itself, and says so in its `hello.yields` (HOST_YIELD_WORKTREES).
     appKeepsWorktrees: () => server.appKeeps(HOST_YIELD_WORKTREES),
