@@ -1,7 +1,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, promises as fsp } from 'node:fs'
 import { lineLog } from '../core/log/logWriter'
 import { app, net } from 'electron'
 import { AccountRegistry } from '../core/accounts/registry'
@@ -12,6 +12,8 @@ import { setProbeLog } from '../core/sessions/pathProbe'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { createPtyRouter } from './host/ptyRouter'
 import { createProcRouter } from './host/procRouter'
+import { shippedHostExe } from './host/runtimeInstall'
+import { hostRuntimeBase } from '../core/host/runtime'
 import { nodeProcFactory } from './chat/nodeProcFactory'
 import { ChatSessionManager } from '../core/chat/manager'
 import { HistoryIndex } from '../core/history/index'
@@ -87,6 +89,9 @@ export interface Core {
   /** Drops the stored statusline payload of every session not in `keep` — see
    *  StatusLineManager.pruneExcept for what it collects and when it may be called. */
   pruneStatusLinePayloads: (keep: ReadonlySet<string>) => Promise<void>
+  /** Runs Claude Code's capture scripts under `node` for every session that starts from now on — see
+   *  StatusLineManager.useNode. ipc.ts calls it on win32 once the Host runtime install has answered. */
+  useCaptureNode: (node: string) => Promise<void>
   hookEventsDir: string // Hook event file directory — watched by index.ts's HookEventWatcher
   // Rolling config persistence. index.ts does the persisting (the claudeCoordinator.ts persistConfig wiring);
   // ipc.ts no longer restores from here — it only reads (get) for sessions.resumeDefaults
@@ -202,15 +207,33 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   )
   // statusLine usage hook: prepares the capture script and settings file, and injects a session-scoped
   // statusLine via --settings on every session spawn. The global settings.json is never touched.
-  // On win32, pass the bare 'node' so the emitted statusLine command stays byte-identical to what
-  // shipped before absolute-path resolution existed — resolveNodePath's win32 branch is exercised by
-  // its test, not by this call. The absolute-path resolution is for macOS, where node under nvm/mise
-  // is otherwise unresolvable by the shell that runs the statusLine command (see resolveNodePath).
+  //
+  // On win32 the capture scripts run under the Host runtime's node.exe, which ships with the app: a PC
+  // without Node.js ran every hook into `node: command not found`, and nothing the app reads off the
+  // hooks (attention, notifications, Slack, the statusline) arrived. The path is where the runtime
+  // installer puts it, known before the install lands; ipc.ts corrects it once the installer answers,
+  // back to a bare 'node' when there is no runtime. The same gates as that installer: packaged builds
+  // only, so `npm run dev` keeps the bare 'node' from PATH. resolveNodePath is not used on win32 (see
+  // its own comment). It is for macOS, where node under nvm/mise is otherwise unresolvable by the
+  // shell that runs the statusLine command.
+  const runtimeBase = hostRuntimeBase({
+    platform: process.platform,
+    localAppData: process.env.LOCALAPPDATA,
+    userData: userDataDir,
+    appName: app.getName()
+  })
   const statusLine = new StatusLineManager(
     userDataDir,
-    process.platform === 'win32'
-      ? 'node'
-      : resolveNodePath(process.env as { PATH?: string }, existsSync, process.platform)
+    process.platform !== 'win32'
+      ? resolveNodePath(process.env as { PATH?: string }, existsSync, process.platform)
+      : runtimeBase && app.isPackaged
+        ? ((await shippedHostExe({
+            base: runtimeBase,
+            shippedRoot: path.join(process.resourcesPath, 'host-runtime'),
+            appVersion: app.getVersion(),
+            readFile: (p, enc) => fsp.readFile(p, enc)
+          })) ?? 'node')
+        : 'node'
   )
   await statusLine.init()
   // One factory for the app's life. Slice 2's Host-backed one is attached to it by registerIpc once
@@ -431,6 +454,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     usageSession,
     statusLinePayload: (sessionId: string) => statusLine.read(sessionId),
     pruneStatusLinePayloads: (keep: ReadonlySet<string>) => statusLine.pruneExcept(keep),
+    useCaptureNode: (node: string) => statusLine.useNode(node),
     hookEventsDir: statusLine.hookEventsDir,
     rollConfig,
     schedulerConfig,

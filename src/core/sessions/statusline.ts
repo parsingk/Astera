@@ -59,9 +59,9 @@ process.stdin.on('error', finish)
 // process began, as epoch milliseconds with a fraction, so node's own startup (tens of ms, and the
 // part that varies) is not in it. It is closer to Claude's spawn than the script's first statement,
 // and in the same measurement it inverted 2 of 40 pairs spawned at once against 7 for `Date.now()`.
-// The capture runs under whatever `node` the settings command names (bare `node` on PATH on Windows,
-// the resolved one on macOS); a node older than 16 has no global `performance`, and falls back to
-// `Date.now()` taken first, before stdin is read. Spliced in
+// The capture runs under whatever `node` the settings command names (Astera's own Host runtime on
+// Windows, else bare `node` on PATH; the resolved one on macOS); a node older than 16 has no global
+// `performance`, and falls back to `Date.now()` taken first, before stdin is read. Spliced in
 // as text rather than parsed and re-serialised, so the payload is written exactly as Claude sent it
 // (a number past 2^53 would not survive a round trip). A payload that is not an object is written as
 // before, with no stamp.
@@ -134,9 +134,10 @@ async function writeScript(file: string, content: string): Promise<void> {
  * `node`, and the failure is silent (the capture script only talks over stdout). Resolving this once
  * at startup and baking it in makes this whole failure mode disappear. This resolution is for macOS.
  *
- * The win32 branch below exists and is covered by its own test, but the caller (core.ts) does not use
- * it — it passes the literal 'node' on win32 instead, to keep the emitted statusLine command
- * byte-identical to what shipped before this function existed.
+ * The win32 branch below exists, but neither caller (core.ts, host/spawner.ts) uses it: a PATH walk
+ * with existsSync can freeze the thread for as long as SMB takes on an offline drive (pathProbe.ts),
+ * and on win32 the capture scripts run under Astera's own Host runtime instead, or a bare `node`
+ * where there is none.
  *
  * If it can't be found, this just returns 'node' — the prior behavior, and still correct as long as
  * it's on PATH.
@@ -154,6 +155,49 @@ export function resolveNodePath(
     if (exists(candidate)) return candidate
   }
   return 'node'
+}
+
+/** A drive or UNC path, after the backslashes have been turned into slashes. */
+const WINDOWS_PATH = /^(?:[A-Za-z]:\/|\/\/)/
+
+/** `p` as one word that Git Bash and PowerShell both read literally, or null when no quoting does:
+ *  single quotes, else double quotes for a path with a `'` in it (`O'Brien`), unless it also holds
+ *  `$` or a backtick, which both shells expand inside double quotes. */
+function quotedForBothShells(p: string): string | null {
+  if (!p.includes("'")) return `'${p}'`
+  if (!/[$`"]/.test(p)) return `"${p}"`
+  return null
+}
+
+/**
+ * The command line that runs one capture script, `<node> <script>`, as the settings file hands it to
+ * Claude Code.
+ *
+ * **On Windows it has to read the same in two shells.** Claude Code runs a hook's command through Git
+ * Bash when it finds one and through PowerShell when it does not (its own hook schema says so, as of
+ * 2.1.296). The quoted form, `"<node>" "<script>"`, is a parse error in PowerShell: a line that starts
+ * with a string is an expression there, and the second string is an unexpected token. Measured on a
+ * PC without Git: every hook of every session failed with ParserError UnexpectedToken, Node installed
+ * or not. So for a Windows path:
+ *
+ * - the script is one quoted word, which both shells take as an argument;
+ * - node, when it is a path, keeps its drive letter outside the quotes: `C:'/…/astera-host.exe'`. A
+ *   line that starts with a bare word is a command in PowerShell, which joins the quoted rest onto it,
+ *   and bash joins the two halves the same way. Measured through both, with a space and Hangul in
+ *   both paths, the payload piped through to the capture. A bare `node` stays bare.
+ *
+ * A path neither quoting can hold falls back to the quoted form, which still works through Git Bash.
+ * Anything that is not a Windows path (macOS, Linux) gets that form too, byte for byte as before.
+ */
+export function captureCommand(node: string, script: string): string {
+  const n = node.replace(/\\/g, '/')
+  const s = script.replace(/\\/g, '/')
+  const quoted = `"${n}" "${s}"`
+  const arg = WINDOWS_PATH.test(s) ? quotedForBothShells(s) : null
+  if (arg === null) return quoted
+  if (!n.includes('/')) return `${n} ${arg}`
+  const rest = /^[A-Za-z]:\//.test(n) ? quotedForBothShells(n.slice(2)) : null
+  return rest === null ? quoted : `${n.slice(0, 2)}${rest} ${arg}`
 }
 
 /** The one tool whose PreToolUse/PostToolUse pair **every** session gets. Its `tool_input` is the question
@@ -178,7 +222,8 @@ export class StatusLineManager {
 
   constructor(
     private userDataDir: string,
-    /** The node that will run the capture script. The default matches prior behavior (a PATH lookup). */
+    /** The node that will run the capture script. The default matches prior behavior (a PATH lookup).
+     *  `useNode` changes it once the app knows better. */
     private nodePath: string = 'node',
     /** Where a folder it cannot use is told. */
     private log: (m: string) => void = (m) => console.warn(m)
@@ -200,6 +245,15 @@ export class StatusLineManager {
     await this.startupCleanup()
   }
 
+  /** Runs the capture scripts under `node` from now on, rewriting the settings files when that is a
+   *  change. Only sessions that start after it get the new command: a session reads its settings file
+   *  once, at startup (see UserPromptSubmit in ensureFiles). */
+  async useNode(node: string): Promise<void> {
+    if (node === this.nodePath) return
+    this.nodePath = node
+    await this.ensureFiles()
+  }
+
   /** Writes the capture scripts and both settings files, skipping identical content, and creates the
    *  folders the scripts write into. Never deletes anything. The Host calls this and only this: the
    *  hook events are its running sessions'. */
@@ -210,8 +264,8 @@ export class StatusLineManager {
     await writeScript(this.capturePath, CAPTURE_SCRIPT)
     await writeScript(this.hookCapturePath, HOOK_CAPTURE_SCRIPT)
     await writeScript(this.sessionContextPath, SESSION_CONTEXT_SCRIPT)
-    const hookCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.hookCapturePath.replace(/\\/g, '/')}"`
-    const contextCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.sessionContextPath.replace(/\\/g, '/')}"`
+    const hookCmd = captureCommand(this.nodePath, this.hookCapturePath)
+    const contextCmd = captureCommand(this.nodePath, this.sessionContextPath)
     // Hooks from --settings merge with the account's global settings.json hooks and both run
     // (measured). The global settings stay untouched.
     //
@@ -274,10 +328,11 @@ export class StatusLineManager {
       StopFailure: [{ hooks: [{ type: 'command', command: hookCmd, async: true }] }]
     }
     const settings = {
-      // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).
+      // It is a JSON string, so no JSON escaping on top; the shell quoting is captureCommand's. Paths
+      // are normalised to forward slashes (fine on Windows too).
       statusLine: {
         type: 'command',
-        command: `"${this.nodePath.replace(/\\/g, '/')}" "${this.capturePath.replace(/\\/g, '/')}"`,
+        command: captureCommand(this.nodePath, this.capturePath),
         padding: 0
       },
       hooks: everySessionHooks

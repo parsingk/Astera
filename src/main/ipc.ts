@@ -6064,6 +6064,12 @@ export function registerIpc(
         onInstall: installing,
         log: (m) => hostWiring?.log(m)
       })
+      // Claude Code's capture scripts run under this runtime's node.exe (core.ts, which named the path
+      // before this answer). Said again now that it is known: no runtime means no node.exe to run them,
+      // and a bare 'node' still works wherever Node.js is installed.
+      core
+        .useCaptureNode(r.runtime?.paths.exePath ?? 'node')
+        .catch((err) => hostWiring?.log(`the hooks' node could not be written: ${String(err)}`))
       return { value: r.runtime, failure: r.failure }
     },
     onState: (s) => send('host:runtime-install', s),

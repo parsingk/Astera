@@ -4,6 +4,7 @@ import {
   createRuntimeInstaller,
   INSTALL_TIMEOUT_MS,
   installHostRuntime,
+  shippedHostExe,
   spawnWhenInstalled,
   type AsyncFs
 } from './runtimeInstall'
@@ -181,6 +182,33 @@ describe('asyncRuntimeFs', () => {
     expect(await fs.readdir('C:\\nope')).toEqual([])
     await fs.rm('C:\\nope')
     expect(m.syncCalls).toEqual([])
+  })
+})
+
+describe('shippedHostExe — what runs the hooks on win32, known before the install', () => {
+  const ask = (m: MemFs): Promise<string | null> =>
+    shippedHostExe({ base: BASE, shippedRoot: SHIPPED_ROOT, appVersion: APP, readFile: m.wrap().readFile })
+
+  it('names the executable the install lays down, before it has run', async () => {
+    const m = shipped()
+    expect(m.has(paths.exePath)).toBe(false)
+    expect(await ask(m)).toBe(paths.exePath)
+  })
+
+  it('names the one the install then actually reports', async () => {
+    const m = shipped()
+    const before = await ask(m)
+    expect((await install(m)).runtime?.paths.exePath).toBe(before)
+  })
+
+  it('is null when nothing was shipped, or the manifest names no Node', async () => {
+    expect(await ask(new MemFs())).toBeNull()
+    const unnamed = new MemFs()
+    unnamed.files.set(`${SHIPPED_ROOT}${B}runtime.json`, JSON.stringify({ files: { node: [], build: [] } }))
+    expect(await ask(unnamed)).toBeNull()
+    const torn = new MemFs()
+    torn.files.set(`${SHIPPED_ROOT}${B}runtime.json`, '{"node":')
+    expect(await ask(torn)).toBeNull()
   })
 })
 
