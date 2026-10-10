@@ -3,17 +3,50 @@
 // itself"). On a new PC the app installed it, could not find it, and kept saying it was not installed.
 import { describe, it, expect, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { addUserPathCommand, unpathedInstallDir } from './cliInstall'
+import { PROFILE_PATH_LINE, addUserPathCommand, profileFileFor, unpathedInstallDir } from './cliInstall'
 
 describe('unpathedInstallDir', () => {
   it("names Claude Code's documented Windows folder under the user's home", () => {
     expect(unpathedInstallDir('claude', 'win32', 'C:\\Users\\kim')).toBe('C:\\Users\\kim\\.local\\bin')
     expect(unpathedInstallDir('claude', 'win32', 'C:\\Users\\kim\\')).toBe('C:\\Users\\kim\\.local\\bin')
   })
-  it('names none for an installer that puts its own folder on PATH, or off Windows', () => {
+  it('names ~/.local/bin on macOS and Linux, where the same installer leaves PATH alone too', () => {
+    expect(unpathedInstallDir('claude', 'darwin', '/Users/kim')).toBe('/Users/kim/.local/bin')
+    expect(unpathedInstallDir('claude', 'linux', '/home/kim/')).toBe('/home/kim/.local/bin')
+  })
+  it('names none for an installer that puts its own folder on PATH, or a platform nobody measured', () => {
     expect(unpathedInstallDir('codex', 'win32', 'C:\\Users\\kim')).toBeNull()
-    expect(unpathedInstallDir('claude', 'darwin', '/Users/kim')).toBeNull()
-    expect(unpathedInstallDir('claude', 'linux', '/home/kim')).toBeNull()
+    expect(unpathedInstallDir('codex', 'darwin', '/Users/kim')).toBeNull()
+    expect(unpathedInstallDir('claude', 'freebsd', '/home/kim')).toBeNull()
+  })
+})
+
+// The files Claude Code's own note names for its PATH line (troubleshoot-install, "Verify your PATH").
+describe('profileFileFor', () => {
+  const none = (): boolean => false
+  it('zsh: ~/.zshrc, or the one in ZDOTDIR', () => {
+    expect(profileFileFor({ shell: '/bin/zsh', platform: 'darwin', home: '/Users/kim', exists: none })).toBe('/Users/kim/.zshrc')
+    expect(profileFileFor({ shell: '/usr/bin/zsh', platform: 'linux', home: '/home/kim', zdotdir: '/home/kim/.config/zsh', exists: none })).toBe(
+      '/home/kim/.config/zsh/.zshrc'
+    )
+  })
+  it('bash on Linux: ~/.bashrc', () => {
+    expect(profileFileFor({ shell: '/bin/bash', platform: 'linux', home: '/home/kim', exists: none })).toBe('/home/kim/.bashrc')
+  })
+  it('bash on macOS: the first login file there is, ~/.bash_profile when there is none', () => {
+    expect(profileFileFor({ shell: '/bin/bash', platform: 'darwin', home: '/Users/kim', exists: none })).toBe('/Users/kim/.bash_profile')
+    const only = (f: string) => (p: string) => p === f
+    expect(profileFileFor({ shell: '/bin/bash', platform: 'darwin', home: '/Users/kim', exists: only('/Users/kim/.profile') })).toBe('/Users/kim/.profile')
+    expect(profileFileFor({ shell: '/bin/bash', platform: 'darwin', home: '/Users/kim', exists: only('/Users/kim/.bash_login') })).toBe(
+      '/Users/kim/.bash_login'
+    )
+  })
+  it('no file for a shell with a syntax of its own, or none at all', () => {
+    expect(profileFileFor({ shell: '/opt/homebrew/bin/fish', platform: 'darwin', home: '/Users/kim', exists: none })).toBeNull()
+    expect(profileFileFor({ shell: undefined, platform: 'linux', home: '/home/kim', exists: none })).toBeNull()
+  })
+  it("the line is the note's own", () => {
+    expect(PROFILE_PATH_LINE).toBe('export PATH="$HOME/.local/bin:$PATH"')
   })
 })
 

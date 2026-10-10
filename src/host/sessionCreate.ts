@@ -25,6 +25,7 @@ import type { HostSpawner } from './spawner'
 import { checkCwd, type ProbeResult } from '../core/sessions/pathProbe'
 import { LAUNCH_FORBIDDEN } from '../core/sessions/commands'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
+import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { providerOf } from '../core/providers/meta'
 import { sourcesOf } from './sessions'
 
@@ -106,6 +107,7 @@ export function createHostSessionStarter(d: {
       await checkCwd(o.cwd, d.probeCwd, `CWD_MISSING: ${o.cwd} does not exist`)
       // win32: a CLI installed since this Host started, found on the Path Windows keeps (windowsPath.ts)
       await ensureOnWindowsPath([providerOf(account)])
+      await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
       bypass = await d.bypass()
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err

@@ -111,26 +111,69 @@ export function locateCommandFor(
     }
   }
   if (platform === 'darwin' || platform === 'linux') {
-    // A login shell, because that is what reads the profile files an installer appends a PATH line to.
-    const line = `command -v ${cli}`
-    return { command: loginShell, args: ['-lc', line], display: line, source: SOURCES[cli] }
+    // An interactive login shell, as the app's own PATH probe asks (main/loginPath.ts): the PATH line
+    // Claude Code's note asks for goes in ~/.zshrc or ~/.bashrc, which a non-interactive shell never
+    // reads. Its aliases and functions are dropped first, since `command -v` names those before a file.
+    // The answer is marked, since an rc file may print before it (parseLocated).
+    const line = `unalias ${cli} 2>/dev/null; unset -f ${cli} 2>/dev/null; printf '${LOCATED}%s\\n' "$(command -v ${cli})"`
+    return { command: loginShell, args: ['-ilc', line], display: line, source: SOURCES[cli] }
   }
   return null
+}
+
+/** What the macOS and Linux locate command prints before the path it found. */
+export const LOCATED = '__ASTERA_CLI__'
+
+/** The path a locate command printed, or null: the marked line where there is one (an rc file may print
+ *  before it), else the first non-empty line (Windows PowerShell prints only the path). */
+export function parseLocated(stdout: string): string | null {
+  const lines = stdout.split('\n').map((l) => l.trim())
+  const marked = lines.find((l) => l.startsWith(LOCATED))
+  if (marked !== undefined) return marked.slice(LOCATED.length).trim() || null
+  return lines.find((l) => l !== '') ?? null
 }
 
 /**
  * The folder a vendor's installer documents putting its CLI in while it leaves PATH to the person, or
  * null for one that puts its own folder on PATH.
  *
- * Only Claude Code on Windows: its installer writes `%USERPROFILE%\.local\bin\claude.exe` and "prints the
- * fix with that note but doesn't change PATH itself" (code.claude.com/docs/en/troubleshoot-install, read
- * 2026-10-10). Without its folder on PATH the app it was installed from could not find it, and said it
- * was not installed. Codex's installer adds its own folder (measured). On macOS and Linux the same
- * installer leaves a shell profile line to the person, which this app does not write.
+ * Only Claude Code: its installer writes `%USERPROFILE%\.local\bin\claude.exe` on Windows and
+ * `~/.local/bin/claude` on macOS and Linux, and "prints the fix with that note but doesn't change PATH
+ * itself" (code.claude.com/docs/en/troubleshoot-install, read 2026-10-10). Without its folder on PATH
+ * the app it was installed from could not find it, and said it was not installed. Codex's installer adds
+ * its own folder (measured on Windows).
  */
 export function unpathedInstallDir(cli: InstallableCli, platform: string, home: string): string | null {
-  if (platform === 'win32' && cli === 'claude') return `${home.replace(/[\\/]+$/, '')}\\.local\\bin`
+  if (cli !== 'claude') return null
+  if (platform === 'win32') return `${home.replace(/[\\/]+$/, '')}\\.local\\bin`
+  if (platform === 'darwin' || platform === 'linux') return `${home.replace(/\/+$/, '')}/.local/bin`
   return null
+}
+
+/** The PATH line Claude Code's note asks a macOS or Linux person to add, verbatim. */
+export const PROFILE_PATH_LINE = 'export PATH="$HOME/.local/bin:$PATH"'
+
+/**
+ * The file that line goes in for this shell, as the same note says: zsh reads `~/.zshrc` (in `ZDOTDIR`
+ * when that is set); bash on Linux `~/.bashrc`; bash on macOS, whose terminals start login shells, the
+ * first of `~/.bash_profile`, `~/.bash_login` and `~/.profile` there is, `~/.bash_profile` when there is
+ * none. null for any other shell, whose syntax may differ (fish), or none at all: nothing is written.
+ */
+export function profileFileFor(o: {
+  shell: string | undefined
+  platform: string
+  home: string
+  zdotdir?: string
+  exists: (file: string) => boolean
+}): string | null {
+  const name = (o.shell ?? '').split('/').pop() ?? ''
+  const home = o.home.replace(/\/+$/, '')
+  if (name === 'zsh') return `${(o.zdotdir || home).replace(/\/+$/, '')}/.zshrc`
+  if (name !== 'bash') return null
+  if (o.platform === 'linux') return `${home}/.bashrc`
+  if (o.platform !== 'darwin') return null
+  const login = ['.bash_profile', '.bash_login', '.profile'].map((f) => `${home}/${f}`)
+  return login.find((f) => o.exists(f)) ?? login[0]
 }
 
 /**

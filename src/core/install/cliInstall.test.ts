@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { installCommandFor, locateCommandFor } from './cliInstall'
+import { LOCATED, installCommandFor, locateCommandFor, parseLocated } from './cliInstall'
 
 describe('installCommandFor', () => {
   it('runs the vendors own Windows installers through PowerShell', () => {
@@ -75,13 +75,24 @@ describe('locateCommandFor', () => {
     expect(line).toContain('Get-Command claude')
   })
 
-  // A login shell is what reads the profile files a POSIX installer appends its PATH line to.
-  it('asks a login shell on macOS and Linux', () => {
+  // An interactive login shell, as the app's own PATH probe (loginPath.ts) asks: the PATH line Claude Code's
+  // note asks for goes in ~/.zshrc or ~/.bashrc, which a non-interactive one never reads. The answer is
+  // marked, since an rc file may print before it.
+  it('asks an interactive login shell on macOS and Linux, its answer marked', () => {
     for (const platform of ['darwin', 'linux'] as const) {
       const c = locateCommandFor('codex', platform, '/bin/zsh')
       expect(c?.command).toBe('/bin/zsh')
-      expect(c?.args).toEqual(['-lc', 'command -v codex'])
+      // An interactive shell has the person's aliases and functions, and `command -v` names those first
+      // (`alias claude='claude --resume'` answered the alias, not a file): both are dropped before it asks.
+      expect(c?.args).toEqual(['-ilc', `unalias codex 2>/dev/null; unset -f codex 2>/dev/null; printf '${LOCATED}%s\\n' "$(command -v codex)"`])
     }
+  })
+
+  it('reads the marked line, past what an rc file printed, and the first line where nothing is marked', () => {
+    expect(parseLocated(`Welcome!\n${LOCATED}/Users/kim/.local/bin/claude\n`)).toBe('/Users/kim/.local/bin/claude')
+    expect(parseLocated(`banner\n${LOCATED}\n`)).toBeNull()
+    expect(parseLocated('\r\nC:\\Users\\kim\\.local\\bin\\claude.exe\r\n')).toBe('C:\\Users\\kim\\.local\\bin\\claude.exe')
+    expect(parseLocated('')).toBeNull()
   })
 
   // Nothing here names a directory: a vendor moving its binary must not need a change in this app.

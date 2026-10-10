@@ -73,7 +73,7 @@ import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { attachmentNameOf } from '../core/files/attachmentName'
 import { installCommandFor } from '../core/install/cliInstall'
-import { findAfterInstall, locateCli, runInstallCommand } from './cliLocate'
+import { addToProfile, findAfterInstall, locateCli, runInstallCommand } from './cliLocate'
 import { mcpClientsStatus, registerMcpClientNow } from './mcpClients'
 import { mcpServerFor, shimPathFor } from '../core/install/mcpRegistration'
 import { prependToPath } from '../core/sessions/manager'
@@ -213,6 +213,7 @@ import { sortEntries, isPathWithin, isSamePath, renamePlan, resolveProjectRootFr
 import { OUTSIDE_ROOT, writeWithinRoot } from '../core/files/atomicWrite'
 import { warmWindowsExecutable, windowsSpawn } from '../core/sessions/windowsExecutable'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
+import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { claudeCliRunner, claudeResumeTarget } from '../core/sessions/claudeBackground'
 import { cliEnvFor } from '../core/sessions/cliEnv'
 import { writeFilesToClipboard } from './clipboardFiles'
@@ -2015,6 +2016,7 @@ export function registerIpc(
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
     // read again first (at most every 30 s, and only when the CLI is missing: core/sessions/windowsPath.ts).
     if (account) await ensureOnWindowsPath([providerOf(account)])
+    if (account) await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     // Resolves and passes the provider of every account in the roll chain — the manager rejects a mix.
     // The rollAccountIds combination the modal settled on is checked here as well.
     //
@@ -7690,6 +7692,7 @@ export function registerIpc(
   ipcMain.handle('system.checkCli', async (_e, cwd?: string) => {
     // A CLI installed since this app started is looked for on the Path Windows keeps too (windowsPath.ts)
     await ensureOnWindowsPath(['claude', 'codex'])
+    await ensureInstallDirOnPath(['claude', 'codex']) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     const check = async (cli: string): Promise<{ ok: boolean; version?: string; error?: string }> => {
       // Off the thread (second pass M2-2): an offline drive on PATH held the app at every folder pick.
       const found = process.platform === 'win32' ? await warmWindowsExecutable(cli) : null
@@ -7758,7 +7761,16 @@ export function registerIpc(
    * user's Path first (cliLocate.ts's findAfterInstall).
    */
   const adoptInstalledCli = async (cli: 'claude' | 'codex'): Promise<string | null> => {
-    const found = await findAfterInstall(cli, { platform: process.platform, home: os.homedir(), exists: existsSync, locate: locateCli, run: runInstallCommand })
+    const found = await findAfterInstall(cli, {
+      platform: process.platform,
+      home: os.homedir(),
+      shell: process.env.SHELL,
+      zdotdir: process.env.ZDOTDIR,
+      exists: existsSync,
+      locate: locateCli,
+      run: runInstallCommand,
+      addToProfile
+    })
     if (found === null) return null
     prependToPath(process.env as Record<string, string | undefined>, path.dirname(found))
     return found

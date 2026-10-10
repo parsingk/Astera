@@ -39,6 +39,7 @@ import { findRollout as findRolloutOnDisk } from '../core/rolling/codexLocate'
 import { descriptorOf, makeDescriptors } from '../core/providers/descriptor'
 import { providerOf } from '../core/providers/meta'
 import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
+import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { SessionManager, defaultSpawnChecks } from '../core/sessions/manager'
 import { defaultSessionTitle } from '../core/sessions/title'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
@@ -471,6 +472,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Host inherited; read again first, at most every 30 s and only when it is missing (windowsPath.ts).
     // Before prepare, which keys what it finds by the PATH it sees.
     await ensureOnWindowsPath([providerOf(account)])
+    await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     await sessions.prepare({ account, cwd: o.cwd })
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
@@ -518,6 +520,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // CWD_MISSING, or CWD_UNREACHABLE for a folder that did not answer in time; also finds the Git Bash
     // the synchronous rollSpawn below will use, so that spawn looks at nothing on disk.
     await ensureOnWindowsPath([providerOf(account)]) // before prepare, which keys what it finds by PATH
+    await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
     await sessions.prepare({ account, cwd })
     preparedBypass = await bypassFromSettings() // RepairNeeded on a damaged settings file (A10)
     await preTrustWorkspace({ account, cwd, homeDir, descriptors, log })
