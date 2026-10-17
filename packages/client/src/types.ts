@@ -59,6 +59,15 @@ export interface JobSource {
   readonly url?: string
 }
 
+/** A Job's GitHub lifecycle policy (Astera 1.4.15 and later): which CI checks decide a pull request's head, and the
+ *  bounds of reruns and waits. Its presence means Astera may push, open a PR and rerun CI on the Job's branches. */
+export interface GitHubLifecyclePolicy {
+  readonly ci: { readonly mode: 'required' | 'selected'; readonly selectedChecks?: readonly string[] }
+  readonly autoRerunInfrastructureFailures: boolean
+  readonly maxInfrastructureReruns: number
+  readonly ciWaitMinutes: number
+}
+
 export interface Job {
   readonly id: string
   readonly objective: string
@@ -76,6 +85,8 @@ export interface Job {
   /** Where the Job came from: a job source and its item, set by Astera when it made the Job from that item (Astera
    *  1.4.14 and later). */
   readonly source?: JobSource
+  /** The GitHub lifecycle policy, when the Job carries its work through a pull request and GitHub CI. */
+  readonly github?: GitHubLifecyclePolicy
   /** Derived on every read: how the Job's latest Run (or the Job itself before one) stands. */
   readonly outcome: JobOutcome
   readonly progress: Progress

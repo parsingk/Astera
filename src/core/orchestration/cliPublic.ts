@@ -60,12 +60,15 @@ type NothingLeft<T extends never> = T
 /** Held back: the roll tap's bookkeeping of a stopped coordinator, the mark of a coordinator start in flight, the
  *  mark of a coordinator stop not confirmed yet, and the session the inbox net leaves a Run's questions to (an
  *  external coordinator; publishing it would add to the SDK's contract, which nothing has asked for). What a script
- *  needs from the first, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. */
+ *  needs from the first, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. Also
+ *  held back: the Run's raw GitHub record (`githubState`, GitHub lifecycle), whose public face is the derived `github`
+ *  field. */
 const RUN_HIDDEN = [
   'coordinatorStop',
   'coordinatorStartingAt',
   'coordinatorStopPending',
-  'externalCoordinatorSessionId'
+  'externalCoordinatorSessionId',
+  'githubState'
 ] as const
 
 /**

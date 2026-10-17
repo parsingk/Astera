@@ -26,6 +26,7 @@ import {
 } from './types'
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
+import type { GitHubLifecyclePolicy } from '../github/lifecycle'
 import { t, type Lang } from '../i18n'
 import {
   appendHistory,
@@ -254,6 +255,8 @@ export function createJob(
     convergence?: ConvergencePolicy
     /** The job source's item the Job is made from (plugin Phase 4 J15); only the Host gives it. */
     source?: JobSourceRef
+    /** The GitHub lifecycle policy (design 2026-10-17 L10); the caller (run-create) has already run the preflight. */
+    github?: GitHubLifecyclePolicy
   },
   now: string
 ): Res<Job> {
@@ -274,7 +277,8 @@ export function createJob(
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {}),
     ...(a.convergence ? { convergence: a.convergence } : {}),
-    ...(a.source ? { source: a.source } : {})
+    ...(a.source ? { source: a.source } : {}),
+    ...(a.github ? { github: a.github } : {})
   }
   return ok({ ...s, jobs: [...s.jobs, job] }, job)
 }

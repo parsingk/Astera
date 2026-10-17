@@ -32,7 +32,8 @@ export const JOB_FIELDS = Object.freeze([
   'pendingStart',
   'paused',
   'convergence',
-  'source'
+  'source',
+  'github'
 ] as const)
 
 export const RUN_FIELDS = Object.freeze([

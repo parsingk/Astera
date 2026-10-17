@@ -30,6 +30,13 @@ describe('publicFor', () => {
     expect(made).not.toHaveProperty('internalField')
   })
 
+  // GitHub lifecycle G1: a Job's lifecycle policy is public, a Run's raw GitHub record is not
+  it('keeps a Job’s GitHub lifecycle policy and drops a Run’s raw GitHub record', () => {
+    const github = { ci: { mode: 'selected', selectedChecks: ['build'] }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    expect(publicFor('jobs-get', { id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', github })).toMatchObject({ github })
+    expect(publicFor('runs-get', { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T', githubState: { log: [], seq: 0 } })).not.toHaveProperty('githubState')
+  })
+
   // 없는 것을 undefined 로 찍으면 JSON 에서 사라져 결과는 같지만, 있는데 비어 있는 것과
   // 아예 없는 것이 한 모양이 된다
   it('없는 칸을 만들지 않는다', () => {
