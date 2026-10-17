@@ -57,6 +57,10 @@ export interface JobSource {
   /** The item's title, as the app names the Job: someone else's text, at most 300 characters. */
   readonly title?: string
   readonly url?: string
+  /** A GitHub issue's body hash and update time when the Job was made (Astera 1.4.15 and later): Astera compares them
+   *  to notice an edit after the Job began. */
+  readonly capturedBodyHash?: string
+  readonly capturedUpdatedAt?: string
 }
 
 /** A Job's GitHub lifecycle policy (Astera 1.4.15 and later): which CI checks decide a pull request's head, and the

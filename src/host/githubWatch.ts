@@ -8,7 +8,9 @@
 // LOW_BUDGET_SHARE of its limit stretches every spacing to LOW_BUDGET_MS until it resets. A failed read backs off
 // along ERROR_BACKOFF_MS. The timer is unref'd: the watch never keeps the Host up (design L15).
 import type { OrchState } from '../core/orchestration/state'
+import type { JobSourceRef } from '../core/orchestration/types'
 import type { GhFailed } from '../core/github/gh'
+import { issueBodyHash, type GhIssue } from '../core/github/issue'
 import type { GitHubBinding, GitHubLifecyclePolicy, RunGitHubState } from '../core/github/lifecycle'
 import { evaluateCi } from '../core/github/ciVerdict'
 import type { OpenPr } from '../core/github/prBinding'
@@ -29,6 +31,8 @@ export const ERROR_BACKOFF_MS = [20_000, 40_000, 80_000, 120_000] as const
 /** How long the branch rules of one base are trusted before they are read again. */
 export const RULES_TTL_MS = 600_000
 export const JITTER = 0.2
+/** How often a lifecycle Run's source issue is looked at (§6). */
+export const ISSUE_MS = 300_000
 const READS_AT_ONCE = 2
 
 export interface WatchedWorktree {
@@ -47,6 +51,8 @@ export interface GithubWatchDeps {
   findOpenPrs(cwd: string, repo: GitHubRepo, branch: string, base: string): Promise<{ ok: true; prs: OpenPr[] } | GhFailed>
   readPrState(cwd: string, repo: GitHubRepo, number: number): Promise<{ ok: true; read: PrStateRead } | GhFailed>
   ruleCheckNames(cwd: string, repo: GitHubRepo, branch: string): Promise<{ ok: true; names: string[] } | GhFailed>
+  /** The source issue, read as the Job's source was (`readIssue`). */
+  readIssue(cwd: string, number: number): Promise<{ ok: true; issue: GhIssue } | GhFailed>
   log(m: string): void
   /** Epoch milliseconds. */
   now?(): number
@@ -67,6 +73,7 @@ interface Target {
   cwd: string
   worktree: WatchedWorktree
   policy: GitHubLifecyclePolicy
+  source: JobSourceRef | undefined
   state: RunGitHubState | undefined
 }
 
@@ -82,6 +89,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   /** A folder's repository, once its origin named one. A folder with none is asked again next time. */
   const repos = new Map<string, GitHubRepo>()
   const rules = new Map<string, { names: string[]; until: number }>()
+  /** When each Run's source issue is next looked at. */
+  const issueAt = new Map<string, number>()
   /** Runs whose record answered 404: deleted, never read again. */
   const gone = new Set<string>()
   let holdUntil = 0
@@ -95,14 +104,15 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const out: Target[] = []
     for (const run of s.runs) {
       if (gone.has(run.id) || run.worktree === undefined) continue
-      const policy = s.jobs.find((j) => j.id === run.jobId)?.github
+      const job = s.jobs.find((j) => j.id === run.jobId)
+      const policy = job?.github
       if (!policy) continue
       const gs = run.githubState
       if (gs?.pr && gs.pr.state !== 'open') continue
       if (!gs?.binding && now() - Date.parse(run.createdAt) > UNBOUND_MAX_AGE_MS) continue
       const worktree = d.worktreeOf(run.worktree)
       if (!worktree) continue
-      out.push({ runId: run.id, cwd: run.worktree, worktree, policy, state: gs })
+      out.push({ runId: run.id, cwd: run.worktree, worktree, policy, source: job?.source, state: gs })
     }
     return out
   }
@@ -148,9 +158,31 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     return names
   }
 
+  /** Whether the source issue's body changed since the Job was made (§6), looked at every ISSUE_MS from the first time
+   *  the Run is seen. Undefined when it is not time, or nothing changed, or the issue could not be read. */
+  const sourceChange = async (t: Target): Promise<true | undefined> => {
+    const src = t.source
+    if (src?.id !== 'github' || src.capturedBodyHash === undefined || t.state?.sourceChanged) return undefined
+    const at = issueAt.get(t.runId)
+    if (at === undefined) {
+      issueAt.set(t.runId, now() + jittered(ISSUE_MS))
+      return undefined
+    }
+    if (at > now()) return undefined
+    issueAt.set(t.runId, now() + jittered(ISSUE_MS))
+    const r = await d.readIssue(t.cwd, Number(src.itemId))
+    if (!r.ok) {
+      d.log(`github watch: run ${t.runId}: the source issue could not be read: ${r.message}`)
+      return undefined
+    }
+    if (r.issue.updatedAt === src.capturedUpdatedAt) return undefined
+    return issueBodyHash(r.issue.body) !== src.capturedBodyHash ? true : undefined
+  }
+
   const readOne = async (t: Target): Promise<void> => {
     const repo = await repoFor(t.cwd)
     if (repo === null) return failed(t, { kind: 'no-github-origin', message: "this Run's folder has no GitHub origin" })
+    const changed = await sourceChange(t)
     let binding: GitHubBinding | undefined = t.state?.binding
     const patch: RunGitHubPatch = {}
     if (!binding) {
@@ -160,7 +192,11 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       if (found.prs.length !== 1) {
         failures.delete(t.runId)
         nextAt.set(t.runId, now() + spaced(UNBOUND_MS))
-        await record(t.runId, { prCandidates: found.prs.length > 1 ? found.prs.map((p) => p.number) : null, lastReadError: null })
+        await record(t.runId, {
+          prCandidates: found.prs.length > 1 ? found.prs.map((p) => p.number) : null,
+          lastReadError: null,
+          ...(changed ? { sourceChanged: true as const } : {})
+        })
         return
       }
       binding = {
@@ -194,6 +230,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       ci: { sha: read.commitSha, basis: ev.basis, verdict: ev.verdict, ...(ev.failing ? { failing: ev.failing.name } : {}), checks: read.checks }
     }
     patch.lastReadError = null
+    if (changed) patch.sourceChanged = true
     failures.delete(t.runId)
     nextAt.set(t.runId, now() + spaced(ev.verdict === 'pending' ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)

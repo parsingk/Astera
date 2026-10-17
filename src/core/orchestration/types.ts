@@ -219,6 +219,10 @@ export interface JobSourceRef {
    *  a Job made before 4d. */
   title?: string
   url?: string
+  /** A GitHub issue's body hash and update time when the Job was made (GitHub lifecycle §6): the watch compares them,
+   *  and an edit after the Job started is shown, never folded into the objective. */
+  capturedBodyHash?: string
+  capturedUpdatedAt?: string
 }
 
 /** 한 번의 실행. **계획이 실제로 돈 기록이고, 계획 자체는 Job 이다.**

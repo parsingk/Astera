@@ -130,7 +130,7 @@ import { isOverrideCompletion, policyOf } from './convergence'
 import { leftNothingBehind } from '../host/orchProtocol'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
-import { JOB_SOURCE, SOURCE_COMMANDS, createFromContext, sourcesCommand, type JobSourcesDeps } from './commandSources'
+import { JOB_SOURCE, SOURCE_COMMANDS, capturedIssue, createFromContext, sourcesCommand, type JobSourcesDeps } from './commandSources'
 export { JOB_SOURCE } from './commandSources'
 import { pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from './pluginChecks'
 import { checkIdsOf, pluginCheckRefusal, tasksOfNextRun } from './commandChecks'
@@ -1240,7 +1240,9 @@ const jobSourceOf = (args: Record<string, unknown>): JobSourceRef | undefined =>
     itemId: r.itemId,
     label: r.label,
     ...(typeof r.title === 'string' ? { title: r.title } : {}),
-    ...(typeof r.url === 'string' ? { url: r.url } : {})
+    ...(typeof r.url === 'string' ? { url: r.url } : {}),
+    ...(typeof r.capturedBodyHash === 'string' ? { capturedBodyHash: r.capturedBodyHash } : {}),
+    ...(typeof r.capturedUpdatedAt === 'string' ? { capturedUpdatedAt: r.capturedUpdatedAt } : {})
   }
 }
 
@@ -4752,7 +4754,8 @@ export async function handleCommand(
         ctx: issueContext(issue),
         sourceId: GITHUB_SOURCE_ID,
         sourceName: 'GitHub',
-        itemId: String(issue.number)
+        itemId: String(issue.number),
+        captured: capturedIssue(issue)
       })
       if (reply.status < 200 || reply.status >= 300) return reply
       return okBody({ ...(reply.body as object), issue: { number: issue.number, url: issue.url } })

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8758,10 +8759,26 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(body.issue).toEqual({ number: 5, url: 'https://github.com/o/r/issues/5' })
       const job = deps.getState().jobs.find((j) => j.id === body.id)
       expect(job?.objective).toBe(sourcedObjective(issueContext(parseIssue(JSON.stringify(issueJson))!), 'GitHub'))
-      expect(job?.source).toEqual({ id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', title: 'Broken', url: 'https://github.com/o/r/issues/5' })
+      expect(job?.source).toEqual({
+        id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', title: 'Broken', url: 'https://github.com/o/r/issues/5',
+        capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex')
+      })
       expect(job?.cwd).toBe(projectPath)
       expect(job?.concurrency).toBe(2)
       expect(body.objective).toBe(job?.objective)
+    })
+
+    // GitHub lifecycle §6: the issue as it was when the Job was made, so a later edit can be noticed
+    it('a Job made from an issue keeps a hash of its body and when it was last updated', async () => {
+      const { deps, projectId } = issueSetup({ updated_at: '2026-10-01T00:00:00Z' })
+      const r = await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')
+      expect(r.status).toBe(200)
+      expect(deps.getState().jobs.at(-1)?.source).toMatchObject({
+        id: 'github',
+        itemId: '5',
+        capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex'),
+        capturedUpdatedAt: '2026-10-01T00:00:00Z'
+      })
     })
 
     it('jobs-create-from-issue refuses an author outside OWNER, MEMBER and COLLABORATOR (403), and makes no Job', async () => {

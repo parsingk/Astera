@@ -191,7 +191,10 @@ A Job made from a job source's item (a ticket a person picked in the app, with `
 with MCP's `create_job_from_source`) carries `source`: `{ id, itemId, label, title?, url? }`, the source (`github`,
 or a plugin's id), the item's id there, how a person names it (`Linear ENG-123`), the item's title (someone else's
 text, at most 300 characters), and its link. Astera sets it, from 1.4.14
-and `@astera-app/client` 0.3.0; `jobs.create` takes no such field. There is no namespace for job sources yet: make
+and `@astera-app/client` 0.3.0; `jobs.create` takes no such field. A GitHub issue's source also carries
+`capturedBodyHash` (a sha256 of the issue's body when the Job was made) and `capturedUpdatedAt` (GitHub's `updated_at`
+then), from 1.4.15: a GitHub lifecycle Run marks `github.sourceChanged` when the body changes after that, and the Job's
+objective stays as it was. There is no namespace for job sources yet: make
 such a Job with `call('jobs-create-from-source', { source, item, project })`, as the CLI does (`astera jobs
 create-from-source`), with `jobs.create`'s coordinator and convergence arguments beside them; the answer is the Job.
 [Job source plugins](plugins.md#job-source-plugins) says where the items come from.

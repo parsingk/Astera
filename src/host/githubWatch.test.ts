@@ -1,7 +1,8 @@
 // The Host's read-only watch over lifecycle Runs' pull requests (GitHub lifecycle design §6.2, G1): what it binds, how
 // often it reads, and what makes it stop.
 import { describe, it, expect } from 'vitest'
-import { createGithubWatch, LOW_BUDGET_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
+import { createGithubWatch, ISSUE_MS, LOW_BUDGET_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
+import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { Job, JobRun } from '../core/orchestration/types'
 import type { PrStateRead } from '../core/github/prState'
@@ -31,7 +32,9 @@ const prRead = (over: Partial<PrStateRead> = {}): PrStateRead => ({
 })
 const running = prRead({ suites: [{ app: 'github-actions', completed: false }], checks: [{ externalId: 'run:1', name: 'build', status: 'in-progress', required: false }] })
 
-function rig(o: { prs?: { number: number; url: string }[]; read?: PrStateRead; origin?: string | null; fail?: { at: 'find' | 'read'; kind: string } } = {}) {
+function rig(
+  o: { prs?: { number: number; url: string }[]; read?: PrStateRead; origin?: string | null; fail?: { at: 'find' | 'read'; kind: string }; issue?: { body: string; updatedAt: string } } = {}
+) {
   const clock = { now: T0 }
   const records: { runId: string; patch: RunGitHubPatch }[] = []
   const calls: string[] = []
@@ -54,6 +57,13 @@ function rig(o: { prs?: { number: number; url: string }[]; read?: PrStateRead; o
       return o.fail?.at === 'read' ? failure(o.fail.kind) : { ok: true, read: o.read ?? prRead() }
     },
     ruleCheckNames: async () => (calls.push('rules'), { ok: true, names: [] }),
+    readIssue: async (_cwd, n) => {
+      calls.push(`issue ${n}`)
+      return {
+        ok: true,
+        issue: { number: n, title: 't', body: o.issue?.body ?? 'old', state: 'open', labels: [], author: 'pk', authorAssociation: 'OWNER', url: 'u', isPullRequest: false, updatedAt: o.issue?.updatedAt ?? 'T1' }
+      }
+    },
     log: (m) => void logs.push(m)
   }
   const watch = createGithubWatch(deps)
@@ -194,6 +204,41 @@ describe('githubWatch', () => {
     r.watch.onState(stateOf({ run: { githubState: { ...BOUND, lastReadError: { kind: 'network', since: ISO0 } } } }))
     await r.at(0)
     expect(r.logs).toEqual([])
+  })
+
+  describe('the source issue (§6)', () => {
+    const source = { id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', capturedBodyHash: issueBodyHash('old'), capturedUpdatedAt: 'T1' }
+
+    it('records once that the issue body changed, first looking after ISSUE_MS', async () => {
+      const r = rig({ issue: { body: 'new', updatedAt: 'T2' } })
+      r.watch.onState(stateOf({ job: { source }, run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.calls).not.toContain('issue 5')
+      await r.at(ISSUE_MS)
+      expect(r.calls).toContain('issue 5')
+      expect(r.records.at(-1)?.patch.sourceChanged).toBe(true)
+    })
+
+    it('an edit that leaves the body as it was is not a change', async () => {
+      const r = rig({ issue: { body: 'old', updatedAt: 'T2' } })
+      r.watch.onState(stateOf({ job: { source }, run: { githubState: BOUND } }))
+      await r.at(0)
+      await r.at(ISSUE_MS)
+      expect(r.records.some((x) => x.patch.sourceChanged)).toBe(false)
+    })
+
+    it('does not look again once the Run carries the change, nor for a source that is not GitHub', async () => {
+      const a = rig({ issue: { body: 'new', updatedAt: 'T2' } })
+      a.watch.onState(stateOf({ job: { source }, run: { githubState: { ...BOUND, sourceChanged: { at: ISO0 } } } }))
+      await a.at(0)
+      await a.at(ISSUE_MS)
+      expect(a.calls).not.toContain('issue 5')
+      const b = rig()
+      b.watch.onState(stateOf({ job: { source: { ...source, id: 'astera-linear-source' } }, run: { githubState: BOUND } }))
+      await b.at(0)
+      await b.at(ISSUE_MS)
+      expect(b.calls).not.toContain('issue 5')
+    })
   })
 
   it('reads at most two Runs at once', async () => {

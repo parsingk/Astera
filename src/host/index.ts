@@ -85,6 +85,7 @@ import { createGithubWatch, type GithubWatch } from './githubWatch'
 import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
+import { readIssue } from '../core/github/issue'
 import { normalizeBaseForGh } from '../core/worktrees/push'
 import { readChanges, readFileDiff } from '../core/git/changes'
 import { createMcpHttpSupervisor } from './mcpHttp'
@@ -886,6 +887,7 @@ async function main(): Promise<void> {
         findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
         readPrState: (cwd, repo, n) => readPrState(defaultGhRunner, cwd, repo, n),
         ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(defaultGhRunner, cwd, repo, branch),
+        readIssue: (cwd, n) => readIssue(defaultGhRunner, cwd, n),
         log: (m) => log.write(m)
       })
     : null
