@@ -3,6 +3,17 @@
 `@astera-app/client` is versioned apart from the Astera app. [docs/sdk.md](https://github.com/parsingk/Astera/blob/main/docs/sdk.md)
 is the guide.
 
+## Unreleased
+
+- The GitHub lifecycle (Astera 1.4.15 or later; an older one leaves these out): a Job's `github`
+  (`GitHubLifecyclePolicy`: which CI checks decide, and the bounds of reruns and waits), a Run's `github`
+  (`GitHubLifecycle`: the pull request Astera bound for its branch, its head, the CI checks of that head with a
+  `verdict` and the check that failed first, and a `state`), and a GitHub issue source's `capturedBodyHash` and
+  `capturedUpdatedAt` on `JobSource`.
+- Five event types: `github.pr_bound`, `github.head_changed`, `github.ci_passed`, `github.ci_failed` and
+  `github.source_changed`, each carrying the `Run` it moved. A script that switches on every `EventType` meets five
+  more.
+
 ## 0.3.0
 
 - A Job's `source`: the job source and the item it was made from (`{ id, itemId, label, title?, url? }`, `title` the item's own, at most 300 characters), when Astera made it

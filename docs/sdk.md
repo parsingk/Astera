@@ -318,6 +318,11 @@ outlives a Host restart, and `events` reads it. An event:
 | `session.input_needed` | a session turns to waiting on a person (a permission, a question), once per turn into it | `{ session, prompt }` |
 | `session.limit_waiting` | a session stops at a usage limit and waits for it to reset | `{ session, scope?, nextRetryAt? }` |
 | `session.account_switched` | a session goes on under another account | `{ session, accountLabel }` |
+| `github.pr_bound` | a GitHub lifecycle Run's branch got its pull request | `Run` |
+| `github.head_changed` | that pull request's head moved | `Run` |
+| `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
+| `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its
 checks carry no output; a plugin check, in a Task or a `TaskCompletion`, carries how many findings it has

@@ -376,9 +376,9 @@ export interface ListResult<T> {
   readonly nextCursor?: string
 }
 
-/** What the Host's public event log records (SDK spec §6, and the session events of plugin Phase 3). `run.cancelled`,
- *  `github.*` and `runtime.*` are not produced yet: there is no cancel (a stop pauses), and neither GitHub nor a
- *  Runtime's presence moves the state. */
+/** What the Host's public event log records (SDK spec §6, the session events of plugin Phase 3, and the GitHub
+ *  lifecycle's `github.*` from Astera 1.4.15). `run.cancelled` and `runtime.*` are not produced: there is no cancel (a
+ *  stop pauses), and a Runtime's presence does not move the state. */
 export type EventType =
   | 'job.created'
   | 'job.updated'
@@ -398,6 +398,11 @@ export type EventType =
   | 'session.input_needed'
   | 'session.limit_waiting'
   | 'session.account_switched'
+  | 'github.pr_bound'
+  | 'github.head_changed'
+  | 'github.ci_passed'
+  | 'github.ci_failed'
+  | 'github.source_changed'
 
 /** The session a session event is about: five of the fields `astera sessions list` shows for it. `title`, `provider`
  *  and `cwd` are absent when the Host does not know them. */
@@ -453,6 +458,11 @@ export interface EventPayloads {
   readonly 'session.input_needed': SessionInputNeeded
   readonly 'session.limit_waiting': SessionLimitWaiting
   readonly 'session.account_switched': SessionAccountSwitched
+  readonly 'github.pr_bound': Run
+  readonly 'github.head_changed': Run
+  readonly 'github.ci_passed': Run
+  readonly 'github.ci_failed': Run
+  readonly 'github.source_changed': Run
 }
 
 /** One event. A notification, not the source of truth: read the object again when it matters. Delivered at least

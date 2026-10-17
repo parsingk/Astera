@@ -194,7 +194,8 @@ function shapePayload(type: unknown, payload: unknown): unknown {
   const list = (v: unknown, fields: readonly string[]): unknown =>
     Array.isArray(v) ? v.map((x) => (x !== null && typeof x === 'object' ? pick(fields, x) : x)) : v
   if (kind === 'job') return pick(JOB, payload)
-  if (kind === 'run') return pick(EVENT_RUN, payload)
+  // A github event carries the Run it moved, shaped as a run event's (its `github` field says what moved).
+  if (kind === 'run' || kind === 'github') return pick(EVENT_RUN, payload)
   if (kind === 'question') return pick(QUESTION_FIELDS, payload)
   if (kind === 'task') {
     const task = pick(TASK, payload)

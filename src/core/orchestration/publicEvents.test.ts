@@ -285,3 +285,32 @@ describe('derivePublicEvents', () => {
     expect(derivePublicEvents(before, state({ runs: [], tasks: [] }))).toEqual([])
   })
 })
+
+describe('github events (GitHub lifecycle G1)', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const entry = (seq: number, kind: 'pr-bound' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'source-changed') => ({ seq, at: NOW, kind })
+  const withLog = (log: ReturnType<typeof entry>[]): OrchState =>
+    state({ jobs: [job({ github: policy })], runs: [{ ...run, githubState: { log, seq: log.at(-1)?.seq ?? 0 } }] })
+
+  it('one event per new log entry, in order, each carrying the Run with its github field', () => {
+    const prev = withLog([entry(1, 'pr-bound')])
+    const next = withLog([entry(1, 'pr-bound'), entry(2, 'head-changed'), entry(3, 'ci-failed')])
+    const es = derivePublicEvents(prev, next)
+    expect(types(es)).toEqual(['github.head_changed', 'github.ci_failed'])
+    expect(es[0]).toMatchObject({ jobId: 'job_1', runId: 'run_1', projectId: 'proj_1' })
+    expect((es[0].payload as { github?: { state: string } }).github?.state).toBe('unbound')
+    expect(es[0].payload).not.toHaveProperty('githubState')
+  })
+
+  it('maps every kind', () => {
+    const next = withLog([entry(1, 'pr-bound'), entry(2, 'head-changed'), entry(3, 'ci-passed'), entry(4, 'ci-failed'), entry(5, 'source-changed')])
+    expect(types(derivePublicEvents(withLog([]), next))).toEqual([
+      'github.pr_bound', 'github.head_changed', 'github.ci_passed', 'github.ci_failed', 'github.source_changed'
+    ])
+  })
+
+  it('a record that moved nothing makes no event', () => {
+    const prev = withLog([entry(1, 'pr-bound')])
+    expect(derivePublicEvents(prev, { ...prev, runs: [{ ...prev.runs[0] }] })).toEqual([])
+  })
+})
