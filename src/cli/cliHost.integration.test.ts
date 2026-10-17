@@ -16,6 +16,7 @@
 // **Portable and loaded-runner safe:** every path is `os.tmpdir()`/`path.join`, every profile is its
 // own (so every address is its own), every wait is a bounded `vi.waitFor`, and the budgets are wide.
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { promises as fs, existsSync } from 'node:fs'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -2107,7 +2108,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     await setMcpSettings(h, { mcpGithubWrite: true })
     const made = await mcp.call('create_job_from_source', { source: 'github', itemId: '31', projectId, coordinatorAccountId: h.accountId, requestId: 's-2' })
     expect(made.isError, made.content[0]?.text).toBeFalsy()
-    expect(h.state().jobs[0].source).toEqual({ id: 'github', itemId: '31', label: 'GitHub issue #31 in o/r', title: 'Typo in the README', url: 'https://github.com/o/r/issues/31' })
+    expect(h.state().jobs[0].source).toEqual({
+      id: 'github', itemId: '31', label: 'GitHub issue #31 in o/r', title: 'Typo in the README', url: 'https://github.com/o/r/issues/31',
+      // GitHub lifecycle §6: the body as it was, as a hash
+      capturedBodyHash: createHash('sha256').update('Line 3.', 'utf8').digest('hex')
+    })
   })
 
   it('GitHub issues through the Host: get_issue reads with the write setting off; create_job_from_issue needs it, and takes only a trusted author', async () => {
@@ -2194,7 +2199,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(lines).toContain(' SOURCE>>>')
     expect(lines.at(-1)).toBe(close)
     // Plugin Phase 4 J13: the Job keeps the issue it was made from
-    expect(jobs[0].source).toEqual({ id: 'github', itemId: '11', label: expect.stringMatching(/^GitHub issue #11 in /), title: 'Login breaks', url: expect.any(String) })
+    expect(jobs[0].source).toEqual({
+      id: 'github', itemId: '11', label: expect.stringMatching(/^GitHub issue #11 in /), title: 'Login breaks', url: expect.any(String),
+      // GitHub lifecycle §6: the body as it was, as a hash
+      capturedBodyHash: expect.stringMatching(/^[0-9a-f]{64}$/)
+    })
     expect((made.structuredContent as { id: string }).id).toBe(jobs[0].id)
 
     // A CONTRIBUTOR's issue is refused with the setting on, and makes nothing.

@@ -159,7 +159,8 @@ Answers come in the public shapes the CLI prints with `--json`, typed: `Project`
 `RunCompletion`, `AsteraEvent` and the rest are exported from the package. The words are the Host's: a question is
 `open` or `resolved`, and a stop pauses a Run (`runs.resume` takes it back). There is no cancel.
 
-A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, Astera 1.4.15 and later) carries its
+A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, Astera 1.4.15 and `@astera-app/client`
+0.4.0 and later) carries its
 policy as `github` (`GitHubLifecyclePolicy`), and each of its Runs carries `github` (`GitHubLifecycle`): the pull
 request Astera bound for the Run's branch, its head commit, the CI checks of that commit with the `verdict` (`pending`,
 `passed`, `failed`, or `none` when the commit has no check) and its `basis` (the required checks, every reported check,

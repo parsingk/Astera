@@ -3,7 +3,7 @@
 `@astera-app/client` is versioned apart from the Astera app. [docs/sdk.md](https://github.com/parsingk/Astera/blob/main/docs/sdk.md)
 is the guide.
 
-## Unreleased
+## 0.4.0
 
 - The GitHub lifecycle (Astera 1.4.15 or later; an older one leaves these out): a Job's `github`
   (`GitHubLifecyclePolicy`: which CI checks decide, and the bounds of reruns and waits), a Run's `github`
