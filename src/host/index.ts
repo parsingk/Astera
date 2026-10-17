@@ -81,6 +81,11 @@ import { readUnderstandingFile } from '../core/understanding/read'
 import { createPullRequest, readCommits } from '../core/github/prCreate'
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
+import { createGithubWatch, type GithubWatch } from './githubWatch'
+import { findOpenPrs } from '../core/github/prBinding'
+import { readPrState } from '../core/github/prState'
+import { readRuleCheckNames } from '../core/github/ciVerdict'
+import { normalizeBaseForGh } from '../core/worktrees/push'
 import { readChanges, readFileDiff } from '../core/git/changes'
 import { createMcpHttpSupervisor } from './mcpHttp'
 import { createGatewaySupervisor } from './gatewaySupervisor'
@@ -88,6 +93,12 @@ import { attachGatewayLink } from './gatewayLink'
 import { readRemoteSettings } from '../core/remote/settings'
 import { loadIdentity, type RuntimeIdentity } from '../core/remote/identity'
 import { readMcpHttp } from '../core/settings/mcpHttp'
+
+/** A folder's `origin` URL, or null: the GitHub lifecycle reads and pushes origin alone (design L24). */
+const originOf = async (cwd: string): Promise<string | null> => {
+  const r = await realGit(['remote', 'get-url', 'origin'], { cwd })
+  return r.ok && r.stdout !== '' ? r.stdout : null
+}
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -228,6 +239,8 @@ async function main(): Promise<void> {
     // check: the Task stays validating or reviewing, and the next Host restarts it (a convergence Job)
     // or gates it (otherwise). Never throws.
     wiring?.dispose()
+    // The GitHub watch reads no more: a read under way records into a state that is about to be saved and left.
+    githubWatch?.stop()
     // No reap from here on: a leaked console host ends with the Host (measured 2026-09-26).
     conhostReaper.dispose()
     // **The rolling stops with it** (S6 R16): its tick and the app-gone watch stop, so no takeover starts
@@ -336,6 +349,7 @@ async function main(): Promise<void> {
   // Phase 10: the git range each Run and attempt worked over, recorded as the state moves and around every merge.
   // Made below, once `orch` exists to record through; the worktrees' merge hooks read it when a merge runs.
   let runGit: RunGitRecorder | null = null
+  let githubWatch: GithubWatch | null = null
   const worktrees = createHostWorktrees({
     profileDir,
     integrateHooks: () => runGit,
@@ -738,6 +752,7 @@ async function main(): Promise<void> {
     onState: (state, version) => {
       server.broadcast({ t: 'orch-state', state, version })
       runGit?.onState(state)
+      githubWatch?.onState(state)
     },
     // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
     // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
@@ -789,10 +804,7 @@ async function main(): Promise<void> {
       readCommits: (wt, base) => readCommits(wt, base),
       isClean: (wt) => isCleanWorktree(wt),
       // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
-      originOf: async (cwd: string) => {
-        const r = await realGit(['remote', 'get-url', 'origin'], { cwd })
-        return r.ok && r.stdout !== '' ? r.stdout : null
-      }
+      originOf
     },
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.
@@ -837,6 +849,7 @@ async function main(): Promise<void> {
         log.write(`the Host's after-load pass failed to start: ${String(err)}`)
       }
       runGit?.onState(orch.state())
+      githubWatch?.onState(orch.state())
     },
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
     slack: slackWiring ?? undefined,
@@ -861,6 +874,22 @@ async function main(): Promise<void> {
     isDir: (p) => fsp.stat(p).then((st) => st.isDirectory(), () => false),
     log: (m) => log.write(m)
   })
+
+  // The GitHub lifecycle's read-only watch (design 2026-10-17 §6.2, G1): the PR of each lifecycle Run's branch and its
+  // CI, recorded through `runs-github-record`. With no spawner there is no worktree registry, so nothing to watch.
+  githubWatch = spawner
+    ? createGithubWatch({
+        record: (args) => orch.handle('runs-github-record', args),
+        worktreeOf: (p) => worktrees.infoOf(p),
+        baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
+        originOf,
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
+        readPrState: (cwd, repo, n) => readPrState(defaultGhRunner, cwd, repo, n),
+        ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(defaultGhRunner, cwd, repo, branch),
+        log: (m) => log.write(m)
+      })
+    : null
+  githubWatch?.start()
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
   // emptying their coordinator slots, and the handover sweep when an app leaves. **Only with a
