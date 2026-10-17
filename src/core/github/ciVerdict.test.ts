@@ -108,6 +108,14 @@ describe('branch rules', () => {
     expect(parseRuleCheckNames('{}')).toBeNull()
   })
 
+  // Measured on a private repository of a free account (2026-10-18): rulesets are not offered there at all
+  it('reads a plan without rulesets (403 "Upgrade to GitHub Pro") as no rules, and any other 403 as a failure', async () => {
+    const plan: GhRunner = async () => ({ ok: false, stdout: '', stderr: 'gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)', exitCode: 1 })
+    expect(await readRuleCheckNames(plan, '/wt', { host: 'github.com', owner: 'o', name: 'r' }, 'main')).toEqual({ ok: true, names: [] })
+    const denied: GhRunner = async () => ({ ok: false, stdout: '', stderr: 'gh: Resource not accessible by integration (HTTP 403)', exitCode: 1 })
+    expect((await readRuleCheckNames(denied, '/wt', { host: 'github.com', owner: 'o', name: 'r' }, 'main')).ok).toBe(false)
+  })
+
   it('asks for the branch, slashes kept and other characters encoded', async () => {
     const calls: string[][] = []
     const run: GhRunner = async (args) => (calls.push(args), { ok: true, stdout: '[]', stderr: '' })

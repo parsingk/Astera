@@ -1,7 +1,7 @@
 // The Host's read-only watch over lifecycle Runs' pull requests (GitHub lifecycle design §6.2, G1): what it binds, how
 // often it reads, and what makes it stop.
 import { describe, it, expect } from 'vitest'
-import { createGithubWatch, ISSUE_MS, LOW_BUDGET_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
+import { createGithubWatch, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
 import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { Job, JobRun } from '../core/orchestration/types'
@@ -226,6 +226,21 @@ describe('githubWatch', () => {
       expect(r.records[0].patch.read?.ci.verdict).toBe('passed')
       await r.at(PENDING_MS)
       expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
+    })
+
+    // Measured on the sandbox (2026-10-18): right after a push the new head has no check at all for a few seconds
+    it('reads a new head with no checks again soon, and a head long without checks only now and then', async () => {
+      const bare = prRead({ suites: [], checks: [] })
+      const r = rig({ read: bare })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.verdict).toBe('none')
+      await r.at(PENDING_MS)
+      expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
+      await r.at(NEW_HEAD_MS + PENDING_MS)
+      const after = r.calls.filter((c) => c === 'read 12').length
+      await r.at(NEW_HEAD_MS + 2 * PENDING_MS)
+      expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(after)
     })
 
     // I2: branch rules that could not be read are not "no rules"

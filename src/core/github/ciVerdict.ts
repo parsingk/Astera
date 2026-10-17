@@ -94,6 +94,10 @@ export async function readRuleCheckNames(
   // A branch's slashes are path separators GitHub reads as part of the name; every other character is encoded.
   const path = branch.split('/').map(encodeURIComponent).join('/')
   const r = await run(['api', ...hostnameArgs(repo), `repos/${repoSlug(repo)}/rules/branches/${path}`], cwd)
+  // A private repository on a free plan has no rulesets at all: GitHub answers 403 "Upgrade to GitHub Pro or make this
+  // repository public to enable this feature" (measured on the sandbox, 2026-10-18). No rules can require a check there.
+  // Any other refusal stays a failure: the rules may exist and be unreadable.
+  if (!r.ok && /upgrade to github pro/i.test(r.stderr)) return { ok: true, names: [] }
   if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
   const names = parseRuleCheckNames(r.stdout)
   return names ? { ok: true, names } : { ok: false, kind: 'other', message: 'the branch rules answer is not a list' }

@@ -33,6 +33,9 @@ export const RULES_TTL_MS = 600_000
 export const JITTER = 0.2
 /** How often a lifecycle Run's source issue is looked at (§6). */
 export const ISSUE_MS = 300_000
+/** How long a head is read as new: right after a push it has no check for a few seconds (measured on the sandbox,
+ *  2026-10-18), so a head with none is read again soon this long after it was first seen (the grace of design L23). */
+export const NEW_HEAD_MS = 180_000
 const READS_AT_ONCE = 2
 
 export interface WatchedWorktree {
@@ -91,6 +94,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   const rules = new Map<string, { names: string[]; until: number }>()
   /** When each Run's source issue is next looked at. */
   const issueAt = new Map<string, number>()
+  /** Each Run's PR head and when it was first seen. */
+  const headSeen = new Map<string, { sha: string; at: number }>()
   /** Runs whose record answered 404: deleted, never read again. */
   const gone = new Set<string>()
   let holdUntil = 0
@@ -252,8 +257,12 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     patch.lastReadError = null
     if (changed) patch.sourceChanged = true
     failures.delete(t.runId)
-    // Checks of a commit that is not the head yet are read again soon, however settled they look (final review I1).
-    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha
+    // Checks of a commit that is not the head yet are read again soon, however settled they look (final review I1), and so
+    // is a new head with no check yet: its checks are seconds away.
+    const seen = headSeen.get(t.runId)
+    if (seen?.sha !== read.headSha) headSeen.set(t.runId, { sha: read.headSha, at: now() })
+    const newHead = now() - (headSeen.get(t.runId)?.at ?? now()) < NEW_HEAD_MS
+    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead)
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
   }
@@ -264,7 +273,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   const forgetOthers = (targets: Target[]): void => {
     const runIds = new Set(targets.map((t) => t.runId))
     const cwds = new Set(targets.map((t) => t.cwd))
-    for (const map of [nextAt, failures, issueAt]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
+    for (const map of [nextAt, failures, issueAt, headSeen]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
     for (const cwd of repos.keys()) if (!cwds.has(cwd)) repos.delete(cwd)
   }
 
