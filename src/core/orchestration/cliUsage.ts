@@ -104,7 +104,9 @@ const JOB_MAKING_FLAGS: readonly UsageFlag[] = [
     value: '<high|medium>',
     about: 'which review findings block; needs --convergence'
   },
-  { name: 'max-total-minutes', value: '<n>', about: 'time budget per task; needs --convergence' }
+  { name: 'max-total-minutes', value: '<n>', about: 'time budget per task; needs --convergence' },
+  { name: 'github-lifecycle', about: 'carry the work through a pull request and GitHub CI (origin must be GitHub, and yours to push)' },
+  { name: 'github-checks', value: '<name,...>', about: 'the CI checks that decide; needs --github-lifecycle' }
 ]
 
 /** The job-source commands' flags (plugin Phase 4 J21). */

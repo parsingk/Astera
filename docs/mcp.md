@@ -246,6 +246,15 @@ does. `convergence: true` turns it on with the default bounds; `maxFixAttempts`,
 policy that is off. The Job carries the policy as `convergence`, and `get_completion` shows the
 loops as they run.
 
+**GitHub lifecycle.** `create_job`, `create_job_from_issue` and `create_job_from_source` take
+`githubLifecycle: true`, as `astera jobs create --github-lifecycle` does: Astera binds the open pull
+request of each Run's branch and watches its CI. The project's origin must be a GitHub repository you
+can push to (the Astera Host checks this before it makes the Job, and refuses with `CONFLICT` and the
+reason otherwise), and the field turns convergence on. `githubChecks` (a list of check names) makes
+those checks decide; without it, the branch rules' required checks decide, or every reported check
+when the rules name none. It needs "Let MCP clients act on GitHub" like the other GitHub writes. The
+Job carries the policy as `github`.
+
 `run_job` makes the Run's worktree and starts its coordinator before it
 answers, so on a large repository it can take up to a minute.
 

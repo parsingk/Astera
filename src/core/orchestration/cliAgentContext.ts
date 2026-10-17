@@ -88,6 +88,8 @@ const SESSION = {
         about: 'which review findings block; needs --convergence'
       },
       { name: 'max-total-minutes', value: '<n>', about: 'time budget per Task; needs --convergence' },
+      { name: 'github-lifecycle', about: 'carry the work through a pull request and GitHub CI (origin must be GitHub, and yours to push)' },
+      { name: 'github-checks', value: '<name,...>', about: 'the CI checks that decide; needs --github-lifecycle' },
       { name: 'auto', about: "this Job's workers are placed for you, and it holds until `run-start`" }
     ]
   },

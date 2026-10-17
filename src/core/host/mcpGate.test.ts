@@ -129,6 +129,13 @@ describe('mcpRefusal', () => {
         for (const cmd of ['github-issue', 'github-pr-create', 'jobs-create'])
           expect(mcpRefusal(cmd, 'off', false, gh)?.body.error).toMatch(/MCP access is off/)
     })
+    it('a Job made with the GitHub lifecycle is a GitHub write (design §7.1)', () => {
+      for (const cmd of ['jobs-create', 'jobs-create-from-source', 'jobs-create-from-issue']) {
+        expect(mcpRefusal(cmd, 'control', false, false, { githubLifecycle: true })?.status).toBe(403)
+        expect(mcpRefusal(cmd, 'control', false, true, { githubLifecycle: true })).toBeNull()
+      }
+      expect(mcpRefusal('jobs-create', 'control', false, false, {})).toBeNull()
+    })
     it('a GitHub read is admitted at read and control, with the setting either way', () => {
       for (const access of ['read', 'control'] as const)
         for (const gh of [false, true]) expect(mcpRefusal('github-issue', access, false, gh)).toBeNull()

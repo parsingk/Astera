@@ -116,6 +116,8 @@ import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
+import { GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
+import { lifecyclePreflight } from '../github/preflight'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -639,6 +641,8 @@ export interface OrchServerDeps {
     createPr(req: PrCreateRequest): Promise<PrCreateResult>
     readCommits(worktree: string, base: string): Promise<CommitSummary[]>
     isClean(worktree: string): Promise<{ changedCount: number }>
+    /** The folder's `origin` URL, or null (GitHub lifecycle L24); the lifecycle's preflight reads it. */
+    originOf?(cwd: string): Promise<string | null>
   }
   /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
@@ -1238,6 +1242,16 @@ const jobSourceOf = (args: Record<string, unknown>): JobSourceRef | undefined =>
   }
 }
 
+/** `--github-checks a,b` from the CLI, or a list from MCP: the names trimmed, once each; [] when absent; null when
+ *  malformed (an empty name, a bare flag, a value that is not text). */
+const checkNamesOf = (v: unknown): string[] | null => {
+  if (v === undefined) return []
+  const raw: unknown[] | null = typeof v === 'string' ? v.split(',') : Array.isArray(v) ? v : null
+  if (raw === null || raw.some((x) => typeof x !== 'string')) return null
+  const names = (raw as string[]).map((x) => x.trim())
+  return names.some((x) => x === '') ? null : [...new Set(names)]
+}
+
 export async function handleCommand(
   deps: OrchServerDeps,
   /** `role` is the Host connection's (OrchCaller.role); absent where no Host connection exists. Only
@@ -1698,6 +1712,22 @@ export async function handleCommand(
           convergence.maxTotalMinutes = n
         }
       }
+      // The GitHub lifecycle (design 2026-10-17 L2, L10): the Job's consent to push, open a PR and rerun CI on its Runs'
+      // branches, its policy written once here. It rides on convergence, which it turns on with defaults when not given.
+      // A worker session never gets here: run-create is in COORDINATOR_ONLY, and jobs-create and the from-source and
+      // from-issue paths all come through run-create with the same caller (design §7.1 holds by that).
+      let github: GitHubLifecyclePolicy | undefined
+      const wantsGithub = args.githubLifecycle === true
+      if (args.githubChecks !== undefined && !wantsGithub) return bad('--github-checks requires --github-lifecycle')
+      if (wantsGithub) {
+        const checks = checkNamesOf(args.githubChecks)
+        if (checks === null) return bad('--github-checks takes check names, comma separated')
+        github = {
+          ci: checks.length > 0 ? { mode: 'selected', selectedChecks: checks } : { mode: 'required' },
+          ...GITHUB_LIFECYCLE_DEFAULTS
+        }
+        convergence ??= {}
+      }
       // 이 Run 을 관리할 코디네이터 세션의 계정. **하나다** — 목록이 아닌 이유는 Run.coordinatorAccountId
       // 의 주석에 있다(갈아타는 대신 같은 세션에서 기다린다). 없으면 코디네이터를 띄우지 않는다:
       // `--auto` 면 앱이 돌리고, 아니면 이 명령을 부른 세션이 몬다(아래 끝의 externalCoordinatorSessionId).
@@ -1774,6 +1804,14 @@ export async function handleCommand(
       // The scheduler added in this branch runs after every setState, and the sidebar's "+ 새 작업"
       // button makes a person creating a second Run while workers are running ordinary, not rare —
       // so the window this await always had is now one this app hits in normal use.
+      //
+      // The GitHub lifecycle's preflight (design §7.2) is the Host's: it asks this machine's gh about this folder's
+      // origin. Before the re-read below, since it awaits.
+      if (github) {
+        if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
+        const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
+        if (!pre.ok) return conflict(`the GitHub lifecycle cannot be turned on here: ${pre.reason}`)
+      }
       const latest = deps.getState()
       // **등록되어 있으면 그 프로젝트에 매단다.** 등록은 여기서 하지 않는다 — 프로젝트 목록을
       // 채우는 것은 사람이 프로젝트를 여는 일이고(ipc.ts 의 orch.list), 이 명령은 CLI 로도
@@ -1808,7 +1846,8 @@ export async function handleCommand(
             // 무장하므로(firesDue), '실행' 을 누른 뒤의 첫 예약 시각이 첫 회차가 된다.
             ...(args.auto === true ? { pendingStart: true } : {}),
             ...(convergence ? { convergence } : {}),
-            ...(jobSourceOf(args) ? { source: jobSourceOf(args) } : {})
+            ...(jobSourceOf(args) ? { source: jobSourceOf(args) } : {}),
+            ...(github ? { github } : {})
           },
         now
       )

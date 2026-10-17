@@ -787,7 +787,12 @@ async function main(): Promise<void> {
       // github-pr-create: the app's own create PR path (push, then gh pr create), over the Run's worktree.
       createPr: (req) => createPullRequest(req),
       readCommits: (wt, base) => readCommits(wt, base),
-      isClean: (wt) => isCleanWorktree(wt)
+      isClean: (wt) => isCleanWorktree(wt),
+      // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
+      originOf: async (cwd: string) => {
+        const r = await realGit(['remote', 'get-url', 'origin'], { cwd })
+        return r.ok && r.stdout !== '' ? r.stdout : null
+      }
     },
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.

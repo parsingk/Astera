@@ -22,7 +22,7 @@ import {
 } from './state'
 import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
-import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project, type Task } from './types'
+import { FAILURE_LIMIT, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
 import { runningRunCount } from './running'
@@ -9041,5 +9041,102 @@ describe('the external coordinator: run-create and check record the driving sess
     await call(deps, 'check', { run, ack: first.deliveryId }, 'sess-b')
     expect(deps.getState().deliveries[0].ackedAt).toBeDefined()
     expect(deps.getState().runs[0].externalCoordinatorSessionId).toBe('sess-b')
+  })
+})
+
+describe('run-create — the GitHub lifecycle (G1)', () => {
+  const VIEW = 'repo view o/r --json nameWithOwner,viewerPermission'
+  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const withGithub = (o: { permission?: string; origin?: string | null; initial?: OrchState } = {}) => {
+    const deps = makeDeps(o.initial)
+    const calls: string[] = []
+    const unexpected = (name: string) => async (): Promise<never> => {
+      throw new Error(`${name} was not expected`)
+    }
+    deps.github = {
+      run: async (args) => {
+        calls.push(args.join(' '))
+        return args.join(' ') === VIEW
+          ? { ok: true, stdout: JSON.stringify({ nameWithOwner: 'o/r', viewerPermission: o.permission ?? 'WRITE' }), stderr: '' }
+          : { ok: false, stdout: '', stderr: `unexpected gh call: ${args.join(' ')}`, exitCode: 1 }
+      },
+      originOf: async () => (o.origin === undefined ? 'git@github.com:o/r.git' : o.origin),
+      createPr: unexpected('createPr'),
+      readCommits: unexpected('readCommits'),
+      isClean: unexpected('isClean')
+    }
+    return { deps, calls }
+  }
+
+  it('stores the policy with its defaults and turns convergence on', async () => {
+    const { deps, calls } = withGithub()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(200)
+    const job = deps.getState().jobs[0]
+    expect(job.github).toEqual(POLICY)
+    expect(job.convergence).toEqual({})
+    expect(calls).toEqual([VIEW])
+  })
+
+  it('keeps the convergence policy the caller gave', async () => {
+    const { deps } = withGithub()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, convergence: true, maxFixAttempts: 5 })
+    expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5 })
+  })
+
+  it('selects checks by name, from a comma list or a list, once each', async () => {
+    const a = withGithub()
+    await call(a.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build, test,build' })
+    expect(a.deps.getState().jobs[0].github?.ci).toEqual({ mode: 'selected', selectedChecks: ['build', 'test'] })
+    const b = withGithub()
+    await call(b.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: ['lint'] })
+    expect(b.deps.getState().jobs[0].github?.ci).toEqual({ mode: 'selected', selectedChecks: ['lint'] })
+  })
+
+  it('refuses --github-checks without --github-lifecycle, and an empty or missing name', async () => {
+    const { deps } = withGithub()
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubChecks: 'build' })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build,' })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: true })).status).toBe(400)
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('refuses a permission that cannot push, says why, and makes no Job', async () => {
+    const { deps } = withGithub({ permission: 'READ' })
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('READ')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('refuses a folder with no origin', async () => {
+    const { deps } = withGithub({ origin: null })
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('no git remote named origin')
+  })
+
+  it('is answered by the Host only: without deps.github it is 409', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+  })
+
+  // Already true before this slice (run-create is COORDINATOR_ONLY); pinned so a later change cannot open it.
+  it('refuses a worker session (design §7.1), through jobs-create too', async () => {
+    const worker: Dispatch = {
+      id: 'd1', taskId: 't1', provider: 'codex', accountId: 'acc1', sessionId: 'w1', cwd: 'D:/p',
+      specPath: 'D:/p/spec.md', startedAt: NOW, workerState: 'ready', retained: false
+    }
+    const { deps } = withGithub({ initial: { ...emptyState(), dispatches: [worker] } })
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }, 'w1')).status).toBe(403)
+    expect((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }, 'w1')).status).toBe(403)
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('jobs-create passes it through', async () => {
+    const { deps } = withGithub()
+    const r = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(200)
+    expect((r.body as { github?: unknown }).github).toEqual(POLICY)
   })
 })
