@@ -817,6 +817,11 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 `waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
 ([mcp.md](mcp.md) says more).
 
+**`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
+branch, its head, the CI checks of that head with the `verdict` and the check that failed first, and a `state` that sums
+it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
+`external-state-unavailable` while GitHub cannot be read). [sdk.md](sdk.md) lists the fields.
+
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
 list`. A `--project` after the command belongs to that command and wins over the global one. Every

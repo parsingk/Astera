@@ -68,6 +68,36 @@ export interface GitHubLifecyclePolicy {
   readonly ciWaitMinutes: number
 }
 
+/** Where a GitHub lifecycle Run's pull request stands (Astera 1.4.15 and later). */
+export type GitHubLifecycleState =
+  | 'unbound'
+  | 'pr-bound'
+  | 'ci-pending'
+  | 'ci-passed'
+  | 'ci-failed'
+  | 'pr-merged'
+  | 'pr-closed'
+  | 'external-state-unavailable'
+
+/** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
+export interface GitHubLifecycle {
+  readonly state: GitHubLifecycleState
+  readonly pr?: { readonly number: number; readonly url: string; readonly isDraft: boolean; readonly state: 'open' | 'closed' | 'merged'; readonly mergeStateStatus?: string }
+  /** The PR's head commit. */
+  readonly headSha?: string
+  readonly ci?: {
+    /** The commit these checks belong to. */
+    readonly sha: string
+    /** Which checks decide: the required ones, every reported one (no required checks), or the Job's selection. */
+    readonly basis: 'required' | 'all-reported' | 'selected'
+    readonly verdict: 'pending' | 'passed' | 'failed' | 'none'
+    readonly checks: readonly { readonly name: string; readonly status: 'queued' | 'in-progress' | 'completed'; readonly conclusion?: string; readonly required: boolean }[]
+  }
+  readonly failing?: { readonly check: string; readonly detailsUrl?: string }
+  readonly candidates?: readonly number[]
+  readonly sourceChanged?: true
+}
+
 export interface Job {
   readonly id: string
   readonly objective: string
@@ -110,6 +140,8 @@ export interface Run {
   readonly questionsOpen: number
   /** `runs.get` only, and only above zero: Tasks whose worker shows a permission prompt. */
   readonly waitingForApproval?: number
+  /** A GitHub lifecycle Job's Run only: its pull request and CI, derived on every read. */
+  readonly github?: GitHubLifecycle
 }
 
 /** `jobs.get`: the Job, with the Run it names or its latest folded in. */

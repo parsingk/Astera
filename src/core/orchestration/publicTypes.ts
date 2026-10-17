@@ -45,8 +45,10 @@ import type {
   RunOutcome as RunOutcomeDto,
   Progress as ProgressDto,
   TaskCompletion as TaskCompletionDto,
-  Task as TaskDto
+  Task as TaskDto,
+  GitHubLifecycle as GitHubLifecycleDto
 } from '../publicContract'
+import type { GitHubLifecycleView } from '../github/view'
 
 type Check<T extends true> = T
 /** The app's value is accepted where the DTO is promised. */
@@ -65,8 +67,10 @@ type _project = Check<Fits<Pick<Project, Fields<typeof PROJECT_FIELDS>>, Project
 type _projectKeys = Check<SameKeys<ProjectDto, Fields<typeof PROJECT_FIELDS>>>
 type _job = Check<Fits<Pick<Job, Fields<typeof JOB_FIELDS>>, Omit<JobDto, Derived>>>
 type _jobKeys = Check<SameKeys<Omit<JobDto, Derived>, Fields<typeof JOB_FIELDS>>>
-type _run = Check<Fits<Pick<JobRun, Fields<typeof RUN_FIELDS>>, Omit<RunDto, Derived | 'waitingForApproval'>>>
-type _runKeys = Check<SameKeys<Omit<RunDto, Derived | 'waitingForApproval'>, Fields<typeof RUN_FIELDS>>>
+type _run = Check<Fits<Pick<JobRun, Fields<typeof RUN_FIELDS>>, Omit<RunDto, Derived | 'waitingForApproval' | 'github'>>>
+type _runKeys = Check<SameKeys<Omit<RunDto, Derived | 'waitingForApproval' | 'github'>, Fields<typeof RUN_FIELDS>>>
+/** The derived github field (GitHub lifecycle) is the DTO the package promises. */
+type _githubLifecycle = Check<Fits<GitHubLifecycleView, GitHubLifecycleDto>>
 type _task = Check<Fits<Pick<Task, Fields<typeof TASK_FIELDS>>, Omit<TaskDto, 'spec_truncated'>>>
 type _taskKeys = Check<SameKeys<Omit<TaskDto, 'spec_truncated'>, Fields<typeof TASK_FIELDS>>>
 type _checkResult = Check<Fits<CheckResult, CheckResultDto>>
