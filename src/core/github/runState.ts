@@ -30,6 +30,7 @@ const sameCi = (a: GitHubCiSnapshot | undefined, b: Omit<GitHubCiSnapshot, 'chan
   a.basis === b.basis &&
   a.verdict === b.verdict &&
   a.failing === b.failing &&
+  a.failingUrl === b.failingUrl &&
   JSON.stringify(a.checks) === JSON.stringify(b.checks.slice(0, CI_CHECKS_MAX))
 
 export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitHubPatch, now: string): RunGitHubState | null {
@@ -52,7 +53,10 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     next.pr = r.pr
     const prevCi = base.ci
     next.ci = sameCi(prevCi, r.ci) ? prevCi : { ...r.ci, checks: r.ci.checks.slice(0, CI_CHECKS_MAX), changedAt: now }
-    const moved = !prevCi || prevCi.sha !== r.ci.sha || prevCi.verdict !== r.ci.verdict
+    // A verdict is news about the PR only for its head: a read can catch GitHub between a push and the PR's own move,
+    // with the checks of the commit before (final review I1). That verdict is kept, never announced.
+    const ofHead = r.ci.sha === r.headSha
+    const moved = ofHead && (!prevCi || prevCi.sha !== r.ci.sha || prevCi.verdict !== r.ci.verdict)
     if (moved && r.ci.verdict === 'passed') entries.push({ kind: 'ci-passed', sha: r.ci.sha })
     if (moved && r.ci.verdict === 'failed') entries.push({ kind: 'ci-failed', sha: r.ci.sha, ...(r.ci.failing ? { check: r.ci.failing } : {}) })
   }
@@ -101,6 +105,7 @@ function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
     (ci.basis === 'required' || ci.basis === 'all-reported' || ci.basis === 'selected') &&
     (ci.verdict === 'pending' || ci.verdict === 'passed' || ci.verdict === 'failed' || ci.verdict === 'none') &&
     (ci.failing === undefined || isStr(ci.failing)) &&
+    (ci.failingUrl === undefined || isStr(ci.failingUrl)) &&
     Array.isArray(ci.checks) &&
     ci.checks.every((c) => isObj(c) && isStr(c.externalId) && isStr(c.name) && isStr(c.status) && typeof c.required === 'boolean')
   )

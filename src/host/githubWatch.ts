@@ -136,23 +136,35 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     return repo
   }
 
-  const failed = async (t: Target, f: { kind: string; message: string }): Promise<void> => {
-    if (f.kind === 'rate-limit') holdUntil = now() + RATE_HOLD_MS
+  /** A rate limit on any read holds every read: the budget is the person's, one for all of them (final review M4). */
+  const noteRateLimit = (kind: string): void => {
+    if (kind === 'rate-limit') holdUntil = now() + RATE_HOLD_MS
+  }
+
+  const failed = async (t: Target, f: { kind: string; message: string }, changed?: true): Promise<void> => {
+    noteRateLimit(f.kind)
     const n = failures.get(t.runId) ?? 0
     failures.set(t.runId, n + 1)
     nextAt.set(t.runId, now() + jittered(ERROR_BACKOFF_MS[Math.min(n, ERROR_BACKOFF_MS.length - 1)]))
     // Once per kind: the Run carries the kind it last failed with, and the same failure again says nothing new.
     if (t.state?.lastReadError?.kind !== f.kind) d.log(`github watch: run ${t.runId}: ${f.message}`)
-    await record(t.runId, { lastReadError: { kind: f.kind } })
+    // An issue change seen earlier in this pass is kept: the next look is ISSUE_MS away (final review M8).
+    await record(t.runId, { lastReadError: { kind: f.kind }, ...(changed ? { sourceChanged: true as const } : {}) })
   }
 
-  const ruleNamesFor = async (t: Target, repo: GitHubRepo, base: string): Promise<string[]> => {
+  /** The required check names of a base's branch rules, or null when they could not be read: a pass then waits
+   *  (evaluateCi). Only an answer is kept for RULES_TTL_MS, a repository with no rules (404) among them; a failure is
+   *  asked again on the next read (final review I2). */
+  const ruleNamesFor = async (t: Target, repo: GitHubRepo, base: string): Promise<string[] | null> => {
     const key = `${repo.host}/${repoSlug(repo)}#${base}`
     const cached = rules.get(key)
     if (cached && cached.until > now()) return cached.names
     const r = await d.ruleCheckNames(t.cwd, repo, base)
-    // A rules read that fails does not stop the watch: the suites and isRequired still guard a pass (design S1).
-    if (!r.ok) d.log(`github watch: the branch rules of ${repoSlug(repo)} ${base} could not be read: ${r.message}`)
+    if (!r.ok && r.kind !== 'not-found') {
+      noteRateLimit(r.kind)
+      d.log(`github watch: the branch rules of ${repoSlug(repo)} ${base} could not be read: ${r.message}`)
+      return null
+    }
     const names = r.ok ? r.names : []
     rules.set(key, { names, until: now() + RULES_TTL_MS })
     return names
@@ -172,6 +184,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     issueAt.set(t.runId, now() + jittered(ISSUE_MS))
     const r = await d.readIssue(t.cwd, Number(src.itemId))
     if (!r.ok) {
+      noteRateLimit(r.kind)
       d.log(`github watch: run ${t.runId}: the source issue could not be read: ${r.message}`)
       return undefined
     }
@@ -188,7 +201,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (!binding) {
       const base = await d.baseBranch(t.worktree.repoPath, t.worktree.baseRef)
       const found = await d.findOpenPrs(t.cwd, repo, t.worktree.branch, base)
-      if (!found.ok) return failed(t, found)
+      if (!found.ok) return failed(t, found, changed)
       if (found.prs.length !== 1) {
         failures.delete(t.runId)
         nextAt.set(t.runId, now() + spaced(UNBOUND_MS))
@@ -212,7 +225,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       patch.binding = binding
     }
     const r = await d.readPrState(t.cwd, repo, binding.number)
-    if (!r.ok) return failed(t, r)
+    if (!r.ok) return failed(t, r, changed)
     const read = r.read
     if (read.rateLimit && read.rateLimit.remaining < read.rateLimit.limit * LOW_BUDGET_SHARE)
       lowUntil = Date.parse(read.rateLimit.resetAt) || now() + LOW_BUDGET_MS
@@ -227,18 +240,39 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
         ...(read.mergeStateStatus ? { mergeStateStatus: read.mergeStateStatus } : {}),
         ...(read.reviewDecision ? { reviewDecision: read.reviewDecision } : {})
       },
-      ci: { sha: read.commitSha, basis: ev.basis, verdict: ev.verdict, ...(ev.failing ? { failing: ev.failing.name } : {}), checks: read.checks }
+      ci: {
+        sha: read.commitSha,
+        basis: ev.basis,
+        verdict: ev.verdict,
+        ...(ev.failing ? { failing: ev.failing.name } : {}),
+        ...(ev.failing?.detailsUrl ? { failingUrl: ev.failing.detailsUrl } : {}),
+        checks: read.checks
+      }
     }
     patch.lastReadError = null
     if (changed) patch.sourceChanged = true
     failures.delete(t.runId)
-    nextAt.set(t.runId, now() + spaced(ev.verdict === 'pending' ? PENDING_MS : SETTLED_MS))
+    // Checks of a commit that is not the head yet are read again soon, however settled they look (final review I1).
+    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha
+    nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
+  }
+
+  /** Drops what is kept for Runs and folders no longer watched, so a Host that lives for weeks (`runtime serve`) does not
+   *  grow with every Run it ever watched; a Run that comes back starts afresh (final review M5). Runs being read keep
+   *  theirs until the read settles. */
+  const forgetOthers = (targets: Target[]): void => {
+    const runIds = new Set(targets.map((t) => t.runId))
+    const cwds = new Set(targets.map((t) => t.cwd))
+    for (const map of [nextAt, failures, issueAt]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
+    for (const cwd of repos.keys()) if (!cwds.has(cwd)) repos.delete(cwd)
   }
 
   const tick = async (): Promise<void> => {
     if (latest === null || now() < holdUntil) return
-    const due = targetsOf(latest).filter((t) => !inFlight.has(t.runId) && (nextAt.get(t.runId) ?? 0) <= now())
+    const targets = targetsOf(latest)
+    forgetOthers(targets)
+    const due = targets.filter((t) => !inFlight.has(t.runId) && (nextAt.get(t.runId) ?? 0) <= now())
     const work = due.slice(0, Math.max(0, READS_AT_ONCE - inFlight.size))
     await Promise.all(
       work.map(async (t) => {

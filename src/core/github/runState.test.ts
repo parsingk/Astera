@@ -45,6 +45,23 @@ describe('nextGitHubState', () => {
     expect(next.ci?.changedAt).toBe(T2)
   })
 
+  // Final review I1: a verdict for a commit that is not the PR's head is no news about the head
+  it('does not log a verdict for a commit that is not the head', () => {
+    const lagging = { ...read(A, 'passed'), headSha: B }
+    const next = nextGitHubState(undefined, { binding: BINDING, read: lagging }, T1)!
+    expect(next.log.map((e) => e.kind)).toEqual(['pr-bound'])
+    expect(next.ci?.sha).toBe(A)
+    expect(next.headSha).toBe(B)
+    const caughtUp = nextGitHubState(next, { read: read(B, 'passed') }, T2)!
+    expect(caughtUp.log.map((e) => e.kind)).toEqual(['pr-bound', 'ci-passed'])
+  })
+
+  // Final review M6: the failing check's link is kept with the verdict, not looked up again by name
+  it('keeps the failing check’s link with the verdict', () => {
+    const next = nextGitHubState(undefined, { read: read(A, 'failed', { failing: 'build', failingUrl: 'https://x/run/1' }) }, T1)!
+    expect(next.ci?.failingUrl).toBe('https://x/run/1')
+  })
+
   it('does not log the same verdict twice for the same commit', () => {
     const first = nextGitHubState(undefined, { binding: BINDING, read: read(A, 'failed', { failing: 'build' }) }, T1)!
     const again = nextGitHubState(first, { read: read(A, 'failed', { failing: 'build', checks: [build({ conclusion: 'failure', completedAt: T2 })] }) }, T2)!
@@ -92,6 +109,7 @@ describe('parseRunGitHubPatch', () => {
     [null, 'patch must be an object'],
     [{ binding: { number: '12' } }, 'binding is malformed'],
     [{ read: { headSha: 'x', pr: {}, ci: {} } }, 'read is malformed'],
+    [{ read: { ...read(A, 'failed'), ci: { ...read(A, 'failed').ci, failingUrl: 7 } } }, 'read is malformed'],
     [{ prCandidates: ['12'] }, 'prCandidates is malformed'],
     [{ lastReadError: { kind: 3 } }, 'lastReadError is malformed'],
     [{ sourceChanged: 'yes' }, 'sourceChanged is malformed']

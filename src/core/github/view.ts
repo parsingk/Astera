@@ -31,6 +31,9 @@ function stateOf(gs: RunGitHubState | undefined): GitHubLifecycleState {
   if (!gs?.binding) return 'unbound'
   if (gs.pr?.state === 'merged') return 'pr-merged'
   if (gs.pr?.state === 'closed') return 'pr-closed'
+  // A verdict for a commit that is not the PR's head yet (GitHub between a push and the PR's own move) says nothing
+  // about the head (final review I1).
+  if (gs.ci && gs.headSha !== undefined && gs.ci.sha !== gs.headSha) return 'ci-pending'
   switch (gs.ci?.verdict) {
     case 'pending':
       return 'ci-pending'
@@ -64,10 +67,7 @@ export function githubLifecycleOf(policy: GitHubLifecyclePolicy | undefined, gs:
       verdict: ci.verdict,
       checks: ci.checks.map((c) => ({ name: c.name, status: c.status, ...(c.conclusion ? { conclusion: c.conclusion } : {}), required: c.required }))
     }
-    if (ci.failing !== undefined) {
-      const url = ci.checks.find((c) => c.name === ci.failing)?.detailsUrl
-      view.failing = { check: ci.failing, ...(url ? { detailsUrl: url } : {}) }
-    }
+    if (ci.failing !== undefined) view.failing = { check: ci.failing, ...(ci.failingUrl ? { detailsUrl: ci.failingUrl } : {}) }
   }
   if (gs?.prCandidates?.length) view.candidates = [...gs.prCandidates]
   if (gs?.sourceChanged) view.sourceChanged = true

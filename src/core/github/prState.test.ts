@@ -46,8 +46,8 @@ describe('parsePrState', () => {
       { app: 'github-actions', completed: true },
       { app: 'github-actions', completed: true }
     ])
-    expect(read!.checks).toHaveLength(4)
-    expect(read!.checks[0]).toEqual({
+    expect(read!.checks.map((c) => c.name)).toEqual(['build', 'build (macos-latest)', 'build (ubuntu-latest)', 'build (windows-latest)'])
+    expect(read!.checks[3]).toEqual({
       externalId: 'run:95020118524',
       name: 'build (windows-latest)',
       workflow: 'CI',
@@ -83,14 +83,14 @@ describe('parsePrState', () => {
     expect(read.reviewDecision).toBe('REVIEW_REQUIRED')
     expect(read.suites).toEqual([{ app: 'github-actions', completed: false }])
     expect(read.checks.map((c) => [c.name, c.status, c.conclusion, c.required])).toEqual([
-      ['test', 'in-progress', undefined, true],
+      ['ci/err', 'completed', 'failure', false],
+      ['ci/ext', 'queued', undefined, true],
       ['lint', 'completed', 'failure', false],
       ['odd', 'completed', 'unknown', false],
-      ['ci/ext', 'queued', undefined, true],
-      ['ci/err', 'completed', 'failure', false]
+      ['test', 'in-progress', undefined, true]
     ])
-    expect(read.checks[3]).toMatchObject({ externalId: 'status:ci/ext', detailsUrl: 'https://ci.example/1' })
-    expect(read.checks[4]).not.toHaveProperty('detailsUrl')
+    expect(read.checks[1]).toMatchObject({ externalId: 'status:ci/ext', detailsUrl: 'https://ci.example/1' })
+    expect(read.checks[0]).not.toHaveProperty('detailsUrl')
   })
 
   // Review Focus 2
@@ -135,9 +135,62 @@ describe('readPrState', () => {
     expect(calls[0].slice(0, 4)).toEqual(['api', 'graphql', '--hostname', 'ghe.example.com'])
   })
 
-  it('a missing PR is not-found', async () => {
-    const failed: GhResult = { ok: false, stdout: '', stderr: 'gh: Could not resolve to a PullRequest with the number of 999.', exitCode: 1 }
+  // gh exits 1 whenever the answer carries `errors`, and still prints the data (measured, final review C1)
+  it('a missing PR is not-found, read as gh answers it: exit 1 with the data and the error', async () => {
+    const failed: GhResult = {
+      ok: false,
+      stdout: JSON.stringify({ data: { rateLimit: { limit: 5000, remaining: 4990, resetAt: 'T' }, repository: { pullRequest: null } }, errors: [{ type: 'NOT_FOUND', path: ['repository', 'pullRequest'] }] }),
+      stderr: 'gh: Could not resolve to a PullRequest with the number of 999.',
+      exitCode: 1
+    }
     const r = await readPrState(async () => failed, '/wt', { host: 'github.com', owner: 'o', name: 'r' }, 999)
     expect(r).toMatchObject({ ok: false, kind: 'not-found' })
+  })
+
+  // Review Focus 2 on the real path (final review C1)
+  it('reads an answer gh failed only because a leaf field could not be resolved, and says required-ness is unknown', async () => {
+    const leaf = ['repository', 'pullRequest', 'commits', 'nodes', 0, 'commit', 'statusCheckRollup', 'contexts', 'nodes', 0, 'isRequired']
+    const partial: GhResult = {
+      ok: false,
+      stdout: answer({ contexts: [{ __typename: 'CheckRun', databaseId: 1, name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: null }], errors: [{ type: 'FORBIDDEN', path: leaf, message: 'x' }] }),
+      stderr: 'gh: Resource not accessible by integration',
+      exitCode: 1
+    }
+    const r = await readPrState(async () => partial, '/wt', { host: 'github.com', owner: 'o', name: 'r' }, 12)
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.read.checks.map((c) => c.name)).toEqual(['build'])
+    expect(r.ok && r.read.requiredUnknown).toBe(true)
+  })
+
+  it('does not read an answer whose checks themselves could not be resolved: that is not "no checks"', async () => {
+    const container = ['repository', 'pullRequest', 'commits', 'nodes', 0, 'commit', 'statusCheckRollup']
+    const partial: GhResult = { ok: false, stdout: answer({ errors: [{ type: 'FORBIDDEN', path: container, message: 'x' }] }), stderr: 'gh: Resource not accessible by integration', exitCode: 1 }
+    const r = await readPrState(async () => partial, '/wt', { host: 'github.com', owner: 'o', name: 'r' }, 12)
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe('what a read cannot see (final review M1, M7)', () => {
+  it('marks a read whose checks or suites ran past the page as truncated', () => {
+    const many = JSON.parse(answer({ contexts: [{ __typename: 'CheckRun', databaseId: 1, name: 'a', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: false }] }))
+    many.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.totalCount = 150
+    expect(parsePrState(JSON.stringify(many))?.truncated).toBe(true)
+    const suites = JSON.parse(answer({ suites: [{ status: 'COMPLETED', app: { slug: 'x' }, checkRuns: { totalCount: 1 } }] }))
+    suites.data.repository.pullRequest.commits.nodes[0].commit.checkSuites.totalCount = 70
+    expect(parsePrState(JSON.stringify(suites))?.truncated).toBe(true)
+    expect(parsePrState(answer())).not.toHaveProperty('truncated')
+  })
+
+  it('orders the checks by name, then id, whatever order GitHub answered in', () => {
+    const read = parsePrState(
+      answer({
+        contexts: [
+          { __typename: 'CheckRun', databaseId: 9, name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: false },
+          { __typename: 'CheckRun', databaseId: 3, name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: false },
+          { __typename: 'CheckRun', databaseId: 2, name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: false }
+        ]
+      })
+    )!
+    expect(read.checks.map((c) => c.externalId)).toEqual(['run:2', 'run:3', 'run:9'])
   })
 })

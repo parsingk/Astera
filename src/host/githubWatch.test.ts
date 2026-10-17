@@ -33,7 +33,14 @@ const prRead = (over: Partial<PrStateRead> = {}): PrStateRead => ({
 const running = prRead({ suites: [{ app: 'github-actions', completed: false }], checks: [{ externalId: 'run:1', name: 'build', status: 'in-progress', required: false }] })
 
 function rig(
-  o: { prs?: { number: number; url: string }[]; read?: PrStateRead; origin?: string | null; fail?: { at: 'find' | 'read'; kind: string }; issue?: { body: string; updatedAt: string } } = {}
+  o: {
+    prs?: { number: number; url: string }[]
+    read?: PrStateRead
+    origin?: string | null
+    fail?: { at: 'find' | 'read'; kind: string }
+    issue?: { body: string; updatedAt: string }
+    rules?: { ok: true; names: string[] } | { ok: false; kind: string }
+  } = {}
 ) {
   const clock = { now: T0 }
   const records: { runId: string; patch: RunGitHubPatch }[] = []
@@ -56,7 +63,11 @@ function rig(
       calls.push(`read ${n}`)
       return o.fail?.at === 'read' ? failure(o.fail.kind) : { ok: true, read: o.read ?? prRead() }
     },
-    ruleCheckNames: async () => (calls.push('rules'), { ok: true, names: [] }),
+    ruleCheckNames: async () => {
+      calls.push('rules')
+      const r = o.rules ?? { ok: true as const, names: [] }
+      return r.ok ? r : failure(r.kind)
+    },
     readIssue: async (_cwd, n) => {
       calls.push(`issue ${n}`)
       return {
@@ -204,6 +215,78 @@ describe('githubWatch', () => {
     r.watch.onState(stateOf({ run: { githubState: { ...BOUND, lastReadError: { kind: 'network', since: ISO0 } } } }))
     await r.at(0)
     expect(r.logs).toEqual([])
+  })
+
+  describe('final review fixes', () => {
+    // I1: a read that caught GitHub between a push and the PR's own move is read again soon, however settled
+    it('reads again after PENDING_MS when the checks are of a commit that is not the head', async () => {
+      const r = rig({ read: prRead({ headSha: 'c'.repeat(40) }) })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.verdict).toBe('passed')
+      await r.at(PENDING_MS)
+      expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
+    })
+
+    // I2: branch rules that could not be read are not "no rules"
+    it('does not pass, nor cache, branch rules that could not be read', async () => {
+      const r = rig({ rules: { ok: false, kind: 'network' } })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.verdict).toBe('pending')
+      await r.at(PENDING_MS)
+      expect(r.calls.filter((c) => c === 'rules')).toHaveLength(2)
+    })
+
+    it('caches a repository without rules (404) as no rules', async () => {
+      const r = rig({ rules: { ok: false, kind: 'not-found' } })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.verdict).toBe('passed')
+      await r.at(SETTLED_MS)
+      expect(r.calls.filter((c) => c === 'rules')).toHaveLength(1)
+    })
+
+    // M4: a rate limit on any read holds every read
+    it('holds every read after a rate limit on the branch rules', async () => {
+      const r = rig({ rules: { ok: false, kind: 'rate-limit' } })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      const before = r.calls.length
+      await r.at(RATE_HOLD_MS - 1)
+      expect(r.calls).toHaveLength(before)
+    })
+
+    // M5: a Run that left the watch and came back is read at once: nothing of its old schedule is kept
+    it('forgets the schedule of a Run that left the watch', async () => {
+      const r = rig()
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      r.watch.onState(stateOf({ run: { githubState: { ...BOUND, pr: { state: 'closed', isDraft: false, baseBranch: 'develop' } } } }))
+      await r.at(1)
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(2)
+      expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
+    })
+
+    // M6: the failing check's link goes with the verdict
+    it('records the failing check’s link with the verdict', async () => {
+      const failing = prRead({ checks: [{ externalId: 'run:1', name: 'build', status: 'completed', conclusion: 'failure', required: false, detailsUrl: 'https://x/run/1' }] })
+      const r = rig({ read: failing })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci).toMatchObject({ verdict: 'failed', failing: 'build', failingUrl: 'https://x/run/1' })
+    })
+
+    // M8: an issue change seen in a pass whose PR read then fails is still recorded
+    it('records a changed issue even when the pull request read fails', async () => {
+      const source = { id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', capturedBodyHash: issueBodyHash('old'), capturedUpdatedAt: 'T1' }
+      const r = rig({ issue: { body: 'new', updatedAt: 'T2' }, fail: { at: 'read', kind: 'network' } })
+      r.watch.onState(stateOf({ job: { source }, run: { githubState: BOUND } }))
+      await r.at(0)
+      await r.at(ISSUE_MS)
+      expect(r.records.at(-1)?.patch).toMatchObject({ lastReadError: { kind: 'network' }, sourceChanged: true })
+    })
   })
 
   describe('the source issue (§6)', () => {

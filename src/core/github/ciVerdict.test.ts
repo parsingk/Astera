@@ -77,6 +77,25 @@ describe('evaluateCi — selected', () => {
   })
 })
 
+describe('evaluateCi — what it cannot know never passes (final review C1, I2, M1)', () => {
+  const green = { checks: [check('build')], suites: done }
+  it('required mode with branch rules that could not be read: pending, not passed; a failure still fails', () => {
+    expect(evaluateCi(green, REQUIRED, null)).toEqual({ basis: 'all-reported', verdict: 'pending' })
+    expect(evaluateCi({ checks: [check('build', { conclusion: 'failure' })], suites: done }, REQUIRED, null).verdict).toBe('failed')
+  })
+  it('required mode with required-ness unknown for some check: pending', () => {
+    expect(evaluateCi({ ...green, requiredUnknown: true }, REQUIRED, []).verdict).toBe('pending')
+  })
+  it('selected mode does not care whether required-ness or the rules are known', () => {
+    const SELECTED = { mode: 'selected' as const, selectedChecks: ['build'] }
+    expect(evaluateCi({ ...green, requiredUnknown: true }, SELECTED, null).verdict).toBe('passed')
+  })
+  it('a read that ran past its page cannot pass in any mode', () => {
+    expect(evaluateCi({ ...green, truncated: true }, REQUIRED, []).verdict).toBe('pending')
+    expect(evaluateCi({ ...green, truncated: true }, { mode: 'selected', selectedChecks: ['build'] }, []).verdict).toBe('pending')
+  })
+})
+
 describe('branch rules', () => {
   it('reads the required status checks of the rules that apply', () => {
     const rules = [

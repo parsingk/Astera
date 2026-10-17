@@ -23,16 +23,24 @@ const NOTHING_CHECKED: readonly GitHubCiConclusion[] = ['skipped', 'neutral']
 /** Completed with a conclusion that is a verdict. STALE is not: GitHub will run it again. */
 const settled = (c: GitHubCiCheck): boolean => c.status === 'completed' && c.conclusion !== undefined && c.conclusion !== 'stale'
 
-export function evaluateCi(read: Pick<PrStateRead, 'checks' | 'suites'>, policy: GitHubCiPolicy, ruleNames: readonly string[]): CiEvaluation {
+/** `ruleNames` is null when the branch rules could not be read. In `required` mode that, or a read that could not say
+ *  whether some check is required, keeps a verdict from passing (spec §9: do not guess a pass), and so does a read
+ *  that ran past its page in any mode; a failure seen still fails (final review C1, I2, M1). */
+export function evaluateCi(
+  read: Pick<PrStateRead, 'checks' | 'suites' | 'requiredUnknown' | 'truncated'>,
+  policy: GitHubCiPolicy,
+  ruleNames: readonly string[] | null
+): CiEvaluation {
   let basis: CiBasis
   let targets: GitHubCiCheck[]
   let named: string[] = []
+  const unknowable = read.truncated === true || (policy.mode === 'required' && (ruleNames === null || read.requiredUnknown === true))
   if (policy.mode === 'selected') {
     basis = 'selected'
     named = [...new Set(policy.selectedChecks ?? [])]
     targets = read.checks.filter((c) => named.includes(c.name))
   } else {
-    const required = new Set([...ruleNames, ...read.checks.filter((c) => c.required).map((c) => c.name)])
+    const required = new Set([...(ruleNames ?? []), ...read.checks.filter((c) => c.required).map((c) => c.name)])
     if (required.size > 0) {
       basis = 'required'
       named = [...required]
@@ -48,7 +56,7 @@ export function evaluateCi(read: Pick<PrStateRead, 'checks' | 'suites'>, policy:
     .sort((a, b) => (a.completedAt ?? '').localeCompare(b.completedAt ?? ''))[0]
   if (failing) return { basis, verdict: 'failed', failing }
   const present = new Set(read.checks.map((c) => c.name))
-  const passed = named.every((n) => present.has(n)) && targets.every(settled) && read.suites.every((s) => s.completed)
+  const passed = !unknowable && named.every((n) => present.has(n)) && targets.every(settled) && read.suites.every((s) => s.completed)
   return { basis, verdict: passed ? 'passed' : 'pending' }
 }
 

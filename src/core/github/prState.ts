@@ -11,8 +11,8 @@ export const PR_STATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     pullRequest(number:$number){
       number state isDraft url headRefName headRefOid baseRefName mergeStateStatus reviewDecision
       commits(last:1){ nodes{ commit{ oid
-        checkSuites(first:50){ nodes{ status app{ slug } checkRuns(first:1){ totalCount } } }
-        statusCheckRollup{ contexts(first:100){ nodes{
+        checkSuites(first:50){ totalCount nodes{ status app{ slug } checkRuns(first:1){ totalCount } } }
+        statusCheckRollup{ contexts(first:100){ totalCount nodes{
           __typename
           ... on CheckRun{ databaseId name status conclusion startedAt completedAt detailsUrl isRequired(pullRequestNumber:$number)
             checkSuite{ workflowRun{ databaseId workflow{ name } } } }
@@ -39,8 +39,25 @@ export interface PrStateRead {
   reviewDecision?: string
   /** The head commit's check suites that have at least one check run, and whether each is done (design S1). */
   suites: { app: string; completed: boolean }[]
+  /** Ordered by name, then externalId, so the same checks read twice compare equal (final review M7). */
   checks: GitHubCiCheck[]
   rateLimit?: { limit: number; remaining: number; resetAt: string }
+  /** GitHub could not say for some check whether the branch rules require it (an `isRequired` error): a verdict on
+   *  the required checks cannot pass on this read (spec §9). */
+  requiredUnknown?: true
+  /** More checks or suites than one page holds: unseen ones could be failing, so this read cannot pass (final review
+   *  M1). */
+  truncated?: true
+}
+
+/** The fields an answer may have failed on and still be read: leaves that say nothing about which checks exist or
+ *  how they ended. An error anywhere else (the commit, its suites, its rollup) makes the read a failure, never "no
+ *  checks" (final review C1). */
+const LEAF_ERRORS: ReadonlySet<string> = new Set(['isRequired', 'reviewDecision', 'mergeStateStatus'])
+
+const errorPaths = (root: unknown): unknown[][] => {
+  const errors = (root as { errors?: unknown } | null)?.errors
+  return Array.isArray(errors) ? errors.map((e) => (Array.isArray((e as { path?: unknown } | null)?.path) ? (e as { path: unknown[] }).path : [])) : []
 }
 
 const RUN_STATUS: Record<string, GitHubCiCheck['status']> = {
@@ -144,16 +161,22 @@ export function parsePrState(stdout: string): PrStateRead | null {
     return null
   const commit = obj(obj(nodes(pr.commits)[0])?.commit)
   if (!commit || typeof commit.oid !== 'string') return null
-  const suites = nodes(commit.checkSuites).flatMap((raw) => {
+  const suiteNodes = nodes(commit.checkSuites)
+  const suites = suiteNodes.flatMap((raw) => {
     const s = obj(raw)
     const runs = obj(s?.checkRuns)?.totalCount
     if (!s || typeof s.status !== 'string' || typeof runs !== 'number' || runs === 0) return []
     return [{ app: text(obj(s.app)?.slug) ?? '', completed: s.status === 'COMPLETED' }]
   })
-  const checks = nodes(obj(commit.statusCheckRollup)?.contexts).flatMap((raw) => {
-    const c = checkOf(raw)
-    return c ? [c] : []
-  })
+  const contexts = obj(obj(commit.statusCheckRollup)?.contexts)
+  const contextNodes = nodes(contexts)
+  const checks = contextNodes
+    .flatMap((raw) => {
+      const c = checkOf(raw)
+      return c ? [c] : []
+    })
+    .sort((a, b) => a.name.localeCompare(b.name) || a.externalId.localeCompare(b.externalId))
+  const beyondPage = (total: unknown, seen: number): boolean => typeof total === 'number' && total > seen
   const read: PrStateRead = {
     number: pr.number,
     url: pr.url,
@@ -173,11 +196,28 @@ export function parsePrState(stdout: string): PrStateRead | null {
   const limit = obj(data?.rateLimit)
   if (limit && typeof limit.limit === 'number' && typeof limit.remaining === 'number' && typeof limit.resetAt === 'string')
     read.rateLimit = { limit: limit.limit, remaining: limit.remaining, resetAt: limit.resetAt }
+  if (errorPaths(root).some((p) => p.at(-1) === 'isRequired')) read.requiredUnknown = true
+  if (beyondPage(obj(commit.checkSuites)?.totalCount, suiteNodes.length) || beyondPage(contexts?.totalCount, contextNodes.length))
+    read.truncated = true
   return read
 }
 
+/** gh exits 1 whenever the answer carries `errors`, with the data still on stdout (measured, final review C1). Such an
+ *  answer is read when every error is on a leaf field (LEAF_ERRORS). */
+function usablePartial(stdout: string): boolean {
+  let root: unknown
+  try {
+    root = JSON.parse(stdout)
+  } catch {
+    return false
+  }
+  const paths = errorPaths(root)
+  return paths.length > 0 && paths.every((p) => LEAF_ERRORS.has(String(p.at(-1))))
+}
+
 /** PR `number` of `repo`. The query goes on one line: an argument with line breaks is one more thing a Windows
- *  launcher can split. A missing PR is not-found (ghFailureSentence reads GraphQL's words for it). */
+ *  launcher can split. A missing PR is not-found (ghFailureSentence reads GraphQL's words for it). An answer gh failed
+ *  only because a leaf field could not be resolved is read (usablePartial). */
 export async function readPrState(
   run: GhRunner,
   cwd: string,
@@ -200,7 +240,10 @@ export async function readPrState(
     ],
     cwd
   )
-  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  if (!r.ok) {
+    const partial = r.spawnError === undefined && usablePartial(r.stdout) ? parsePrState(r.stdout) : null
+    return partial ? { ok: true, read: partial } : { ok: false, ...ghFailureSentence(r) }
+  }
   const read = parsePrState(r.stdout)
   return read ? { ok: true, read } : { ok: false, kind: 'other', message: 'gh api graphql answered with something that is not a pull request' }
 }

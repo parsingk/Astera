@@ -86,6 +86,8 @@ export interface GitHubCiSnapshot {
   verdict: CiVerdict
   /** The first target check that failed, by name. */
   failing?: string
+  /** That check's details link, kept with the verdict: a name can repeat, and the check can fall past CI_CHECKS_MAX. */
+  failingUrl?: string
   /** At most CI_CHECKS_MAX. */
   checks: GitHubCiCheck[]
   /** When this snapshot last changed, not when it was last read: a read that finds nothing new writes nothing. */

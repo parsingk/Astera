@@ -12,7 +12,7 @@ const bound = (over: Partial<RunGitHubState> = {}): RunGitHubState => ({
   ...over
 })
 const ci = (verdict: 'pending' | 'passed' | 'failed' | 'none', failing?: string): RunGitHubState['ci'] => ({
-  sha: A, basis: 'all-reported', verdict, changedAt: 'T', ...(failing ? { failing } : {}),
+  sha: A, basis: 'all-reported', verdict, changedAt: 'T', ...(failing ? { failing, failingUrl: 'https://x/1' } : {}),
   checks: [{ externalId: 'run:1', name: 'build', status: 'completed', conclusion: verdict === 'failed' ? 'failure' : 'success', required: false, detailsUrl: 'https://x/1', jobId: 1 }]
 })
 
@@ -45,6 +45,19 @@ describe('githubLifecycleOf', () => {
       ci: { sha: A, basis: 'all-reported', verdict: 'failed', checks: [{ name: 'build', status: 'completed', conclusion: 'failure', required: false }] },
       failing: { check: 'build', detailsUrl: 'https://x/1' }
     })
+  })
+
+  // Final review I1: a verdict for a commit that is not the PR's head says nothing about the head yet
+  it('reads a verdict for a commit that is not the head as ci-pending', () => {
+    expect(githubLifecycleOf(POLICY, bound({ headSha: 'b'.repeat(40), ci: ci('passed') }))?.state).toBe('ci-pending')
+    expect(githubLifecycleOf(POLICY, bound({ headSha: 'b'.repeat(40), ci: ci('failed', 'build') }))?.state).toBe('ci-pending')
+    expect(githubLifecycleOf(POLICY, bound({ headSha: A, ci: ci('passed') }))?.state).toBe('ci-passed')
+  })
+
+  // Final review M6: the link comes from the verdict, never from a check found again by name
+  it('takes the failing link from the verdict only', () => {
+    const noUrl = { ...ci('failed', 'build')!, failingUrl: undefined }
+    expect(githubLifecycleOf(POLICY, bound({ ci: noUrl }))?.failing).toEqual({ check: 'build' })
   })
 
   it('names PR candidates and a changed source', () => {
