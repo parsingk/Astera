@@ -46,6 +46,7 @@ import {
   resumeRun,
   setRunWorktree,
   recordRunGit,
+  recordRunGitHub,
   resolveRunId,
   recordDispatchGit,
   placedByApp,
@@ -118,6 +119,7 @@ import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
+import { parseRunGitHubPatch } from '../github/runState'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -2689,6 +2691,17 @@ export async function handleCommand(
       const patch = { ...(base !== undefined ? { base } : {}), ...(head !== undefined ? { head } : {}) }
       const r: Res<unknown> = runId !== null ? recordRunGit(s, runId, patch) : recordDispatchGit(s, dispatchId!, patch)
       // Nothing changed: no write, so a recorder that reads the same head twice costs no state version.
+      if (r.ok && r.state === s) return okBody(r.value)
+      return commit(r)
+    }
+    case 'runs-github-record': {
+      if (caller.sessionId !== HOST_CALLER) return denied('runs-github-record is the Host’s own record')
+      const runId = str(args.runId)
+      if (runId === null) return bad('runs-github-record takes a runId')
+      const patch = parseRunGitHubPatch(args.patch)
+      if (typeof patch === 'string') return bad(`runs-github-record: ${patch}`)
+      const r = recordRunGitHub(s, runId, patch, now)
+      // Nothing changed: no write, as runs-git-record does for a head read twice.
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
     }

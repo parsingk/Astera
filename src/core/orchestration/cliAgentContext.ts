@@ -173,6 +173,14 @@ const SESSION = {
       { name: 'head', value: '<sha>', about: 'where the work stands now' }
     ]
   },
+  'runs-github-record': {
+    summary: "record what the Host read of a run's pull request and CI",
+    detail: 'The Host records it itself (GitHub lifecycle); anyone else is refused.',
+    flags: [
+      { name: 'runId', value: '<runId>', about: 'the run to record it on' },
+      { name: 'patch', value: '<object>', about: 'what was read; the Host passes it in-process' }
+    ]
+  },
   'run-worktree-set': {
     summary: "record this run's worktree",
     flags: [

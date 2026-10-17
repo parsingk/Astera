@@ -9140,3 +9140,33 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect((r.body as { github?: unknown }).github).toEqual(POLICY)
   })
 })
+
+describe('runs-github-record (GitHub lifecycle G1)', () => {
+  const seeded = async () => {
+    const deps = makeDeps()
+    const runId = ((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })).body as { id: string }).id
+    return { deps, runId }
+  }
+  const patch = { lastReadError: { kind: 'network' } }
+
+  it('is the Host’s own record: anyone else is refused', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch }, '')).status).toBe(403)
+    expect((await call(deps, 'runs-github-record', { runId, patch }, 'coordinator')).status).toBe(403)
+  })
+
+  it('records on the Run, and a read with nothing new commits nothing', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch }, HOST_CALLER)).status).toBe(200)
+    const after = deps.getState()
+    expect(after.runs.find((r) => r.id === runId)?.githubState?.lastReadError?.kind).toBe('network')
+    await call(deps, 'runs-github-record', { runId, patch }, HOST_CALLER)
+    expect(deps.getState()).toBe(after)
+  })
+
+  it('refuses a malformed patch and an unknown run', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch: { binding: 1 } }, HOST_CALLER)).status).toBe(400)
+    expect((await call(deps, 'runs-github-record', { runId: 'run_nope', patch }, HOST_CALLER)).status).toBe(404)
+  })
+})

@@ -42,6 +42,7 @@ import {
 import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
+import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -518,6 +519,17 @@ export function recordDispatchGit(s: OrchState, dispatchId: string, patch: GitRa
   if (git === null) return ok(s, d)
   const next = { ...d, git }
   return ok({ ...s, dispatches: s.dispatches.map((x) => (x.id === dispatchId ? next : x)) }, next)
+}
+
+/** Records what the Host read of a Run's pull request and CI (GitHub lifecycle G1). A read with nothing new answers the
+ *  same state, so a watch that polls costs no state version. */
+export function recordRunGitHub(s: OrchState, runId: string, patch: RunGitHubPatch, now: string): Res<JobRun> {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return gone(`unknown run: ${runId}`)
+  const githubState = nextGitHubState(run.githubState, patch, now)
+  if (githubState === null) return ok(s, run)
+  const next = { ...run, githubState }
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? next : r)) }, next)
 }
 
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {
