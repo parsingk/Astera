@@ -159,6 +159,15 @@ Answers come in the public shapes the CLI prints with `--json`, typed: `Project`
 `RunCompletion`, `AsteraEvent` and the rest are exported from the package. The words are the Host's: a question is
 `open` or `resolved`, and a stop pauses a Run (`runs.resume` takes it back). There is no cancel.
 
+A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, Astera 1.4.15 and `@astera-app/client`
+0.4.0 and later) carries its
+policy as `github` (`GitHubLifecyclePolicy`), and each of its Runs carries `github` (`GitHubLifecycle`): the pull
+request Astera bound for the Run's branch, its head commit, the CI checks of that commit with the `verdict` (`pending`,
+`passed`, `failed`, or `none` when the commit has no check) and its `basis` (the required checks, every reported check,
+or the Job's selection), the check that failed first with its link, and a `state` that sums it up (`unbound`,
+`pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or `external-state-unavailable` while
+GitHub cannot be read). It is derived on every read, so `runs.get` always shows what Astera last read.
+
 ### Jobs and Runs
 
 `jobs.create` takes an `objective`, and where the work happens: a `projectId` (a project registered in the app) or an
@@ -183,7 +192,10 @@ A Job made from a job source's item (a ticket a person picked in the app, with `
 with MCP's `create_job_from_source`) carries `source`: `{ id, itemId, label, title?, url? }`, the source (`github`,
 or a plugin's id), the item's id there, how a person names it (`Linear ENG-123`), the item's title (someone else's
 text, at most 300 characters), and its link. Astera sets it, from 1.4.14
-and `@astera-app/client` 0.3.0; `jobs.create` takes no such field. There is no namespace for job sources yet: make
+and `@astera-app/client` 0.3.0; `jobs.create` takes no such field. A GitHub issue's source also carries
+`capturedBodyHash` (a sha256 of the issue's body when the Job was made) and `capturedUpdatedAt` (GitHub's `updated_at`
+then), from 1.4.15: a GitHub lifecycle Run marks `github.sourceChanged` when the body changes after that, and the Job's
+objective stays as it was. There is no namespace for job sources yet: make
 such a Job with `call('jobs-create-from-source', { source, item, project })`, as the CLI does (`astera jobs
 create-from-source`), with `jobs.create`'s coordinator and convergence arguments beside them; the answer is the Job.
 [Job source plugins](plugins.md#job-source-plugins) says where the items come from.
@@ -310,6 +322,11 @@ outlives a Host restart, and `events` reads it. An event:
 | `session.input_needed` | a session turns to waiting on a person (a permission, a question), once per turn into it | `{ session, prompt }` |
 | `session.limit_waiting` | a session stops at a usage limit and waits for it to reset | `{ session, scope?, nextRetryAt? }` |
 | `session.account_switched` | a session goes on under another account | `{ session, accountLabel }` |
+| `github.pr_bound` | a GitHub lifecycle Run's branch got its pull request | `Run` |
+| `github.head_changed` | that pull request's head moved | `Run` |
+| `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
+| `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its
 checks carry no output; a plugin check, in a Task or a `TaskCompletion`, carries how many findings it has
@@ -392,7 +409,7 @@ handled, and, while you are not handling one, the subscription's own `cursor`. T
 read a gap. Saved while you handle an event, it is where that event's page was read from, so that page comes again.
 [notify-webhook.ts](../examples/sdk/notify-webhook.ts) does both, posting to a webhook.
 
-Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `github.*` and `runtime.*`.
+Not produced yet: `run.cancelled` (there is no cancel; a stop pauses) and `runtime.*`.
 
 ## Errors
 
@@ -550,10 +567,11 @@ Node 22.6 to 22.17 needs `--experimental-strip-types`; on anything else use `npx
 ## Not yet
 
 - An HTTP mode (`mode: 'http'`) for a Host on another machine, and Runtime targets (`runtimeId`).
-- The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile.
+- The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile; a GitHub
+  lifecycle Run's pull request and CI are already on `runs.get` (`github`).
 - A Run cancel (`runs.cancel`, `run.cancelled`): a stop pauses.
 - Paging done by the Host for the lists other than events.
-- `github.*` and `runtime.*` events.
+- `runtime.*` events.
 - A browser build.
 
 ## Troubleshooting

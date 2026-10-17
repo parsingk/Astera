@@ -3,6 +3,7 @@
 // providers/meta.ts).
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
+import type { GitHubLifecyclePolicy, RunGitHubState } from '../github/lifecycle'
 
 export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
@@ -202,6 +203,9 @@ export interface Job {
   /** Where the Job came from: a job source and its item (plugin Phase 4 J15). Set only by the Host, when it makes the
    *  Job from that item (`jobs-create-from-source`); no caller of `jobs-create` can give it. */
   source?: JobSourceRef
+  /** The GitHub lifecycle (design 2026-10-17 L2, L10): present = the Job's consent to push, open a PR and rerun CI on
+   *  its Runs' branches, with the policy written once when the Job was made. */
+  github?: GitHubLifecyclePolicy
 }
 
 /** A job source's item a Job was made from: the source (a plugin's id, or `github`), the item's id there, how a person
@@ -215,6 +219,10 @@ export interface JobSourceRef {
    *  a Job made before 4d. */
   title?: string
   url?: string
+  /** A GitHub issue's body hash and update time when the Job was made (GitHub lifecycle §6): the watch compares them,
+   *  and an edit after the Job started is shown, never folded into the objective. */
+  capturedBodyHash?: string
+  capturedUpdatedAt?: string
 }
 
 /** 한 번의 실행. **계획이 실제로 돈 기록이고, 계획 자체는 Job 이다.**
@@ -291,6 +299,9 @@ export interface JobRun {
   /** The git range this Run worked over (remote runtime design Phase 10): its base when it began and its head as it
    *  moved, recorded by the Host, so its changed files and diffs outlive a reaped worktree. */
   git?: GitRange
+  /** What the Host last read of this Run's pull request and CI (GitHub lifecycle). Written only by the Host's
+   *  `runs-github-record`; kept back from the public surface, whose `github` field is derived from it (runView). */
+  githubState?: RunGitHubState
   /** 예약을 세울 때 이 회차도 함께 멈췄다.
    *
    *  **Job.paused 하나로 겸할 수 없다.** Dispatch 를 닫는 것만으로는 회차가 멈추지 않는다 — 닫힌

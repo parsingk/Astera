@@ -188,7 +188,7 @@ value Astera does not recognize counts as off. Leave `runtimeId` out for this ma
 | `create_job` | Create a durable Astera Job for a project. This does not start execution. Use `run_job` after reviewing the returned Job id. The coordinator account runs a coordinator that plans and places the work; without `coordinatorAccountId` it is `coordinatorProvider`'s default account (`claude` unless given). With `convergence: true`, a Task whose checks or review fail gets bounded repair and recheck loops instead of failing at once. |
 | `run_job` | Start a new Run for an existing Job. Returns immediately with a Run id; follow it with `wait_for_run`, and read `get_completion` for where each Task stands. Configured completion checks and review policies may trigger bounded repair and recheck loops. |
 | `list_runs` | Runs, newest first, optionally of one Job. |
-| `get_run` | One Run: its state and progress. It answers at once; to follow a Run until it changes, use `wait_for_run` rather than calling this in a loop. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). |
+| `get_run` | One Run: its state and progress. It answers at once; to follow a Run until it changes, use `wait_for_run` rather than calling this in a loop. `waitingForApproval` counts the Tasks whose worker waits for a person's approval (see below). A Run of a GitHub lifecycle Job carries `github`: its pull request, head and CI as Astera last read them. |
 | `wait_for_run` | Wait until a Run (`runId`) changes, for up to `waitSeconds` (1 to 40, 30 when not given). It answers as soon as the Run has events the caller has not seen (`seen`, 0 when not given) or reaches an ending, and otherwise when the window passes. Returns `runId`, `jobId`, `seen` (how many events the Run has now: pass it to the next call), `progress`, `events` (only the new ones) and `ending`. See [Following a Run](#following-a-run). |
 | `stop_run` | Stop a Run: its open workers are closed, its coordinator is asked to stop (`coordinatorStopped: true` means it had one and was asked, not that it has exited yet), and the Run is paused. Use `resume_run` to continue it. A Run that has already finished is refused with `CONFLICT` and left as it is: its coordinator and idle workers end on their own 10 minutes after it finished or after a person last typed into them (at once for a scheduled Run), so there is nothing to stop. |
 | `resume_run` | Resume a Run that `stop_run` paused. A Job with a coordinator account gets a new coordinator, which looks at what is done and carries on; while the stopped one is still exiting it waits up to 10 seconds, then answers `CONFLICT` and changes nothing, so call it again. A Run that is not paused is returned as it is. |
@@ -245,6 +245,15 @@ does. `convergence: true` turns it on with the default bounds; `maxFixAttempts`,
 `convergence: true` is refused with `INVALID_ARGUMENTS`, as the CLI refuses it, since it would set a
 policy that is off. The Job carries the policy as `convergence`, and `get_completion` shows the
 loops as they run.
+
+**GitHub lifecycle.** `create_job`, `create_job_from_issue` and `create_job_from_source` take
+`githubLifecycle: true`, as `astera jobs create --github-lifecycle` does: Astera binds the open pull
+request of each Run's branch and watches its CI. The project's origin must be a GitHub repository you
+can push to (the Astera Host checks this before it makes the Job, and refuses with `CONFLICT` and the
+reason otherwise), and the field turns convergence on. `githubChecks` (a list of check names) makes
+those checks decide; without it, the branch rules' required checks decide, or every reported check
+when the rules name none. It needs "Let MCP clients act on GitHub" like the other GitHub writes. The
+Job carries the policy as `github`.
 
 `run_job` makes the Run's worktree and starts its coordinator before it
 answers, so on a large repository it can take up to a minute.

@@ -1,6 +1,7 @@
 // One GitHub issue read through the user's gh. Pure over an injected GhRunner; the Host's github-issue command and
 // the GitHub job source (issueSource.ts) wrap it. A Job made from an issue gets its objective from the job sources'
 // one writer (sources/objective.ts).
+import { createHash } from 'node:crypto'
 import { ghFailureSentence, type GhFailed, type GhRunner } from './gh'
 
 export interface GhIssue {
@@ -15,6 +16,8 @@ export interface GhIssue {
   url: string
   /** The issues endpoint answers a pull request's number too. */
   isPullRequest: boolean
+  /** When GitHub last changed the issue (title, body, labels, ...). */
+  updatedAt?: string
 }
 
 /** The authors whose issues may become a Job: people the repository already trusts with its code. */
@@ -59,9 +62,14 @@ export function issueFrom(raw: unknown): GhIssue | null {
     author: user.login,
     authorAssociation: r.author_association,
     url: r.html_url,
-    isPullRequest: r.pull_request !== undefined && r.pull_request !== null
+    isPullRequest: r.pull_request !== undefined && r.pull_request !== null,
+    ...(typeof r.updated_at === 'string' ? { updatedAt: r.updated_at } : {})
   }
 }
+
+/** A Job keeps this of its issue's body (GitHub lifecycle §6): enough to tell a changed body from a label change, and
+ *  nothing of the text itself. */
+export const issueBodyHash = (body: string): string => createHash('sha256').update(body, 'utf8').digest('hex')
 
 /** Issue `n` of the repository at `cwd`; gh fills `{owner}/{repo}` from that folder's remote. */
 export async function readIssue(

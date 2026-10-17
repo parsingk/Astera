@@ -692,8 +692,8 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
-astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
+astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
 astera runs    get    --id <runId>
@@ -817,6 +817,11 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 `waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
 ([mcp.md](mcp.md) says more).
 
+**`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
+branch, its head, the CI checks of that head with the `verdict` and the check that failed first, and a `state` that sums
+it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
+`external-state-unavailable` while GitHub cannot be read). [sdk.md](sdk.md) lists the fields.
+
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
 list`. A `--project` after the command belongs to that command and wins over the global one. Every
@@ -867,6 +872,14 @@ account of that provider logged in it is a 2 that names the provider. When both 
 `--coordinator-account` wins.
 A Host that announces `dispatch` places them whether Astera is open or closed, and otherwise Astera
 does (see "Jobs run with Astera closed").
+
+**`--github-lifecycle` carries the Job's work through GitHub.** Astera binds the open pull request of
+each run's branch and watches its CI, and `runs get` shows where it stands as `github`. Before it makes
+the Job, the Astera Host checks that the folder's `origin` is a GitHub repository you can push to
+(WRITE, MAINTAIN or ADMIN through your `gh` login) and refuses with a 6 that says why otherwise. The flag
+turns `--convergence` on. `--github-checks build,test` makes those checks decide; without it, the branch
+rules' required checks decide, or every reported check when the rules name none. The Job carries the
+policy as `github`.
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it

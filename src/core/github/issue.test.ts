@@ -6,6 +6,8 @@ import {
   parseIssue,
   readIssue,
   repoOf,
+  issueFrom,
+  issueBodyHash,
   type GhIssue
 } from './issue'
 import type { GhResult, GhRunner } from './gh'
@@ -45,7 +47,8 @@ describe('parseIssue', () => {
       author: 'parsingk',
       authorAssociation: 'OWNER',
       url: 'https://github.com/parsingk/Astera/issues/7',
-      isPullRequest: false
+      isPullRequest: false,
+      updatedAt: '2026-09-30T13:13:31Z'
     })
   })
 
@@ -99,5 +102,16 @@ describe('constants and repoOf', () => {
   it('repoOf reads owner/repo off the html_url', () => {
     expect(repoOf('https://github.com/parsingk/Astera/issues/7')).toBe('parsingk/Astera')
     expect(repoOf('https://ghe.corp.example/team/app/pull/3')).toBe('team/app')
+  })
+})
+
+describe('the issue as a Job saw it (GitHub lifecycle §6)', () => {
+  it('reads updated_at', () => {
+    const issue = issueFrom({ number: 5, title: 't', body: 'b', state: 'open', user: { login: 'pk' }, author_association: 'OWNER', html_url: 'u', updated_at: '2026-10-18T00:00:00Z' })
+    expect(issue?.updatedAt).toBe('2026-10-18T00:00:00Z')
+  })
+  it('hashes a body to sha256 hex, the same body to the same hash', () => {
+    expect(issueBodyHash('abc')).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+    expect(issueBodyHash('abc')).toBe(issueBodyHash('abc'))
   })
 })

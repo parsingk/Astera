@@ -88,6 +88,8 @@ const SESSION = {
         about: 'which review findings block; needs --convergence'
       },
       { name: 'max-total-minutes', value: '<n>', about: 'time budget per Task; needs --convergence' },
+      { name: 'github-lifecycle', about: 'carry the work through a pull request and GitHub CI (origin must be GitHub, and yours to push)' },
+      { name: 'github-checks', value: '<name,...>', about: 'the CI checks that decide; needs --github-lifecycle' },
       { name: 'auto', about: "this Job's workers are placed for you, and it holds until `run-start`" }
     ]
   },
@@ -169,6 +171,14 @@ const SESSION = {
       { name: 'dispatchId', value: '<dispatchId>', about: 'the attempt to record it on' },
       { name: 'base', value: '<sha>', about: 'where the work started; kept once set' },
       { name: 'head', value: '<sha>', about: 'where the work stands now' }
+    ]
+  },
+  'runs-github-record': {
+    summary: "record what the Host read of a run's pull request and CI",
+    detail: 'The Host records it itself (GitHub lifecycle); anyone else is refused.',
+    flags: [
+      { name: 'runId', value: '<runId>', about: 'the run to record it on' },
+      { name: 'patch', value: '<object>', about: 'what was read; the Host passes it in-process' }
     ]
   },
   'run-worktree-set': {

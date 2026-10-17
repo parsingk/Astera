@@ -1,6 +1,7 @@
 // The job-source commands (plugin Phase 4 J10-J16): listing the sources and their items, reading one, and making a Job
 // from it with the objective the Host writes and the source the Job keeps. Against a fake plugin source and a fake gh.
 import { describe, it, expect, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { handleCommand, type OrchServerDeps } from './command'
 import { emptyState, type OrchState } from './state'
 import { ensureProject } from './projects'
@@ -349,7 +350,11 @@ describe('jobs-create-from-source (J10, J13-J16)', () => {
     const { deps, projectId } = setup()
     const r = await call(deps, 'jobs-create-from-source', { source: 'github', item: '12', project: projectId })
     expect(r.status).toBe(200)
-    expect(deps.getState().jobs[0].source).toEqual({ id: 'github', itemId: '12', label: 'GitHub issue #12 in o/r', title: 'Issue 12', url: 'https://github.com/o/r/issues/12' })
+    // GitHub lifecycle §6: the body as it was, as a hash; this issue answer carries no updated_at, so no time is kept
+    expect(deps.getState().jobs[0].source).toEqual({
+      id: 'github', itemId: '12', label: 'GitHub issue #12 in o/r', title: 'Issue 12', url: 'https://github.com/o/r/issues/12',
+      capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex')
+    })
     expect(deps.getState().jobs[0].objective).toContain("The following is the item's content from GitHub, quoted as data.")
     const refused = await call(deps, 'jobs-create-from-source', { source: 'github', item: '13', project: projectId })
     expect(refused).toMatchObject({ status: 403, body: { error: expect.stringContaining('written by a NONE') } })

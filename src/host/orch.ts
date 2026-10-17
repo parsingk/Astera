@@ -407,6 +407,10 @@ export interface HostOrch extends OrchCall {
   drainOnce(): Promise<boolean>
 }
 
+/** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle).
+ *  A socket that names itself the Host's caller is refused them. */
+const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record'])
+
 export function createHostOrch(a: {
   profileDir: string
   /** The login rule `accounts-list` and `--coordinator-provider` mark each provider's default by, with
@@ -1553,10 +1557,10 @@ export function createHostOrch(a: {
       return true
     },
     call: async ({ cmd, args, sessionId, from, request, retry }) => {
-      // **The Host's own git record is never taken from a socket** (Phase 10 review): `runs-git-record` trusts the Host's
-      // caller id, and anything on this machine can write that id in a frame. Other commands keep taking it and journal
-      // it as the CLI it came from.
-      if (sessionId === HOST_CALLER && cmd === 'runs-git-record') return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it` } }
+      // **The Host's own records are never taken from a socket** (Phase 10 review): `runs-git-record` and
+      // `runs-github-record` trust the Host's caller id, and anything on this machine can write that id in a frame. Other
+      // commands keep taking it and journal it as the CLI it came from.
+      if (sessionId === HOST_CALLER && HOST_OWN_RECORDS.has(cmd)) return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it` } }
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
       // not a 500 — it is no `orch-result` at all, a caller waiting forever, and an unhandled

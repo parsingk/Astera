@@ -3791,3 +3791,14 @@ describe('the external coordinator (spec E1, E3)', () => {
     expect(none.ok && none.state).toBe(moved)
   })
 })
+
+describe('createJob — GitHub lifecycle (G1)', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+
+  it('keeps the policy it is given, and gives none when it is not', () => {
+    const made = unwrap<{ github?: unknown }>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p', github: policy }, NOW) as never)
+    expect(made.value.github).toEqual(policy)
+    const plain = unwrap<Record<string, unknown>>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
+    expect(plain.value).not.toHaveProperty('github')
+  })
+})

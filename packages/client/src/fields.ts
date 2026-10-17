@@ -32,7 +32,8 @@ export const JOB_FIELDS = Object.freeze([
   'pendingStart',
   'paused',
   'convergence',
-  'source'
+  'source',
+  'github'
 ] as const)
 
 export const RUN_FIELDS = Object.freeze([
@@ -190,7 +191,12 @@ const EVENT_TYPE_SET = {
   'completion.exhausted': true,
   'session.input_needed': true,
   'session.limit_waiting': true,
-  'session.account_switched': true
+  'session.account_switched': true,
+  'github.pr_bound': true,
+  'github.head_changed': true,
+  'github.ci_passed': true,
+  'github.ci_failed': true,
+  'github.source_changed': true
 } as const satisfies Record<EventType, true>
 /** The event types the Host produces, in the order of the spec's list. */
 export const EVENT_TYPES: readonly EventType[] = Object.freeze(Object.keys(EVENT_TYPE_SET) as EventType[])

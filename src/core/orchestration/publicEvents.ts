@@ -22,6 +22,7 @@ import { outcomeOfTasks } from './running'
 import { countedCheck, findingsCounted, taskCompletionOf, taskCompletionState, type CompletionState } from './runCompletion'
 import type { OrchState } from './state'
 import { isPlaceholderSessionId, type Dispatch, type Gate, type Job, type JobRun, type Task } from './types'
+import type { GitHubLogKind, RunGitHubState } from '../github/lifecycle'
 
 /** One event before the log gives it an id, a sequence and a time. */
 export interface EventDraft {
@@ -103,6 +104,21 @@ const eventState = (s: OrchState, by: ByTask, t: Task): CompletionState => {
   return open !== undefined && isPlaceholderSessionId(open.sessionId) ? 'not-started' : state
 }
 
+const GITHUB_EVENT: Record<GitHubLogKind, EventType> = {
+  'pr-bound': 'github.pr_bound',
+  'head-changed': 'github.head_changed',
+  'ci-passed': 'github.ci_passed',
+  'ci-failed': 'github.ci_failed',
+  'source-changed': 'github.source_changed'
+}
+
+/** The GitHub events a Run's record gained in one commit: its log entries numbered past the last one it had. */
+export function githubEventsOf(prev: RunGitHubState | undefined, next: RunGitHubState | undefined): EventType[] {
+  if (next === undefined || next === prev) return []
+  const seen = prev?.seq ?? 0
+  return next.log.filter((e) => e.seq > seen).map((e) => GITHUB_EVENT[e.kind])
+}
+
 export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft[] {
   if (prev === next) return []
   const out: EventDraft[] = []
@@ -136,6 +152,15 @@ export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft
 
   const runsBefore = prev.runs === next.runs ? null : new Set(prev.runs.map((r) => r.id))
   if (runsBefore !== null) for (const run of next.runs) if (!runsBefore.has(run.id)) runEvent('run.started', run)
+
+  if (prev.runs !== next.runs) {
+    const runBefore = byId(prev.runs)
+    for (const run of next.runs) {
+      const was = runBefore.get(run.id)
+      if (was === run) continue
+      for (const type of githubEventsOf(was?.githubState, run.githubState)) runEvent(type, run)
+    }
+  }
 
   const tasksMoved = prev.tasks !== next.tasks
   const gatesMoved = prev.gates !== next.gates

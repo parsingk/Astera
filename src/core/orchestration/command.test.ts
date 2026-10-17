@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -22,7 +23,7 @@ import {
 } from './state'
 import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
-import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project, type Task } from './types'
+import { FAILURE_LIMIT, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
 import { runningRunCount } from './running'
@@ -8758,10 +8759,26 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(body.issue).toEqual({ number: 5, url: 'https://github.com/o/r/issues/5' })
       const job = deps.getState().jobs.find((j) => j.id === body.id)
       expect(job?.objective).toBe(sourcedObjective(issueContext(parseIssue(JSON.stringify(issueJson))!), 'GitHub'))
-      expect(job?.source).toEqual({ id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', title: 'Broken', url: 'https://github.com/o/r/issues/5' })
+      expect(job?.source).toEqual({
+        id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', title: 'Broken', url: 'https://github.com/o/r/issues/5',
+        capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex')
+      })
       expect(job?.cwd).toBe(projectPath)
       expect(job?.concurrency).toBe(2)
       expect(body.objective).toBe(job?.objective)
+    })
+
+    // GitHub lifecycle §6: the issue as it was when the Job was made, so a later edit can be noticed
+    it('a Job made from an issue keeps a hash of its body and when it was last updated', async () => {
+      const { deps, projectId } = issueSetup({ updated_at: '2026-10-01T00:00:00Z' })
+      const r = await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')
+      expect(r.status).toBe(200)
+      expect(deps.getState().jobs.at(-1)?.source).toMatchObject({
+        id: 'github',
+        itemId: '5',
+        capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex'),
+        capturedUpdatedAt: '2026-10-01T00:00:00Z'
+      })
     })
 
     it('jobs-create-from-issue refuses an author outside OWNER, MEMBER and COLLABORATOR (403), and makes no Job', async () => {
@@ -9041,5 +9058,132 @@ describe('the external coordinator: run-create and check record the driving sess
     await call(deps, 'check', { run, ack: first.deliveryId }, 'sess-b')
     expect(deps.getState().deliveries[0].ackedAt).toBeDefined()
     expect(deps.getState().runs[0].externalCoordinatorSessionId).toBe('sess-b')
+  })
+})
+
+describe('run-create — the GitHub lifecycle (G1)', () => {
+  const VIEW = 'repo view o/r --json nameWithOwner,viewerPermission'
+  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const withGithub = (o: { permission?: string; origin?: string | null; initial?: OrchState } = {}) => {
+    const deps = makeDeps(o.initial)
+    const calls: string[] = []
+    const unexpected = (name: string) => async (): Promise<never> => {
+      throw new Error(`${name} was not expected`)
+    }
+    deps.github = {
+      run: async (args) => {
+        calls.push(args.join(' '))
+        return args.join(' ') === VIEW
+          ? { ok: true, stdout: JSON.stringify({ nameWithOwner: 'o/r', viewerPermission: o.permission ?? 'WRITE' }), stderr: '' }
+          : { ok: false, stdout: '', stderr: `unexpected gh call: ${args.join(' ')}`, exitCode: 1 }
+      },
+      originOf: async () => (o.origin === undefined ? 'git@github.com:o/r.git' : o.origin),
+      createPr: unexpected('createPr'),
+      readCommits: unexpected('readCommits'),
+      isClean: unexpected('isClean')
+    }
+    return { deps, calls }
+  }
+
+  it('stores the policy with its defaults and turns convergence on', async () => {
+    const { deps, calls } = withGithub()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(200)
+    const job = deps.getState().jobs[0]
+    expect(job.github).toEqual(POLICY)
+    expect(job.convergence).toEqual({})
+    expect(calls).toEqual([VIEW])
+  })
+
+  it('keeps the convergence policy the caller gave', async () => {
+    const { deps } = withGithub()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, convergence: true, maxFixAttempts: 5 })
+    expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5 })
+  })
+
+  it('selects checks by name, from a comma list or a list, once each', async () => {
+    const a = withGithub()
+    await call(a.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build, test,build' })
+    expect(a.deps.getState().jobs[0].github?.ci).toEqual({ mode: 'selected', selectedChecks: ['build', 'test'] })
+    const b = withGithub()
+    await call(b.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: ['lint'] })
+    expect(b.deps.getState().jobs[0].github?.ci).toEqual({ mode: 'selected', selectedChecks: ['lint'] })
+  })
+
+  it('refuses --github-checks without --github-lifecycle, and an empty or missing name', async () => {
+    const { deps } = withGithub()
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubChecks: 'build' })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build,' })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: true })).status).toBe(400)
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('refuses a permission that cannot push, says why, and makes no Job', async () => {
+    const { deps } = withGithub({ permission: 'READ' })
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('READ')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('refuses a folder with no origin', async () => {
+    const { deps } = withGithub({ origin: null })
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('no git remote named origin')
+  })
+
+  it('is answered by the Host only: without deps.github it is 409', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+  })
+
+  // Already true before this slice (run-create is COORDINATOR_ONLY); pinned so a later change cannot open it.
+  it('refuses a worker session (design §7.1), through jobs-create too', async () => {
+    const worker: Dispatch = {
+      id: 'd1', taskId: 't1', provider: 'codex', accountId: 'acc1', sessionId: 'w1', cwd: 'D:/p',
+      specPath: 'D:/p/spec.md', startedAt: NOW, workerState: 'ready', retained: false
+    }
+    const { deps } = withGithub({ initial: { ...emptyState(), dispatches: [worker] } })
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }, 'w1')).status).toBe(403)
+    expect((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }, 'w1')).status).toBe(403)
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('jobs-create passes it through', async () => {
+    const { deps } = withGithub()
+    const r = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(200)
+    expect((r.body as { github?: unknown }).github).toEqual(POLICY)
+  })
+})
+
+describe('runs-github-record (GitHub lifecycle G1)', () => {
+  const seeded = async () => {
+    const deps = makeDeps()
+    const runId = ((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })).body as { id: string }).id
+    return { deps, runId }
+  }
+  const patch = { lastReadError: { kind: 'network' } }
+
+  it('is the Host’s own record: anyone else is refused', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch }, '')).status).toBe(403)
+    expect((await call(deps, 'runs-github-record', { runId, patch }, 'coordinator')).status).toBe(403)
+  })
+
+  it('records on the Run, and a read with nothing new commits nothing', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch }, HOST_CALLER)).status).toBe(200)
+    const after = deps.getState()
+    expect(after.runs.find((r) => r.id === runId)?.githubState?.lastReadError?.kind).toBe('network')
+    await call(deps, 'runs-github-record', { runId, patch }, HOST_CALLER)
+    expect(deps.getState()).toBe(after)
+  })
+
+  it('refuses a malformed patch and an unknown run', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch: { binding: 1 } }, HOST_CALLER)).status).toBe(400)
+    expect((await call(deps, 'runs-github-record', { runId: 'run_nope', patch }, HOST_CALLER)).status).toBe(404)
   })
 })

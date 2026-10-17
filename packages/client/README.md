@@ -115,6 +115,11 @@ for await (const e of astera.events.subscribe({ types: ['run.completed', 'run.fa
 | `session.input_needed` | a session turns to waiting on a person (a permission, a question), once per turn into it | `{ session, prompt }` |
 | `session.limit_waiting` | a session stops at a usage limit and waits for it to reset | `{ session, scope?, nextRetryAt? }` |
 | `session.account_switched` | a session goes on under another account | `{ session, accountLabel }` |
+| `github.pr_bound` | a GitHub lifecycle Run's branch got its pull request | `Run` |
+| `github.head_changed` | that pull request's head moved | `Run` |
+| `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
+| `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
 
 - An event is `{ id, type, sequence, occurredAt, projectId?, jobId?, runId?, taskId?, sessionId?, payload }`, the
   payload the object as it stood right after the change (a session event's is `{ session, ... }`). A Task is cut like
@@ -138,7 +143,7 @@ for await (const e of astera.events.subscribe({ types: ['run.completed', 'run.fa
 - A subscription outlives a Host restart: a call that fails because the Host went away or did not answer is sent
   again from the same cursor after 250 ms, 1 s, then every 5 s. It ends only on `break`/`return()`, its `signal`, or
   an error waiting cannot mend (a Host too old for events answers `VERSION_MISMATCH`).
-- Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `github.*`, `runtime.*`. Local Host only for
+- Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `runtime.*`. Local Host only for
   now.
 
 It is versioned apart from the Astera app, and 0.x, so a minor version may still change names:

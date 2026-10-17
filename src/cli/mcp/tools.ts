@@ -84,6 +84,26 @@ export const CONVERGENCE_KNOBS = {
     .describe('Time budget per Task in minutes (an integer >= 1). Needs convergence: true.')
 }
 
+/** create_job*'s GitHub lifecycle fields: the CLI's `--github-lifecycle` and `--github-checks`. */
+export const GITHUB_LIFECYCLE_FIELDS = {
+  githubLifecycle: z
+    .boolean()
+    .optional()
+    .describe(
+      "Carry the Job's work through GitHub: Astera binds the open pull request of each Run's branch and watches its CI. The project's origin must be a GitHub repository you can push to. Turns convergence on. Needs \"Let MCP clients act on GitHub\" in Astera Settings (CLI tab)."
+    ),
+  githubChecks: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("With githubLifecycle: decide by these CI checks only, by name. Without it the branch rules' required checks decide, or every reported check when the rules name none.")
+}
+
+function lifecycleArgs(i: Record<string, unknown>): Record<string, unknown> {
+  return i.githubLifecycle === true
+    ? { githubLifecycle: true, ...(Array.isArray(i.githubChecks) ? { githubChecks: i.githubChecks } : {}) }
+    : {}
+}
+
 /** Why create_task's input is refused before the Host is asked, or null: the Host's tasks-add takes
  *  exactly one of `--job` or `--run`, and the server reads the Job before it (its coordinator account). */
 export function taskTargetRefusal(input: Record<string, unknown>): string | null {
@@ -248,10 +268,11 @@ const LISTED_TOOLS: ToolDef[] = [
       coordinatorProvider,
       convergence,
       ...CONVERGENCE_KNOBS,
+      ...GITHUB_LIFECYCLE_FIELDS,
       requestId
     },
     // coordinatorArgs: the knobs go only with convergence: true; without it server.ts refuses them (convergenceRefusal).
-    args: (i) => ({ objective: i.objective, cwd: i.projectPath, ...coordinatorArgs(i) })
+    args: (i) => ({ objective: i.objective, cwd: i.projectPath, ...coordinatorArgs(i), ...lifecycleArgs(i) })
   },
   {
     name: 'run_job',
@@ -626,9 +647,10 @@ const LISTED_TOOLS: ToolDef[] = [
       coordinatorProvider,
       convergence,
       ...CONVERGENCE_KNOBS,
+      ...GITHUB_LIFECYCLE_FIELDS,
       requestId
     },
-    args: (i) => ({ project: i.projectId, number: i.number, ...coordinatorArgs(i) })
+    args: (i) => ({ project: i.projectId, number: i.number, ...coordinatorArgs(i), ...lifecycleArgs(i) })
   },
   // Plugin Phase 4 J22. The Host's job-source commands, named for the CLI (`sources show --item`). `source` keeps its
   // name because the Host's MCP gate reads it off the command's args (mcpRefusal: a Job from GitHub is a GitHub write);
@@ -684,9 +706,10 @@ const LISTED_TOOLS: ToolDef[] = [
       coordinatorProvider,
       convergence,
       ...CONVERGENCE_KNOBS,
+      ...GITHUB_LIFECYCLE_FIELDS,
       requestId
     },
-    args: (i) => ({ source: i.source, item: i.itemId, project: i.projectId, ...coordinatorArgs(i) })
+    args: (i) => ({ source: i.source, item: i.itemId, project: i.projectId, ...coordinatorArgs(i), ...lifecycleArgs(i) })
   },
   // P2-C. The Host reads its profile's understanding.json; `project` is the project id, as for GitHub.
   {
