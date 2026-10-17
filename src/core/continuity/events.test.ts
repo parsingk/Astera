@@ -407,6 +407,14 @@ describe('deriveEvents — convergence', () => {
     const started = deriveEvents(emptyState(), withRun(run({ convergence: { maxFixAttempts: 2 } })), NOW)[0]
     expect(started.payload.convergence).toEqual({ maxFixAttempts: 2 })
   })
+  // GitHub lifecycle design §5.1 (final review M3): the run's start records the Job's GitHub policy beside convergence
+  it('JOB_RUN_STARTED 는 GitHub lifecycle 정책을 싣고, 없으면 null 이다', () => {
+    const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    const s = withRun(run())
+    const lifecycle = { ...s, jobs: s.jobs.map((j) => ({ ...j, github: policy })) }
+    expect(deriveEvents(emptyState(), lifecycle, NOW)[0].payload.github).toEqual(policy)
+    expect(deriveEvents(emptyState(), s, NOW)[0].payload.github).toBeNull()
+  })
   it('one-shot 키(dispatch id로 끝난다)는 다른 now 에 다시 관찰해도 그대로다; repeatable 키(now 로 끝난다)는 아니다', () => {
     // This is what the journal's `OR IGNORE` insert actually depends on (design §5 "Dedupe"), not
     // "the same call twice returns the same thing" (true of any pure function, and proves nothing).

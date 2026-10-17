@@ -409,7 +409,7 @@ handled, and, while you are not handling one, the subscription's own `cursor`. T
 read a gap. Saved while you handle an event, it is where that event's page was read from, so that page comes again.
 [notify-webhook.ts](../examples/sdk/notify-webhook.ts) does both, posting to a webhook.
 
-Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `github.*` and `runtime.*`.
+Not produced yet: `run.cancelled` (there is no cancel; a stop pauses) and `runtime.*`.
 
 ## Errors
 
@@ -567,10 +567,11 @@ Node 22.6 to 22.17 needs `--experimental-strip-types`; on anything else use `npx
 ## Not yet
 
 - An HTTP mode (`mode: 'http'`) for a Host on another machine, and Runtime targets (`runtimeId`).
-- The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile.
+- The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile; a GitHub
+  lifecycle Run's pull request and CI are already on `runs.get` (`github`).
 - A Run cancel (`runs.cancel`, `run.cancelled`): a stop pauses.
 - Paging done by the Host for the lists other than events.
-- `github.*` and `runtime.*` events.
+- `runtime.*` events.
 - A browser build.
 
 ## Troubleshooting

@@ -170,7 +170,9 @@ function runStartEvents(prev: OrchState, next: OrchState, now: string, stamp: st
         // 이제는 모든 회차가 Job 을 가리키므로 이름도 그것이다.
         jobId: run.jobId,
         ordinal: run.ordinal,
-        convergence: job?.convergence ?? null
+        convergence: job?.convergence ?? null,
+        // The GitHub lifecycle's policy (design 2026-10-17 §5.1): the Job's, written once when it was made
+        github: job?.github ?? null
       })
     )
   }

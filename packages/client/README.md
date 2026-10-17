@@ -143,7 +143,7 @@ for await (const e of astera.events.subscribe({ types: ['run.completed', 'run.fa
 - A subscription outlives a Host restart: a call that fails because the Host went away or did not answer is sent
   again from the same cursor after 250 ms, 1 s, then every 5 s. It ends only on `break`/`return()`, its `signal`, or
   an error waiting cannot mend (a Host too old for events answers `VERSION_MISMATCH`).
-- Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `github.*`, `runtime.*`. Local Host only for
+- Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `runtime.*`. Local Host only for
   now.
 
 It is versioned apart from the Astera app, and 0.x, so a minor version may still change names:

@@ -55,6 +55,15 @@ describe('lifecyclePreflight', () => {
     expect(r).toEqual({ ok: false, reason: 'gh is not logged in: run `gh auth login`' })
   })
 
+  // Final review M9: gh's words alone can send a person to `gh auth login` for a host that is not GitHub at all
+  it('names the host when gh fails for an origin that is not on github.com', async () => {
+    const r = await lifecyclePreflight(
+      { gh: gh({ ok: false, stderr: 'none of the git remotes point to a known GitHub host', exitCode: 1 }), originOf: async () => 'git@gitlab.com:o/r.git' },
+      'D:/repo'
+    )
+    expect(r.ok === false && r.reason).toContain('gitlab.com')
+  })
+
   it('refuses an answer without a permission', async () => {
     const r = await lifecyclePreflight({ gh: gh({ stdout: 'null' }), originOf: async () => 'https://github.com/o/r' }, 'D:/repo')
     expect(r).toEqual({ ok: false, reason: 'gh repo view answered without a permission' })

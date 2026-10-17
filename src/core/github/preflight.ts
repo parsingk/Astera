@@ -18,7 +18,11 @@ export async function lifecyclePreflight(
   const repo = parseGitHubRemote(origin)
   if (repo === null) return { ok: false, reason: 'origin is not a GitHub repository' }
   const r = await d.gh(['repo', 'view', ghRepoArg(repo), '--json', 'nameWithOwner,viewerPermission'], cwd)
-  if (!r.ok) return { ok: false, reason: ghFailureSentence(r).message }
+  // gh's words alone can point at `gh auth login` for a host that is not GitHub at all: say which host was asked.
+  if (!r.ok) {
+    const why = ghFailureSentence(r).message
+    return { ok: false, reason: repo.host === 'github.com' ? why : `${why} (origin's host is ${repo.host})` }
+  }
   let permission: unknown
   try {
     permission = (JSON.parse(r.stdout) as { viewerPermission?: unknown } | null)?.viewerPermission
