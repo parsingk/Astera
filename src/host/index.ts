@@ -83,7 +83,7 @@ import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
 import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
-import { createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
+import { ancestry, createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
 import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
@@ -897,9 +897,11 @@ async function main(): Promise<void> {
         readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
         readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
         // G3b1: CI on the pushed head settles a lifecycle round through the Host's own validation (its store is the
-        // authoritative one); a cause outside the code asks a person
+        // authoritative one). G3b2: where it must stop, a GitHub question keeps the round's wait, in the person's language
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
-        openGate: (a) => orch.handle('gate-create', { task: a.taskId, question: a.question }),
+        openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
+        ancestry: (cwd, head, sha) => ancestry(realGit, cwd, head, sha),
+        lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)
       })
     : null

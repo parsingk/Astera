@@ -8,11 +8,12 @@
 // LOW_BUDGET_SHARE of its limit stretches every spacing to LOW_BUDGET_MS until it resets. A failed read backs off
 // along ERROR_BACKOFF_MS. The timer is unref'd: the watch never keeps the Host up (design L15).
 import type { OrchState } from '../core/orchestration/state'
-import type { CheckResult, JobSourceRef } from '../core/orchestration/types'
+import type { CheckResult, GitHubGateKind, JobSourceRef } from '../core/orchestration/types'
+import { t as translate, type Lang } from '../core/i18n'
 import { openLifecycleTaskOf } from '../core/orchestration/lifecycleTask'
 import type { GhFailed } from '../core/github/gh'
 import { issueBodyHash, type GhIssue } from '../core/github/issue'
-import { EVIDENCE_TRIES, type CiVerdict, type GitHubBinding, type GitHubCiCheck, type GitHubCiFailure, type GitHubLifecyclePolicy, type RunGitHubState } from '../core/github/lifecycle'
+import { EVIDENCE_TRIES, GITHUB_CI_CHECK, type CiVerdict, type GitHubBinding, type GitHubCiCheck, type GitHubCiFailure, type GitHubLifecyclePolicy, type RunGitHubState } from '../core/github/lifecycle'
 import { evaluateCi } from '../core/github/ciVerdict'
 import { ciCheckResult } from '../core/github/ciResult'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
@@ -39,6 +40,8 @@ export const ISSUE_MS = 300_000
 /** How long a head is read as new: right after a push it has no check for a few seconds (measured on the sandbox,
  *  2026-10-18), so a head with none is read again soon this long after it was first seen (the grace of design L23). */
 export const NEW_HEAD_MS = 180_000
+/** A pushed head with no check at all this long after its wait began asks a person (design §4.4 grace, L23). */
+export const NO_CI_GRACE_MS = 180_000
 const READS_AT_ONCE = 2
 /** gh's words for a job log asked for while its Actions run still goes (measured on the sandbox, 2026-10-18). */
 const STILL_RUNNING = /is still in progress; logs will be available when it is complete/i
@@ -67,8 +70,13 @@ export interface GithubWatchDeps {
   readAnnotations(cwd: string, repo: GitHubRepo, checkRunId: number): Promise<{ ok: true; annotations: RawAnnotation[] } | GhFailed>
   /** TaskValidation.settleHandedOff (G3b1): a lifecycle round settled with CI's verdict on the head it pushed. */
   settle?(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
-  /** `gate-create` (G3b1): a CI failure for a cause outside the code asks a person. */
-  openGate?(a: { taskId: string; question: string }): Promise<{ status: number; body: unknown }>
+  /** `lifecycle-gate` (G3b2): a GitHub question about the round `since` names, which keeps the round's wait. */
+  openGitHubGate?(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<{ status: number; body: unknown }>
+  /** Whether the PR's head is in the history of the head Astera pushed, read in the Run root (G3b2): an earlier head of
+   *  Astera's own is GitHub catching up; one not in it is someone else's. Absent: a head that differs only waits. */
+  ancestry?(cwd: string, head: string, sha: string): Promise<'ancestor' | 'not' | 'unknown'>
+  /** The person's language, for the questions (G3b2). */
+  lang?(): Lang
   log(m: string): void
   /** Epoch milliseconds. */
   now?(): number
@@ -91,9 +99,22 @@ interface Target {
   policy: GitHubLifecyclePolicy
   source: JobSourceRef | undefined
   state: RunGitHubState | undefined
-  /** The Run's lifecycle round handed over at github:ci (G3b1): CI on `sha`, once the Host pushed it, settles it. */
-  round?: { taskId: string; since: string; sha?: string }
+  /** The Run's lifecycle round handed over at github:ci (G3b1): CI on `sha`, once the Host pushed it, settles it.
+   *  `waitingSince` (G3b2) is when the current wait began; `noCi` a person's choice to go on without CI. */
+  round?: Round
 }
+
+interface Round {
+  taskId: string
+  since: string
+  sha?: string
+  waitingSince: string
+  noCi?: true
+}
+
+/** Each wait is decided once: a person's "wait again" begins another (G3b2). */
+const decisionOf = (round: Round): string => `${round.taskId}@${round.since}@${round.waitingSince}`
+const short = (sha: string): string => sha.slice(0, 7)
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
@@ -113,10 +134,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   const headSeen = new Map<string, { sha: string; at: number }>()
   /** Runs whose record answered 404: deleted, never read again. */
   const gone = new Set<string>()
-  /** Each Run's lifecycle round already settled or asked about (`taskId@since`): a verdict read again is not news. */
+  /** Each Run's lifecycle wait already settled or asked about (`decisionOf`): a verdict read again is not news. */
   const decided = new Map<string, string>()
-  /** Each Run's pushed round last seen (`since@sha`): a round pushed again is read at once, not when the verdict before
-   *  put the next read (G3b1 final review M1). */
+  /** Each Run's pushed wait last seen (`since@sha@waitingSince`): a round pushed again, or waited on again, is read at
+   *  once, not when the verdict before put the next read (G3b1 final review M1). */
   const roundSeen = new Map<string, string>()
   let holdUntil = 0
   let lowUntil = 0
@@ -133,12 +154,17 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       const policy = job?.github
       if (!policy) continue
       const gs = run.githubState
-      if (gs?.pr && gs.pr.state !== 'open') continue
+      const open = openLifecycleTaskOf(s, run.id)
+      const wait = open?.status === 'validating' ? open.ciWait : undefined
+      const round: Round | undefined =
+        open && wait
+          ? { taskId: open.id, since: wait.since, sha: wait.sha, waitingSince: wait.waitingSince ?? wait.since, ...(wait.noCi ? { noCi: true as const } : {}) }
+          : undefined
+      // A closed PR is read no more, unless a round waits on it: a person is asked (G3b2)
+      if (gs?.pr && gs.pr.state !== 'open' && round?.sha === undefined) continue
       if (!gs?.binding && now() - Date.parse(run.createdAt) > UNBOUND_MAX_AGE_MS) continue
       const worktree = d.worktreeOf(run.worktree)
       if (!worktree) continue
-      const open = openLifecycleTaskOf(s, run.id)
-      const round = open?.status === 'validating' && open.ciWait ? { taskId: open.id, since: open.ciWait.since, sha: open.ciWait.sha } : undefined
       // A round waiting to be pushed is bound by the Host's carrier (lifecycleCi), which may be making the PR right now:
       // binding it here first would log a PR Astera made as found
       if (!gs?.binding && round && round.sha === undefined) continue
@@ -180,6 +206,18 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (t.state?.lastReadError?.kind !== f.kind) d.log(`github watch: run ${t.runId}: ${f.message}`)
     // An issue change seen earlier in this pass is kept: the next look is ISSUE_MS away (final review M8).
     await record(t.runId, { lastReadError: { kind: f.kind }, ...(changed ? { sourceChanged: true as const } : {}) })
+    // GitHub refusing this account's reads will not pass by waiting: a waiting round asks at once (design §6.2)
+    if (f.kind === 'auth' && t.round?.sha !== undefined && decided.get(t.runId) !== decisionOf(t.round))
+      await ask(t.runId, t.round, 'github-ci-outside', say('jobs.gate.github.q.auth', { reason: f.message }), ['wait', 'mark-failed'])
+  }
+
+  const say = (key: Parameters<typeof translate>[1], params: Record<string, string | number>): string => translate(d.lang?.() ?? 'en', key, params)
+
+  /** A GitHub question about a waiting round, once per wait (G3b2). */
+  const ask = async (runId: string, round: Round, kind: GitHubGateKind, question: string, options: string[]): Promise<void> => {
+    decided.set(runId, decisionOf(round))
+    const r = await d.openGitHubGate?.({ taskId: round.taskId, since: round.since, kind, question, options })
+    if (r && r.status >= 400) d.log(`github watch: run ${runId}: the ${kind} question could not be opened: ${JSON.stringify(r.body)}`)
   }
 
   /** A failed check's evidence (design §4.7), fetched once per commit and check: a record that already holds it for this
@@ -324,26 +362,41 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (seen?.sha !== read.headSha) headSeen.set(t.runId, { sha: read.headSha, at: now() })
     const newHead = now() - (headSeen.get(t.runId)?.at ?? now()) < NEW_HEAD_MS
     const completable = failure?.incomplete !== undefined && (failure.incomplete.reason === 'run-in-progress' || failure.incomplete.tries < EVIDENCE_TRIES)
-    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable
+    const round = t.round
+    // A waiting round with no check yet is read soon: its grace runs out in minutes (G3b2)
+    const awaited = round?.sha !== undefined && read.checks.length === 0
+    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable || awaited
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
-    // CI on the head the Host pushed settles the round, and only that head (design §4.4): GitHub can still show the
-    // head before for a few seconds after a push (measured)
-    const round = t.round
-    if (round?.sha !== undefined && read.commitSha === round.sha && read.headSha === round.sha) await settleRound(t.runId, round, ev.verdict, failure, binding)
+    if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
+    const sha = round.sha
+    const pr = binding.number
+    // design §4.3: the bound PR closed or merged under a waiting round asks a person (G3b2)
+    if (read.state !== 'open')
+      return read.state === 'merged'
+        ? ask(t.runId, round, 'github-pr-closed', say('jobs.gate.github.q.merged', { pr }), ['mark-failed'])
+        : ask(t.runId, round, 'github-pr-closed', say('jobs.gate.github.q.closed', { pr }), ['wait', 'mark-failed'])
+    // design §4.4 S2: a head that is not the pushed one is GitHub catching up when it is Astera's own earlier head, and
+    // someone else's when it is not in Astera's history
+    if (read.headSha !== sha) {
+      if ((await d.ancestry?.(t.cwd, read.headSha, sha)) !== 'not') return
+      await record(t.runId, { externalHead: { sha: read.headSha } })
+      return ask(t.runId, round, 'github-external-head', say('jobs.gate.github.q.externalHead', { branch: binding.headBranch, sha: short(read.headSha) }), ['continue', 'mark-failed'])
+    }
+    // CI on the head the Host pushed settles the round, and only that head (design §4.4)
+    if (read.commitSha !== sha) return
+    if (read.checks.length === 0) {
+      if (now() - Date.parse(round.waitingSince) < NO_CI_GRACE_MS) return
+      return ask(t.runId, round, 'github-no-ci', say('jobs.gate.github.q.noCi', { sha: short(sha), minutes: NO_CI_GRACE_MS / 60_000, pr }), ['wait', 'no-ci', 'mark-failed'])
+    }
+    await settleRound(t.runId, round, ev.verdict, failure, binding)
   }
 
   /** A round's verdict, once (G3b1, design §4.6): a pass or a code failure settles it through settleHandedOff; a cause
    *  outside the code asks a person (G3b2's Gate, G4's rerun); a failure whose evidence a later read can still complete
    *  waits for it (G2 final review I1). */
-  const settleRound = async (
-    runId: string,
-    round: { taskId: string; since: string },
-    verdict: CiVerdict,
-    failure: GitHubCiFailure | undefined,
-    binding: GitHubBinding
-  ): Promise<void> => {
-    const key = `${round.taskId}@${round.since}`
+  const settleRound = async (runId: string, round: Round, verdict: CiVerdict, failure: GitHubCiFailure | undefined, binding: GitHubBinding): Promise<void> => {
+    const key = decisionOf(round)
     if (decided.get(runId) === key) return
     if (verdict === 'failed' && failure?.incomplete && !(failure.incomplete.reason === 'read-failed' && failure.incomplete.tries >= EVIDENCE_TRIES)) return
     const result = ciCheckResult({ verdict, ...(failure ? { failure } : {}), prUrl: binding.url, since: round.since, now: new Date(now()).toISOString() })
@@ -353,13 +406,33 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       return
     }
     if (verdict !== 'failed' || !failure) return
-    decided.set(runId, key)
-    const asked = await d.openGate?.({
-      taskId: round.taskId,
-      // Any answer to a Gate checks again, so giving up is said apart: the Task marked failed (G3b1 final review M2)
-      question: `GitHub CI 가 코드 밖의 이유로 실패했습니다(${failure.class}): ${failure.summary}. GitHub 에서 다시 돌린 뒤 답하면 다시 확인합니다. 그만두려면 \`astera task-update --id ${round.taskId} --status failed\` 로 이 Task 를 실패로 끝내세요.`
-    })
-    if (asked && asked.status >= 400) d.log(`github watch: run ${runId}: the Gate could not be opened: ${JSON.stringify(asked.body)}`)
+    await ask(runId, round, 'github-ci-outside', say('jobs.gate.github.q.outside', { class: failure.class, summary: failure.summary }), ['wait', 'mark-failed'])
+  }
+
+  /** What a waiting round decides without a read (G3b2): a person's choice to go on without CI settles it passed, and a
+   *  wait past the Job's cap asks, however the reads go (design §4.4, §6.2). */
+  const decideUnread = async (t: Target): Promise<void> => {
+    const round = t.round
+    if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
+    if (round.noCi) {
+      decided.set(t.runId, decisionOf(round))
+      await record(t.runId, { noCi: { sha: round.sha } })
+      const at = new Date(now()).toISOString()
+      const result: CheckResult = {
+        configId: GITHUB_CI_CHECK,
+        name: 'GitHub CI',
+        status: 'passed',
+        summary: `No CI ran on ${short(round.sha)}; a person chose to go on without CI.`,
+        startedAt: round.since,
+        endedAt: at,
+        ...(t.state?.binding ? { externalUrl: t.state.binding.url } : {})
+      }
+      await d.settle?.({ taskId: round.taskId, result, since: round.since })
+      return
+    }
+    const minutes = t.policy.ciWaitMinutes
+    if (now() - Date.parse(round.waitingSince) < minutes * 60_000) return
+    await ask(t.runId, round, 'github-ci-cap', say('jobs.gate.github.q.cap', { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }), ['wait', 'mark-failed'])
   }
 
   /** Drops what is kept for Runs and folders no longer watched, so a Host that lives for weeks (`runtime serve`) does not
@@ -377,12 +450,15 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const targets = targetsOf(latest)
     forgetOthers(targets)
     for (const t of targets) {
-      const key = t.round?.sha === undefined ? undefined : `${t.round.since}@${t.round.sha}`
+      const key = t.round?.sha === undefined ? undefined : `${t.round.since}@${t.round.sha}@${t.round.waitingSince}`
       // A read in flight sets its own next read when it ends: the round is taken up on the tick after
       if (key === undefined || inFlight.has(t.runId) || roundSeen.get(t.runId) === key) continue
       roundSeen.set(t.runId, key)
       nextAt.delete(t.runId)
     }
+    for (const t of targets)
+      if (!inFlight.has(t.runId))
+        await decideUnread(t).catch((e) => d.log(`github watch: run ${t.runId}: ${message(e)}`))
     const due = targets.filter((t) => !inFlight.has(t.runId) && (nextAt.get(t.runId) ?? 0) <= now())
     const work = due.slice(0, Math.max(0, READS_AT_ONCE - inFlight.size))
     await Promise.all(
