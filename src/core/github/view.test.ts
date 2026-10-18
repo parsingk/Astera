@@ -1,6 +1,7 @@
 // The public face of a lifecycle Run's GitHub side (design §5.3, §8), derived from the Host's record on every read.
 import { describe, it, expect } from 'vitest'
 import type { GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
+import type { Gate, Task } from '../orchestration/types'
 import { githubLifecycleOf } from './view'
 
 const POLICY: GitHubLifecyclePolicy = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
@@ -34,6 +35,29 @@ describe('githubLifecycleOf', () => {
     [bound({ ci: ci('passed'), lastReadError: { kind: 'network', since: 'T' } }), 'external-state-unavailable']
   ] as const)('reads %j as %s', (gs, state) => {
     expect(githubLifecycleOf(POLICY, gs as RunGitHubState | undefined)?.state).toBe(state)
+  })
+
+  // GitHub lifecycle G3c2 (design §5.3): while the lifecycle Task is open, its own state is the Run's
+  describe('the lifecycle Task’s states', () => {
+    const task = (over: Partial<Task> = {}): Task => ({
+      id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: 'T', updatedAt: 'T', ...over
+    })
+    const gate = (kind?: Gate['kind']): Gate => ({ id: 'g1', runId: 'run_1', taskId: 'tsk_l', question: 'q', status: 'open', createdAt: 'T', ...(kind ? { kind } : {}) })
+    const wait = { since: 'T', done: [] }
+    it.each([
+      ['local checks before the first push', bound(), { task: task(), repairing: false }, 'pr-ready'],
+      ['local checks after a repair, a push due', bound({ lastPushedSha: A }), { task: task(), repairing: false }, 'awaiting-push'],
+      ['CI awaited', bound({ lastPushedSha: A, ci: ci('passed') }), { task: task({ ciWait: wait }), repairing: false }, 'ci-pending'],
+      ['CI awaited while GitHub cannot be read', bound({ lastReadError: { kind: 'network', since: 'T' } }), { task: task({ ciWait: wait }), repairing: false }, 'external-state-unavailable'],
+      ['a repair at work', bound({ ci: ci('failed', 'build') }), { task: task({ status: 'dispatched' }), repairing: true }, 'repairing'],
+      ['in review', bound({ ci: ci('passed') }), { task: task({ status: 'reviewing' }), repairing: false }, 'reviewing'],
+      ['blocked on a GitHub question that keeps its wait', bound(), { task: task({ status: 'blocked', ciWait: wait }), openGate: gate('github-no-ci'), repairing: false }, 'waiting-for-user'],
+      ['blocked on an exhausted budget', bound(), { task: task({ status: 'blocked' }), openGate: gate('convergence-exhausted'), repairing: false }, 'exhausted'],
+      ['failed', bound(), { task: task({ status: 'failed', consecutiveFailures: 3 }), repairing: false }, 'exhausted'],
+      ['completed: the read says the rest', bound({ ci: ci('passed'), pr: { state: 'merged', isDraft: false, baseBranch: 'develop' } }), { task: task({ status: 'completed' }), repairing: false }, 'pr-merged']
+    ] as const)('%s', (_name, gs, lifecycle, state) => {
+      expect(githubLifecycleOf(POLICY, gs as RunGitHubState, lifecycle as never)?.state).toBe(state)
+    })
   })
 
   it('shows the PR, the head, the checks without their internals, and the failing check with its link', () => {

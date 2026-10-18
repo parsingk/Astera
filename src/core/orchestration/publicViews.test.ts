@@ -33,6 +33,15 @@ describe('briefTask', () => {
 describe('runView — GitHub lifecycle (G1)', () => {
   const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
   const runOf = { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T' }
+  // GitHub lifecycle G3c2: the Run's state follows its lifecycle Task
+  it('carries the lifecycle Task’s state in github', () => {
+    const lifecycleTask = { id: 'tsk_l', runId: runOf.id, kind: 'lifecycle' as const, title: 'GitHub', spec: 's', deps: [], status: 'validating' as const, consecutiveFailures: 0, createdAt: 'T', updatedAt: 'T' }
+    const s = { ...emptyState(), jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', github: policy }], runs: [runOf], tasks: [lifecycleTask] }
+    expect(runView(s, runOf).github).toMatchObject({ state: 'pr-ready' })
+    const reviewing = { ...s, tasks: [{ ...lifecycleTask, status: 'reviewing' as const }] }
+    expect(runView(reviewing, runOf).github).toMatchObject({ state: 'reviewing' })
+  })
+
   it('carries github for a lifecycle Job’s Run, and nothing for any other', () => {
     const lifecycle = { ...emptyState(), jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', github: policy }], runs: [runOf] }
     expect(runView(lifecycle, runOf).github).toEqual({ state: 'unbound' })

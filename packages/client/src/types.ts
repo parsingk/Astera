@@ -92,6 +92,12 @@ export type GitHubLifecycleState =
   | 'pr-merged'
   | 'pr-closed'
   | 'external-state-unavailable'
+  | 'pr-ready'
+  | 'awaiting-push'
+  | 'repairing'
+  | 'reviewing'
+  | 'waiting-for-user'
+  | 'exhausted'
 
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {

@@ -837,7 +837,8 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
 as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sums
 it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
-`external-state-unavailable` while GitHub cannot be read). [sdk.md](sdk.md) lists the fields. Once every Task of
+`external-state-unavailable` while GitHub cannot be read; while the run's lifecycle Task works, `pr-ready`,
+`awaiting-push`, `ci-pending`, `repairing`, `reviewing`, `waiting-for-user` or `exhausted`). [sdk.md](sdk.md) lists the fields. Once every Task of
 such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle`, no worker): it folds the Task
 worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
 those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft
