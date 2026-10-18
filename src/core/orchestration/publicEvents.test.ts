@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { derivePublicEvents, type EventDraft } from './publicEvents'
 import { emptyState, type OrchState } from './state'
-import { FAILURE_LIMIT, type CheckResult, type Dispatch, type Gate, type Job, type JobRun, type Message, type Task } from './types'
+import { FAILURE_LIMIT, GITHUB_GATE_KINDS, type CheckResult, type Dispatch, type Gate, type Job, type JobRun, type Message, type Task } from './types'
 
 const NOW = '2026-10-12T00:00:00.000Z'
 
@@ -190,6 +190,15 @@ describe('derivePublicEvents', () => {
     const before = state({ tasks: [task('t1', 'validating')] })
     const after = state({ tasks: [task('t1', 'blocked')], gates: [gate('g1', 't1', { kind: 'check-unavailable', options: ['retry', 'skip-check', 'mark-failed'] })] })
     expect(types(derivePublicEvents(before, after))).toEqual(['question.created'])
+  })
+
+  // GitHub lifecycle G3b2: a GitHub question holds the round's wait; the round has not failed
+  it('a GitHub question gives the question, and no completion.failed', () => {
+    for (const kind of GITHUB_GATE_KINDS) {
+      const before = state({ tasks: [task('t1', 'validating')] })
+      const after = state({ tasks: [task('t1', 'blocked')], gates: [gate('g1', 't1', { kind, options: ['wait', 'mark-failed'] })] })
+      expect(types(derivePublicEvents(before, after)), kind).toEqual(['question.created'])
+    }
   })
 
   it('a completion move made by a Dispatch alone, the Task object unchanged', () => {

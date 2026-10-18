@@ -376,7 +376,22 @@ missing, the plugin stopped) is asked again at once, and a second one spends no 
 on a question of kind `check-unavailable`, and `runs wait` ends with 8. Its `options` are the answers:
 `retry` runs the task's checks again, `skip-check` lets this round go on without that check, which the
 task's record keeps as skipped, and `mark-failed` fails the task, as in
-`astera questions answer --id <questionId> --answer retry`. Any other answer is a 2.
+`astera questions answer --id <questionId> --answer retry`. Any other answer is a 2. When the check that
+could not be made is GitHub CI, `skip-check` is not offered: a round never passes with CI unproven.
+
+**A GitHub lifecycle round asks with questions of its own.** Where the Host must stop a round it carries
+to GitHub, the task waits on a question whose `kind` says why: `github-no-ci` (no CI appeared on the pushed
+head in 3 minutes), `github-ci-cap` (no verdict within the Job's `ciWaitMinutes`), `github-external-head`
+(GitHub has a commit on the branch Astera did not push), `github-pr-ambiguous` (several open pull requests
+for the branch), `github-pr-closed` (the bound pull request was closed or merged), `github-ci-outside`
+(CI failed for a reason outside the code, such as a runner lost or a permission missing, or GitHub refused
+this account's reads) or `github-carry` (the round could not be taken to GitHub: no origin, a HEAD off the
+branch, a lookup or a record that failed). The question keeps the round's wait, and its `options` act on it:
+`wait` waits again on the same head, `no-ci` lets the round pass without CI and records that a person chose
+it, `continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from
+the first (a history that cannot fast-forward is refused with git's reason, and the question stays open),
+`retry` runs the round again from the first check, `pr-<n>` binds pull request n, and `mark-failed` fails
+the task. Any answer it does not list is a 2.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and
@@ -826,7 +841,8 @@ such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle
 worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
 those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft
 one (its body ending `Refs #N` for an issue of the same repository), and waits for CI on the head it pushed: a pass
-takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person.
+takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person,
+with a question of kind `github-*` where the answer acts on the wait (above).
 
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions

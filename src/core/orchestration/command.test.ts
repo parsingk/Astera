@@ -1402,6 +1402,112 @@ describe('handleCommand — lifecycle-ci-begin', () => {
   })
 })
 
+// GitHub lifecycle G3b2 (design §4.2-4.4): the Host opens GitHub Gates for a round, and answering one acts on that round
+describe('handleCommand — GitHub Gates', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const SHA = 'c'.repeat(40)
+  type FastForward = (cwd: string, branch: string) => Promise<{ ok: true } | { ok: false; message: string }>
+  const seeded = (fastForward?: FastForward) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        {
+          id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+          reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ciWait: { since: NOW, done: [], pr: 12, sha: SHA, waitingSince: NOW }
+        }
+      ]
+    })
+    const worktreeOf = (p: string) => (p === 'D:/wt/run' ? { id: 'w', repoPath: 'D:/p', path: p, name: 'run', branch: 'u/run', baseRef: 'develop', createdAt: NOW } : null)
+    deps.github = { run: async () => ({ ok: true, stdout: '', stderr: '' }), worktreeOf, ...(fastForward ? { fastForward } : {}) } as never
+    return deps
+  }
+  const open = async (deps: OrchServerDeps, kind = 'github-external-head', options = ['continue', 'mark-failed']): Promise<string> => {
+    const r = await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-gate', { task: 'tsk_l', since: NOW, kind, question: 'q', options })
+    expect(r.status).toBe(200)
+    return (r.body as { id: string }).id
+  }
+  const taskOf = (deps: OrchServerDeps) => deps.getState().tasks.find((t) => t.id === 'tsk_l')!
+
+  it('lifecycle-gate opens a GitHub Gate that keeps the round’s wait, for the Host alone', async () => {
+    const deps = seeded()
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'app' as const }, { sessionId: APP_CALLER }])
+      expect((await handleCommand(deps, caller, 'lifecycle-gate', { task: 'tsk_l', since: NOW, kind: 'github-no-ci', question: 'q', options: ['wait'] })).status).toBe(403)
+    const id = await open(deps, 'github-no-ci', ['wait', 'no-ci', 'mark-failed'])
+    expect(deps.getState().gates.find((g) => g.id === id)).toMatchObject({ kind: 'github-no-ci', options: ['wait', 'no-ci', 'mark-failed'], status: 'open' })
+    expect(taskOf(deps)).toMatchObject({ status: 'blocked', ciWait: { sha: SHA } })
+  })
+
+  it('lifecycle-gate refuses a missing round, a kind that is not GitHub’s and malformed answers', async () => {
+    const host = { sessionId: HOST_CALLER }
+    const base = { task: 'tsk_l', since: NOW, kind: 'github-no-ci', question: 'q', options: ['wait'] }
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, since: undefined })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, kind: 'convergence-blocked' })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, options: [] })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, options: [3] })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, question: '' })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, since: 'another' })).status).toBe(400)
+  })
+
+  it('gate-resolve takes only the answers the Gate offers, and wait goes back to the round’s wait', async () => {
+    const deps = seeded()
+    const id = await open(deps, 'github-ci-cap', ['wait', 'mark-failed'])
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(400)
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'wait' })).status).toBe(200)
+    expect(taskOf(deps)).toMatchObject({ status: 'validating', ciWait: { sha: SHA } })
+  })
+
+  it('continue brings the outside commits into the Run root first, then starts a fresh round', async () => {
+    const ran: string[] = []
+    const deps = seeded(async (cwd, branch) => (ran.push(`${cwd} ${branch} ${taskOf(deps).status}`), { ok: true }))
+    const id = await open(deps)
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(200)
+    expect(ran).toEqual(['D:/wt/run u/run blocked'])
+    expect(taskOf(deps).status).toBe('ready')
+    expect(taskOf(deps).ciWait).toBeUndefined()
+  })
+
+  it('continue that cannot fast-forward is refused with git’s reason, and the question stays open', async () => {
+    const deps = seeded(async () => ({ ok: false, message: 'fatal: Not possible to fast-forward, aborting.' }))
+    const id = await open(deps)
+    expect(await call(deps, 'gate-resolve', { id, resolution: 'continue' })).toEqual({
+      status: 409,
+      body: { error: 'The Run’s branch could not be brought up to date with GitHub: fatal: Not possible to fast-forward, aborting.' }
+    })
+    expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+    expect(taskOf(deps).status).toBe('blocked')
+    const nowhere = seeded()
+    const other = await open(nowhere)
+    expect((await call(nowhere, 'gate-resolve', { id: other, resolution: 'continue' })).status).toBe(409)
+    expect((await call(nowhere, 'gate-resolve', { id: other, resolution: 'mark-failed' })).status).toBe(200)
+  })
+
+  // G3b2 final review M1, M5: a refusal says so before anything moves, as a conflict
+  it('an answer while another question holds the Task is a conflict, and continue does not fast-forward first', async () => {
+    const ran: string[] = []
+    const deps = seeded(async () => (ran.push('ff'), { ok: true }))
+    const id = await open(deps)
+    const state = deps.getState()
+    await deps.setState({ ...state, gates: [...state.gates, { id: 'gat_plain', runId: 'run_1', taskId: 'tsk_l', question: 'q', status: 'open' as const, createdAt: NOW }] })
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(409)
+    expect(ran).toEqual([])
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'mark-failed' })).status).toBe(409)
+    expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+  })
+
+  // G3b2 (S10): a check-unavailable question answers only what it offers
+  it('check-unavailable refuses skip-check where the question does not offer it', async () => {
+    const deps = seeded()
+    const state = deps.getState()
+    const gate = { id: 'gat_u', runId: 'run_1', taskId: 'tsk_l', question: 'q', options: ['retry', 'mark-failed'], kind: 'check-unavailable' as const, status: 'open' as const, createdAt: NOW }
+    await deps.setState({ ...state, gates: [gate], tasks: state.tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'blocked' as const, ciWait: undefined } : t)) })
+    deps.startValidation = () => {}
+    expect((await call(deps, 'gate-resolve', { id: 'gat_u', resolution: 'skip-check' })).status).toBe(400)
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

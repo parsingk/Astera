@@ -641,4 +641,11 @@ describe('cliUsage — completion check plugins', () => {
     expect(guide).toMatch(/Do not resolve a `check-unavailable` Gate yourself/)
     expect(guide).toContain('`options: ["retry", "skip-check", "mark-failed"]`')
   })
+
+  // GitHub lifecycle G3b2: going on without CI, or bringing outside commits in, is the person's to choose
+  it('the coordinator guide says a GitHub question is the person’s', () => {
+    const guide = readFileSync(guidePath, 'utf8').replace(/\s+/g, ' ')
+    expect(guide).toMatch(/Do not resolve a GitHub Gate \(`kind: "github-\*"`\) yourself/)
+    expect(guide).toContain('`no-ci`')
+  })
 })

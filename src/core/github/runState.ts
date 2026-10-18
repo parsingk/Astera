@@ -20,8 +20,12 @@ export interface RunGitHubPatch {
   /** null clears: a read succeeded. */
   lastReadError?: { kind: string } | null
   sourceChanged?: true
-  /** The head Astera pushed to the Run's branch (G3b1, design §4.2). */
+  /** The head Astera pushed to the Run's branch (G3b1, design §4.2). It clears `externalHeadChange`. */
   pushed?: { sha: string }
+  /** A head on GitHub Astera did not push (G3b2): the PR's head, or none for a refused push. */
+  externalHead?: { sha?: string }
+  /** A person chose to go on without CI for this head (G3b2). */
+  noCi?: { sha: string }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -77,7 +81,13 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     next.sourceChanged = { at: now }
     entries.push({ kind: 'source-changed' })
   }
-  if (patch.pushed) next.lastPushedSha = patch.pushed.sha
+  if (patch.externalHead && !(base.externalHeadChange && base.externalHeadChange.sha === patch.externalHead.sha))
+    next.externalHeadChange = { ...(patch.externalHead.sha !== undefined ? { sha: patch.externalHead.sha } : {}), at: now }
+  if (patch.pushed) {
+    next.lastPushedSha = patch.pushed.sha
+    delete next.externalHeadChange
+  }
+  if (patch.noCi && base.ciOverride?.sha !== patch.noCi.sha) next.ciOverride = { sha: patch.noCi.sha, at: now }
   if (entries.length > 0) {
     let seq = base.seq
     next.log = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))].slice(-GITHUB_LOG_MAX)
@@ -150,5 +160,8 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
     return 'lastReadError is malformed'
   if (v.sourceChanged !== undefined && v.sourceChanged !== true) return 'sourceChanged is malformed'
   if (v.pushed !== undefined && !(isObj(v.pushed) && isStr(v.pushed.sha))) return 'pushed is malformed'
+  if (v.externalHead !== undefined && !(isObj(v.externalHead) && (v.externalHead.sha === undefined || isStr(v.externalHead.sha))))
+    return 'externalHead is malformed'
+  if (v.noCi !== undefined && !(isObj(v.noCi) && isStr(v.noCi.sha))) return 'noCi is malformed'
   return v as RunGitHubPatch
 }

@@ -41,6 +41,8 @@ import {
   beginLifecycleCi,
   settleLifecycleCi,
   recordLifecycleCiWait,
+  openGitHubGate,
+  answerGitHubGate,
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
@@ -3943,6 +3945,26 @@ describe('answerCheckUnavailable — the lifecycle Task', () => {
     expect(r.state.tasks.find((t) => t.id === lifecycleId)!.status).toBe('validating')
   })
 
+  it('an ordinary check that could not be made offers all three answers', () => {
+    const { s, gateId } = unavailable()
+    expect(s.gates.find((g) => g.id === gateId)!.options).toEqual(['retry', 'skip-check', 'mark-failed'])
+  })
+
+  // G3b2 (design §4.6, S10): skipping GitHub CI would let the round pass with CI unproven
+  it('GitHub CI that errored offers no skip-check, and refuses one', () => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const rooted = { ...a.state, runs: a.state.runs.map((r) => ({ ...r, worktree: 'D:/wt/run' })) }
+    const ready = withLifecycleTask({ ...rooted, tasks: rooted.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const validating = unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state
+    const results: CheckResult[] = [{ configId: 'github:ci', name: 'GitHub CI', status: 'error', summary: 'GitHub could not be read' }]
+    const gated = unwrap<Task>(applyValidationResult(validating, { taskId: lifecycleId, results, lang: 'en' }, NOW) as never).state
+    const gate = gated.gates.find((g) => g.taskId === lifecycleId && g.kind === 'check-unavailable')!
+    expect(gate.options).toEqual(['retry', 'mark-failed'])
+    expect(answerCheckUnavailable(gated, { gateId: gate.id, resolution: 'skip-check' }, LATER).ok).toBe(false)
+  })
+
   it('skip-check carries the round on, live although the Task has no attempt to name', () => {
     const { s, lifecycleId, gateId } = unavailable()
     const r = unwrap<{ revalidate: { taskId: string; cwd: string } | null }>(answerCheckUnavailable(s, { gateId, resolution: 'skip-check' }, LATER) as never)
@@ -3969,7 +3991,7 @@ describe('recordLifecycleCiWait', () => {
     const { s, lifecycleId } = handedOver()
     const r = unwrap<string>(recordLifecycleCiWait(s, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER) as never)
     expect(r.value).toBe('recorded')
-    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: NOW, done: [], pr: 12, sha: SHA })
+    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: NOW, done: [], pr: 12, sha: SHA, waitingSince: LATER })
     const again = recordLifecycleCiWait(r.state, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER)
     expect(again).toMatchObject({ ok: true, value: 'same' })
     expect(again.ok && again.state).toBe(r.state)
@@ -3987,6 +4009,139 @@ describe('recordLifecycleCiWait', () => {
   it('refuses a record for another round of the Task', () => {
     const { s, lifecycleId } = handedOver()
     expect(recordLifecycleCiWait(s, { taskId: lifecycleId, since: LATER, pr: 12, sha: SHA }, LATER).ok).toBe(false)
+  })
+})
+
+// GitHub lifecycle G3b2 (design §4.2-4.4, §4.6): a GitHub Gate holds the round's wait while a person answers, and its
+// answers act on that round instead of starting a fresh one
+describe('GitHub Gates (G3b2)', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const SHA = 'c'.repeat(40)
+  const waiting = (): { s: OrchState; lifecycleId: string; ordinaryId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const ready = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const validating = unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state
+    const handed = unwrap<string>(beginLifecycleCi(validating, { taskId: lifecycleId, done: [] }, NOW) as never).state
+    return { s: unwrap<string>(recordLifecycleCiWait(handed, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, NOW) as never).state, lifecycleId, ordinaryId: a.value.id }
+  }
+  const open = (s: OrchState, taskId: string, kind = 'github-no-ci', options = ['wait', 'no-ci', 'mark-failed']) =>
+    unwrap<Gate>(openGitHubGate(s, { taskId, since: NOW, kind: kind as never, question: 'q', options }, LATER) as never)
+  const taskOf = (s: OrchState, id: string): Task => s.tasks.find((t) => t.id === id)!
+
+  it('blocks the round and keeps its wait, with the kind and the answers', () => {
+    const { s, lifecycleId } = waiting()
+    const before = taskOf(s, lifecycleId).ciWait
+    const r = open(s, lifecycleId)
+    expect(taskOf(r.state, lifecycleId)).toMatchObject({ status: 'blocked', ciWait: before })
+    expect(r.value).toMatchObject({ taskId: lifecycleId, kind: 'github-no-ci', options: ['wait', 'no-ci', 'mark-failed'], status: 'open' })
+    expect(r.state.messages.at(-1)).toMatchObject({ type: 'decision_gate', taskId: lifecycleId, options: ['wait', 'no-ci', 'mark-failed'] })
+  })
+
+  it('refuses a Task with no round waiting, another round, a kind that is not GitHub’s, and an unknown Task', () => {
+    const { s, lifecycleId, ordinaryId } = waiting()
+    const args = { taskId: lifecycleId, since: NOW, kind: 'github-no-ci' as const, question: 'q', options: ['wait'] }
+    expect(openGitHubGate(s, { ...args, taskId: ordinaryId }, LATER).ok).toBe(false)
+    expect(openGitHubGate(s, { ...args, since: LATER }, LATER).ok).toBe(false)
+    expect(openGitHubGate(s, { ...args, kind: 'check-unavailable' as never }, LATER).ok).toBe(false)
+    expect(openGitHubGate(open(s, lifecycleId).state, args, LATER).ok).toBe(false)
+    expect(openGitHubGate(s, { ...args, taskId: 'tsk_nope' }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+
+  it('refuses an answer the Gate does not offer, and any answer while another question holds the Task', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId)
+    expect(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'continue' }, EVEN_LATER).ok).toBe(false)
+    const two = { ...r.state, gates: [...r.state.gates, { ...r.value, id: 'gat_other' }] }
+    expect(answerGitHubGate(two, { gateId: r.value.id, resolution: 'wait' }, EVEN_LATER).ok).toBe(false)
+  })
+
+  it('wait goes back to the same wait, from now', () => {
+    const { s, lifecycleId } = waiting()
+    const before = taskOf(s, lifecycleId).ciWait!
+    const r = open(s, lifecycleId)
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'wait' }, EVEN_LATER) as never)
+    expect(a.value.gate).toMatchObject({ status: 'resolved', resolution: 'wait' })
+    expect(taskOf(a.state, lifecycleId)).toMatchObject({ status: 'validating', ciWait: { ...before, waitingSince: EVEN_LATER } })
+  })
+
+  it('no-ci goes back to the wait marked to go on without CI', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId)
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'no-ci' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId)).toMatchObject({ status: 'validating', ciWait: { sha: SHA, noCi: true, waitingSince: EVEN_LATER } })
+  })
+
+  it('pr-<n> goes back to the wait marked to bind that pull request', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId, 'github-pr-ambiguous', ['pr-12', 'pr-13', 'mark-failed'])
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'pr-13' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId)).toMatchObject({ status: 'validating', ciWait: { since: NOW, bindPr: 13 } })
+  })
+
+  it('mark-failed fails the Task and drops its wait', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId)
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'mark-failed' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId).status).toBe('failed')
+    expect(taskOf(a.state, lifecycleId).ciWait).toBeUndefined()
+  })
+
+  it('continue starts a fresh round from the first check', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId, 'github-external-head', ['continue', 'mark-failed'])
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'continue' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId).status).toBe('ready')
+    expect(taskOf(a.state, lifecycleId).ciWait).toBeUndefined()
+  })
+
+  // G3b2 final review M7: the carrier's own stops are answered with retry or mark-failed
+  it('retry starts a fresh round from the first check', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId, 'github-carry', ['retry', 'mark-failed'])
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'retry' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId).status).toBe('ready')
+    expect(taskOf(a.state, lifecycleId).ciWait).toBeUndefined()
+  })
+
+  it('wait on a Task whose wait is gone starts a fresh round', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId)
+    const lost = { ...r.state, tasks: r.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, ciWait: undefined } : t)) }
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(lost, { gateId: r.value.id, resolution: 'wait' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId).status).toBe('ready')
+  })
+
+  // G3b2 final review I2: a question about an earlier round does not hold the next round's own
+  it('a fresh round answers the earlier round’s GitHub questions as superseded, so the next one can be answered', () => {
+    const { s, lifecycleId } = waiting()
+    const g1 = open(s, lifecycleId, 'github-ci-cap', ['wait', 'mark-failed'])
+    // task-update --status ready leaves the question open and drops the wait
+    const moved = { ...g1.state, tasks: g1.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'ready' as const, ciWait: undefined } : t)) }
+    const again = unwrap<Task>(beginLifecycleValidation(moved, { taskId: lifecycleId }, EVEN_LATER) as never).state
+    expect(again.gates.find((g) => g.id === g1.value.id)).toMatchObject({ status: 'resolved', resolution: 'superseded', resolvedAt: EVEN_LATER })
+    const handed = unwrap<string>(beginLifecycleCi(again, { taskId: lifecycleId, done: [] }, EVEN_LATER) as never).state
+    const recorded = unwrap<string>(recordLifecycleCiWait(handed, { taskId: lifecycleId, since: EVEN_LATER, pr: 12, sha: SHA }, EVEN_LATER) as never).state
+    const g2 = unwrap<Gate>(openGitHubGate(recorded, { taskId: lifecycleId, since: EVEN_LATER, kind: 'github-no-ci', question: 'q', options: ['wait', 'mark-failed'] }, EVEN_LATER) as never)
+    expect(answerGitHubGate(g2.state, { gateId: g2.value.id, resolution: 'wait' }, EVEN_LATER).ok).toBe(true)
+  })
+
+  it('a hand-over answers a GitHub question still open on the Task as superseded', () => {
+    const { s, lifecycleId } = waiting()
+    const g1 = open(s, lifecycleId)
+    const back = { ...g1.state, tasks: g1.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'validating' as const, ciWait: undefined } : t)) }
+    const handed = unwrap<string>(beginLifecycleCi(back, { taskId: lifecycleId, done: [] }, EVEN_LATER) as never).state
+    expect(handed.gates.find((g) => g.id === g1.value.id)).toMatchObject({ status: 'resolved', resolution: 'superseded' })
+  })
+
+  it('only answers the Gate when a person already moved the Task', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId)
+    const moved = { ...r.state, tasks: r.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'failed' as const, ciWait: undefined } : t)) }
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(moved, { gateId: r.value.id, resolution: 'wait' }, EVEN_LATER) as never)
+    expect(a.value.gate.status).toBe('resolved')
+    expect(taskOf(a.state, lifecycleId).status).toBe('failed')
   })
 })
 

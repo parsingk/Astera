@@ -25,6 +25,8 @@ import {
   beginLifecycleValidation,
   beginLifecycleCi,
   recordLifecycleCiWait,
+  openGitHubGate,
+  answerGitHubGate,
   createTask,
   emptyState,
   latestRun,
@@ -87,7 +89,9 @@ import {
   DEFAULT_WAIT_TIMEOUT_MS,
   DEFAULT_CONCURRENCY,
   FAILURE_LIMIT,
+  GITHUB_GATE_KINDS,
   canTransition,
+  isGitHubGateKind,
   isPlaceholderSessionId,
   recomputeReady,
   type CheckResult,
@@ -652,6 +656,9 @@ export interface OrchServerDeps {
     isClean(worktree: string): Promise<{ changedCount: number }>
     /** The folder's `origin` URL, or null (GitHub lifecycle L24); the lifecycle's preflight reads it. */
     originOf?(cwd: string): Promise<string | null>
+    /** The Run root brought up to `origin/<branch>`, fast-forward only: "continue" on a GitHub external-head question
+     *  (GitHub lifecycle G3b2). */
+    fastForward?(cwd: string, branch: string): Promise<{ ok: true } | { ok: false; message: string }>
   }
   /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
@@ -2777,6 +2784,26 @@ export async function handleCommand(
       if (r.value === 'recorded') await deps.setState(r.state)
       return okBody({ taskId, wait: r.value })
     }
+    case 'lifecycle-gate': {
+      // The Host's own question about a round it carries (GitHub lifecycle G3b2): the Task waits for the answer keeping
+      // the round's wait, which the answer acts on (answerGitHubGate)
+      if (caller.sessionId !== HOST_CALLER) return denied('lifecycle-gate is the Host’s own question')
+      const taskId = str(args.task)
+      const since = str(args.since)
+      const kind = str(args.kind)
+      const question = str(args.question)
+      const options = args.options
+      if (!taskId) return bad('--task is required')
+      if (!since) return bad('--since is required: the round the question is about')
+      if (!isGitHubGateKind(kind)) return bad(`--kind must be one of ${GITHUB_GATE_KINDS.join(', ')}`)
+      if (!question || question.trim() === '') return bad('--question is required')
+      if (!Array.isArray(options) || options.length === 0 || !options.every((o) => typeof o === 'string' && o !== ''))
+        return bad('--options must name the answers')
+      const r = openGitHubGate(deps.getState(), { taskId, since, kind, question, options }, now)
+      if (!r.ok) return refused(r)
+      await deps.setState(r.state)
+      return okBody(r.value)
+    }
     case 'run-worktree-set': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
@@ -4167,10 +4194,35 @@ export async function handleCommand(
       if (!gateId) return bad('--id is required')
       if (!resolution) return bad('--resolution is required')
       const gate = s.gates.find((g) => g.id === gateId)
-      // **A check that could not be made takes its three answers and no other** (plugin Phase 5 C9): the plain
-      // resolve below would move the Task to ready, and a worker would redo work that is done.
+      // **A GitHub question takes only the answers it offers, and acts on its round** (GitHub lifecycle G3b2): the plain
+      // resolve below would start a fresh round and lose the wait a person chose to keep
+      if (gate && isGitHubGateKind(gate.kind) && gate.status === 'open') {
+        const offered = gate.options ?? []
+        if (!offered.includes(resolution)) return bad(`answer one of ${offered.join(', ')}`)
+        const task = s.tasks.find((t) => t.id === gate.taskId)
+        // Refused before anything moves (G3b2 final review M1): another question still holds the Task
+        const other = s.gates.find((g) => g.taskId === gate.taskId && g.status === 'open' && g.id !== gate.id)
+        if (other) return conflict(`another question about this Task is still open: ${other.id}`)
+        // continue brings the commits Astera did not push into the Run root before the fresh round's first check reads it
+        if (resolution === 'continue' && task?.status === 'blocked') {
+          const root = s.runs.find((r) => r.id === task.runId)?.worktree
+          const info = root === undefined ? null : (deps.github?.worktreeOf?.(root) ?? null)
+          if (!deps.github?.fastForward || root === undefined || !info) return conflict('The Run’s branch cannot be brought up to date here')
+          const ff = await deps.github.fastForward(root, info.branch)
+          if (!ff.ok) return conflict(`The Run’s branch could not be brought up to date with GitHub: ${ff.message}`)
+        }
+        const answered = answerGitHubGate(deps.getState(), { gateId, resolution }, now)
+        // A refusal of the moment (the question answered meanwhile, another one open) is a conflict, as check-unavailable's
+        if (!answered.ok) return answered.missing ? refused(answered) : conflict(answered.error)
+        deps.log?.(`gate-resolve: task=${gate.taskId} ${resolution} on a ${gate.kind} Gate`)
+        await deps.setState(answered.state)
+        return okBody(answered.value.gate satisfies AnsweredQuestion)
+      }
+      // **A check that could not be made takes the answers it offers and no other** (plugin Phase 5 C9; GitHub CI is
+      // never skipped, G3b2): the plain resolve below would move the Task to ready, and a worker would redo work that is done.
       if (gate?.kind === 'check-unavailable' && gate.status === 'open') {
-        if (!isCheckUnavailableAnswer(resolution)) return bad(`answer one of ${CHECK_UNAVAILABLE_OPTIONS.join(', ')}`)
+        const offered: readonly string[] = gate.options ?? CHECK_UNAVAILABLE_OPTIONS
+        if (!isCheckUnavailableAnswer(resolution) || !offered.includes(resolution)) return bad(`answer one of ${offered.join(', ')}`)
         if (resolution !== 'mark-failed' && !deps.startValidation) return conflict('the checks cannot be run here')
         const answered = answerCheckUnavailable(s, { gateId, resolution }, now)
         if (!answered.ok) return answered.missing ? refused(answered) : conflict(answered.error)

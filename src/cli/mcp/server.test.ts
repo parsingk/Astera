@@ -559,6 +559,8 @@ describe('the MCP server', () => {
     expect(of('create_task').description).toContain('plugin:<pluginId>')
     // 5b final review M9: only a check-unavailable question refuses an answer that is not one of its options
     expect(of('answer_question').description).toContain('A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed.')
+    // GitHub lifecycle G3b2
+    expect(of('answer_question').description).toContain('A question about a GitHub lifecycle round (kind github-*) takes only the options it lists, among wait, no-ci, continue, retry, mark-failed and pr-<n>.')
     expect(of('answer_question').description).not.toContain('takes one of them')
     expect(of('get_completion').description).toMatch(/diagnostics.*externalUrl.*check-unavailable/)
     // 5b final review M10: a plugin's check has no output; its findings are in get_completion

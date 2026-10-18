@@ -8,7 +8,17 @@ export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 're
 export type Outcome = 'succeeded' | 'failed'
 export type MessageType = 'status' | 'worker_done' | 'question' | 'escalation' | 'heartbeat' | 'decision_gate'
 export type RepairReason = 'check-failure' | 'review-failure'
-export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable'
+export type GateKind =
+  | 'convergence-exhausted'
+  | 'convergence-blocked'
+  | 'check-unavailable'
+  | 'github-no-ci'
+  | 'github-ci-cap'
+  | 'github-external-head'
+  | 'github-pr-ambiguous'
+  | 'github-pr-closed'
+  | 'github-ci-outside'
+  | 'github-carry'
 export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 /** When a scheduled Job fires again. */

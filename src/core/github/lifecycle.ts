@@ -163,6 +163,11 @@ export interface RunGitHubState {
   headSha?: string
   /** The head Astera last pushed to the Run's branch (G3b1, design §4.2). */
   lastPushedSha?: string
+  /** GitHub has a head on the Run's branch Astera did not push (G3b2, design §4.2, §4.4): seen in the PR (`sha`) or as
+   *  a refused push (no sha). Kept until Astera pushes again. */
+  externalHeadChange?: { sha?: string; at: string }
+  /** A person chose to go on without CI for this head (G3b2, design §4.4 grace, S10): merge-ready says so. */
+  ciOverride?: { sha: string; at: string }
   pr?: GitHubPrFacts
   ci?: GitHubCiSnapshot
   lastReadError?: { kind: string; since: string }

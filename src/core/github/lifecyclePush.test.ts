@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import type { GhResult } from './gh'
 import type { GitResult } from '../worktrees/git'
-import { createDraftPr, headOf, prNumberOf, pushBranch, refsLine, type RunGit } from './lifecyclePush'
+import { ancestry, createDraftPr, fastForward, headOf, prNumberOf, pushBranch, refsLine, type RunGit } from './lifecyclePush'
 
 const repo = { host: 'github.com', owner: 'parsingk', name: 'astera-lifecycle-sandbox' }
 const gitAnswering = (r: Partial<GitResult>) => {
@@ -11,6 +11,63 @@ const gitAnswering = (r: Partial<GitResult>) => {
   const run: RunGit = async (args, opts) => (calls.push({ args, ...opts }), { ok: true, stdout: '', stderr: '', ...r })
   return { run, calls }
 }
+
+/** Answers each git call in turn with the next result; the last repeats. */
+const gitScript = (rs: Partial<GitResult>[]) => {
+  const calls: { args: string[]; cwd: string; timeoutMs?: number }[] = []
+  const run: RunGit = async (args, opts) => {
+    calls.push({ args, ...opts })
+    return { ok: true, stdout: '', stderr: '', ...rs[Math.min(calls.length - 1, rs.length - 1)] }
+  }
+  return { run, calls }
+}
+
+// GitHub lifecycle G3b2 (design §4.2): "continue" on a head Astera did not push brings it in, fast-forward only
+describe('fastForward', () => {
+  it('fetches the branch from origin, then merges it fast-forward only', async () => {
+    const g = gitScript([{ ok: true }, { ok: true, stdout: 'Fast-forward' }])
+    expect(await fastForward(g.run, '/wt', 'u/a')).toEqual({ ok: true })
+    expect(g.calls.map((c) => c.args)).toEqual([
+      ['fetch', 'origin', '+refs/heads/u/a:refs/remotes/origin/u/a'],
+      ['merge', '--ff-only', 'origin/u/a']
+    ])
+    expect(g.calls.every((c) => c.cwd === '/wt')).toBe(true)
+  })
+
+  it('stops at a fetch that failed, saying why', async () => {
+    const g = gitScript([{ ok: false, exitCode: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com" }])
+    expect(await fastForward(g.run, '/wt', 'u/a')).toEqual({ ok: false, message: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com" })
+    expect(g.calls).toHaveLength(1)
+  })
+
+  it('says the refusing line of a merge that cannot fast-forward', async () => {
+    const g = gitScript([{ ok: true }, { ok: false, exitCode: 128, stderr: 'hint: Diverging branches can\'t be fast-forwarded, you need to either:\nfatal: Not possible to fast-forward, aborting.' }])
+    expect(await fastForward(g.run, '/wt', 'u/a')).toEqual({ ok: false, message: 'fatal: Not possible to fast-forward, aborting.' })
+  })
+})
+
+// GitHub lifecycle G3b2 (design §4.4, S2): a PR head behind the push is Astera's own earlier head; one not in its history
+// is someone else's
+describe('ancestry', () => {
+  const HEAD = 'a'.repeat(40)
+  const PUSHED = 'b'.repeat(40)
+  const has = { ok: true, exitCode: 0 }
+  it.each([
+    ['both present, head in the history', [has, has, { ok: true, exitCode: 0 }], 'ancestor'],
+    ['both present, head not in the history', [has, has, { ok: false, exitCode: 1 }], 'not'],
+    // G3b2 final review M4: the Run root lacking the head is told by the exit code, in whatever language git speaks
+    ['the head absent from the Run root', [has, { ok: false, exitCode: 128, stderr: 'fatal: Ungültiger Objektname' }], 'not'],
+    ['the head unreadable in time', [has, { ok: false, timedOut: true, stderr: '' }], 'unknown'],
+    ['the pushed head itself unreadable', [{ ok: false, exitCode: 128, stderr: 'fatal: not a git repository' }], 'unknown'],
+    ['merge-base out of time', [has, has, { ok: false, timedOut: true, stderr: '' }], 'unknown']
+  ] as const)('%s', async (_name, rs, want) => {
+    const g = gitScript(rs as unknown as Partial<GitResult>[])
+    expect(await ancestry(g.run, '/wt', HEAD, PUSHED)).toBe(want)
+    expect(g.calls.map((c) => c.args)).toEqual(
+      [['cat-file', '-e', `${PUSHED}^{commit}`], ['cat-file', '-e', `${HEAD}^{commit}`], ['merge-base', '--is-ancestor', HEAD, PUSHED]].slice(0, rs.length)
+    )
+  })
+})
 
 describe('pushBranch', () => {
   it('pushes the branch to origin, never forced, and sets its upstream', async () => {

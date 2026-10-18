@@ -115,6 +115,22 @@ describe('nextGitHubState', () => {
     expect(nextGitHubState(made, { pushed: { sha: B } }, T2)!.lastPushedSha).toBe(B)
   })
 
+  // G3b2 (design §4.2, §4.4): a head on GitHub Astera did not push is kept until Astera pushes again
+  it('keeps a head Astera did not push until its next push', () => {
+    const seen = nextGitHubState(undefined, { externalHead: { sha: B } }, T1)!
+    expect(seen.externalHeadChange).toEqual({ sha: B, at: T1 })
+    expect(nextGitHubState(seen, { externalHead: { sha: B } }, T2)).toBeNull()
+    expect(nextGitHubState(undefined, { externalHead: {} }, T1)!.externalHeadChange).toEqual({ at: T1 })
+    expect(nextGitHubState(seen, { pushed: { sha: A } }, T2)!.externalHeadChange).toBeUndefined()
+  })
+
+  // G3b2 (design §4.4 grace, S10): a person's choice to go on without CI is kept with the head it was for
+  it('keeps a person’s choice to go on without CI', () => {
+    const chose = nextGitHubState(undefined, { noCi: { sha: A } }, T1)!
+    expect(chose.ciOverride).toEqual({ sha: A, at: T1 })
+    expect(nextGitHubState(chose, { noCi: { sha: A } }, T2)).toBeNull()
+  })
+
   it('logs a changed source once', () => {
     const changed = nextGitHubState(undefined, { sourceChanged: true }, T1)!
     expect(changed.log).toEqual([{ seq: 1, at: T1, kind: 'source-changed' }])
@@ -140,6 +156,11 @@ describe('parseRunGitHubPatch', () => {
   it('accepts the head Astera pushed, and refuses a malformed one', () => {
     expect(parseRunGitHubPatch({ pushed: { sha: A } })).toEqual({ pushed: { sha: A } })
     expect(parseRunGitHubPatch({ pushed: { sha: 7 } })).toBe('pushed is malformed')
+    expect(parseRunGitHubPatch({ externalHead: { sha: A } })).toEqual({ externalHead: { sha: A } })
+    expect(parseRunGitHubPatch({ externalHead: {} })).toEqual({ externalHead: {} })
+    expect(parseRunGitHubPatch({ externalHead: { sha: 7 } })).toBe('externalHead is malformed')
+    expect(parseRunGitHubPatch({ noCi: { sha: A } })).toEqual({ noCi: { sha: A } })
+    expect(parseRunGitHubPatch({ noCi: true })).toBe('noCi is malformed')
   })
 
   // G2 final review I1

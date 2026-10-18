@@ -1,7 +1,7 @@
 // The Host's read-only watch over lifecycle Runs' pull requests (GitHub lifecycle design §6.2, G1): what it binds, how
 // often it reads, and what makes it stop.
 import { describe, it, expect } from 'vitest'
-import { createGithubWatch, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
+import { createGithubWatch, ERROR_BACKOFF_MS, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, NO_CI_GRACE_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
 import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, Job, JobRun } from '../core/orchestration/types'
@@ -46,6 +46,13 @@ function rig(
     evidenceFail?: string
     /** Fails the log read only, in gh's words. */
     logFail?: { kind: string; message: string }
+    /** Whether the PR's head is in the history of the pushed head (G3b2); absent: the watch has no git. */
+    ancestry?: 'ancestor' | 'not' | 'unknown'
+    lang?: 'en' | 'ko'
+    /** What lifecycle-gate answers, in turn; the last repeats (G3b2). */
+    gateStatus?: number[]
+    /** How many settles throw first (G3b2). */
+    settleFails?: number
   } = {}
 ) {
   const clock = { now: T0 }
@@ -53,8 +60,9 @@ function rig(
   const calls: string[] = []
   const logs: string[] = []
   const settled: { taskId: string; result: CheckResult; since?: string }[] = []
-  const gates: { taskId: string; question: string }[] = []
+  const gates: { taskId: string; since: string; kind: string; question: string; options: string[] }[] = []
   const status = { record: 200 }
+  const fails = { settle: o.settleFails ?? 0 }
   const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: `failed: ${kind}` })
   const deps: GithubWatchDeps = {
     now: () => clock.now,
@@ -92,8 +100,16 @@ function rig(
         issue: { number: n, title: 't', body: o.issue?.body ?? 'old', state: 'open', labels: [], author: 'pk', authorAssociation: 'OWNER', url: 'u', isPullRequest: false, updatedAt: o.issue?.updatedAt ?? 'T1' }
       }
     },
-    settle: async (a) => void settled.push(a),
-    openGate: async (a) => (gates.push(a), { status: 200, body: {} }),
+    settle: async (a) => {
+      if (fails.settle > 0) {
+        fails.settle--
+        throw new Error('the store could not be written')
+      }
+      settled.push(a)
+    },
+    openGitHubGate: async (a) => (gates.push(a), { status: o.gateStatus?.[Math.min(gates.length - 1, o.gateStatus.length - 1)] ?? 200, body: {} }),
+    ...(o.ancestry ? { ancestry: async () => o.ancestry! } : {}),
+    lang: () => o.lang ?? 'en',
     log: (m) => void logs.push(m)
   }
   const watch = createGithubWatch(deps)
@@ -527,6 +543,7 @@ describe('githubWatch', () => {
       ]
     })
     const LOG = ['##[group]Run npm test', 'not ok 1 - adds', '##[error]Process completed with exit code 1.'].map((l) => `t\tUNKNOWN STEP\t2026-10-17T20:32:40.1Z ${l}`).join('\n')
+    const TIMED_OUT = prRead({ checks: [{ externalId: 'run:1', name: 'deploy', status: 'completed', conclusion: 'timed-out', required: false, jobId: 1, ciRunId: 9 }] })
     const failed = (name = 'test') =>
       prRead({ checks: [{ externalId: 'run:1', name, status: 'completed', conclusion: 'failure', required: false, jobId: 1, ciRunId: 9, detailsUrl: 'https://x/run/1' }] })
 
@@ -570,15 +587,19 @@ describe('githubWatch', () => {
       expect(passed.settled).toHaveLength(1)
     })
 
-    it('a cause outside the code asks a person and settles nothing', async () => {
-      const r = rig({ read: prRead({ checks: [{ externalId: 'run:1', name: 'deploy', status: 'completed', conclusion: 'timed-out', required: false, jobId: 1, ciRunId: 9 }] }), log: LOG })
+    // G3b2: the question keeps the round's wait, and failing the Task is one of its answers
+    it('a cause outside the code asks whether to wait again or fail, and settles nothing', async () => {
+      const r = rig({ read: TIMED_OUT, log: LOG })
       r.watch.onState(withRound())
       await r.at(0)
       expect(r.settled).toEqual([])
-      expect(r.gates[0]).toMatchObject({ taskId: 'tsk_l', question: expect.stringContaining('timeout') })
-      // G3b1 final review M2: any answer to this Gate checks again, so it does not tell a person to answer "failed"
-      expect(r.gates[0].question).not.toContain('실패로 표시하세요')
-      expect(r.gates[0].question).toContain('task-update --id tsk_l --status failed')
+      expect(r.gates).toEqual([
+        { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('GitHub CI failed for a reason outside the code (timeout)'), options: ['wait', 'mark-failed'] }
+      ])
+      const ko = rig({ read: TIMED_OUT, log: LOG, lang: 'ko' })
+      ko.watch.onState(withRound())
+      await ko.at(0)
+      expect(ko.gates[0].question).toContain('GitHub CI 가 코드 밖의 이유로 실패했습니다(timeout)')
     })
 
     // G3b1 final review M1: a round pushed again is read at once, not when the last verdict put the next read
@@ -624,6 +645,175 @@ describe('githubWatch', () => {
       r.watch.onState(withRound(undefined, { githubState: { ...BOUND, ci: { sha: A, basis: 'all-reported', verdict: 'failed', failing: 'test', checks: [], changedAt: ISO0, failure: spent } } }))
       await r.at(0)
       expect(r.settled[0]?.result).toMatchObject({ status: 'failed', summary: 'test (build): failure' })
+    })
+
+    // GitHub lifecycle G3b2 (design §4.2-4.4, §4.6, §6.2): the Gate that fits, once per wait
+    describe('the GitHub Gates (G3b2)', () => {
+      const waiting = (over: Record<string, unknown> = {}, run?: Partial<JobRun>): OrchState =>
+        withRound({ since: ISO0, done: [], pr: 12, sha: A, waitingSince: ISO0, ...over }, run)
+      const B = 'b'.repeat(40)
+      const NONE = prRead({ suites: [], checks: [] })
+
+      it('no CI on the pushed head for 3 minutes asks whether to wait, go on without CI or fail; not before', async () => {
+        const r = rig({ read: NONE })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(NO_CI_GRACE_MS - 1_000)
+        expect(r.gates).toEqual([])
+        await r.at(NO_CI_GRACE_MS + PENDING_MS)
+        expect(r.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-no-ci', question: expect.stringContaining('No GitHub CI appeared on aaaaaaa in 3 minutes (PR #12)'), options: ['wait', 'no-ci', 'mark-failed'] }
+        ])
+        expect(r.settled).toEqual([])
+      })
+
+      it('no CI is no CI in required mode with rule names too, where the verdict reads pending', async () => {
+        const r = rig({ read: NONE, rules: { ok: true, names: ['ci'] } })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(NO_CI_GRACE_MS + PENDING_MS)
+        expect(r.gates.map((g) => g.kind)).toEqual(['github-no-ci'])
+      })
+
+      it('a wait past the Job’s ciWaitMinutes asks whether to wait again or fail, even while reads fail, once', async () => {
+        const r = rig({ fail: { at: 'read', kind: 'network' } })
+        r.watch.onState(waiting())
+        await r.at(0)
+        expect(r.gates).toEqual([])
+        await r.at(90 * 60_000)
+        expect(r.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-cap', question: expect.stringContaining('gave no verdict in 90 minutes (PR #12)'), options: ['wait', 'mark-failed'] }
+        ])
+        await r.at(90 * 60_000 + 5_000)
+        expect(r.gates).toHaveLength(1)
+      })
+
+      it('a read GitHub refuses for this account asks at once; a network failure does not', async () => {
+        const r = rig({ fail: { at: 'read', kind: 'auth' } })
+        r.watch.onState(waiting())
+        await r.at(0)
+        expect(r.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('GitHub does not take this account’s reads'.replace('’', "'")), options: ['wait', 'mark-failed'] }
+        ])
+        await r.at(ERROR_BACKOFF_MS[0])
+        expect(r.gates).toHaveLength(1)
+        const n = rig({ fail: { at: 'read', kind: 'network' } })
+        n.watch.onState(waiting())
+        await n.at(0)
+        expect(n.gates).toEqual([])
+      })
+
+      it('a bound pull request closed while the round waits asks to reopen it and wait, or fail; a merged one to fail', async () => {
+        const closedRun = { githubState: { ...BOUND, pr: { state: 'closed' as const, isDraft: true, baseBranch: 'develop' } } }
+        const r = rig({ read: prRead({ state: 'closed' }) })
+        r.watch.onState(waiting({}, closedRun))
+        await r.at(0)
+        expect(r.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-pr-closed', question: expect.stringContaining('pull request #12 was closed'), options: ['wait', 'mark-failed'] }
+        ])
+        expect(r.settled).toEqual([])
+        const m = rig({ read: prRead({ state: 'merged' }) })
+        m.watch.onState(waiting({}, { githubState: { ...BOUND, pr: { state: 'merged' as const, isDraft: false, baseBranch: 'develop' } } }))
+        await m.at(0)
+        expect(m.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-pr-closed', question: expect.stringContaining('pull request #12 was merged before'), options: ['mark-failed'] }
+        ])
+      })
+
+      it('a pull request head Astera did not push is recorded and asks whether to bring it in; one behind the push waits', async () => {
+        const r = rig({ read: prRead({ headSha: B, commitSha: B }), ancestry: 'not' })
+        r.watch.onState(waiting())
+        await r.at(0)
+        expect(r.records.some((x) => x.patch.externalHead?.sha === B)).toBe(true)
+        expect(r.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-external-head', question: expect.stringContaining('u/a on GitHub has a commit Astera did not push (bbbbbbb)'), options: ['continue', 'mark-failed'] }
+        ])
+        for (const ancestry of ['ancestor', 'unknown'] as const) {
+          const lag = rig({ read: prRead({ headSha: B, commitSha: B }), ancestry })
+          lag.watch.onState(waiting())
+          await lag.at(0)
+          expect(lag.gates, ancestry).toEqual([])
+          expect(lag.settled, ancestry).toEqual([])
+        }
+      })
+
+      it('going on without CI settles the round passed, says why, and records the choice, once', async () => {
+        const r = rig({ read: NONE })
+        r.watch.onState(waiting({ noCi: true }))
+        await r.at(0)
+        await r.at(5_000)
+        expect(r.settled).toEqual([
+          { taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ configId: 'github:ci', status: 'passed', summary: 'No CI ran on aaaaaaa; a person chose to go on without CI.' }) }
+        ])
+        expect(r.records.filter((x) => x.patch.noCi?.sha === A)).toHaveLength(1)
+      })
+
+      // A question the Host could not write is asked again on the next read; one refused because the round moved is not
+      it('asks again on the next read when the question could not be written, not when the round moved', async () => {
+        const r = rig({ read: TIMED_OUT, log: LOG, gateStatus: [500, 200] })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(SETTLED_MS * 2)
+        await r.at(SETTLED_MS * 4)
+        expect(r.gates).toHaveLength(2)
+        const moved = rig({ read: TIMED_OUT, log: LOG, gateStatus: [400] })
+        moved.watch.onState(waiting())
+        await moved.at(0)
+        await moved.at(SETTLED_MS * 2)
+        expect(moved.gates).toHaveLength(1)
+      })
+
+      it('going on without CI that could not be recorded is tried again on the next read', async () => {
+        const r = rig({ read: NONE, settleFails: 1 })
+        r.watch.onState(waiting({ noCi: true }))
+        await r.at(0)
+        expect(r.settled).toEqual([])
+        await r.at(SETTLED_MS * 2)
+        expect(r.settled).toHaveLength(1)
+      })
+
+      // G3b2 final review I1 (S10): going on without CI is for a head with no check at all
+      it('a choice to go on without CI does not pass a head whose CI ran since', async () => {
+        const f = rig({ read: failed(), log: LOG })
+        f.watch.onState(waiting({ noCi: true }))
+        await f.at(0)
+        expect(f.settled).toEqual([{ taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ status: 'failed' }) }])
+        expect(f.records.some((x) => x.patch.noCi)).toBe(false)
+        const o = rig({ read: TIMED_OUT, log: LOG })
+        o.watch.onState(waiting({ noCi: true }))
+        await o.at(0)
+        expect(o.settled).toEqual([])
+        expect(o.gates.map((g) => g.kind)).toEqual(['github-ci-outside'])
+      })
+
+      // G3b2 final review M2: a verdict read at the cap is the verdict
+      it('a verdict read past the cap settles the round instead of asking', async () => {
+        const r = rig()
+        r.watch.onState(waiting())
+        await r.at(90 * 60_000)
+        expect(r.settled).toHaveLength(1)
+        expect(r.gates).toEqual([])
+      })
+
+      // G3b2 final review M3: while a person chooses among pull requests, the watch binds none
+      it('binds no pull request for a Run whose lifecycle Task holds a wait with nothing pushed, even while it waits on a person', async () => {
+        const r = rig({ prs: [{ number: 3, url: 'u3' }] })
+        const s = waiting({ sha: undefined }, {})
+        r.watch.onState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'blocked' as const } : t)) })
+        await r.at(0)
+        expect(r.calls.some((c) => c.startsWith('find'))).toBe(false)
+      })
+
+      it('after waiting again the same head is decided again, once', async () => {
+        const r = rig({ read: TIMED_OUT, log: LOG })
+        r.watch.onState(waiting())
+        await r.at(0)
+        expect(r.gates).toHaveLength(1)
+        r.watch.onState(waiting({ waitingSince: '2026-10-18T00:10:00.000Z' }))
+        await r.at(10 * 60_000)
+        await r.at(10 * 60_000 + 5_000)
+        expect(r.gates).toHaveLength(2)
+      })
     })
 
     it('leaves the binding of a Run whose round waits to be pushed to the Host’s carrier', async () => {

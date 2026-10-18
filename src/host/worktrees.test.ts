@@ -187,6 +187,28 @@ describe('createHostWorktrees', () => {
     expect(order[at - 1]).toBe('<begin>')
     expect(order[at + 1]).toBe('<end>')
   })
+  // GitHub lifecycle G3b2 (design §4.2): "continue" on a head Astera did not push is the Host's own merge into the Run root
+  it('fastForwardRoot brings origin/<branch> in, fast-forward only, inside a git-op, and records the head after', async () => {
+    const order: string[] = []
+    const after: string[] = []
+    const h = rig({
+      broadcast: (m) => { if (m.t === 'git-op') order.push(`<${m.phase}>`) },
+      git: async (args) => { order.push(args.slice(0, 2).join(' ')); return { ok: true, stdout: '', stderr: '' } },
+      integrateHooks: () => ({ beforeIntegrate: async () => {}, afterIntegrate: async (into) => void after.push(into) })
+    })
+    expect(await h.wt.fastForwardRoot('/wt/run', 'u/run')).toEqual({ ok: true })
+    expect(order.filter((x) => !x.startsWith('rev-parse'))).toEqual(['<begin>', 'fetch origin', 'merge --ff-only', '<end>'])
+    expect(after).toEqual(['/wt/run'])
+  })
+  it('fastForwardRoot that git refuses says why and still ends its git-op', async () => {
+    const order: string[] = []
+    const h = rig({
+      broadcast: (m) => { if (m.t === 'git-op') order.push(`<${m.phase}>`) },
+      git: async (args) => (args[0] === 'merge' ? { ok: false, exitCode: 128, stdout: '', stderr: 'fatal: Not possible to fast-forward, aborting.' } : { ok: true, stdout: '', stderr: '' })
+    })
+    expect(await h.wt.fastForwardRoot('/wt/run', 'u/run')).toEqual({ ok: false, message: 'fatal: Not possible to fast-forward, aborting.' })
+    expect(order).toEqual(['<begin>', '<end>'])
+  })
   it('makeRunWorktree forks the project where it stands', async () => {
     const h = rig()
     const p = await h.wt.makeRunWorktree({ repoPath: repo, name: 'run-a' })

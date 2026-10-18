@@ -17,6 +17,12 @@ is the guide.
 - Six event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,
   `github.ci_passed`, `github.ci_failed` and `github.source_changed`, each carrying the `Run` it moved. A script that
   switches on every `EventType` meets six more.
+- Seven `GateKind`s for the questions Astera asks about a GitHub lifecycle round: `github-no-ci` (no CI on the pushed
+  head), `github-ci-cap` (the wait ran past `ciWaitMinutes`), `github-external-head` (a head Astera did not push),
+  `github-pr-ambiguous` (several open pull requests), `github-pr-closed` (the bound pull request was closed or merged),
+  `github-ci-outside` (CI failed for a reason outside the code) and `github-carry` (the round could not be taken to
+  GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `mark-failed` and `pr-<n>`;
+  `questions.answer` takes one of them.
 
 ## 0.3.0
 

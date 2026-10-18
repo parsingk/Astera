@@ -83,7 +83,7 @@ import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
 import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
-import { createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
+import { ancestry, createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
 import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
@@ -810,7 +810,9 @@ async function main(): Promise<void> {
       readCommits: (wt, base) => readCommits(wt, base),
       isClean: (wt) => isCleanWorktree(wt),
       // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
-      originOf
+      originOf,
+      // G3b2: "continue" on a GitHub external-head question, over this Host's own merge path into the Run root
+      ...(spawner ? { fastForward: (cwd: string, branch: string) => worktrees.fastForwardRoot(cwd, branch) } : {})
     },
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.
@@ -897,9 +899,11 @@ async function main(): Promise<void> {
         readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
         readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
         // G3b1: CI on the pushed head settles a lifecycle round through the Host's own validation (its store is the
-        // authoritative one); a cause outside the code asks a person
+        // authoritative one). G3b2: where it must stop, a GitHub question keeps the round's wait, in the person's language
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
-        openGate: (a) => orch.handle('gate-create', { task: a.taskId, question: a.question }),
+        openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
+        ancestry: (cwd, head, sha) => ancestry(realGit, cwd, head, sha),
+        lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)
       })
     : null
@@ -921,7 +925,9 @@ async function main(): Promise<void> {
         record: (args) => orch.handle('runs-github-record', args),
         recordWait: (args) => orch.handle('lifecycle-ci-wait', args),
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
-        openGate: (a) => orch.handle('gate-create', { task: a.taskId, question: a.question }),
+        // G3b2: every stop is a GitHub question; a refused push and several pull requests keep the round's wait
+        openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
+        lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)
       })
     : null

@@ -33,6 +33,38 @@ export async function pushBranch(run: RunGit, cwd: string, branch: string): Prom
   return { ok: false, kind, detail }
 }
 
+/** A branch fetch and a fast-forward merge in the Run root, over a slow line. */
+const FETCH_TIMEOUT_MS = 120_000
+const MERGE_TIMEOUT_MS = 60_000
+
+/** The line of git's answer that says why it refused, else its first. */
+const tellingLine = (r: GitResult, fallback: string): string => {
+  const lines = r.stderr.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+  return lines.find((l) => /^(error|fatal):/i.test(l)) ?? lines[0] ?? (r.timedOut ? `${fallback} ran out of time` : `${fallback} failed`)
+}
+
+/** The Run root brought up to `origin/<branch>`, fast-forward only (GitHub lifecycle G3b2, design §4.2 "continue"): the
+ *  commits someone else pushed come in, and history that parted from them is refused, never merged or overwritten. */
+export async function fastForward(run: RunGit, cwd: string, branch: string): Promise<{ ok: true } | { ok: false; message: string }> {
+  const fetched = await run(['fetch', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { cwd, timeoutMs: FETCH_TIMEOUT_MS })
+  if (!fetched.ok) return { ok: false, message: tellingLine(fetched, 'the fetch') }
+  const merged = await run(['merge', '--ff-only', `origin/${branch}`], { cwd, timeoutMs: MERGE_TIMEOUT_MS })
+  return merged.ok ? { ok: true } : { ok: false, message: tellingLine(merged, 'the merge') }
+}
+
+/** Whether `head` is in the history of `sha` (GitHub lifecycle G3b2, design §4.4 S2): a PR head behind the push is an
+ *  earlier head of Astera's own. A commit the Run root does not have was never Astera's, which pushes from there. Told by
+ *  exit codes, not git's words, which follow the person's language (G3b2 final review M4): the pushed head must be there
+ *  for the answer to mean anything, then the PR's head, then the history. */
+export async function ancestry(run: RunGit, cwd: string, head: string, sha: string): Promise<'ancestor' | 'not' | 'unknown'> {
+  if (!(await run(['cat-file', '-e', `${sha}^{commit}`], { cwd })).ok) return 'unknown'
+  const present = await run(['cat-file', '-e', `${head}^{commit}`], { cwd })
+  if (!present.ok) return present.timedOut || present.exitCode === undefined ? 'unknown' : 'not'
+  const r = await run(['merge-base', '--is-ancestor', head, sha], { cwd })
+  if (r.ok) return 'ancestor'
+  return r.exitCode === 1 ? 'not' : 'unknown'
+}
+
 /** The commit `ref` names (HEAD unless named), or null when git cannot say. */
 export async function headOf(run: RunGit, cwd: string, ref = 'HEAD'): Promise<string | null> {
   const r = await run(['rev-parse', ref], { cwd })

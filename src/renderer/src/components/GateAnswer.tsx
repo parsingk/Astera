@@ -3,6 +3,7 @@
 // so each is shown in this app's words with what it does, and there is no box: gate-resolve refuses any other answer.
 import { X } from 'lucide-react'
 import type { JobTask } from '../../../core/types'
+import { isGitHubGateKind } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
 import type { Translate } from './checkText'
 
@@ -26,6 +27,15 @@ const EXHAUSTED_WORDS = {
   'mark-failed': 'jobs.convergence.gate.markFailed'
 } as const
 
+/** A GitHub question's answers in words (GitHub lifecycle G3b2): its label and the line that says what it does. */
+const GITHUB_WORDS = {
+  wait: ['jobs.gate.github.wait', 'jobs.gate.github.waitHint'],
+  'no-ci': ['jobs.gate.github.noCi', 'jobs.gate.github.noCiHint'],
+  continue: ['jobs.gate.github.continue', 'jobs.gate.github.continueHint'],
+  retry: ['jobs.gate.github.retry', 'jobs.gate.github.retryHint'],
+  'mark-failed': ['jobs.gate.github.markFailed', 'jobs.gate.github.markFailedHint']
+} as const
+
 /** The choices a question offers, in words, and whether it takes an answer in words too. An option this app does not
  *  know is offered as it is. */
 export function gateChoicesOf(gate: Gate, t: Translate): { choices: GateChoice[]; freeText: boolean } {
@@ -35,6 +45,18 @@ export function gateChoicesOf(gate: Gate, t: Translate): { choices: GateChoice[]
       choices: options.map((o) => {
         if (!Object.hasOwn(CHECK_UNAVAILABLE_WORDS, o)) return { value: o, label: o }
         const [label, hint] = CHECK_UNAVAILABLE_WORDS[o as keyof typeof CHECK_UNAVAILABLE_WORDS]
+        return { value: o, label: t(label), hint: t(hint) }
+      }),
+      freeText: false
+    }
+  // A GitHub question takes the answers it lists and no other (gate-resolve), so there is no box
+  if (isGitHubGateKind(gate.kind))
+    return {
+      choices: options.map((o) => {
+        const pr = /^pr-(\d+)$/.exec(o)
+        if (pr) return { value: o, label: t('jobs.gate.github.bindPr', { number: Number(pr[1]) }), hint: t('jobs.gate.github.bindPrHint') }
+        if (!Object.hasOwn(GITHUB_WORDS, o)) return { value: o, label: o }
+        const [label, hint] = GITHUB_WORDS[o as keyof typeof GITHUB_WORDS]
         return { value: o, label: t(label), hint: t(hint) }
       }),
       freeText: false

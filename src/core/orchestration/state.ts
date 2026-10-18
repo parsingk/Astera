@@ -4,6 +4,7 @@ import {
   DELIVERY_MAX,
   FAILURE_LIMIT,
   canTransition,
+  isGitHubGateKind,
   newId,
   placeholderSessionId,
   recomputeReady,
@@ -14,6 +15,7 @@ import {
   type Dispatch,
   type Gate,
   type GateKind,
+  type GitHubGateKind,
   type GitRange,
   type Message,
   type MessageType,
@@ -26,7 +28,7 @@ import {
 } from './types'
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
-import type { GitHubLifecyclePolicy } from '../github/lifecycle'
+import { GITHUB_CI_CHECK, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { t, type Lang } from '../i18n'
 import {
   appendHistory,
@@ -893,7 +895,8 @@ export function applyValidationResult(
         taskId: task.id,
         // One line, as every list of questions shows it; the result keeps the reason as the plugin wrote it
         question: t(lang, 'jobs.checks.gate.unavailable', { check: unavailableCheck.name, reason: oneLine(unavailableCheck.summary ?? '') }),
-        options: [...CHECK_UNAVAILABLE_OPTIONS],
+        // Skipping GitHub CI would let the round pass with CI unproven (GitHub lifecycle S10)
+        options: unavailableCheck.configId === GITHUB_CI_CHECK ? CHECK_UNAVAILABLE_OPTIONS.filter((o) => o !== 'skip-check') : [...CHECK_UNAVAILABLE_OPTIONS],
         kind: 'check-unavailable'
       },
       now
@@ -1031,6 +1034,7 @@ export function answerCheckUnavailable(
   if (cwd === undefined) return err(`task ${task.id} has no attempt whose folder its checks could run in`)
   const round = task.checks ?? []
   const at = round.findIndex((c) => c.status === 'error')
+  if (a.resolution === 'skip-check' && round[at]?.configId === GITHUB_CI_CHECK) return err('GitHub CI cannot be skipped: retry it or mark the Task failed')
   const resume =
     a.resolution === 'skip-check' && at >= 0
       ? { dispatchId: attempt?.id ?? '', done: [...round.slice(0, at), skippedResult(round[at])], rest: round.slice(at + 1).map((c) => c.configId) }
@@ -1261,8 +1265,15 @@ export function beginLifecycleValidation(s: OrchState, a: { taskId: string }, no
   // A new round hands over afresh, whatever a hand-edited file left behind (G3a final review I1)
   const { ciWait: _stale, ...fresh } = moved
   const stamped = withConvergenceClock(fresh, now)
-  return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
+  return ok({ ...s, tasks: replace(s.tasks, stamped), gates: supersededGitHubGates(s.gates, task.id, now) }, stamped)
 }
+
+/** A fresh round or a hand-over makes the GitHub questions of the Task's earlier rounds moot (G3b2 final review I2): one
+ *  left open would hold the next round's own question, each refusing an answer while the other is open. */
+const supersededGitHubGates = (gates: Gate[], taskId: string, now: string): Gate[] =>
+  gates.some((g) => g.taskId === taskId && g.status === 'open' && isGitHubGateKind(g.kind))
+    ? gates.map((g) => (g.taskId === taskId && g.status === 'open' && isGitHubGateKind(g.kind) ? { ...g, status: 'resolved', resolution: 'superseded', resolvedAt: now } : g))
+    : gates
 
 /** A lifecycle Task's round handed to the Host at `github:ci` (GitHub lifecycle §4): its results so far kept in `ciWait`
  *  until the CI result settles the whole round (settleLifecycleCi). **Once**: a second hand-over (a restart that ran the
@@ -1280,7 +1291,7 @@ export function beginLifecycleCi(s: OrchState, a: { taskId: string; done: CheckR
     return kept
   })
   const next: Task = { ...task, ciWait: { since: now, done }, updatedAt: now }
-  return ok({ ...s, tasks: replace(s.tasks, next) }, 'begun')
+  return ok({ ...s, tasks: replace(s.tasks, next), gates: supersededGitHubGates(s.gates, task.id, now) }, 'begun')
 }
 
 /** The pull request and the head the Host pushed for a handed-off round (GitHub lifecycle G3b1, design §4.4): CI is read
@@ -1292,7 +1303,7 @@ export function recordLifecycleCiWait(s: OrchState, a: { taskId: string; since: 
   if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to wait on`)
   if (task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
   if (task.ciWait.pr === a.pr && task.ciWait.sha === a.sha) return ok(s, 'same')
-  const next: Task = { ...task, ciWait: { ...task.ciWait, pr: a.pr, sha: a.sha }, updatedAt: now }
+  const next: Task = { ...task, ciWait: { ...task.ciWait, pr: a.pr, sha: a.sha, waitingSince: now }, updatedAt: now }
   return ok({ ...s, tasks: replace(s.tasks, next) }, 'recorded')
 }
 
@@ -1316,6 +1327,67 @@ export function settleLifecycleCi(
     { taskId: a.taskId, results: [...ciWait.done, a.result], canReview: true, ...(a.repair ? { repair: a.repair } : {}), ...(a.lang ? { lang: a.lang } : {}) },
     now
   )
+}
+
+/** A GitHub Gate (G3b2, design §4.2-4.4, §4.6), opened by the Host for the round `since` names. The Task is blocked as any
+ *  Gate blocks it but **keeps its wait**: every reader of `ciWait` also wants `validating`, so the wait is inert until an
+ *  answer (answerGitHubGate) takes the Task back to it, and an answer that waits again reads the same head. */
+export function openGitHubGate(
+  s: OrchState,
+  a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] },
+  now: string
+): Res<Gate> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isGitHubGateKind(a.kind)) return err(`not a GitHub question kind: ${a.kind}`)
+  if (!isLifecycleTask(task) || task.status !== 'validating' || !task.ciWait) return err(`task ${a.taskId} has no round waiting on GitHub`)
+  if (task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
+  const opened = createGate(s, { taskId: a.taskId, question: a.question, options: a.options, kind: a.kind }, now)
+  if (!opened.ok) return opened
+  return ok({ ...opened.state, tasks: opened.state.tasks.map((t) => (t.id === task.id ? { ...t, ciWait: task.ciWait } : t)) }, opened.value)
+}
+
+/** `pr-<n>` on a `github-pr-ambiguous` Gate: bind pull request n. */
+const BIND_PR_ANSWER = /^pr-(\d+)$/
+
+/**
+ * A person's answer to a GitHub Gate (G3b2), in one commit with the Gate's resolution, out of `blocked` past the
+ * transition table as answerCheckUnavailable goes:
+ *
+ * - `wait`: back to the same wait, from now (`waitingSince`), so the watch reads that head again;
+ * - `no-ci`: back to the wait, marked to go on without CI; the watch settles the round passed and says why;
+ * - `pr-<n>`: back to the wait, marked to bind pull request n; the carrier binds it;
+ * - `continue`: a fresh round from the first check (gate-resolve brought the outside commits in before this);
+ * - `retry`: a fresh round from the first check (the carrier's own stops, G3b2 final review M7);
+ * - `mark-failed`: the Task fails.
+ *
+ * An answer the Gate does not offer is refused, and so is any answer while another question holds the Task. A Task a
+ * person already moved only has its Gate answered. A wait that is gone (`wait`, `no-ci`, `pr-<n>`) is a fresh round.
+ */
+export function answerGitHubGate(s: OrchState, a: { gateId: string; resolution: string }, now: string): Res<{ gate: Gate }> {
+  const gate = s.gates.find((g) => g.id === a.gateId)
+  if (!gate) return gone(`unknown gate: ${a.gateId}`)
+  if (!isGitHubGateKind(gate.kind) || gate.status !== 'open') return err(`not an open GitHub question: ${a.gateId}`)
+  const options = gate.options ?? []
+  if (!options.includes(a.resolution)) return err(`answer one of ${options.join(', ')}`)
+  const task = s.tasks.find((t) => t.id === gate.taskId)
+  if (!task) return err(`unknown task for gate: ${a.gateId}`)
+  const other = s.gates.find((g) => g.taskId === task.id && g.status === 'open' && g.id !== gate.id)
+  if (other) return err(`another question about this Task is still open: ${other.id}`)
+  const resolved: Gate = { ...gate, status: 'resolved', resolution: a.resolution, resolvedAt: now }
+  const gates = replace(s.gates, resolved)
+  if (task.status !== 'blocked') return ok({ ...s, gates }, { gate: resolved })
+  const { ciWait, ...base } = task
+  if (a.resolution === 'mark-failed') return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'failed', updatedAt: now }) }, { gate: resolved })
+  if (a.resolution === 'continue' || a.resolution === 'retry' || !ciWait) {
+    const fresh = moveTask(task, 'pending', now)
+    if (!fresh) return err(`cannot unblock from status: ${task.status}`)
+    return ok({ ...s, gates, tasks: recomputeReady(replace(s.tasks, fresh)) }, { gate: resolved })
+  }
+  const bind = BIND_PR_ANSWER.exec(a.resolution)
+  const wait: NonNullable<Task['ciWait']> =
+    a.resolution === 'no-ci' ? { ...ciWait, noCi: true, waitingSince: now } : bind ? { ...ciWait, bindPr: Number(bind[1]) } : { ...ciWait, waitingSince: now }
+  return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'validating', ciWait: wait, updatedAt: now }) }, { gate: resolved })
 }
 
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,

@@ -21,7 +21,7 @@ import { briefTask, jobView, latestRunOf, runView } from './publicViews'
 import { outcomeOfTasks } from './running'
 import { countedCheck, findingsCounted, taskCompletionOf, taskCompletionState, type CompletionState } from './runCompletion'
 import type { OrchState } from './state'
-import { isPlaceholderSessionId, type Dispatch, type Gate, type Job, type JobRun, type Task } from './types'
+import { isGitHubGateKind, isPlaceholderSessionId, type Dispatch, type Gate, type Job, type JobRun, type Task } from './types'
 import type { GitHubLogKind, RunGitHubState } from '../github/lifecycle'
 
 /** One event before the log gives it an id, a sequence and a time. */
@@ -219,7 +219,9 @@ export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft
         if (from === to) continue
         // A check that could not be made (plugin Phase 5 C9) ends no round in failure: the question it opens says the
         // Task waits, and its answer starts the checks again (5a final review M2)
-        const unavailable = to === 'waiting-for-user' && (byNow.gates.get(t.id) ?? []).some((g) => g.status === 'open' && g.kind === 'check-unavailable')
+        // Nor does a GitHub question (GitHub lifecycle G3b2): it holds the round's wait while a person answers
+        const unavailable =
+          to === 'waiting-for-user' && (byNow.gates.get(t.id) ?? []).some((g) => g.status === 'open' && (g.kind === 'check-unavailable' || isGitHubGateKind(g.kind)))
         const types = completionTypes(from, to).filter((x) => !(unavailable && x === 'completion.failed'))
         if (types.length === 0) continue
         const payload = findingsCounted(taskCompletionOf(narrowed(next, byNow, t.id), t))

@@ -55,6 +55,29 @@ it('an exhausted repair budget offers its two answers in words, sent as the opti
   })
 })
 
+// GitHub lifecycle G3b2: a GitHub question offers its answers in words, a pull request by its number, and takes no words
+it('a GitHub question offers each answer in words with what it does, a pull request by its number, and no free text', () => {
+  expect(gateChoicesOf({ id: 'g4', question: 'q', options: ['wait', 'no-ci', 'mark-failed'], kind: 'github-no-ci' }, t)).toEqual({
+    choices: [
+      { value: 'wait', label: 'jobs.gate.github.wait', hint: 'jobs.gate.github.waitHint' },
+      { value: 'no-ci', label: 'jobs.gate.github.noCi', hint: 'jobs.gate.github.noCiHint' },
+      { value: 'mark-failed', label: 'jobs.gate.github.markFailed', hint: 'jobs.gate.github.markFailedHint' }
+    ],
+    freeText: false
+  })
+  const withParams = (key: string, p?: Record<string, unknown>): string => (p ? `${key} ${JSON.stringify(p)}` : key)
+  expect(gateChoicesOf({ id: 'g5', question: 'q', options: ['pr-12', 'continue'], kind: 'github-pr-ambiguous' }, withParams as never).choices).toEqual([
+    { value: 'pr-12', label: 'jobs.gate.github.bindPr {"number":12}', hint: 'jobs.gate.github.bindPrHint' },
+    { value: 'continue', label: 'jobs.gate.github.continue', hint: 'jobs.gate.github.continueHint' }
+  ])
+  // G3b2 final review M7
+  expect(gateChoicesOf({ id: 'g6', question: 'q', options: ['retry', 'mark-failed'], kind: 'github-carry' }, t).choices[0]).toEqual({
+    value: 'retry', label: 'jobs.gate.github.retry', hint: 'jobs.gate.github.retryHint'
+  })
+  for (const key of ['wait', 'waitHint', 'noCi', 'noCiHint', 'continue', 'continueHint', 'markFailed', 'markFailedHint', 'bindPr', 'bindPrHint', 'retry', 'retryHint'])
+    for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[`jobs.gate.github.${key}`], `${lang} ${key}`).toBeTruthy()
+})
+
 describe('GateAnswer', () => {
   it('a check that could not be made shows the question, three described choices and no box to type in', () => {
     const html = render(unavailable)
