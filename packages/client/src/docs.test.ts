@@ -42,6 +42,13 @@ const hostConstant = (file: string, name: string): number => {
   if (!m) throw new Error(`${file} has no ${name}`)
   return m[1].split('*').reduce((n, f) => n * Number(f.trim().replace(/_/g, '')), 1)
 }
+/** The members of a string-literal union of the Host's source or this package's, `export type NAME =\n  | 'a'\n  | 'b'`,
+ *  read as text for the same reason. */
+const unionOf = (file: string, name: string): string[] => {
+  const m = new RegExp(`^export type ${name} =\\n((?:  \\| '[\\w-]+'\\n)+)`, 'm').exec(read(file))
+  if (!m) throw new Error(`${file} has no ${name}`)
+  return [...m[1].matchAll(/'([\w-]+)'/g)].map((x) => x[1])
+}
 const RECEIPT_TTL_MS = hostConstant('src/host/orch.ts', 'RECEIPT_TTL_MS')
 const RECEIPTS_PER_CALLER = hostConstant('src/host/orch.ts', 'RECEIPTS_PER_CALLER')
 const SEGMENT_EVENTS = hostConstant('src/host/eventLog.ts', 'EVENT_SEGMENT_EVENTS')
@@ -64,6 +71,15 @@ describe('docs/sdk.md', () => {
     const known = new Set<string>([...methods, ...EVENT_TYPES, 'runs.cancel'])
     expect(named.length).toBeGreaterThan(20)
     expect(named.filter((n) => !known.has(n))).toEqual([])
+  })
+
+  // GitHub lifecycle G3c2: GitHubLifecycle.state is a union typed twice, in the Host and here; a state the Host derives
+  // and the package does not name leaves a script's switch with a case it cannot write
+  it('types every GitHub lifecycle state the Host derives, and names each', () => {
+    const states = unionOf('src/core/github/view.ts', 'GitHubLifecycleState')
+    expect(states).toContain('waiting-for-user')
+    expect(unionOf('packages/client/src/types.ts', 'GitHubLifecycleState')).toEqual(states)
+    for (const s of states) expect(section(guide, '## What you can do'), s).toContain(`\`${s}\``)
   })
 
   it('names every event type in its Events section, and the README does too', () => {
