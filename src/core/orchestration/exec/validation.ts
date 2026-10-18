@@ -28,6 +28,7 @@ import {
 } from '../state'
 import { cutTail } from '../taskOutput'
 import type { CheckResult, Dispatch, Task } from '../types'
+import { isLifecycleTask } from '../lifecycleTask'
 import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 import { checkInputOf, pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from '../pluginChecks'
 import { repairTargetFor } from './repair'
@@ -265,6 +266,19 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
     return c.getState().tasks.find((t) => t.id === first.taskId)?.filesModified ?? []
   }
 
+  const changedFilesOfAttempt = async (taskId: string, cwd: string): Promise<string[] | null> => {
+    const first = firstImplDispatch(c.getState(), taskId)
+    return first ? changedFilesSince(first, cwd) : null
+  }
+
+  /** A lifecycle Task's changed files: the Run's branch from the Run's base (`run.git.base`, the fork point the Host
+   *  recorded), else what the Task reported. */
+  const changedFilesOfRun = async (task: Task, cwd: string): Promise<string[]> => {
+    const base = c.getState().runs.find((r) => r.id === task.runId)?.git?.base
+    const names = base !== undefined ? await c.diffNames(cwd, base) : null
+    return names ?? c.getState().tasks.find((t) => t.id === task.id)?.filesModified ?? []
+  }
+
   // checkConfigIdsOf 는 옛 validateConfigId 와 새 validateConfigIds 를 함께 읽으므로, 지금
   // 존재할 수 있는 모든 Task 에 대해 이것으로 충분하다.
   const startValidation = ({ taskId, cwd }: { taskId: string; cwd: string }): void => {
@@ -312,9 +326,11 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
       await c.setState(stampPolicySnapshot(c.getState(), { taskId, key }, c.now()))
     })().catch((e) => c.log(`policy snapshot task=${taskId}: ${String(e)}`))
     void (async () => {
-      const first = firstImplDispatch(c.getState(), taskId)
-      if (!first) return
-      const suspicious = suspiciousCheckFiles(await changedFilesSince(first, cwd))
+      // A lifecycle Task's work is the Run's whole branch: measured from the Run's base, whether or not it has a repair of
+      // its own yet (GitHub lifecycle G3c1, design §3.4 S7)
+      const changed = isLifecycleTask(task) ? await changedFilesOfRun(task, cwd) : await changedFilesOfAttempt(taskId, cwd)
+      if (changed === null) return
+      const suspicious = suspiciousCheckFiles(changed)
       if (suspicious.length === 0) return
       const st = c.getState()
       await c.setState({

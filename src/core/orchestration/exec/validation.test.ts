@@ -502,6 +502,63 @@ describe('createTaskValidation — settleHandedOff', () => {
   })
 })
 
+// GitHub lifecycle G3c1 (design §3.4 S7): a lifecycle Task's work is the Run's whole branch, so its suspicious files are
+// measured from the Run's base, with or without a repair of its own
+describe('createTaskValidation — suspicious files of a lifecycle Task', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const BASE = 'b'.repeat(40)
+  const lifecycle = (o: { base?: boolean; filesModified?: string[] } = {}): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run', ...(o.base !== false ? { git: { base: BASE } } : {}) }],
+    tasks: [
+      { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      {
+        id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+        reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW,
+        ...(o.filesModified ? { filesModified: o.filesModified } : {})
+      }
+    ]
+  })
+  const wired = (start: OrchState, diffNames: (cwd: string, head: string) => Promise<string[] | null>) => {
+    let state = start
+    const validation = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: () => ({ runId: 'r1' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => true,
+      startReview: async () => {},
+      startRepair: async () => undefined,
+      firstCheckpointHead: () => null,
+      diffNames,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' }),
+      lifecycleCiBegin: async () => ({ status: 200, body: {} })
+    })
+    return { validation, task: () => state.tasks.find((t) => t.id === 'tsk_l')! }
+  }
+
+  it('measures them from the Run’s base in the Run root, before any repair of its own', async () => {
+    const diffNames = vi.fn(async () => ['package.json', 'src/a.ts'])
+    const w = wired(lifecycle(), diffNames)
+    w.validation.startValidation({ taskId: 'tsk_l', cwd: '/wt-run' })
+    await vi.waitFor(() => expect(w.task().suspiciousFiles).toEqual(['package.json']))
+    expect(diffNames).toHaveBeenCalledWith('/wt-run', BASE)
+  })
+
+  it('falls back to what the Task reported when the Run has no base', async () => {
+    const diffNames = vi.fn(async () => ['package.json'])
+    const w = wired(lifecycle({ base: false, filesModified: ['vitest.config.ts'] }), diffNames)
+    w.validation.startValidation({ taskId: 'tsk_l', cwd: '/wt-run' })
+    await vi.waitFor(() => expect(w.task().suspiciousFiles).toEqual(['vitest.config.ts']))
+    expect(diffNames).not.toHaveBeenCalled()
+  })
+})
+
 // G3a final review I1 and M1: a round whose Task already handed one over, or left validating, is not run or handed again
 describe('createTaskValidation — a lifecycle round that is no longer needed', () => {
   const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }

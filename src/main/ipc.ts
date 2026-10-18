@@ -122,6 +122,7 @@ import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles } from '../core/workUnit/gitProbe'
 import { readRange, readRangeFiles, readHeadSteps } from '../core/git/range'
+import { changedNames } from '../core/git/changedNames'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -3063,10 +3064,7 @@ export function registerIpc(
       startReview: (a) => startReview(a),
       startRepair: (a) => performRepair(repairDeps, a),
       firstCheckpointHead: (dispatchId) => appJournal.firstCheckpointHead(dispatchId),
-      diffNames: async (cwd, fromHead) => {
-        const r = await git(['diff', '--name-only', fromHead, 'HEAD'], { cwd })
-        return r.ok ? r.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : null
-      },
+      diffNames: (cwd, fromHead) => changedNames((args, o) => git(args, o), cwd, fromHead),
       // Plugins run in the Host: the app asks it (plugin Phase 5 C8). `deps` is defined below and read at the call.
       pluginCheck: (plugin, input) =>
         deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') }),
