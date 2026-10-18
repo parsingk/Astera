@@ -64,7 +64,8 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
         kind: 'ci-failed',
         sha: r.ci.sha,
         ...(r.ci.failing ? { check: r.ci.failing } : {}),
-        ...(r.ci.failure ? { class: r.ci.failure.class } : {})
+        // Incomplete evidence classes from what it could read (the check's name while its run goes): not said as settled.
+        ...(r.ci.failure && !r.ci.failure.incomplete ? { class: r.ci.failure.class } : {})
       })
   }
   if (patch.lastReadError === null) delete next.lastReadError
@@ -101,7 +102,18 @@ function bindingOk(b: unknown): b is GitHubBinding {
 }
 
 function failureOk(f: unknown): boolean {
-  return isObj(f) && isStr(f.check) && isStr(f.externalId) && isStr(f.class) && isStr(f.summary) && Array.isArray(f.diagnostics)
+  return (
+    isObj(f) &&
+    isStr(f.check) &&
+    isStr(f.externalId) &&
+    isStr(f.class) &&
+    isStr(f.summary) &&
+    Array.isArray(f.diagnostics) &&
+    (f.incomplete === undefined ||
+      (isObj(f.incomplete) &&
+        (f.incomplete.reason === 'run-in-progress' || f.incomplete.reason === 'read-failed') &&
+        typeof f.incomplete.tries === 'number'))
+  )
 }
 
 function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {

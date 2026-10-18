@@ -11,7 +11,7 @@ import type { OrchState } from '../core/orchestration/state'
 import type { JobSourceRef } from '../core/orchestration/types'
 import type { GhFailed } from '../core/github/gh'
 import { issueBodyHash, type GhIssue } from '../core/github/issue'
-import type { GitHubBinding, GitHubCiCheck, GitHubCiFailure, GitHubLifecyclePolicy, RunGitHubState } from '../core/github/lifecycle'
+import { EVIDENCE_TRIES, type GitHubBinding, type GitHubCiCheck, type GitHubCiFailure, type GitHubLifecyclePolicy, type RunGitHubState } from '../core/github/lifecycle'
 import { evaluateCi } from '../core/github/ciVerdict'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
 import type { OpenPr } from '../core/github/prBinding'
@@ -38,6 +38,8 @@ export const ISSUE_MS = 300_000
  *  2026-10-18), so a head with none is read again soon this long after it was first seen (the grace of design L23). */
 export const NEW_HEAD_MS = 180_000
 const READS_AT_ONCE = 2
+/** gh's words for a job log asked for while its Actions run still goes (measured on the sandbox, 2026-10-18). */
+const STILL_RUNNING = /is still in progress; logs will be available when it is complete/i
 
 export interface WatchedWorktree {
   repoPath: string
@@ -162,26 +164,40 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     await record(t.runId, { lastReadError: { kind: f.kind }, ...(changed ? { sourceChanged: true as const } : {}) })
   }
 
+  /** A failed check's evidence (design §4.7), fetched once per commit and check: a record that already holds it for this
+   *  commit and check is reused, so a failure read every PENDING_MS costs no log download (G2 Review Focus 4), unless it
+   *  is incomplete and a read can still complete it (G2 final review I1). gh gives no job log while any job of the
+   *  Actions run is still going (measured), so none is asked for then; a check run another app made has no job log, and
+   *  a commit status nothing to read at all (final review M1). A read that fails leaves the evidence with what was read;
+   *  a rate limit holds every read. */
+  const evidenceFor = async (t: Target, repo: GitHubRepo, sha: string, check: GitHubCiCheck, checks: GitHubCiCheck[]): Promise<GitHubCiFailure> => {
+    const runGoing = check.ciRunId !== undefined && checks.some((c) => c.ciRunId === check.ciRunId && c.status !== 'completed')
+    const known = t.state?.ci?.sha === sha && t.state.ci.failure?.externalId === check.externalId ? t.state.ci.failure : undefined
+    if (known && (!known.incomplete || (known.incomplete.reason === 'run-in-progress' ? runGoing : known.incomplete.tries >= EVIDENCE_TRIES)))
+      return known
+    if (check.jobId === undefined) return ciFailureEvidence({ check })
+    const [log, annotations] = await Promise.all([
+      check.ciRunId !== undefined && !runGoing ? d.readJobLog(t.cwd, repo, check.jobId) : undefined,
+      d.readAnnotations(t.cwd, repo, check.jobId)
+    ])
+    let reason: 'run-in-progress' | 'read-failed' | undefined = runGoing ? 'run-in-progress' : undefined
+    for (const r of [log, annotations])
+      if (r && !r.ok) {
+        noteRateLimit(r.kind)
+        if (STILL_RUNNING.test(r.message)) reason ??= 'run-in-progress'
+        else if (r.kind !== 'not-found') reason = 'read-failed'
+        // A run still going is not a failed read, and is not logged as one.
+        if (!STILL_RUNNING.test(r.message)) d.log(`github watch: run ${t.runId}: the evidence of ${check.name} could not be read: ${r.message}`)
+      }
+    const evidence = ciFailureEvidence({ check, ...(log?.ok ? { log: log.log } : {}), ...(annotations.ok ? { annotations: annotations.annotations } : {}) })
+    if (!reason) return evidence
+    const tries = (known?.incomplete?.tries ?? 0) + (reason === 'read-failed' ? 1 : 0)
+    return { ...evidence, incomplete: { reason, tries } }
+  }
+
   /** The required check names of a base's branch rules, or null when they could not be read: a pass then waits
    *  (evaluateCi). Only an answer is kept for RULES_TTL_MS, a repository with no rules (404) among them; a failure is
    *  asked again on the next read (final review I2). */
-  /** A failed check's evidence (design §4.7), fetched once per commit and check: a record that already holds it for this
-   *  commit and check is reused, so a failure read every PENDING_MS costs no log download (G2 Review Focus 4). A read
-   *  that fails leaves the evidence with what was read; a rate limit holds every read. A commit status has no job to
-   *  read. */
-  const evidenceFor = async (t: Target, repo: GitHubRepo, sha: string, check: GitHubCiCheck): Promise<GitHubCiFailure> => {
-    const known = t.state?.ci
-    if (known?.sha === sha && known.failure?.externalId === check.externalId) return known.failure
-    if (check.jobId === undefined) return ciFailureEvidence({ check })
-    const [log, annotations] = await Promise.all([d.readJobLog(t.cwd, repo, check.jobId), d.readAnnotations(t.cwd, repo, check.jobId)])
-    for (const r of [log, annotations])
-      if (!r.ok) {
-        noteRateLimit(r.kind)
-        d.log(`github watch: run ${t.runId}: the evidence of ${check.name} could not be read: ${r.message}`)
-      }
-    return ciFailureEvidence({ check, ...(log.ok ? { log: log.log } : {}), ...(annotations.ok ? { annotations: annotations.annotations } : {}) })
-  }
-
   const ruleNamesFor = async (t: Target, repo: GitHubRepo, base: string): Promise<string[] | null> => {
     const key = `${repo.host}/${repoSlug(repo)}#${base}`
     const cached = rules.get(key)
@@ -260,7 +276,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const ev = evaluateCi(read, t.policy.ci, names)
     // Evidence only for the head: a verdict of another commit is not news (final review I1), and its log would be stale.
     const failure =
-      ev.verdict === 'failed' && ev.failing && read.commitSha === read.headSha ? await evidenceFor(t, repo, read.commitSha, ev.failing) : undefined
+      ev.verdict === 'failed' && ev.failing && read.commitSha === read.headSha ? await evidenceFor(t, repo, read.commitSha, ev.failing, read.checks) : undefined
     patch.read = {
       headSha: read.headSha,
       pr: {
@@ -284,11 +300,13 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (changed) patch.sourceChanged = true
     failures.delete(t.runId)
     // Checks of a commit that is not the head yet are read again soon, however settled they look (final review I1), and so
-    // is a new head with no check yet: its checks are seconds away.
+    // is a new head with no check yet: its checks are seconds away. So is incomplete evidence a read can still complete:
+    // a job log comes the moment its run ends (G2 final review I1).
     const seen = headSeen.get(t.runId)
     if (seen?.sha !== read.headSha) headSeen.set(t.runId, { sha: read.headSha, at: now() })
     const newHead = now() - (headSeen.get(t.runId)?.at ?? now()) < NEW_HEAD_MS
-    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead)
+    const completable = failure?.incomplete !== undefined && (failure.incomplete.reason === 'run-in-progress' || failure.incomplete.tries < EVIDENCE_TRIES)
+    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
   }

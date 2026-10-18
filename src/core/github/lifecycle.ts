@@ -88,7 +88,14 @@ export interface GitHubCiFailure {
   /** The failing step's lines: at most 4000 characters and 80 lines. Absent for a commit status (no job log). */
   logExcerpt?: string
   url?: string
+  /** Set while the evidence lacks what a later read can still bring (G2 final review I1): the job log of an Actions run
+   *  still going (gh gives none until the whole run ends, measured), or reads that failed for a reason that passes,
+   *  counted in `tries` up to EVIDENCE_TRIES. A log that is gone (expired) is final and sets nothing. */
+  incomplete?: { reason: 'run-in-progress' | 'read-failed'; tries: number }
 }
+
+/** How many times the watch makes evidence reads that failed for a reason that passes (G2 final review I1). */
+export const EVIDENCE_TRIES = 3
 
 export interface GitHubBinding {
   /** `owner/name`; `host` is set only for a host other than github.com. */
@@ -138,7 +145,7 @@ export interface GitHubLogEntry {
   pr?: number
   sha?: string
   check?: string
-  /** A ci-failed entry's class, when the evidence was read with the verdict. */
+  /** A ci-failed entry's class, when complete evidence was read with the verdict. */
   class?: CiFailureClass
 }
 

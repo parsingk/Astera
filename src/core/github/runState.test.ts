@@ -70,6 +70,13 @@ describe('nextGitHubState', () => {
     expect(next.log.at(-1)).toEqual({ seq: 1, at: T1, kind: 'ci-failed', sha: A, check: 'build', class: 'test' })
   })
 
+  // G2 final review I1: with its run still going, the class is read from the check's name alone
+  it('logs no class with a verdict whose evidence is still incomplete', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'build' as const, summary: 's', diagnostics: [], incomplete: { reason: 'run-in-progress' as const, tries: 0 } }
+    const next = nextGitHubState(undefined, { read: read(A, 'failed', { failing: 'build', failure }) }, T1)!
+    expect(next.log.at(-1)).toEqual({ seq: 1, at: T1, kind: 'ci-failed', sha: A, check: 'build' })
+  })
+
   it('a read whose evidence changed is a change; the same evidence again is not', () => {
     const failure = { check: 'build', externalId: 'run:1', class: 'test' as const, summary: 's', diagnostics: [] }
     const first = nextGitHubState(undefined, { read: read(A, 'failed', { failing: 'build' }) }, T1)!
@@ -120,6 +127,20 @@ describe('parseRunGitHubPatch', () => {
   it('accepts what the watch sends', () => {
     const patch = { binding: BINDING, read: read(A, 'passed'), lastReadError: null, prCandidates: null }
     expect(parseRunGitHubPatch(patch)).toEqual(patch)
+  })
+  // G2 final review I1
+  it('accepts evidence that is still incomplete', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'build' as const, summary: 's', diagnostics: [], incomplete: { reason: 'run-in-progress' as const, tries: 0 } }
+    const patch = { read: read(A, 'failed', { failing: 'build', failure }) }
+    expect(parseRunGitHubPatch(patch)).toEqual(patch)
+  })
+  it.each([
+    [{ reason: 'later', tries: 0 }],
+    [{ reason: 'read-failed', tries: '1' }],
+    ['yes']
+  ])('refuses evidence whose incomplete mark is %j', (incomplete) => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'build', summary: 's', diagnostics: [], incomplete }
+    expect(parseRunGitHubPatch({ read: { ...read(A, 'failed'), ci: { ...read(A, 'failed').ci, failure } } })).toBe('read is malformed')
   })
   it.each([
     [null, 'patch must be an object'],
