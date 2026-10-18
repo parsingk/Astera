@@ -42,6 +42,8 @@ interface RigOpts {
   checkResume?: { dispatchId?: string; done: CheckResult[]; rest: string[] }
   /** How a plugin check is asked (plugin Phase 5 C8); answers passed when left out. */
   pluginCheck?: (plugin: string, input: CompletionCheckInput) => Promise<PluginCheckAnswer>
+  /** The Host command a round reaching github:ci calls (GitHub lifecycle G3a); absent when left out. */
+  lifecycleCiBegin?: ValidationContext['lifecycleCiBegin']
 }
 
 function rig(o: RigOpts = {}) {
@@ -142,7 +144,8 @@ function rig(o: RigOpts = {}) {
     pluginCheck: async (plugin, input) => {
       pluginAsks.push({ plugin, input })
       return o.pluginCheck ? o.pluginCheck(plugin, input) : { name: plugin.toUpperCase(), status: 'passed', summary: 'passed' }
-    }
+    },
+    ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {})
   }
   const validation = createTaskValidation(ctx)
 
@@ -281,6 +284,32 @@ describe('createTaskValidation — a plugin check (plugin Phase 5 C3, C8, C9, C1
     h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
     await vi.waitFor(() => expect(h.task().policySnapshot).toBeDefined())
     expect(h.task().policySnapshot!.key.endsWith('|plugin:d=plugin')).toBe(true)
+  })
+})
+
+// GitHub lifecycle G3a (design §4): the round reaching github:ci goes to the Host command lifecycle-ci-begin
+describe('createTaskValidation — github:ci', () => {
+  it('asks the Host to keep the round and leaves the Task validating', async () => {
+    const asked: unknown[] = []
+    const h = rig({ checks: ['github:ci'], convergence: true, lifecycleCiBegin: async (a) => (asked.push(a), { status: 200, body: {} }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(asked).toEqual([{ taskId: h.taskId, done: [] }]))
+    await h.settle()
+    expect(h.task().status).toBe('validating')
+  })
+
+  it('a refusal from the Host asks a person, in the Host’s words', async () => {
+    const h = rig({ checks: ['github:ci'], convergence: true, lifecycleCiBegin: async () => ({ status: 409, body: { error: 'task tsk_x is not a lifecycle Task' } }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.state().gates.find((g) => g.taskId === h.taskId)?.question).toContain('task tsk_x is not a lifecycle Task')
+  })
+
+  it('names github:ci in the completion policy’s fingerprint', async () => {
+    const h = rig({ checks: ['github:ci'], convergence: true, lifecycleCiBegin: async () => ({ status: 200, body: {} }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().policySnapshot).toBeDefined())
+    expect(h.task().policySnapshot!.key.endsWith('|github:ci=github')).toBe(true)
   })
 })
 

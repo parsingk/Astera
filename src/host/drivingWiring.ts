@@ -111,6 +111,7 @@ export function composeHostDriving(a: {
     log,
     now: () => a.now(),
     retiring: () => disposed,
+    lifecycleCiBegin: (args) => a.orch().handle('lifecycle-ci-begin', args),
     ...(a.killRunner ? { killRunner: a.killRunner } : {})
   })
 

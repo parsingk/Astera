@@ -27,6 +27,7 @@ import { isLang, t, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import type { OrchServerDeps } from '../core/orchestration/command'
 import type { RepairTarget } from '../core/orchestration/state'
+import type { CheckResult } from '../core/orchestration/types'
 import { knowledgeIn } from '../core/orchestration/exec/coordinator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
 import { createResumeSweep } from '../core/orchestration/exec/resumeSweep'
@@ -109,6 +110,9 @@ export interface HostChecksDeps {
   retiring?: () => boolean
   /** Test seam: FOREIGN_KILL_WAIT_MS. */
   foreignKillWaitMs?: number
+  /** `lifecycle-ci-begin` through the Host's own door (GitHub lifecycle §4): a round reaching `github:ci` hands its
+   *  results so far to it. */
+  lifecycleCiBegin?(a: { taskId: string; done: CheckResult[] }): Promise<{ status: number; body: unknown }>
 }
 
 /** The OS locale as node reports it — what the app's `app.getLocale()` stands in for (R13). */
@@ -270,7 +274,9 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     diffNames: async () => null,
     // The Host's plugin runtime, through its deps (plugin Phase 5 C8)
     pluginCheck: (plugin, input) =>
-      d.deps().completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('this Host runs no plugin checks') })
+      d.deps().completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('this Host runs no plugin checks') }),
+    // GitHub CI (GitHub lifecycle §4): this Host's own command, under its own caller
+    ...(d.lifecycleCiBegin ? { lifecycleCiBegin: d.lifecycleCiBegin } : {})
   })
 
   // The Host's twin of the app's `core.run.onStatus` hook (ipc.ts): a run pty this manager started has

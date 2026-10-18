@@ -24,7 +24,8 @@ import {
   type OrchState
 } from '../state'
 import { cutTail } from '../taskOutput'
-import type { Dispatch } from '../types'
+import type { CheckResult, Dispatch } from '../types'
+import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 import { checkInputOf, pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from '../pluginChecks'
 import { repairTargetFor } from './repair'
 import { TaskValidator } from './validator'
@@ -58,6 +59,9 @@ export interface ValidationContext {
    *  command `checks-plugin-run` where the app does. Never rejects: a plugin that could not answer is an `error`
    *  answer, its reason in `summary`. */
   pluginCheck(plugin: string, input: CompletionCheckInput): Promise<PluginCheckAnswer>
+  /** The Host command `lifecycle-ci-begin` (GitHub lifecycle §4): `orch.handle` in the Host, the Host socket from the
+   *  app. A round reaching `github:ci` hands its results so far through it. Absent: that entry cannot be run here. */
+  lifecycleCiBegin?(a: { taskId: string; done: CheckResult[] }): Promise<{ status: number; body: unknown }>
 }
 /** A git head, null when there is no baseline, 'unknown' when there may be one the journal could not give. */
 export type CheckpointHead = string | null | 'unknown'
@@ -186,6 +190,18 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
           c.log(`repair failed task=${taskId}: ${String(e)}`)
         )
     },
+    // The Host keeps the round until CI answers (GitHub lifecycle §4); its refusal is the reason a person reads.
+    ...(c.lifecycleCiBegin
+      ? {
+          onHandedOff: async ({ taskId, done }: { taskId: string; done: CheckResult[] }) => {
+            const reply = await c.lifecycleCiBegin!({ taskId, done })
+            if (reply.status >= 400) {
+              const said = (reply.body as { error?: unknown } | null)?.error
+              throw new Error(typeof said === 'string' ? said : `the Host answered ${reply.status}`)
+            }
+          }
+        }
+      : {}),
     onCannotRun: async ({ taskId, reason }) => {
       const r = blockForValidation(c.getState(), { taskId, reason }, c.now())
       if (!r.ok) {
@@ -275,6 +291,8 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
       const key = completionPolicyHash(task, pol, (id) => {
         // A plugin's check has no configuration here: its id is what the fingerprint names (plugin Phase 5 C11)
         if (pluginIdOfCheck(id) !== null) return 'plugin'
+        // GitHub CI has no configuration here either: the Host answers it (GitHub lifecycle §4)
+        if (id === GITHUB_CI_CHECK) return 'github'
         const cfg = byId.get(id)
         return cfg ? seedKeyOf(cfg) : null
       })
