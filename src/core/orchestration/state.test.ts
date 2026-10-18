@@ -39,6 +39,7 @@ import {
   beginValidation,
   beginLifecycleValidation,
   beginLifecycleCi,
+  settleLifecycleCi,
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
@@ -3882,6 +3883,48 @@ describe('beginLifecycleCi', () => {
     const blocked = { ...s, tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'blocked' as const } : t)) }
     expect(beginLifecycleCi(blocked, { taskId: lifecycleId, done: [] }, LATER).ok).toBe(false)
     expect(beginLifecycleCi(s, { taskId: 'tsk_nope', done: [] }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+})
+
+// GitHub lifecycle G3a (design §4): the CI result and the handed-off local results make one verdict, once
+describe('settleLifecycleCi', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lint: CheckResult = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0 }
+  const handedOver = (): { s: OrchState; lifecycleId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [], validateConfigIds: ['lint'] }, NOW) as never)
+    const ready = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const validating = unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state
+    return { s: unwrap<string>(beginLifecycleCi(validating, { taskId: lifecycleId, done: [lint] }, NOW) as never).state, lifecycleId }
+  }
+  const ci = (status: CheckResult['status']): CheckResult => ({
+    configId: 'github:ci', name: 'GitHub CI', status, ...(status === 'failed' ? { summary: 'test (test): not ok 1 - adds', externalUrl: 'https://github.com/o/r/actions/runs/1/job/2' } : {})
+  })
+
+  it('a passing CI after passing local checks goes to review, with both in the Task’s checks and history', () => {
+    const { s, lifecycleId } = handedOver()
+    const r = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never)
+    expect(r.value.status).toBe('reviewing')
+    expect(r.value.checks?.map((c) => [c.configId, c.status])).toEqual([['lint', 'passed'], ['github:ci', 'passed']])
+    expect(r.value.checkHistory).toEqual({ lint: ['passed'], 'github:ci': ['passed'] })
+    expect(r.value.ciWait).toBeUndefined()
+  })
+
+  it('a failing CI is a check failure; with no repair target yet (G3c gives one) it asks a person', () => {
+    const { s, lifecycleId } = handedOver()
+    const r = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('failed') }, LATER) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.value.checks?.at(-1)).toMatchObject({ configId: 'github:ci', status: 'failed', summary: 'test (test): not ok 1 - adds' })
+    expect(r.value.ciWait).toBeUndefined()
+    expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-blocked')
+  })
+
+  it('settles once: a Task with no round handed over is refused', () => {
+    const { s, lifecycleId } = handedOver()
+    const once = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+    expect(settleLifecycleCi(once, { taskId: lifecycleId, result: ci('passed') }, LATER).ok).toBe(false)
+    expect(settleLifecycleCi(s, { taskId: 'tsk_nope', result: ci('passed') }, LATER)).toMatchObject({ ok: false, missing: true })
   })
 })
 

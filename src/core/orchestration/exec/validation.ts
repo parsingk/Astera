@@ -20,11 +20,14 @@ import {
   blockForValidation,
   jobOf,
   liveCheckResume,
+  settleLifecycleCi,
   stampPolicySnapshot,
-  type OrchState
+  type OrchState,
+  type RepairTarget,
+  type Res
 } from '../state'
 import { cutTail } from '../taskOutput'
-import type { CheckResult, Dispatch } from '../types'
+import type { CheckResult, Dispatch, Task } from '../types'
 import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 import { checkInputOf, pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from '../pluginChecks'
 import { repairTargetFor } from './repair'
@@ -69,9 +72,52 @@ export interface TaskValidation {
   validator: TaskValidator
   /** OrchServerDeps.startValidation's body: enqueue, then the policy stamp and the suspicious files beside it. */
   startValidation(a: { taskId: string; cwd: string }): void
+  /** A lifecycle Task's round handed over at `github:ci`, settled with the CI result (GitHub lifecycle §4). */
+  settleHandedOff(a: { taskId: string; result: CheckResult }): Promise<void>
 }
 
 export function createTaskValidation(c: ValidationContext): TaskValidation {
+  /** Commits one verdict and then starts what it opened: the review, or a repair, both only after the commit. The
+   *  validator's own rounds (onSettled) and the Host's settling of a handed-off round (settleHandedOff, GitHub lifecycle
+   *  §4) go through it, so the two cannot drift. `verdictOf` is the pure verdict, given the state and the repair target. */
+  const commitVerdict = async (taskId: string, verdictOf: (before: OrchState, repair: RepairTarget | undefined) => Res<Task>): Promise<void> => {
+    const before = c.getState()
+    // 판정 직전에 repair 대상을 정한다(설계 §6.2) — 순수 층(state.ts)은 세션이 살아 있는지 모른다.
+    // 서버가 검토 판정에서 하는 것과 같은 판정이다(ipc.ts 의 deps.repairTargetFor).
+    const repair = repairTargetFor(before, taskId, (id) => c.isAlive(id))
+    const r = verdictOf(before, repair ?? undefined)
+    if (!r.ok) {
+      c.log(`validation result rejected task=${taskId}: ${r.error}`)
+      return
+    }
+    await c.setState(r.state)
+    // 검증이 통과했고 검토가 걸려 있으면 여기서 이어진다. 서버의 worker_done 분기가 검증이 걸리지
+    // 않은 Task 에 대해 같은 일을 한다. cwd 는 넘기지 않는다 — startReview 가 구현 Dispatch 에서
+    // 얻는다(그 Dispatch 를 provider 때문에 어차피 찾는다).
+    // 종단 .catch 를 붙인다 — 이유는 ipc.ts 의 deps.startReview 쪽 주석에 있다(validator 가 자기
+    // onSettled/onCannotRun 에 붙이는 것과 같은 것이다).
+    if (r.value.status === 'reviewing')
+      void c.startReview({ taskId }).catch((e) =>
+        c.log(`startReview failed task=${taskId}: ${String(e)}`)
+      )
+    // 판정이 repair Dispatch 를 새로 열었으면(routeFailure) 그 부수 효과(spec 파일을 쓰고 살아
+    // 있는 세션에 넣거나 새 워커를 띄운다)를 시작한다 — **커밋(위 setState) 뒤에만** 부른다.
+    // **여기서도 getState() 를 다시 읽는다** — r.state 를 그대로 뒤지지 않는다. 서버의 검토
+    // 판정 분기(server.ts)가 자신의 setState 뒤에 afterReview = deps.getState() 로 다시 읽는
+    // 것과 같은 모양이다 — 지금은 둘이 갈라질 수 없지만(그 사이에 await 가 없다), 한쪽이 나중에
+    // await 를 얻어도 이 자리가 조용히 낡은 채로 남지 않는다. openRepairDispatch 가 채우는
+    // specPath 는 '' 이므로 !d.specPath 는 그것도 "아직 시작되지 않았다"로 읽는다(performRepair
+    // 의 liveRepairDispatch 와 같은 조건).
+    const afterValidation = c.getState()
+    const opened = afterValidation.dispatches.find(
+      (d) => d.taskId === taskId && d.repair !== undefined && !d.endedAt && !d.specPath
+    )
+    if (opened)
+      void c.startRepair({ dispatchId: opened.id }).catch((e) =>
+        c.log(`repair failed task=${taskId}: ${String(e)}`)
+      )
+  }
+
   // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
   // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
   const validator = new TaskValidator({
@@ -146,50 +192,12 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         return c.pluginCheck(pluginIdOfCheck(configId)!, checkInputOf(st, task, cwd))
       }
     },
-    onSettled: async ({ taskId, results }) => {
-      const before = c.getState()
-      // 판정 직전에 repair 대상을 정한다(설계 §6.2) — 순수 층(state.ts)은 세션이 살아 있는지 모른다.
-      // 서버가 검토 판정에서 하는 것과 같은 판정이다(ipc.ts 의 deps.repairTargetFor).
-      const repair = repairTargetFor(before, taskId, (id) => c.isAlive(id))
-      const r = applyValidationResult(
-        before,
-        // 서버가 applyWorkerDone 에 넘기는 것과 같은 값들이다 — 이 배선에는 startReview 가 있다.
-        // repair 는 convergence Run 에서 필수다(없으면 순수 층이 거절한다); lang 은 Gate 문구의
-        // 언어다.
-        { taskId, results, canReview: true, ...(repair ? { repair } : {}), lang: c.lang() },
-        c.now()
-      )
-      if (!r.ok) {
-        c.log(`validation result rejected task=${taskId}: ${r.error}`)
-        return
-      }
-      await c.setState(r.state)
-      // 검증이 통과했고 검토가 걸려 있으면 여기서 이어진다. 서버의 worker_done 분기가 검증이 걸리지
-      // 않은 Task 에 대해 같은 일을 한다. cwd 는 넘기지 않는다 — startReview 가 구현 Dispatch 에서
-      // 얻는다(그 Dispatch 를 provider 때문에 어차피 찾는다).
-      // 종단 .catch 를 붙인다 — 이유는 ipc.ts 의 deps.startReview 쪽 주석에 있다(validator 가 자기
-      // onSettled/onCannotRun 에 붙이는 것과 같은 것이다).
-      if (r.value.status === 'reviewing')
-        void c.startReview({ taskId }).catch((e) =>
-          c.log(`startReview failed task=${taskId}: ${String(e)}`)
-        )
-      // 판정이 repair Dispatch 를 새로 열었으면(routeFailure) 그 부수 효과(spec 파일을 쓰고 살아
-      // 있는 세션에 넣거나 새 워커를 띄운다)를 시작한다 — **커밋(위 setState) 뒤에만** 부른다.
-      // **여기서도 getState() 를 다시 읽는다** — r.state 를 그대로 뒤지지 않는다. 서버의 검토
-      // 판정 분기(server.ts)가 자신의 setState 뒤에 afterReview = deps.getState() 로 다시 읽는
-      // 것과 같은 모양이다 — 지금은 둘이 갈라질 수 없지만(그 사이에 await 가 없다), 한쪽이 나중에
-      // await 를 얻어도 이 자리가 조용히 낡은 채로 남지 않는다. openRepairDispatch 가 채우는
-      // specPath 는 '' 이므로 !d.specPath 는 그것도 "아직 시작되지 않았다"로 읽는다(performRepair
-      // 의 liveRepairDispatch 와 같은 조건).
-      const afterValidation = c.getState()
-      const opened = afterValidation.dispatches.find(
-        (d) => d.taskId === taskId && d.repair !== undefined && !d.endedAt && !d.specPath
-      )
-      if (opened)
-        void c.startRepair({ dispatchId: opened.id }).catch((e) =>
-          c.log(`repair failed task=${taskId}: ${String(e)}`)
-        )
-    },
+    onSettled: ({ taskId, results }) =>
+      // 서버가 applyWorkerDone 에 넘기는 것과 같은 값들이다 — 이 배선에는 startReview 가 있다. repair 는 convergence Run 에서
+      // 필수다(없으면 순수 층이 거절한다); lang 은 Gate 문구의 언어다.
+      commitVerdict(taskId, (before, repair) =>
+        applyValidationResult(before, { taskId, results, canReview: true, ...(repair ? { repair } : {}), lang: c.lang() }, c.now())
+      ),
     // The Host keeps the round until CI answers (GitHub lifecycle §4); its refusal is the reason a person reads.
     ...(c.lifecycleCiBegin
       ? {
@@ -311,5 +319,12 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
     })().catch((e) => c.log(`suspicious files task=${taskId}: ${String(e)}`))
   }
 
-  return { validator, startValidation }
+  /** The Host settles a round handed over at `github:ci` with the CI result (GitHub lifecycle §4): once, since
+   *  settleLifecycleCi refuses a Task with no round handed over. */
+  const settleHandedOff = (a: { taskId: string; result: CheckResult }): Promise<void> =>
+    commitVerdict(a.taskId, (before, repair) =>
+      settleLifecycleCi(before, { taskId: a.taskId, result: a.result, ...(repair ? { repair } : {}), lang: c.lang() }, c.now())
+    )
+
+  return { validator, startValidation, settleHandedOff }
 }

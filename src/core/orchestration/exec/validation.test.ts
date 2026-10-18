@@ -435,3 +435,60 @@ describe('createTaskValidation', () => {
     expect(h.logs.join(' | ')).not.toMatch(/could not start|rejected/)
   })
 })
+
+// GitHub lifecycle G3a (design §4): the Host settles a handed-off round with the CI result, then starts what it opened
+describe('createTaskValidation — settleHandedOff', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const handedOver = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+    tasks: [
+      { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      {
+        id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['lint', 'github:ci'],
+        reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW,
+        ciWait: { since: NOW, done: [{ configId: 'lint', name: 'lint', status: 'passed' }] }
+      }
+    ]
+  })
+  const wired = () => {
+    let state = handedOver()
+    const startReview = vi.fn(async (_a: { taskId: string }) => {})
+    const startRepair = vi.fn(async (_a: { dispatchId: string }) => undefined as unknown)
+    const validation = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: () => ({ runId: 'r' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => true,
+      startReview,
+      startRepair,
+      firstCheckpointHead: () => null,
+      diffNames: async () => null,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' })
+    })
+    return { validation, startReview, startRepair, task: () => state.tasks.find((t) => t.id === 'tsk_l')! }
+  }
+
+  it('a passing CI result settles the round and starts the review once', async () => {
+    const w = wired()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
+    expect(w.task()).toMatchObject({ status: 'reviewing' })
+    expect(w.task().ciWait).toBeUndefined()
+    await vi.waitFor(() => expect(w.startReview).toHaveBeenCalledWith({ taskId: 'tsk_l' }))
+    expect(w.startReview).toHaveBeenCalledTimes(1)
+  })
+
+  it('a second settle changes nothing', async () => {
+    const w = wired()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
+    const after = w.task()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed' } })
+    expect(w.task()).toBe(after)
+  })
+})

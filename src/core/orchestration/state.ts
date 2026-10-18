@@ -1270,6 +1270,26 @@ export function beginLifecycleCi(s: OrchState, a: { taskId: string; done: CheckR
   return ok({ ...s, tasks: replace(s.tasks, next) }, 'begun')
 }
 
+/** The CI result settles a lifecycle Task's handed-off round (GitHub lifecycle §4): `[...ciWait.done, result]` goes to
+ *  applyValidationResult once, so the Task's checks and history read as a one-process round would, and `ciWait` is
+ *  cleared in the same write. A Task with no round handed over is refused: a verdict is applied exactly once. */
+export function settleLifecycleCi(
+  s: OrchState,
+  a: { taskId: string; result: CheckResult; repair?: RepairTarget; lang?: Lang },
+  now: string
+): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to settle`)
+  const { ciWait, ...rest } = task
+  const cleared: OrchState = { ...s, tasks: replace(s.tasks, rest) }
+  return applyValidationResult(
+    cleared,
+    { taskId: a.taskId, results: [...ciWait.done, a.result], canReview: true, ...(a.repair ? { repair: a.repair } : {}), ...(a.lang ? { lang: a.lang } : {}) },
+    now
+  )
+}
+
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
  *  인프라 문제로 실패시키면 멀쩡한 작업이 재시도 세 번 끝에 회로 차단까지 간다. 어느 쪽도 기계가
  *  정할 일이 아니므로 Gate 를 열어 사람에게 넘긴다. */
