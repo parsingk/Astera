@@ -1579,6 +1579,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.gate.github.q.closed': "This Run's pull request #{pr} was closed. Reopen it on GitHub and wait again, or mark the Task failed.",
   'jobs.gate.github.q.merged': "This Run's pull request #{pr} was merged before Astera's verdict. With no CI left to wait for, mark the Task failed.",
   'jobs.gate.github.q.outside': 'GitHub CI failed for a reason outside the code ({class}): {summary}. Run it again on GitHub and wait again, or mark the Task failed.',
+  'jobs.gate.github.q.unknownAgain': 'GitHub CI failed again for a reason Astera could not classify: {summary}. A repair that diagnosed first already ran. If you ran it again on GitHub, wait again; if you fixed it by hand and committed, try again; otherwise mark the Task failed.',
+  'jobs.gate.github.q.repairDeclined': "This Run's repair worker reported it did not fix the failure: {reason}. If you ran CI again on GitHub or fixed it by hand and committed, try again; otherwise mark the Task failed.",
   'jobs.gate.github.q.auth': "GitHub does not take this account's reads: {reason}. Fix the gh login and wait again, or mark the Task failed.",
   'jobs.gate.github.carry.noBranch': "This Run's branch cannot be found, so it cannot be carried to GitHub. Fix it and answer to try again.",
   'jobs.gate.github.carry.noOrigin': "This Run's folder has no GitHub origin to push to. Fix it and answer to try again.",

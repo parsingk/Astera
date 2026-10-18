@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { emptyState, type OrchState } from './state'
 import type { Task } from './types'
 import { GITHUB_CI_CHECK } from '../github/lifecycle'
-import { LIFECYCLE_TASK_TITLE, isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { LIFECYCLE_TASK_TITLE, isLifecycleTask, lifecycleBriefOf, lifecycleRepairFacts, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 
 const NOW = '2026-10-18T00:00:00.000Z'
 const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
@@ -48,6 +48,69 @@ describe('withLifecycleTask', () => {
   it('reads only the Run’s own Tasks, not the Job’s definitions', () => {
     const s = state([task('a'), task('def', { runId: undefined, jobId: 'job_1', status: 'pending' })])
     expect(withLifecycleTask(s, 'run_1', NOW).tasks.find(isLifecycleTask)?.deps).toEqual(['a'])
+  })
+})
+
+// GitHub lifecycle G3c1 (design §4.8): what a lifecycle repair is told, from the Run's GitHub record
+describe('lifecycleRepairFacts', () => {
+  const A = 'a'.repeat(40)
+  const B = 'b'.repeat(40)
+  const failedCi = { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'failed' as const, summary: 'test (test): x' }
+  const withGitHub = (checks: Task['checks']): OrchState => {
+    const s = withLifecycleTask(state([task('a')]), 'run_1', NOW)
+    return {
+      ...s,
+      tasks: s.tasks.map((t) => (isLifecycleTask(t) ? { ...t, checks } : t)),
+      runs: s.runs.map((r) => ({
+        ...r,
+        githubState: {
+          binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW },
+          lastPushedSha: B,
+          ci: { sha: B, basis: 'all-reported' as const, verdict: 'failed' as const, failing: 'test', checks: [], changedAt: NOW, failure: { check: 'test', externalId: 'run:1', class: 'test' as const, summary: 'test (test): x', diagnostics: [] } },
+          log: [
+            { seq: 1, at: '2026-10-17T00:00:00.000Z', kind: 'ci-failed' as const, sha: 'f'.repeat(40), check: 'old' },
+            { seq: 2, at: NOW, kind: 'ci-failed' as const, sha: A, check: 'lint', class: 'lint' as const },
+            { seq: 3, at: NOW, kind: 'ci-failed' as const, sha: B, check: 'test', class: 'test' as const }
+          ],
+          seq: 3
+        }
+      }))
+    }
+  }
+
+  it('gives the pull request, the pushed head, the failing check and the earlier failures of this lifecycle Task', () => {
+    const s = withGitHub([failedCi])
+    const facts = lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!)
+    expect(facts).toEqual({
+      pr: { number: 12, url: 'https://github.com/o/r/pull/12' },
+      head: B,
+      failing: { check: 'test', class: 'test', summary: 'test (test): x' },
+      earlier: [{ sha: A, check: 'lint', class: 'lint' }]
+    })
+  })
+
+  // G3c1 final review M5: the carrier's own failure (uncommitted, no commits) is not the CI failure read earlier
+  it('names no failing CI check when this round’s GitHub CI result is not the one CI gave', () => {
+    const s = withGitHub([{ configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'failed', summary: "The Run's branch has 1 uncommitted change; Astera pushes commits only. Commit it." }])
+    expect(lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!).failing).toBeUndefined()
+  })
+
+  it('names no failing CI check when this round failed a local check', () => {
+    const s = withGitHub([{ configId: 'lint', name: 'lint', status: 'failed', exitCode: 1 }, { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'not-run' }])
+    expect(lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!).failing).toBeUndefined()
+  })
+})
+
+// G3c1 final review I1: a lifecycle repair and review are asked to satisfy the Run's objective, not a placeholder
+describe('lifecycleBriefOf', () => {
+  it('is the Run’s objective and its Tasks', () => {
+    const s = withLifecycleTask(state([task('a', { title: 'Add login', spec: 'Users sign in with a password.\nMore detail.' }), task('b', { title: 'Add logout', spec: 'Users sign out.' })]), 'run_1', NOW)
+    const brief = lifecycleBriefOf({ ...s, jobs: s.jobs.map((j) => ({ ...j, objective: 'Accounts for the shop' })) }, s.tasks.find(isLifecycleTask)!)
+    expect(brief.title).toContain('Accounts for the shop')
+    expect(brief.spec).toContain('Accounts for the shop')
+    expect(brief.spec).toContain('- Add login: Users sign in with a password.')
+    expect(brief.spec).toContain('- Add logout: Users sign out.')
+    expect(brief.spec).not.toContain('워커가 없는 Task')
   })
 })
 

@@ -484,6 +484,13 @@ describe('createTaskValidation — settleHandedOff', () => {
     expect(w.startReview).toHaveBeenCalledTimes(1)
   })
 
+  // G3c1: the class the Host read reaches the count
+  it('carries the class of a failed CI to the lifecycle Task’s count', async () => {
+    const w = wired()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', ciClass: 'unknown', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'deploy (unknown): exit 1' } })
+    expect(w.task().ciUnknowns).toBe(1)
+  })
+
   it('a second settle changes nothing', async () => {
     const w = wired()
     await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
@@ -499,6 +506,123 @@ describe('createTaskValidation — settleHandedOff', () => {
     await w.validation.settleHandedOff({ taskId: 'tsk_l', since: '2026-01-01T00:00:00.000Z', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
     expect(w.task()).toBe(before)
     expect(w.startReview).not.toHaveBeenCalled()
+  })
+})
+
+// GitHub lifecycle G3c1 (design §3.4 S7): a lifecycle Task's work is the Run's whole branch, so its suspicious files are
+// measured from the Run's base, with or without a repair of its own
+describe('createTaskValidation — suspicious files of a lifecycle Task', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const BASE = 'b'.repeat(40)
+  const lifecycle = (o: { base?: boolean; filesModified?: string[] } = {}): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run', ...(o.base !== false ? { git: { base: BASE } } : {}) }],
+    tasks: [
+      { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      {
+        id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+        reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW,
+        ...(o.filesModified ? { filesModified: o.filesModified } : {})
+      }
+    ]
+  })
+  const wired = (start: OrchState, diffNames: (cwd: string, head: string) => Promise<string[] | null>) => {
+    let state = start
+    const validation = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: () => ({ runId: 'r1' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => true,
+      startReview: async () => {},
+      startRepair: async () => undefined,
+      firstCheckpointHead: () => null,
+      diffNames,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' }),
+      lifecycleCiBegin: async () => ({ status: 200, body: {} })
+    })
+    return { validation, task: () => state.tasks.find((t) => t.id === 'tsk_l')! }
+  }
+
+  it('measures them from the Run’s base in the Run root, before any repair of its own', async () => {
+    const diffNames = vi.fn(async () => ['package.json', 'src/a.ts'])
+    const w = wired(lifecycle(), diffNames)
+    w.validation.startValidation({ taskId: 'tsk_l', cwd: '/wt-run' })
+    await vi.waitFor(() => expect(w.task().suspiciousFiles).toEqual(['package.json']))
+    expect(diffNames).toHaveBeenCalledWith('/wt-run', BASE)
+  })
+
+  it('falls back to what the Task reported when the Run has no base', async () => {
+    const diffNames = vi.fn(async () => ['package.json'])
+    const w = wired(lifecycle({ base: false, filesModified: ['vitest.config.ts'] }), diffNames)
+    w.validation.startValidation({ taskId: 'tsk_l', cwd: '/wt-run' })
+    await vi.waitFor(() => expect(w.task().suspiciousFiles).toEqual(['vitest.config.ts']))
+    expect(diffNames).not.toHaveBeenCalled()
+  })
+})
+
+// GitHub lifecycle G3c1: the loop end to end — a CI failure opens a repair in the Run root, its done report starts the
+// round again in the Run root, and that round hands over to GitHub again
+describe('the lifecycle repair loop, end to end', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const LATER = '2026-09-24T01:00:00.000Z'
+  it('goes from a CI failure through a Run-root repair and a new hand-over', async () => {
+    let state: OrchState = {
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        {
+          id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+          reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW, ciWait: { since: NOW, done: [] }
+        }
+      ],
+      dispatches: [{
+        id: 'dsp_a', taskId: 'tsk_a', provider: 'codex', accountId: 'accX', sessionId: 'sessA', cwd: '/wt/a', specPath: '/s/a.md',
+        startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'ready', retained: false
+      }]
+    }
+    const begun: unknown[] = []
+    const startRepair = vi.fn(async (_a: { dispatchId: string }) => undefined as unknown)
+    const v = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: () => ({ runId: 'r1' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => false,
+      startReview: async () => {},
+      startRepair,
+      firstCheckpointHead: () => null,
+      diffNames: async () => null,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' }),
+      lifecycleCiBegin: async (a) => (begun.push(a), { status: 200, body: {} })
+    })
+    const lifecycle = () => state.tasks.find((t) => t.id === 'tsk_l')!
+
+    await v.settleHandedOff({ taskId: 'tsk_l', since: NOW, ciClass: 'test', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'test (test): not ok 1' } })
+    const repair = state.dispatches.find((d) => d.taskId === 'tsk_l' && d.repair)!
+    expect(repair).toMatchObject({ cwd: '/wt-run', provider: 'codex', accountId: 'accX', repair: 'check-failure' })
+    expect(lifecycle().status).toBe('dispatched')
+    await vi.waitFor(() => expect(startRepair).toHaveBeenCalledWith({ dispatchId: repair.id }))
+
+    // The repair worker reports done; the round starts again where it worked, the Run root
+    state = { ...state, dispatches: state.dispatches.map((d) => (d.id === repair.id ? { ...d, sessionId: 'sessFix', specPath: '/s/fix.md' } : d)) }
+    const done = applyWorkerDone(state, { taskId: 'tsk_l', dispatchId: repair.id, outcome: 'succeeded', subject: 's', body: 'fixed' }, LATER)
+    if (!done.ok) throw new Error(done.error)
+    state = done.state
+    expect(lifecycle().status).toBe('validating')
+    v.startValidation({ taskId: 'tsk_l', cwd: repair.cwd })
+    await vi.waitFor(() => expect(begun).toEqual([{ taskId: 'tsk_l', done: [] }]))
   })
 })
 

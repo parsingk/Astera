@@ -21,6 +21,7 @@ import { isSamePath } from '../../files/tree'
 import type { Provider } from '../../providers/meta'
 import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../knowledge/detect'
 import type { CheckResult, RepairReason, ReviewIssue } from '../types'
+import type { LifecycleRepairFacts } from '../lifecycleTask'
 import { REPAIR_DIAGNOSTICS, diagnosticLine, findingsCountOf } from '../pluginChecks'
 import { boundedSlug } from '../../worktrees/naming'
 
@@ -163,6 +164,11 @@ export const resumeWorkerPrompt = (specPath: string, taskId: string, dispatchId:
 export const repairWorkerPrompt = (specPath: string): string =>
   `Your previous report did not satisfy the completion checks. Read ${specPath} — it says what failed and how to report`
 
+/** The line typed into a live session for a lifecycle Task's repair (GitHub lifecycle G3c1): that session may have worked
+ *  on another Task of the Run, so it is not told its own report failed. Free of LAUNCH_FORBIDDEN, as the line above. */
+export const lifecycleRepairPrompt = (specPath: string, reason: RepairReason = 'check-failure'): string =>
+  `The Run's branch did not pass ${reason === 'review-failure' ? 'its review' : 'its checks or its GitHub CI'}. Read ${specPath} — it says what failed and how to report`
+
 export interface RepairSection {
   reason: RepairReason
   /** 몇 번째 수리인가 / 상한 — "This is repair 2 of 3" */
@@ -176,6 +182,39 @@ export interface RepairSection {
    *  그것을 오류로 읽는다. true 면 그 대신 "사람이 예산이 다 쓰인 뒤 하나 더 허락했다" 로 적는다 —
    *  숫자를 지우는 것이 아니라 그 숫자가 뜻하는 것을 바꾸는 것이다. */
   extra?: true
+  /** A lifecycle Task's repair (GitHub lifecycle G3c1, design §4.8): what GitHub said about the Run's pull request. */
+  github?: LifecycleRepairFacts
+}
+
+/** A check's output, its last 40 lines, saying how many were cut — so the cut is not invisible. */
+function pushTail(lines: string[], outputTail: string, label: string): void {
+  const tail = outputTail.split('\n')
+  const kept = tail.slice(-40)
+  lines.push(`  ${label}`)
+  if (kept.length < tail.length) lines.push(`    … (${tail.length - kept.length} earlier line(s) cut)`)
+  for (const l of kept) lines.push(`    ${l}`)
+}
+
+/** The "### GitHub" part of a lifecycle repair (design §4.8): the pull request, the head pushed, the failing check and
+ *  its class, the earlier CI failures, who pushes; and for a failure Astera could not classify, to diagnose first. */
+function githubSection(g: LifecycleRepairFacts): string {
+  const out: string[] = ["This task carries the whole Run to GitHub: you work in the Run's own branch."]
+  if (g.pr) out.push(`Its pull request: #${g.pr.number} ${g.pr.url}`)
+  if (g.head) out.push(`The head Astera pushed: ${g.head.slice(0, 7)}`)
+  if (g.failing) out.push(`The failing GitHub check: ${g.failing.check} (class ${g.failing.class ?? 'not known'}) — ${g.failing.summary}`)
+  if (g.earlier.length > 0) {
+    out.push('Earlier CI failures of this pull request:')
+    for (const e of g.earlier) out.push(`- ${e.sha ? `${e.sha.slice(0, 7)} ` : ''}${e.check ?? 'a check'}${e.class ? ` (class ${e.class})` : ''}`)
+  }
+  out.push(
+    'Commit your fix in this folder. Astera pushes it after the local checks pass and reads CI again. Do not push yourself, and do not open, edit or close the pull request.'
+  )
+  if (g.failing?.class === 'unknown')
+    out.push(
+      '',
+      "Astera could not tell why this check failed. First decide whether the failure is caused by this Run's change. If it is not (a flaky test, a CI or network problem, something outside this repository), change nothing and report `--outcome failed` with the reason."
+    )
+  return out.join('\n')
 }
 
 /** spec 파일의 "## Repair request" 절(설계 §6.1, 명세 §9·§16·§35·§39). 보고 의무 앞에 선다 — 무엇이 틀렸는지
@@ -203,18 +242,13 @@ function repairSection(a: RepairSection): string {
       const more = findingsCountOf(c) - shown.length
       if (more > 0) lines.push(`${shown.length > 0 ? '    ' : '  '}… ${more} more finding(s)`)
       if (c.externalUrl !== undefined) lines.push(`  Details: ${c.externalUrl}`)
+      // GitHub CI's failed job log, which its summary only names (GitHub lifecycle G3c1)
+      if (c.outputTail) pushTail(lines, c.outputTail, 'Log excerpt:')
     } else {
       lines.push(`- Check "${c.name}" — exit ${c.exitCode ?? '?'}${c.status === 'timed-out' ? ' (timed out)' : ''}.`)
       // outputTail 이 없거나 빈 문자열이면 아무것도 싣지 않는다 — 예전에는 "Output tail:" 뒤에 빈
-      // 들여쓰기 줄 하나가 남았다. 40줄로 자를 때는 몇 줄이 잘렸는지도 남긴다 — 안 그러면 잘린
-      // 사실 자체가 안 보인다.
-      if (c.outputTail) {
-        const tail = c.outputTail.split('\n')
-        const kept = tail.slice(-40)
-        lines.push('  Output tail:')
-        if (kept.length < tail.length) lines.push(`    … (${tail.length - kept.length} earlier line(s) cut)`)
-        for (const l of kept) lines.push(`    ${l}`)
-      }
+      // 들여쓰기 줄 하나가 남았다.
+      if (c.outputTail) pushTail(lines, c.outputTail, 'Output tail:')
     }
   }
   const blocking = (a.issues ?? []).filter((i) => i.blocking)
@@ -237,14 +271,15 @@ function repairSection(a: RepairSection): string {
 ---
 ## Repair request (assembled by the app — do not delete)
 
-Your previous report for this task did not satisfy the completion checks — ${reasonText}. ${roundText}
+${a.github ? "The Run's branch, which this task carries to GitHub," : 'Your previous report for this task'} did not satisfy the completion checks — ${reasonText}. ${roundText}
 
 ### What failed
 ${lines.join('\n')}
-
+${a.github ? `\n### GitHub\n${githubSection(a.github)}\n` : ''}
 ### Rules
 Do not redefine the objective. Do not remove, skip or weaken failing tests unless the objective
 explicitly requires it. Do not disable lint rules, bypass the build, or change how the checks run.
+Do not change CI workflows, required checks, workflow triggers or coverage thresholds to get a check past.
 Fix the failing completion conditions with the smallest correct change — correctness before size.
 Astera, not you, decides whether the completion conditions are met: after your fix it re-runs every
 check, then review. Report \`--outcome succeeded\` for this repair attempt once you have made the fix
@@ -497,6 +532,9 @@ export function buildReviewSpecFile(a: {
   checks?: CheckResult[]
   /** 직전 라운드의 이슈. blocking 만 싣는다 — 리뷰어가 "고쳐졌는지" 확인할 것들이다 */
   previousIssues?: ReviewIssue[]
+  /** The range a lifecycle Task's reviewer reads (GitHub lifecycle G3c1): its pull request is the Run's whole branch,
+   *  from the Run's base to the head Astera pushed. Absent for every other Task. */
+  diff?: { base: string; head: string }
   /** check 의 동작을 바꾸는 파일들(설계 §8.3) */
   suspiciousFiles?: string[]
   /** 완료 정책의 지문이 라운드 사이에 달라졌다(2조각 설계 G3, 명세 §36·§37). 의심 파일과 같은 자리,
@@ -622,7 +660,16 @@ ${a.implReport?.trim() || '(nothing was reported)'}
 ## Files the implementer says it changed
 
 ${a.filesModified?.length ? a.filesModified.map((f) => `- ${f}`).join('\n') : '(none reported)'}
+${
+  a.diff
+    ? `
+## The pull request's changes
 
+This Task carries the whole Run to GitHub: review every change of its pull request, not only the files above. Read them
+with \`git diff ${a.diff.base}..${a.diff.head}\` in this folder.
+`
+    : ''
+}
 ## What is already decided — do not re-judge it
 
 ${

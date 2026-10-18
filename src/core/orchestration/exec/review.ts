@@ -18,6 +18,7 @@ import type { OrchServerDeps } from '../command'
 import { checkConfigIdsOf, policyOf } from '../convergence'
 import { pickReviewer } from '../reviewer'
 import { openReviewDispatch, type OrchState } from '../state'
+import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf } from '../lifecycleTask'
 import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
 import { createReviewGate } from './reviewGate'
 
@@ -67,12 +68,20 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       if (await reviewGate.refuseIfRunGated({ taskId })) return
       // 구현 Dispatch — 그 provider 를 피해야 하고, cwd 도 여기서 얻는다(그래서 이 함수는 taskId
       // 하나만 받는다: 호출자가 cwd 를 따로 구하면 두 경로가 갈라진다)
-      const impl = st.dispatches
-        .filter((d) => d.taskId === taskId && !d.review)
-        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-        .at(-1)
+      // A lifecycle Task is reviewed in the Run root, the branch Astera pushed, over its pull request's diff; the
+      // implementer to avoid is its latest repair, else the Run's latest ordinary work (GitHub lifecycle G3c1, §3.4 S7)
+      const lifecycle = isLifecycleTask(task)
+      const run = st.runs.find((r) => r.id === task.runId)
+      const impl =
+        st.dispatches
+          .filter((d) => d.taskId === taskId && !d.review)
+          .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+          .at(-1) ?? (lifecycle && task.runId !== undefined ? latestOrdinaryWork(st, task.runId)?.dispatch : undefined)
       if (!impl) return void (await gate(`no implementation dispatch for task ${taskId}`))
-      const cwd = impl.cwd
+      const cwd = lifecycle ? run?.worktree : impl.cwd
+      if (cwd === undefined) return void (await gate(`the Run of task ${taskId} has no folder of its own to review in`))
+      const base = lifecycle ? run?.git?.base : undefined
+      const diff = base !== undefined ? { base, head: run?.githubState?.lastPushedSha ?? 'HEAD' } : undefined
       const accounts = await c.accounts()
       // core.ts 의 defaultAccountIdFor 와 같은 모양 — 로그인 조회는 계정마다 파일(또는 macOS 에서는
       // Keychain)을 읽으므로 순차로 돌리면 계정 수만큼 늘어난다. 같은 일을 하는 자리가 이미 있으니
@@ -124,9 +133,11 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       // `onOpenRefused` 안에 있다.
       if (!opened.ok) return void (await reviewGate.onOpenRefused({ taskId, error: opened.error }))
       await c.setState(opened.state)
+      // The reviewer judges the Run's objective and Tasks for a lifecycle Task, not its placeholder (G3c1 final review I1)
+      const brief = lifecycle ? lifecycleBriefOf(fresh, task) : { title: task.title, spec: task.spec }
       const spec = buildReviewSpecFile({
-        title: task.title,
-        spec: task.spec,
+        title: brief.title,
+        spec: brief.spec,
         taskId,
         dispatchId: opened.value.id,
         implReport: task.result,
@@ -150,6 +161,7 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
         // 값이라 그런 창이 없다.
         checks: task.checks,
         previousIssues: task.reviewIssues,
+        ...(diff ? { diff } : {}),
         suspiciousFiles: freshTask.suspiciousFiles,
         policyChanged: freshTask.policyChanged === true,
         // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일

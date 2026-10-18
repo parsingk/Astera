@@ -717,6 +717,8 @@ export function applyWorkerDone(
      *  reviewing 이고, recomputeReady 는 completed 만 승격시키므로 그 의존 서브트리 전체가
      *  pending 에 멈춘다. 기본값 true — 이 인자를 모르는 호출자에게는 지금까지의 동작이 유지된다. */
     canReview?: boolean
+    /** The language of a question this report opens (a lifecycle repair reported failed, GitHub lifecycle G3c1). */
+    lang?: Lang
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -797,6 +799,22 @@ export function applyWorkerDone(
   // Settle unanswered questions without an answer — the worker is finished, so there is nobody
   // left to answer them. See the settlePendingQuestions comment for why they are not deleted.
   state = { ...state, messages: settlePendingQuestions(state.messages, a.dispatchId) }
+  // A lifecycle repair that could not fix the failure — most often one it judged outside the Run's change, as its spec
+  // asks — goes to a person, as a cause outside the code does (GitHub lifecycle §4.6, G3c1 final review I2): ending the
+  // lifecycle Task here would fail the Run with nobody asked
+  if (to === 'failed' && dispatch.repair && isLifecycleTask(task)) {
+    const asked = createGate(
+      state,
+      {
+        taskId: task.id,
+        question: t(a.lang ?? 'en', 'jobs.gate.github.q.repairDeclined', { reason: oneLine(a.body).slice(0, 300) }),
+        options: ['retry', 'mark-failed'],
+        kind: 'github-ci-outside'
+      },
+      now
+    )
+    if (asked.ok) state = asked.state
+  }
   return ok(state, 'accepted')
 }
 
@@ -1068,7 +1086,8 @@ export function openRepairDispatch(
   const open = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
   if (open) return err(`dispatch already open: ${open.id}`)
   const prior = latestImplDispatch(s, a.taskId)
-  if (!prior) return err(`no implementation dispatch for task ${a.taskId}`)
+  // A lifecycle Task has no attempt of its own before its first repair (GitHub lifecycle G3c1, design §3.4)
+  if (!prior && !isLifecycleTask(task)) return err(`no implementation dispatch for task ${a.taskId}`)
   const sessionId = a.target.kind === 'same-session' ? a.target.sessionId : placeholderSessionId()
   const sessionOpen = s.dispatches.find((d) => d.sessionId === sessionId && !d.outcome && !d.endedAt)
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
@@ -1082,7 +1101,7 @@ export function openRepairDispatch(
     sessionId,
     cwd: a.target.cwd,
     specPath: '',
-    retryOf: prior.id,
+    ...(prior ? { retryOf: prior.id } : {}),
     startedAt: now,
     workerState: 'ready',
     retained: false,
@@ -1312,7 +1331,7 @@ export function recordLifecycleCiWait(s: OrchState, a: { taskId: string; since: 
  *  cleared in the same write. A Task with no round handed over is refused: a verdict is applied exactly once. */
 export function settleLifecycleCi(
   s: OrchState,
-  a: { taskId: string; result: CheckResult; since?: string; repair?: RepairTarget; lang?: Lang },
+  a: { taskId: string; result: CheckResult; since?: string; repair?: RepairTarget; lang?: Lang; ciClass?: string },
   now: string
 ): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
@@ -1320,7 +1339,9 @@ export function settleLifecycleCi(
   if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to settle`)
   // A verdict read for an earlier round settles nothing of the round after it (G3b1 final review I1)
   if (a.since !== undefined && task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
-  const { ciWait, ...rest } = task
+  const { ciWait, ...kept } = task
+  // A failure Astera could not classify is counted on the Task, so a second one asks a person (G3c1, design §4.6)
+  const rest: Task = a.result.status === 'failed' && a.ciClass === 'unknown' ? { ...kept, ciUnknowns: (kept.ciUnknowns ?? 0) + 1 } : kept
   const cleared: OrchState = { ...s, tasks: replace(s.tasks, rest) }
   return applyValidationResult(
     cleared,
@@ -1380,8 +1401,11 @@ export function answerGitHubGate(s: OrchState, a: { gateId: string; resolution: 
   const { ciWait, ...base } = task
   if (a.resolution === 'mark-failed') return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'failed', updatedAt: now }) }, { gate: resolved })
   if (a.resolution === 'continue' || a.resolution === 'retry' || !ciWait) {
-    const fresh = moveTask(task, 'pending', now)
-    if (!fresh) return err(`cannot unblock from status: ${task.status}`)
+    const moved = moveTask(task, 'pending', now)
+    if (!moved) return err(`cannot unblock from status: ${task.status}`)
+    // A fresh round a person asked for is not held by the failure circuit the loop reads before it starts a lifecycle
+    // Task (lifecycleToStart), as task-update resets it (G3c1 fix pass); the repair budget counts repairs, not this
+    const fresh: Task = { ...moved, consecutiveFailures: 0 }
     return ok({ ...s, gates, tasks: recomputeReady(replace(s.tasks, fresh)) }, { gate: resolved })
   }
   const bind = BIND_PR_ANSWER.exec(a.resolution)

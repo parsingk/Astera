@@ -8,6 +8,7 @@ import {
   buildReviewSpecFile,
   launchPrompt,
   repairWorkerPrompt,
+  lifecycleRepairPrompt,
   knowledgeIn,
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
@@ -199,6 +200,64 @@ describe('buildSpecFile', () => {
       knowledge: { paths: ['knowledge/a.md'], more: 12 }
     })
     expect(out).toContain('12')
+  })
+})
+
+// GitHub lifecycle G3c1 (design §4.8): a lifecycle repair is told what GitHub said
+describe('buildSpecFile — a lifecycle repair', () => {
+  const ci = { configId: 'github:ci', name: 'GitHub CI', status: 'failed' as const, summary: 'test (test): not ok 1 - adds', externalUrl: 'https://x/run/1', outputTail: 'line 1\nnot ok 1 - adds' }
+  const repairOf = (cls: string) => ({
+    reason: 'check-failure' as const, repair: 1, maxFixAttempts: 3, checks: [ci],
+    github: {
+      pr: { number: 12, url: 'https://github.com/o/r/pull/12' }, head: 'c'.repeat(40),
+      failing: { check: 'test', class: cls, summary: 'test (test): not ok 1 - adds' },
+      earlier: [{ sha: 'a'.repeat(40), check: 'lint', class: 'lint' }]
+    }
+  })
+  const spec = (cls: string) => buildSpecFile({ title: 'GitHub', spec: 's', taskId: 'tsk_l', dispatchId: 'dsp_f', committing: true, repair: repairOf(cls) })
+
+  it('names the pull request, the pushed head, the failing check and its class, earlier failures, and says not to push', () => {
+    const s = spec('test')
+    expect(s).toContain('### GitHub')
+    expect(s).toContain('#12 https://github.com/o/r/pull/12')
+    expect(s).toContain('cccccc')
+    expect(s).toContain('test (class test)')
+    expect(s).toContain('aaaaaaa lint (class lint)')
+    expect(s).toMatch(/Do not push/)
+    expect(s).not.toMatch(/could not tell why/)
+  })
+
+  it('asks to diagnose first when Astera could not classify the failure', () => {
+    expect(spec('unknown')).toMatch(/could not tell why[\s\S]*caused by this Run/)
+  })
+
+  it('shows a GitHub check’s log excerpt as well as its summary', () => {
+    expect(spec('test')).toContain('not ok 1 - adds')
+    expect(spec('test')).toMatch(/Log excerpt:/)
+  })
+
+  it('every repair’s Rules forbid weakening CI', () => {
+    const plain = buildSpecFile({ title: 't', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', committing: false, repair: { reason: 'check-failure', repair: 1, maxFixAttempts: 3, checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] } })
+    expect(plain).toMatch(/CI workflows, required checks, workflow triggers or coverage thresholds/)
+  })
+
+  it('types a lifecycle repair into a live session with its own words, none that a launch forbids', () => {
+    const p = lifecycleRepairPrompt('C:/specs/x.md')
+    expect(p).toContain('C:/specs/x.md')
+    expect(p).not.toMatch(/["&|<>^%\r\n]/)
+    expect(p).not.toBe(repairWorkerPrompt('C:/specs/x.md'))
+    // G3c1 final review M1: a review's repair is not told its checks failed
+    expect(lifecycleRepairPrompt('C:/specs/x.md', 'review-failure')).toMatch(/its review/)
+    expect(lifecycleRepairPrompt('C:/specs/x.md', 'review-failure')).not.toMatch(/GitHub CI/)
+  })
+})
+
+// GitHub lifecycle G3c1: a lifecycle Task's reviewer reads the pull request's whole diff
+describe('buildReviewSpecFile — the pull request diff', () => {
+  const base = { title: 'GitHub', spec: 's', taskId: 'tsk_l', dispatchId: 'dsp_r', validated: true }
+  it('names the diff to review when it is given, and nothing when it is not', () => {
+    expect(buildReviewSpecFile({ ...base, diff: { base: 'b'.repeat(40), head: 'c'.repeat(40) } })).toContain(`git diff ${'b'.repeat(40)}..${'c'.repeat(40)}`)
+    expect(buildReviewSpecFile(base)).not.toContain('git diff')
   })
 })
 

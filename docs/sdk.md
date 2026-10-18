@@ -254,7 +254,8 @@ be made, `kind` `check-unavailable`, refuses any answer but `retry`, `skip-check
 `INVALID_ARGUMENTS`: `retry` runs the Task's checks again, `skip-check` goes on without that check this round, and
 `mark-failed` fails the Task; when that check is GitHub CI, `skip-check` is not offered. A question about a GitHub
 lifecycle round (`kind` `github-no-ci`, `github-ci-cap`, `github-external-head`, `github-pr-ambiguous`,
-`github-pr-closed`, `github-ci-outside` or `github-carry`) takes only the `options` it lists: `wait` waits again on
+`github-pr-closed`, `github-ci-outside` — also after a second failure Astera could not classify, or a repair that fixed
+nothing — or `github-carry`) takes only the `options` it lists: `wait` waits again on
 the same head, `no-ci` lets the round pass without CI, `continue` brings GitHub's commits in by fast-forward and
 starts the checks again, `retry` starts the round again, `pr-<n>` binds pull request n, and `mark-failed` fails the
 Task.

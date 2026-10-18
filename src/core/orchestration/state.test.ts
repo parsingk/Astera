@@ -52,6 +52,7 @@ import {
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
+import { lifecycleToStart } from './schedule'
 import type { RepairTarget } from './state'
 import { withLifecycleTask } from './lifecycleTask'
 import { outcomeOf } from './running'
@@ -4105,6 +4106,17 @@ describe('GitHub Gates (G3b2)', () => {
     expect(taskOf(a.state, lifecycleId).ciWait).toBeUndefined()
   })
 
+  // G3c1 fix pass (self-review): a fresh round a person asked for is not held by the failure circuit, which the
+  // dispatch loop reads before it starts a lifecycle Task (lifecycleToStart)
+  it('a fresh round a person asks for starts however many rounds failed before', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId, 'github-carry', ['retry', 'mark-failed'])
+    const worn = { ...r.state, tasks: r.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, consecutiveFailures: FAILURE_LIMIT } : t)) }
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(worn, { gateId: r.value.id, resolution: 'retry' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId)).toMatchObject({ status: 'ready', consecutiveFailures: 0 })
+    expect(lifecycleToStart(a.state)).toEqual([{ runId: a.state.runs[0].id, taskId: lifecycleId }])
+  })
+
   it('wait on a Task whose wait is gone starts a fresh round', () => {
     const { s, lifecycleId } = waiting()
     const r = open(s, lifecycleId)
@@ -4176,6 +4188,45 @@ describe('settleLifecycleCi', () => {
     expect(r.value.checks?.at(-1)).toMatchObject({ configId: 'github:ci', status: 'failed', summary: 'test (test): not ok 1 - adds' })
     expect(r.value.ciWait).toBeUndefined()
     expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-blocked')
+  })
+
+  // G3c1 (design §3.4): the first repair of a lifecycle Task has no attempt to retry
+  it('a failing CI with a repair target opens the first repair in the Run root, with no attempt before it', () => {
+    const { s, lifecycleId } = handedOver()
+    const target = { kind: 'fresh' as const, cwd: 'D:/wt/run', provider: 'claude' as const, accountId: 'acc1' }
+    const r = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('failed'), repair: target }, LATER) as never)
+    expect(r.value.status).toBe('dispatched')
+    const d = r.state.dispatches.find((x) => x.taskId === lifecycleId)!
+    expect(d).toMatchObject({ cwd: 'D:/wt/run', provider: 'claude', accountId: 'acc1', repair: 'check-failure' })
+    expect(d.retryOf).toBeUndefined()
+  })
+
+  // G3c1 final review I2: a lifecycle repair that says it could not fix the failure asks a person, as a cause outside the
+  // code does (design §4.6), instead of ending the Run
+  it('a lifecycle repair reported failed asks a person whether to try again or fail, and does not end the Task', () => {
+    const { s, lifecycleId } = handedOver()
+    const target = { kind: 'fresh' as const, cwd: 'D:/wt/run', provider: 'claude' as const, accountId: 'acc1' }
+    const repairing = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('failed'), repair: target }, LATER) as never).state
+    const d = repairing.dispatches.find((x) => x.taskId === lifecycleId && x.repair)!
+    const r = unwrap<string>(applyWorkerDone(repairing, { taskId: lifecycleId, dispatchId: d.id, outcome: 'failed', subject: 's', body: 'not this change: the runner lost its network', lang: 'en' }, LATER) as never)
+    const task = r.state.tasks.find((t) => t.id === lifecycleId)!
+    expect(task.status).toBe('blocked')
+    const gate = r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')!
+    expect(gate).toMatchObject({ kind: 'github-ci-outside', options: ['retry', 'mark-failed'] })
+    expect(gate.question).toContain('the runner lost its network')
+  })
+
+  // G3c1 (design §4.6): a CI failure Astera could not classify is counted on the lifecycle Task
+  it('counts a failed GitHub CI that Astera could not classify, and nothing else', () => {
+    const target = { kind: 'fresh' as const, cwd: 'D:/wt/run', provider: 'claude' as const, accountId: 'acc1' }
+    const count = (result: CheckResult, ciClass?: string) => {
+      const { s, lifecycleId } = handedOver()
+      return unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result, repair: target, ...(ciClass ? { ciClass } : {}) }, LATER) as never).value.ciUnknowns
+    }
+    expect(count(ci('failed'), 'unknown')).toBe(1)
+    expect(count(ci('failed'), 'test')).toBeUndefined()
+    expect(count(ci('failed'))).toBeUndefined()
+    expect(count(ci('passed'), 'unknown')).toBeUndefined()
   })
 
   // G3b1 final review I1: a verdict read for an earlier round does not settle the round after it

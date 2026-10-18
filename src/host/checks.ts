@@ -13,8 +13,8 @@
 //   - the saved configurations: run-configs.json, read-only;
 //   - the accounts: accounts.json, read each call, and the one login rule (isLoggedIn, C8);
 //   - the language: app-settings.json, read by lang(), kept for the synchronous langNow() (R13, B3);
-//   - the journal: none — firstCheckpointHead is null and the suspicious files fall back to the Task's
-//     own filesModified (R12).
+//   - the journal: none — firstCheckpointHead is null and an ordinary Task's suspicious files fall back to its
+//     own filesModified (R12); a lifecycle Task's are measured from its Run's base with git (GitHub lifecycle G3c1).
 //
 // **Imports nothing from electron, src/main or src/renderer**: this runs on a plain node.exe in the
 // packaged app.
@@ -26,7 +26,7 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { isLang, t, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import type { OrchServerDeps } from '../core/orchestration/command'
-import type { RepairTarget } from '../core/orchestration/state'
+import type { OrchState, RepairTarget } from '../core/orchestration/state'
 import type { CheckResult } from '../core/orchestration/types'
 import { knowledgeIn } from '../core/orchestration/exec/coordinator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
@@ -43,6 +43,8 @@ import { readStoredRunConfigs } from '../core/run/runConfigsFile'
 import { RunManager } from '../core/run/runManager'
 import { treeKillCommand } from '../core/run/kill'
 import { isSamePath } from '../core/files/tree'
+import { changedNames } from '../core/git/changedNames'
+import { git as runGit } from '../core/worktrees/git'
 import { readFileRetrying } from '../core/renameRetry'
 import { settingsObjectOf } from '../core/settings/settingsObject'
 import type { Account } from '../core/types'
@@ -54,7 +56,7 @@ export interface HostChecks {
   startReview(a: { taskId: string }): void
   startRepair(a: { dispatchId: string }): void
   repairTargetFor(taskId: string): RepairTarget | null
-  repairOnce(a: { taskId: string }): Promise<{ ok: true } | { ok: false; error: string }>
+  repairOnce(a: { taskId: string; from?: OrchState }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Reads app-settings.json now, and refreshes langNow's value (R13). */
   lang(): Promise<Lang>
   /** The value lang() last read, synchronously, for the moved bodies that take a sync lang (B3).
@@ -82,7 +84,7 @@ export interface HostChecks {
   checking(taskId: string): boolean
   resumeSweep(why: string): void
   /** A lifecycle round handed over at github:ci, settled with CI's result (GitHub lifecycle G3b1): the watch's settle. */
-  settleHandedOff(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
+  settleHandedOff(a: { taskId: string; result: CheckResult; since?: string; ciClass?: string }): Promise<void>
 }
 
 /** How long stopForeignValidations waits for a killed run to exit. taskkill is asynchronous, and a
@@ -271,9 +273,10 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     isAlive,
     startReview: (a) => reviewBody(a),
     startRepair: (a) => startRepairOnce(a),
-    // R12: the continuity journal is the app's (D8), so there is no diff base here.
+    // R12: the continuity journal is the app's (D8), so there is no attempt's diff base here. A lifecycle Task's base is
+    // its Run's, in the state (GitHub lifecycle G3c1), and git reads the diff from it.
     firstCheckpointHead: () => null,
-    diffNames: async () => null,
+    diffNames: (cwd, fromHead) => changedNames((args, o) => runGit(args, o), cwd, fromHead),
     // The Host's plugin runtime, through its deps (plugin Phase 5 C8)
     pluginCheck: (plugin, input) =>
       d.deps().completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('this Host runs no plugin checks') }),
