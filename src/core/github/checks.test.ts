@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { failedLogTail, parsePrChecks, prChecksArgs, readPrChecks, rerunFailed, runIdOf } from './checks'
+import { ciRunHead, failedLogTail, parsePrChecks, prChecksArgs, readPrChecks, rerunFailed, runIdOf } from './checks'
 import type { GhResult, GhRunner } from './gh'
 
 // fixtures/pr-checks.json: the first two rows of
@@ -181,6 +181,27 @@ describe('failedLogTail', () => {
       1
     )
     expect(r).toMatchObject({ ok: false, kind: 'not-found' })
+  })
+})
+
+// GitHub lifecycle G4 (measured on the sandbox 2026-10-19: `gh run view <id> --json attempt,status,conclusion,headSha`)
+describe('ciRunHead', () => {
+  it('reads the commit a CI run ran on and its attempt, in the given repository', async () => {
+    const calls: string[][] = []
+    const r = await ciRunHead(
+      answering(result({ ok: true, stdout: JSON.stringify({ attempt: 2, headSha: '9ecb7effb52d478506d719037f79892b714e8cbb', status: 'completed' }) }), calls),
+      'd',
+      39099662373,
+      { host: 'github.com', owner: 'o', name: 'r' }
+    )
+    expect(calls).toEqual([['run', 'view', '39099662373', '--json', 'headSha,attempt,status', '--repo', 'o/r']])
+    expect(r).toEqual({ ok: true, headSha: '9ecb7effb52d478506d719037f79892b714e8cbb', attempt: 2, status: 'completed' })
+  })
+
+  it('an answer that is not a run is a failed read; gh failing is a sentence', async () => {
+    expect(await ciRunHead(answering(result({ ok: true, stdout: '{"attempt":"x"}' })), 'd', 1)).toMatchObject({ ok: false, kind: 'other' })
+    expect(await ciRunHead(answering(result({ ok: true, stdout: 'nope' })), 'd', 1)).toMatchObject({ ok: false, kind: 'other' })
+    expect(await ciRunHead(answering(result({ stderr: 'HTTP 404: Not Found' })), 'd', 1)).toMatchObject({ ok: false })
   })
 })
 

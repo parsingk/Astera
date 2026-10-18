@@ -413,9 +413,11 @@ const SESSION = {
   },
   'github-ci-rerun': {
     summary: "rerun the failed jobs of a CI run, through the Host's gh (the MCP server's retry_ci)",
-    detail: 'MCP clients need the "Let MCP clients act on GitHub" setting.',
+    detail:
+      'Exactly one of --run or --project. Through a Run, only a CI run of the head of its pull request (the one a GitHub lifecycle Run is bound to, in its repository, or its branch\'s) is rerun; another commit\'s is a 409, and a lifecycle Run\'s wait holds for the new attempt. MCP clients need the "Let MCP clients act on GitHub" setting.',
     flags: [
-      req('project', '<projectId>', 'the project whose repository the CI run is in (from `projects list`)'),
+      { name: 'run', value: '<runId>', about: "the Run whose pull request's head the CI run must have run on" },
+      { name: 'project', value: '<projectId>', about: 'the project whose repository the CI run is in (from `projects list`)' },
       req('run-id', '<ciRunId>', "the CI run to rerun (a check's runId)")
     ]
   },

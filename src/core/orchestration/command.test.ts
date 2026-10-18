@@ -9212,12 +9212,65 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(gh.calls).toEqual([{ args: ['run', 'rerun', '77', '--failed'], cwd: projectPath }])
     })
 
-    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or a --run, is 400', async () => {
+    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or both targets, is 400', async () => {
       const { deps, gh, projectId } = setup({ 'run rerun 77 --failed': { ok: false, stderr: 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/77/rerun-failed-jobs)' } })
       expect((await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).status).toBe(404)
-      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1', runId: 77 }])
+      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1' }, { run: 'r1', project: projectId, runId: 77 }])
         expect((await call(deps, 'github-ci-rerun', args, '')).status, JSON.stringify(args)).toBe(400)
       expect(gh.calls).toHaveLength(1)
+    })
+
+    // GitHub lifecycle G4 (design §8 Actions, closes inventory I-§12.4): through a Run, only a CI run of its pull request's
+    // head is rerun, in the bound repository, and the Run keeps the rerun so its wait holds for the new attempt
+    describe('github-ci-rerun --run (G4)', () => {
+      const HEAD = '9ecb7effb52d478506d719037f79892b714e8cbb'
+      const OLD = '1'.repeat(40)
+      const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+      const PR_HEAD = 'pr view 34 --json headRefOid,state'
+      const RUN_HEAD = (id: number) => `run view ${id} --json headSha,attempt,status`
+      const runOn = (sha: string, attempt = 1) => ({ stdout: JSON.stringify({ headSha: sha, attempt, status: 'completed' }) })
+
+      it('reruns a CI run of the bound pull request’s head in the bound repository, and the Run keeps it', async () => {
+        const { deps, gh } = setup(
+          {
+            [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+            [`${RUN_HEAD(77)} --repo o/r`]: runOn(HEAD, 2),
+            'run rerun 77 --failed --repo o/r': {}
+          },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 34 } })
+        expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${PR_HEAD} --repo o/r`, `${RUN_HEAD(77)} --repo o/r`, 'run rerun 77 --failed --repo o/r'])
+        expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 77, attempt: 2, sha: HEAD, by: 'person', at: NOW }])
+      })
+
+      it('refuses a CI run of another commit before any rerun, naming both', async () => {
+        const { deps, gh } = setup(
+          { [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) }, [`${RUN_HEAD(78)} --repo o/r`]: runOn(OLD) },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 78 }, '')).toEqual({
+          status: 409,
+          body: { error: 'CI run 78 ran on 1111111, not on the head of pull request #34 (9ecb7ef)' }
+        })
+        expect(gh.calls.some((c) => c.args[1] === 'rerun')).toBe(false)
+        expect(deps.getState().runs[0].githubState?.reruns).toBeUndefined()
+      })
+
+      it('a Run not bound yet uses its branch’s pull request; a branch with none is a conflict', async () => {
+        const list = (rows: unknown[]) => ({ stdout: JSON.stringify(rows) })
+        const row = { number: 35, title: 't', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/35', headRefName: 'u/a', statusCheckRollup: [] }
+        const { deps, gh } = setup({
+          [PR_LIST]: list([row]),
+          'pr view 35 --json headRefOid,state': { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+          [RUN_HEAD(77)]: runOn(HEAD),
+          'run rerun 77 --failed': {}
+        })
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 35 } })
+        expect(gh.calls.at(-1)?.args).toEqual(['run', 'rerun', '77', '--failed'])
+        const none = setup({ [PR_LIST]: list([]) })
+        expect((await call(none.deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).status).toBe(409)
+      })
     })
 
     const ISSUE_API = 'api repos/{owner}/{repo}/issues/5'

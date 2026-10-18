@@ -107,6 +107,28 @@ export async function failedLogTail(
   return { ok: true, text: cutTail(r.stdout, FAILED_LOG_MAX), cut: r.stdout.length > FAILED_LOG_MAX }
 }
 
+/** The commit an Actions run ran on, its attempt and status, in `repo` or in the repository at `cwd` (GitHub lifecycle
+ *  G4; measured on the sandbox 2026-10-19). An answer that is not one is a failed read. */
+export async function ciRunHead(
+  run: GhRunner,
+  cwd: string,
+  runId: number,
+  repo?: GitHubRepo
+): Promise<{ ok: true; headSha: string; attempt: number; status: string } | GhFailed> {
+  const r = await run(['run', 'view', String(runId), '--json', 'headSha,attempt,status', ...(repo ? ['--repo', ghRepoArg(repo)] : [])], cwd)
+  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  let v: unknown
+  try {
+    v = JSON.parse(r.stdout)
+  } catch {
+    v = null
+  }
+  const o = v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  if (typeof o.headSha !== 'string' || typeof o.attempt !== 'number' || typeof o.status !== 'string')
+    return { ok: false, kind: 'other', message: `gh run view ${runId} answered with something that is not a CI run` }
+  return { ok: true, headSha: o.headSha, attempt: o.attempt, status: o.status }
+}
+
 /** gh's words for a rerun of a run that is going again (measured on the sandbox, 2026-10-19). */
 const RUN_ALREADY_RUNNING = /This workflow is already running/i
 

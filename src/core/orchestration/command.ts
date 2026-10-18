@@ -119,10 +119,10 @@ import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
-import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
+import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding, type GitHubRepo } from '../github/remote'
 import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
-import { prByNumber, prForBranch } from '../github/prs'
+import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
@@ -4942,13 +4942,40 @@ export async function handleCommand(
       return { status: refused.status, body: { ...(refused.body as object), pushed: made.pushed } }
     }
     case 'github-ci-rerun': {
-      if (args.run !== undefined) return bad('--run does not go with github-ci-rerun: give --project')
       const t = githubTarget(deps, s, args)
       if ('error' in t) return t.error
       const runId = posInt(args.runId)
       if (runId === null) return bad("--run-id is required: the CI run id (a positive integer, from a check's runId)")
-      const r = await rerunFailed(t.gh, t.cwd, runId)
-      return r.ok ? okBody({ runId, rerun: true }) : ghRefusal(r)
+      if (!('run' in t)) {
+        const r = await rerunFailed(t.gh, t.cwd, runId)
+        return r.ok ? okBody({ runId, rerun: true }) : ghRefusal(r)
+      }
+      // Through a Run, only a CI run of its pull request's head (GitHub lifecycle G4, design §8 Actions, closes inventory
+      // I-§12.4): the pull request it is bound to, in the bound repository, or its branch's
+      const binding = t.run.githubState?.binding
+      const repo = binding ? (repoOfBinding(binding) ?? undefined) : undefined
+      let pr: number
+      if (binding) pr = binding.number
+      else {
+        const found = await prForBranch(t.gh, t.cwd, t.branch)
+        if (!found.ok) return ghRefusal(found)
+        if (!found.pr) return conflict(`no pull request for ${t.branch}`)
+        pr = found.pr.number
+      }
+      const head = await prHead(t.gh, t.cwd, pr, repo)
+      if (!head.ok) return ghRefusal(head)
+      const ci = await ciRunHead(t.gh, t.cwd, runId, repo)
+      if (!ci.ok) return ghRefusal(ci)
+      if (ci.headSha !== head.headSha)
+        return conflict(`CI run ${runId} ran on ${ci.headSha.slice(0, 7)}, not on the head of pull request #${pr} (${head.headSha.slice(0, 7)})`)
+      const r = await rerunFailed(t.gh, t.cwd, runId, repo)
+      if (!r.ok) return ghRefusal(r)
+      // A bound Run keeps the rerun, so a round waiting on that head waits for the new attempt (G4)
+      if (binding) {
+        const recorded = recordRunGitHub(deps.getState(), t.run.id, { rerun: { ciRunId: runId, attempt: ci.attempt, sha: ci.headSha, by: 'person' } }, now)
+        if (recorded.ok) await deps.setState(recorded.state)
+      }
+      return okBody({ runId, rerun: true, pr })
     }
     /**
      * An issue becomes a Job, as the GitHub job source makes one (plugin Phase 4 J13): the objective the job sources'

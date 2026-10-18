@@ -132,6 +132,15 @@ export function sendTextRefusal(text: string): string | null {
   return null
 }
 
+/** Why retry_ci's target is refused before the Host is asked, or null: a Run or a project, one of them (G4). */
+export function rerunTargetRefusal(input: Record<string, unknown>): string | null {
+  const run = input.runId !== undefined
+  const project = input.projectId !== undefined
+  if (run && project) return 'give either runId or projectId, not both'
+  if (!run && !project) return 'runId or projectId is required'
+  return null
+}
+
 /** Why a GitHub read's target is refused before the Host is asked, or null: the Host's github-pr and
  *  github-ci take exactly one of a Run, or a project with `second` (branch for github-pr, pr for github-ci). */
 export function githubTargetRefusal(input: Record<string, unknown>, second: 'branch' | 'pr'): string | null {
@@ -630,9 +639,14 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Rerun failed CI',
     readOnly: false,
     cmd: 'github-ci-rerun',
-    description: `Rerun the failed jobs of a GitHub Actions run (ciRunId, from get_ci's checks). It does not wait for the rerun: poll get_ci. ${GITHUB_WRITE}`,
-    inputSchema: { projectId: id, ciRunId: z.number().int().min(1).describe("The Actions run id, from get_ci's checks."), requestId },
-    args: (i) => ({ project: i.projectId, runId: i.ciRunId })
+    description: `Rerun the failed jobs of a GitHub Actions run (ciRunId, from get_ci's checks), of a Run's pull request (runId) or of a project's repository (projectId). Through a Run, only a CI run of the head of its pull request (the one Astera bound, in that repository, or its branch's) is rerun; any other is refused with CONFLICT, and a GitHub lifecycle Run's wait holds for the new attempt. It does not wait for the rerun: poll get_ci. ${GITHUB_WRITE}`,
+    inputSchema: {
+      runId: id.optional().describe('A Run with a branch of its own: the CI run must be of its pull request’s head.'),
+      projectId: id.optional().describe('A project from list_projects; give it instead of runId.'),
+      ciRunId: z.number().int().min(1).describe("The Actions run id, from get_ci's checks."),
+      requestId
+    },
+    args: (i) => (i.runId !== undefined ? { run: i.runId, runId: i.ciRunId } : { project: i.projectId, runId: i.ciRunId })
   },
   {
     name: 'create_job_from_issue',
