@@ -107,8 +107,18 @@ export async function failedLogTail(
   return { ok: true, text: cutTail(r.stdout, FAILED_LOG_MAX), cut: r.stdout.length > FAILED_LOG_MAX }
 }
 
-/** Reruns the failed jobs of Actions run `runId`. */
-export async function rerunFailed(run: GhRunner, cwd: string, runId: number): Promise<{ ok: true } | GhFailed> {
-  const r = await run(['run', 'rerun', String(runId), '--failed'], cwd)
-  return r.ok ? { ok: true } : { ok: false, ...ghFailureSentence(r) }
+/** gh's words for a rerun of a run that is going again (measured on the sandbox, 2026-10-19). */
+const RUN_ALREADY_RUNNING = /This workflow is already running/i
+
+/** Reruns the failed jobs of Actions run `runId` in `repo`, or in the repository at `cwd`. `running`: the run is going
+ *  again already, so its attempt moved past the one that failed (GitHub lifecycle L16). */
+export async function rerunFailed(
+  run: GhRunner,
+  cwd: string,
+  runId: number,
+  repo?: GitHubRepo
+): Promise<{ ok: true } | (GhFailed & { running?: true })> {
+  const r = await run(['run', 'rerun', String(runId), '--failed', ...(repo ? ['--repo', ghRepoArg(repo)] : [])], cwd)
+  if (r.ok) return { ok: true }
+  return { ok: false, ...ghFailureSentence(r), ...(RUN_ALREADY_RUNNING.test(r.stderr) ? { running: true as const } : {}) }
 }

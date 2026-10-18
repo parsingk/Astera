@@ -192,6 +192,21 @@ describe('rerunFailed', () => {
     expect(r).toEqual({ ok: true })
   })
 
+  // GitHub lifecycle G4: the Run's repository, not whatever gh resolves from the folder's remotes
+  it('names the repository when given one', async () => {
+    const calls: string[][] = []
+    await rerunFailed(answering(result({ ok: true }), calls), 'd', 42, { host: 'github.com', owner: 'o', name: 'r' })
+    expect(calls).toEqual([['run', 'rerun', '42', '--failed', '--repo', 'o/r']])
+  })
+
+  // measured on the sandbox 2026-10-19: a rerun of a run that is still going
+  it('says when the run is already running again: its attempt moved', async () => {
+    const r = await rerunFailed(answering(result({ stderr: 'run 39099662373 cannot be rerun; This workflow is already running' })), 'd', 42)
+    expect(r).toMatchObject({ ok: false, running: true })
+    const done = await rerunFailed(answering(result({ stderr: 'run 39100211754 cannot be rerun; This workflow run cannot be retried' })), 'd', 42)
+    expect(done).not.toHaveProperty('running')
+  })
+
   it('a failure maps to a sentence', async () => {
     const r = await rerunFailed(answering(result({ stderr: 'HTTP 403: API rate limit exceeded for user ID 1' })), 'd', 42)
     expect(r).toEqual({

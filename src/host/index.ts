@@ -89,6 +89,7 @@ import { readPrState } from '../core/github/prState'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
 import { readIssue } from '../core/github/issue'
 import { readAnnotations, readJobLog } from '../core/github/evidence'
+import { rerunFailed } from '../core/github/checks'
 import { normalizeBaseForGh } from '../core/worktrees/push'
 import { readChanges, readFileDiff } from '../core/git/changes'
 import { createMcpHttpSupervisor } from './mcpHttp'
@@ -903,6 +904,8 @@ async function main(): Promise<void> {
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
         openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
         ancestry: (cwd, head, sha) => ancestry(realGit, cwd, head, sha),
+        // G4 (L9): a CI failure a rerun can cure is rerun in the Run's repository, within the Job's budget
+        rerunCi: (cwd, repo, id) => rerunFailed(defaultGhRunner, cwd, id, repo),
         lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)
       })

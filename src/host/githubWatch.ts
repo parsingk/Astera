@@ -1,6 +1,7 @@
-// The Host's watch over the pull requests of GitHub lifecycle Runs (design 2026-10-17 §6.2), read-only in G1: it binds
-// the one open PR of a Run's branch, reads that PR's head and checks, judges CI under the Job's policy, and records
-// what it read through `runs-github-record`. Nothing here writes to GitHub, and nothing here throws.
+// The Host's watch over the pull requests of GitHub lifecycle Runs (design 2026-10-17 §6.2): it binds the one open PR of
+// a Run's branch, reads that PR's head and checks, judges CI under the Job's policy, and records what it read through
+// `runs-github-record`. Its one write to GitHub is the rerun of a CI run that failed for a reason a rerun can cure
+// (G4, L9), within the Job's budget. Nothing here throws.
 //
 // One tick every TICK_MS reads the Runs that are due. Reads are spaced by what they found: a CI still running is read
 // again in PENDING_MS, a settled one in SETTLED_MS, a Run with no PR yet in UNBOUND_MS, each jittered by ±JITTER so
@@ -13,7 +14,18 @@ import { t as translate, type Lang } from '../core/i18n'
 import { openLifecycleTaskOf } from '../core/orchestration/lifecycleTask'
 import type { GhFailed } from '../core/github/gh'
 import { issueBodyHash, type GhIssue } from '../core/github/issue'
-import { EVIDENCE_TRIES, GITHUB_CI_CHECK, type CiVerdict, type GitHubBinding, type GitHubCiCheck, type GitHubCiFailure, type GitHubLifecyclePolicy, type RunGitHubState } from '../core/github/lifecycle'
+import {
+  EVIDENCE_TRIES,
+  GITHUB_CI_CHECK,
+  GITHUB_LIFECYCLE_DEFAULTS,
+  type CiFailureClass,
+  type CiVerdict,
+  type GitHubBinding,
+  type GitHubCiCheck,
+  type GitHubCiFailure,
+  type GitHubLifecyclePolicy,
+  type RunGitHubState
+} from '../core/github/lifecycle'
 import { evaluateCi } from '../core/github/ciVerdict'
 import { ciCheckResult } from '../core/github/ciResult'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
@@ -45,6 +57,10 @@ export const NO_CI_GRACE_MS = 180_000
 const READS_AT_ONCE = 2
 /** gh's words for a job log asked for while its Actions run still goes (measured on the sandbox, 2026-10-18). */
 const STILL_RUNNING = /is still in progress; logs will be available when it is complete/i
+/** The causes outside the code a rerun can cure (design §4.6, L9): the Host reruns them within the Job's budget. */
+const RERUNNABLE: ReadonlySet<CiFailureClass> = new Set(['infrastructure', 'environment', 'timeout'])
+/** A rerun that failed for these is tried again on the next read rather than asked about. */
+const TRANSIENT_FAILURES: ReadonlySet<string> = new Set(['network', 'rate-limit'])
 
 export interface WatchedWorktree {
   repoPath: string
@@ -72,6 +88,8 @@ export interface GithubWatchDeps {
   settle?(a: { taskId: string; result: CheckResult; since?: string; ciClass?: string }): Promise<void>
   /** `lifecycle-gate` (G3b2): a GitHub question about the round `since` names, which keeps the round's wait. */
   openGitHubGate?(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<{ status: number; body: unknown }>
+  /** `gh run rerun <id> --failed --repo` (G4): the watch's one write to GitHub. */
+  rerunCi?(cwd: string, repo: GitHubRepo, ciRunId: number): Promise<{ ok: true } | (GhFailed & { running?: true })>
   /** Whether the PR's head is in the history of the head Astera pushed, read in the Run root (G3b2): an earlier head of
    *  Astera's own is GitHub catching up; one not in it is someone else's. Absent: a head that differs only waits. */
   ancestry?(cwd: string, head: string, sha: string): Promise<'ancestor' | 'not' | 'unknown'>
@@ -113,6 +131,11 @@ interface Round {
   /** How many CI failures of this lifecycle Task Astera could not classify (G3c1). */
   unknowns: number
 }
+
+/** A rerun asked on this head that a read has not shown yet: the read is of the attempt that failed, or of none of its
+ *  run at all (measured, G4), so it decides nothing. A rerun has shown once its run reads a later attempt. */
+const rerunUnshown = (gs: RunGitHubState | undefined, sha: string, checks: GitHubCiCheck[]): boolean =>
+  (gs?.reruns ?? []).some((r) => r.sha === sha && !checks.some((c) => c.ciRunId === r.ciRunId && (c.ciRunAttempt ?? 1) > r.attempt))
 
 /** Each wait is decided once: a person's "wait again" begins another (G3b2). */
 const decisionOf = (round: Round): string => `${round.taskId}@${round.since}@${round.waitingSince}`
@@ -384,7 +407,9 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const round = t.round
     // A waiting round with no check yet is read soon: its grace runs out in minutes (G3b2)
     const awaited = round?.sha !== undefined && read.checks.length === 0
-    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable || awaited
+    // A rerun of the waited head that has not shown yet is seconds away (G4)
+    const reran = round?.sha !== undefined && rerunUnshown(t.state, round.sha, read.checks)
+    const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable || awaited || reran
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
@@ -404,6 +429,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     }
     // CI on the head the Host pushed settles the round, and only that head (design §4.4)
     if (read.commitSha !== sha) return
+    if (reran) return
     if (read.checks.length === 0) {
       // An Actions suite with no check run yet is a workflow starting or rerunning, not a head without CI (G4, measured)
       if (read.suites.some((s) => !s.completed)) return
@@ -412,13 +438,22 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       if (now() - Date.parse(round.waitingSince) < NO_CI_GRACE_MS) return
       return ask(t.runId, round, 'github-no-ci', say('jobs.gate.github.q.noCi', { sha: short(sha), minutes: NO_CI_GRACE_MS / 60_000, pr }), ['wait', 'no-ci', 'mark-failed'])
     }
-    await settleRound(t.runId, round, ev.verdict, failure, binding)
+    await settleRound(t, round, ev.verdict, failure, binding, repo, ev.failing)
   }
 
   /** A round's verdict, once (G3b1, design §4.6): a pass or a code failure settles it through settleHandedOff; a cause
-   *  outside the code asks a person (G3b2's Gate, G4's rerun); a failure whose evidence a later read can still complete
-   *  waits for it (G2 final review I1). */
-  const settleRound = async (runId: string, round: Round, verdict: CiVerdict, failure: GitHubCiFailure | undefined, binding: GitHubBinding): Promise<void> => {
+   *  outside the code a rerun can cure is rerun (G4), and any other asks a person (G3b2's Gate); a failure whose evidence
+   *  a later read can still complete waits for it (G2 final review I1). */
+  const settleRound = async (
+    t: Target,
+    round: Round,
+    verdict: CiVerdict,
+    failure: GitHubCiFailure | undefined,
+    binding: GitHubBinding,
+    repo: GitHubRepo,
+    failing: GitHubCiCheck | undefined
+  ): Promise<void> => {
+    const runId = t.runId
     const key = decisionOf(round)
     if (decided.get(runId) === key) return
     if (verdict === 'failed' && failure?.incomplete && !(failure.incomplete.reason === 'read-failed' && failure.incomplete.tries >= EVIDENCE_TRIES)) return
@@ -432,7 +467,38 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       return
     }
     if (verdict !== 'failed' || !failure) return
+    // Only an Actions run can be rerun: a commit status or another app's check has none behind it (L9)
+    if (RERUNNABLE.has(failure.class) && failing?.ciRunId !== undefined && d.rerunCi) return rerunOrAsk(t, round, failure, failing, failing.ciRunId, repo)
     await ask(runId, round, 'github-ci-outside', say('jobs.gate.github.q.outside', { class: failure.class, summary: failure.summary }), ['wait', 'mark-failed'])
+  }
+
+  /** L9 (design §4.6): reruns the failed jobs of the failing check's Actions run while the Job reruns by itself and the
+   *  Host's own reruns of this Run are under the budget, and records the attempt it reran so the next reads wait for a
+   *  later one. A person's reruns are not counted. Past the budget, with reruns off, or a rerun GitHub refuses, it asks:
+   *  rerun, wait (the person reruns it on GitHub) or mark failed. gh saying the run already goes again is the attempt
+   *  having moved (L16): it waits. A rerun the network lost is tried again on the next read. */
+  const rerunOrAsk = async (t: Target, round: Round, failure: GitHubCiFailure, failing: GitHubCiCheck, ciRunId: number, repo: GitHubRepo): Promise<void> => {
+    const options = ['rerun', 'wait', 'mark-failed']
+    const facts = { class: failure.class, summary: failure.summary }
+    if (!(t.policy.autoRerunInfrastructureFailures ?? GITHUB_LIFECYCLE_DEFAULTS.autoRerunInfrastructureFailures))
+      return ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunOff', facts), options)
+    const own = (t.state?.reruns ?? []).filter((r) => r.by === 'astera').length
+    if (own >= (t.policy.maxInfrastructureReruns ?? GITHUB_LIFECYCLE_DEFAULTS.maxInfrastructureReruns))
+      return ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunSpent', { ...facts, reruns: own }), options)
+    const r = await d.rerunCi!(t.cwd, repo, ciRunId)
+    if (r.ok) {
+      nextAt.set(t.runId, now() + spaced(PENDING_MS))
+      await record(t.runId, { rerun: { ciRunId, attempt: failing.ciRunAttempt ?? 1, sha: round.sha!, check: failing.name, by: 'astera' } })
+      return
+    }
+    if (r.running) return
+    noteRateLimit(r.kind)
+    if (TRANSIENT_FAILURES.has(r.kind)) {
+      if (r.kind !== 'rate-limit') nextAt.set(t.runId, now() + spaced(PENDING_MS))
+      d.log(`github watch: run ${t.runId}: the rerun of CI run ${ciRunId} failed, tried again on the next read: ${r.message}`)
+      return
+    }
+    await ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunFailed', { ...facts, reason: r.message }), options)
   }
 
   /** A person chose to go on without CI, read on a head with no check at all (G3b2, design §4.4 grace, S10): the round
