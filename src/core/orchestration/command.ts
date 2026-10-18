@@ -727,6 +727,9 @@ const refused = (r: { error: string; missing?: true }): Reply =>
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
 
+/** A lifecycle Task is carried by Astera (GitHub lifecycle §3.3): no worker is started on it by request. */
+const LIFECYCLE_NO_WORKER = 'Astera carries this Task through GitHub itself; it has no worker'
+
 const CHECK_STATUSES: readonly string[] = ['passed', 'failed', 'timed-out', 'not-run', 'error']
 /** A validation round's results as a validator sends them (lifecycle-ci-begin): each names its check and a status. */
 const checkResultsOk = (v: unknown): v is CheckResult[] =>
@@ -2060,6 +2063,8 @@ export async function handleCommand(
         if (validate === null) return bad('--validate needs a value: run configuration ids')
         const ids = validate.split(',').map((x) => x.trim())
         if (ids.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        // Refused before the configurations are looked up, as task-create refuses it (G3a final review M5)
+        if (ids.includes(GITHUB_CI_CHECK)) return bad("github:ci is the GitHub lifecycle's own check; Astera adds it")
         const owner = job !== null ? s.jobs.find((j) => j.id === job) : jobOf(s, s.runs.find((r) => r.id === run)!)
         if (!owner) return notFound(`unknown job for run: ${String(run)}`)
         // A plugin's check (plugin Phase 5 C7): its plugin must be here, offer checks and be enabled. It is no run
@@ -3049,7 +3054,8 @@ export async function handleCommand(
       // While its lifecycle Task is open the Run is being carried through GitHub, and the PR head is what the Tasks made:
       // nothing is added but the integration Task the dispatch loop makes for the lifecycle Task (GitHub lifecycle L20).
       const carrying = openLifecycleTaskOf(latest, runId)
-      if (carrying && str(args.parent) !== carrying.id)
+      const loopsOwn = caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER
+      if (carrying && !(loopsOwn && str(args.parent) === carrying.id))
         return conflict('This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends')
       return commit(
         createTask(
@@ -3096,6 +3102,7 @@ export async function handleCommand(
       if (!id) return bad('--id is required: a task id from `tasks list`')
       const task = s.tasks.find((t) => t.id === id)
       if (!task) return notFound(`unknown task: ${id}`)
+      if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
       const run = task.runId === undefined ? undefined : s.runs.find((r) => r.id === task.runId)
       if (!run)
         return conflict(
@@ -3230,8 +3237,10 @@ export async function handleCommand(
         return bad(
           'this task has not satisfied its completion policy — pass --reason to record why it is being completed anyway'
         )
+      // A lifecycle round handed to the Host is its validating stretch's alone, past the table too (G3a final review I1)
+      const { ciWait: _handedOver, ...kept } = task
       const nextTask: Task = {
-        ...task,
+        ...(status === 'validating' ? task : kept),
         status,
         updatedAt: now,
         ...(override && reason ? { completionOverride: { reason, at: now } } : {}),
@@ -3332,6 +3341,8 @@ export async function handleCommand(
       // structurally impossible: if openDispatch is rejected the coordinator is never called at all.
       const task = s.tasks.find((t) => t.id === taskId)
       if (!task) return notFound(`unknown task: ${taskId}`)
+      // Its repairs are Astera's (G3c), through the repair path, never this command (G3a final review)
+      if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
       // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
       // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·

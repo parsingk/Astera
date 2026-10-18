@@ -112,8 +112,9 @@ export class TaskValidator {
       onSettled: (a: { taskId: string; results: CheckResult[] }) => Promise<void>
       onCannotRun: (a: { taskId: string; reason: string }) => Promise<void>
       /** A round that reaches `github:ci` (GitHub lifecycle §4): its results so far go to the Host, which settles the
-       *  round with the CI result. Absent: that entry cannot be run here. A rejection is the reason it could not. */
-      onHandedOff?: (a: { taskId: string; cwd: string; done: CheckResult[] }) => Promise<void>
+       *  round with the CI result. Absent: that entry cannot be run here. A rejection is the reason it could not;
+       *  'skip', a round nobody needs any more (the Task left validating, or its round is already the Host's). */
+      onHandedOff?: (a: { taskId: string; cwd: string; done: CheckResult[] }) => Promise<void | 'skip'>
       log?: (message: string) => void
       /** 테스트 주입용. 배선은 넘기지 않는다 */
       timeoutMs?: number
@@ -443,7 +444,8 @@ export class TaskValidator {
     head.settling = true
     try {
       if (!this.deps.onHandedOff) throw new Error('GitHub CI is checked by the Astera Host')
-      await this.deps.onHandedOff({ taskId: head.taskId, cwd, done: [...head.results] })
+      if ((await this.deps.onHandedOff({ taskId: head.taskId, cwd, done: [...head.results] })) === 'skip')
+        this.deps.log?.(`hand-off no longer needed task=${head.taskId} cwd=${cwd}`)
     } catch (e) {
       await this.deps
         .onCannotRun({ taskId: head.taskId, reason: e instanceof Error ? e.message : String(e) })

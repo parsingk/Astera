@@ -1261,9 +1261,28 @@ describe('handleCommand — task-create on a Run carried through GitHub', () => 
     expect((await create(seeded('validating'), { parent: 'tsk_a' })).status).toBe(409)
   })
 
-  it('takes the integration Task made for the lifecycle Task itself, and any Task once the lifecycle Task ended', async () => {
-    expect((await create(seeded('ready'), { parent: 'tsk_l', deps: ['tsk_a'] })).status).toBe(200)
+  it('takes the integration Task the dispatch loop makes for the lifecycle Task, and any Task once the lifecycle Task ended', async () => {
+    const loop = (deps: OrchServerDeps) => call(deps, 'task-create', { runId: 'run_1', spec: 'merge', account: 'acc1', parent: 'tsk_l', deps: ['tsk_a'] }, APP_CALLER)
+    expect((await loop(seeded('ready'))).status).toBe(200)
     expect((await create(seeded('completed'))).status).toBe(200)
+  })
+
+  // G3a final review M4: the exemption is the dispatch loop's, not a door for a coordinator
+  it('a coordinator naming the lifecycle Task as parent is refused like any other Task', async () => {
+    expect((await create(seeded('ready'), { parent: 'tsk_l', deps: ['tsk_a'] })).status).toBe(409)
+  })
+
+  // G3a final review M5: tasks add checks run configurations first; the reserved id is refused before that
+  it('tasks add keeps github:ci for the lifecycle Task too', async () => {
+    const r = await call(seeded('completed'), 'tasks-add', { run: 'run_1', spec: 's', account: 'acc1', validate: 'github:ci' })
+    expect(r).toEqual({ status: 400, body: { error: "github:ci is the GitHub lifecycle's own check; Astera adds it" } })
+  })
+
+  // G3a final review M6, and a worker on it: the lifecycle Task has no worker
+  it('no worker is started on the lifecycle Task, by worker-start or tasks dispatch', async () => {
+    const said = 'Astera carries this Task through GitHub itself; it has no worker'
+    expect(await call(seeded('ready'), 'worker-start', { task: 'tsk_l', agent: 'claude', account: 'acc1' })).toEqual({ status: 409, body: { error: said } })
+    expect(await call(seeded('ready'), 'tasks-dispatch', { id: 'tsk_l' }, '')).toEqual({ status: 409, body: { error: said } })
   })
 
   it('keeps github:ci for the lifecycle Task', async () => {
@@ -1352,6 +1371,14 @@ describe('handleCommand — lifecycle-ci-begin', () => {
     for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'cli' as const }, { sessionId: '', role: 'mcp' as const }, { sessionId: '', role: 'controller' as const }, { sessionId: APP_CALLER }])
       expect((await begin(seeded(), caller)).status).toBe(403)
     expect(await begin(seeded(false), { sessionId: HOST_CALLER })).toEqual({ status: 409, body: { error: 'GitHub CI is checked by the Astera Host' } })
+  })
+
+  // G3a final review I1: task-update moves past the transition table, and the handed-over round goes all the same
+  it('task-update moving the lifecycle Task out of validating drops its handed-over round', async () => {
+    const deps = seeded()
+    await begin(deps, { sessionId: HOST_CALLER })
+    expect((await call(deps, 'task-update', { id: 'tsk_l', status: 'ready' })).status).toBe(200)
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait).toBeUndefined()
   })
 
   it('refuses a malformed round, an ordinary Task and an unknown one', async () => {

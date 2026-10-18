@@ -199,9 +199,10 @@ const replace = <T extends { id: string }>(xs: T[], next: T): T[] =>
 function moveTask(t: Task, to: Task['status'], now: string): Task | null {
   if (t.status === to) return t
   if (!canTransition(t.status, to)) return null
-  // A skipped round goes with its round (plugin Phase 5 C9; 5a final review C1): out of `validating`, it is over
-  if (to !== 'validating' && t.checkResume !== undefined) {
-    const { checkResume: _over, ...rest } = t
+  // A skipped round goes with its round (plugin Phase 5 C9; 5a final review C1): out of `validating`, it is over. So
+  // does a lifecycle round handed to the Host (GitHub lifecycle G3a final review I1): the next round is handed fresh.
+  if (to !== 'validating' && (t.checkResume !== undefined || t.ciWait !== undefined)) {
+    const { checkResume: _over, ciWait: _handedOver, ...rest } = t
     return { ...rest, status: to, updatedAt: now }
   }
   return { ...t, status: to, updatedAt: now }
@@ -213,7 +214,8 @@ function moveTask(t: Task, to: Task['status'], now: string): Task | null {
 export function liveCheckResume(s: OrchState, task: Task): NonNullable<Task['checkResume']> | null {
   const resume = task.checkResume
   if (resume === undefined) return null
-  return latestImplDispatch(s, task.id)?.id === resume.dispatchId ? resume : null
+  // '' names "no attempt yet": a lifecycle Task before its first repair has none (GitHub lifecycle G3a final review I2)
+  return (latestImplDispatch(s, task.id)?.id ?? '') === resume.dispatchId ? resume : null
 }
 
 function pushMessage(
@@ -348,12 +350,16 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
     .filter((r) => r.jobId === jobId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .at(-1)
-  // The previous Run's lifecycle Task is Astera's, made at its end (GitHub lifecycle §3.2): the next Run makes its own.
+  // The previous Run's lifecycle Task is Astera's, made at its end (GitHub lifecycle §3.2), and so is the integration Task
+  // made for it (G3a final review I3): the next Run makes its own.
+  const lifecycleIds = new Set(s.tasks.filter((t) => t.runId === previous?.id && isLifecycleTask(t)).map((t) => t.id))
   const source =
     defs.length > 0
       ? defs
       : previous
-        ? s.tasks.filter((t) => t.runId === previous.id && !isLifecycleTask(t)).sort(byCreated)
+        ? s.tasks
+            .filter((t) => t.runId === previous.id && !lifecycleIds.has(t.id) && !(t.parentId !== undefined && lifecycleIds.has(t.parentId)))
+            .sort(byCreated)
         : []
   const idMap = new Map(source.map((t) => [t.id, newId('tsk')]))
   const copies: Task[] = source.map((t) => ({
@@ -1019,13 +1025,15 @@ export function answerCheckUnavailable(
     return ok({ ...s, gates: replace(s.gates, resolved), tasks: replace(s.tasks, failed) }, { gate: resolved, revalidate: null })
   }
   const attempt = latestImplDispatch(s, task.id)
-  if (attempt === undefined) return err(`task ${task.id} has no attempt whose folder its checks could run in`)
-  const cwd = attempt.cwd
+  // A lifecycle Task's round runs in the Run root, with or without an attempt of its own (GitHub lifecycle G3a final
+  // review I2): it has none before its first repair
+  const cwd = isLifecycleTask(task) ? s.runs.find((r) => r.id === task.runId)?.worktree : attempt?.cwd
+  if (cwd === undefined) return err(`task ${task.id} has no attempt whose folder its checks could run in`)
   const round = task.checks ?? []
   const at = round.findIndex((c) => c.status === 'error')
   const resume =
     a.resolution === 'skip-check' && at >= 0
-      ? { dispatchId: attempt.id, done: [...round.slice(0, at), skippedResult(round[at])], rest: round.slice(at + 1).map((c) => c.configId) }
+      ? { dispatchId: attempt?.id ?? '', done: [...round.slice(0, at), skippedResult(round[at])], rest: round.slice(at + 1).map((c) => c.configId) }
       : null
   const again: Task = { ...base, status: 'validating', updatedAt: now, ...(resume ? { checkResume: resume } : {}) }
   return ok({ ...s, gates: replace(s.gates, resolved), tasks: replace(s.tasks, again) }, { gate: resolved, revalidate: { taskId: task.id, cwd } })
@@ -1232,6 +1240,9 @@ export function stampPolicySnapshot(s: OrchState, a: { taskId: string; key: stri
 export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
+  // A worker's finished attempt is checked: from dispatched, or again from validating. ready → validating is in the
+  // table for the lifecycle Task alone (beginLifecycleValidation, GitHub lifecycle G3a final review M2).
+  if (task.status !== 'dispatched' && task.status !== 'validating') return err(`cannot begin validation from status: ${task.status}`)
   const moved = moveTask(task, 'validating', now)
   if (!moved) return err(`cannot begin validation from status: ${task.status}`)
   const stamped = withConvergenceClock(moved, now)
@@ -1247,7 +1258,9 @@ export function beginLifecycleValidation(s: OrchState, a: { taskId: string }, no
   if (task.status !== 'ready') return err(`a lifecycle Task starts from ready, not ${task.status}`)
   const moved = moveTask(task, 'validating', now)
   if (!moved) return err(`cannot move task ${task.status} -> validating`)
-  const stamped = withConvergenceClock(moved, now)
+  // A new round hands over afresh, whatever a hand-edited file left behind (G3a final review I1)
+  const { ciWait: _stale, ...fresh } = moved
+  const stamped = withConvergenceClock(fresh, now)
   return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
 }
 

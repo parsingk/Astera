@@ -129,8 +129,9 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
         // 빌드 전체가 돌고 실행 패널을 차지한 뒤에야 applyValidationResult 가
         // 결과를 거절한다. 던지지 않고 'skip' 을 돌려주는 이유는 ValidatorRunner.start 의 주석에
-        // 있다 — 이것은 실패가 아니라 없어진 할 일이다.
-        if (task.status !== 'validating') return 'skip'
+        // 있다 — 이것은 실패가 아니라 없어진 할 일이다. Host 에 넘겨 CI 를 기다리는 라운드(ciWait)도 같다: 같은 라운드가
+        // 한 번 더 큐에 들어와도 로컬 검사를 다시 돌리지 않는다(GitHub lifecycle G3a final review I1).
+        if (task.status !== 'validating' || task.ciWait !== undefined) return 'skip'
         const run = st.runs.find((r) => r.id === task.runId)
         if (!run) throw new Error(`unknown run for task ${taskId}`)
         // PTY 를 띄울 경로는 가드를 통과해야 한다. Dispatch.cwd 는 오케스트레이션 소켓에서 온
@@ -187,7 +188,7 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
         const st = c.getState()
         const task = st.tasks.find((t) => t.id === taskId)
         if (!task) throw new Error(`unknown task ${taskId}`)
-        if (task.status !== 'validating') return 'skip'
+        if (task.status !== 'validating' || task.ciWait !== undefined) return 'skip'
         await c.assertAllowedPath(cwd)
         return c.pluginCheck(pluginIdOfCheck(configId)!, checkInputOf(st, task, cwd))
       }
@@ -202,6 +203,10 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
     ...(c.lifecycleCiBegin
       ? {
           onHandedOff: async ({ taskId, done }: { taskId: string; done: CheckResult[] }) => {
+            // A Task that left validating, or whose round is already the Host's, has nothing to hand over (G3a final review
+            // M1, I1): a refusal from the Host would only open a Gate about a round nobody needs.
+            const task = c.getState().tasks.find((t) => t.id === taskId)
+            if (!task || task.status !== 'validating' || task.ciWait !== undefined) return 'skip'
             const reply = await c.lifecycleCiBegin!({ taskId, done })
             if (reply.status >= 400) {
               const said = (reply.body as { error?: unknown } | null)?.error

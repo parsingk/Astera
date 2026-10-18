@@ -1768,6 +1768,25 @@ describe('the lifecycle Task is started by the loop', () => {
     expect(paused.handled()).not.toContain('lifecycle-start')
   })
 
+  // G3a final review M3: a throw in the lifecycle pass is that Task's Gate, not the end of the activation
+  it('a folding that throws asks a person about the lifecycle Task, and the other Runs are still placed', async () => {
+    const h = rig()
+    const base = lifecycleState({ dispatchCwd: '/wt-a' })
+    h.setState({
+      ...base,
+      jobs: [...base.jobs, { id: 'job_o', objective: 'other', cwd: '/p', createdAt: NOW, autoDispatch: true }],
+      runs: [...base.runs, { id: 'run_o', jobId: 'job_o', ordinal: 1, createdAt: NOW, worktree: '/wt-o' }],
+      tasks: [...base.tasks, task({ id: 'tsk_o', runId: 'run_o', jobId: undefined })]
+    })
+    h.ctx.integrate = async () => {
+      throw new Error('git is not answering')
+    }
+    await h.loop.run()
+    await h.settle()
+    expect(h.state().gates.find((g) => g.taskId === 'tsk_l')?.question).toContain('git is not answering')
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+  })
+
   it('a Run with no branch of its own asks a person', async () => {
     const h = rig()
     h.setState(lifecycleState({ worktree: null }))

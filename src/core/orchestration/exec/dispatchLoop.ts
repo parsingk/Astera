@@ -879,8 +879,13 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
           if (attempted.has(l.taskId)) continue
           attempted.add(l.taskId)
           if (!c.mayStart()) return
-          const end = await startLifecycle(l)
-          if (end?.kind === 'gate') await gateSlot(l.taskId, end.reason)
+          // 아래 슬롯처럼 던진 것은 그 Task 의 Gate 다 — 이 활성화를 끝내면 다른 회차의 배치와 정리가 같이 빠진다
+          try {
+            const end = await startLifecycle(l)
+            if (end?.kind === 'gate') await gateSlot(l.taskId, end.reason)
+          } catch (e) {
+            await gateSlot(l.taskId, `GitHub 전달을 시작하지 못했습니다: ${String(e)}`)
+          }
         }
         const slots = slotsToFill(c.getState()).filter((s) => !attempted.has(s.taskId))
         // 띄울 자리가 없으면 계정 조회까지 가지 않는다. 이 함수는 **모든 저장마다** 불리고 그
@@ -1000,6 +1005,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
       if (task.status !== 'ready') return refuse(`task ${taskId} is ${task.status}, not ready`)
       if (task.consecutiveFailures >= FAILURE_LIMIT)
         return refuse(`task ${taskId} has failed ${task.consecutiveFailures} times in a row (circuit break)`)
+      // The lifecycle Task has no account by design: the loop starts it (G3a final review M6)
+      if (task.kind === 'lifecycle') return refuse('Astera carries this Task through GitHub itself; it has no worker')
       if ((task.accountIds?.length ?? 0) === 0)
         return refuse(`task ${taskId} names no account to run on; give it one with tasks add --account`)
       if (s.dispatches.some((d) => d.taskId === taskId && !d.outcome && !d.endedAt))
