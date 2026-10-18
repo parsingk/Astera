@@ -69,6 +69,8 @@ export const TASK_FIELDS = Object.freeze([
   // Not bookkeeping but a decision a person made: where a watcher asks "why did this pass".
   'completionOverride',
   'consecutiveFailures',
+  // 'lifecycle' for the Task Astera adds to carry a Run through GitHub (GitHub lifecycle G3a); absent otherwise
+  'kind',
   'createdAt',
   'updatedAt'
 ] as const)

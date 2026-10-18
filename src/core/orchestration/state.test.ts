@@ -45,6 +45,7 @@ import {
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
 import type { RepairTarget } from './state'
+import { withLifecycleTask } from './lifecycleTask'
 import { t } from '../i18n'
 
 const NOW = '2026-08-04T00:00:00.000Z'
@@ -3800,5 +3801,21 @@ describe('createJob — GitHub lifecycle (G1)', () => {
     expect(made.value.github).toEqual(policy)
     const plain = unwrap<Record<string, unknown>>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
     expect(plain.value).not.toHaveProperty('github')
+  })
+
+  // G3a Review Focus 4: a Job without Task definitions copies the previous Run's Tasks into the next
+  it('does not copy a lifecycle Task into the next Run', () => {
+    const job = unwrap<{ id: string }>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW) as never)
+    const run1 = unwrap<{ id: string }>(startJobRun(job.state, job.value.id, NOW) as never)
+    const a = unwrap<{ id: string }>(createTask(run1.state, { runId: run1.value.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const finished = withLifecycleTask(
+      { ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) },
+      run1.value.id,
+      NOW
+    )
+    expect(finished.tasks.filter((t) => t.runId === run1.value.id).map((t) => t.kind ?? 'ordinary')).toEqual(['ordinary', 'lifecycle'])
+    const run2 = unwrap<{ id: string }>(startJobRun(finished, job.value.id, LATER) as never)
+    const copied = run2.state.tasks.filter((t) => t.runId === run2.value.id)
+    expect(copied.map((t) => [t.title, t.kind ?? 'ordinary', t.deps])).toEqual([['a', 'ordinary', []]])
   })
 })

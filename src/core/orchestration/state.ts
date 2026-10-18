@@ -43,6 +43,7 @@ import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
 import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
+import { isLifecycleTask } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -347,11 +348,12 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
     .filter((r) => r.jobId === jobId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .at(-1)
+  // The previous Run's lifecycle Task is Astera's, made at its end (GitHub lifecycle §3.2): the next Run makes its own.
   const source =
     defs.length > 0
       ? defs
       : previous
-        ? s.tasks.filter((t) => t.runId === previous.id).sort(byCreated)
+        ? s.tasks.filter((t) => t.runId === previous.id && !isLifecycleTask(t)).sort(byCreated)
         : []
   const idMap = new Map(source.map((t) => [t.id, newId('tsk')]))
   const copies: Task[] = source.map((t) => ({

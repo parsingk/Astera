@@ -407,6 +407,12 @@ export interface Task {
    *  켠다. 검증(validateConfigId)과 독립이고, 둘 다 걸리면 검증이 먼저다 — 컴파일도 안 되는 코드를
    *  읽으라고 에이전트 세션을 태우는 것은 낭비다. */
   reviewRequested?: boolean
+  /** `'lifecycle'`: the Run-level Task Astera adds when the last ordinary Task of a GitHub lifecycle Run completes
+   *  (GitHub lifecycle design §3). It has no worker of its own. Absent on every other Task. */
+  kind?: 'lifecycle'
+  /** A lifecycle Task's round handed to the Host at `github:ci` (design §4): the round's results so far, applied with
+   *  the CI result in one verdict. Kept back from the public surface. */
+  ciWait?: { since: string; done: CheckResult[] }
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
   createdAt: string

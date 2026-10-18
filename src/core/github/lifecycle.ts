@@ -97,6 +97,9 @@ export interface GitHubCiFailure {
 /** How many times the watch makes evidence reads that failed for a reason that passes (G2 final review I1). */
 export const EVIDENCE_TRIES = 3
 
+/** The check entry a lifecycle Task's round hands to the Host: GitHub CI on the pushed head (design §4). */
+export const GITHUB_CI_CHECK = 'github:ci'
+
 export interface GitHubBinding {
   /** `owner/name`; `host` is set only for a host other than github.com. */
   repository: string
