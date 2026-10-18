@@ -170,8 +170,9 @@ or the Job's selection), the check that failed first with its link, its `class` 
 GitHub cannot be read). While the Run's lifecycle Task works, `state` says where it stands instead: `pr-ready` (its local
 checks run before the first push), `awaiting-push` (they run again after an earlier push: after a repair, or in a round a
 person started again), `ci-pending` (CI is awaited), `repairing`, `reviewing`, `waiting-for-user` (a question is open on
-it) or `exhausted` (its repair budget ran out, or it failed; once its pull request is merged or closed, `pr-merged` or
-`pr-closed` instead). It is derived on every read, so `runs.get` always shows what Astera last read.
+it), `ci-infrastructure-failure` (CI failed for a reason a rerun can cure: a rerun of the head's CI is in flight, or a
+question about rerunning it is open) or `exhausted` (its repair budget ran out, or it failed; once its pull request is
+merged or closed, `pr-merged` or `pr-closed` instead). It is derived on every read, so `runs.get` always shows what Astera last read.
 
 ### Jobs and Runs
 

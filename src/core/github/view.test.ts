@@ -6,6 +6,7 @@ import { githubLifecycleOf, type GitHubLifecycleState, type LifecycleTaskFacts }
 
 const POLICY: GitHubLifecyclePolicy = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
 const A = 'a'.repeat(40)
+const B = 'b'.repeat(40)
 const bound = (over: Partial<RunGitHubState> = {}): RunGitHubState => ({
   binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: 'T' },
   log: [],
@@ -61,7 +62,12 @@ describe('githubLifecycleOf', () => {
       // Final review I1: a person merged the pull request and answered github-pr-closed's only choice, mark-failed
       ['failed after its pull request was merged', bound({ ci: ci('passed'), pr: merged }), facts({ status: 'failed' }), 'pr-merged'],
       ['failed after its pull request was closed', bound({ pr: { ...merged, state: 'closed' } }), facts({ status: 'failed' }), 'pr-closed'],
-      ['completed: the read says the rest', bound({ ci: ci('passed'), pr: merged }), facts({ status: 'completed' }), 'pr-merged']
+      ['completed: the read says the rest', bound({ ci: ci('passed'), pr: merged }), facts({ status: 'completed' }), 'pr-merged'],
+      // G4 (design §5.3): a rerun in flight, or the question about one
+      ['the question past the rerun budget', bound(), facts({ status: 'blocked', ciWait: { ...wait, sha: A } }, { ...gate('github-ci-outside'), options: ['rerun', 'wait', 'mark-failed'] }), 'ci-infrastructure-failure'],
+      ['another question about a cause outside the code', bound(), facts({ status: 'blocked', ciWait: { ...wait, sha: A } }, { ...gate('github-ci-outside'), options: ['wait', 'mark-failed'] }), 'waiting-for-user'],
+      ['a wait after a rerun of its head', bound({ lastPushedSha: A, reruns: [{ ciRunId: 9, attempt: 1, sha: A, by: 'astera', at: 'T' }] }), facts({ ciWait: { ...wait, sha: A } }), 'ci-infrastructure-failure'],
+      ['a wait on a new head after an older head’s rerun', bound({ lastPushedSha: B, reruns: [{ ciRunId: 9, attempt: 1, sha: A, by: 'astera', at: 'T' }] }), facts({ ciWait: { ...wait, sha: B } }), 'ci-pending']
     ]
     it.each(rows)('%s', (_name, gs, lifecycle, state) => {
       expect(githubLifecycleOf(POLICY, gs, lifecycle)?.state).toBe(state)

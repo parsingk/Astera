@@ -99,6 +99,7 @@ export type GitHubLifecycleState =
   | 'reviewing'
   | 'waiting-for-user'
   | 'exhausted'
+  | 'ci-infrastructure-failure'
 
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {

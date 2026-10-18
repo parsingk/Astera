@@ -4,8 +4,9 @@
 import type { CiBasis, CiFailureClass, CiVerdict, GitHubCiCheck, GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
 import type { Gate, Task } from '../orchestration/types'
 
-/** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open. Later
- *  slices add merge-ready and invalidated (G5). */
+/** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open, with
+ *  `ci-infrastructure-failure` (G4) while a CI rerun is in flight or asked about. Later slices add merge-ready and
+ *  invalidated (G5). */
 export type GitHubLifecycleState =
   | 'unbound'
   | 'pr-bound'
@@ -21,6 +22,7 @@ export type GitHubLifecycleState =
   | 'reviewing'
   | 'waiting-for-user'
   | 'exhausted'
+  | 'ci-infrastructure-failure'
 
 /** The Run's latest lifecycle Task and the question open on it (G3c2). */
 export interface LifecycleTaskFacts {
@@ -35,12 +37,19 @@ export interface LifecycleTaskFacts {
  *  (final review I1). Only a repair dispatches a lifecycle Task (L20), and its Task stays dispatched while a worker
  *  that ended without a report waits for recovery, so dispatched reads repairing (final review M1). */
 function lifecycleStateOf(l: LifecycleTaskFacts, gs: RunGitHubState | undefined): GitHubLifecycleState | undefined {
+  // A question offering a rerun is about a CI failure a rerun can cure (G4, design §5.3)
+  if (l.openGate?.kind === 'github-ci-outside' && l.openGate.options?.includes('rerun')) return 'ci-infrastructure-failure'
   if (l.openGate) return l.openGate.kind === 'convergence-exhausted' ? 'exhausted' : 'waiting-for-user'
   if (l.task.status === 'failed') return gs?.pr?.state === 'merged' ? 'pr-merged' : gs?.pr?.state === 'closed' ? 'pr-closed' : 'exhausted'
   if (l.task.status === 'dispatched') return 'repairing'
   if (l.task.status === 'reviewing') return 'reviewing'
   if (l.task.status !== 'validating') return undefined
-  if (l.task.ciWait) return gs?.lastReadError ? 'external-state-unavailable' : 'ci-pending'
+  if (l.task.ciWait) {
+    if (gs?.lastReadError) return 'external-state-unavailable'
+    // A wait whose head had a CI run rerun waits for that rerun (G4)
+    const sha = l.task.ciWait.sha
+    return sha !== undefined && gs?.reruns?.some((r) => r.sha === sha) ? 'ci-infrastructure-failure' : 'ci-pending'
+  }
   return gs?.lastPushedSha ? 'awaiting-push' : 'pr-ready'
 }
 
