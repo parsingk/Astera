@@ -330,10 +330,12 @@ It also answers `CONFLICT` when the push fails, for any reason (a branch that ha
 upstream, but also a failed login, the network or a timeout), with "The push was rejected", and
 when the branch already has a pull request (the message ends with its URL).
 
-**`get_ci` with a `runId`** answers `CONFLICT` ("This Run's branch has no pull request") when the
+**`get_ci` with a `runId`** reads the pull request a GitHub lifecycle Run is bound to, in the bound
+repository; for any other Run it answers `CONFLICT` ("This Run's branch has no pull request") when the
 Run's branch has no pull request yet. With a `runId` and `failedLogOf` it makes up to three `gh`
-calls (the branch's pull request, its checks, the failed log), which together can take longer than
-the MCP call timeout (see [`TIMEOUT`](#troubleshooting)); it only reads, so a retry is safe.
+calls (the branch's pull request, its checks, the failed log; two for a bound Run), which together can
+take longer than the MCP call timeout (see [`TIMEOUT`](#troubleshooting)); it only reads, so a retry is
+safe.
 
 `create_job_from_source` with `source: "github"` (below, [Job sources](#job-sources)) makes the same Job from an
 issue and takes the same setting; it answers `PERMISSION_DENIED` for a closed issue and `NOT_FOUND` for a pull

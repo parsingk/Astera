@@ -112,6 +112,7 @@ import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
+import { repoOfBinding } from '../github/remote'
 import { prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
@@ -4594,16 +4595,17 @@ export async function handleCommand(
     }
     case 'github-ci': {
       if (args.run !== undefined && args.pr !== undefined)
-        return bad("--pr goes with --project; a Run's pull request is its branch's")
+        return bad("--pr goes with --project; a Run's pull request is the one it is bound to, or its branch's")
       const log = args.log === undefined ? undefined : posInt(args.log)
       if (log === null) return bad('--log must be a CI run id (a positive integer, from a check\'s runId)')
       const t = githubTarget(deps, s, args)
       if ('error' in t) return t.error
       let pr: number
       // A GitHub lifecycle Run reads the pull request it is bound to: a lookup by branch picks open-else-newest and
-      // can land on a closed PR of the same branch (G2, inventory I-§12.4).
-      const runId = str(args.run)
-      const bound = runId === null ? undefined : s.runs.find((r) => r.id === runId)?.githubState?.binding
+      // can land on a closed PR of the same branch (G2, inventory I-§12.4). It reads it in the bound repository: in a
+      // checkout with an `upstream` remote, gh would take another repository's PR of that number (G2 final review M10).
+      const bound = 'run' in t ? t.run?.githubState?.binding : undefined
+      const repo = bound ? (repoOfBinding(bound) ?? undefined) : undefined
       if (bound) pr = bound.number
       else if ('branch' in t) {
         const found = await prForBranch(t.gh, t.cwd, t.branch)
@@ -4615,10 +4617,10 @@ export async function handleCommand(
         if (given === null) return bad('--pr is required with --project: a pull request number')
         pr = given
       }
-      const checks = await readPrChecks(t.gh, t.cwd, pr)
+      const checks = await readPrChecks(t.gh, t.cwd, pr, repo)
       if (!checks.ok) return ghRefusal(checks)
       if (log === undefined) return okBody({ pr, checks: checks.checks })
-      const tail = await failedLogTail(t.gh, t.cwd, log)
+      const tail = await failedLogTail(t.gh, t.cwd, log, repo)
       if (!tail.ok) return ghRefusal(tail)
       // Redacted here, in the Host, so the CLI and a Runtime's controller get what MCP gets (G2, design L22).
       return okBody({ pr, checks: checks.checks, log: { runId: log, text: sanitize(tail.text), cut: tail.cut } })

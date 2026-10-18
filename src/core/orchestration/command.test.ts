@@ -8459,10 +8459,25 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
   // land on a closed PR of the same branch
   it('github-ci with a lifecycle Run reads the pull request it is bound to, without looking the branch up', async () => {
     const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
-    const { deps, gh } = setup({ [CHECKS(34)]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const { deps, gh } = setup({ [`${CHECKS(34)} --repo o/r`]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
     const r = await call(deps, 'github-ci', { run: 'r1' }, '')
     expect(r).toMatchObject({ status: 200, body: { pr: 34 } })
-    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([CHECKS(34)])
+    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo o/r`])
+  })
+
+  // G2 final review M10: a checkout with an `upstream` remote makes gh pick another repository's PR of that number
+  it('github-ci reads a bound Run’s checks and log in the bound repository, on any host', async () => {
+    const binding = { repository: 'o/r', host: 'ghe.example', number: 34, url: 'https://ghe.example/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup(
+      {
+        [`${CHECKS(34)} --repo ghe.example/o/r`]: { stdout: JSON.stringify([checkRow]) },
+        'run view 77 --log-failed --repo ghe.example/o/r': { stdout: 'not ok 1' }
+      },
+      { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+    )
+    const r = await call(deps, 'github-ci', { run: 'r1', log: 77 }, '')
+    expect(r).toMatchObject({ status: 200, body: { pr: 34, log: { runId: 77, text: 'not ok 1' } } })
+    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo ghe.example/o/r`, 'run view 77 --log-failed --repo ghe.example/o/r'])
   })
 
   // G2 Review Focus 2: the log answer is redacted in the Host, whatever surface asked
