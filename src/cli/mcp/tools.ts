@@ -584,7 +584,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get CI checks',
     readOnly: true,
     cmd: 'github-ci',
-    description: `The CI checks of a pull request: the one of a Run's branch (runId), or a project's pull request number (projectId and pr). Each check has its name, workflow, state, bucket (pass, fail, pending, skipping or cancel), link and the Actions run id behind it. With failedLogOf, an Actions run id from here, the result also carries the tail of that run's failed log, with anything that looks like a secret redacted. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
+    description: `The CI checks of a pull request: the one of a Run's branch (runId; for a GitHub lifecycle Run, the pull request Astera bound), or a project's pull request number (projectId and pr). Each check has its name, workflow, state, bucket (pass, fail, pending, skipping or cancel), link and the Actions run id behind it. With failedLogOf, an Actions run id from here, the result also carries the tail of that run's failed log, with anything that looks like a secret redacted. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
     inputSchema: {
       runId: id.optional().describe('A Run with a branch of its own; the pull request of its branch is read.'),
       projectId: id.optional().describe('A project from list_projects; give it with pr, not with runId.'),

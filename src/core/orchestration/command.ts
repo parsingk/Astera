@@ -120,6 +120,7 @@ import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import { parseRunGitHubPatch } from '../github/runState'
+import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
@@ -4599,7 +4600,12 @@ export async function handleCommand(
       const t = githubTarget(deps, s, args)
       if ('error' in t) return t.error
       let pr: number
-      if ('branch' in t) {
+      // A GitHub lifecycle Run reads the pull request it is bound to: a lookup by branch picks open-else-newest and
+      // can land on a closed PR of the same branch (G2, inventory I-§12.4).
+      const runId = str(args.run)
+      const bound = runId === null ? undefined : s.runs.find((r) => r.id === runId)?.githubState?.binding
+      if (bound) pr = bound.number
+      else if ('branch' in t) {
         const found = await prForBranch(t.gh, t.cwd, t.branch)
         if (!found.ok) return ghRefusal(found)
         if (!found.pr) return conflict("This Run's branch has no pull request")
@@ -4614,7 +4620,8 @@ export async function handleCommand(
       if (log === undefined) return okBody({ pr, checks: checks.checks })
       const tail = await failedLogTail(t.gh, t.cwd, log)
       if (!tail.ok) return ghRefusal(tail)
-      return okBody({ pr, checks: checks.checks, log: { runId: log, text: tail.text, cut: tail.cut } })
+      // Redacted here, in the Host, so the CLI and a Runtime's controller get what MCP gets (G2, design L22).
+      return okBody({ pr, checks: checks.checks, log: { runId: log, text: sanitize(tail.text), cut: tail.cut } })
     }
     case 'github-issue': {
       if (args.run !== undefined) return bad('--run does not go with github-issue: give --project')
