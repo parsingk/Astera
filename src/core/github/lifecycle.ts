@@ -58,6 +58,22 @@ export type CiBasis = 'required' | 'all-reported' | 'selected'
 /** `none`: the commit has no check at all. */
 export type CiVerdict = 'pending' | 'passed' | 'failed' | 'none'
 
+/** Why a check failed (design §4.5): the classes the routing of G3/G4 reads. `code` stays for the spec's list; the
+ *  classifier names the kind of code failure instead (test, build, lint, typecheck). */
+export type CiFailureClass =
+  | 'code'
+  | 'test'
+  | 'build'
+  | 'lint'
+  | 'typecheck'
+  | 'configuration'
+  | 'environment'
+  | 'infrastructure'
+  | 'timeout'
+  | 'cancelled'
+  | 'permission'
+  | 'unknown'
+
 export interface GitHubBinding {
   /** `owner/name`; `host` is set only for a host other than github.com. */
   repository: string
