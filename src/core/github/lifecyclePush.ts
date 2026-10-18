@@ -53,12 +53,16 @@ export async function fastForward(run: RunGit, cwd: string, branch: string): Pro
 }
 
 /** Whether `head` is in the history of `sha` (GitHub lifecycle G3b2, design §4.4 S2): a PR head behind the push is an
- *  earlier head of Astera's own. A commit the Run root does not have was never Astera's, which pushes from there. */
+ *  earlier head of Astera's own. A commit the Run root does not have was never Astera's, which pushes from there. Told by
+ *  exit codes, not git's words, which follow the person's language (G3b2 final review M4): the pushed head must be there
+ *  for the answer to mean anything, then the PR's head, then the history. */
 export async function ancestry(run: RunGit, cwd: string, head: string, sha: string): Promise<'ancestor' | 'not' | 'unknown'> {
+  if (!(await run(['cat-file', '-e', `${sha}^{commit}`], { cwd })).ok) return 'unknown'
+  const present = await run(['cat-file', '-e', `${head}^{commit}`], { cwd })
+  if (!present.ok) return present.timedOut || present.exitCode === undefined ? 'unknown' : 'not'
   const r = await run(['merge-base', '--is-ancestor', head, sha], { cwd })
   if (r.ok) return 'ancestor'
-  if (r.exitCode === 1) return 'not'
-  return r.exitCode === 128 && /not a valid commit|bad object|unknown revision|no such commit/i.test(r.stderr) ? 'not' : 'unknown'
+  return r.exitCode === 1 ? 'not' : 'unknown'
 }
 
 /** The commit `ref` names (HEAD unless named), or null when git cannot say. */

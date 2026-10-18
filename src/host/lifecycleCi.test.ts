@@ -43,7 +43,6 @@ function rig(o: {
 } = {}) {
   const calls: string[] = []
   const settled: { taskId: string; result: CheckResult }[] = []
-  const gates: { taskId: string; question: string }[] = []
   const githubGates: { taskId: string; since: string; kind: string; question: string; options: string[] }[] = []
   const records: unknown[] = []
   const waits: unknown[] = []
@@ -68,14 +67,19 @@ function rig(o: {
     record: async (args) => (calls.push('record'), records.push(args), { status: o.recordStatus ?? 200, body: {} }),
     recordWait: async (args) => (calls.push('recordWait'), waits.push(args), { status: o.waitStatus ?? 200, body: {} }),
     settle: async (a) => void (calls.push('settle'), settled.push(a)),
-    openGate: async (a) => (calls.push('openGate'), gates.push(a), { status: o.gateStatus ?? 200, body: {} }),
     openGitHubGate: async (a) => (calls.push('openGitHubGate'), githubGates.push(a), { status: o.gateStatus ?? 200, body: {} }),
     lang: () => o.lang ?? 'ko',
     log: () => {},
     now: () => clock.now
   }
   const ci = createLifecycleCi(deps)
-  return { ci, calls, settled, gates, githubGates, records, waits, created, clock }
+  return {
+    ci, calls, settled, githubGates, records, waits, created, clock,
+    /** The carrier's own stops (G3b2 final review M7): a GitHub question whose answers are retry and mark-failed. */
+    get gates() {
+      return githubGates.filter((g) => g.kind === 'github-carry')
+    }
+  }
 }
 
 describe('createLifecycleCi', () => {
@@ -176,7 +180,7 @@ describe('createLifecycleCi', () => {
     r.ci.onState(stateWith())
     await r.ci.drain()
     expect(r.settled).toEqual([])
-    expect(r.gates).toEqual([{ taskId: 'tsk_l', question: expect.stringContaining('커밋을 읽지 못했습니다') }])
+    expect(r.gates).toEqual([{ taskId: 'tsk_l', since: ISO, kind: 'github-carry', question: expect.stringContaining('커밋을 읽지 못했습니다'), options: ['retry', 'mark-failed'] }])
   })
 
   // G3b1 final review M6
@@ -255,6 +259,8 @@ describe('createLifecycleCi', () => {
     expect(r.githubGates).toEqual([
       { taskId: 'tsk_l', since: ISO, kind: 'github-external-head', question: expect.stringContaining('(fetch first)'), options: ['continue', 'mark-failed'] }
     ])
+    // G3b2 final review M6: history that parted cannot fast-forward; the question says so
+    expect(r.githubGates[0].question).toContain('손으로 합친 뒤')
     expect(r.gates).toEqual([])
     expect(r.calls).not.toContain('findOpenPrs')
   })
@@ -284,11 +290,27 @@ describe('createLifecycleCi', () => {
     expect(r.waits).toEqual([{ taskId: 'tsk_l', since: ISO, pr: 4, sha: SHA }])
   })
 
+  // G3b2 final review M3: the person's choice is not swapped for another pull request without asking
+  it('asks again when the chosen pull request is no longer open, and opens a draft when none is', async () => {
+    const one = rig({ open: [[3]] })
+    one.ci.onState(stateWith({ ciWait: { since: ISO, done: [], bindPr: 4 } }))
+    await one.ci.drain()
+    expect(one.githubGates).toEqual([
+      { taskId: 'tsk_l', since: ISO, kind: 'github-pr-ambiguous', question: expect.stringContaining('#4'), options: ['pr-3', 'mark-failed'] }
+    ])
+    expect(one.waits).toEqual([])
+    const none = rig({ open: [[]] })
+    none.ci.onState(stateWith({ ciWait: { since: ISO, done: [], bindPr: 4 } }))
+    await none.ci.drain()
+    expect(none.calls).toContain('createDraftPr')
+    expect(none.githubGates).toEqual([])
+  })
+
   it('asks in the person’s language', async () => {
     const r = rig({ commits: null, lang: 'en' })
     r.ci.onState(stateWith())
     await r.ci.drain()
-    expect(r.gates).toEqual([{ taskId: 'tsk_l', question: expect.stringContaining('The commits past origin/main on this Run’s branch could not be read'.replace('’', "'")) }])
+    expect(r.gates).toEqual([expect.objectContaining({ question: expect.stringContaining('The commits past origin/main on this Run’s branch could not be read'.replace('’', "'")) })])
   })
 
   it('a step that throws asks a person, so the round is not taken again on every state', async () => {
@@ -300,12 +322,12 @@ describe('createLifecycleCi', () => {
       isClean: async () => {
         throw new Error('GIT_REMOVE_FAILED: index.lock exists')
       },
-      openGate: async (a) => (r.gates.push(a), { status: 200, body: {} }),
+      openGitHubGate: async (a) => (r.githubGates.push(a), { status: 200, body: {} }),
       log: () => {}
     })
     failing.onState(stateWith())
     await failing.drain()
-    expect(r.gates).toEqual([{ taskId: 'tsk_l', question: expect.stringContaining('index.lock exists') }])
+    expect(r.gates).toEqual([{ taskId: 'tsk_l', since: ISO, kind: 'github-carry', question: expect.stringContaining('index.lock exists'), options: ['retry', 'mark-failed'] }])
   })
 
   it('takes a round once, however many states arrive meanwhile, and never one already waiting', async () => {

@@ -4096,12 +4096,43 @@ describe('GitHub Gates (G3b2)', () => {
     expect(taskOf(a.state, lifecycleId).ciWait).toBeUndefined()
   })
 
+  // G3b2 final review M7: the carrier's own stops are answered with retry or mark-failed
+  it('retry starts a fresh round from the first check', () => {
+    const { s, lifecycleId } = waiting()
+    const r = open(s, lifecycleId, 'github-carry', ['retry', 'mark-failed'])
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'retry' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId).status).toBe('ready')
+    expect(taskOf(a.state, lifecycleId).ciWait).toBeUndefined()
+  })
+
   it('wait on a Task whose wait is gone starts a fresh round', () => {
     const { s, lifecycleId } = waiting()
     const r = open(s, lifecycleId)
     const lost = { ...r.state, tasks: r.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, ciWait: undefined } : t)) }
     const a = unwrap<{ gate: Gate }>(answerGitHubGate(lost, { gateId: r.value.id, resolution: 'wait' }, EVEN_LATER) as never)
     expect(taskOf(a.state, lifecycleId).status).toBe('ready')
+  })
+
+  // G3b2 final review I2: a question about an earlier round does not hold the next round's own
+  it('a fresh round answers the earlier round’s GitHub questions as superseded, so the next one can be answered', () => {
+    const { s, lifecycleId } = waiting()
+    const g1 = open(s, lifecycleId, 'github-ci-cap', ['wait', 'mark-failed'])
+    // task-update --status ready leaves the question open and drops the wait
+    const moved = { ...g1.state, tasks: g1.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'ready' as const, ciWait: undefined } : t)) }
+    const again = unwrap<Task>(beginLifecycleValidation(moved, { taskId: lifecycleId }, EVEN_LATER) as never).state
+    expect(again.gates.find((g) => g.id === g1.value.id)).toMatchObject({ status: 'resolved', resolution: 'superseded', resolvedAt: EVEN_LATER })
+    const handed = unwrap<string>(beginLifecycleCi(again, { taskId: lifecycleId, done: [] }, EVEN_LATER) as never).state
+    const recorded = unwrap<string>(recordLifecycleCiWait(handed, { taskId: lifecycleId, since: EVEN_LATER, pr: 12, sha: SHA }, EVEN_LATER) as never).state
+    const g2 = unwrap<Gate>(openGitHubGate(recorded, { taskId: lifecycleId, since: EVEN_LATER, kind: 'github-no-ci', question: 'q', options: ['wait', 'mark-failed'] }, EVEN_LATER) as never)
+    expect(answerGitHubGate(g2.state, { gateId: g2.value.id, resolution: 'wait' }, EVEN_LATER).ok).toBe(true)
+  })
+
+  it('a hand-over answers a GitHub question still open on the Task as superseded', () => {
+    const { s, lifecycleId } = waiting()
+    const g1 = open(s, lifecycleId)
+    const back = { ...g1.state, tasks: g1.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'validating' as const, ciWait: undefined } : t)) }
+    const handed = unwrap<string>(beginLifecycleCi(back, { taskId: lifecycleId, done: [] }, EVEN_LATER) as never).state
+    expect(handed.gates.find((g) => g.id === g1.value.id)).toMatchObject({ status: 'resolved', resolution: 'superseded' })
   })
 
   it('only answers the Gate when a person already moved the Task', () => {

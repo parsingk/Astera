@@ -165,9 +165,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       if (!gs?.binding && now() - Date.parse(run.createdAt) > UNBOUND_MAX_AGE_MS) continue
       const worktree = d.worktreeOf(run.worktree)
       if (!worktree) continue
-      // A round waiting to be pushed is bound by the Host's carrier (lifecycleCi), which may be making the PR right now:
-      // binding it here first would log a PR Astera made as found
-      if (!gs?.binding && round && round.sha === undefined) continue
+      // A round waiting to be pushed is bound by the Host's carrier (lifecycleCi), which may be making the PR right now, or
+      // waits on a person's choice among several (G3b2 final review M3): binding it here first would log a PR Astera made
+      // as found, or bind one the person did not choose
+      if (!gs?.binding && open?.ciWait && open.ciWait.sha === undefined) continue
       out.push({ runId: run.id, cwd: run.worktree, worktree, policy, source: job?.source, state: gs, ...(round ? { round } : {}) })
     }
     return out
@@ -395,6 +396,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     // CI on the head the Host pushed settles the round, and only that head (design §4.4)
     if (read.commitSha !== sha) return
     if (read.checks.length === 0) {
+      // A person chose to go on without CI, and this head still has none (G3b2 final review I1, S10): only then
+      if (round.noCi) return goOnWithoutCi(t, round, round.sha)
       if (now() - Date.parse(round.waitingSince) < NO_CI_GRACE_MS) return
       return ask(t.runId, round, 'github-no-ci', say('jobs.gate.github.q.noCi', { sha: short(sha), minutes: NO_CI_GRACE_MS / 60_000, pr }), ['wait', 'no-ci', 'mark-failed'])
     }
@@ -418,31 +421,32 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     await ask(runId, round, 'github-ci-outside', say('jobs.gate.github.q.outside', { class: failure.class, summary: failure.summary }), ['wait', 'mark-failed'])
   }
 
-  /** What a waiting round decides without a read (G3b2): a person's choice to go on without CI settles it passed, and a
-   *  wait past the Job's cap asks, however the reads go (design §4.4, §6.2). */
-  const decideUnread = async (t: Target): Promise<void> => {
+  /** A person chose to go on without CI, read on a head with no check at all (G3b2, design §4.4 grace, S10): the round
+   *  settles passed, saying why, and the Run keeps the choice. */
+  const goOnWithoutCi = async (t: Target, round: Round, sha: string): Promise<void> => {
+    decided.set(t.runId, decisionOf(round))
+    await record(t.runId, { noCi: { sha } })
+    const result: CheckResult = {
+      configId: GITHUB_CI_CHECK,
+      name: 'GitHub CI',
+      status: 'passed',
+      summary: `No CI ran on ${short(sha)}; a person chose to go on without CI.`,
+      startedAt: round.since,
+      endedAt: new Date(now()).toISOString(),
+      ...(t.state?.binding ? { externalUrl: t.state.binding.url } : {})
+    }
+    // A settle that could not be written is tried again on the next read
+    await d.settle?.({ taskId: round.taskId, result, since: round.since }).catch((e: unknown) => {
+      d.log(`github watch: run ${t.runId}: going on without CI could not be recorded: ${message(e)}`)
+      decided.delete(t.runId)
+    })
+  }
+
+  /** A wait past the Job's cap asks, however the reads go (G3b2, design §4.4, §6.2), once the read of this pass decided
+   *  nothing: a verdict read at the cap is the verdict (G3b2 final review M2). */
+  const capOf = async (t: Target): Promise<void> => {
     const round = t.round
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
-    if (round.noCi) {
-      decided.set(t.runId, decisionOf(round))
-      await record(t.runId, { noCi: { sha: round.sha } })
-      const at = new Date(now()).toISOString()
-      const result: CheckResult = {
-        configId: GITHUB_CI_CHECK,
-        name: 'GitHub CI',
-        status: 'passed',
-        summary: `No CI ran on ${short(round.sha)}; a person chose to go on without CI.`,
-        startedAt: round.since,
-        endedAt: at,
-        ...(t.state?.binding ? { externalUrl: t.state.binding.url } : {})
-      }
-      // A settle that could not be written is tried again on the next read
-      await d.settle?.({ taskId: round.taskId, result, since: round.since }).catch((e: unknown) => {
-        d.log(`github watch: run ${t.runId}: going on without CI could not be recorded: ${message(e)}`)
-        decided.delete(t.runId)
-      })
-      return
-    }
     const minutes = t.policy.ciWaitMinutes
     if (now() - Date.parse(round.waitingSince) < minutes * 60_000) return
     await ask(t.runId, round, 'github-ci-cap', say('jobs.gate.github.q.cap', { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }), ['wait', 'mark-failed'])
@@ -475,10 +479,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       work.map(async (t) => {
         inFlight.add(t.runId)
         try {
-          // What the round decides without a read comes first, at the read's own pace, so a question that could not be
-          // written is asked again no faster than the Run is read
-          await decideUnread(t)
           await readOne(t)
+          // The cap after the read, at the read's own pace, so a question that could not be written is asked again no
+          // faster than the Run is read
+          await capOf(t)
         } catch (e) {
           d.log(`github watch: run ${t.runId}: ${message(e)}`)
           nextAt.set(t.runId, now() + jittered(SETTLED_MS))

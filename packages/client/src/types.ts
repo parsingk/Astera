@@ -18,6 +18,7 @@ export type GateKind =
   | 'github-pr-ambiguous'
   | 'github-pr-closed'
   | 'github-ci-outside'
+  | 'github-carry'
 export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 /** When a scheduled Job fires again. */

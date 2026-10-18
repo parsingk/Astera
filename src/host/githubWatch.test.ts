@@ -772,6 +772,38 @@ describe('githubWatch', () => {
         expect(r.settled).toHaveLength(1)
       })
 
+      // G3b2 final review I1 (S10): going on without CI is for a head with no check at all
+      it('a choice to go on without CI does not pass a head whose CI ran since', async () => {
+        const f = rig({ read: failed(), log: LOG })
+        f.watch.onState(waiting({ noCi: true }))
+        await f.at(0)
+        expect(f.settled).toEqual([{ taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ status: 'failed' }) }])
+        expect(f.records.some((x) => x.patch.noCi)).toBe(false)
+        const o = rig({ read: TIMED_OUT, log: LOG })
+        o.watch.onState(waiting({ noCi: true }))
+        await o.at(0)
+        expect(o.settled).toEqual([])
+        expect(o.gates.map((g) => g.kind)).toEqual(['github-ci-outside'])
+      })
+
+      // G3b2 final review M2: a verdict read at the cap is the verdict
+      it('a verdict read past the cap settles the round instead of asking', async () => {
+        const r = rig()
+        r.watch.onState(waiting())
+        await r.at(90 * 60_000)
+        expect(r.settled).toHaveLength(1)
+        expect(r.gates).toEqual([])
+      })
+
+      // G3b2 final review M3: while a person chooses among pull requests, the watch binds none
+      it('binds no pull request for a Run whose lifecycle Task holds a wait with nothing pushed, even while it waits on a person', async () => {
+        const r = rig({ prs: [{ number: 3, url: 'u3' }] })
+        const s = waiting({ sha: undefined }, {})
+        r.watch.onState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'blocked' as const } : t)) })
+        await r.at(0)
+        expect(r.calls.some((c) => c.startsWith('find'))).toBe(false)
+      })
+
       it('after waiting again the same head is decided again, once', async () => {
         const r = rig({ read: TIMED_OUT, log: LOG })
         r.watch.onState(waiting())

@@ -3,9 +3,9 @@
 // a draft one Astera opens, and the wait recorded on the round (`lifecycle-ci-wait`), after which the watch reads CI
 // on that head. Driven by state like the watch: a round whose wait has no pushed head yet is taken once at a time, and a
 // restart takes it again from the state (a push of the same head changes nothing; the pull request is looked up first,
-// L16). Where it must stop it asks a person: a GitHub question that keeps the round's wait where its answer acts on
-// the round (a refused push, several pull requests; G3b2), else a plain Gate whose answer starts the round again. Every
-// question is in the person's language.
+// L16). Where it must stop it asks a person with a GitHub question (G3b2): a refused push and several pull requests
+// keep the round's wait for an answer that acts on it; its other stops (`github-carry`) take retry, a fresh round, or
+// mark-failed (G3b2 final review M7). Every question is in the person's language.
 import { fillFromCommits, type CommitSummary } from '../core/github/fill'
 import type { GhFailed } from '../core/github/gh'
 import { GITHUB_CI_CHECK, type GitHubBinding } from '../core/github/lifecycle'
@@ -44,10 +44,8 @@ export interface LifecycleCiDeps {
   recordWait(args: { taskId: string; since: string; pr: number; sha: string }): Promise<Reply>
   /** TaskValidation.settleHandedOff: a precondition that failed is the round's failed `github:ci` check. */
   settle(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
-  /** `gate-create`: a plain Gate, whose answer starts the round again. */
-  openGate(a: { taskId: string; question: string }): Promise<Reply>
   /** `lifecycle-gate` (G3b2): a GitHub question about the round `since` names, which keeps the round's wait. */
-  openGitHubGate?(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<Reply>
+  openGitHubGate(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<Reply>
   /** The person's language, for the questions (G3b2). */
   lang?(): Lang
   log(m: string): void
@@ -80,20 +78,20 @@ const awaitingPush = (t: Task): boolean => isLifecycleTask(t) && t.status === 'v
 export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
   const now = (): number => (d.now ? d.now() : Date.now())
   const say = (key: MessageKey, params?: MessageParams): string => translate(d.lang?.() ?? 'en', key, params)
+  /** A GitHub question about the round the Task hands over now (G3b2). */
+  const askAbout = async (task: Task, kind: GitHubGateKind, question: string, options: string[]): Promise<void> => {
+    const r = await d.openGitHubGate({ taskId: task.id, since: task.ciWait!.since, kind, question, options })
+    if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the ${kind} question could not be opened: ${JSON.stringify(r.body)} — ${question}`)
+  }
   const inFlight = new Map<string, Promise<void>>()
   /** Each round last carried (`taskId` → the wait it carried, `waitKey`) and when it may be taken again. */
   const cooling = new Map<string, { wait: string; until: number }>()
 
   const carry = async (s: OrchState, task: Task): Promise<void> => {
-    const ask = async (question: string): Promise<void> => {
-      const r = await d.openGate({ taskId: task.id, question })
-      if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the Gate could not be opened: ${JSON.stringify(r.body)} — ${question}`)
-    }
     const since = task.ciWait!.since
-    const askGitHub = async (kind: GitHubGateKind, question: string, options: string[]): Promise<void> => {
-      const r = d.openGitHubGate ? await d.openGitHubGate({ taskId: task.id, since, kind, question, options }) : { status: 501, body: 'no GitHub questions here' }
-      if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the ${kind} question could not be opened: ${JSON.stringify(r.body)} — ${question}`)
-    }
+    const askGitHub = (kind: GitHubGateKind, question: string, options: string[]): Promise<void> => askAbout(task, kind, question, options)
+    /** The carrier's own stop: a person fixes it and tries again, or gives up (G3b2 final review M7). */
+    const ask = (question: string): Promise<void> => askGitHub('github-carry', question, ['retry', 'mark-failed'])
     const fail = (summary: string): Promise<void> =>
       d.settle({
         taskId: task.id,
@@ -154,15 +152,16 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
       })
       const found = await d.findOpenPrs(cwd, repo, info.branch, base)
       if (!found.ok) return ask(say('jobs.gate.github.carry.lookupFailed', { message: found.message }))
-      // design §4.3: several open pull requests → a person chooses, and the answer binds it (G3b2)
+      // design §4.3: several open pull requests → a person chooses, and the answer binds it (G3b2). A choice no longer
+      // open is asked about again, never swapped for what is left (G3b2 final review M3); with none left, a draft is opened
+      const numbers = found.prs.map((p) => `#${p.number}`).join(', ')
+      const choices = [...found.prs.map((p) => `pr-${p.number}`), 'mark-failed']
+      const wanted = task.ciWait!.bindPr
+      const chosen = found.prs.find((p) => p.number === wanted)
+      if (wanted !== undefined && !chosen && found.prs.length > 0)
+        return askGitHub('github-pr-ambiguous', say('jobs.gate.github.q.chosenGone', { pr: wanted, branch: info.branch, numbers }), choices)
       if (found.prs.length > 1) {
-        const chosen = found.prs.find((p) => p.number === task.ciWait!.bindPr)
-        if (!chosen)
-          return askGitHub(
-            'github-pr-ambiguous',
-            say('jobs.gate.github.q.ambiguous', { branch: info.branch, numbers: found.prs.map((p) => `#${p.number}`).join(', ') }),
-            [...found.prs.map((p) => `pr-${p.number}`), 'mark-failed']
-          )
+        if (!chosen) return askGitHub('github-pr-ambiguous', say('jobs.gate.github.q.ambiguous', { branch: info.branch, numbers }), choices)
         made = bind(chosen, false)
       } else if (found.prs.length === 1) made = bind(found.prs[0], false)
       else {
@@ -200,8 +199,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
         const p = carry(s, task)
           .catch(async (e) => {
             d.log(`lifecycle ci: task ${task.id}: ${String(e)}`)
-            const r = await d.openGate({ taskId: task.id, question: say('jobs.gate.github.carry.threw', { error: String(e) }) })
-            if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the Gate could not be opened: ${JSON.stringify(r.body)}`)
+            await askAbout(task, 'github-carry', say('jobs.gate.github.carry.threw', { error: String(e) }), ['retry', 'mark-failed'])
           })
           .catch((e) => d.log(`lifecycle ci: task ${task.id}: ${String(e)}`))
           .finally(() => {

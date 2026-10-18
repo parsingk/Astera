@@ -1379,6 +1379,8 @@ export const ja: Catalog = {
   'jobs.gate.github.noCiHint': 'CI なしでこのラウンドを通し、レビューに進みます。人が選んだことが記録に残ります。',
   'jobs.gate.github.continue': '取り込んで続ける',
   'jobs.gate.github.continueHint': 'GitHub のコミットを fast-forward で取り込み、最初のチェックからやり直します。',
+  'jobs.gate.github.retry': 'もう一度試す',
+  'jobs.gate.github.retryHint': '最初のチェックからこのラウンドをやり直します。',
   'jobs.gate.github.markFailed': 'Task を失敗にする',
   'jobs.gate.github.markFailedHint': 'Task を失敗として終了します。',
   'jobs.gate.github.bindPr': 'PR #{number} に結び付ける',

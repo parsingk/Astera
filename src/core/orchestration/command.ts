@@ -4200,6 +4200,9 @@ export async function handleCommand(
         const offered = gate.options ?? []
         if (!offered.includes(resolution)) return bad(`answer one of ${offered.join(', ')}`)
         const task = s.tasks.find((t) => t.id === gate.taskId)
+        // Refused before anything moves (G3b2 final review M1): another question still holds the Task
+        const other = s.gates.find((g) => g.taskId === gate.taskId && g.status === 'open' && g.id !== gate.id)
+        if (other) return conflict(`another question about this Task is still open: ${other.id}`)
         // continue brings the commits Astera did not push into the Run root before the fresh round's first check reads it
         if (resolution === 'continue' && task?.status === 'blocked') {
           const root = s.runs.find((r) => r.id === task.runId)?.worktree
@@ -4209,7 +4212,8 @@ export async function handleCommand(
           if (!ff.ok) return conflict(`The Run’s branch could not be brought up to date with GitHub: ${ff.message}`)
         }
         const answered = answerGitHubGate(deps.getState(), { gateId, resolution }, now)
-        if (!answered.ok) return refused(answered)
+        // A refusal of the moment (the question answered meanwhile, another one open) is a conflict, as check-unavailable's
+        if (!answered.ok) return answered.missing ? refused(answered) : conflict(answered.error)
         deps.log?.(`gate-resolve: task=${gate.taskId} ${resolution} on a ${gate.kind} Gate`)
         await deps.setState(answered.state)
         return okBody(answered.value.gate satisfies AnsweredQuestion)

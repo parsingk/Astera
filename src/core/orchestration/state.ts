@@ -1265,8 +1265,15 @@ export function beginLifecycleValidation(s: OrchState, a: { taskId: string }, no
   // A new round hands over afresh, whatever a hand-edited file left behind (G3a final review I1)
   const { ciWait: _stale, ...fresh } = moved
   const stamped = withConvergenceClock(fresh, now)
-  return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
+  return ok({ ...s, tasks: replace(s.tasks, stamped), gates: supersededGitHubGates(s.gates, task.id, now) }, stamped)
 }
+
+/** A fresh round or a hand-over makes the GitHub questions of the Task's earlier rounds moot (G3b2 final review I2): one
+ *  left open would hold the next round's own question, each refusing an answer while the other is open. */
+const supersededGitHubGates = (gates: Gate[], taskId: string, now: string): Gate[] =>
+  gates.some((g) => g.taskId === taskId && g.status === 'open' && isGitHubGateKind(g.kind))
+    ? gates.map((g) => (g.taskId === taskId && g.status === 'open' && isGitHubGateKind(g.kind) ? { ...g, status: 'resolved', resolution: 'superseded', resolvedAt: now } : g))
+    : gates
 
 /** A lifecycle Task's round handed to the Host at `github:ci` (GitHub lifecycle §4): its results so far kept in `ciWait`
  *  until the CI result settles the whole round (settleLifecycleCi). **Once**: a second hand-over (a restart that ran the
@@ -1284,7 +1291,7 @@ export function beginLifecycleCi(s: OrchState, a: { taskId: string; done: CheckR
     return kept
   })
   const next: Task = { ...task, ciWait: { since: now, done }, updatedAt: now }
-  return ok({ ...s, tasks: replace(s.tasks, next) }, 'begun')
+  return ok({ ...s, tasks: replace(s.tasks, next), gates: supersededGitHubGates(s.gates, task.id, now) }, 'begun')
 }
 
 /** The pull request and the head the Host pushed for a handed-off round (GitHub lifecycle G3b1, design §4.4): CI is read
@@ -1351,6 +1358,7 @@ const BIND_PR_ANSWER = /^pr-(\d+)$/
  * - `no-ci`: back to the wait, marked to go on without CI; the watch settles the round passed and says why;
  * - `pr-<n>`: back to the wait, marked to bind pull request n; the carrier binds it;
  * - `continue`: a fresh round from the first check (gate-resolve brought the outside commits in before this);
+ * - `retry`: a fresh round from the first check (the carrier's own stops, G3b2 final review M7);
  * - `mark-failed`: the Task fails.
  *
  * An answer the Gate does not offer is refused, and so is any answer while another question holds the Task. A Task a
@@ -1371,7 +1379,7 @@ export function answerGitHubGate(s: OrchState, a: { gateId: string; resolution: 
   if (task.status !== 'blocked') return ok({ ...s, gates }, { gate: resolved })
   const { ciWait, ...base } = task
   if (a.resolution === 'mark-failed') return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'failed', updatedAt: now }) }, { gate: resolved })
-  if (a.resolution === 'continue' || !ciWait) {
+  if (a.resolution === 'continue' || a.resolution === 'retry' || !ciWait) {
     const fresh = moveTask(task, 'pending', now)
     if (!fresh) return err(`cannot unblock from status: ${task.status}`)
     return ok({ ...s, gates, tasks: recomputeReady(replace(s.tasks, fresh)) }, { gate: resolved })

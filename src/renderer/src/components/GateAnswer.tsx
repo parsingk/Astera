@@ -32,6 +32,7 @@ const GITHUB_WORDS = {
   wait: ['jobs.gate.github.wait', 'jobs.gate.github.waitHint'],
   'no-ci': ['jobs.gate.github.noCi', 'jobs.gate.github.noCiHint'],
   continue: ['jobs.gate.github.continue', 'jobs.gate.github.continueHint'],
+  retry: ['jobs.gate.github.retry', 'jobs.gate.github.retryHint'],
   'mark-failed': ['jobs.gate.github.markFailed', 'jobs.gate.github.markFailedHint']
 } as const
 

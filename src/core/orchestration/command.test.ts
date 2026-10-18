@@ -1484,6 +1484,19 @@ describe('handleCommand — GitHub Gates', () => {
     expect((await call(nowhere, 'gate-resolve', { id: other, resolution: 'mark-failed' })).status).toBe(200)
   })
 
+  // G3b2 final review M1, M5: a refusal says so before anything moves, as a conflict
+  it('an answer while another question holds the Task is a conflict, and continue does not fast-forward first', async () => {
+    const ran: string[] = []
+    const deps = seeded(async () => (ran.push('ff'), { ok: true }))
+    const id = await open(deps)
+    const state = deps.getState()
+    await deps.setState({ ...state, gates: [...state.gates, { id: 'gat_plain', runId: 'run_1', taskId: 'tsk_l', question: 'q', status: 'open' as const, createdAt: NOW }] })
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(409)
+    expect(ran).toEqual([])
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'mark-failed' })).status).toBe(409)
+    expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+  })
+
   // G3b2 (S10): a check-unavailable question answers only what it offers
   it('check-unavailable refuses skip-check where the question does not offer it', async () => {
     const deps = seeded()

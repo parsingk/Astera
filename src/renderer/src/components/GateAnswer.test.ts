@@ -70,7 +70,11 @@ it('a GitHub question offers each answer in words with what it does, a pull requ
     { value: 'pr-12', label: 'jobs.gate.github.bindPr {"number":12}', hint: 'jobs.gate.github.bindPrHint' },
     { value: 'continue', label: 'jobs.gate.github.continue', hint: 'jobs.gate.github.continueHint' }
   ])
-  for (const key of ['wait', 'waitHint', 'noCi', 'noCiHint', 'continue', 'continueHint', 'markFailed', 'markFailedHint', 'bindPr', 'bindPrHint'])
+  // G3b2 final review M7
+  expect(gateChoicesOf({ id: 'g6', question: 'q', options: ['retry', 'mark-failed'], kind: 'github-carry' }, t).choices[0]).toEqual({
+    value: 'retry', label: 'jobs.gate.github.retry', hint: 'jobs.gate.github.retryHint'
+  })
+  for (const key of ['wait', 'waitHint', 'noCi', 'noCiHint', 'continue', 'continueHint', 'markFailed', 'markFailedHint', 'bindPr', 'bindPrHint', 'retry', 'retryHint'])
     for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[`jobs.gate.github.${key}`], `${lang} ${key}`).toBeTruthy()
 })
 

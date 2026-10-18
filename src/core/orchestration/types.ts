@@ -113,7 +113,9 @@ export const GITHUB_GATE_KINDS = [
   'github-external-head',
   'github-pr-ambiguous',
   'github-pr-closed',
-  'github-ci-outside'
+  'github-ci-outside',
+  /** The carrier could not take the round to GitHub (no origin, HEAD, a lookup, a record…): retry or mark-failed. */
+  'github-carry'
 ] as const
 export type GitHubGateKind = (typeof GITHUB_GATE_KINDS)[number]
 export const isGitHubGateKind = (k: string | null | undefined): k is GitHubGateKind =>

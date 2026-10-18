@@ -925,8 +925,7 @@ async function main(): Promise<void> {
         record: (args) => orch.handle('runs-github-record', args),
         recordWait: (args) => orch.handle('lifecycle-ci-wait', args),
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
-        openGate: (a) => orch.handle('gate-create', { task: a.taskId, question: a.question }),
-        // G3b2: a refused push or several pull requests ask a GitHub question that keeps the round's wait
+        // G3b2: every stop is a GitHub question; a refused push and several pull requests keep the round's wait
         openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
         lang: () => (wiring ? wiring.checks.langNow() : 'en'),
         log: (m) => log.write(m)

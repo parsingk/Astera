@@ -383,13 +383,15 @@ could not be made is GitHub CI, `skip-check` is not offered: a round never passe
 to GitHub, the task waits on a question whose `kind` says why: `github-no-ci` (no CI appeared on the pushed
 head in 3 minutes), `github-ci-cap` (no verdict within the Job's `ciWaitMinutes`), `github-external-head`
 (GitHub has a commit on the branch Astera did not push), `github-pr-ambiguous` (several open pull requests
-for the branch), `github-pr-closed` (the bound pull request was closed or merged) or `github-ci-outside`
+for the branch), `github-pr-closed` (the bound pull request was closed or merged), `github-ci-outside`
 (CI failed for a reason outside the code, such as a runner lost or a permission missing, or GitHub refused
-this account's reads). The question keeps the round's wait, and its `options` act on it: `wait` waits
-again on the same head, `no-ci` lets the round pass without CI and records that a person chose it,
-`continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from the
-first (a history that cannot fast-forward is refused with git's reason, and the question stays open),
-`pr-<n>` binds pull request n, and `mark-failed` fails the task. Any answer it does not list is a 2.
+this account's reads) or `github-carry` (the round could not be taken to GitHub: no origin, a HEAD off the
+branch, a lookup or a record that failed). The question keeps the round's wait, and its `options` act on it:
+`wait` waits again on the same head, `no-ci` lets the round pass without CI and records that a person chose
+it, `continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from
+the first (a history that cannot fast-forward is refused with git's reason, and the question stays open),
+`retry` runs the round again from the first check, `pr-<n>` binds pull request n, and `mark-failed` fails
+the task. Any answer it does not list is a 2.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and

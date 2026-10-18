@@ -49,17 +49,23 @@ describe('fastForward', () => {
 // GitHub lifecycle G3b2 (design §4.4, S2): a PR head behind the push is Astera's own earlier head; one not in its history
 // is someone else's
 describe('ancestry', () => {
+  const HEAD = 'a'.repeat(40)
+  const PUSHED = 'b'.repeat(40)
+  const has = { ok: true, exitCode: 0 }
   it.each([
-    [{ ok: true, exitCode: 0 }, 'ancestor'],
-    [{ ok: false, exitCode: 1 }, 'not'],
-    [{ ok: false, exitCode: 128, stderr: 'fatal: Not a valid commit name 0123456789abcdef0123456789abcdef01234567' }, 'not'],
-    [{ ok: false, exitCode: 128, stderr: 'fatal: bad object 0123456789abcdef0123456789abcdef01234567' }, 'not'],
-    [{ ok: false, timedOut: true, stderr: '' }, 'unknown'],
-    [{ ok: false, exitCode: 128, stderr: 'fatal: not a git repository' }, 'unknown']
-  ] as const)('reads %j as %s', async (r, want) => {
-    const g = gitScript([r as Partial<GitResult>])
-    expect(await ancestry(g.run, '/wt', 'a'.repeat(40), 'b'.repeat(40))).toBe(want)
-    expect(g.calls[0].args).toEqual(['merge-base', '--is-ancestor', 'a'.repeat(40), 'b'.repeat(40)])
+    ['both present, head in the history', [has, has, { ok: true, exitCode: 0 }], 'ancestor'],
+    ['both present, head not in the history', [has, has, { ok: false, exitCode: 1 }], 'not'],
+    // G3b2 final review M4: the Run root lacking the head is told by the exit code, in whatever language git speaks
+    ['the head absent from the Run root', [has, { ok: false, exitCode: 128, stderr: 'fatal: Ungültiger Objektname' }], 'not'],
+    ['the head unreadable in time', [has, { ok: false, timedOut: true, stderr: '' }], 'unknown'],
+    ['the pushed head itself unreadable', [{ ok: false, exitCode: 128, stderr: 'fatal: not a git repository' }], 'unknown'],
+    ['merge-base out of time', [has, has, { ok: false, timedOut: true, stderr: '' }], 'unknown']
+  ] as const)('%s', async (_name, rs, want) => {
+    const g = gitScript(rs as unknown as Partial<GitResult>[])
+    expect(await ancestry(g.run, '/wt', HEAD, PUSHED)).toBe(want)
+    expect(g.calls.map((c) => c.args)).toEqual(
+      [['cat-file', '-e', `${PUSHED}^{commit}`], ['cat-file', '-e', `${HEAD}^{commit}`], ['merge-base', '--is-ancestor', HEAD, PUSHED]].slice(0, rs.length)
+    )
   })
 })
 
