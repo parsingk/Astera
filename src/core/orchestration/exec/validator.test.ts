@@ -684,3 +684,53 @@ describe('TaskValidator — 여러 check', () => {
     expect(calls[0].results.map((r) => r.configId)).toEqual(['a', 'b'])
   })
 })
+
+// GitHub lifecycle G3a (design §4): a round that reaches github:ci hands its results so far to the Host, settles nothing
+// itself, and frees its folder
+describe('TaskValidator — github:ci', () => {
+  const W = absPath('wl')
+  it('hands the passed local results to the Host once, never settles, and frees the folder', async () => {
+    const { onSettled, calls } = settledCalls()
+    const handed: { taskId: string; cwd: string; done: CheckResult[] }[] = []
+    const runner = fakeRunner()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {}, onHandedOff: async (a) => void handed.push(a) })
+    v.enqueue({ taskId: 'tsk_l', cwd: W, configIds: ['lint', 'github:ci'] })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ runId: 'run_1', exitCode: 0 })
+    await vi.waitFor(() => expect(handed).toHaveLength(1))
+    expect(handed[0]).toMatchObject({ taskId: 'tsk_l', cwd: W, done: [{ configId: 'lint', status: 'passed' }] })
+    expect(calls).toEqual([])
+    expect(v.holds('tsk_l')).toBe(false)
+    // the folder is free: the next round there starts at once
+    v.enqueue({ taskId: 'tsk_next', cwd: W, configIds: ['test'] })
+    await vi.waitFor(() => expect(runner.started.map((s) => s.taskId)).toEqual(['tsk_l', 'tsk_next']))
+  })
+
+  it('a local failure settles the round as today and never reaches the Host', async () => {
+    const { onSettled, calls } = settledCalls()
+    const handed = vi.fn(async () => {})
+    const runner = fakeRunner()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {}, onHandedOff: handed })
+    v.enqueue({ taskId: 'tsk_l', cwd: W, configIds: ['lint', 'github:ci'] })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ runId: 'run_1', exitCode: 1 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].results.map((r) => [r.configId, r.status])).toEqual([['lint', 'failed'], ['github:ci', 'not-run']])
+    expect(handed).not.toHaveBeenCalled()
+  })
+
+  it('without the Host to hand it to, or when the hand-off fails, it cannot be run', async () => {
+    const cannot: string[] = []
+    const alone = new TaskValidator({ runner: fakeRunner(), onSettled: async () => {}, onCannotRun: async (a) => void cannot.push(a.reason) })
+    alone.enqueue({ taskId: 'tsk_l', cwd: W, configIds: ['github:ci'] })
+    await vi.waitFor(() => expect(cannot).toEqual(['GitHub CI is checked by the Astera Host']))
+    const failing = new TaskValidator({
+      runner: fakeRunner(), onSettled: async () => {}, onCannotRun: async (a) => void cannot.push(a.reason),
+      onHandedOff: async () => { throw new Error('the Host refused: 409') }
+    })
+    failing.enqueue({ taskId: 'tsk_l', cwd: absPath('wl2'), configIds: ['github:ci'] })
+    await vi.waitFor(() => expect(cannot).toHaveLength(2))
+    expect(cannot[1]).toContain('the Host refused: 409')
+    expect(failing.holds('tsk_l')).toBe(false)
+  })
+})

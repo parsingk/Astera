@@ -3069,7 +3069,9 @@ export function registerIpc(
       },
       // Plugins run in the Host: the app asks it (plugin Phase 5 C8). `deps` is defined below and read at the call.
       pluginCheck: (plugin, input) =>
-        deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') })
+        deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') }),
+      // GitHub CI is the Host's (GitHub lifecycle §4): a round this app runs hands it over through the socket
+      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' })
     })
     orchValidator = validation.validator
 

@@ -37,14 +37,22 @@ import {
   rekeyExternalCoordinator,
   bindNativeSession,
   beginValidation,
+  beginLifecycleValidation,
+  beginLifecycleCi,
+  settleLifecycleCi,
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
   runGatedForTask,
+  answerCheckUnavailable,
+  liveCheckResume,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
 import type { RepairTarget } from './state'
+import { withLifecycleTask } from './lifecycleTask'
+import { outcomeOf } from './running'
+import { derivePublicEvents } from './publicEvents'
 import { t } from '../i18n'
 
 const NOW = '2026-08-04T00:00:00.000Z'
@@ -3198,6 +3206,14 @@ describe('beginValidation', () => {
     return r2.state
   }
 
+  // G3a final review M2: ready → validating is the lifecycle Task's own move, not recovery's
+  it('refuses a ready Task: a ready Task has no work to check', () => {
+    const r0 = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const r1 = unwrap<Task>(createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW))
+    expect(r1.value.status).toBe('ready')
+    expect(beginValidation(r1.state, { taskId: r1.value.id }, NOW).ok).toBe(false)
+  })
+
   it('moves a dispatched Task into validating so its check can run', () => {
     const s = taskDispatchedFixture()
     const before = s.tasks[0]
@@ -3800,5 +3816,222 @@ describe('createJob — GitHub lifecycle (G1)', () => {
     expect(made.value.github).toEqual(policy)
     const plain = unwrap<Record<string, unknown>>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never)
     expect(plain.value).not.toHaveProperty('github')
+  })
+
+  // G3a Review Focus 4: a Job without Task definitions copies the previous Run's Tasks into the next
+  it('does not copy a lifecycle Task into the next Run', () => {
+    const job = unwrap<{ id: string }>(createJob(emptyState(), { objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW) as never)
+    const run1 = unwrap<{ id: string }>(startJobRun(job.state, job.value.id, NOW) as never)
+    const a = unwrap<{ id: string }>(createTask(run1.state, { runId: run1.value.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const withLifecycle = withLifecycleTask(
+      { ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) },
+      run1.value.id,
+      NOW
+    )
+    expect(withLifecycle.tasks.filter((t) => t.runId === run1.value.id).map((t) => t.kind ?? 'ordinary')).toEqual(['ordinary', 'lifecycle'])
+    // G3a final review I3: the integration Task the loop made for the lifecycle Task is not the next Run's either
+    const lifecycleId = withLifecycle.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const merge = unwrap<{ id: string }>(
+      createTask(withLifecycle, { runId: run1.value.id, title: '워크트리 병합: GitHub 전달', spec: 'merge /wt-a into D:/wt/run', deps: [a.value.id], parentId: lifecycleId }, NOW) as never
+    )
+    const finished = merge.state
+    const run2 = unwrap<{ id: string }>(startJobRun(finished, job.value.id, LATER) as never)
+    const copied = run2.state.tasks.filter((t) => t.runId === run2.value.id)
+    expect(copied.map((t) => [t.title, t.kind ?? 'ordinary', t.deps])).toEqual([['a', 'ordinary', []]])
+  })
+})
+
+// GitHub lifecycle G3a (design §3.3): the lifecycle Task starts its checks with no worker
+describe('beginLifecycleValidation', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const ready = (): { s: OrchState; lifecycleId: string; ordinaryId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const s = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    return { s, lifecycleId: s.tasks.find((t) => t.kind === 'lifecycle')!.id, ordinaryId: a.value.id }
+  }
+
+  it('moves a ready lifecycle Task to validating and starts its time budget once', () => {
+    const { s, lifecycleId } = ready()
+    const r = unwrap<Task>(beginLifecycleValidation(s, { taskId: lifecycleId }, LATER) as never)
+    expect(r.value).toMatchObject({ status: 'validating', convergenceStartedAt: LATER })
+  })
+
+  it('refuses an ordinary Task, a lifecycle Task that is not ready, and an unknown Task', () => {
+    const { s, lifecycleId, ordinaryId } = ready()
+    expect(beginLifecycleValidation(s, { taskId: ordinaryId }, LATER).ok).toBe(false)
+    const started = unwrap<Task>(beginLifecycleValidation(s, { taskId: lifecycleId }, LATER) as never).state
+    expect(beginLifecycleValidation(started, { taskId: lifecycleId }, LATER).ok).toBe(false)
+    expect(beginLifecycleValidation(s, { taskId: 'tsk_nope' }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+})
+
+// GitHub lifecycle G3a (design §4, Review Focus 5): the round handed over at github:ci is kept once
+describe('beginLifecycleCi', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const validating = (): { s: OrchState; lifecycleId: string; ordinaryId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const ready = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    return { s: unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state, lifecycleId, ordinaryId: a.value.id }
+  }
+  const lint: CheckResult = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0, outputTail: 'all good', startedAt: NOW, endedAt: NOW }
+
+  it('keeps the round’s results, the passed ones without their output', () => {
+    const { s, lifecycleId } = validating()
+    const r = unwrap<string>(beginLifecycleCi(s, { taskId: lifecycleId, done: [lint] }, LATER) as never)
+    expect(r.value).toBe('begun')
+    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: LATER, done: [{ configId: 'lint', name: 'lint', status: 'passed', exitCode: 0, startedAt: NOW, endedAt: NOW }] })
+  })
+
+  it('a second hand-over changes nothing', () => {
+    const { s, lifecycleId } = validating()
+    const once = unwrap<string>(beginLifecycleCi(s, { taskId: lifecycleId, done: [lint] }, LATER) as never).state
+    const again = beginLifecycleCi(once, { taskId: lifecycleId, done: [] }, EVEN_LATER)
+    expect(again).toMatchObject({ ok: true, value: 'already' })
+    expect(again.ok && again.state).toBe(once)
+  })
+
+  // G3a final review I1: a handed-over round belongs to that stretch of validating only
+  it('drops a handed-over round when the Task leaves validating, so the next round is kept fresh', () => {
+    const { s, lifecycleId } = validating()
+    const once = unwrap<string>(beginLifecycleCi(s, { taskId: lifecycleId, done: [lint] }, LATER) as never).state
+    const gated = unwrap<Gate>(createGate(once, { taskId: lifecycleId, question: 'q' }, LATER) as never).state
+    expect(gated.tasks.find((t) => t.id === lifecycleId)!.ciWait).toBeUndefined()
+    const gateId = gated.gates.find((g) => g.taskId === lifecycleId)!.id
+    const back = unwrap(resolveGate(gated, { gateId, resolution: 'go on' }, LATER) as never).state
+    const again = unwrap<Task>(beginLifecycleValidation(back, { taskId: lifecycleId }, EVEN_LATER) as never).state
+    const fresh: CheckResult = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0, startedAt: EVEN_LATER }
+    const r = unwrap<string>(beginLifecycleCi(again, { taskId: lifecycleId, done: [fresh] }, EVEN_LATER) as never)
+    expect(r.value).toBe('begun')
+    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: EVEN_LATER, done: [fresh] })
+  })
+
+  it('refuses an ordinary Task, a lifecycle Task not validating, and an unknown Task', () => {
+    const { s, lifecycleId, ordinaryId } = validating()
+    expect(beginLifecycleCi(s, { taskId: ordinaryId, done: [] }, LATER).ok).toBe(false)
+    const blocked = { ...s, tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'blocked' as const } : t)) }
+    expect(beginLifecycleCi(blocked, { taskId: lifecycleId, done: [] }, LATER).ok).toBe(false)
+    expect(beginLifecycleCi(s, { taskId: 'tsk_nope', done: [] }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+})
+
+// G3a final review I2: a lifecycle Task has no attempt of its own; its round runs in the Run root
+describe('answerCheckUnavailable — the lifecycle Task', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const unavailable = (): { s: OrchState; lifecycleId: string; gateId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [], validateConfigIds: ['plugin:x'] }, NOW) as never)
+    const rooted = { ...a.state, runs: a.state.runs.map((r) => ({ ...r, worktree: 'D:/wt/run' })) }
+    const ready = withLifecycleTask({ ...rooted, tasks: rooted.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const validating = unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state
+    const results: CheckResult[] = [
+      { configId: 'plugin:x', name: 'X', status: 'error', summary: 'the plugin did not answer' },
+      { configId: 'github:ci', name: 'github:ci', status: 'not-run' }
+    ]
+    const gated = unwrap<Task>(applyValidationResult(validating, { taskId: lifecycleId, results, lang: 'en' }, NOW) as never).state
+    return { s: gated, lifecycleId, gateId: gated.gates.find((g) => g.taskId === lifecycleId && g.kind === 'check-unavailable')!.id }
+  }
+
+  it('retry runs the checks again in the Run root', () => {
+    const { s, lifecycleId, gateId } = unavailable()
+    const r = unwrap<{ revalidate: { taskId: string; cwd: string } | null }>(answerCheckUnavailable(s, { gateId, resolution: 'retry' }, LATER) as never)
+    expect(r.value.revalidate).toEqual({ taskId: lifecycleId, cwd: 'D:/wt/run' })
+    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.status).toBe('validating')
+  })
+
+  it('skip-check carries the round on, live although the Task has no attempt to name', () => {
+    const { s, lifecycleId, gateId } = unavailable()
+    const r = unwrap<{ revalidate: { taskId: string; cwd: string } | null }>(answerCheckUnavailable(s, { gateId, resolution: 'skip-check' }, LATER) as never)
+    const task = r.state.tasks.find((t) => t.id === lifecycleId)!
+    expect(liveCheckResume(r.state, task)).toMatchObject({ done: [{ configId: 'plugin:x', skipped: true }], rest: ['github:ci'] })
+  })
+})
+
+// GitHub lifecycle G3a (design §4): the CI result and the handed-off local results make one verdict, once
+describe('settleLifecycleCi', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lint: CheckResult = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0 }
+  const handedOver = (): { s: OrchState; lifecycleId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [], validateConfigIds: ['lint'] }, NOW) as never)
+    const ready = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const validating = unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state
+    return { s: unwrap<string>(beginLifecycleCi(validating, { taskId: lifecycleId, done: [lint] }, NOW) as never).state, lifecycleId }
+  }
+  const ci = (status: CheckResult['status']): CheckResult => ({
+    configId: 'github:ci', name: 'GitHub CI', status, ...(status === 'failed' ? { summary: 'test (test): not ok 1 - adds', externalUrl: 'https://github.com/o/r/actions/runs/1/job/2' } : {})
+  })
+
+  it('a passing CI after passing local checks goes to review, with both in the Task’s checks and history', () => {
+    const { s, lifecycleId } = handedOver()
+    const r = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never)
+    expect(r.value.status).toBe('reviewing')
+    expect(r.value.checks?.map((c) => [c.configId, c.status])).toEqual([['lint', 'passed'], ['github:ci', 'passed']])
+    expect(r.value.checkHistory).toEqual({ lint: ['passed'], 'github:ci': ['passed'] })
+    expect(r.value.ciWait).toBeUndefined()
+  })
+
+  it('a failing CI is a check failure; with no repair target yet (G3c gives one) it asks a person', () => {
+    const { s, lifecycleId } = handedOver()
+    const r = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('failed') }, LATER) as never)
+    expect(r.value.status).toBe('blocked')
+    expect(r.value.checks?.at(-1)).toMatchObject({ configId: 'github:ci', status: 'failed', summary: 'test (test): not ok 1 - adds' })
+    expect(r.value.ciWait).toBeUndefined()
+    expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-blocked')
+  })
+
+  it('settles once: a Task with no round handed over is refused', () => {
+    const { s, lifecycleId } = handedOver()
+    const once = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+    expect(settleLifecycleCi(once, { taskId: lifecycleId, result: ci('passed') }, LATER).ok).toBe(false)
+    expect(settleLifecycleCi(s, { taskId: 'tsk_nope', result: ci('passed') }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+})
+
+// GitHub lifecycle G3a (design §3.2): every pure transition that completes a lifecycle Run's last ordinary Task adds the
+// lifecycle Task in the same write. A new path to completed that skips withLifecycleTask fails here.
+describe('GitHub lifecycle G3a: every transition to completed adds the lifecycle Task in the same write', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  type Armed = { s: OrchState; runId: string; taskId: string; dispatchId: string }
+  /** A lifecycle Job's Run with one ordinary Task and its open Dispatch. */
+  const armed = (o: { convergence?: boolean; validate?: boolean; review?: boolean }): Armed => {
+    const { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, ...(o.convergence ? { convergence: {} } : {}) }, NOW)
+    const t = unwrap<{ id: string }>(
+      createTask(s, { runId: run.id, title: 't', spec: 'do it', deps: [], ...(o.validate ? { validateConfigIds: ['cfg1'] } : {}), ...(o.review ? { reviewRequested: true } : {}) }, NOW) as never
+    )
+    const d = unwrap<{ id: string }>(
+      openDispatch(t.state, { taskId: t.value.id, provider: 'codex', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p', specPath: 'D:/p/orch/specs/x.md' }, NOW) as never
+    )
+    return { s: d.state, runId: run.id, taskId: t.value.id, dispatchId: d.value.id }
+  }
+  const workerDone = (a: Armed): OrchState =>
+    unwrap(applyWorkerDone(a.s, { taskId: a.taskId, dispatchId: a.dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+  const validated = (a: Armed): OrchState =>
+    unwrap(applyValidationResult(workerDone(a), { taskId: a.taskId, results: one(0), repair: SAME }, NOW) as never).state
+  const reviewed = (a: Armed): OrchState => {
+    const opened = unwrap<{ id: string }>(
+      openReviewDispatch(workerDone(a), { taskId: a.taskId, provider: 'claude', accountId: 'acc2', sessionId: 'sess2', cwd: 'D:/p', specPath: 'D:/p/orch/specs/review.md' }, NOW) as never
+    )
+    return unwrap(applyReviewResult(opened.state, { taskId: a.taskId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 's', body: 'ok', repair: SAME }, NOW) as never).state
+  }
+
+  it.each([
+    ['worker_done', {}, workerDone],
+    ['a validation verdict with no policy', { validate: true }, validated],
+    ['a validation verdict under convergence', { convergence: true, validate: true }, validated],
+    ['a review verdict with no policy', { review: true }, reviewed],
+    ['a review verdict under convergence', { convergence: true, review: true }, reviewed]
+  ] as const)('%s', (_, o, complete) => {
+    const a = armed(o)
+    const s = complete(a)
+    expect(s.tasks.find((t) => t.id === a.taskId)!.status).toBe('completed')
+    expect(s.tasks.filter((t) => t.runId === a.runId && t.kind === 'lifecycle').map((t) => [t.status, t.deps])).toEqual([['ready', [a.taskId]]])
+    // In the same write: no reader sees the Run all-terminal, so it neither completes nor announces it
+    expect(outcomeOf(s, a.runId)).toBe('running')
+    expect(derivePublicEvents(a.s, s).map((e) => e.type)).not.toContain('run.completed')
   })
 })

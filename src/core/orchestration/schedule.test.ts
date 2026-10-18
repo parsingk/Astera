@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { pendingMerges } from './integrate'
-import { slotsToFill, tasksMissingAccounts } from './schedule'
+import { lifecycleToStart, slotsToFill, tasksMissingAccounts } from './schedule'
 import { emptyState, type OrchState } from './state'
 import type { Task } from './types'
 import { stateFromLegacy } from './legacyState'
@@ -241,6 +241,43 @@ describe('slotsToFill', () => {
 
 // slotsToFill 이 계정 없는 Task 를 건너뛰는 것만으로는 Run 이 이유 없이 서 있는다 — 이 판정이
 // 그것들을 따로 내고 배선이 Gate 를 연다(ipc.ts 의 자동 디스패치 루프)
+// GitHub lifecycle G3a (design §3.3, Review Focus 3): the lifecycle Task has no account and no worker; Astera places it
+// in every Run, coordinator-driven ones included
+describe('lifecycleToStart', () => {
+  const lifecycle = (over: Partial<Task> = {}): Task => task('tsk_l', { kind: 'lifecycle', accountIds: undefined, deps: ['t1'], ...over })
+  const done = task('t1', { status: 'completed' })
+
+  it('names a ready lifecycle Task, in an app-driven Run and in a coordinator-driven one', () => {
+    expect(lifecycleToStart(state({ tasks: [done, lifecycle()] }))).toEqual([{ runId: 'run_1', taskId: 'tsk_l' }])
+    expect(lifecycleToStart(state({ runs: [run({ autoDispatch: false })], tasks: [done, lifecycle()] }))).toEqual([{ runId: 'run_1', taskId: 'tsk_l' }])
+  })
+
+  it('names none that is not ready, has an open Dispatch, hit the failure limit, or whose Run is paused', () => {
+    expect(lifecycleToStart(state({ tasks: [done, lifecycle({ status: 'validating' })] }))).toEqual([])
+    expect(lifecycleToStart(state({ tasks: [done, lifecycle({ consecutiveFailures: 3 })] }))).toEqual([])
+    expect(lifecycleToStart(state({ runs: [run({ paused: true })], tasks: [done, lifecycle()] }))).toEqual([])
+    const open = state({ tasks: [done, lifecycle()] })
+    open.dispatches = [
+      { id: 'dsp_1', taskId: 'tsk_l', provider: 'codex', accountId: 'acc_1', sessionId: 's', cwd: '/p', specPath: '', startedAt: '2026-08-19T00:00:00.000Z', workerState: 'ready', retained: false }
+    ]
+    expect(lifecycleToStart(open)).toEqual([])
+  })
+
+  it('is never a slot and never asks for an account', () => {
+    const s = state({ tasks: [done, lifecycle()] })
+    expect(slotsToFill(s)).toEqual([])
+    expect(tasksMissingAccounts(s)).toEqual([])
+  })
+
+  it('its integration Task is a slot in a coordinator-driven Run too, and no other Task of that Run is', () => {
+    const merge = task('tsk_m', { parentId: 'tsk_l', deps: ['t1'] })
+    const coordinatorRun = state({ runs: [run({ autoDispatch: false })], tasks: [done, lifecycle(), merge, task('t2')] })
+    expect(slotsToFill(coordinatorRun)).toEqual([{ runId: 'run_1', taskId: 'tsk_m', accountIds: ['acc_1'] }])
+    const paused = state({ runs: [run({ autoDispatch: false, paused: true })], tasks: [done, lifecycle(), merge] })
+    expect(slotsToFill(paused)).toEqual([])
+  })
+})
+
 describe('tasksMissingAccounts', () => {
   it('계정 없는 ready Task 를 낸다', () => {
     const s = state({ tasks: [task('t1', { accountIds: undefined }), task('t2')] })

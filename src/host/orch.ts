@@ -29,7 +29,7 @@ import type { ControllerRegistry } from './controllers'
 import { readMcpAccess } from '../core/settings/mcpAccess'
 import { readMcpSessions } from '../core/settings/mcpSessions'
 import { readMcpGithubWrite } from '../core/settings/mcpGithubWrite'
-import { HOST_CALLER, type Driver } from '../core/host/driver'
+import { APP_CALLER, HOST_CALLER, type Driver } from '../core/host/driver'
 import { hostOrchDeps } from './orchDeps'
 import { createCheckWaits } from '../core/orchestration/checkWaits'
 import { readAccountsFile } from '../core/accounts/accountsFile'
@@ -407,9 +407,12 @@ export interface HostOrch extends OrchCall {
   drainOnce(): Promise<boolean>
 }
 
-/** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle).
- *  A socket that names itself the Host's caller is refused them. */
-const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record'])
+/** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle),
+ *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
+ *  names itself the Host's caller is refused them. */
+const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin'])
+/** The app's own dispatch-loop step: under the app's caller id it is taken only from the app's connection. */
+const APP_OWN_STEPS: ReadonlySet<string> = new Set(['lifecycle-start'])
 
 export function createHostOrch(a: {
   profileDir: string
@@ -1561,6 +1564,8 @@ export function createHostOrch(a: {
       // `runs-github-record` trust the Host's caller id, and anything on this machine can write that id in a frame. Other
       // commands keep taking it and journal it as the CLI it came from.
       if (sessionId === HOST_CALLER && HOST_OWN_RECORDS.has(cmd)) return { status: 403, body: { error: `${HOST_CALLER} is the Host's own caller id; a connection cannot use it` } }
+      if (sessionId === APP_CALLER && from?.role !== 'app' && APP_OWN_STEPS.has(cmd))
+        return { status: 403, body: { error: `${APP_CALLER} is the app's own caller id; only the app's connection can use it for ${cmd}` } }
       // **Everything is inside the try, including `state-put` and `ready()`.** `server.ts` answers
       // `orch-call` from this promise and has no catch of its own, so anything that escapes here is
       // not a 500 — it is no `orch-result` at all, a caller waiting forever, and an unhandled

@@ -21,6 +21,7 @@ import {
   type OrchState
 } from './state'
 import { latestImplDispatch } from './convergence'
+import { isLifecycleTask } from './lifecycleTask'
 import { splitLegacyRuns, type LegacyRun } from './legacy'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
@@ -141,6 +142,15 @@ export function interruptedResumes(
     if (runGated || openHere) continue
     if (r.resume === 'review') {
       rereview.push(t.id)
+      continue
+    }
+    // A lifecycle Task has no implementation Dispatch (GitHub lifecycle §6.3): its round runs in the Run root, and once it
+    // was handed to the Host at github:ci (`ciWait`) the wait is the Host's, so it is neither re-run nor stuck.
+    if (isLifecycleTask(t)) {
+      const root = s.runs.find((run) => run.id === t.runId)?.worktree
+      if (t.ciWait) continue
+      if (root !== undefined) revalidate.push({ taskId: t.id, cwd: root })
+      else stuck++
       continue
     }
     const impl = latestImplDispatch(s, t.id)

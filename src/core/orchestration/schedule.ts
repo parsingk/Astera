@@ -1,5 +1,6 @@
-import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun } from './types'
+import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun, type Task } from './types'
 import { jobOf, placedByApp, type OrchState } from './state'
+import { isLifecycleTask } from './lifecycleTask'
 
 /** 지금 워커를 띄워야 할 자리 하나.
  *
@@ -42,6 +43,18 @@ export function appDriven(s: OrchState, run: JobRun): boolean {
   return true
 }
 
+/** Whether Astera may carry the Run through GitHub now, whoever drives it (GitHub lifecycle §3.3): appDriven's three
+ *  holds, without its "placed by the app". */
+function mayCarry(s: OrchState, run: JobRun): boolean {
+  const job = jobOf(s, run)
+  return !!job && !job.pendingStart && !job.paused && !run.paused
+}
+
+/** The integration Task the dispatch loop made for a lifecycle Task (its `parentId`, integrate.ts). */
+function isLifecycleIntegration(s: OrchState, t: Task): boolean {
+  return t.parentId !== undefined && s.tasks.some((p) => p.id === t.parentId && isLifecycleTask(p))
+}
+
 /** 지금 띄워야 할 것들. **부수 효과가 없고 같은 입력에 같은 답을 준다** — 이 판정이 순수해야
  *  하는 이유는 이것이 이 슬라이스에서 기계가 검사할 수 있는 유일한 부분이기 때문이다(스케줄러를
  *  매다는 자리는 main 의 배선이라 테스트가 없다).
@@ -59,7 +72,10 @@ export function appDriven(s: OrchState, run: JobRun): boolean {
 export function slotsToFill(s: OrchState): Slot[] {
   const slots: Slot[] = []
   for (const run of s.runs) {
-    if (!appDriven(s, run)) continue
+    // 앱이 모는 회차가 아니어도 **lifecycle Task 의 통합 Task 는 낸다**(GitHub lifecycle §3.3) — lifecycle Task 를
+    // Astera 가 띄우듯 그 앞의 병합도 Astera 의 일이고, 코디네이터는 그 회차에서 할 일이 없다고 들었다.
+    const driven = appDriven(s, run)
+    if (!driven && !mayCarry(s, run)) continue
     const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
     const openHere = open.filter((d) => {
       const t = s.tasks.find((x) => x.id === d.taskId)
@@ -78,7 +94,8 @@ export function slotsToFill(s: OrchState): Slot[] {
         (t.accountIds?.length ?? 0) > 0 &&
         // ready 인데 열린 Dispatch 가 있는 조합은 만들어질 수 없지만, 판정이 그 사실에 기대지
         // 않는다. 기대면 그 불변식이 깨지는 날 두 워커가 같은 Task 를 잡는다
-        !open.some((d) => d.taskId === t.id)
+        !open.some((d) => d.taskId === t.id) &&
+        (driven || isLifecycleIntegration(s, t))
     )
     for (const t of candidates.slice(0, room)) {
       // accountIds 는 위 필터가 비어 있지 않음을 보장한다(Slot.accountIds 의 주석)
@@ -112,7 +129,28 @@ export function tasksMissingAccounts(s: OrchState): { runId: string; taskId: str
       if (t.runId !== run.id) continue
       if (t.status !== 'ready') continue
       if (t.consecutiveFailures >= FAILURE_LIMIT) continue
+      // A lifecycle Task has no account by design: it has no worker (lifecycleToStart below places it)
+      if (isLifecycleTask(t)) continue
       if ((t.accountIds?.length ?? 0) > 0) continue
+      if (open.some((d) => d.taskId === t.id)) continue
+      out.push({ runId: run.id, taskId: t.id })
+    }
+  }
+  return out
+}
+
+/** The lifecycle Tasks to start now (GitHub lifecycle §3.3): ready, under the failure limit, with no open Dispatch, in a
+ *  Run that is not paused and whose Job is neither paused nor waiting for its start. **Every Run, coordinator-driven
+ *  ones included**: Astera carries the Run through GitHub whoever drove its Tasks, and a coordinator cannot start a
+ *  Task that has no worker. Pure, like slotsToFill. */
+export function lifecycleToStart(s: OrchState): { runId: string; taskId: string }[] {
+  const out: { runId: string; taskId: string }[] = []
+  const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
+  for (const run of s.runs) {
+    if (!mayCarry(s, run)) continue
+    for (const t of s.tasks) {
+      if (t.runId !== run.id || !isLifecycleTask(t) || t.status !== 'ready') continue
+      if (t.consecutiveFailures >= FAILURE_LIMIT) continue
       if (open.some((d) => d.taskId === t.id)) continue
       out.push({ runId: run.id, taskId: t.id })
     }

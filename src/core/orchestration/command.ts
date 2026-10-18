@@ -22,6 +22,8 @@ import {
   createGate,
   createQuestion,
   createJob,
+  beginLifecycleValidation,
+  beginLifecycleCi,
   createTask,
   emptyState,
   latestRun,
@@ -87,6 +89,7 @@ import {
   canTransition,
   isPlaceholderSessionId,
   recomputeReady,
+  type CheckResult,
   type ConvergencePolicy,
   type Dispatch,
   type Job,
@@ -113,12 +116,13 @@ import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding } from '../github/remote'
+import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 import { prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
-import { GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
+import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import { parseRunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
@@ -722,6 +726,18 @@ const refused = (r: { error: string; missing?: true }): Reply =>
   r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
+
+/** A lifecycle Task is carried by Astera (GitHub lifecycle §3.3): no worker is started on it by request. */
+const LIFECYCLE_NO_WORKER = 'Astera carries this Task through GitHub itself; it has no worker'
+
+const CHECK_STATUSES: readonly string[] = ['passed', 'failed', 'timed-out', 'not-run', 'error']
+/** A validation round's results as a validator sends them (lifecycle-ci-begin): each names its check and a status. */
+const checkResultsOk = (v: unknown): v is CheckResult[] =>
+  Array.isArray(v) &&
+  v.every((r) => {
+    const o = r as Record<string, unknown> | null
+    return typeof o === 'object' && o !== null && typeof o.configId === 'string' && typeof o.name === 'string' && CHECK_STATUSES.includes(o.status as string)
+  })
 /** How long after its `startedAt` a `pending:` Dispatch still counts as a start in flight (Host S2
  *  fix round 2, N1). A start waits at most a spawn deadline (SPAWN_DEADLINE_MS, 20 s) plus the
  *  coordinator's idle wait before its prompt (30 s), plus trust and account reads; two minutes covers
@@ -1570,6 +1586,7 @@ export async function handleCommand(
           // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
           // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
           convergence: policyOf(base, { runId: target.id }) !== null,
+          githubLifecycle: job.github !== undefined,
           jobId: job.id,
           accountId
         })
@@ -2046,6 +2063,8 @@ export async function handleCommand(
         if (validate === null) return bad('--validate needs a value: run configuration ids')
         const ids = validate.split(',').map((x) => x.trim())
         if (ids.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        // Refused before the configurations are looked up, as task-create refuses it (G3a final review M5)
+        if (ids.includes(GITHUB_CI_CHECK)) return bad("github:ci is the GitHub lifecycle's own check; Astera adds it")
         const owner = job !== null ? s.jobs.find((j) => j.id === job) : jobOf(s, s.runs.find((r) => r.id === run)!)
         if (!owner) return notFound(`unknown job for run: ${String(run)}`)
         // A plugin's check (plugin Phase 5 C7): its plugin must be here, offer checks and be enabled. It is no run
@@ -2709,6 +2728,39 @@ export async function handleCommand(
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
     }
+    case 'lifecycle-start': {
+      // The dispatch loop's own step (GitHub lifecycle §3.3), after it folded every Task worktree into the Run root: a
+      // caller that skipped the folding would check, push and review a branch missing some Task's work.
+      if (caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+        return denied('lifecycle-start is the dispatch loop’s own step')
+      const id = str(args.task)
+      if (!id) return bad('--task is required')
+      const latest = deps.getState()
+      const task = latest.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      if (!isLifecycleTask(task) || task.status !== 'ready') return conflict(`task ${id} is not a ready lifecycle Task`)
+      const cwd = latest.runs.find((r) => r.id === task.runId)?.worktree
+      if (cwd === undefined) return conflict('This Run has no branch of its own, so it cannot be carried through GitHub')
+      const r = beginLifecycleValidation(latest, { taskId: id }, now)
+      if (!r.ok) return refused(r)
+      await deps.setState(r.state)
+      deps.startValidation?.({ taskId: id, cwd })
+      return okBody({ taskId: id, cwd })
+    }
+    case 'lifecycle-ci-begin': {
+      // The validators' own step (GitHub lifecycle §4): the Host's (its own caller) and the app's (its connection, no
+      // session). Only the Host keeps the round, since only the Host goes on to GitHub (L13).
+      if (caller.sessionId !== HOST_CALLER && !(caller.role === 'app' && caller.sessionId === ''))
+        return denied('lifecycle-ci-begin is the validators’ own step')
+      if (!deps.github?.originOf) return conflict('GitHub CI is checked by the Astera Host')
+      const taskId = str(args.taskId)
+      if (!taskId) return bad('--taskId is required')
+      if (!checkResultsOk(args.done)) return bad("--done must be the round's check results so far")
+      const r = beginLifecycleCi(deps.getState(), { taskId, done: args.done }, now)
+      if (!r.ok) return refused(r)
+      if (r.value === 'begun') await deps.setState(r.state)
+      return okBody({ taskId, ciWait: r.value })
+    }
     case 'run-worktree-set': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
@@ -2990,6 +3042,7 @@ export async function handleCommand(
       if (validateArg !== null) {
         const parts = validateArg.split(',').map((x) => x.trim())
         if (parts.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        if (parts.includes(GITHUB_CI_CHECK)) return bad("github:ci is the GitHub lifecycle's own check; Astera adds it")
         validateIds = parts
       }
       // **getState is read again here, not the entry snapshot `s`.** `listAccounts` above is now
@@ -2998,6 +3051,12 @@ export async function handleCommand(
       // `run-create`'s re-read documents at length a few hundred lines up, arriving here for the
       // same reason: a dependency that used to be a function call became a round trip.
       const latest = deps.getState()
+      // While its lifecycle Task is open the Run is being carried through GitHub, and the PR head is what the Tasks made:
+      // nothing is added but the integration Task the dispatch loop makes for the lifecycle Task (GitHub lifecycle L20).
+      const carrying = openLifecycleTaskOf(latest, runId)
+      const loopsOwn = caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER
+      if (carrying && !(loopsOwn && str(args.parent) === carrying.id))
+        return conflict('This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends')
       return commit(
         createTask(
           latest,
@@ -3043,6 +3102,7 @@ export async function handleCommand(
       if (!id) return bad('--id is required: a task id from `tasks list`')
       const task = s.tasks.find((t) => t.id === id)
       if (!task) return notFound(`unknown task: ${id}`)
+      if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
       const run = task.runId === undefined ? undefined : s.runs.find((r) => r.id === task.runId)
       if (!run)
         return conflict(
@@ -3177,8 +3237,10 @@ export async function handleCommand(
         return bad(
           'this task has not satisfied its completion policy — pass --reason to record why it is being completed anyway'
         )
+      // A lifecycle round handed to the Host is its validating stretch's alone, past the table too (G3a final review I1)
+      const { ciWait: _handedOver, ...kept } = task
       const nextTask: Task = {
-        ...task,
+        ...(status === 'validating' ? task : kept),
         status,
         updatedAt: now,
         ...(override && reason ? { completionOverride: { reason, at: now } } : {}),
@@ -3201,8 +3263,10 @@ export async function handleCommand(
       // createTask and applyWorkerDone already use. recomputeReady only promotes pending to ready
       // and never touches blocked — that property is unchanged.
       const tasks = recomputeReady(s.tasks.map((t) => (t.id === id ? nextTask : t)))
-      await deps.setState({ ...s, tasks })
-      return okBody(tasks.find((t) => t.id === id)!)
+      // Completing a lifecycle Run's last ordinary Task adds its lifecycle Task in the same write (GitHub lifecycle §3.2)
+      const next = nextTask.status === 'completed' ? withLifecycleTask({ ...s, tasks }, nextTask.runId, now) : { ...s, tasks }
+      await deps.setState(next)
+      return okBody(next.tasks.find((t) => t.id === id)!)
     }
     case 'session-task-start': {
       // A worker is executing a Jobs task, and a Run coordinator is running one — either way that
@@ -3277,6 +3341,8 @@ export async function handleCommand(
       // structurally impossible: if openDispatch is rejected the coordinator is never called at all.
       const task = s.tasks.find((t) => t.id === taskId)
       if (!task) return notFound(`unknown task: ${taskId}`)
+      // Its repairs are Astera's (G3c), through the repair path, never this command (G3a final review)
+      if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
       // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
       // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·

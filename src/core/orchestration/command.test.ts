@@ -26,7 +26,7 @@ import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
 import { FAILURE_LIMIT, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
-import { runningRunCount } from './running'
+import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
@@ -1220,6 +1220,174 @@ describe('handleCommand — retained dispatch', () => {
 // task-13a: COORDINATOR_ONLY에는 'task-update'가 있었는데 handleCommand의 switch에 케이스가
 // 없어 인가는 통과하고 라우팅에서 404로 죽던 공백. task-update는 canTransition을 우회해
 // 코디네이터가 좌초한 Task를 수동으로 정정하는 유일한 경로다.
+// GitHub lifecycle G3a (design §3.2): task-update is the one path to completed outside the pure layer
+describe('handleCommand — task-update completes a lifecycle Run’s last Task', () => {
+  it('adds the lifecycle Task in the same write', async () => {
+    const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [{ id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'blocked', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }]
+    })
+    const r = await call(deps, 'task-update', { id: 'tsk_a', status: 'completed', reason: 'done by hand' }, '')
+    expect(r.status).toBe(200)
+    const tasks = deps.getState().tasks
+    expect(tasks.filter((t) => t.kind === 'lifecycle').map((t) => [t.runId, t.status, t.deps])).toEqual([['run_1', 'ready', ['tsk_a']]])
+    expect(outcomeOf(deps.getState(), 'run_1')).toBe('running')
+  })
+})
+
+// GitHub lifecycle G3a (design L20, §3.2): while the lifecycle Task is open only Astera's integration Task for it is added
+describe('handleCommand — task-create on a Run carried through GitHub', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (lifecycle: Task['status']) =>
+    makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: lifecycle, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+  const create = (deps: OrchServerDeps, extra: Record<string, unknown> = {}) => call(deps, 'task-create', { runId: 'run_1', spec: 'more', account: 'acc1', ...extra })
+
+  it('refuses a new Task while the lifecycle Task is open', async () => {
+    expect(await create(seeded('validating'))).toEqual({
+      status: 409,
+      body: { error: 'This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends' }
+    })
+    expect((await create(seeded('validating'), { parent: 'tsk_a' })).status).toBe(409)
+  })
+
+  it('takes the integration Task the dispatch loop makes for the lifecycle Task, and any Task once the lifecycle Task ended', async () => {
+    const loop = (deps: OrchServerDeps) => call(deps, 'task-create', { runId: 'run_1', spec: 'merge', account: 'acc1', parent: 'tsk_l', deps: ['tsk_a'] }, APP_CALLER)
+    expect((await loop(seeded('ready'))).status).toBe(200)
+    expect((await create(seeded('completed'))).status).toBe(200)
+  })
+
+  // G3a final review M4: the exemption is the dispatch loop's, not a door for a coordinator
+  it('a coordinator naming the lifecycle Task as parent is refused like any other Task', async () => {
+    expect((await create(seeded('ready'), { parent: 'tsk_l', deps: ['tsk_a'] })).status).toBe(409)
+  })
+
+  // G3a final review M5: tasks add checks run configurations first; the reserved id is refused before that
+  it('tasks add keeps github:ci for the lifecycle Task too', async () => {
+    const r = await call(seeded('completed'), 'tasks-add', { run: 'run_1', spec: 's', account: 'acc1', validate: 'github:ci' })
+    expect(r).toEqual({ status: 400, body: { error: "github:ci is the GitHub lifecycle's own check; Astera adds it" } })
+  })
+
+  // G3a final review M6, and a worker on it: the lifecycle Task has no worker
+  it('no worker is started on the lifecycle Task, by worker-start or tasks dispatch', async () => {
+    const said = 'Astera carries this Task through GitHub itself; it has no worker'
+    expect(await call(seeded('ready'), 'worker-start', { task: 'tsk_l', agent: 'claude', account: 'acc1' })).toEqual({ status: 409, body: { error: said } })
+    expect(await call(seeded('ready'), 'tasks-dispatch', { id: 'tsk_l' }, '')).toEqual({ status: 409, body: { error: said } })
+  })
+
+  it('keeps github:ci for the lifecycle Task', async () => {
+    const plain = makeDeps()
+    const run = await call(plain, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const r = await call(plain, 'task-create', { runId: (run.body as { id: string }).id, spec: 's', account: 'acc1', validate: 'lint,github:ci' })
+    expect(r).toEqual({ status: 400, body: { error: "github:ci is the GitHub lifecycle's own check; Astera adds it" } })
+  })
+})
+
+// GitHub lifecycle G3a (design §3.3): the dispatch loop starts the lifecycle Task's checks in the Run root, no worker
+describe('handleCommand — lifecycle-start', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (o: { lifecycle?: Task['status']; worktree?: string | null } = {}) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...(o.worktree === null ? {} : { worktree: o.worktree ?? 'D:/wt/run' }) }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: o.lifecycle ?? 'ready', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+    const started: { taskId: string; cwd: string }[] = []
+    deps.startValidation = (a) => void started.push(a)
+    return { deps, started }
+  }
+
+  it('moves the lifecycle Task to validating, then starts its checks in the Run root', async () => {
+    const { deps, started } = seeded()
+    expect(await call(deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).toEqual({ status: 200, body: { taskId: 'tsk_l', cwd: 'D:/wt/run' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.status).toBe('validating')
+    expect(started).toEqual([{ taskId: 'tsk_l', cwd: 'D:/wt/run' }])
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_l' }, HOST_CALLER)).status).toBe(200)
+  })
+
+  it('refuses an unknown Task, one that is not a ready lifecycle Task, and a Run with no branch of its own', async () => {
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_x' }, APP_CALLER)).status).toBe(404)
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_a' }, APP_CALLER)).status).toBe(409)
+    expect((await call(seeded({ lifecycle: 'validating' }).deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).status).toBe(409)
+    const noBranch = seeded({ worktree: null })
+    expect(await call(noBranch.deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).toEqual({ status: 409, body: { error: 'This Run has no branch of its own, so it cannot be carried through GitHub' } })
+    expect(noBranch.started).toEqual([])
+  })
+
+  it('is the dispatch loop’s own: a coordinator, a worker or a shell is refused', async () => {
+    for (const sessionId of ['coordinator', '']) {
+      const { deps, started } = seeded()
+      expect((await call(deps, 'lifecycle-start', { task: 'tsk_l' }, sessionId)).status).toBe(403)
+      expect(started).toEqual([])
+    }
+  })
+})
+
+// GitHub lifecycle G3a (design §4, Review Focus 5): the Host keeps a handed-off round, once, for its own validators only
+describe('handleCommand — lifecycle-ci-begin', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lint = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0 }
+  const seeded = (host = true) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['lint', 'github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+    // The Host's GitHub deps: what tells this command it runs in the Host
+    if (host) deps.github = { run: async () => ({ ok: true, stdout: '', stderr: '' }), originOf: async () => 'git@github.com:o/r.git' } as never
+    return deps
+  }
+  const begin = (deps: OrchServerDeps, caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }, args: Record<string, unknown> = { taskId: 'tsk_l', done: [lint] }) =>
+    handleCommand(deps, caller, 'lifecycle-ci-begin', args)
+
+  it('keeps the round for the Host’s own validator and for the app’s, once', async () => {
+    const deps = seeded()
+    expect(await begin(deps, { sessionId: HOST_CALLER })).toEqual({ status: 200, body: { taskId: 'tsk_l', ciWait: 'begun' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait?.done).toEqual([lint])
+    const before = deps.getState()
+    expect(await begin(deps, { sessionId: '', role: 'app' })).toEqual({ status: 200, body: { taskId: 'tsk_l', ciWait: 'already' } })
+    expect(deps.getState()).toBe(before)
+  })
+
+  it('refuses anyone else, and anywhere but the Host', async () => {
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'cli' as const }, { sessionId: '', role: 'mcp' as const }, { sessionId: '', role: 'controller' as const }, { sessionId: APP_CALLER }])
+      expect((await begin(seeded(), caller)).status).toBe(403)
+    expect(await begin(seeded(false), { sessionId: HOST_CALLER })).toEqual({ status: 409, body: { error: 'GitHub CI is checked by the Astera Host' } })
+  })
+
+  // G3a final review I1: task-update moves past the transition table, and the handed-over round goes all the same
+  it('task-update moving the lifecycle Task out of validating drops its handed-over round', async () => {
+    const deps = seeded()
+    await begin(deps, { sessionId: HOST_CALLER })
+    expect((await call(deps, 'task-update', { id: 'tsk_l', status: 'ready' })).status).toBe(200)
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait).toBeUndefined()
+  })
+
+  it('refuses a malformed round, an ordinary Task and an unknown one', async () => {
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_l', done: [{ configId: 3 }] })).status).toBe(400)
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_a', done: [] })).status).toBe(400)
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_x', done: [] })).status).toBe(404)
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

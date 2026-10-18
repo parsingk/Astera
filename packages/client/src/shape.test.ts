@@ -139,6 +139,12 @@ describe('publicFor', () => {
     expect(out[0]).toEqual({ id: 't1', spec: '짧게', spec_truncated: true })
   })
 
+  // GitHub lifecycle G3a: a lifecycle Task says what it is; the round it handed to the Host is the app's bookkeeping
+  it('a lifecycle Task keeps its kind and never shows its handed-off round', () => {
+    const out = publicFor('tasks-list', [{ id: 't1', kind: 'lifecycle', ciWait: { since: 'T', done: [] } }]) as Record<string, unknown>[]
+    expect(out[0]).toEqual({ id: 't1', kind: 'lifecycle' })
+  })
+
   // phase C 의 셋. 새 목록을 만들지 않는다 — 개체마다 한 목록이다(설계 §11).
   it('jobs create 는 계획으로, tasks add 는 Task 로 가린다', () => {
     expect(

@@ -42,6 +42,8 @@ interface RigOpts {
   checkResume?: { dispatchId?: string; done: CheckResult[]; rest: string[] }
   /** How a plugin check is asked (plugin Phase 5 C8); answers passed when left out. */
   pluginCheck?: (plugin: string, input: CompletionCheckInput) => Promise<PluginCheckAnswer>
+  /** The Host command a round reaching github:ci calls (GitHub lifecycle G3a); absent when left out. */
+  lifecycleCiBegin?: ValidationContext['lifecycleCiBegin']
 }
 
 function rig(o: RigOpts = {}) {
@@ -142,7 +144,8 @@ function rig(o: RigOpts = {}) {
     pluginCheck: async (plugin, input) => {
       pluginAsks.push({ plugin, input })
       return o.pluginCheck ? o.pluginCheck(plugin, input) : { name: plugin.toUpperCase(), status: 'passed', summary: 'passed' }
-    }
+    },
+    ...(o.lifecycleCiBegin ? { lifecycleCiBegin: o.lifecycleCiBegin } : {})
   }
   const validation = createTaskValidation(ctx)
 
@@ -284,6 +287,32 @@ describe('createTaskValidation — a plugin check (plugin Phase 5 C3, C8, C9, C1
   })
 })
 
+// GitHub lifecycle G3a (design §4): the round reaching github:ci goes to the Host command lifecycle-ci-begin
+describe('createTaskValidation — github:ci', () => {
+  it('asks the Host to keep the round and leaves the Task validating', async () => {
+    const asked: unknown[] = []
+    const h = rig({ checks: ['github:ci'], convergence: true, lifecycleCiBegin: async (a) => (asked.push(a), { status: 200, body: {} }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(asked).toEqual([{ taskId: h.taskId, done: [] }]))
+    await h.settle()
+    expect(h.task().status).toBe('validating')
+  })
+
+  it('a refusal from the Host asks a person, in the Host’s words', async () => {
+    const h = rig({ checks: ['github:ci'], convergence: true, lifecycleCiBegin: async () => ({ status: 409, body: { error: 'task tsk_x is not a lifecycle Task' } }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().status).toBe('blocked'))
+    expect(h.state().gates.find((g) => g.taskId === h.taskId)?.question).toContain('task tsk_x is not a lifecycle Task')
+  })
+
+  it('names github:ci in the completion policy’s fingerprint', async () => {
+    const h = rig({ checks: ['github:ci'], convergence: true, lifecycleCiBegin: async () => ({ status: 200, body: {} }) })
+    h.validation.startValidation({ taskId: h.taskId, cwd: h.cwd })
+    await vi.waitFor(() => expect(h.task().policySnapshot).toBeDefined())
+    expect(h.task().policySnapshot!.key.endsWith('|github:ci=github')).toBe(true)
+  })
+})
+
 describe('createTaskValidation', () => {
   it('a passing check commits the Task completed and asks for nothing else (no review, no repair)', async () => {
     const h = rig({ review: false })
@@ -404,5 +433,120 @@ describe('createTaskValidation', () => {
     await vi.waitFor(() => expect(h.task().status).not.toBe('validating'))
     expect(h.runsStarted()).toBe(1)
     expect(h.logs.join(' | ')).not.toMatch(/could not start|rejected/)
+  })
+})
+
+// GitHub lifecycle G3a (design §4): the Host settles a handed-off round with the CI result, then starts what it opened
+describe('createTaskValidation — settleHandedOff', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const handedOver = (): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+    tasks: [
+      { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      {
+        id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['lint', 'github:ci'],
+        reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW,
+        ciWait: { since: NOW, done: [{ configId: 'lint', name: 'lint', status: 'passed' }] }
+      }
+    ]
+  })
+  const wired = () => {
+    let state = handedOver()
+    const startReview = vi.fn(async (_a: { taskId: string }) => {})
+    const startRepair = vi.fn(async (_a: { dispatchId: string }) => undefined as unknown)
+    const validation = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: () => ({ runId: 'r' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => true,
+      startReview,
+      startRepair,
+      firstCheckpointHead: () => null,
+      diffNames: async () => null,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' })
+    })
+    return { validation, startReview, startRepair, task: () => state.tasks.find((t) => t.id === 'tsk_l')! }
+  }
+
+  it('a passing CI result settles the round and starts the review once', async () => {
+    const w = wired()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
+    expect(w.task()).toMatchObject({ status: 'reviewing' })
+    expect(w.task().ciWait).toBeUndefined()
+    await vi.waitFor(() => expect(w.startReview).toHaveBeenCalledWith({ taskId: 'tsk_l' }))
+    expect(w.startReview).toHaveBeenCalledTimes(1)
+  })
+
+  it('a second settle changes nothing', async () => {
+    const w = wired()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
+    const after = w.task()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed' } })
+    expect(w.task()).toBe(after)
+  })
+})
+
+// G3a final review I1 and M1: a round whose Task already handed one over, or left validating, is not run or handed again
+describe('createTaskValidation — a lifecycle round that is no longer needed', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lifecycle = (over: Record<string, unknown>): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+    tasks: [
+      { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      {
+        id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['lint', 'github:ci'],
+        reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW, ...over
+      }
+    ]
+  })
+  const wired = (start: OrchState) => {
+    let state = start
+    const begun: unknown[] = []
+    const started: unknown[] = []
+    const validation = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: (o) => (started.push(o), { runId: 'r1' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => true,
+      startReview: async () => {},
+      startRepair: async () => undefined,
+      firstCheckpointHead: () => null,
+      diffNames: async () => null,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' }),
+      lifecycleCiBegin: async (a) => (begun.push(a), { status: 200, body: {} })
+    })
+    return { validation, begun, started, state: () => state }
+  }
+
+  it('runs no check again for a round already handed over', async () => {
+    const w = wired(lifecycle({ ciWait: { since: NOW, done: [] } }))
+    w.validation.validator.enqueue({ taskId: 'tsk_l', cwd: '/wt-run', configIds: ['lint', 'github:ci'] })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(w.started).toEqual([])
+    expect(w.begun).toEqual([])
+    expect(w.state().gates).toEqual([])
+  })
+
+  it('hands nothing over for a Task that left validating, and asks nobody', async () => {
+    const w = wired(lifecycle({ status: 'ready' }))
+    w.validation.validator.enqueue({ taskId: 'tsk_l', cwd: '/wt-run', configIds: ['github:ci'] })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(w.begun).toEqual([])
+    expect(w.state().gates).toEqual([])
+    expect(w.validation.validator.holds('tsk_l')).toBe(false)
   })
 })

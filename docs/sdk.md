@@ -267,7 +267,9 @@ order), `validate` (run configuration ids that check the work, or `plugin:<id>` 
 the order the checks run) and `review`. Without `accountIds` it uses the Job's coordinator account, and is refused when
 the Job has none. A `plugin:<id>` whose plugin is not installed, does not offer completion checks, or is disabled is
 refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-check-plugins)). `tasks.list({ runId, status, ready, brief })` and
-`tasks.get` read them.
+`tasks.get` read them. A Task with `kind: 'lifecycle'` is the one Astera adds once every other Task of a GitHub
+lifecycle Run is completed, to carry the Run through GitHub: it has no worker, and `tasks.create` on that Run is
+refused while it is open.
 
 ### Completion
 

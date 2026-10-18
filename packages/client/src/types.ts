@@ -216,6 +216,9 @@ export interface Task {
   /** A person's decision to pass the Task over its checks. */
   readonly completionOverride?: { readonly reason: string; readonly at: string }
   readonly consecutiveFailures: number
+  /** `'lifecycle'`: the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to carry the
+   *  Run through GitHub (push, draft pull request, CI, repair, review). It has no worker. Absent on every other Task. */
+  readonly kind?: 'lifecycle'
   readonly createdAt: string
   readonly updatedAt: string
   /** `tasks.list({ brief: true })` only: the spec was cut to 160 characters. */
