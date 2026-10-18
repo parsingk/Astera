@@ -62,6 +62,10 @@ export function buildHandoverPrompt(a: {
    *  거절하기 시작한다 — 그 규칙을 모르는 코디네이터는 거절을 받고서야, 혹은 최악의 경우
    *  `task-update` 로 앱의 repair 를 밟고서야 알아챈다. */
   convergence?: boolean
+  /** The Job has GitHub lifecycle on (GitHub lifecycle §3.2, self-review S11): the briefing says Astera carries the
+   *  Run through GitHub once every Task is completed, so the coordinator does not read the 409 on `task-create` and the
+   *  Run that stays open as faults. */
+  githubLifecycle?: boolean
   /** The Job this Run belongs to: `run-configs list --job` takes a Job id, not a Run id. Only the
    *  planning section (no Tasks) names it. */
   jobId?: string
@@ -172,6 +176,19 @@ export function buildHandoverPrompt(a: {
           'it would move the Task out from under a repair the app still thinks is running. When the Task',
           'converges you get a status message and it reaches `completed`. When it exhausts its budget, a',
           'Gate opens with `retry-once` / `mark-failed` — a person answers that one, not you.'
+        ]
+      : []),
+    ...(a.githubLifecycle
+      ? [
+          '',
+          'GITHUB LIFECYCLE IS ON',
+          'Once every Task of this Run is completed, Astera adds one more Task, "GitHub 전달", and carries',
+          'the Run through GitHub itself: it folds every Task worktree into the Run branch, runs the checks,',
+          'pushes, opens a draft pull request, waits for CI, repairs what fails and has the pull request',
+          'reviewed. While that Task is open `task-create` is refused (409) on this Run: the pull request is',
+          'what your Tasks made. The Run completes when the pull request is merge-ready; merging stays a',
+          "person's action. You need not do anything for it, and you must not push or open the pull request",
+          'yourself.'
         ]
       : []),
     '',

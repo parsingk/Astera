@@ -149,6 +149,16 @@ describe('buildHandoverPrompt', () => {
     expect(p).toContain('worker-release')
     expect(buildHandoverPrompt({ runId: 'run_1', objective: 'o', concurrency: 1, taskCount: 2 })).not.toContain('CONVERGENCE')
   })
+
+  // GitHub lifecycle G3a (design §3.2, self-review S11): without it a coordinator reads the 409 and the Run that does
+  // not complete as faults
+  it('a GitHub lifecycle Run’s briefing says Astera carries the Run through GitHub and refuses new Tasks meanwhile', () => {
+    const p = prompt({ convergence: true, githubLifecycle: true })
+    expect(p).toContain('GITHUB LIFECYCLE IS ON')
+    expect(p).toContain('`task-create` is refused')
+    expect(p).toContain('merge-ready')
+    expect(prompt({ convergence: true })).not.toContain('GITHUB LIFECYCLE')
+  })
 })
 
 // **이 계약이 깨지면 코디네이터는 빈 화면으로 선다.** 이 문구는 세션의 argv 로 가고 win32 에서

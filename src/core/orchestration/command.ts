@@ -113,13 +113,13 @@ import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding } from '../github/remote'
-import { withLifecycleTask } from './lifecycleTask'
+import { openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 import { prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
-import { GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
+import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import { parseRunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
@@ -1571,6 +1571,7 @@ export async function handleCommand(
           // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
           // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
           convergence: policyOf(base, { runId: target.id }) !== null,
+          githubLifecycle: job.github !== undefined,
           jobId: job.id,
           accountId
         })
@@ -2991,6 +2992,7 @@ export async function handleCommand(
       if (validateArg !== null) {
         const parts = validateArg.split(',').map((x) => x.trim())
         if (parts.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        if (parts.includes(GITHUB_CI_CHECK)) return bad("github:ci is the GitHub lifecycle's own check; Astera adds it")
         validateIds = parts
       }
       // **getState is read again here, not the entry snapshot `s`.** `listAccounts` above is now
@@ -2999,6 +3001,11 @@ export async function handleCommand(
       // `run-create`'s re-read documents at length a few hundred lines up, arriving here for the
       // same reason: a dependency that used to be a function call became a round trip.
       const latest = deps.getState()
+      // While its lifecycle Task is open the Run is being carried through GitHub, and the PR head is what the Tasks made:
+      // nothing is added but the integration Task the dispatch loop makes for the lifecycle Task (GitHub lifecycle L20).
+      const carrying = openLifecycleTaskOf(latest, runId)
+      if (carrying && str(args.parent) !== carrying.id)
+        return conflict('This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends')
       return commit(
         createTask(
           latest,

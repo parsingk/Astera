@@ -1238,6 +1238,42 @@ describe('handleCommand — task-update completes a lifecycle Run’s last Task'
   })
 })
 
+// GitHub lifecycle G3a (design L20, §3.2): while the lifecycle Task is open only Astera's integration Task for it is added
+describe('handleCommand — task-create on a Run carried through GitHub', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (lifecycle: Task['status']) =>
+    makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: lifecycle, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+  const create = (deps: OrchServerDeps, extra: Record<string, unknown> = {}) => call(deps, 'task-create', { runId: 'run_1', spec: 'more', account: 'acc1', ...extra })
+
+  it('refuses a new Task while the lifecycle Task is open', async () => {
+    expect(await create(seeded('validating'))).toEqual({
+      status: 409,
+      body: { error: 'This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends' }
+    })
+    expect((await create(seeded('validating'), { parent: 'tsk_a' })).status).toBe(409)
+  })
+
+  it('takes the integration Task made for the lifecycle Task itself, and any Task once the lifecycle Task ended', async () => {
+    expect((await create(seeded('ready'), { parent: 'tsk_l', deps: ['tsk_a'] })).status).toBe(200)
+    expect((await create(seeded('completed'))).status).toBe(200)
+  })
+
+  it('keeps github:ci for the lifecycle Task', async () => {
+    const plain = makeDeps()
+    const run = await call(plain, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const r = await call(plain, 'task-create', { runId: (run.body as { id: string }).id, spec: 's', account: 'acc1', validate: 'lint,github:ci' })
+    expect(r).toEqual({ status: 400, body: { error: "github:ci is the GitHub lifecycle's own check; Astera adds it" } })
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
