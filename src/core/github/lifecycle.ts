@@ -74,6 +74,20 @@ export type CiFailureClass =
   | 'permission'
   | 'unknown'
 
+/** What a failed check left to read (design §4.7), bounded and redacted where it was made (evidence.ts). */
+export interface GitHubCiFailure {
+  check: string
+  externalId: string
+  class: CiFailureClass
+  /** At most 1000 characters: the check, its class and one line that says why. */
+  summary: string
+  /** At most 20: the annotations that say something (not the runner's boilerplate). */
+  diagnostics: { path?: string; line?: number; message: string }[]
+  /** The failing step's lines: at most 4000 characters and 80 lines. Absent for a commit status (no job log). */
+  logExcerpt?: string
+  url?: string
+}
+
 export interface GitHubBinding {
   /** `owner/name`; `host` is set only for a host other than github.com. */
   repository: string
