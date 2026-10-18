@@ -1068,7 +1068,8 @@ export function openRepairDispatch(
   const open = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
   if (open) return err(`dispatch already open: ${open.id}`)
   const prior = latestImplDispatch(s, a.taskId)
-  if (!prior) return err(`no implementation dispatch for task ${a.taskId}`)
+  // A lifecycle Task has no attempt of its own before its first repair (GitHub lifecycle G3c1, design §3.4)
+  if (!prior && !isLifecycleTask(task)) return err(`no implementation dispatch for task ${a.taskId}`)
   const sessionId = a.target.kind === 'same-session' ? a.target.sessionId : placeholderSessionId()
   const sessionOpen = s.dispatches.find((d) => d.sessionId === sessionId && !d.outcome && !d.endedAt)
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
@@ -1082,7 +1083,7 @@ export function openRepairDispatch(
     sessionId,
     cwd: a.target.cwd,
     specPath: '',
-    retryOf: prior.id,
+    ...(prior ? { retryOf: prior.id } : {}),
     startedAt: now,
     workerState: 'ready',
     retained: false,

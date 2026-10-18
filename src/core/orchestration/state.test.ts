@@ -4178,6 +4178,17 @@ describe('settleLifecycleCi', () => {
     expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-blocked')
   })
 
+  // G3c1 (design §3.4): the first repair of a lifecycle Task has no attempt to retry
+  it('a failing CI with a repair target opens the first repair in the Run root, with no attempt before it', () => {
+    const { s, lifecycleId } = handedOver()
+    const target = { kind: 'fresh' as const, cwd: 'D:/wt/run', provider: 'claude' as const, accountId: 'acc1' }
+    const r = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('failed'), repair: target }, LATER) as never)
+    expect(r.value.status).toBe('dispatched')
+    const d = r.state.dispatches.find((x) => x.taskId === lifecycleId)!
+    expect(d).toMatchObject({ cwd: 'D:/wt/run', provider: 'claude', accountId: 'acc1', repair: 'check-failure' })
+    expect(d.retryOf).toBeUndefined()
+  })
+
   // G3b1 final review I1: a verdict read for an earlier round does not settle the round after it
   it('refuses a verdict for another round of the Task', () => {
     const { s, lifecycleId } = handedOver()

@@ -49,7 +49,9 @@ export async function startWorkerWithChain(
 ): Promise<StartWorkerResult> {
   let rollAccountIds = [a.accountId]
   const stateHere = ctx.getState()
-  const task = stateHere.tasks.find((t) => t.id === a.taskId)
+  const found = stateHere.tasks.find((t) => t.id === a.taskId)
+  // A Task with no account of its own rolls through the ones it is handed (a lifecycle repair, GitHub lifecycle G3c1)
+  const task = found && !found.accountIds?.length && a.rollFrom?.length ? { ...found, accountIds: a.rollFrom } : found
   // The account list is read once, and only when the Task names accounts: both the provider lookup
   // and rollChainFor below need it, and a Task without accounts needs neither.
   const accountList = task?.accountIds?.length ? await ctx.accounts() : []

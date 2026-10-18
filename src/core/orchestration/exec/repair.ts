@@ -6,6 +6,7 @@ import { isSamePath } from '../../files/tree'
 import { t, type Lang } from '../../i18n'
 import { latestImplDispatch, policyOf, repairCountOf } from '../convergence'
 import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../state'
+import { isLifecycleTask } from '../lifecycleTask'
 import {
   canTransition,
   FAILURE_LIMIT,
@@ -31,8 +32,40 @@ export interface RepairDeps {
   now(): string
 }
 
+/** The Run's most recently completed ordinary Task that a worker did, with that worker's Dispatch (GitHub lifecycle
+ *  §3.4): whose provider and accounts a lifecycle Task's repair and review take, having none of its own. Read from the
+ *  Run's Tasks, not the lifecycle Task's deps, which a later lifecycle Task (reconverge) would not share. */
+export function latestOrdinaryWork(s: OrchState, runId: string): { task: Task; dispatch: Dispatch } | null {
+  const done = s.tasks.filter((t) => t.runId === runId && !isLifecycleTask(t) && t.status === 'completed').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  for (const task of done) {
+    const dispatch = latestImplDispatch(s, task.id)
+    if (dispatch) return { task, dispatch }
+  }
+  return null
+}
+
+/** A lifecycle Task's repair works in the Run root, the branch Astera pushes (GitHub lifecycle §3.4): typed into the live
+ *  session that last worked there — the latest non-review Dispatch of the Run's Tasks in that folder, held by no other
+ *  open Dispatch — else a fresh worker with the provider and account of the Run's latest ordinary work. */
+function lifecycleRepairTarget(s: OrchState, task: Task, isAlive: (id: string) => boolean): RepairTarget | null {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const root = run?.worktree
+  if (!run || root === undefined) return null
+  const own = new Set(s.tasks.filter((t) => t.runId === run.id).map((t) => t.id))
+  const last = s.dispatches
+    .filter((d) => own.has(d.taskId) && !d.review && isSamePath(d.cwd, root))
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
+  const held = (id: string): boolean => s.dispatches.some((d) => d.sessionId === id && !d.outcome && !d.endedAt)
+  if (last && !isPlaceholderSessionId(last.sessionId) && isAlive(last.sessionId) && !held(last.sessionId))
+    return { kind: 'same-session', sessionId: last.sessionId, cwd: root, provider: last.provider, accountId: last.accountId }
+  const work = latestOrdinaryWork(s, run.id)
+  return work ? { kind: 'fresh', cwd: root, provider: work.dispatch.provider, accountId: work.dispatch.accountId } : null
+}
+
 /** 판정 직전에 배선이 부른다: 마지막 구현·수리 세션이 살아 있으면 그 세션, 아니면 새 워커(설계 D3). */
 export function repairTargetFor(s: OrchState, taskId: string, isAlive: (id: string) => boolean): RepairTarget | null {
+  const task = s.tasks.find((t) => t.id === taskId)
+  if (task && isLifecycleTask(task)) return lifecycleRepairTarget(s, task, isAlive)
   const prior = latestImplDispatch(s, taskId)
   if (!prior) return null
   const base = { cwd: prior.cwd, provider: prior.provider, accountId: prior.accountId }
@@ -73,6 +106,11 @@ function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string },
       ...(d.grantedExtra ? { extra: true } : {})
     }
   })
+}
+
+const rollFromOf = (s: OrchState, task: Task): { rollFrom?: string[] } => {
+  const ids = latestOrdinaryWork(s, task.runId!)?.task.accountIds
+  return ids?.length ? { rollFrom: [...ids] } : {}
 }
 
 /** 주어진 state 조각에서 이 repair Dispatch 를 다시 찾는다. **부수 효과 앞뒤로 두 번 부른다** — 한 번은
@@ -126,6 +164,8 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
       accountId: d.accountId,
       runCwd: run.cwd,
       worktree: d.cwd,
+      // A lifecycle Task names no account; its repair rolls through the Run's latest ordinary Task's (G3c1)
+      ...(isLifecycleTask(task) ? rollFromOf(s, task) : {}),
       ...(same
         ? { terminal: d.sessionId, terminalCwd: d.cwd, terminalProvider: d.provider, terminalAccountId: d.accountId, launchPhrase: repairWorkerPrompt('{specPath}') }
         : {})
@@ -196,14 +236,13 @@ export async function repairOnce(
   if (!task) return { ok: false, error: `unknown task: ${a.taskId}` }
   const prior = latestImplDispatch(s, a.taskId)
   const target = repairTargetFor(s, a.taskId, deps.isAlive)
-  // target 이 null 인 것은 정확히 prior 가 없을 때뿐이다(repairTargetFor 의 유일한 null 갈래) —
-  // 같은 s·taskId 로 부른 같은 판정이라 prior 만 다시 확인하지 않는다.
+  // target 이 null 인 것은 prior 가 없을 때(lifecycle Task 는 Run 루트도 마지막 일반 작업도 없을 때)뿐이다
   if (!target) {
     const error = `no implementation dispatch to repair for task=${a.taskId}`
     deps.log(`repair: retry-once has ${error}`)
     return { ok: false, error }
   }
-  const reason = prior!.repair ?? (task.reviewIssues?.some((i) => i.blocking) ? 'review-failure' : 'check-failure')
+  const reason = prior?.repair ?? (task.reviewIssues?.some((i) => i.blocking) ? 'review-failure' : 'check-failure')
   const opened = openDispatch(
     s,
     {
@@ -213,7 +252,8 @@ export async function repairOnce(
       sessionId: target.kind === 'same-session' ? target.sessionId : placeholderSessionId(),
       cwd: target.cwd,
       specPath: '',
-      retryOf: prior!.id,
+      // A lifecycle Task's first repair has no attempt before it (GitHub lifecycle G3c1)
+      ...(prior ? { retryOf: prior.id } : {}),
       repair: reason,
       ignoreCircuit: true
     },

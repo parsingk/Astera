@@ -44,6 +44,17 @@ describe('startWorkerWithChain', () => {
     expect(startWorker.mock.calls[0][0].rollAccountIds).toEqual(['a1'])
   })
 
+  // GitHub lifecycle G3c1: a lifecycle repair rolls through the accounts of the Run's latest ordinary Task
+  it('rolls through the accounts it is handed when the Task names none of its own', async () => {
+    const { s, taskId } = stateWithTask()
+    const startWorker = vi.fn().mockResolvedValue({ sessionId: 'ses_1', cwd: 'D:/p', specPath: 'D:/s.md' })
+    await startWorkerWithChain({
+      getState: () => s, accounts: async () => [acct('a1'), acct('a2')], loginStatus: async () => true,
+      coordinator: { startWorker }, tails: new WorkerTails(), log: () => {}
+    }, { ...args(taskId), rollFrom: ['a1', 'a2'] })
+    expect(startWorker.mock.calls[0][0].rollAccountIds).toEqual(['a1', 'a2'])
+  })
+
   it('falls back to the one account and says so when the login lookup throws', async () => {
     const { s, taskId } = stateWithTask(['a1', 'a2'])
     const logs: string[] = []
