@@ -7,7 +7,8 @@ import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { Job, JobRun } from '../core/orchestration/types'
 import type { PrStateRead } from '../core/github/prState'
 import type { RunGitHubPatch } from '../core/github/runState'
-import type { RunGitHubState } from '../core/github/lifecycle'
+import type { GitHubCiFailure, RunGitHubState } from '../core/github/lifecycle'
+import type { RawAnnotation } from '../core/github/evidence'
 
 const T0 = Date.parse('2026-10-18T00:00:00.000Z')
 const ISO0 = new Date(T0).toISOString()
@@ -40,6 +41,9 @@ function rig(
     fail?: { at: 'find' | 'read'; kind: string }
     issue?: { body: string; updatedAt: string }
     rules?: { ok: true; names: string[] } | { ok: false; kind: string }
+    log?: string
+    annotations?: RawAnnotation[]
+    evidenceFail?: string
   } = {}
 ) {
   const clock = { now: T0 }
@@ -67,6 +71,14 @@ function rig(
       calls.push('rules')
       const r = o.rules ?? { ok: true as const, names: [] }
       return r.ok ? r : failure(r.kind)
+    },
+    readJobLog: async (_cwd, _repo, id) => {
+      calls.push(`log ${id}`)
+      return o.evidenceFail ? failure(o.evidenceFail) : { ok: true, log: o.log ?? '' }
+    },
+    readAnnotations: async (_cwd, _repo, id) => {
+      calls.push(`annotations ${id}`)
+      return o.evidenceFail ? failure(o.evidenceFail) : { ok: true, annotations: o.annotations ?? [] }
     },
     readIssue: async (_cwd, n) => {
       calls.push(`issue ${n}`)
@@ -301,6 +313,75 @@ describe('githubWatch', () => {
       await r.at(0)
       await r.at(ISSUE_MS)
       expect(r.records.at(-1)?.patch).toMatchObject({ lastReadError: { kind: 'network' }, sourceChanged: true })
+    })
+  })
+
+  describe('failure evidence (G2)', () => {
+    const A = 'a'.repeat(40)
+    const failingRead = prRead({
+      checks: [{ externalId: 'run:1', name: 'build', status: 'completed', conclusion: 'failure', required: false, jobId: 1, detailsUrl: 'https://x/run/1' }]
+    })
+    const LOG = ['##[group]Run npm test', 'not ok 1 - adds', '##[error]Process completed with exit code 1.'].map((l) => `t\tUNKNOWN STEP\t2026-10-17T20:32:40.1Z ${l}`).join('\n')
+    const known: GitHubCiFailure = { check: 'build', externalId: 'run:1', class: 'test', summary: 'build (test): known', diagnostics: [] }
+    const withEvidence = (sha: string): RunGitHubState => ({
+      ...BOUND,
+      ci: { sha, basis: 'all-reported', verdict: 'failed', failing: 'build', checks: [], changedAt: ISO0, failure: known }
+    })
+
+    it('fetches a failed head check’s log and annotations once and records its classified evidence', async () => {
+      const r = rig({ read: failingRead, log: LOG })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.failure).toMatchObject({ check: 'build', class: 'test', summary: 'build (test): not ok 1 - adds', url: 'https://x/run/1' })
+      expect(r.calls.filter((c) => c === 'log 1' || c === 'annotations 1')).toEqual(['log 1', 'annotations 1'])
+    })
+
+    // Review Focus 4
+    it('reuses the evidence the record holds for the same commit and check', async () => {
+      const r = rig({ read: failingRead, log: LOG })
+      r.watch.onState(stateOf({ run: { githubState: withEvidence(A) } }))
+      await r.at(0)
+      expect(r.calls).not.toContain('log 1')
+      expect(r.records[0].patch.read?.ci.failure).toEqual(known)
+    })
+
+    it('fetches again for a new commit', async () => {
+      const r = rig({ read: failingRead, log: LOG })
+      r.watch.onState(stateOf({ run: { githubState: withEvidence('b'.repeat(40)) } }))
+      await r.at(0)
+      expect(r.calls).toContain('log 1')
+    })
+
+    // Review Focus 3
+    it('records the verdict with what it could read when the evidence reads fail, and a rate limit there holds every read', async () => {
+      const r = rig({ read: failingRead, evidenceFail: 'not-found' })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci).toMatchObject({ verdict: 'failed', failure: { check: 'build', class: 'unknown' } })
+      const limited = rig({ read: failingRead, evidenceFail: 'rate-limit' })
+      limited.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await limited.at(0)
+      const before = limited.calls.length
+      await limited.at(RATE_HOLD_MS - 1)
+      expect(limited.calls).toHaveLength(before)
+    })
+
+    // Review Focus 5
+    it('asks no log or annotations for a failing commit status', async () => {
+      const status = prRead({ checks: [{ externalId: 'status:ci/ext', name: 'ci/ext', status: 'completed', conclusion: 'failure', required: false }] })
+      const r = rig({ read: status })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.calls.some((c) => c.startsWith('log') || c.startsWith('annotations'))).toBe(false)
+      expect(r.records[0].patch.read?.ci.failure).toMatchObject({ check: 'ci/ext', class: 'unknown' })
+    })
+
+    it('fetches no evidence for a commit that is not the head', async () => {
+      const r = rig({ read: { ...failingRead, headSha: 'c'.repeat(40) }, log: LOG })
+      r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+      await r.at(0)
+      expect(r.calls).not.toContain('log 1')
+      expect(r.records[0].patch.read?.ci.failure).toBeUndefined()
     })
   })
 

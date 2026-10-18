@@ -11,8 +11,9 @@ import type { OrchState } from '../core/orchestration/state'
 import type { JobSourceRef } from '../core/orchestration/types'
 import type { GhFailed } from '../core/github/gh'
 import { issueBodyHash, type GhIssue } from '../core/github/issue'
-import type { GitHubBinding, GitHubLifecyclePolicy, RunGitHubState } from '../core/github/lifecycle'
+import type { GitHubBinding, GitHubCiCheck, GitHubCiFailure, GitHubLifecyclePolicy, RunGitHubState } from '../core/github/lifecycle'
 import { evaluateCi } from '../core/github/ciVerdict'
+import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
 import type { OpenPr } from '../core/github/prBinding'
 import type { PrStateRead } from '../core/github/prState'
 import { parseGitHubRemote, repoSlug, type GitHubRepo } from '../core/github/remote'
@@ -56,6 +57,10 @@ export interface GithubWatchDeps {
   ruleCheckNames(cwd: string, repo: GitHubRepo, branch: string): Promise<{ ok: true; names: string[] } | GhFailed>
   /** The source issue, read as the Job's source was (`readIssue`). */
   readIssue(cwd: string, number: number): Promise<{ ok: true; issue: GhIssue } | GhFailed>
+  /** A failed Actions job's log (`gh run view --job <id> --log-failed`). */
+  readJobLog(cwd: string, repo: GitHubRepo, jobId: number): Promise<{ ok: true; log: string } | GhFailed>
+  /** A check run's annotations. */
+  readAnnotations(cwd: string, repo: GitHubRepo, checkRunId: number): Promise<{ ok: true; annotations: RawAnnotation[] } | GhFailed>
   log(m: string): void
   /** Epoch milliseconds. */
   now?(): number
@@ -160,6 +165,23 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   /** The required check names of a base's branch rules, or null when they could not be read: a pass then waits
    *  (evaluateCi). Only an answer is kept for RULES_TTL_MS, a repository with no rules (404) among them; a failure is
    *  asked again on the next read (final review I2). */
+  /** A failed check's evidence (design §4.7), fetched once per commit and check: a record that already holds it for this
+   *  commit and check is reused, so a failure read every PENDING_MS costs no log download (G2 Review Focus 4). A read
+   *  that fails leaves the evidence with what was read; a rate limit holds every read. A commit status has no job to
+   *  read. */
+  const evidenceFor = async (t: Target, repo: GitHubRepo, sha: string, check: GitHubCiCheck): Promise<GitHubCiFailure> => {
+    const known = t.state?.ci
+    if (known?.sha === sha && known.failure?.externalId === check.externalId) return known.failure
+    if (check.jobId === undefined) return ciFailureEvidence({ check })
+    const [log, annotations] = await Promise.all([d.readJobLog(t.cwd, repo, check.jobId), d.readAnnotations(t.cwd, repo, check.jobId)])
+    for (const r of [log, annotations])
+      if (!r.ok) {
+        noteRateLimit(r.kind)
+        d.log(`github watch: run ${t.runId}: the evidence of ${check.name} could not be read: ${r.message}`)
+      }
+    return ciFailureEvidence({ check, ...(log.ok ? { log: log.log } : {}), ...(annotations.ok ? { annotations: annotations.annotations } : {}) })
+  }
+
   const ruleNamesFor = async (t: Target, repo: GitHubRepo, base: string): Promise<string[] | null> => {
     const key = `${repo.host}/${repoSlug(repo)}#${base}`
     const cached = rules.get(key)
@@ -236,6 +258,9 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       lowUntil = Date.parse(read.rateLimit.resetAt) || now() + LOW_BUDGET_MS
     const names = t.policy.ci.mode === 'required' ? await ruleNamesFor(t, repo, read.baseBranch) : []
     const ev = evaluateCi(read, t.policy.ci, names)
+    // Evidence only for the head: a verdict of another commit is not news (final review I1), and its log would be stale.
+    const failure =
+      ev.verdict === 'failed' && ev.failing && read.commitSha === read.headSha ? await evidenceFor(t, repo, read.commitSha, ev.failing) : undefined
     patch.read = {
       headSha: read.headSha,
       pr: {
@@ -251,6 +276,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
         verdict: ev.verdict,
         ...(ev.failing ? { failing: ev.failing.name } : {}),
         ...(ev.failing?.detailsUrl ? { failingUrl: ev.failing.detailsUrl } : {}),
+        ...(failure ? { failure } : {}),
         checks: read.checks
       }
     }
