@@ -261,8 +261,8 @@ lifecycle round (`kind` `github-no-ci`, `github-ci-cap`, `github-external-head`,
 `github-pr-closed`, `github-ci-outside` — also after a second failure Astera could not classify, or a repair that fixed
 nothing — or `github-carry`) takes only the `options` it lists: `wait` waits again on
 the same head, `no-ci` lets the round pass without CI, `continue` brings GitHub's commits in by fast-forward and
-starts the checks again, `retry` starts the round again, `pr-<n>` binds pull request n, and `mark-failed` fails the
-Task.
+starts the checks again, `retry` starts the round again, `rerun` reruns the failed jobs of the CI run and waits for
+its new attempt, `pr-<n>` binds pull request n, and `mark-failed` fails the Task.
 
 A question someone already answered (in the app, say) keeps that answer, and `questions.answer` gives it back, so
 compare `resolution` with what you sent. When a person takes a while to type, read the question again

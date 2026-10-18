@@ -74,7 +74,11 @@ it('a GitHub question offers each answer in words with what it does, a pull requ
   expect(gateChoicesOf({ id: 'g6', question: 'q', options: ['retry', 'mark-failed'], kind: 'github-carry' }, t).choices[0]).toEqual({
     value: 'retry', label: 'jobs.gate.github.retry', hint: 'jobs.gate.github.retryHint'
   })
-  for (const key of ['wait', 'waitHint', 'noCi', 'noCiHint', 'continue', 'continueHint', 'markFailed', 'markFailedHint', 'bindPr', 'bindPrHint', 'retry', 'retryHint'])
+  // G4: the question past the rerun budget
+  expect(gateChoicesOf({ id: 'g7', question: 'q', options: ['rerun', 'wait', 'mark-failed'], kind: 'github-ci-outside' }, t).choices[0]).toEqual({
+    value: 'rerun', label: 'jobs.gate.github.rerun', hint: 'jobs.gate.github.rerunHint'
+  })
+  for (const key of ['wait', 'waitHint', 'noCi', 'noCiHint', 'continue', 'continueHint', 'markFailed', 'markFailedHint', 'bindPr', 'bindPrHint', 'retry', 'retryHint', 'rerun', 'rerunHint'])
     for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[`jobs.gate.github.${key}`], `${lang} ${key}`).toBeTruthy()
 })
 

@@ -391,8 +391,10 @@ branch, a lookup or a record that failed). The question keeps the round's wait, 
 `wait` waits again on the same head, `no-ci` lets the round pass without CI and records that a person chose
 it, `continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from
 the first (a history that cannot fast-forward is refused with git's reason, and the question stays open),
-`retry` runs the round again from the first check, `pr-<n>` binds pull request n, and `mark-failed` fails
-the task. Any answer it does not list is a 2.
+`retry` runs the round again from the first check, `rerun` reruns the failed jobs of the CI run on GitHub and
+waits for its new attempt (offered for a failure outside the code a rerun can cure, once Astera's own reruns are
+spent or turned off, or GitHub refused one), `pr-<n>` binds pull request n, and `mark-failed` fails the task. Any
+answer it does not list is a 2.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and

@@ -1566,6 +1566,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.gate.github.continueHint': "Brings GitHub's commits in by fast-forward, then runs the checks again from the first.",
   'jobs.gate.github.retry': 'Try again',
   'jobs.gate.github.retryHint': 'Starts this round again from the first check.',
+  'jobs.gate.github.rerun': 'Rerun',
+  'jobs.gate.github.rerunHint': 'Reruns the failed jobs of the CI run on GitHub, then waits for the new attempt.',
   'jobs.gate.github.markFailed': 'Mark the Task failed',
   'jobs.gate.github.markFailedHint': 'The Task ends as failed.',
   'jobs.gate.github.bindPr': 'Bind PR #{number}',

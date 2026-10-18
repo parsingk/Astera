@@ -25,7 +25,7 @@ is the guide.
   head), `github-ci-cap` (the wait ran past `ciWaitMinutes`), `github-external-head` (a head Astera did not push),
   `github-pr-ambiguous` (several open pull requests), `github-pr-closed` (the bound pull request was closed or merged),
   `github-ci-outside` (CI failed for a reason outside the code, again for one Astera could not classify, or a repair
-  fixed nothing) and `github-carry` (the round could not be taken to GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `mark-failed` and `pr-<n>`;
+  fixed nothing) and `github-carry` (the round could not be taken to GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `rerun`, `mark-failed` and `pr-<n>`;
   `questions.answer` takes one of them.
 
 ## 0.3.0

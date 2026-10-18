@@ -1083,7 +1083,7 @@ run-create --objective <s> --convergence [--max-fix-attempts <n>] [--max-review-
 - **A GitHub lifecycle round stopped.** Where Astera stops a Run it carries through GitHub, the lifecycle Task waits on a
   Gate whose `kind` starts with `github-` (no CI on the pushed head, the wait cap, a head Astera did not push, several
   open pull requests, a closed pull request, a CI failure outside the code, a round that could not be taken to GitHub).
-  Its `options` act on the round: `wait`, `no-ci`, `continue`, `retry`, `pr-<n>` and `mark-failed`. **This is a person's decision, not yours.** Do not call
+  Its `options` act on the round: `wait`, `no-ci`, `continue`, `retry`, `rerun`, `pr-<n>` and `mark-failed`. **This is a person's decision, not yours.** Do not call
   `gate-resolve` on it yourself.
 
 **What is refused while a Task is converging, and why.** A repair keeps the Task on the same worker on

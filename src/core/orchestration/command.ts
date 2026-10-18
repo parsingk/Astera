@@ -120,7 +120,7 @@ import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
-import { repoOfBinding } from '../github/remote'
+import { repoOfBinding, type GitHubRepo } from '../github/remote'
 import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 import { prByNumber, prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
@@ -129,7 +129,7 @@ import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
-import { parseRunGitHubPatch } from '../github/runState'
+import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
@@ -1116,7 +1116,7 @@ export function githubTarget(
   s: OrchState,
   args: Record<string, unknown>
 ): GithubTarget | { error: Reply } {
-  if (!deps.github) return { error: conflict('GitHub commands are answered by the Astera Host, and this caller is not one') }
+  if (!deps.github) return { error: conflict(NO_GITHUB_HERE) }
   const gh = deps.github.run
   if ((args.run === undefined) === (args.project === undefined))
     return { error: bad('give exactly one of --run (a Run id) or --project (a project id)') }
@@ -1136,6 +1136,28 @@ export function githubTarget(
   if (id === null) return { error: bad('--project needs a value: a project id (from `projects list`)') }
   const project = findProject(s, id)
   return project ? { gh, cwd: project.path, project } : { error: notFound(`unknown project: ${id}`) }
+}
+
+const NO_GITHUB_HERE = 'GitHub commands are answered by the Astera Host, and this caller is not one'
+
+/** The failed Actions run a `rerun` answer reruns (GitHub lifecycle G4): the failing check of the CI read on the head the
+ *  round waits on, in the bound repository, from the Run root; or why there is none. */
+function rerunTargetOf(
+  s: OrchState,
+  task: Task
+): { cwd: string; repo: GitHubRepo; ciRunId: number; attempt: number; sha: string; check: string } | string {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const gs = run?.githubState
+  const repo = gs?.binding ? repoOfBinding(gs.binding) : null
+  const sha = task.ciWait?.sha
+  const ci = gs?.ci
+  const failing =
+    ci?.verdict === 'failed' && sha !== undefined && ci.sha === sha
+      ? (ci.checks.find((c) => c.externalId === ci.failure?.externalId) ?? ci.checks.find((c) => c.name === ci.failing))
+      : undefined
+  if (!run?.worktree || !repo || sha === undefined || failing?.ciRunId === undefined)
+    return 'No failed CI run of the head this round waits on can be rerun: wait, or mark the Task failed'
+  return { cwd: run.worktree, repo, ciRunId: failing.ciRunId, attempt: failing.ciRunAttempt ?? 1, sha, check: failing.name }
 }
 
 /** A failed gh call as a reply: not-found 404, something the person must fix (gh missing, not logged
@@ -4242,11 +4264,31 @@ export async function handleCommand(
           const ff = await deps.github.fastForward(root, info.branch)
           if (!ff.ok) return conflict(`The Run’s branch could not be brought up to date with GitHub: ${ff.message}`)
         }
+        // rerun reruns the failed Actions run of the waited head before the round waits again (G4, design §4.6); a run
+        // already going again is waited on as it is (L16), and the rerun's record is written with the answer
+        let rerun: RunGitHubPatch['rerun']
+        if (resolution === 'rerun' && task?.status === 'blocked') {
+          const target = rerunTargetOf(s, task)
+          if (typeof target === 'string') return conflict(target)
+          if (!deps.github) return conflict(NO_GITHUB_HERE)
+          const r = await rerunFailed(deps.github.run, target.cwd, target.ciRunId, target.repo)
+          if (!r.ok && !r.running) return ghRefusal(r)
+          if (r.ok) rerun = { ciRunId: target.ciRunId, attempt: target.attempt, sha: target.sha, check: target.check, by: 'person' }
+        }
         const answered = answerGitHubGate(deps.getState(), { gateId, resolution }, now)
+        // A rerun GitHub already took is kept whatever the answer meets
+        const kept = (base: OrchState): OrchState => {
+          if (!rerun || task?.runId === undefined) return base
+          const recorded = recordRunGitHub(base, task.runId, { rerun }, now)
+          return recorded.ok ? recorded.state : base
+        }
         // A refusal of the moment (the question answered meanwhile, another one open) is a conflict, as check-unavailable's
-        if (!answered.ok) return answered.missing ? refused(answered) : conflict(answered.error)
+        if (!answered.ok) {
+          if (rerun) await deps.setState(kept(deps.getState()))
+          return answered.missing ? refused(answered) : conflict(answered.error)
+        }
         deps.log?.(`gate-resolve: task=${gate.taskId} ${resolution} on a ${gate.kind} Gate`)
-        await deps.setState(answered.state)
+        await deps.setState(kept(answered.state))
         return okBody(answered.value.gate satisfies AnsweredQuestion)
       }
       // **A check that could not be made takes the answers it offers and no other** (plugin Phase 5 C9; GitHub CI is

@@ -1400,6 +1400,8 @@ export const es: Catalog = {
   'jobs.gate.github.continueHint': 'Trae los commits de GitHub por fast-forward y vuelve a ejecutar las comprobaciones desde la primera.',
   'jobs.gate.github.retry': 'Intentar de nuevo',
   'jobs.gate.github.retryHint': 'Vuelve a empezar esta ronda desde la primera comprobación.',
+  'jobs.gate.github.rerun': 'Volver a ejecutar',
+  'jobs.gate.github.rerunHint': 'Vuelve a ejecutar en GitHub los trabajos fallidos de la CI y espera el nuevo intento.',
   'jobs.gate.github.markFailed': 'Marcar la tarea como fallida',
   'jobs.gate.github.markFailedHint': 'La tarea termina como fallida.',
   'jobs.gate.github.bindPr': 'Vincular PR #{number}',

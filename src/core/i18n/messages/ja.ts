@@ -1381,6 +1381,8 @@ export const ja: Catalog = {
   'jobs.gate.github.continueHint': 'GitHub のコミットを fast-forward で取り込み、最初のチェックからやり直します。',
   'jobs.gate.github.retry': 'もう一度試す',
   'jobs.gate.github.retryHint': '最初のチェックからこのラウンドをやり直します。',
+  'jobs.gate.github.rerun': '再実行',
+  'jobs.gate.github.rerunHint': 'GitHub で CI の失敗したジョブを再実行し、新しい試行を待ちます。',
   'jobs.gate.github.markFailed': 'Task を失敗にする',
   'jobs.gate.github.markFailedHint': 'Task を失敗として終了します。',
   'jobs.gate.github.bindPr': 'PR #{number} に結び付ける',

@@ -1776,6 +1776,8 @@ export const ko = {
   'jobs.gate.github.continueHint': 'GitHub 의 커밋을 fast-forward 로 받은 뒤 처음 검사부터 다시 돌립니다.',
   'jobs.gate.github.retry': '다시 시도',
   'jobs.gate.github.retryHint': '처음 검사부터 이 라운드를 다시 시작합니다.',
+  'jobs.gate.github.rerun': '다시 돌리기',
+  'jobs.gate.github.rerunHint': 'GitHub 에서 CI 의 실패한 job 을 다시 돌리고 새 시도를 기다립니다.',
   'jobs.gate.github.markFailed': 'Task 를 실패로 처리',
   'jobs.gate.github.markFailedHint': 'Task 를 실패로 끝냅니다.',
   'jobs.gate.github.bindPr': 'PR #{number} 로 묶기',
