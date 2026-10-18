@@ -46,6 +46,8 @@ import {
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate, type Dispatch, type CheckResult } from './types'
 import type { RepairTarget } from './state'
 import { withLifecycleTask } from './lifecycleTask'
+import { outcomeOf } from './running'
+import { derivePublicEvents } from './publicEvents'
 import { t } from '../i18n'
 
 const NOW = '2026-08-04T00:00:00.000Z'
@@ -3817,5 +3819,49 @@ describe('createJob — GitHub lifecycle (G1)', () => {
     const run2 = unwrap<{ id: string }>(startJobRun(finished, job.value.id, LATER) as never)
     const copied = run2.state.tasks.filter((t) => t.runId === run2.value.id)
     expect(copied.map((t) => [t.title, t.kind ?? 'ordinary', t.deps])).toEqual([['a', 'ordinary', []]])
+  })
+})
+
+// GitHub lifecycle G3a (design §3.2): every pure transition that completes a lifecycle Run's last ordinary Task adds the
+// lifecycle Task in the same write. A new path to completed that skips withLifecycleTask fails here.
+describe('GitHub lifecycle G3a: every transition to completed adds the lifecycle Task in the same write', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  type Armed = { s: OrchState; runId: string; taskId: string; dispatchId: string }
+  /** A lifecycle Job's Run with one ordinary Task and its open Dispatch. */
+  const armed = (o: { convergence?: boolean; validate?: boolean; review?: boolean }): Armed => {
+    const { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, ...(o.convergence ? { convergence: {} } : {}) }, NOW)
+    const t = unwrap<{ id: string }>(
+      createTask(s, { runId: run.id, title: 't', spec: 'do it', deps: [], ...(o.validate ? { validateConfigIds: ['cfg1'] } : {}), ...(o.review ? { reviewRequested: true } : {}) }, NOW) as never
+    )
+    const d = unwrap<{ id: string }>(
+      openDispatch(t.state, { taskId: t.value.id, provider: 'codex', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p', specPath: 'D:/p/orch/specs/x.md' }, NOW) as never
+    )
+    return { s: d.state, runId: run.id, taskId: t.value.id, dispatchId: d.value.id }
+  }
+  const workerDone = (a: Armed): OrchState =>
+    unwrap(applyWorkerDone(a.s, { taskId: a.taskId, dispatchId: a.dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+  const validated = (a: Armed): OrchState =>
+    unwrap(applyValidationResult(workerDone(a), { taskId: a.taskId, results: one(0), repair: SAME }, NOW) as never).state
+  const reviewed = (a: Armed): OrchState => {
+    const opened = unwrap<{ id: string }>(
+      openReviewDispatch(workerDone(a), { taskId: a.taskId, provider: 'claude', accountId: 'acc2', sessionId: 'sess2', cwd: 'D:/p', specPath: 'D:/p/orch/specs/review.md' }, NOW) as never
+    )
+    return unwrap(applyReviewResult(opened.state, { taskId: a.taskId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 's', body: 'ok', repair: SAME }, NOW) as never).state
+  }
+
+  it.each([
+    ['worker_done', {}, workerDone],
+    ['a validation verdict with no policy', { validate: true }, validated],
+    ['a validation verdict under convergence', { convergence: true, validate: true }, validated],
+    ['a review verdict with no policy', { review: true }, reviewed],
+    ['a review verdict under convergence', { convergence: true, review: true }, reviewed]
+  ] as const)('%s', (_, o, complete) => {
+    const a = armed(o)
+    const s = complete(a)
+    expect(s.tasks.find((t) => t.id === a.taskId)!.status).toBe('completed')
+    expect(s.tasks.filter((t) => t.runId === a.runId && t.kind === 'lifecycle').map((t) => [t.status, t.deps])).toEqual([['ready', [a.taskId]]])
+    // In the same write: no reader sees the Run all-terminal, so it neither completes nor announces it
+    expect(outcomeOf(s, a.runId)).toBe('running')
+    expect(derivePublicEvents(a.s, s).map((e) => e.type)).not.toContain('run.completed')
   })
 })

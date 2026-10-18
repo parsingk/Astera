@@ -43,7 +43,7 @@ import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
 import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
-import { isLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, withLifecycleTask } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -771,6 +771,7 @@ export function applyWorkerDone(
     tasks: recomputeReady(replace(s.tasks, nextTask)),
     dispatches: replace(s.dispatches, nextDispatch)
   }
+  if (to === 'completed') state = withLifecycleTask(state, task.runId, now)
   state = pushMessage(
     state,
     {
@@ -906,6 +907,7 @@ export function applyValidationResult(
       ...(passed ? {} : { result: `validation failed (exit ${exitCode})\n${output}` })
     }
     let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+    if (to === 'completed') state = withLifecycleTask(state, task.runId, now)
     state = pushMessage(
       state,
       {
@@ -929,6 +931,7 @@ export function applyValidationResult(
     if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
     const next: Task = { ...moved, consecutiveFailures: reviewing ? task.consecutiveFailures : 0 }
     let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+    if (to === 'completed') state = withLifecycleTask(state, task.runId, now)
     state = pushMessage(
       state,
       {
@@ -1373,6 +1376,7 @@ export function applyReviewResult(
       consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1
     }
     let state: OrchState = { ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }
+    if (passed) state = withLifecycleTask(state, task.runId, now)
     state = pushMessage(
       state,
       {
@@ -1412,7 +1416,7 @@ export function applyReviewResult(
     const moved = moveTask(recorded, 'completed', now)
     if (!moved) return err(`cannot move task ${task.status} -> completed`)
     const next: Task = { ...moved, consecutiveFailures: 0 }
-    let state: OrchState = { ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }
+    let state: OrchState = withLifecycleTask({ ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }, task.runId, now)
     const notes = issues.length
     state = pushMessage(
       state,

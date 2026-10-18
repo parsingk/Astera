@@ -26,7 +26,7 @@ import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
 import { FAILURE_LIMIT, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
-import { runningRunCount } from './running'
+import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
 import { checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
@@ -1220,6 +1220,24 @@ describe('handleCommand — retained dispatch', () => {
 // task-13a: COORDINATOR_ONLY에는 'task-update'가 있었는데 handleCommand의 switch에 케이스가
 // 없어 인가는 통과하고 라우팅에서 404로 죽던 공백. task-update는 canTransition을 우회해
 // 코디네이터가 좌초한 Task를 수동으로 정정하는 유일한 경로다.
+// GitHub lifecycle G3a (design §3.2): task-update is the one path to completed outside the pure layer
+describe('handleCommand — task-update completes a lifecycle Run’s last Task', () => {
+  it('adds the lifecycle Task in the same write', async () => {
+    const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [{ id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'blocked', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }]
+    })
+    const r = await call(deps, 'task-update', { id: 'tsk_a', status: 'completed', reason: 'done by hand' }, '')
+    expect(r.status).toBe(200)
+    const tasks = deps.getState().tasks
+    expect(tasks.filter((t) => t.kind === 'lifecycle').map((t) => [t.runId, t.status, t.deps])).toEqual([['run_1', 'ready', ['tsk_a']]])
+    expect(outcomeOf(deps.getState(), 'run_1')).toBe('running')
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

@@ -113,6 +113,7 @@ import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding } from '../github/remote'
+import { withLifecycleTask } from './lifecycleTask'
 import { prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
@@ -3201,8 +3202,10 @@ export async function handleCommand(
       // createTask and applyWorkerDone already use. recomputeReady only promotes pending to ready
       // and never touches blocked — that property is unchanged.
       const tasks = recomputeReady(s.tasks.map((t) => (t.id === id ? nextTask : t)))
-      await deps.setState({ ...s, tasks })
-      return okBody(tasks.find((t) => t.id === id)!)
+      // Completing a lifecycle Run's last ordinary Task adds its lifecycle Task in the same write (GitHub lifecycle §3.2)
+      const next = nextTask.status === 'completed' ? withLifecycleTask({ ...s, tasks }, nextTask.runId, now) : { ...s, tasks }
+      await deps.setState(next)
+      return okBody(next.tasks.find((t) => t.id === id)!)
     }
     case 'session-task-start': {
       // A worker is executing a Jobs task, and a Run coordinator is running one — either way that
