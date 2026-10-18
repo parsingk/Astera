@@ -220,6 +220,34 @@ describe('handleCommand — 역할 인가', () => {
       expect((await call(deps, cmd, {}, 'sess1')).status).toBe(403)
     }
   })
+  // GitHub lifecycle G3c2 (design §7.1): a worker session does not write to GitHub through Astera
+  it('a worker session cannot write to GitHub through Astera, before any gh call', async () => {
+    const deps = await seedWorker()
+    const gh = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    deps.github = { run: gh } as never
+    const cases: [string, Record<string, unknown>][] = [
+      ['github-pr-create', { run: 'run_x' }],
+      ['github-ci-rerun', { project: 'p', runId: 1 }],
+      ['jobs-create-from-issue', { project: 'p', issue: 3 }],
+      ['jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }],
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p', githubLifecycle: true }],
+      // Final review M4: the same Job as jobs-create-from-issue, refused the same way and as early
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p' }]
+    ]
+    for (const [cmd, args] of cases) {
+      const r = await call(deps, cmd, args, 'sess1')
+      expect(r.status, cmd).toBe(403)
+      expect((r.body as { error: string }).error, cmd).toBe(`worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`)
+    }
+    expect(gh).not.toHaveBeenCalled()
+  })
+
+  it('the coordinator, the app and a shell are not refused GitHub writes by that check', async () => {
+    const deps = await seedWorker()
+    for (const sessionId of ['coordinator', APP_CALLER, ''])
+      expect((await call(deps, 'github-ci-rerun', { project: 'p', runId: 1 }, sessionId)).body).not.toMatchObject({ error: expect.stringContaining('worker sessions cannot write to GitHub') })
+  })
+
   it('워커 세션은 자기 send·ask를 부를 수 있다', async () => {
     const deps = await seedWorker()
     const d = deps.getState().dispatches[0]
@@ -8681,6 +8709,19 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
     })
     expect(gh.calls.map((c) => c.cwd)).toEqual([WT])
+  })
+
+  // GitHub lifecycle G3c2 (design §8 Actions): a bound Run's PR is the one it is bound to, not the newest of its branch
+  it('github-pr with a bound run reads the pull request it is bound to, in its repository', async () => {
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+    const { deps, gh } = setup({ [VIEW]: { stdout: JSON.stringify(prRow()) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-pr', { run: 'r1' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+    })
+    expect(gh.calls.map((c) => c.args.slice(0, 3).join(' '))).toEqual(['pr view 12'])
   })
 
   it('github-pr with a project and a branch reads in the project root; no PR is pr: null', async () => {

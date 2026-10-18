@@ -571,9 +571,9 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get a pull request',
     readOnly: true,
     cmd: 'github-pr',
-    description: `The pull request of a Run's branch (runId), or of a branch of a project (projectId and branch): number, title, state, whether it is a draft, url and a summary of its checks. pr is null when the branch has none. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
+    description: `The pull request of a Run's branch (runId), or of a branch of a project (projectId and branch): number, title, state, whether it is a draft, url and a summary of its checks. A GitHub lifecycle Run bound to a pull request reads that one. pr is null when the branch has none. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
     inputSchema: {
-      runId: id.optional().describe("A Run with a branch of its own; its worktree's branch is read."),
+      runId: id.optional().describe("A Run with a branch of its own; its worktree's branch is read, or for a GitHub lifecycle Run the pull request it is bound to."),
       projectId: id.optional().describe('A project from list_projects; give it with branch, not with runId.'),
       branch: id.optional().describe('The branch name, with projectId.')
     },

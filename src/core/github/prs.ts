@@ -1,5 +1,6 @@
 import { ghFailureSentence, type GhFailed, type GhRunner } from './gh'
 import type { PrChecks, PrInfo, PrState } from './types'
+import { ghRepoArg, type GitHubRepo } from './remote'
 
 /** The PR window per repository. Branches older than the newest 200 PRs are not found — accepted
  *  in the design doc §3.3; Astera-created worktree branches are recent. */
@@ -93,6 +94,28 @@ export function parsePrList(stdout: string): Record<string, PrInfo> | null {
     }
   }
   return byBranch
+}
+
+/** One pull request by its number in `repo` (GitHub lifecycle G3c2): the PR a Run is bound to, read as the list reads a
+ *  row. `gh pr view` answers one object; output that is not one PR is a failed read, never "no PR". */
+export async function prByNumber(
+  run: GhRunner,
+  cwd: string,
+  repo: GitHubRepo,
+  n: number
+): Promise<{ ok: true; pr: PrInfo | null } | GhFailed> {
+  const fields = PR_LIST_ARGS[PR_LIST_ARGS.length - 1]
+  const r = await run(['pr', 'view', String(n), '--repo', ghRepoArg(repo), '--json', fields], cwd)
+  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  let one: unknown
+  try {
+    one = JSON.parse(r.stdout)
+  } catch {
+    return { ok: false, kind: 'other', message: 'gh pr view answered with something that is not JSON' }
+  }
+  const rows = parsePrList(JSON.stringify([one]))
+  const pr = rows ? Object.values(rows)[0] : undefined
+  return pr ? { ok: true, pr } : { ok: false, kind: 'other', message: `gh pr view ${n} answered with something that is not a pull request` }
 }
 
 /** The PR of one head branch, by the same fold as the coordinator's list: an open PR wins, else the

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePrList, prForBranch, PR_LIST_ARGS, PR_LIST_LIMIT } from './prs'
+import { parsePrList, prByNumber, prForBranch, PR_LIST_ARGS, PR_LIST_LIMIT } from './prs'
 import type { GhResult, GhRunner } from './gh'
 
 type Row = Record<string, unknown>
@@ -93,6 +93,25 @@ describe('parsePrList', () => {
   it('the argv embeds the window constant', () => {
     expect(PR_LIST_ARGS).toContain(String(PR_LIST_LIMIT))
     expect(PR_LIST_ARGS.slice(0, 2)).toEqual(['pr', 'list'])
+  })
+})
+
+// GitHub lifecycle G3c2: the pull request a Run is bound to, read by its number in its repository
+describe('prByNumber', () => {
+  const repo = { host: 'github.com', owner: 'o', name: 'r' }
+  it('reads the PR by number in the repository, with the coordinator’s fields', async () => {
+    const seen: { args: string[]; cwd: string }[] = []
+    const run: GhRunner = async (args, cwd) => {
+      seen.push({ args, cwd })
+      return { ok: true, stdout: JSON.stringify(row({ number: 12, state: 'CLOSED', headRefName: 'u/a' })), stderr: '' }
+    }
+    expect(await prByNumber(run, 'D:/wt', repo, 12)).toMatchObject({ ok: true, pr: { number: 12, state: 'closed' } })
+    expect(seen).toEqual([{ args: ['pr', 'view', '12', '--repo', 'o/r', '--json', PR_LIST_ARGS.at(-1)], cwd: 'D:/wt' }])
+  })
+
+  it('a gh failure maps to a sentence; output that is not one PR is other', async () => {
+    expect(await prByNumber(async () => ({ ok: false, stdout: '', stderr: 'no pull requests found for 12' }), 'd', repo, 12)).toMatchObject({ ok: false })
+    expect(await prByNumber(async () => ({ ok: true, stdout: 'x', stderr: '' }), 'd', repo, 12)).toMatchObject({ ok: false, kind: 'other' })
   })
 })
 

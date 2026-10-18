@@ -12,6 +12,8 @@ is the guide.
   `capturedUpdatedAt` on `JobSource`.
 - `GitHubLifecycle.failing.class` and `summary`: why the first failing check failed, as Astera classified it (test,
   build, lint, typecheck, infrastructure, timeout, permission, configuration, environment, cancelled, unknown).
+- `GitHubLifecycle.state` also says where a Run's lifecycle Task stands while it works: `pr-ready`, `awaiting-push`,
+  `repairing`, `reviewing`, `waiting-for-user` and `exhausted` (a script that switches on every state meets six more).
 - `Task.kind`: `'lifecycle'` for the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to
   carry the Run through GitHub. It has no worker, and `tasks.create` on that Run is refused while it is open.
 - Six event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,

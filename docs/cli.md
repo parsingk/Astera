@@ -837,7 +837,8 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
 as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sums
 it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
-`external-state-unavailable` while GitHub cannot be read). [sdk.md](sdk.md) lists the fields. Once every Task of
+`external-state-unavailable` while GitHub cannot be read; while the run's lifecycle Task works, `pr-ready`,
+`awaiting-push`, `ci-pending`, `repairing`, `reviewing`, `waiting-for-user` or `exhausted`). [sdk.md](sdk.md) lists the fields. Once every Task of
 such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle`, no worker): it folds the Task
 worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
 those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft
@@ -902,7 +903,10 @@ the Job, the Astera Host checks that the folder's `origin` is a GitHub repositor
 (WRITE, MAINTAIN or ADMIN through your `gh` login) and refuses with a 6 that says why otherwise. The flag
 turns `--convergence` on. `--github-checks build,test` makes those checks decide; without it, the branch
 rules' required checks decide, or every reported check when the rules name none. The Job carries the
-policy as `github`.
+policy as `github`. A worker session Astera started is refused the flag with a 5, as it is
+`jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create` and `github-ci-rerun`: those
+writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off
+Astera's GitHub commands and is not a sandbox.
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it

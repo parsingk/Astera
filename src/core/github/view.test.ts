@@ -1,7 +1,8 @@
 // The public face of a lifecycle Run's GitHub side (design §5.3, §8), derived from the Host's record on every read.
 import { describe, it, expect } from 'vitest'
 import type { GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
-import { githubLifecycleOf } from './view'
+import type { Gate, Task } from '../orchestration/types'
+import { githubLifecycleOf, type GitHubLifecycleState, type LifecycleTaskFacts } from './view'
 
 const POLICY: GitHubLifecyclePolicy = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
 const A = 'a'.repeat(40)
@@ -34,6 +35,37 @@ describe('githubLifecycleOf', () => {
     [bound({ ci: ci('passed'), lastReadError: { kind: 'network', since: 'T' } }), 'external-state-unavailable']
   ] as const)('reads %j as %s', (gs, state) => {
     expect(githubLifecycleOf(POLICY, gs as RunGitHubState | undefined)?.state).toBe(state)
+  })
+
+  // GitHub lifecycle G3c2 (design §5.3): while the lifecycle Task is open, its own state is the Run's
+  describe('the lifecycle Task’s states', () => {
+    const task = (over: Partial<Task> = {}): Task => ({
+      id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: 'T', updatedAt: 'T', ...over
+    })
+    const gate = (kind?: Gate['kind']): Gate => ({ id: 'g1', runId: 'run_1', taskId: 'tsk_l', question: 'q', status: 'open', createdAt: 'T', ...(kind ? { kind } : {}) })
+    const wait = { since: 'T', done: [] }
+    const facts = (over: Partial<Task> = {}, openGate?: Gate): LifecycleTaskFacts => ({ task: task(over), ...(openGate ? { openGate } : {}) })
+    const merged = { state: 'merged' as const, isDraft: false, baseBranch: 'develop' }
+    const rows: [string, RunGitHubState, LifecycleTaskFacts, GitHubLifecycleState][] = [
+      ['local checks before the first push', bound(), facts(), 'pr-ready'],
+      ['local checks after a repair, a push due', bound({ lastPushedSha: A }), facts(), 'awaiting-push'],
+      ['CI awaited', bound({ lastPushedSha: A, ci: ci('passed') }), facts({ ciWait: wait }), 'ci-pending'],
+      ['CI awaited while GitHub cannot be read', bound({ lastReadError: { kind: 'network', since: 'T' } }), facts({ ciWait: wait }), 'external-state-unavailable'],
+      ['a repair at work', bound({ ci: ci('failed', 'build') }), facts({ status: 'dispatched' }), 'repairing'],
+      // Final review M1: a repair worker that ended without a report leaves the Task dispatched until recovery
+      ['a repair whose worker is gone, waiting for recovery', bound({ ci: ci('passed') }), facts({ status: 'dispatched' }), 'repairing'],
+      ['in review', bound({ ci: ci('passed') }), facts({ status: 'reviewing' }), 'reviewing'],
+      ['blocked on a GitHub question that keeps its wait', bound(), facts({ status: 'blocked', ciWait: wait }, gate('github-no-ci')), 'waiting-for-user'],
+      ['blocked on an exhausted budget', bound(), facts({ status: 'blocked' }, gate('convergence-exhausted')), 'exhausted'],
+      ['failed', bound(), facts({ status: 'failed', consecutiveFailures: 3 }), 'exhausted'],
+      // Final review I1: a person merged the pull request and answered github-pr-closed's only choice, mark-failed
+      ['failed after its pull request was merged', bound({ ci: ci('passed'), pr: merged }), facts({ status: 'failed' }), 'pr-merged'],
+      ['failed after its pull request was closed', bound({ pr: { ...merged, state: 'closed' } }), facts({ status: 'failed' }), 'pr-closed'],
+      ['completed: the read says the rest', bound({ ci: ci('passed'), pr: merged }), facts({ status: 'completed' }), 'pr-merged']
+    ]
+    it.each(rows)('%s', (_name, gs, lifecycle, state) => {
+      expect(githubLifecycleOf(POLICY, gs, lifecycle)?.state).toBe(state)
+    })
   })
 
   it('shows the PR, the head, the checks without their internals, and the failing check with its link', () => {

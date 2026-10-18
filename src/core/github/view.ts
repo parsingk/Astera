@@ -2,8 +2,10 @@
 // the Host last recorded, never stored. `runs get`, `jobs get`, MCP get_run, the SDK's runs.get and the run and github
 // events carry it. Node-free.
 import type { CiBasis, CiFailureClass, CiVerdict, GitHubCiCheck, GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
+import type { Gate, Task } from '../orchestration/types'
 
-/** G1's states. Later slices add the lifecycle Task's (repairing, reviewing, merge-ready, ...). */
+/** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open. Later
+ *  slices add merge-ready and invalidated (G5). */
 export type GitHubLifecycleState =
   | 'unbound'
   | 'pr-bound'
@@ -13,6 +15,34 @@ export type GitHubLifecycleState =
   | 'pr-merged'
   | 'pr-closed'
   | 'external-state-unavailable'
+  | 'pr-ready'
+  | 'awaiting-push'
+  | 'repairing'
+  | 'reviewing'
+  | 'waiting-for-user'
+  | 'exhausted'
+
+/** The Run's latest lifecycle Task and the question open on it (G3c2). */
+export interface LifecycleTaskFacts {
+  task: Task
+  openGate?: Gate
+}
+
+/** The lifecycle Task's state while it works (design §5.3), or undefined to let the read speak: a question open on it,
+ *  then a failed Task, a repair, the review, and its validating round — local checks before the first push or after
+ *  one, then CI awaited. A GitHub question keeps the round's wait on the blocked Task, so the question is read first.
+ *  A failed Task whose pull request was merged or closed (github-pr-closed's mark-failed) lets the pull request speak
+ *  (final review I1). Only a repair dispatches a lifecycle Task (L20), and its Task stays dispatched while a worker
+ *  that ended without a report waits for recovery, so dispatched reads repairing (final review M1). */
+function lifecycleStateOf(l: LifecycleTaskFacts, gs: RunGitHubState | undefined): GitHubLifecycleState | undefined {
+  if (l.openGate) return l.openGate.kind === 'convergence-exhausted' ? 'exhausted' : 'waiting-for-user'
+  if (l.task.status === 'failed') return gs?.pr?.state === 'merged' ? 'pr-merged' : gs?.pr?.state === 'closed' ? 'pr-closed' : 'exhausted'
+  if (l.task.status === 'dispatched') return 'repairing'
+  if (l.task.status === 'reviewing') return 'reviewing'
+  if (l.task.status !== 'validating') return undefined
+  if (l.task.ciWait) return gs?.lastReadError ? 'external-state-unavailable' : 'ci-pending'
+  return gs?.lastPushedSha ? 'awaiting-push' : 'pr-ready'
+}
 
 export interface GitHubLifecycleView {
   state: GitHubLifecycleState
@@ -48,9 +78,13 @@ function stateOf(gs: RunGitHubState | undefined): GitHubLifecycleState {
   }
 }
 
-export function githubLifecycleOf(policy: GitHubLifecyclePolicy | undefined, gs: RunGitHubState | undefined): GitHubLifecycleView | undefined {
+export function githubLifecycleOf(
+  policy: GitHubLifecyclePolicy | undefined,
+  gs: RunGitHubState | undefined,
+  lifecycle?: LifecycleTaskFacts
+): GitHubLifecycleView | undefined {
   if (!policy) return undefined
-  const view: GitHubLifecycleView = { state: stateOf(gs) }
+  const view: GitHubLifecycleView = { state: (lifecycle ? lifecycleStateOf(lifecycle, gs) : undefined) ?? stateOf(gs) }
   if (gs?.binding)
     view.pr = {
       number: gs.binding.number,

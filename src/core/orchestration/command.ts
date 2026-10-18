@@ -122,7 +122,7 @@ import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding } from '../github/remote'
 import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
-import { prForBranch } from '../github/prs'
+import { prByNumber, prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
@@ -730,6 +730,11 @@ const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
  *  부르는 쪽이 문구를 읽어야 알 수 있었다. */
 const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
+/** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2); `jobs-create` with the lifecycle on and
+ *  `jobs-create-from-source` from the github source or with the lifecycle on are refused beside them.
+ *  `runs-reconverge` joins when it exists (G5). */
+const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue'])
+const githubWriteRefusal = (cmd: string): string => `worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`
 /** A pure-layer refusal handed straight to the caller: 404 when it is marked `missing` (the id the
  *  caller named is not there — state.ts marks it where it refuses), 400 otherwise. For the cases that
  *  do not go through `commit()`; the same fact must not exit 4 from one command and 2 from another. */
@@ -1293,6 +1298,15 @@ export async function handleCommand(
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
+  // A worker asking for a Job from a GitHub issue (jobs-create-from-issue's Job) or a lifecycle Job from any source is
+  // refused before the source is read (GitHub lifecycle G3c2, §7.1; final review M4)
+  if (
+    cmd === 'jobs-create-from-source' &&
+    (args.source === 'github' || args.githubLifecycle === true) &&
+    caller.sessionId !== '' &&
+    deps.getState().dispatches.some((d) => d.sessionId === caller.sessionId)
+  )
+    return denied(githubWriteRefusal(cmd))
   // The job-source commands (plugin Phase 4), in a module of their own; jobs-create-from-source comes back here
   if (SOURCE_COMMANDS.has(cmd)) return sourcesCommand(deps, caller, cmd, args, handleCommand)
   if (cmd === 'browser-js') {
@@ -1355,6 +1369,11 @@ export async function handleCommand(
     s.dispatches.filter((d) => d.sessionId === caller.sessionId).map((d) => d.id)
   )
   const isWorker = myDispatchIds.size > 0
+  // Worker sessions do not write to GitHub through Astera (GitHub lifecycle §7.1, G3c2): a pull request, a CI rerun, a
+  // Job from an issue and a Job's lifecycle are the coordinator's or the person's. The agent still has its own git and
+  // gh: this keeps a well-meaning agent off Astera's write commands, and is no sandbox (design S8). Before
+  // COORDINATOR_ONLY, so a lifecycle Job from a worker names the command it sent, not run-create.
+  if (isWorker && (GITHUB_WRITES.has(cmd) || (cmd === 'jobs-create' && args.githubLifecycle === true))) return denied(githubWriteRefusal(cmd))
   if (isWorker && COORDINATOR_ONLY.has(cmd)) return denied(`worker sessions cannot call ${cmd}`)
   // **The driving loop's own calls are not an agent's** (final review M3). `run-coordinator-stop --gone`
   // empties a slot with nothing stopped, and a coordinator sending it with its own id would orphan
@@ -4741,8 +4760,12 @@ export async function handleCommand(
         if (given === null) return bad('--branch is required with --project: the head branch to look up')
         branch = given
       }
-      const found = await prForBranch(t.gh, t.cwd, branch)
-      return found.ok ? okBody({ branch, pr: found.pr }) : ghRefusal(found)
+      // A bound Run's pull request is the one it is bound to, read in the binding's repository — not the newest of its
+      // branch, which can be a closed one (GitHub lifecycle G3c2, design §8 Actions)
+      const binding = 'run' in t ? t.run.githubState?.binding : undefined
+      const bound = binding ? repoOfBinding(binding) : null
+      const found = binding && bound ? await prByNumber(t.gh, t.cwd, bound, binding.number) : await prForBranch(t.gh, t.cwd, branch)
+      return found.ok ? okBody({ branch: binding && bound ? binding.headBranch : branch, pr: found.pr }) : ghRefusal(found)
     }
     case 'github-ci': {
       if (args.run !== undefined && args.pr !== undefined)

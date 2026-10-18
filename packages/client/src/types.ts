@@ -82,7 +82,8 @@ export interface GitHubLifecyclePolicy {
   readonly ciWaitMinutes: number
 }
 
-/** Where a GitHub lifecycle Run's pull request stands (Astera 1.4.15 and later). */
+/** Where a GitHub lifecycle Run's pull request stands, or, while the Run's lifecycle Task works, where that Task stands
+ *  (Astera 1.4.15 and later). */
 export type GitHubLifecycleState =
   | 'unbound'
   | 'pr-bound'
@@ -92,6 +93,12 @@ export type GitHubLifecycleState =
   | 'pr-merged'
   | 'pr-closed'
   | 'external-state-unavailable'
+  | 'pr-ready'
+  | 'awaiting-push'
+  | 'repairing'
+  | 'reviewing'
+  | 'waiting-for-user'
+  | 'exhausted'
 
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {
