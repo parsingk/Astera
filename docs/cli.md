@@ -823,7 +823,10 @@ as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sum
 it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
 `external-state-unavailable` while GitHub cannot be read). [sdk.md](sdk.md) lists the fields. Once every Task of
 such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle`, no worker): it folds the Task
-worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends.
+worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
+those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft
+one (its body ending `Refs #N` for an issue of the same repository), and waits for CI on the head it pushed: a pass
+takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person.
 
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
