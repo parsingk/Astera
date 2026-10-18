@@ -97,7 +97,9 @@ export interface GitHubLifecycle {
     readonly verdict: 'pending' | 'passed' | 'failed' | 'none'
     readonly checks: readonly { readonly name: string; readonly status: 'queued' | 'in-progress' | 'completed'; readonly conclusion?: string; readonly required: boolean }[]
   }
-  readonly failing?: { readonly check: string; readonly detailsUrl?: string }
+  /** The check that failed first; `class` (test, build, lint, typecheck, infrastructure, ...) and `summary` say why, as
+   *  Astera classified it. */
+  readonly failing?: { readonly check: string; readonly class?: string; readonly summary?: string; readonly detailsUrl?: string }
   readonly candidates?: readonly number[]
   readonly sourceChanged?: true
 }

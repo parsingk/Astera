@@ -54,6 +54,14 @@ describe('githubLifecycleOf', () => {
     expect(githubLifecycleOf(POLICY, bound({ headSha: A, ci: ci('passed') }))?.state).toBe('ci-passed')
   })
 
+  // G2: why it failed, as Astera classified it; the excerpt and diagnostics stay off the view (github-ci --run reads them)
+  it('says the failing check’s class and summary from its evidence', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'test' as const, summary: 'build (test): not ok 1', diagnostics: [{ path: 'a.ts', line: 3, message: 'm' }], logExcerpt: 'x' }
+    expect(githubLifecycleOf(POLICY, bound({ ci: { ...ci('failed', 'build')!, failure } }))?.failing).toEqual({
+      check: 'build', class: 'test', summary: 'build (test): not ok 1', detailsUrl: 'https://x/1'
+    })
+  })
+
   // Final review M6: the link comes from the verdict, never from a check found again by name
   it('takes the failing link from the verdict only', () => {
     const noUrl = { ...ci('failed', 'build')!, failingUrl: undefined }

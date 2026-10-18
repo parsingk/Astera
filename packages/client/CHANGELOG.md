@@ -10,6 +10,8 @@ is the guide.
   (`GitHubLifecycle`: the pull request Astera bound for its branch, its head, the CI checks of that head with a
   `verdict` and the check that failed first, and a `state`), and a GitHub issue source's `capturedBodyHash` and
   `capturedUpdatedAt` on `JobSource`.
+- `GitHubLifecycle.failing.class` and `summary`: why the first failing check failed, as Astera classified it (test,
+  build, lint, typecheck, infrastructure, timeout, permission, configuration, environment, cancelled, unknown).
 - Five event types: `github.pr_bound`, `github.head_changed`, `github.ci_passed`, `github.ci_failed` and
   `github.source_changed`, each carrying the `Run` it moved. A script that switches on every `EventType` meets five
   more.

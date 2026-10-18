@@ -818,7 +818,8 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 ([mcp.md](mcp.md) says more).
 
 **`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
-branch, its head, the CI checks of that head with the `verdict` and the check that failed first, and a `state` that sums
+branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
+as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sums
 it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
 `external-state-unavailable` while GitHub cannot be read). [sdk.md](sdk.md) lists the fields.
 
