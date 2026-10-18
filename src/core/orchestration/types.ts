@@ -593,7 +593,8 @@ export { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_WAIT_TIMEOUT_
 
 const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   pending: ['ready', 'dispatched', 'blocked'],
-  ready: ['dispatched', 'blocked'],
+  // validating: a lifecycle Task has no worker and starts its checks straight away (GitHub lifecycle §3.3)
+  ready: ['dispatched', 'blocked', 'validating'],
   // A Task with a live worker is not gated: a Gate decides the task DAG the coordinator manages, and
   // halting a running worker is worker-stop's job, not a Gate's. `blocked` is nevertheless reachable
   // from `dispatched` because recovery needs it — when a worker is lost and the app cannot prove it is

@@ -36,9 +36,9 @@ import {
 } from '../integrate'
 import { reapableChildRuns } from '../reap'
 import { lostAttemptOf } from '../../recovery/candidates'
-import { slotsToFill, tasksMissingAccounts, type Slot } from '../schedule'
+import { lifecycleToStart, slotsToFill, tasksMissingAccounts, type Slot } from '../schedule'
 import { coordinatorStarting, jobOf, type OrchState } from '../state'
-import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun } from '../types'
+import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun, type Task } from '../types'
 import { tasksOwnedBy } from '../running'
 import { outcomeOf } from '../view'
 import type { Integration } from './integrateGit'
@@ -464,6 +464,141 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    * person's call does with it stays in `dispatchOne` (an answer). `why` is the same fact as `reason`,
    * in English, for that answer: some reasons are Gate questions in the app's language.
    */
+  /** 통합 단계(아래 placeSlot 과 lifecycle Task 의 시작이 함께 쓴다): `at` 의 의존이 자기 워크트리에서 돌았다면
+   *  그 커밋을 Run 뿌리로 합치고, 기다려야 하면 그 끝을, 아니면 null 을 준다. `accounts` 는 충돌 때 만드는 통합
+   *  Task 의 계정이다. */
+  const integrateBefore = async (
+    at: { runId: string; taskId: string },
+    state: OrchState,
+    task: Task,
+    runRoot: string,
+    accounts: readonly string[]
+  ): Promise<SlotEnd | null> => {
+    // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
+    // 커밋을 Run 뿌리로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
+    // 넘기는 것이 이 기능의 결정이다: 사람을 부르는 것은 모든 작업이 끝났을 때로 미룬다.
+    //
+    // 통합 Task 자신은 이 단계를 지나지 않는다. 지나면 그 Task 의 deps(= 그 워크트리 Task
+    // 들)를 보고 통합 Task 를 위한 통합 Task 를 만들고, 그것이 끝없이 이어진다 — 새 Task 는
+    // 매번 새 id 라서 아래의 attempted 가 막지 못한다(integrate.ts 에 자세히 적었다).
+    const merges = isIntegrationTask(task) ? [] : pendingMerges(state, at.taskId)
+    if (merges.length > 0) {
+      // **이미 통합 Task 가 있으면 새로 만들지 않는다.** 아직 끝나지 않았으면 그것을
+      // 기다린다. 실패했어도 만들지 않는다 — 즉시 실패하는 통합은 상태 변경마다 Task 를
+      // 하나씩 늘리게 되고 그것은 경계가 없다. 보이는 정지가 조용한 쌓임보다 낫다(실패한
+      // Task 는 그래프에 그대로 남고, 거기서 다시 띄우는 것이 사람의 길이다).
+      const existing = integrationTaskFor(state, at.taskId)
+      if (existing && existing.status !== 'completed') {
+        log(
+          `scheduler: task=${at.taskId} waits for integration task=${existing.id} (${existing.status})`
+        )
+        return { kind: 'wait', why: `it waits for its integration task ${existing.id} (${existing.status}) to finish` }
+      }
+      // Run 뿌리에서 도는 워커가 있으면 합치지 않는다 — 그 워커가 읽은 트리를 그
+      // 아래에서 갈아치우는 일이고, 그 실패는 조용하다(integrate.ts 에 이유가 있다).
+      // 다음 상태 변경에 다시 본다. 그 워커가 끝나는 것 자체가 상태 변경이다.
+      if (workingInRunRoot(state, at.runId)) {
+        log(`scheduler: task=${at.taskId} waits — a worker is still working in ${runRoot}`)
+        return {
+          kind: 'wait',
+          why: `the worktrees it depends on must be merged into ${runRoot} first, and a worker is still working there`
+        }
+      }
+      // **여기서부터 git 이 돈다.** 위까지는 상태만 본다 — runScheduler 는 모든 저장마다
+      // 불리고 그 대부분은 합칠 것이 없는 저장이므로, 그 바퀴에 git 프로세스를 띄우지 않는다
+      // (슬롯이 없을 때 계정 조회 앞에서 빠지는 것과 같은 성격이다).
+      const integration = await c.integrate(runRoot, merges)
+      if (integration.kind === 'human') {
+        return { kind: 'gate', reason: integration.reason, why: integration.reason }
+      }
+      if (integration.kind === 'agent') {
+        // 통합 Task 가 이미 completed 인데 아직 깨끗하지 않다면 넘길 곳이 없다 — 두 번째
+        // 통합 Task 를 만들지 않기로 했으므로 사람에게 간다. 조용히 넘기면 사용자에게
+        // 남는 것은 '완료된 통합 Task 와 이유 없이 서 있는 Task' 뿐이어서 문제가 보이지
+        // 않는다(실패한 통합 Task 는 그래프에서 스스로 보이므로 그쪽은 Gate 가 아니다).
+        if (existing) {
+          return {
+            kind: 'gate',
+            reason: `통합 Task 가 끝났는데도 워크트리를 합칠 수 없습니다: ${integration.reason}`,
+            why: `the worktrees it depends on still cannot be merged although the integration task finished: ${integration.reason}`
+          }
+        }
+        // 통합 Task 도 **task-create 로** 만든다 — 앱이 createTask 를 직접 부르지 않는다.
+        // 문은 하나다. `runId` 도 명시한다: 그 인자가 없으면 task-create 는 '가장 마지막에
+        // 만들어진 Run' 을 쓰고(server.ts), 그것은 이 슬롯의 Run 이 아닐 수 있다.
+        const created = await c.handle('task-create', {
+          runId: at.runId,
+          // task-create 은 계정을 요구한다 — 통합 Task 도 워커가 띄우는 Task 다. 기다리는 Task 의 계정을 그대로
+          // 넘긴다(lifecycle Task 는 계정이 없으므로 부르는 쪽이 합칠 Task 의 계정을 준다).
+          ...(accounts.length > 0 ? { account: accounts.join(',') } : {}),
+          // parentId 가 "이 Task 의 통합 Task" 라는 표식이다 — 다음 바퀴에 그것을 보고
+          // 두 번 만들지 않는다(integrate.ts 의 integrationTaskFor).
+          parent: at.taskId,
+          deps: worktreeDepsOf(state, at.taskId),
+          // 제목은 그래프에 뜨므로 사람의 말(한국어)이고 — 같은 파일의 Gate 질문이
+          // 그렇다 — spec 본문은 에이전트가 읽으므로 영어다(buildSpecFile 의 의무 절과
+          // 같은 이유). 둘 다 i18n 카탈로그에 넣지 않는다: 그 카탈로그는 렌더러의 문구를
+          // 위한 것이고 이 문구는 main 에서 조립된다. 80자로 자르는 것은 title 을 주지
+          // 않았을 때 task-create 가 하는 것과 같은 길이다.
+          title: `워크트리 병합: ${task.title}`.slice(0, 80),
+          spec: buildIntegrationSpec({
+            mergeInto: runRoot,
+            reason: integration.reason,
+            worktrees: integration.worktrees
+          })
+        })
+        if (created.status >= 400) {
+          return {
+            kind: 'gate',
+            reason: `워크트리를 합칠 통합 Task 를 만들지 못했습니다: ${JSON.stringify(created.body)}`,
+            why: `the integration task that merges the worktrees it depends on could not be made: ${JSON.stringify(created.body)}`
+          }
+        }
+        log(`scheduler: integration task created for task=${at.taskId} — ${integration.reason}`)
+        // 이번 회차에서 이 Task 는 띄우지 않는다. 통합 Task 는 방금의 setState 로 스케줄러가
+        // 한 바퀴 더 돌 때 스스로 슬롯이 된다(deps 가 이미 전부 completed 이므로 ready 다).
+        return {
+          kind: 'wait',
+          why: `the worktrees it depends on must be merged first, so an integration task was made for that (${String((created.body as { id?: unknown } | null)?.id ?? '')}); it runs first`
+        }
+      }
+    }
+    return null
+  }
+
+  /** A ready lifecycle Task (GitHub lifecycle §3.3): every Task worktree folded into the Run root first, then
+   *  `lifecycle-start` moves it to validating and starts its checks there. No account and no worker: an integration
+   *  Task a conflict needs runs on the accounts of the Task most recently completed among the ones it folds in. Null
+   *  when started, or when there is nothing to do yet. */
+  const startLifecycle = async (l: { runId: string; taskId: string }): Promise<SlotEnd | null> => {
+    const state = c.getState()
+    const run = state.runs.find((r) => r.id === l.runId)
+    const task = state.tasks.find((t) => t.id === l.taskId)
+    if (!run || !task) return null
+    if (run.worktree === undefined)
+      return {
+        kind: 'gate',
+        reason: '이 Run 에는 자기 브랜치가 없어 GitHub 으로 가져갈 수 없습니다',
+        why: 'the run has no branch of its own to carry through GitHub'
+      }
+    const latestDone = task.deps
+      .map((id) => state.tasks.find((t) => t.id === id))
+      .filter((t): t is Task => t !== undefined && t.status === 'completed' && (t.accountIds?.length ?? 0) > 0)
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .at(-1)
+    const waiting = await integrateBefore(l, state, task, runRootOf(run, jobOf(state, run)), latestDone?.accountIds ?? [])
+    if (waiting) return waiting
+    const started = await c.handle('lifecycle-start', { task: l.taskId })
+    if (started.status >= 400)
+      return {
+        kind: 'gate',
+        reason: `GitHub 전달을 시작하지 못했습니다: ${JSON.stringify(started.body)}`,
+        why: `the GitHub lifecycle could not start: ${JSON.stringify(started.body)}`
+      }
+    log(`scheduler: lifecycle task=${l.taskId} checks its run's root`)
+    return null
+  }
+
   const placeSlot = async (slot: Slot, accounts: Account[], loggedIn: Set<string>): Promise<SlotEnd> => {
     // 사람이 이 Task 에 계정을 지정했으면 그 목록의 첫 계정, 아니면 그 provider 의 기본
     // 계정. 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
@@ -595,92 +730,9 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
     const task = state.tasks.find((t) => t.id === slot.taskId)!
     const runRoot = runRootOf(run, jobOf(state, run))
 
-    // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
-    // 커밋을 Run 뿌리로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
-    // 넘기는 것이 이 기능의 결정이다: 사람을 부르는 것은 모든 작업이 끝났을 때로 미룬다.
-    //
-    // 통합 Task 자신은 이 단계를 지나지 않는다. 지나면 그 Task 의 deps(= 그 워크트리 Task
-    // 들)를 보고 통합 Task 를 위한 통합 Task 를 만들고, 그것이 끝없이 이어진다 — 새 Task 는
-    // 매번 새 id 라서 아래의 attempted 가 막지 못한다(integrate.ts 에 자세히 적었다).
-    const merges = isIntegrationTask(task) ? [] : pendingMerges(state, slot.taskId)
-    if (merges.length > 0) {
-      // **이미 통합 Task 가 있으면 새로 만들지 않는다.** 아직 끝나지 않았으면 그것을
-      // 기다린다. 실패했어도 만들지 않는다 — 즉시 실패하는 통합은 상태 변경마다 Task 를
-      // 하나씩 늘리게 되고 그것은 경계가 없다. 보이는 정지가 조용한 쌓임보다 낫다(실패한
-      // Task 는 그래프에 그대로 남고, 거기서 다시 띄우는 것이 사람의 길이다).
-      const existing = integrationTaskFor(state, slot.taskId)
-      if (existing && existing.status !== 'completed') {
-        log(
-          `scheduler: task=${slot.taskId} waits for integration task=${existing.id} (${existing.status})`
-        )
-        return { kind: 'wait', why: `it waits for its integration task ${existing.id} (${existing.status}) to finish` }
-      }
-      // Run 뿌리에서 도는 워커가 있으면 합치지 않는다 — 그 워커가 읽은 트리를 그
-      // 아래에서 갈아치우는 일이고, 그 실패는 조용하다(integrate.ts 에 이유가 있다).
-      // 다음 상태 변경에 다시 본다. 그 워커가 끝나는 것 자체가 상태 변경이다.
-      if (workingInRunRoot(state, slot.runId)) {
-        log(`scheduler: task=${slot.taskId} waits — a worker is still working in ${runRoot}`)
-        return {
-          kind: 'wait',
-          why: `the worktrees it depends on must be merged into ${runRoot} first, and a worker is still working there`
-        }
-      }
-      // **여기서부터 git 이 돈다.** 위까지는 상태만 본다 — runScheduler 는 모든 저장마다
-      // 불리고 그 대부분은 합칠 것이 없는 저장이므로, 그 바퀴에 git 프로세스를 띄우지 않는다
-      // (슬롯이 없을 때 계정 조회 앞에서 빠지는 것과 같은 성격이다).
-      const integration = await c.integrate(runRoot, merges)
-      if (integration.kind === 'human') {
-        return { kind: 'gate', reason: integration.reason, why: integration.reason }
-      }
-      if (integration.kind === 'agent') {
-        // 통합 Task 가 이미 completed 인데 아직 깨끗하지 않다면 넘길 곳이 없다 — 두 번째
-        // 통합 Task 를 만들지 않기로 했으므로 사람에게 간다. 조용히 넘기면 사용자에게
-        // 남는 것은 '완료된 통합 Task 와 이유 없이 서 있는 Task' 뿐이어서 문제가 보이지
-        // 않는다(실패한 통합 Task 는 그래프에서 스스로 보이므로 그쪽은 Gate 가 아니다).
-        if (existing) {
-          return {
-            kind: 'gate',
-            reason: `통합 Task 가 끝났는데도 워크트리를 합칠 수 없습니다: ${integration.reason}`,
-            why: `the worktrees it depends on still cannot be merged although the integration task finished: ${integration.reason}`
-          }
-        }
-        // 통합 Task 도 **task-create 로** 만든다 — 앱이 createTask 를 직접 부르지 않는다.
-        // 문은 하나다. `runId` 도 명시한다: 그 인자가 없으면 task-create 는 '가장 마지막에
-        // 만들어진 Run' 을 쓰고(server.ts), 그것은 이 슬롯의 Run 이 아닐 수 있다.
-        const created = await c.handle('task-create', {
-          runId: slot.runId,
-          // parentId 가 "이 Task 의 통합 Task" 라는 표식이다 — 다음 바퀴에 그것을 보고
-          // 두 번 만들지 않는다(integrate.ts 의 integrationTaskFor).
-          parent: slot.taskId,
-          deps: worktreeDepsOf(state, slot.taskId),
-          // 제목은 그래프에 뜨므로 사람의 말(한국어)이고 — 같은 파일의 Gate 질문이
-          // 그렇다 — spec 본문은 에이전트가 읽으므로 영어다(buildSpecFile 의 의무 절과
-          // 같은 이유). 둘 다 i18n 카탈로그에 넣지 않는다: 그 카탈로그는 렌더러의 문구를
-          // 위한 것이고 이 문구는 main 에서 조립된다. 80자로 자르는 것은 title 을 주지
-          // 않았을 때 task-create 가 하는 것과 같은 길이다.
-          title: `워크트리 병합: ${task.title}`.slice(0, 80),
-          spec: buildIntegrationSpec({
-            mergeInto: runRoot,
-            reason: integration.reason,
-            worktrees: integration.worktrees
-          })
-        })
-        if (created.status >= 400) {
-          return {
-            kind: 'gate',
-            reason: `워크트리를 합칠 통합 Task 를 만들지 못했습니다: ${JSON.stringify(created.body)}`,
-            why: `the integration task that merges the worktrees it depends on could not be made: ${JSON.stringify(created.body)}`
-          }
-        }
-        log(`scheduler: integration task created for task=${slot.taskId} — ${integration.reason}`)
-        // 이번 회차에서 이 Task 는 띄우지 않는다. 통합 Task 는 방금의 setState 로 스케줄러가
-        // 한 바퀴 더 돌 때 스스로 슬롯이 된다(deps 가 이미 전부 completed 이므로 ready 다).
-        return {
-          kind: 'wait',
-          why: `the worktrees it depends on must be merged first, so an integration task was made for that (${String((created.body as { id?: unknown } | null)?.id ?? '')}); it runs first`
-        }
-      }
-    }
+    // **통합 단계 — worker-start 앞이다.** integrateBefore 의 주석에 이유가 있다.
+    const waiting = await integrateBefore(slot, state, task, runRoot, slot.accountIds)
+    if (waiting) return waiting
 
     // 통합 Task 는 동시 실행 손잡이와 상관없이 Run 뿌리에 놓이므로(아래 배치 예외), 그
     // 자리에 이미 도는 워커와 **겹치지 않게 한다.** 접합점이 둘이면 통합 Task 도 둘이
@@ -820,6 +872,15 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
               ? `inbox: reply rejected message=${id} — ${JSON.stringify(answered.body)}`
               : `inbox: answered an unattended question message=${id} — no coordinator on this run`
           )
+        }
+        // **lifecycle Task 는 Astera 가 띄운다**(GitHub lifecycle §3.3) — 워커가 없으므로 슬롯이 아니고, 코디네이터가
+        // 모는 회차에서도 그렇다. 같은 활성화 안에서 한 번만 건드리는 규칙은 위 attempted 그대로다.
+        for (const l of lifecycleToStart(c.getState())) {
+          if (attempted.has(l.taskId)) continue
+          attempted.add(l.taskId)
+          if (!c.mayStart()) return
+          const end = await startLifecycle(l)
+          if (end?.kind === 'gate') await gateSlot(l.taskId, end.reason)
         }
         const slots = slotsToFill(c.getState()).filter((s) => !attempted.has(s.taskId))
         // 띄울 자리가 없으면 계정 조회까지 가지 않는다. 이 함수는 **모든 저장마다** 불리고 그

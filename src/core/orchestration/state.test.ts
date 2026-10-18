@@ -37,6 +37,7 @@ import {
   rekeyExternalCoordinator,
   bindNativeSession,
   beginValidation,
+  beginLifecycleValidation,
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
@@ -3819,6 +3820,31 @@ describe('createJob — GitHub lifecycle (G1)', () => {
     const run2 = unwrap<{ id: string }>(startJobRun(finished, job.value.id, LATER) as never)
     const copied = run2.state.tasks.filter((t) => t.runId === run2.value.id)
     expect(copied.map((t) => [t.title, t.kind ?? 'ordinary', t.deps])).toEqual([['a', 'ordinary', []]])
+  })
+})
+
+// GitHub lifecycle G3a (design §3.3): the lifecycle Task starts its checks with no worker
+describe('beginLifecycleValidation', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const ready = (): { s: OrchState; lifecycleId: string; ordinaryId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const s = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    return { s, lifecycleId: s.tasks.find((t) => t.kind === 'lifecycle')!.id, ordinaryId: a.value.id }
+  }
+
+  it('moves a ready lifecycle Task to validating and starts its time budget once', () => {
+    const { s, lifecycleId } = ready()
+    const r = unwrap<Task>(beginLifecycleValidation(s, { taskId: lifecycleId }, LATER) as never)
+    expect(r.value).toMatchObject({ status: 'validating', convergenceStartedAt: LATER })
+  })
+
+  it('refuses an ordinary Task, a lifecycle Task that is not ready, and an unknown Task', () => {
+    const { s, lifecycleId, ordinaryId } = ready()
+    expect(beginLifecycleValidation(s, { taskId: ordinaryId }, LATER).ok).toBe(false)
+    const started = unwrap<Task>(beginLifecycleValidation(s, { taskId: lifecycleId }, LATER) as never).state
+    expect(beginLifecycleValidation(started, { taskId: lifecycleId }, LATER).ok).toBe(false)
+    expect(beginLifecycleValidation(s, { taskId: 'tsk_nope' }, LATER)).toMatchObject({ ok: false, missing: true })
   })
 })
 

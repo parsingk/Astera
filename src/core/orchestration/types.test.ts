@@ -49,6 +49,11 @@ describe('validating 전이', () => {
     expect(canTransition('dispatched', 'validating')).toBe(true)
   })
 
+  // GitHub lifecycle G3a: the lifecycle Task has no worker, so it starts its checks straight from ready
+  it('ready 에서 validating 으로 갈 수 있다 — lifecycle Task 는 워커 없이 검증을 시작한다', () => {
+    expect(canTransition('ready', 'validating')).toBe(true)
+  })
+
   it('validating 에서 completed·failed·blocked 로 갈 수 있다', () => {
     expect(canTransition('validating', 'completed')).toBe(true)
     expect(canTransition('validating', 'failed')).toBe(true)
@@ -60,9 +65,9 @@ describe('validating 전이', () => {
     expect(canTransition('validating', 'dispatched')).toBe(true)
   })
 
-  it('validating 은 pending·ready 에서 바로 올 수 없다', () => {
+  // ready 는 위의 lifecycle Task 예외 하나다(beginLifecycleValidation 만 그 길로 보낸다)
+  it('validating 은 pending 에서 바로 올 수 없다', () => {
     expect(canTransition('pending', 'validating')).toBe(false)
-    expect(canTransition('ready', 'validating')).toBe(false)
   })
 })
 

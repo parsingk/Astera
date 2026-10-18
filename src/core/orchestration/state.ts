@@ -1238,6 +1238,19 @@ export function beginValidation(s: OrchState, a: { taskId: string }, now: string
   return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
 }
 
+/** A ready lifecycle Task starts its checks with no worker (GitHub lifecycle §3.3): ready → validating, its time budget
+ *  starting here. The dispatch loop calls it (`lifecycle-start`) once every Task worktree is in the Run root. */
+export function beginLifecycleValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task)) return err(`task ${a.taskId} is not a lifecycle Task`)
+  if (task.status !== 'ready') return err(`a lifecycle Task starts from ready, not ${task.status}`)
+  const moved = moveTask(task, 'validating', now)
+  if (!moved) return err(`cannot move task ${task.status} -> validating`)
+  const stamped = withConvergenceClock(moved, now)
+  return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
+}
+
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
  *  인프라 문제로 실패시키면 멀쩡한 작업이 재시도 세 번 끝에 회로 차단까지 간다. 어느 쪽도 기계가
  *  정할 일이 아니므로 Gate 를 열어 사람에게 넘긴다. */

@@ -22,6 +22,7 @@ import {
   createGate,
   createQuestion,
   createJob,
+  beginLifecycleValidation,
   createTask,
   emptyState,
   latestRun,
@@ -113,7 +114,7 @@ import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding } from '../github/remote'
-import { openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 import { prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
@@ -2710,6 +2711,25 @@ export async function handleCommand(
       // Nothing changed: no write, as runs-git-record does for a head read twice.
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
+    }
+    case 'lifecycle-start': {
+      // The dispatch loop's own step (GitHub lifecycle §3.3), after it folded every Task worktree into the Run root: a
+      // caller that skipped the folding would check, push and review a branch missing some Task's work.
+      if (caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+        return denied('lifecycle-start is the dispatch loop’s own step')
+      const id = str(args.task)
+      if (!id) return bad('--task is required')
+      const latest = deps.getState()
+      const task = latest.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      if (!isLifecycleTask(task) || task.status !== 'ready') return conflict(`task ${id} is not a ready lifecycle Task`)
+      const cwd = latest.runs.find((r) => r.id === task.runId)?.worktree
+      if (cwd === undefined) return conflict('This Run has no branch of its own, so it cannot be carried through GitHub')
+      const r = beginLifecycleValidation(latest, { taskId: id }, now)
+      if (!r.ok) return refused(r)
+      await deps.setState(r.state)
+      deps.startValidation?.({ taskId: id, cwd })
+      return okBody({ taskId: id, cwd })
     }
     case 'run-worktree-set': {
       const id = str(args.run)

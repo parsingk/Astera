@@ -181,6 +181,11 @@ const SESSION = {
       { name: 'patch', value: '<object>', about: 'what was read; the Host passes it in-process' }
     ]
   },
+  'lifecycle-start': {
+    summary: "start a GitHub lifecycle Task's checks in its run's root",
+    detail: 'The dispatch loop starts it itself, once every Task worktree is folded into the run root (GitHub lifecycle); anyone else is refused.',
+    flags: [req('task', '<taskId>', 'the lifecycle Task')]
+  },
   'run-worktree-set': {
     summary: "record this run's worktree",
     flags: [

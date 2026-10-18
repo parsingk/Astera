@@ -1274,6 +1274,50 @@ describe('handleCommand — task-create on a Run carried through GitHub', () => 
   })
 })
 
+// GitHub lifecycle G3a (design §3.3): the dispatch loop starts the lifecycle Task's checks in the Run root, no worker
+describe('handleCommand — lifecycle-start', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (o: { lifecycle?: Task['status']; worktree?: string | null } = {}) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...(o.worktree === null ? {} : { worktree: o.worktree ?? 'D:/wt/run' }) }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: o.lifecycle ?? 'ready', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+    const started: { taskId: string; cwd: string }[] = []
+    deps.startValidation = (a) => void started.push(a)
+    return { deps, started }
+  }
+
+  it('moves the lifecycle Task to validating, then starts its checks in the Run root', async () => {
+    const { deps, started } = seeded()
+    expect(await call(deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).toEqual({ status: 200, body: { taskId: 'tsk_l', cwd: 'D:/wt/run' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.status).toBe('validating')
+    expect(started).toEqual([{ taskId: 'tsk_l', cwd: 'D:/wt/run' }])
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_l' }, HOST_CALLER)).status).toBe(200)
+  })
+
+  it('refuses an unknown Task, one that is not a ready lifecycle Task, and a Run with no branch of its own', async () => {
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_x' }, APP_CALLER)).status).toBe(404)
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_a' }, APP_CALLER)).status).toBe(409)
+    expect((await call(seeded({ lifecycle: 'validating' }).deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).status).toBe(409)
+    const noBranch = seeded({ worktree: null })
+    expect(await call(noBranch.deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).toEqual({ status: 409, body: { error: 'This Run has no branch of its own, so it cannot be carried through GitHub' } })
+    expect(noBranch.started).toEqual([])
+  })
+
+  it('is the dispatch loop’s own: a coordinator, a worker or a shell is refused', async () => {
+    for (const sessionId of ['coordinator', '']) {
+      const { deps, started } = seeded()
+      expect((await call(deps, 'lifecycle-start', { task: 'tsk_l' }, sessionId)).status).toBe(403)
+      expect(started).toEqual([])
+    }
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
