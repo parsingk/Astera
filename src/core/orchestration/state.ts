@@ -1283,6 +1283,17 @@ export function beginLifecycleCi(s: OrchState, a: { taskId: string; done: CheckR
   return ok({ ...s, tasks: replace(s.tasks, next) }, 'begun')
 }
 
+/** The pull request and the head the Host pushed for a handed-off round (GitHub lifecycle G3b1, design §4.4): CI is read
+ *  on this head only. The same values again change nothing; a Task with no round handed over is refused. */
+export function recordLifecycleCiWait(s: OrchState, a: { taskId: string; pr: number; sha: string }, now: string): Res<'recorded' | 'same'> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to wait on`)
+  if (task.ciWait.pr === a.pr && task.ciWait.sha === a.sha) return ok(s, 'same')
+  const next: Task = { ...task, ciWait: { ...task.ciWait, pr: a.pr, sha: a.sha }, updatedAt: now }
+  return ok({ ...s, tasks: replace(s.tasks, next) }, 'recorded')
+}
+
 /** The CI result settles a lifecycle Task's handed-off round (GitHub lifecycle §4): `[...ciWait.done, result]` goes to
  *  applyValidationResult once, so the Task's checks and history read as a one-process round would, and `ciWait` is
  *  cleared in the same write. A Task with no round handed over is refused: a verdict is applied exactly once. */

@@ -194,6 +194,15 @@ const SESSION = {
       { name: 'done', value: '<results>', about: 'the round’s check results so far; the validator passes them in-process' }
     ]
   },
+  'lifecycle-ci-wait': {
+    summary: "record the pull request and pushed head a GitHub lifecycle round waits on",
+    detail: 'The Host records it itself (GitHub lifecycle); anyone else is refused.',
+    flags: [
+      { name: 'taskId', value: '<taskId>', about: 'the lifecycle Task' },
+      { name: 'pr', value: '<n>', about: 'the bound pull request' },
+      { name: 'sha', value: '<sha>', about: 'the head the Host pushed' }
+    ]
+  },
   'run-worktree-set': {
     summary: "record this run's worktree",
     flags: [

@@ -412,7 +412,13 @@ export interface Task {
   kind?: 'lifecycle'
   /** A lifecycle Task's round handed to the Host at `github:ci` (design §4): the round's results so far, applied with
    *  the CI result in one verdict. Kept back from the public surface. */
-  ciWait?: { since: string; done: CheckResult[] }
+  ciWait?: {
+    since: string
+    done: CheckResult[]
+    /** The bound pull request and the head the Host pushed, once it did (G3b1): CI is read on this head only. */
+    pr?: number
+    sha?: string
+  }
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
   createdAt: string

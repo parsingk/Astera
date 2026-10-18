@@ -20,6 +20,8 @@ export interface RunGitHubPatch {
   /** null clears: a read succeeded. */
   lastReadError?: { kind: string } | null
   sourceChanged?: true
+  /** The head Astera pushed to the Run's branch (G3b1, design §4.2). */
+  pushed?: { sha: string }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -41,7 +43,7 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   if (patch.binding && !base.binding) {
     next.binding = patch.binding
     delete next.prCandidates
-    entries.push({ kind: 'pr-bound', pr: patch.binding.number })
+    entries.push({ kind: patch.binding.createdByAstera ? 'pr-created' : 'pr-bound', pr: patch.binding.number })
   }
   if (patch.prCandidates !== undefined && !next.binding) {
     if (patch.prCandidates === null || patch.prCandidates.length === 0) delete next.prCandidates
@@ -75,6 +77,7 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     next.sourceChanged = { at: now }
     entries.push({ kind: 'source-changed' })
   }
+  if (patch.pushed) next.lastPushedSha = patch.pushed.sha
   if (entries.length > 0) {
     let seq = base.seq
     next.log = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))].slice(-GITHUB_LOG_MAX)
@@ -146,5 +149,6 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
   if (v.lastReadError !== undefined && v.lastReadError !== null && !(isObj(v.lastReadError) && isStr(v.lastReadError.kind)))
     return 'lastReadError is malformed'
   if (v.sourceChanged !== undefined && v.sourceChanged !== true) return 'sourceChanged is malformed'
+  if (v.pushed !== undefined && !(isObj(v.pushed) && isStr(v.pushed.sha))) return 'pushed is malformed'
   return v as RunGitHubPatch
 }

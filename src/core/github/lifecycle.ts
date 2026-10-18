@@ -138,7 +138,8 @@ export interface GitHubCiSnapshot {
   changedAt: string
 }
 
-export type GitHubLogKind = 'pr-bound' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'source-changed'
+/** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found. */
+export type GitHubLogKind = 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'source-changed'
 
 export interface GitHubLogEntry {
   /** From 1, never reused: a public event is one entry past the last one seen. */
@@ -158,6 +159,8 @@ export interface RunGitHubState {
   /** More than one open PR matched the Run's branch and base; none was bound (§7). */
   prCandidates?: number[]
   headSha?: string
+  /** The head Astera last pushed to the Run's branch (G3b1, design §4.2). */
+  lastPushedSha?: string
   pr?: GitHubPrFacts
   ci?: GitHubCiSnapshot
   lastReadError?: { kind: string; since: string }

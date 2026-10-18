@@ -14,9 +14,9 @@ is the guide.
   build, lint, typecheck, infrastructure, timeout, permission, configuration, environment, cancelled, unknown).
 - `Task.kind`: `'lifecycle'` for the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to
   carry the Run through GitHub. It has no worker, and `tasks.create` on that Run is refused while it is open.
-- Five event types: `github.pr_bound`, `github.head_changed`, `github.ci_passed`, `github.ci_failed` and
-  `github.source_changed`, each carrying the `Run` it moved. A script that switches on every `EventType` meets five
-  more.
+- Six event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,
+  `github.ci_passed`, `github.ci_failed` and `github.source_changed`, each carrying the `Run` it moved. A script that
+  switches on every `EventType` meets six more.
 
 ## 0.3.0
 

@@ -410,7 +410,7 @@ export interface HostOrch extends OrchCall {
 /** The records only the Host itself writes: its git ranges and what it read of a Run's pull request (GitHub lifecycle),
  *  and the drivers' own lifecycle steps (G3a: starting a lifecycle Task, keeping its handed-off round). A socket that
  *  names itself the Host's caller is refused them. */
-const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin'])
+const HOST_OWN_RECORDS: ReadonlySet<string> = new Set(['runs-git-record', 'runs-github-record', 'lifecycle-start', 'lifecycle-ci-begin', 'lifecycle-ci-wait'])
 /** The app's own dispatch-loop step: under the app's caller id it is taken only from the app's connection. */
 const APP_OWN_STEPS: ReadonlySet<string> = new Set(['lifecycle-start'])
 

@@ -408,6 +408,7 @@ export type EventType =
   | 'session.limit_waiting'
   | 'session.account_switched'
   | 'github.pr_bound'
+  | 'github.pr_created'
   | 'github.head_changed'
   | 'github.ci_passed'
   | 'github.ci_failed'
@@ -468,6 +469,7 @@ export interface EventPayloads {
   readonly 'session.limit_waiting': SessionLimitWaiting
   readonly 'session.account_switched': SessionAccountSwitched
   readonly 'github.pr_bound': Run
+  readonly 'github.pr_created': Run
   readonly 'github.head_changed': Run
   readonly 'github.ci_passed': Run
   readonly 'github.ci_failed': Run
