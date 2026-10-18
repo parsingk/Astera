@@ -220,6 +220,32 @@ describe('handleCommand — 역할 인가', () => {
       expect((await call(deps, cmd, {}, 'sess1')).status).toBe(403)
     }
   })
+  // GitHub lifecycle G3c2 (design §7.1): a worker session does not write to GitHub through Astera
+  it('a worker session cannot write to GitHub through Astera, before any gh call', async () => {
+    const deps = await seedWorker()
+    const gh = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    deps.github = { run: gh } as never
+    const cases: [string, Record<string, unknown>][] = [
+      ['github-pr-create', { run: 'run_x' }],
+      ['github-ci-rerun', { project: 'p', runId: 1 }],
+      ['jobs-create-from-issue', { project: 'p', issue: 3 }],
+      ['jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }],
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p', githubLifecycle: true }]
+    ]
+    for (const [cmd, args] of cases) {
+      const r = await call(deps, cmd, args, 'sess1')
+      expect(r.status, cmd).toBe(403)
+      expect((r.body as { error: string }).error, cmd).toBe(`worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`)
+    }
+    expect(gh).not.toHaveBeenCalled()
+  })
+
+  it('the coordinator, the app and a shell are not refused GitHub writes by that check', async () => {
+    const deps = await seedWorker()
+    for (const sessionId of ['coordinator', APP_CALLER, ''])
+      expect((await call(deps, 'github-ci-rerun', { project: 'p', runId: 1 }, sessionId)).body).not.toMatchObject({ error: expect.stringContaining('worker sessions cannot write to GitHub') })
+  })
+
   it('워커 세션은 자기 send·ask를 부를 수 있다', async () => {
     const deps = await seedWorker()
     const d = deps.getState().dispatches[0]
