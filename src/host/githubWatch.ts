@@ -405,6 +405,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     // CI on the head the Host pushed settles the round, and only that head (design §4.4)
     if (read.commitSha !== sha) return
     if (read.checks.length === 0) {
+      // An Actions suite with no check run yet is a workflow starting or rerunning, not a head without CI (G4, measured)
+      if (read.suites.some((s) => !s.completed)) return
       // A person chose to go on without CI, and this head still has none (G3b2 final review I1, S10): only then
       if (round.noCi) return goOnWithoutCi(t, round, round.sha)
       if (now() - Date.parse(round.waitingSince) < NO_CI_GRACE_MS) return

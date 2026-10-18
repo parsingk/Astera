@@ -667,6 +667,19 @@ describe('githubWatch', () => {
         expect(r.settled).toEqual([])
       })
 
+      // G4 (measured): a workflow starting or rerunning shows a suite and no check run for seconds; that is CI coming
+      it('asks nothing about no CI while an Actions suite runs with no check yet, and reads again soon', async () => {
+        const r = rig({ read: prRead({ suites: [{ app: 'github-actions', completed: false }], checks: [] }) })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(NO_CI_GRACE_MS + PENDING_MS)
+        expect(r.gates).toEqual([])
+        expect(r.settled).toEqual([])
+        const reads = r.calls.filter((c) => c === 'read 12').length
+        await r.at(NO_CI_GRACE_MS + 2 * PENDING_MS)
+        expect(r.calls.filter((c) => c === 'read 12').length).toBe(reads + 1)
+      })
+
       it('no CI is no CI in required mode with rule names too, where the verdict reads pending', async () => {
         const r = rig({ read: NONE, rules: { ok: true, names: ['ci'] } })
         r.watch.onState(waiting())

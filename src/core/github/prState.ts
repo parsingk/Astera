@@ -11,11 +11,11 @@ export const PR_STATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     pullRequest(number:$number){
       number state isDraft url headRefName headRefOid baseRefName mergeStateStatus reviewDecision
       commits(last:1){ nodes{ commit{ oid
-        checkSuites(first:50){ totalCount nodes{ status conclusion app{ slug } checkRuns(first:1){ totalCount } workflowRun{ databaseId url workflow{ name } } } }
+        checkSuites(first:50){ totalCount nodes{ status conclusion app{ slug } checkRuns(first:1){ totalCount } workflowRun{ databaseId runAttempt url workflow{ name } } } }
         statusCheckRollup{ contexts(first:100){ totalCount nodes{
           __typename
           ... on CheckRun{ databaseId name status conclusion startedAt completedAt detailsUrl isRequired(pullRequestNumber:$number)
-            checkSuite{ workflowRun{ databaseId workflow{ name } } } }
+            checkSuite{ workflowRun{ databaseId runAttempt workflow{ name } } } }
           ... on StatusContext{ context state targetUrl createdAt isRequired(pullRequestNumber:$number) }
         } } }
       } } }
@@ -104,6 +104,7 @@ function checkRunOf(r: Obj): GitHubCiCheck | null {
   const details = text(r.detailsUrl)
   if (details) check.detailsUrl = details
   if (typeof run?.databaseId === 'number') check.ciRunId = run.databaseId
+  if (typeof run?.runAttempt === 'number') check.ciRunAttempt = run.runAttempt
   check.jobId = r.databaseId
   const started = text(r.startedAt)
   if (started) check.startedAt = started
@@ -149,7 +150,8 @@ function brokenWorkflowOf(s: Obj | null): GitHubCiCheck | null {
     conclusion,
     required: false,
     ...(details ? { detailsUrl: details } : {}),
-    ciRunId: run.databaseId
+    ciRunId: run.databaseId,
+    ...(typeof run.runAttempt === 'number' ? { ciRunAttempt: run.runAttempt } : {})
   }
 }
 
@@ -185,11 +187,16 @@ export function parsePrState(stdout: string): PrStateRead | null {
   const commit = obj(obj(nodes(pr.commits)[0])?.commit)
   if (!commit || typeof commit.oid !== 'string') return null
   const suiteNodes = nodes(commit.checkSuites)
+  // A suite with no check run says nothing, but an Actions one that has not completed is a workflow starting or rerunning:
+  // its check runs are seconds away (measured, G4), and until they come the other workflows' checks are not all of CI
   const suites = suiteNodes.flatMap((raw) => {
     const s = obj(raw)
     const runs = obj(s?.checkRuns)?.totalCount
-    if (!s || typeof s.status !== 'string' || typeof runs !== 'number' || runs === 0) return []
-    return [{ app: text(obj(s.app)?.slug) ?? '', completed: s.status === 'COMPLETED' }]
+    if (!s || typeof s.status !== 'string' || typeof runs !== 'number') return []
+    const app = text(obj(s.app)?.slug) ?? ''
+    const completed = s.status === 'COMPLETED'
+    if (runs === 0 && (completed || app !== 'github-actions')) return []
+    return [{ app, completed }]
   })
   const contexts = obj(obj(commit.statusCheckRollup)?.contexts)
   const contextNodes = nodes(contexts)

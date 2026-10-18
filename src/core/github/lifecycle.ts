@@ -50,6 +50,8 @@ export interface GitHubCiCheck {
   detailsUrl?: string
   /** The Actions run behind a check run. */
   ciRunId?: number
+  /** That run's attempt as read: 1, then one more for each rerun (G4). */
+  ciRunAttempt?: number
   /** The Actions job behind a check run: its databaseId. */
   jobId?: number
   startedAt?: string

@@ -35,6 +35,12 @@ describe('evaluateCi — required', () => {
 })
 
 describe('evaluateCi — all reported (no required checks)', () => {
+  // GitHub lifecycle G4: a workflow starting (or rerunning) has a suite and no check run yet; CI is coming, not absent
+  it('is pending, not none, while an Actions suite runs with no check yet', () => {
+    expect(evaluateCi({ checks: [], suites: [{ app: 'github-actions', completed: false }] }, { mode: 'required' }, []).verdict).toBe('pending')
+    expect(evaluateCi({ checks: [], suites: [] }, { mode: 'required' }, []).verdict).toBe('none')
+  })
+
   it('is none when the commit has no check at all', () => {
     expect(evaluateCi({ checks: [], suites: [] }, REQUIRED, [])).toEqual({ basis: 'all-reported', verdict: 'none' })
   })
