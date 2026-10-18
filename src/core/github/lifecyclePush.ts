@@ -25,7 +25,10 @@ export async function pushBranch(run: RunGit, cwd: string, branch: string): Prom
   const r = await run(['push', '-u', 'origin', branch], { cwd, timeoutMs: PUSH_TIMEOUT_MS })
   if (r.ok) return { ok: true }
   const text = r.stderr
-  const detail = text.split('\n').map((l) => l.trim()).find((l) => l !== '') ?? (r.timedOut ? 'the push ran out of time' : 'the push failed')
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l !== '')
+  // git's first line names the remote ("To https://…", measured): the line that says why is the refusal or the error
+  const telling = lines.find((l) => /\[rejected\]|^(error|fatal|remote):|denied|could not|unable to/i.test(l)) ?? lines[0]
+  const detail = telling ?? (r.timedOut ? 'the push ran out of time' : 'the push failed')
   const kind = REJECTED.test(text) ? 'rejected' : AUTH.test(text) ? 'auth' : NETWORK.test(text) || r.timedOut ? 'network' : 'other'
   return { ok: false, kind, detail }
 }

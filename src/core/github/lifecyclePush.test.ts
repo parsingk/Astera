@@ -33,6 +33,18 @@ describe('pushBranch', () => {
     expect(r).toMatchObject({ ok: false, kind })
   })
 
+  // Measured on the sandbox: git's first line names the remote, not the refusal
+  it('says the line that tells why, not the remote it was pushing to', async () => {
+    const stderr = [
+      'To https://github.com/parsingk/astera-lifecycle-sandbox.git',
+      ' ! [rejected]        u/g3b1-check -> u/g3b1-check (fetch first)',
+      "error: failed to push some refs to 'https://github.com/parsingk/astera-lifecycle-sandbox.git'"
+    ].join('\n')
+    expect(await pushBranch(gitAnswering({ ok: false, exitCode: 1, stderr }).run, '/wt', 'u/a')).toEqual({
+      ok: false, kind: 'rejected', detail: '! [rejected]        u/g3b1-check -> u/g3b1-check (fetch first)'
+    })
+  })
+
   it('a push that ran out of time is a network failure', async () => {
     expect(await pushBranch(gitAnswering({ ok: false, timedOut: true, stderr: '' }).run, '/wt', 'u/a')).toMatchObject({ ok: false, kind: 'network' })
   })
