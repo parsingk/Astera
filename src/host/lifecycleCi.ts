@@ -71,6 +71,9 @@ const PUSH_WORDS: Record<Exclude<PushFailure['kind'], 'rejected'>, MessageKey> =
   other: 'jobs.gate.github.push.other'
 }
 
+/** The wait a carry took up: its round, and a person's choice of pull request (G3b2), which is news to take up at once. */
+const waitKey = (t: Task): string => `${t.ciWait!.since}#${t.ciWait!.bindPr ?? ''}`
+
 /** A round handed over whose wait has no pushed head yet. */
 const awaitingPush = (t: Task): boolean => isLifecycleTask(t) && t.status === 'validating' && t.ciWait !== undefined && t.ciWait.sha === undefined
 
@@ -78,8 +81,8 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
   const now = (): number => (d.now ? d.now() : Date.now())
   const say = (key: MessageKey, params?: MessageParams): string => translate(d.lang?.() ?? 'en', key, params)
   const inFlight = new Map<string, Promise<void>>()
-  /** Each round last carried (`taskId` → its `since`) and when it may be taken again. */
-  const cooling = new Map<string, { since: string; until: number }>()
+  /** Each round last carried (`taskId` → the wait it carried, `waitKey`) and when it may be taken again. */
+  const cooling = new Map<string, { wait: string; until: number }>()
 
   const carry = async (s: OrchState, task: Task): Promise<void> => {
     const ask = async (question: string): Promise<void> => {
@@ -192,7 +195,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
       for (const task of s.tasks) {
         if (!awaitingPush(task) || inFlight.has(task.id)) continue
         const cool = cooling.get(task.id)
-        if (cool && cool.since === task.ciWait!.since && now() < cool.until) continue
+        if (cool && cool.wait === waitKey(task) && now() < cool.until) continue
         // A step that throws asks a person: left alone, every state would take the round again at once
         const p = carry(s, task)
           .catch(async (e) => {
@@ -203,7 +206,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
           .catch((e) => d.log(`lifecycle ci: task ${task.id}: ${String(e)}`))
           .finally(() => {
             inFlight.delete(task.id)
-            cooling.set(task.id, { since: task.ciWait!.since, until: now() + RETRY_MS })
+            cooling.set(task.id, { wait: waitKey(task), until: now() + RETRY_MS })
           })
         inFlight.set(task.id, p)
       }

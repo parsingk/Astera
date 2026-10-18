@@ -273,6 +273,17 @@ describe('createLifecycleCi', () => {
     expect(gone.waits).toEqual([])
   })
 
+  // A person's choice is news: the round is taken again at once, however recently it was asked about
+  it('takes the round again at once when a person chose a pull request, within the pause after asking', async () => {
+    const r = rig({ open: [[3, 4]] })
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    expect(r.githubGates).toHaveLength(1)
+    r.ci.onState(stateWith({ ciWait: { since: ISO, done: [], bindPr: 4 } }))
+    await r.ci.drain()
+    expect(r.waits).toEqual([{ taskId: 'tsk_l', since: ISO, pr: 4, sha: SHA }])
+  })
+
   it('asks in the person’s language', async () => {
     const r = rig({ commits: null, lang: 'en' })
     r.ci.onState(stateWith())
