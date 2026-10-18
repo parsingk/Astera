@@ -30,6 +30,15 @@ describe('ciCheckResult', () => {
     })
   })
 
+  // G3b1 final review M5
+  it('keeps a warning a warning, and how many diagnostics there were', () => {
+    const f = failure({ diagnostics: [{ path: 'a.ts', line: 1, message: 'unused', warning: true }], diagnosticsTotal: 31 })
+    expect(ciCheckResult({ verdict: 'failed', failure: f, prUrl: PR, since: T0, now: T1 })).toMatchObject({
+      diagnostics: [{ file: 'a.ts', line: 1, message: 'unused', severity: 'warning' }],
+      diagnosticsTotal: 31
+    })
+  })
+
   it.each(['infrastructure', 'environment', 'timeout', 'cancelled', 'permission'] as const)('a %s failure is no verdict for the repair loop', (cls) => {
     expect(ciCheckResult({ verdict: 'failed', failure: failure({ class: cls }), prUrl: PR, since: T0, now: T1 })).toBeNull()
   })

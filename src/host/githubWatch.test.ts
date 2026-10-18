@@ -52,7 +52,7 @@ function rig(
   const records: { runId: string; patch: RunGitHubPatch }[] = []
   const calls: string[] = []
   const logs: string[] = []
-  const settled: { taskId: string; result: CheckResult }[] = []
+  const settled: { taskId: string; result: CheckResult; since?: string }[] = []
   const gates: { taskId: string; question: string }[] = []
   const status = { record: 200 }
   const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: `failed: ${kind}` })
@@ -534,7 +534,7 @@ describe('githubWatch', () => {
       const r = rig()
       r.watch.onState(withRound())
       await r.at(0)
-      expect(r.settled).toEqual([{ taskId: 'tsk_l', result: expect.objectContaining({ configId: 'github:ci', status: 'passed', externalUrl: 'https://github.com/o/r/pull/12' }) }])
+      expect(r.settled).toEqual([{ taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ configId: 'github:ci', status: 'passed', externalUrl: 'https://github.com/o/r/pull/12' }) }])
     })
 
     it('a test failure settles the round failed with its evidence', async () => {
@@ -576,6 +576,54 @@ describe('githubWatch', () => {
       await r.at(0)
       expect(r.settled).toEqual([])
       expect(r.gates[0]).toMatchObject({ taskId: 'tsk_l', question: expect.stringContaining('timeout') })
+      // G3b1 final review M2: any answer to this Gate checks again, so it does not tell a person to answer "failed"
+      expect(r.gates[0].question).not.toContain('실패로 표시하세요')
+      expect(r.gates[0].question).toContain('task-update --id tsk_l --status failed')
+    })
+
+    // G3b1 final review M1: a round pushed again is read at once, not when the last verdict put the next read
+    it('reads a new round at once', async () => {
+      const o: Parameters<typeof rig>[0] = { read: failed(), log: LOG }
+      const r = rig(o)
+      r.watch.onState(withRound())
+      await r.at(0)
+      expect(r.settled).toHaveLength(1)
+      const B = 'b'.repeat(40)
+      o.read = prRead({ headSha: B, commitSha: B })
+      r.watch.onState(withRound({ since: '2026-10-18T00:01:00.000Z', done: [], pr: 12, sha: B }))
+      await r.at(5_000)
+      expect(r.settled).toHaveLength(2)
+      expect(r.settled[1]).toMatchObject({ since: '2026-10-18T00:01:00.000Z', result: { status: 'passed' } })
+    })
+
+    // G3b1 final review M9
+    it('settles a failure once its evidence is complete', async () => {
+      const o: Parameters<typeof rig>[0] = {
+        read: prRead({ suites: [{ app: 'github-actions', completed: false }], checks: [
+          { externalId: 'run:1', name: 'test', status: 'completed', conclusion: 'failure', required: false, jobId: 1, ciRunId: 9 },
+          { externalId: 'run:2', name: 'slow', status: 'in-progress', required: false, jobId: 2, ciRunId: 9 }
+        ] }),
+        log: LOG
+      }
+      const r = rig(o)
+      r.watch.onState(withRound())
+      await r.at(0)
+      expect(r.settled).toEqual([])
+      o.read = failed()
+      await r.at(PENDING_MS)
+      expect(r.settled).toHaveLength(1)
+      expect(r.settled[0].result).toMatchObject({ status: 'failed', summary: 'test (test): not ok 1 - adds' })
+    })
+
+    it('settles with what it has once the evidence reads are spent', async () => {
+      const spent: GitHubCiFailure = {
+        check: 'test', externalId: 'run:1', class: 'build', summary: 'test (build): failure', diagnostics: [],
+        incomplete: { reason: 'read-failed', tries: EVIDENCE_TRIES }
+      }
+      const r = rig({ read: failed(), evidenceFail: 'network' })
+      r.watch.onState(withRound(undefined, { githubState: { ...BOUND, ci: { sha: A, basis: 'all-reported', verdict: 'failed', failing: 'test', checks: [], changedAt: ISO0, failure: spent } } }))
+      await r.at(0)
+      expect(r.settled[0]?.result).toMatchObject({ status: 'failed', summary: 'test (build): failure' })
     })
 
     it('leaves the binding of a Run whose round waits to be pushed to the Host’s carrier', async () => {

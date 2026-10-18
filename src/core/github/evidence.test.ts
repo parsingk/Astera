@@ -99,6 +99,11 @@ describe('diagnosticsFrom', () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ path: `f${i}.ts`, start_line: i, annotation_level: 'failure', message: `m${i}` }))
     expect(diagnosticsFrom(many)).toHaveLength(DIAGNOSTICS_MAX)
   })
+
+  // G3b1 final review M5: a warning stays a warning where the evidence is shown
+  it('marks a warning as one', () => {
+    expect(diagnosticsFrom([{ path: 'a.ts', start_line: 1, annotation_level: 'warning', message: 'unused' }])).toEqual([{ path: 'a.ts', line: 1, message: 'unused', warning: true }])
+  })
   // G2 final review I5
   it('redacts a message before cutting it, so no part of a secret is left', () => {
     const [d] = diagnosticsFrom([{ path: 'a.sh', start_line: 1, annotation_level: 'failure', message: `${'x'.repeat(490)} ${TOKEN}` }])
@@ -169,6 +174,13 @@ describe('ciFailureEvidence', () => {
       diagnostics: [],
       url: 'https://github.com/o/r/actions/runs/39099661750'
     })
+  })
+
+  // G3b1 final review M5: how many there were when more than the 20 kept
+  it('says how many diagnostics there were when it kept fewer', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ path: `f${i}.ts`, start_line: i, annotation_level: 'failure', message: `m${i}` }))
+    expect(ciFailureEvidence({ check: check(), annotations: many })).toMatchObject({ diagnosticsTotal: 30 })
+    expect(ciFailureEvidence({ check: check(), annotations: many.slice(0, 3) })).not.toHaveProperty('diagnosticsTotal')
   })
 
   it('keeps the summary within 1000 characters', () => {

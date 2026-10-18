@@ -33,9 +33,9 @@ export async function pushBranch(run: RunGit, cwd: string, branch: string): Prom
   return { ok: false, kind, detail }
 }
 
-/** The commit HEAD names, or null when git cannot say. */
-export async function headOf(run: RunGit, cwd: string): Promise<string | null> {
-  const r = await run(['rev-parse', 'HEAD'], { cwd })
+/** The commit `ref` names (HEAD unless named), or null when git cannot say. */
+export async function headOf(run: RunGit, cwd: string, ref = 'HEAD'): Promise<string | null> {
+  const r = await run(['rev-parse', ref], { cwd })
   const sha = r.stdout.trim()
   return r.ok && /^[0-9a-f]{40}$/i.test(sha) ? sha : null
 }
@@ -44,6 +44,9 @@ export async function headOf(run: RunGit, cwd: string): Promise<string | null> {
  *  source. Never a closing keyword (L25): closing the issue stays a person's decision. */
 export function refsLine(source: JobSourceRef | undefined, repo: GitHubRepo): string | null {
   if (source?.id !== 'github' || source.url === undefined) return null
+  // The host too (G3b1 final review M8): the same owner and name on another host is another repository
+  const host = source.url.match(/^https?:\/\/([^/]+)\//)?.[1]?.toLowerCase()
+  if (host !== repo.host.toLowerCase()) return null
   return repoOf(source.url).toLowerCase() === repoSlug(repo).toLowerCase() ? `Refs #${source.itemId}` : null
 }
 

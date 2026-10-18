@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createPullRequest, readCommits, type PrCreateRequest } from './prCreate'
+import { createPullRequest, readCommits, readCommitsOrNull, type PrCreateRequest } from './prCreate'
 
 const req = (over: Partial<PrCreateRequest> = {}): PrCreateRequest => ({
   worktreePath: 'C:/wt/opal',
@@ -171,6 +171,15 @@ describe('createPullRequest', () => {
       normalizeBase: async (_r, b) => b
     })
     expect(cwd).toBe('C:/wt/opal')
+  })
+})
+
+// GitHub lifecycle G3b1 final review M3: a git that failed is not "no commits"
+describe('readCommitsOrNull', () => {
+  it('is null when git fails, where readCommits answers none', async () => {
+    const failing = async () => ({ ok: false, stdout: '', stderr: 'fatal: bad revision', exitCode: 128 })
+    expect(await readCommitsOrNull('C:/wt/opal', 'develop', failing)).toBeNull()
+    expect(await readCommits('C:/wt/opal', 'develop', failing)).toEqual([])
   })
 })
 

@@ -80,10 +80,15 @@ export function diagnosticsFrom(annotations: RawAnnotation[]): GitHubCiFailure['
       return {
         ...(file ? { path: file } : {}),
         ...(file && typeof a.start_line === 'number' ? { line: a.start_line } : {}),
-        message: sanitize((a.message as string).trim()).slice(0, MESSAGE_MAX)
+        message: sanitize((a.message as string).trim()).slice(0, MESSAGE_MAX),
+        ...(a.annotation_level === 'warning' ? { warning: true as const } : {})
       }
     })
 }
+
+/** How many annotations diagnosticsFrom would keep before its bound: the total a reader is told about. */
+const diagnosticsCount = (annotations: RawAnnotation[]): number =>
+  annotations.filter((a) => (a.annotation_level === 'failure' || a.annotation_level === 'warning') && said(a)).length
 
 /** One failed check's evidence. Every text is redacted before it is kept. Only failure annotations classify: a warning
  *  (a cache that could not be restored) is not why a step failed (G2 final review I2). `check` stays the name GitHub
@@ -106,6 +111,7 @@ export function ciFailureEvidence(a: { check: GitHubCiCheck; log?: string; annot
     class: cls,
     summary: sanitize(`${a.check.name} (${cls}): ${cause}`).slice(0, SUMMARY_MAX),
     diagnostics: diagnosticsFrom(annotations),
+    ...(diagnosticsCount(annotations) > DIAGNOSTICS_MAX ? { diagnosticsTotal: diagnosticsCount(annotations) } : {}),
     ...(logExcerpt !== undefined ? { logExcerpt } : {}),
     ...(a.check.detailsUrl ? { url: sanitize(a.check.detailsUrl) } : {})
   }

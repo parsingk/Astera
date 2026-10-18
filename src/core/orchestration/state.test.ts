@@ -3967,10 +3967,10 @@ describe('recordLifecycleCiWait', () => {
 
   it('keeps the pull request and the pushed head with the handed-over round, once', () => {
     const { s, lifecycleId } = handedOver()
-    const r = unwrap<string>(recordLifecycleCiWait(s, { taskId: lifecycleId, pr: 12, sha: SHA }, LATER) as never)
+    const r = unwrap<string>(recordLifecycleCiWait(s, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER) as never)
     expect(r.value).toBe('recorded')
     expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: NOW, done: [], pr: 12, sha: SHA })
-    const again = recordLifecycleCiWait(r.state, { taskId: lifecycleId, pr: 12, sha: SHA }, LATER)
+    const again = recordLifecycleCiWait(r.state, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER)
     expect(again).toMatchObject({ ok: true, value: 'same' })
     expect(again.ok && again.state).toBe(r.state)
   })
@@ -3978,9 +3978,15 @@ describe('recordLifecycleCiWait', () => {
   it('refuses a Task with no round handed over, an ordinary Task and an unknown one', () => {
     const { s, lifecycleId, ordinaryId } = handedOver()
     const cleared = { ...s, tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, ciWait: undefined } : t)) }
-    expect(recordLifecycleCiWait(cleared, { taskId: lifecycleId, pr: 12, sha: SHA }, LATER).ok).toBe(false)
-    expect(recordLifecycleCiWait(s, { taskId: ordinaryId, pr: 12, sha: SHA }, LATER).ok).toBe(false)
-    expect(recordLifecycleCiWait(s, { taskId: 'tsk_nope', pr: 12, sha: SHA }, LATER)).toMatchObject({ ok: false, missing: true })
+    expect(recordLifecycleCiWait(cleared, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER).ok).toBe(false)
+    expect(recordLifecycleCiWait(s, { taskId: ordinaryId, since: NOW, pr: 12, sha: SHA }, LATER).ok).toBe(false)
+    expect(recordLifecycleCiWait(s, { taskId: 'tsk_nope', since: NOW, pr: 12, sha: SHA }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+
+  // G3b1 final review I1: a carrier of an earlier round must not write into the round after it
+  it('refuses a record for another round of the Task', () => {
+    const { s, lifecycleId } = handedOver()
+    expect(recordLifecycleCiWait(s, { taskId: lifecycleId, since: LATER, pr: 12, sha: SHA }, LATER).ok).toBe(false)
   })
 })
 
@@ -4015,6 +4021,13 @@ describe('settleLifecycleCi', () => {
     expect(r.value.checks?.at(-1)).toMatchObject({ configId: 'github:ci', status: 'failed', summary: 'test (test): not ok 1 - adds' })
     expect(r.value.ciWait).toBeUndefined()
     expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-blocked')
+  })
+
+  // G3b1 final review I1: a verdict read for an earlier round does not settle the round after it
+  it('refuses a verdict for another round of the Task', () => {
+    const { s, lifecycleId } = handedOver()
+    expect(settleLifecycleCi(s, { taskId: lifecycleId, since: LATER, result: ci('passed') }, LATER).ok).toBe(false)
+    expect(settleLifecycleCi(s, { taskId: lifecycleId, since: NOW, result: ci('passed') }, LATER).ok).toBe(true)
   })
 
   it('settles once: a Task with no round handed over is refused', () => {

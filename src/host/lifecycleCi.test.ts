@@ -1,7 +1,7 @@
 // The Host carries a handed-off lifecycle round to GitHub (GitHub lifecycle G3b1, design §4.1-4.3): preconditions, the
 // push, the open or new draft pull request, and the wait recorded; on fakes for git, gh and the Host's commands.
 import { describe, it, expect } from 'vitest'
-import { createLifecycleCi, type LifecycleCiDeps } from './lifecycleCi'
+import { RETRY_MS, createLifecycleCi, type LifecycleCiDeps } from './lifecycleCi'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, JobSourceRef } from '../core/orchestration/types'
 import type { GitHubBinding } from '../core/github/lifecycle'
@@ -28,10 +28,17 @@ const stateWith = (o: { binding?: GitHubBinding; source?: JobSourceRef; ciWait?:
 function rig(o: {
   clean?: boolean
   changed?: number
-  commits?: { subject: string; body: string }[]
+  commits?: { subject: string; body: string }[] | null
   push?: Awaited<ReturnType<LifecycleCiDeps['push']>>
   open?: number[][]
   create?: Awaited<ReturnType<LifecycleCiDeps['createDraftPr']>>
+  /** HEAD (ref undefined) or a ref, for the n-th headOf call (0-based). */
+  heads?: (ref: string | undefined, n: number) => string | null
+  recordStatus?: number
+  waitStatus?: number
+  gateStatus?: number
+  worktree?: boolean
+  origin?: string | null
 } = {}) {
   const calls: string[] = []
   const settled: { taskId: string; result: CheckResult }[] = []
@@ -40,29 +47,31 @@ function rig(o: {
   const waits: unknown[] = []
   const created: { base: string; head: string; title: string; body: string }[] = []
   const lookups = [...(o.open ?? [[]])]
+  const clock = { now: NOW }
+  let headCalls = 0
   const deps: LifecycleCiDeps = {
-    worktreeOf: (p) => (p === '/wt-run' ? { repoPath: '/repo', branch: 'u/a', baseRef: 'origin/main' } : null),
-    originOf: async () => 'git@github.com:parsingk/astera-lifecycle-sandbox.git',
+    worktreeOf: (p) => (o.worktree !== false && p === '/wt-run' ? { repoPath: '/repo', branch: 'u/a', baseRef: 'origin/main' } : null),
+    originOf: async () => (o.origin === undefined ? 'git@github.com:parsingk/astera-lifecycle-sandbox.git' : o.origin),
     isClean: async () => (calls.push('isClean'), { clean: o.clean ?? true, changedCount: o.changed ?? 0 }),
-    readCommits: async () => (calls.push('readCommits'), o.commits ?? [{ subject: 'Fix add', body: 'add adds now' }]),
+    readCommits: async () => (calls.push('readCommits'), o.commits === undefined ? [{ subject: 'Fix add', body: 'add adds now' }] : o.commits),
     baseBranch: async () => 'main',
     push: async () => (calls.push('push'), o.push ?? { ok: true }),
-    headOf: async () => (calls.push('headOf'), SHA),
+    headOf: async (_cwd, ref) => (calls.push(ref ? `headOf ${ref}` : 'headOf'), o.heads ? o.heads(ref, headCalls++) : SHA),
     findOpenPrs: async () => {
       calls.push('findOpenPrs')
       const next = lookups.length > 1 ? lookups.shift()! : lookups[0]
       return { ok: true, prs: next.map((n) => ({ number: n, url: `https://github.com/parsingk/astera-lifecycle-sandbox/pull/${n}` })) }
     },
     createDraftPr: async (_cwd, _repo, pr) => (calls.push('createDraftPr'), created.push(pr), o.create ?? { ok: true, number: 3, url: 'https://github.com/parsingk/astera-lifecycle-sandbox/pull/3' }),
-    record: async (args) => (calls.push('record'), records.push(args), { status: 200, body: {} }),
-    recordWait: async (args) => (calls.push('recordWait'), waits.push(args), { status: 200, body: {} }),
+    record: async (args) => (calls.push('record'), records.push(args), { status: o.recordStatus ?? 200, body: {} }),
+    recordWait: async (args) => (calls.push('recordWait'), waits.push(args), { status: o.waitStatus ?? 200, body: {} }),
     settle: async (a) => void (calls.push('settle'), settled.push(a)),
-    openGate: async (a) => (calls.push('openGate'), gates.push(a), { status: 200, body: {} }),
+    openGate: async (a) => (calls.push('openGate'), gates.push(a), { status: o.gateStatus ?? 200, body: {} }),
     log: () => {},
-    now: () => NOW
+    now: () => clock.now
   }
   const ci = createLifecycleCi(deps)
-  return { ci, calls, settled, gates, records, waits, created }
+  return { ci, calls, settled, gates, records, waits, created, clock }
 }
 
 describe('createLifecycleCi', () => {
@@ -70,7 +79,7 @@ describe('createLifecycleCi', () => {
     const r = rig()
     r.ci.onState(stateWith({ source: ISSUE }))
     await r.ci.drain()
-    expect(r.calls).toEqual(['isClean', 'readCommits', 'push', 'headOf', 'findOpenPrs', 'createDraftPr', 'record', 'recordWait'])
+    expect(r.calls).toEqual(['isClean', 'readCommits', 'headOf', 'headOf refs/heads/u/a', 'push', 'headOf', 'findOpenPrs', 'createDraftPr', 'record', 'recordWait'])
     expect(r.created).toEqual([{ base: 'main', head: 'u/a', title: 'Fix add', body: 'add adds now\n\nRefs #7' }])
     expect(r.records).toEqual([
       {
@@ -84,7 +93,7 @@ describe('createLifecycleCi', () => {
         }
       }
     ])
-    expect(r.waits).toEqual([{ taskId: 'tsk_l', pr: 3, sha: SHA }])
+    expect(r.waits).toEqual([{ taskId: 'tsk_l', since: ISO, pr: 3, sha: SHA }])
   })
 
   it('binds the one open pull request of the branch instead of making another', async () => {
@@ -93,7 +102,7 @@ describe('createLifecycleCi', () => {
     await r.ci.drain()
     expect(r.calls).not.toContain('createDraftPr')
     expect(r.records[0]).toMatchObject({ patch: { binding: { number: 5, createdByAstera: false } } })
-    expect(r.waits).toEqual([{ taskId: 'tsk_l', pr: 5, sha: SHA }])
+    expect(r.waits).toEqual([{ taskId: 'tsk_l', since: ISO, pr: 5, sha: SHA }])
   })
 
   // Review Focus 1: a restart after the binding was recorded
@@ -102,7 +111,7 @@ describe('createLifecycleCi', () => {
     const r = rig()
     r.ci.onState(stateWith({ binding }))
     await r.ci.drain()
-    expect(r.calls).toEqual(['isClean', 'readCommits', 'push', 'headOf', 'record', 'recordWait'])
+    expect(r.calls).toEqual(['isClean', 'readCommits', 'headOf', 'headOf refs/heads/u/a', 'push', 'headOf', 'record', 'recordWait'])
     expect(r.records).toEqual([{ runId: 'run_1', patch: { pushed: { sha: SHA } } }])
   })
 
@@ -111,8 +120,86 @@ describe('createLifecycleCi', () => {
     const r = rig({ open: [[], [3]], create: { ok: false, kind: 'network', message: 'Could not reach GitHub' } })
     r.ci.onState(stateWith())
     await r.ci.drain()
-    expect(r.records[0]).toMatchObject({ patch: { binding: { number: 3, createdByAstera: false } } })
+    // G3b1 final review M4: the lookup before found none, so the PR found now is the one Astera just made
+    expect(r.records[0]).toMatchObject({ patch: { binding: { number: 3, createdByAstera: true } } })
     expect(r.gates).toEqual([])
+  })
+
+  it('a pull request gh says already exists for the branch is bound as the one Astera made', async () => {
+    const r = rig({ create: { ok: true, number: 3, url: 'https://github.com/parsingk/astera-lifecycle-sandbox/pull/3', existed: true } })
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    expect(r.records[0]).toMatchObject({ patch: { binding: { number: 3, createdByAstera: true } } })
+  })
+
+  it('a create that failed with nothing found after asks a person and makes no second one', async () => {
+    const r = rig({ open: [[], []], create: { ok: false, kind: 'network', message: 'Could not reach GitHub' } })
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    expect(r.calls.filter((c) => c === 'createDraftPr')).toHaveLength(1)
+    expect(r.gates[0].question).toContain('Could not reach GitHub')
+    expect(r.waits).toEqual([])
+  })
+
+  // G3b1 final review I1: CI is waited on for the commit the push sent, and only that one
+  it('waits on the head it pushed: a HEAD off the branch tip, or one that moved during the push, asks a person', async () => {
+    const off = rig({ heads: (ref) => (ref ? 'b'.repeat(40) : SHA) })
+    off.ci.onState(stateWith())
+    await off.ci.drain()
+    expect(off.calls).not.toContain('push')
+    expect(off.gates).toHaveLength(1)
+    const moved = rig({ heads: (_ref, n) => (n < 2 ? SHA : 'd'.repeat(40)) })
+    moved.ci.onState(stateWith())
+    await moved.ci.drain()
+    expect(moved.calls).toContain('push')
+    expect(moved.gates).toHaveLength(1)
+    expect(moved.waits).toEqual([])
+  })
+
+  // G3b1 final review M9
+  it('a missing branch, origin or HEAD asks a person and pushes nothing', async () => {
+    for (const r of [rig({ worktree: false }), rig({ origin: null }), rig({ heads: () => null })]) {
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      expect(r.gates).toHaveLength(1)
+      expect(r.calls).not.toContain('push')
+    }
+  })
+
+  // G3b1 final review M3: a git that could not read the commits is not a branch with none
+  it('commits that could not be read ask a person instead of failing the check', async () => {
+    const r = rig({ commits: null })
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    expect(r.settled).toEqual([])
+    expect(r.gates).toEqual([{ taskId: 'tsk_l', question: expect.stringContaining('커밋을 읽지 못했습니다') }])
+  })
+
+  // G3b1 final review M6
+  it('a push it could not record asks a person and records no wait; so does a wait it could not record', async () => {
+    const noRecord = rig({ recordStatus: 500 })
+    noRecord.ci.onState(stateWith())
+    await noRecord.ci.drain()
+    expect(noRecord.waits).toEqual([])
+    expect(noRecord.gates).toHaveLength(1)
+    const noWait = rig({ waitStatus: 500 })
+    noWait.ci.onState(stateWith())
+    await noWait.ci.drain()
+    expect(noWait.gates).toHaveLength(1)
+  })
+
+  // G3b1 final review M7: a round it could not move is not taken again on every state
+  it('a round left where it was is taken again only after a while', async () => {
+    const r = rig({ open: [[3, 4]], gateStatus: 409 })
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    expect(r.calls.filter((c) => c === 'push')).toHaveLength(1)
+    r.clock.now = NOW + RETRY_MS
+    r.ci.onState(stateWith())
+    await r.ci.drain()
+    expect(r.calls.filter((c) => c === 'push')).toHaveLength(2)
   })
 
   // Review Focus 4
@@ -128,7 +215,7 @@ describe('createLifecycleCi', () => {
     dirty.ci.onState(stateWith())
     await dirty.ci.drain()
     expect(dirty.settled).toEqual([
-      { taskId: 'tsk_l', result: expect.objectContaining({ configId: 'github:ci', status: 'failed', summary: expect.stringContaining('2 uncommitted changes') }) }
+      { taskId: 'tsk_l', since: ISO, result: expect.objectContaining({ configId: 'github:ci', status: 'failed', summary: expect.stringContaining('2 uncommitted changes') }) }
     ])
     expect(dirty.calls).not.toContain('push')
     const empty = rig({ commits: [] })

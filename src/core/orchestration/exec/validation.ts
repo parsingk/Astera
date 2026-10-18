@@ -73,7 +73,7 @@ export interface TaskValidation {
   /** OrchServerDeps.startValidation's body: enqueue, then the policy stamp and the suspicious files beside it. */
   startValidation(a: { taskId: string; cwd: string }): void
   /** A lifecycle Task's round handed over at `github:ci`, settled with the CI result (GitHub lifecycle §4). */
-  settleHandedOff(a: { taskId: string; result: CheckResult }): Promise<void>
+  settleHandedOff(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
 }
 
 export function createTaskValidation(c: ValidationContext): TaskValidation {
@@ -326,9 +326,13 @@ export function createTaskValidation(c: ValidationContext): TaskValidation {
 
   /** The Host settles a round handed over at `github:ci` with the CI result (GitHub lifecycle §4): once, since
    *  settleLifecycleCi refuses a Task with no round handed over. */
-  const settleHandedOff = (a: { taskId: string; result: CheckResult }): Promise<void> =>
+  const settleHandedOff = (a: { taskId: string; result: CheckResult; since?: string }): Promise<void> =>
     commitVerdict(a.taskId, (before, repair) =>
-      settleLifecycleCi(before, { taskId: a.taskId, result: a.result, ...(repair ? { repair } : {}), lang: c.lang() }, c.now())
+      settleLifecycleCi(
+        before,
+        { taskId: a.taskId, result: a.result, ...(a.since !== undefined ? { since: a.since } : {}), ...(repair ? { repair } : {}), lang: c.lang() },
+        c.now()
+      )
     )
 
   return { validator, startValidation, settleHandedOff }

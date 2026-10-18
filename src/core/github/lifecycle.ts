@@ -83,8 +83,10 @@ export interface GitHubCiFailure {
   class: CiFailureClass
   /** At most 1000 characters: the check, its class and one line that says why. */
   summary: string
-  /** At most 20: the annotations that say something (not the runner's boilerplate). */
-  diagnostics: { path?: string; line?: number; message: string }[]
+  /** At most 20: the annotations that say something (not the runner's boilerplate); `warning` marks a warning's. */
+  diagnostics: { path?: string; line?: number; message: string; warning?: true }[]
+  /** How many there were, when more than the 20 kept (G3b1 final review M5). */
+  diagnosticsTotal?: number
   /** The failing step's lines: at most 4000 characters and 80 lines. Absent for a commit status (no job log). */
   logExcerpt?: string
   url?: string

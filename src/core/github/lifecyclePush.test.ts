@@ -55,6 +55,12 @@ describe('headOf', () => {
     expect(await headOf(gitAnswering({ stdout: `${'a'.repeat(40)}\n` }).run, '/wt')).toBe('a'.repeat(40))
     expect(await headOf(gitAnswering({ ok: false, exitCode: 128, stderr: 'fatal' }).run, '/wt')).toBeNull()
   })
+  // G3b1 final review I1: the branch's own tip, which is what a push sends
+  it('reads a ref when named', async () => {
+    const g = gitAnswering({ stdout: `${'b'.repeat(40)}\n` })
+    expect(await headOf(g.run, '/wt', 'refs/heads/u/a')).toBe('b'.repeat(40))
+    expect(g.calls[0].args).toEqual(['rev-parse', 'refs/heads/u/a'])
+  })
 })
 
 describe('refsLine', () => {
@@ -62,6 +68,12 @@ describe('refsLine', () => {
   it('refers to an issue of the same repository, whatever the case, and never closes it', () => {
     expect(refsLine(source('https://github.com/Parsingk/Astera-Lifecycle-Sandbox/issues/7'), repo)).toBe('Refs #7')
   })
+  // G3b1 final review M8: the same owner and name on another host is another repository
+  it('compares the host too', () => {
+    expect(refsLine(source('https://ghe.example/parsingk/astera-lifecycle-sandbox/issues/7'), repo)).toBeNull()
+    expect(refsLine(source('https://ghe.example/parsingk/astera-lifecycle-sandbox/issues/7'), { ...repo, host: 'ghe.example' })).toBe('Refs #7')
+  })
+
   it('says nothing for another repository’s issue, another source, or none', () => {
     expect(refsLine(source('https://github.com/someone/else/issues/7'), repo)).toBeNull()
     expect(refsLine({ id: 'plugin:x', itemId: '7', label: 'x' }, repo)).toBeNull()

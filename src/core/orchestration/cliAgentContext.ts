@@ -199,6 +199,7 @@ const SESSION = {
     detail: 'The Host records it itself (GitHub lifecycle); anyone else is refused.',
     flags: [
       { name: 'taskId', value: '<taskId>', about: 'the lifecycle Task' },
+      { name: 'since', value: '<time>', about: 'the round the push was for (its hand-over time)' },
       { name: 'pr', value: '<n>', about: 'the bound pull request' },
       { name: 'sha', value: '<sha>', about: 'the head the Host pushed' }
     ]

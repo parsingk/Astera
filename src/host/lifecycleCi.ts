@@ -22,12 +22,13 @@ export interface LifecycleCiDeps {
   worktreeOf(path: string): WatchedWorktree | null
   originOf(cwd: string): Promise<string | null>
   isClean(cwd: string): Promise<{ clean: boolean; changedCount: number }>
-  /** The commits past `base`, newest first. */
-  readCommits(cwd: string, base: string): Promise<CommitSummary[]>
+  /** The commits past `base`, newest first; null when git could not read them. */
+  readCommits(cwd: string, base: string): Promise<CommitSummary[] | null>
   /** The base as gh names it (normalizeBaseForGh). */
   baseBranch(repoPath: string, baseRef: string): Promise<string>
   push(cwd: string, branch: string): Promise<{ ok: true } | PushFailure>
-  headOf(cwd: string): Promise<string | null>
+  /** The commit HEAD names, or `ref` when given; null when git cannot say. */
+  headOf(cwd: string, ref?: string): Promise<string | null>
   findOpenPrs(cwd: string, repo: GitHubRepo, branch: string, base: string): Promise<{ ok: true; prs: OpenPr[] } | GhFailed>
   createDraftPr(
     cwd: string,
@@ -36,10 +37,10 @@ export interface LifecycleCiDeps {
   ): Promise<{ ok: true; number: number; url: string; existed?: true } | GhFailed>
   /** `runs-github-record`. */
   record(args: { runId: string; patch: RunGitHubPatch }): Promise<Reply>
-  /** `lifecycle-ci-wait`. */
-  recordWait(args: { taskId: string; pr: number; sha: string }): Promise<Reply>
+  /** `lifecycle-ci-wait`: for the round `since` names. */
+  recordWait(args: { taskId: string; since: string; pr: number; sha: string }): Promise<Reply>
   /** TaskValidation.settleHandedOff: a precondition that failed is the round's failed `github:ci` check. */
-  settle(a: { taskId: string; result: CheckResult }): Promise<void>
+  settle(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
   /** `gate-create`. */
   openGate(a: { taskId: string; question: string }): Promise<Reply>
   log(m: string): void
@@ -48,9 +49,13 @@ export interface LifecycleCiDeps {
 
 export interface LifecycleCi {
   onState(s: OrchState): void
-  /** Resolves when no round is being carried: for tests and the Host's leaving. */
+  /** Resolves when no round is being carried (tests). */
   drain(): Promise<void>
 }
+
+/** A round a carry left where it was (a Gate that could not open, a record that failed) is taken again after this,
+ *  not on every state (G3b1 final review M7). */
+export const RETRY_MS = 60_000
 
 const PUSH_WORDS: Record<PushFailure['kind'], string> = {
   rejected: '원격 브랜치에 Astera 가 모르는 커밋이 있습니다',
@@ -65,16 +70,20 @@ const awaitingPush = (t: Task): boolean => isLifecycleTask(t) && t.status === 'v
 export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
   const now = (): number => (d.now ? d.now() : Date.now())
   const inFlight = new Map<string, Promise<void>>()
+  /** Each round last carried (`taskId` → its `since`) and when it may be taken again. */
+  const cooling = new Map<string, { since: string; until: number }>()
 
   const carry = async (s: OrchState, task: Task): Promise<void> => {
     const ask = async (question: string): Promise<void> => {
       const r = await d.openGate({ taskId: task.id, question })
       if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the Gate could not be opened: ${JSON.stringify(r.body)} — ${question}`)
     }
+    const since = task.ciWait!.since
     const fail = (summary: string): Promise<void> =>
       d.settle({
         taskId: task.id,
-        result: { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'failed', summary, startedAt: task.ciWait!.since, endedAt: new Date(now()).toISOString() }
+        since,
+        result: { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'failed', summary, startedAt: since, endedAt: new Date(now()).toISOString() }
       })
     const run = s.runs.find((r) => r.id === task.runId)
     const job = run && s.jobs.find((j) => j.id === run.jobId)
@@ -90,14 +99,21 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
     if (!clean.clean)
       return fail(`The Run's branch has ${clean.changedCount} uncommitted change${clean.changedCount === 1 ? '' : 's'}; Astera pushes commits only. Commit them.`)
     const commits = await d.readCommits(cwd, info.baseRef)
+    // A read that failed is not a branch with no commits (G3b1 final review M3)
+    if (commits === null) return ask(`이 Run 의 브랜치에서 ${info.baseRef} 이후의 커밋을 읽지 못했습니다. 고친 뒤 답하면 다시 시도합니다.`)
     if (commits.length === 0) return fail(`The Run's branch adds no commits past ${info.baseRef}.`)
     const base = await d.baseBranch(info.repoPath, info.baseRef)
 
-    // §4.2: never forced; a refusal because the branch moved is G3b2's external-head Gate
+    // §4.2: never forced; a refusal because the branch moved is G3b2's external-head Gate. CI is waited on for the
+    // commit the push sends, the branch's tip, so HEAD must be that tip and stay it through the push (G3b1 final review
+    // I1): otherwise the PR head and the head waited on part, and the round waits for ever
+    const sha = await d.headOf(cwd)
+    if (sha === null) return ask('이 Run 의 HEAD 를 읽지 못했습니다(git rev-parse HEAD). 고친 뒤 답하면 다시 시도합니다.')
+    const tip = await d.headOf(cwd, `refs/heads/${info.branch}`)
+    if (tip !== sha) return ask(`이 Run 의 HEAD 가 브랜치 ${info.branch} 의 끝이 아닙니다. 브랜치로 돌아간 뒤 답하면 다시 시도합니다.`)
     const pushed = await d.push(cwd, info.branch)
     if (!pushed.ok) return ask(`GitHub 으로 push 하지 못했습니다. ${PUSH_WORDS[pushed.kind]}: ${pushed.detail}. 고친 뒤 답하면 다시 시도합니다.`)
-    const sha = await d.headOf(cwd)
-    if (sha === null) return ask('push 한 커밋을 읽지 못했습니다(git rev-parse HEAD). 고친 뒤 답하면 다시 시도합니다.')
+    if ((await d.headOf(cwd)) !== sha) return ask('push 하는 동안 이 Run 의 브랜치에 새 커밋이 생겼습니다. 답하면 그 커밋으로 다시 시도합니다.')
 
     // §4.3: the binding once made; else the one open pull request; else a draft Astera opens
     let binding = run.githubState?.binding
@@ -122,29 +138,33 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
         const filled = fillFromCommits(info.branch, commits)
         const refs = refsLine(job.source, repo)
         const body = refs === null ? filled.body : filled.body === '' ? refs : `${filled.body}\n\n${refs}`
+        // The lookup just above found none, so a PR found now is the one this create made (G3b1 final review M4)
         const created = await d.createDraftPr(cwd, repo, { base, head: info.branch, title: filled.title, body })
-        if (created.ok) made = bind(created, created.existed !== true)
+        if (created.ok) made = bind(created, true)
         else {
           // A create that failed may still have made it (a timeout): look before asking (L16)
           const again = await d.findOpenPrs(cwd, repo, info.branch, base)
           if (!again.ok || again.prs.length !== 1)
             return ask(`draft pull request 를 열지 못했습니다: ${created.message}. 답하면 다시 시도합니다.`)
-          made = bind(again.prs[0], false)
+          made = bind(again.prs[0], true)
         }
       }
       binding = made
     }
 
+    // The wait only after the push is recorded: merge-ready reads the pushed head (G3b1 final review M6)
     const recorded = await d.record({ runId: run.id, patch: { ...(made ? { binding: made } : {}), pushed: { sha } } })
-    if (recorded.status >= 300) d.log(`lifecycle ci: run ${run.id}: the push could not be recorded: ${JSON.stringify(recorded.body)}`)
-    const waited = await d.recordWait({ taskId: task.id, pr: binding.number, sha })
-    if (waited.status >= 300) d.log(`lifecycle ci: task ${task.id}: the wait could not be recorded: ${JSON.stringify(waited.body)}`)
+    if (recorded.status >= 300) return ask(`push 한 것을 기록하지 못했습니다: ${JSON.stringify(recorded.body)}. 답하면 다시 시도합니다.`)
+    const waited = await d.recordWait({ taskId: task.id, since, pr: binding.number, sha })
+    if (waited.status >= 300) return ask(`CI 대기를 기록하지 못했습니다: ${JSON.stringify(waited.body)}. 답하면 다시 시도합니다.`)
   }
 
   return {
     onState: (s) => {
       for (const task of s.tasks) {
         if (!awaitingPush(task) || inFlight.has(task.id)) continue
+        const cool = cooling.get(task.id)
+        if (cool && cool.since === task.ciWait!.since && now() < cool.until) continue
         // A step that throws asks a person: left alone, every state would take the round again at once
         const p = carry(s, task)
           .catch(async (e) => {
@@ -153,7 +173,10 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
             if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the Gate could not be opened: ${JSON.stringify(r.body)}`)
           })
           .catch((e) => d.log(`lifecycle ci: task ${task.id}: ${String(e)}`))
-          .finally(() => inFlight.delete(task.id))
+          .finally(() => {
+            inFlight.delete(task.id)
+            cooling.set(task.id, { since: task.ciWait!.since, until: now() + RETRY_MS })
+          })
         inFlight.set(task.id, p)
       }
     },

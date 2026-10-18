@@ -78,7 +78,7 @@ import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
 import { defaultGhRunner } from '../core/github/gh'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { createPullRequest, readCommits } from '../core/github/prCreate'
+import { createPullRequest, readCommits, readCommitsOrNull } from '../core/github/prCreate'
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
@@ -912,10 +912,10 @@ async function main(): Promise<void> {
         worktreeOf: (p) => worktrees.infoOf(p),
         originOf,
         isClean: (cwd) => isCleanWorktree(cwd),
-        readCommits: (cwd, base) => readCommits(cwd, base),
+        readCommits: (cwd, base) => readCommitsOrNull(cwd, base),
         baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
         push: (cwd, branch) => pushBranch(realGit, cwd, branch),
-        headOf: (cwd) => headOf(realGit, cwd),
+        headOf: (cwd, ref) => headOf(realGit, cwd, ref),
         findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
         createDraftPr: (cwd, repo, pr) => createDraftPr(defaultGhRunner, cwd, repo, pr),
         record: (args) => orch.handle('runs-github-record', args),

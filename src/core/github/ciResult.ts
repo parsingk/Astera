@@ -21,8 +21,16 @@ export function ciCheckResult(a: { verdict: CiVerdict; failure?: GitHubCiFailure
     status: 'failed',
     summary: f.summary,
     ...(f.diagnostics.length > 0
-      ? { diagnostics: f.diagnostics.map((x) => ({ ...(x.path ? { file: x.path } : {}), ...(x.line !== undefined ? { line: x.line } : {}), message: x.message, severity: 'error' as const })) }
+      ? {
+          diagnostics: f.diagnostics.map((x) => ({
+            ...(x.path ? { file: x.path } : {}),
+            ...(x.line !== undefined ? { line: x.line } : {}),
+            message: x.message,
+            severity: x.warning ? ('warning' as const) : ('error' as const)
+          }))
+        }
       : {}),
+    ...(f.diagnosticsTotal !== undefined ? { diagnosticsTotal: f.diagnosticsTotal } : {}),
     ...(f.logExcerpt ? { outputTail: f.logExcerpt } : {}),
     externalUrl: f.url ?? a.prUrl
   }

@@ -325,7 +325,7 @@ outlives a Host restart, and `events` reads it. An event:
 | `session.input_needed` | a session turns to waiting on a person (a permission, a question), once per turn into it | `{ session, prompt }` |
 | `session.limit_waiting` | a session stops at a usage limit and waits for it to reset | `{ session, scope?, nextRetryAt? }` |
 | `session.account_switched` | a session goes on under another account | `{ session, accountLabel }` |
-| `github.pr_bound` | a GitHub lifecycle Run's branch got its pull request | `Run` |
+| `github.pr_bound` | a GitHub lifecycle Run's branch was bound to a pull request Astera found (one Astera opened is `github.pr_created`) | `Run` |
 | `github.pr_created` | Astera opened the draft pull request a GitHub lifecycle Run is bound to | `Run` |
 | `github.head_changed` | that pull request's head moved | `Run` |
 | `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
