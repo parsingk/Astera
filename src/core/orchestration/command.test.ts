@@ -8709,6 +8709,19 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     expect(gh.calls.map((c) => c.cwd)).toEqual([WT])
   })
 
+  // GitHub lifecycle G3c2 (design §8 Actions): a bound Run's PR is the one it is bound to, not the newest of its branch
+  it('github-pr with a bound run reads the pull request it is bound to, in its repository', async () => {
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+    const { deps, gh } = setup({ [VIEW]: { stdout: JSON.stringify(prRow()) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-pr', { run: 'r1' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+    })
+    expect(gh.calls.map((c) => c.args.slice(0, 3).join(' '))).toEqual(['pr view 12'])
+  })
+
   it('github-pr with a project and a branch reads in the project root; no PR is pr: null', async () => {
     const { deps, gh, projectId, projectPath } = setup({ [PR_LIST]: { stdout: '[]' } })
     const r = await call(deps, 'github-pr', { project: projectId, branch: 'u/a' }, '')

@@ -122,7 +122,7 @@ import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { repoOfBinding } from '../github/remote'
 import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
-import { prForBranch } from '../github/prs'
+import { prByNumber, prForBranch } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
@@ -4754,8 +4754,12 @@ export async function handleCommand(
         if (given === null) return bad('--branch is required with --project: the head branch to look up')
         branch = given
       }
-      const found = await prForBranch(t.gh, t.cwd, branch)
-      return found.ok ? okBody({ branch, pr: found.pr }) : ghRefusal(found)
+      // A bound Run's pull request is the one it is bound to, read in the binding's repository — not the newest of its
+      // branch, which can be a closed one (GitHub lifecycle G3c2, design §8 Actions)
+      const binding = 'run' in t ? t.run.githubState?.binding : undefined
+      const bound = binding ? repoOfBinding(binding) : null
+      const found = binding && bound ? await prByNumber(t.gh, t.cwd, bound, binding.number) : await prForBranch(t.gh, t.cwd, branch)
+      return found.ok ? okBody({ branch: binding && bound ? binding.headBranch : branch, pr: found.pr }) : ghRefusal(found)
     }
     case 'github-ci': {
       if (args.run !== undefined && args.pr !== undefined)

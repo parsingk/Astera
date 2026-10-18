@@ -359,7 +359,7 @@ const SESSION = {
   'github-pr': {
     summary: "the pull request of a Run's branch, or of a project's branch, through the Host's gh (the MCP server's get_pr_status)",
     detail:
-      'Exactly one of --run or --project. A Run working in the project folder has no branch of its own (409). `pr` is null when the branch has none.',
+      'Exactly one of --run or --project. A Run working in the project folder has no branch of its own (409). A GitHub lifecycle Run bound to a pull request reads that one, in its repository. `pr` is null when the branch has none.',
     flags: [
       { name: 'run', value: '<runId>', about: "the Run whose worktree branch to look up" },
       { name: 'project', value: '<projectId>', about: 'the project whose repository to look in (from `projects list`)' },
