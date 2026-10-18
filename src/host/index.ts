@@ -810,7 +810,9 @@ async function main(): Promise<void> {
       readCommits: (wt, base) => readCommits(wt, base),
       isClean: (wt) => isCleanWorktree(wt),
       // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
-      originOf
+      originOf,
+      // G3b2: "continue" on a GitHub external-head question, over this Host's own merge path into the Run root
+      ...(spawner ? { fastForward: (cwd: string, branch: string) => worktrees.fastForwardRoot(cwd, branch) } : {})
     },
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.

@@ -839,7 +839,8 @@ such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle
 worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
 those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft
 one (its body ending `Refs #N` for an issue of the same repository), and waits for CI on the head it pushed: a pass
-takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person.
+takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person,
+with a question of kind `github-*` where the answer acts on the wait (above).
 
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
