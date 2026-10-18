@@ -230,7 +230,9 @@ describe('handleCommand — 역할 인가', () => {
       ['github-ci-rerun', { project: 'p', runId: 1 }],
       ['jobs-create-from-issue', { project: 'p', issue: 3 }],
       ['jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }],
-      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p', githubLifecycle: true }]
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p', githubLifecycle: true }],
+      // Final review M4: the same Job as jobs-create-from-issue, refused the same way and as early
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p' }]
     ]
     for (const [cmd, args] of cases) {
       const r = await call(deps, cmd, args, 'sess1')

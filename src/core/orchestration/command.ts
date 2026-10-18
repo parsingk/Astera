@@ -730,14 +730,14 @@ const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
  *  부르는 쪽이 문구를 읽어야 알 수 있었다. */
 const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
+/** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2); `jobs-create` with the lifecycle on and
+ *  `jobs-create-from-source` from the github source or with the lifecycle on are refused beside them.
+ *  `runs-reconverge` joins when it exists (G5). */
+const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue'])
+const githubWriteRefusal = (cmd: string): string => `worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`
 /** A pure-layer refusal handed straight to the caller: 404 when it is marked `missing` (the id the
  *  caller named is not there — state.ts marks it where it refuses), 400 otherwise. For the cases that
  *  do not go through `commit()`; the same fact must not exit 4 from one command and 2 from another. */
-/** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2); `jobs-create` with the lifecycle on and
- *  `jobs-create-from-source` with it on are refused beside them. `runs-reconverge` joins when it exists (G5). */
-const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue'])
-const githubWriteRefusal = (cmd: string): string => `worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`
-
 const refused = (r: { error: string; missing?: true }): Reply =>
   r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
@@ -1298,8 +1298,14 @@ export async function handleCommand(
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
-  // A worker asking for a lifecycle Job from a source is refused before the source is read (GitHub lifecycle G3c2, §7.1)
-  if (cmd === 'jobs-create-from-source' && args.githubLifecycle === true && caller.sessionId !== '' && deps.getState().dispatches.some((d) => d.sessionId === caller.sessionId))
+  // A worker asking for a Job from a GitHub issue (jobs-create-from-issue's Job) or a lifecycle Job from any source is
+  // refused before the source is read (GitHub lifecycle G3c2, §7.1; final review M4)
+  if (
+    cmd === 'jobs-create-from-source' &&
+    (args.source === 'github' || args.githubLifecycle === true) &&
+    caller.sessionId !== '' &&
+    deps.getState().dispatches.some((d) => d.sessionId === caller.sessionId)
+  )
     return denied(githubWriteRefusal(cmd))
   // The job-source commands (plugin Phase 4), in a module of their own; jobs-create-from-source comes back here
   if (SOURCE_COMMANDS.has(cmd)) return sourcesCommand(deps, caller, cmd, args, handleCommand)

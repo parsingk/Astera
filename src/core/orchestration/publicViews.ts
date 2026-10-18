@@ -58,7 +58,8 @@ export const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record
  *
  *  A GitHub lifecycle Job's Run carries `github`, derived from the Host's record (githubState, kept back). */
 export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => {
-  const github = githubLifecycleOf(s.jobs.find((j) => j.id === run.jobId)?.github, run.githubState, lifecycleFactsOf(s, run.id))
+  const policy = s.jobs.find((j) => j.id === run.jobId)?.github
+  const github = policy ? githubLifecycleOf(policy, run.githubState, lifecycleFactsOf(s, run.id)) : undefined
   return {
     ...run,
     ...derivedFor(s, run.id, [run.id]),
@@ -67,14 +68,13 @@ export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => {
   }
 }
 
-/** The Run's latest lifecycle Task with the question open on it and whether a repair of it is at work (GitHub lifecycle
- *  G3c2): what the Run's `github.state` reads while that Task works. */
+/** The Run's latest lifecycle Task with the question open on it (GitHub lifecycle G3c2): what the Run's `github.state`
+ *  reads while that Task works. Read for a lifecycle Job's Run only. */
 function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | undefined {
   const task = s.tasks.filter((t) => t.runId === runId && isLifecycleTask(t)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
   if (!task) return undefined
   const openGate = s.gates.find((g) => g.taskId === task.id && g.status === 'open')
-  const repairing = s.dispatches.some((d) => d.taskId === task.id && d.repair !== undefined && !d.outcome && !d.endedAt)
-  return { task, ...(openGate ? { openGate } : {}), repairing }
+  return { task, ...(openGate ? { openGate } : {}) }
 }
 
 /** A spec longer than this is cut in a brief Task (`tasks list --brief`, and every Task an event carries). */

@@ -361,7 +361,7 @@ const SESSION = {
     detail:
       'Exactly one of --run or --project. A Run working in the project folder has no branch of its own (409). A GitHub lifecycle Run bound to a pull request reads that one, in its repository. `pr` is null when the branch has none.',
     flags: [
-      { name: 'run', value: '<runId>', about: "the Run whose worktree branch to look up" },
+      { name: 'run', value: '<runId>', about: "the Run whose worktree branch to look up (a GitHub lifecycle Run's bound pull request is read)" },
       { name: 'project', value: '<projectId>', about: 'the project whose repository to look in (from `projects list`)' },
       { name: 'branch', value: '<branch>', about: 'the head branch, with --project' }
     ]

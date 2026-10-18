@@ -903,7 +903,10 @@ the Job, the Astera Host checks that the folder's `origin` is a GitHub repositor
 (WRITE, MAINTAIN or ADMIN through your `gh` login) and refuses with a 6 that says why otherwise. The flag
 turns `--convergence` on. `--github-checks build,test` makes those checks decide; without it, the branch
 rules' required checks decide, or every reported check when the rules name none. The Job carries the
-policy as `github`.
+policy as `github`. A worker session Astera started is refused the flag with a 5, as it is
+`jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create` and `github-ci-rerun`: those
+writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off
+Astera's GitHub commands and is not a sandbox.
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it
