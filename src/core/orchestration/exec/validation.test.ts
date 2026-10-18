@@ -566,6 +566,66 @@ describe('createTaskValidation — suspicious files of a lifecycle Task', () => 
   })
 })
 
+// GitHub lifecycle G3c1: the loop end to end — a CI failure opens a repair in the Run root, its done report starts the
+// round again in the Run root, and that round hands over to GitHub again
+describe('the lifecycle repair loop, end to end', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const LATER = '2026-09-24T01:00:00.000Z'
+  it('goes from a CI failure through a Run-root repair and a new hand-over', async () => {
+    let state: OrchState = {
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github: policy, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        {
+          id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+          reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW, ciWait: { since: NOW, done: [] }
+        }
+      ],
+      dispatches: [{
+        id: 'dsp_a', taskId: 'tsk_a', provider: 'codex', accountId: 'accX', sessionId: 'sessA', cwd: '/wt/a', specPath: '/s/a.md',
+        startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'ready', retained: false
+      }]
+    }
+    const begun: unknown[] = []
+    const startRepair = vi.fn(async (_a: { dispatchId: string }) => undefined as unknown)
+    const v = createTaskValidation({
+      getState: () => state,
+      setState: async (next) => { state = next },
+      now: () => NOW,
+      lang: () => 'en',
+      log: () => {},
+      assertAllowedPath: async (p) => p,
+      storedConfigs: () => [],
+      runs: { start: () => ({ runId: 'r1' }), recentOutput: () => '', stop: () => {} },
+      isAlive: () => false,
+      startReview: async () => {},
+      startRepair,
+      firstCheckpointHead: () => null,
+      diffNames: async () => null,
+      pluginCheck: async (plugin) => ({ name: plugin, status: 'passed', summary: 'passed' }),
+      lifecycleCiBegin: async (a) => (begun.push(a), { status: 200, body: {} })
+    })
+    const lifecycle = () => state.tasks.find((t) => t.id === 'tsk_l')!
+
+    await v.settleHandedOff({ taskId: 'tsk_l', since: NOW, ciClass: 'test', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'test (test): not ok 1' } })
+    const repair = state.dispatches.find((d) => d.taskId === 'tsk_l' && d.repair)!
+    expect(repair).toMatchObject({ cwd: '/wt-run', provider: 'codex', accountId: 'accX', repair: 'check-failure' })
+    expect(lifecycle().status).toBe('dispatched')
+    await vi.waitFor(() => expect(startRepair).toHaveBeenCalledWith({ dispatchId: repair.id }))
+
+    // The repair worker reports done; the round starts again where it worked, the Run root
+    state = { ...state, dispatches: state.dispatches.map((d) => (d.id === repair.id ? { ...d, sessionId: 'sessFix', specPath: '/s/fix.md' } : d)) }
+    const done = applyWorkerDone(state, { taskId: 'tsk_l', dispatchId: repair.id, outcome: 'succeeded', subject: 's', body: 'fixed' }, LATER)
+    if (!done.ok) throw new Error(done.error)
+    state = done.state
+    expect(lifecycle().status).toBe('validating')
+    v.startValidation({ taskId: 'tsk_l', cwd: repair.cwd })
+    await vi.waitFor(() => expect(begun).toEqual([{ taskId: 'tsk_l', done: [] }]))
+  })
+})
+
 // G3a final review I1 and M1: a round whose Task already handed one over, or left validating, is not run or handed again
 describe('createTaskValidation — a lifecycle round that is no longer needed', () => {
   const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
