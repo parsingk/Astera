@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import type { GhResult } from './gh'
 import type { GitResult } from '../worktrees/git'
-import { createDraftPr, headOf, prNumberOf, pushBranch, refsLine, type RunGit } from './lifecyclePush'
+import { ancestry, createDraftPr, fastForward, headOf, prNumberOf, pushBranch, refsLine, type RunGit } from './lifecyclePush'
 
 const repo = { host: 'github.com', owner: 'parsingk', name: 'astera-lifecycle-sandbox' }
 const gitAnswering = (r: Partial<GitResult>) => {
@@ -11,6 +11,57 @@ const gitAnswering = (r: Partial<GitResult>) => {
   const run: RunGit = async (args, opts) => (calls.push({ args, ...opts }), { ok: true, stdout: '', stderr: '', ...r })
   return { run, calls }
 }
+
+/** Answers each git call in turn with the next result; the last repeats. */
+const gitScript = (rs: Partial<GitResult>[]) => {
+  const calls: { args: string[]; cwd: string; timeoutMs?: number }[] = []
+  const run: RunGit = async (args, opts) => {
+    calls.push({ args, ...opts })
+    return { ok: true, stdout: '', stderr: '', ...rs[Math.min(calls.length - 1, rs.length - 1)] }
+  }
+  return { run, calls }
+}
+
+// GitHub lifecycle G3b2 (design §4.2): "continue" on a head Astera did not push brings it in, fast-forward only
+describe('fastForward', () => {
+  it('fetches the branch from origin, then merges it fast-forward only', async () => {
+    const g = gitScript([{ ok: true }, { ok: true, stdout: 'Fast-forward' }])
+    expect(await fastForward(g.run, '/wt', 'u/a')).toEqual({ ok: true })
+    expect(g.calls.map((c) => c.args)).toEqual([
+      ['fetch', 'origin', '+refs/heads/u/a:refs/remotes/origin/u/a'],
+      ['merge', '--ff-only', 'origin/u/a']
+    ])
+    expect(g.calls.every((c) => c.cwd === '/wt')).toBe(true)
+  })
+
+  it('stops at a fetch that failed, saying why', async () => {
+    const g = gitScript([{ ok: false, exitCode: 128, stderr: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com" }])
+    expect(await fastForward(g.run, '/wt', 'u/a')).toEqual({ ok: false, message: "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com" })
+    expect(g.calls).toHaveLength(1)
+  })
+
+  it('says the refusing line of a merge that cannot fast-forward', async () => {
+    const g = gitScript([{ ok: true }, { ok: false, exitCode: 128, stderr: 'hint: Diverging branches can\'t be fast-forwarded, you need to either:\nfatal: Not possible to fast-forward, aborting.' }])
+    expect(await fastForward(g.run, '/wt', 'u/a')).toEqual({ ok: false, message: 'fatal: Not possible to fast-forward, aborting.' })
+  })
+})
+
+// GitHub lifecycle G3b2 (design §4.4, S2): a PR head behind the push is Astera's own earlier head; one not in its history
+// is someone else's
+describe('ancestry', () => {
+  it.each([
+    [{ ok: true, exitCode: 0 }, 'ancestor'],
+    [{ ok: false, exitCode: 1 }, 'not'],
+    [{ ok: false, exitCode: 128, stderr: 'fatal: Not a valid commit name 0123456789abcdef0123456789abcdef01234567' }, 'not'],
+    [{ ok: false, exitCode: 128, stderr: 'fatal: bad object 0123456789abcdef0123456789abcdef01234567' }, 'not'],
+    [{ ok: false, timedOut: true, stderr: '' }, 'unknown'],
+    [{ ok: false, exitCode: 128, stderr: 'fatal: not a git repository' }, 'unknown']
+  ] as const)('reads %j as %s', async (r, want) => {
+    const g = gitScript([r as Partial<GitResult>])
+    expect(await ancestry(g.run, '/wt', 'a'.repeat(40), 'b'.repeat(40))).toBe(want)
+    expect(g.calls[0].args).toEqual(['merge-base', '--is-ancestor', 'a'.repeat(40), 'b'.repeat(40)])
+  })
+})
 
 describe('pushBranch', () => {
   it('pushes the branch to origin, never forced, and sets its upstream', async () => {

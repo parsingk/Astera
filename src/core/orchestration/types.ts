@@ -116,8 +116,8 @@ export const GITHUB_GATE_KINDS = [
   'github-ci-outside'
 ] as const
 export type GitHubGateKind = (typeof GITHUB_GATE_KINDS)[number]
-export const isGitHubGateKind = (k: string | undefined): k is GitHubGateKind =>
-  k !== undefined && (GITHUB_GATE_KINDS as readonly string[]).includes(k)
+export const isGitHubGateKind = (k: string | null | undefined): k is GitHubGateKind =>
+  typeof k === 'string' && (GITHUB_GATE_KINDS as readonly string[]).includes(k)
 
 /** worker-start 가 세션을 띄우기 전에 Dispatch 에 적어 두는 자리표시자와 같은 모양(server.ts 의
  *  pendingSessionId). 순수 층은 node:crypto 를 못 쓰므로 newId 의 hex 를 빌린다 — 어떤 세션도 가리키지

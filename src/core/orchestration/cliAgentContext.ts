@@ -204,6 +204,17 @@ const SESSION = {
       { name: 'sha', value: '<sha>', about: 'the head the Host pushed' }
     ]
   },
+  'lifecycle-gate': {
+    summary: 'ask a person about a GitHub lifecycle round, keeping its wait',
+    detail: 'The Host asks it itself (GitHub lifecycle); anyone else is refused. The answers act on the round (gate-resolve).',
+    flags: [
+      { name: 'task', value: '<taskId>', about: 'the lifecycle Task' },
+      { name: 'since', value: '<time>', about: 'the round the question is about (its hand-over time)' },
+      { name: 'kind', value: '<kind>', about: 'github-no-ci, github-ci-cap, github-external-head, github-pr-ambiguous, github-pr-closed or github-ci-outside' },
+      { name: 'question', value: '<text>', about: 'the question, in the person’s language' },
+      { name: 'options', value: '<answers>', about: 'among wait, no-ci, continue, mark-failed and pr-<n>' }
+    ]
+  },
   'run-worktree-set': {
     summary: "record this run's worktree",
     flags: [
