@@ -18,6 +18,7 @@ import {
   EVIDENCE_TRIES,
   GITHUB_CI_CHECK,
   GITHUB_LIFECYCLE_DEFAULTS,
+  roundReruns,
   type CiFailureClass,
   type CiVerdict,
   type GitHubBinding,
@@ -54,6 +55,10 @@ export const ISSUE_MS = 300_000
 export const NEW_HEAD_MS = 180_000
 /** A pushed head with no check at all this long after its wait began asks a person (design §4.4 grace, L23). */
 export const NO_CI_GRACE_MS = 180_000
+/** How long a rerun holds the round's verdict while no read shows it (G4 final review I1): measured, its new attempt
+ *  shows within seconds; a run that has not shown by then is read as it is, and a rerun still starting is held by its
+ *  suite (the reader counts an Actions suite with no check run yet as running). */
+export const RERUN_SHOW_MS = 180_000
 const READS_AT_ONCE = 2
 /** gh's words for a job log asked for while its Actions run still goes (measured on the sandbox, 2026-10-18). */
 const STILL_RUNNING = /is still in progress; logs will be available when it is complete/i
@@ -132,10 +137,17 @@ interface Round {
   unknowns: number
 }
 
-/** A rerun asked on this head that a read has not shown yet: the read is of the attempt that failed, or of none of its
- *  run at all (measured, G4), so it decides nothing. A rerun has shown once its run reads a later attempt. */
-const rerunUnshown = (gs: RunGitHubState | undefined, sha: string, checks: GitHubCiCheck[]): boolean =>
-  (gs?.reruns ?? []).some((r) => r.sha === sha && !checks.some((c) => c.ciRunId === r.ciRunId && (c.ciRunAttempt ?? 1) > r.attempt))
+/** A rerun asked in this round that a read has not shown yet: the read is of the attempt that failed, or of none of its
+ *  run at all (measured, G4), so it decides nothing. A rerun has shown once the check run that failed is gone and its run
+ *  reads a later attempt; an attempt is the workflow run's, so the old check run can read the later one too (G4 final
+ *  review M3). It holds for RERUN_SHOW_MS at most (final review I1). */
+const rerunUnshown = (gs: RunGitHubState | undefined, round: { sha: string; since: string }, checks: GitHubCiCheck[], at: number): boolean =>
+  roundReruns(gs?.reruns, round.sha, round.since).some(
+    (r) =>
+      at - Date.parse(r.at) < RERUN_SHOW_MS &&
+      (checks.some((c) => r.externalId !== undefined && c.externalId === r.externalId) ||
+        !checks.some((c) => c.ciRunId === r.ciRunId && (c.ciRunAttempt ?? 1) > r.attempt))
+  )
 
 /** Each wait is decided once: a person's "wait again" begins another (G3b2). */
 const decisionOf = (round: Round): string => `${round.taskId}@${round.since}@${round.waitingSince}`
@@ -408,7 +420,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     // A waiting round with no check yet is read soon: its grace runs out in minutes (G3b2)
     const awaited = round?.sha !== undefined && read.checks.length === 0
     // A rerun of the waited head that has not shown yet is seconds away (G4)
-    const reran = round?.sha !== undefined && rerunUnshown(t.state, round.sha, read.checks)
+    const reran = round?.sha !== undefined && rerunUnshown(t.state, { sha: round.sha, since: round.since }, read.checks, now())
     const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable || awaited || reran
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
@@ -488,10 +500,14 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const r = await d.rerunCi!(t.cwd, repo, ciRunId)
     if (r.ok) {
       nextAt.set(t.runId, now() + spaced(PENDING_MS))
-      await record(t.runId, { rerun: { ciRunId, attempt: failing.ciRunAttempt ?? 1, sha: round.sha!, check: failing.name, by: 'astera' } })
+      await record(t.runId, { rerun: { ciRunId, attempt: failing.ciRunAttempt ?? 1, sha: round.sha!, check: failing.name, externalId: failing.externalId, by: 'astera' } })
       return
     }
-    if (r.running) return
+    if (r.running) {
+      // Someone reran it first: its new attempt is going, and is read soon (G4 final review M1)
+      nextAt.set(t.runId, now() + spaced(PENDING_MS))
+      return
+    }
     noteRateLimit(r.kind)
     if (TRANSIENT_FAILURES.has(r.kind)) {
       if (r.kind !== 'rate-limit') nextAt.set(t.runId, now() + spaced(PENDING_MS))

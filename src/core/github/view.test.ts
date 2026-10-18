@@ -67,7 +67,14 @@ describe('githubLifecycleOf', () => {
       ['the question past the rerun budget', bound(), facts({ status: 'blocked', ciWait: { ...wait, sha: A } }, { ...gate('github-ci-outside'), options: ['rerun', 'wait', 'mark-failed'] }), 'ci-infrastructure-failure'],
       ['another question about a cause outside the code', bound(), facts({ status: 'blocked', ciWait: { ...wait, sha: A } }, { ...gate('github-ci-outside'), options: ['wait', 'mark-failed'] }), 'waiting-for-user'],
       ['a wait after a rerun of its head', bound({ lastPushedSha: A, reruns: [{ ciRunId: 9, attempt: 1, sha: A, by: 'astera', at: 'T' }] }), facts({ ciWait: { ...wait, sha: A } }), 'ci-infrastructure-failure'],
-      ['a wait on a new head after an older head’s rerun', bound({ lastPushedSha: B, reruns: [{ ciRunId: 9, attempt: 1, sha: A, by: 'astera', at: 'T' }] }), facts({ ciWait: { ...wait, sha: B } }), 'ci-pending']
+      ['a wait on a new head after an older head’s rerun', bound({ lastPushedSha: B, reruns: [{ ciRunId: 9, attempt: 1, sha: A, by: 'astera', at: 'T' }] }), facts({ ciWait: { ...wait, sha: B } }), 'ci-pending'],
+      // G4 final review M5: a rerun of an earlier round of the same head is not this wait's
+      [
+        'a new round of the same head after an earlier round’s rerun',
+        bound({ lastPushedSha: A, reruns: [{ ciRunId: 9, attempt: 1, sha: A, by: 'astera', at: '2026-10-19T00:00:00.000Z' }] }),
+        facts({ ciWait: { since: '2026-10-19T00:10:00.000Z', done: [], sha: A } }),
+        'ci-pending'
+      ]
     ]
     it.each(rows)('%s', (_name, gs, lifecycle, state) => {
       expect(githubLifecycleOf(POLICY, gs, lifecycle)?.state).toBe(state)

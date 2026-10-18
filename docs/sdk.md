@@ -163,7 +163,7 @@ A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, A
 0.4.0 and later) carries its
 policy as `github` (`GitHubLifecyclePolicy`), and each of its Runs carries `github` (`GitHubLifecycle`): the pull
 request Astera bound for the Run's branch, its head commit, the CI checks of that commit with the `verdict` (`pending`,
-`passed`, `failed`, or `none` when the commit has no check) and its `basis` (the required checks, every reported check,
+`passed`, `failed`, or `none` when the commit has no check and no workflow starting) and its `basis` (the required checks, every reported check,
 or the Job's selection), the check that failed first with its link, its `class` and a one-line `summary` of why, and a
 `state` that sums it up (`unbound`,
 `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or `external-state-unavailable` while
@@ -341,7 +341,7 @@ outlives a Host restart, and `events` reads it. An event:
 | `github.head_changed` | that pull request's head moved | `Run` |
 | `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
 | `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
-| `github.ci_rerun_requested` | a CI run of the head was rerun, by Astera (a failure outside the code) or by a person | `Run` |
+| `github.ci_rerun_requested` | a CI run of the head was rerun through Astera: by Astera itself (a failure outside the code) or by a person's answer or `github-ci-rerun --run` (a rerun made on GitHub's own page is not seen) | `Run` |
 | `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its

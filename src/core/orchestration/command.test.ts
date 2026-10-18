@@ -1554,10 +1554,24 @@ describe('handleCommand — GitHub Gates', () => {
       const id = await open(deps, 'github-ci-outside', OPTIONS)
       expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
       expect(ran).toEqual([{ args: ['run', 'rerun', '9', '--failed', '--repo', 'o/r'], cwd: 'D:/wt/run' }])
-      expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 9, attempt: 2, sha: SHA, check: 'npm-network', by: 'person', at: NOW }])
+      expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 9, attempt: 2, sha: SHA, check: 'npm-network', externalId: 'run:70', by: 'person', at: NOW }])
       expect(deps.getState().runs[0].githubState?.log.at(-1)).toMatchObject({ kind: 'ci-rerun', sha: SHA, check: 'npm-network' })
       expect(taskOf(deps)).toMatchObject({ status: 'validating', ciWait: { sha: SHA } })
       expect(deps.getState().gates.find((g) => g.id === id)).toMatchObject({ status: 'resolved', resolution: 'rerun' })
+    })
+
+    // G4 final review M2: the snapshot keeps 50 checks; the failure itself names its run
+    it('reruns the run the failure names when the snapshot no longer holds its check, and never another of the same name', async () => {
+      const beyond = { ...failedCi, checks: [failedCi.checks[0]], failure: { ...failedCi.failure, ciRunId: 9, ciRunAttempt: 2 } }
+      const { deps, ran } = rerunRig({ ok: true }, { binding: BOUND, headSha: SHA, ci: beyond, log: [], seq: 0 })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(ran.map((r) => r.args.join(' '))).toEqual(['run rerun 9 --failed --repo o/r'])
+      const sameName = { ...failedCi, checks: [{ ...failedCi.checks[1], externalId: 'run:99', ciRunId: 77 }] }
+      const other = rerunRig({ ok: true }, { binding: BOUND, headSha: SHA, ci: sameName, log: [], seq: 0 })
+      const otherId = await open(other.deps, 'github-ci-outside', OPTIONS)
+      expect((await call(other.deps, 'gate-resolve', { id: otherId, resolution: 'rerun' })).status).toBe(409)
+      expect(other.ran).toEqual([])
     })
 
     it('a run already going again is waited on, with nothing recorded', async () => {
@@ -9242,6 +9256,19 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
         expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 34 } })
         expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${PR_HEAD} --repo o/r`, `${RUN_HEAD(77)} --repo o/r`, 'run rerun 77 --failed --repo o/r'])
         expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 77, attempt: 2, sha: HEAD, by: 'person', at: NOW }])
+      })
+
+      // G4 final review M4: a CI run still going is not rerun, and says so as a conflict
+      it('a CI run still going is a conflict before any rerun', async () => {
+        const { deps, gh } = setup(
+          {
+            [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+            [`${RUN_HEAD(77)} --repo o/r`]: { stdout: JSON.stringify({ headSha: HEAD, attempt: 2, status: 'in_progress' }) }
+          },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 409, body: { error: 'CI run 77 is still running: rerun it once it has finished' } })
+        expect(gh.calls.some((c) => c.args[1] === 'rerun')).toBe(false)
       })
 
       it('refuses a CI run of another commit before any rerun, naming both', async () => {

@@ -135,7 +135,9 @@ describe('parsePrState', () => {
           { status: 'QUEUED', conclusion: null, app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099662373, 'fixtures', 1) },
           { status: 'COMPLETED', conclusion: 'SUCCESS', app: { slug: 'github-actions' }, checkRuns: { totalCount: 1 }, workflowRun: run(39100211754, 'Lint', 1) },
           { status: 'COMPLETED', conclusion: 'FAILURE', app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099661750, 'broken', 2) },
-          { status: 'QUEUED', conclusion: null, app: { slug: 'stuck-app' }, checkRuns: { totalCount: 0 } }
+          { status: 'QUEUED', conclusion: null, app: { slug: 'stuck-app' }, checkRuns: { totalCount: 0 } },
+          // G4 final review I2: no workflow run behind it, so nothing is starting
+          { status: 'QUEUED', conclusion: null, app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: null }
         ],
         contexts: [
           {

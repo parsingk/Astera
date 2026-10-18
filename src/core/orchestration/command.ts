@@ -1145,19 +1145,21 @@ const NO_GITHUB_HERE = 'GitHub commands are answered by the Astera Host, and thi
 function rerunTargetOf(
   s: OrchState,
   task: Task
-): { cwd: string; repo: GitHubRepo; ciRunId: number; attempt: number; sha: string; check: string } | string {
+): { cwd: string; repo: GitHubRepo; ciRunId: number; attempt: number; sha: string; check: string; externalId: string } | string {
   const run = s.runs.find((r) => r.id === task.runId)
   const gs = run?.githubState
   const repo = gs?.binding ? repoOfBinding(gs.binding) : null
   const sha = task.ciWait?.sha
   const ci = gs?.ci
-  const failing =
-    ci?.verdict === 'failed' && sha !== undefined && ci.sha === sha
-      ? (ci.checks.find((c) => c.externalId === ci.failure?.externalId) ?? ci.checks.find((c) => c.name === ci.failing))
-      : undefined
-  if (!run?.worktree || !repo || sha === undefined || failing?.ciRunId === undefined)
+  // The failure names its run (final review M2); the check by its id is the fallback for a record older than that.
+  // Never by name: two workflows can have checks of one name.
+  const failure = ci?.verdict === 'failed' && sha !== undefined && ci.sha === sha ? ci.failure : undefined
+  const check = failure ? ci?.checks.find((c) => c.externalId === failure.externalId) : undefined
+  const ciRunId = failure?.ciRunId ?? check?.ciRunId
+  if (!run?.worktree || !repo || sha === undefined || !failure || ciRunId === undefined)
     return 'No failed CI run of the head this round waits on can be rerun: wait, or mark the Task failed'
-  return { cwd: run.worktree, repo, ciRunId: failing.ciRunId, attempt: failing.ciRunAttempt ?? 1, sha, check: failing.name }
+  const attempt = failure.ciRunAttempt ?? check?.ciRunAttempt ?? 1
+  return { cwd: run.worktree, repo, ciRunId, attempt, sha, check: failure.check, externalId: failure.externalId }
 }
 
 /** A failed gh call as a reply: not-found 404, something the person must fix (gh missing, not logged
@@ -4273,7 +4275,7 @@ export async function handleCommand(
           if (!deps.github) return conflict(NO_GITHUB_HERE)
           const r = await rerunFailed(deps.github.run, target.cwd, target.ciRunId, target.repo)
           if (!r.ok && !r.running) return ghRefusal(r)
-          if (r.ok) rerun = { ciRunId: target.ciRunId, attempt: target.attempt, sha: target.sha, check: target.check, by: 'person' }
+          if (r.ok) rerun = { ciRunId: target.ciRunId, attempt: target.attempt, sha: target.sha, check: target.check, externalId: target.externalId, by: 'person' }
         }
         const answered = answerGitHubGate(deps.getState(), { gateId, resolution }, now)
         // A rerun GitHub already took is kept whatever the answer meets
@@ -4968,8 +4970,11 @@ export async function handleCommand(
       if (!ci.ok) return ghRefusal(ci)
       if (ci.headSha !== head.headSha)
         return conflict(`CI run ${runId} ran on ${ci.headSha.slice(0, 7)}, not on the head of pull request #${pr} (${head.headSha.slice(0, 7)})`)
+      // A run still going has nothing to rerun yet (G4 final review M4); gh saying so between the read and the rerun too
+      const stillRunning = conflict(`CI run ${runId} is still running: rerun it once it has finished`)
+      if (ci.status !== 'completed') return stillRunning
       const r = await rerunFailed(t.gh, t.cwd, runId, repo)
-      if (!r.ok) return ghRefusal(r)
+      if (!r.ok) return r.running ? stillRunning : ghRefusal(r)
       // A bound Run keeps the rerun, so a round waiting on that head waits for the new attempt (G4)
       if (binding) {
         const recorded = recordRunGitHub(deps.getState(), t.run.id, { rerun: { ciRunId: runId, attempt: ci.attempt, sha: ci.headSha, by: 'person' } }, now)

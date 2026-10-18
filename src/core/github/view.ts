@@ -1,7 +1,7 @@
 // The public face of a lifecycle Run's GitHub side (GitHub lifecycle design §5.3, §8): derived on every read from what
 // the Host last recorded, never stored. `runs get`, `jobs get`, MCP get_run, the SDK's runs.get and the run and github
 // events carry it. Node-free.
-import type { CiBasis, CiFailureClass, CiVerdict, GitHubCiCheck, GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
+import { roundReruns, type CiBasis, type CiFailureClass, type CiVerdict, type GitHubCiCheck, type GitHubLifecyclePolicy, type RunGitHubState } from './lifecycle'
 import type { Gate, Task } from '../orchestration/types'
 
 /** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open, with
@@ -47,8 +47,8 @@ function lifecycleStateOf(l: LifecycleTaskFacts, gs: RunGitHubState | undefined)
   if (l.task.ciWait) {
     if (gs?.lastReadError) return 'external-state-unavailable'
     // A wait whose head had a CI run rerun waits for that rerun (G4)
-    const sha = l.task.ciWait.sha
-    return sha !== undefined && gs?.reruns?.some((r) => r.sha === sha) ? 'ci-infrastructure-failure' : 'ci-pending'
+    const { sha, since } = l.task.ciWait
+    return sha !== undefined && roundReruns(gs?.reruns, sha, since).length > 0 ? 'ci-infrastructure-failure' : 'ci-pending'
   }
   return gs?.lastPushedSha ? 'awaiting-push' : 'pr-ready'
 }

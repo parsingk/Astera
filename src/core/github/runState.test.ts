@@ -184,6 +184,8 @@ describe('parseRunGitHubPatch', () => {
     expect(parseRunGitHubPatch({ rerun: { ...rerun, by: 'someone' } })).toBe('rerun is malformed')
     expect(parseRunGitHubPatch({ rerun: { ...rerun, ciRunId: '9' } })).toBe('rerun is malformed')
     expect(parseRunGitHubPatch({ rerun: { ...rerun, check: 3 } })).toBe('rerun is malformed')
+    expect(parseRunGitHubPatch({ rerun: { ...rerun, externalId: 'run:70' } })).toEqual({ rerun: { ...rerun, externalId: 'run:70' } })
+    expect(parseRunGitHubPatch({ rerun: { ...rerun, externalId: 70 } })).toBe('rerun is malformed')
   })
 
   // G2 final review I1

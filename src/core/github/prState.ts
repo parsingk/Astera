@@ -187,15 +187,16 @@ export function parsePrState(stdout: string): PrStateRead | null {
   const commit = obj(obj(nodes(pr.commits)[0])?.commit)
   if (!commit || typeof commit.oid !== 'string') return null
   const suiteNodes = nodes(commit.checkSuites)
-  // A suite with no check run says nothing, but an Actions one that has not completed is a workflow starting or rerunning:
-  // its check runs are seconds away (measured, G4), and until they come the other workflows' checks are not all of CI
+  // A suite with no check run says nothing, but an Actions one that has not completed, with a workflow run behind it, is
+  // a workflow starting or rerunning: its check runs are seconds away (measured, G4), and until they come the other
+  // workflows' checks are not all of CI. Without a workflow run nothing is starting (G4 final review I2).
   const suites = suiteNodes.flatMap((raw) => {
     const s = obj(raw)
     const runs = obj(s?.checkRuns)?.totalCount
     if (!s || typeof s.status !== 'string' || typeof runs !== 'number') return []
     const app = text(obj(s.app)?.slug) ?? ''
     const completed = s.status === 'COMPLETED'
-    if (runs === 0 && (completed || app !== 'github-actions')) return []
+    if (runs === 0 && (completed || app !== 'github-actions' || typeof obj(s.workflowRun)?.databaseId !== 'number')) return []
     return [{ app, completed }]
   })
   const contexts = obj(obj(commit.statusCheckRollup)?.contexts)

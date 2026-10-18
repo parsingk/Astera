@@ -1,7 +1,7 @@
 // The Host's read-only watch over lifecycle Runs' pull requests (GitHub lifecycle design §6.2, G1): what it binds, how
 // often it reads, and what makes it stop.
 import { describe, it, expect } from 'vitest'
-import { createGithubWatch, ERROR_BACKOFF_MS, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, NO_CI_GRACE_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
+import { createGithubWatch, ERROR_BACKOFF_MS, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, NO_CI_GRACE_MS, PENDING_MS, RATE_HOLD_MS, RERUN_SHOW_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
 import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, Job, JobRun } from '../core/orchestration/types'
@@ -620,7 +620,7 @@ describe('githubWatch', () => {
             { externalId: `run:${attempt}0`, name: 'npm-network', status: 'completed', conclusion: 'startup-failure', required: false, jobId: attempt * 10, ciRunId: 9, ciRunAttempt: attempt, ...over }
           ]
         })
-      const rerun = (attempt: number, by: 'astera' | 'person' = 'astera'): GitHubRerun => ({ ciRunId: 9, attempt, sha: A, check: 'npm-network', by, at: ISO0 })
+      const rerun = (attempt: number, by: 'astera' | 'person' = 'astera'): GitHubRerun => ({ ciRunId: 9, attempt, sha: A, check: 'npm-network', externalId: `run:${attempt}0`, by, at: ISO0 })
       const reran = (...rs: GitHubRerun[]): Partial<JobRun> => ({ githubState: { ...BOUND, reruns: rs } })
       const reruns = (r: ReturnType<typeof rig>): string[] => r.calls.filter((c) => c.startsWith('rerun '))
       const OPTIONS = ['rerun', 'wait', 'mark-failed']
@@ -630,9 +630,49 @@ describe('githubWatch', () => {
         r.watch.onState(withRound())
         await r.at(0)
         expect(reruns(r)).toEqual(['rerun 9 o/r'])
-        expect(r.records.flatMap((x) => (x.patch.rerun ? [x.patch.rerun] : []))).toEqual([{ ciRunId: 9, attempt: 1, sha: A, check: 'npm-network', by: 'astera' }])
+        expect(r.records.flatMap((x) => (x.patch.rerun ? [x.patch.rerun] : []))).toEqual([{ ciRunId: 9, attempt: 1, sha: A, check: 'npm-network', externalId: 'run:10', by: 'astera' }])
         expect(r.settled).toEqual([])
         expect(r.gates).toEqual([])
+      })
+
+      // G4 final review M6
+      it('an outside cause in a toolchain setup step (environment) is rerun too', async () => {
+        const ENV_LOG = ['##[group]Run actions/setup-node@v4', 'Error: read ECONNRESET', '##[error]Process completed with exit code 1.']
+          .map((l) => `t\tUNKNOWN STEP\t2026-10-17T20:32:40.1Z ${l}`)
+          .join('\n')
+        const r = rig({ read: INFRA(1, { conclusion: 'failure' }), log: ENV_LOG })
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(reruns(r)).toEqual(['rerun 9 o/r'])
+      })
+
+      // G4 final review I1: the hold ends: a run that never shows again does not keep the round from its verdict
+      it('a recorded rerun holds the verdict for a while only; then a green read settles', async () => {
+        const r = rig({ read: prRead() })
+        r.watch.onState(withRound(undefined, reran(rerun(1))))
+        await r.at(0)
+        await r.at(RERUN_SHOW_MS - PENDING_MS)
+        expect(r.settled).toEqual([])
+        await r.at(RERUN_SHOW_MS + PENDING_MS)
+        expect(r.settled).toEqual([{ taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ status: 'passed' }) }])
+      })
+
+      it('a rerun of an earlier round does not hold a new round of the same head', async () => {
+        const LATER = '2026-10-18T00:05:00.000Z'
+        const r = rig({ read: prRead() })
+        r.watch.onState(withRound({ since: LATER, done: [], pr: 12, sha: A, waitingSince: LATER }, reran(rerun(1))))
+        await r.at(5 * 60_000)
+        expect(r.settled).toEqual([{ taskId: 'tsk_l', since: LATER, result: expect.objectContaining({ status: 'passed' }) }])
+      })
+
+      // G4 final review M3: an attempt is the workflow run's, so the old failing check run can read a later one
+      it('the failing check run still showing holds the verdict, whatever attempt its run reads', async () => {
+        const r = rig({ read: INFRA(2, { externalId: 'run:10' }) })
+        r.watch.onState(withRound(undefined, reran(rerun(1))))
+        await r.at(0)
+        expect(reruns(r)).toEqual([])
+        expect(r.gates).toEqual([])
+        expect(r.settled).toEqual([])
       })
 
       it('a timeout is rerun too', async () => {
@@ -698,6 +738,9 @@ describe('githubWatch', () => {
         expect(reruns(r)).toHaveLength(1)
         expect(r.records.some((x) => x.patch.rerun)).toBe(false)
         expect(r.gates).toEqual([])
+        // G4 final review M1: the new attempt is going: read again soon
+        await r.at(PENDING_MS)
+        expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
       })
 
       it('a rerun GitHub refuses asks with the reason; one the network lost is tried again on the next read', async () => {

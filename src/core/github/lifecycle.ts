@@ -96,6 +96,10 @@ export interface GitHubCiFailure {
    *  still going (gh gives none until the whole run ends, measured), or reads that failed for a reason that passes,
    *  counted in `tries` up to EVIDENCE_TRIES. A log that is gone (expired) is final and sets nothing. */
   incomplete?: { reason: 'run-in-progress' | 'read-failed'; tries: number }
+  /** The failing check's Actions run and that run's attempt as read (G4 final review M2): the run a rerun reruns, known
+   *  whatever the snapshot keeps of the checks. Absent for a commit status. */
+  ciRunId?: number
+  ciRunAttempt?: number
 }
 
 /** How many times the watch makes evidence reads that failed for a reason that passes (G2 final review I1). */
@@ -154,6 +158,8 @@ export interface GitHubRerun {
   attempt: number
   sha: string
   check?: string
+  /** The failing check run that was rerun (G4 final review M3): while a read still shows it, the rerun has not shown. */
+  externalId?: string
   by: 'astera' | 'person'
   at: string
 }
@@ -198,3 +204,8 @@ export interface RunGitHubState {
 export const CI_CHECKS_MAX = 50
 export const GITHUB_LOG_MAX = 100
 export const RERUNS_MAX = 20
+
+/** The reruns asked in the round `since` names, on its head `sha` (G4 final review I1, M5): a rerun of an earlier round
+ *  of the same head is that round's, not this one's. */
+export const roundReruns = (reruns: readonly GitHubRerun[] | undefined, sha: string, since: string): GitHubRerun[] =>
+  (reruns ?? []).filter((r) => r.sha === sha && r.at >= since)

@@ -163,6 +163,7 @@ function rerunOk(r: unknown): boolean {
     typeof r.attempt === 'number' &&
     isStr(r.sha) &&
     (r.check === undefined || isStr(r.check)) &&
+    (r.externalId === undefined || isStr(r.externalId)) &&
     (r.by === 'astera' || r.by === 'person')
   )
 }
