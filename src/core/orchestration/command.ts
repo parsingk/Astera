@@ -23,6 +23,7 @@ import {
   createQuestion,
   createJob,
   beginLifecycleValidation,
+  beginLifecycleCi,
   createTask,
   emptyState,
   latestRun,
@@ -88,6 +89,7 @@ import {
   canTransition,
   isPlaceholderSessionId,
   recomputeReady,
+  type CheckResult,
   type ConvergencePolicy,
   type Dispatch,
   type Job,
@@ -724,6 +726,15 @@ const refused = (r: { error: string; missing?: true }): Reply =>
   r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
+
+const CHECK_STATUSES: readonly string[] = ['passed', 'failed', 'timed-out', 'not-run', 'error']
+/** A validation round's results as a validator sends them (lifecycle-ci-begin): each names its check and a status. */
+const checkResultsOk = (v: unknown): v is CheckResult[] =>
+  Array.isArray(v) &&
+  v.every((r) => {
+    const o = r as Record<string, unknown> | null
+    return typeof o === 'object' && o !== null && typeof o.configId === 'string' && typeof o.name === 'string' && CHECK_STATUSES.includes(o.status as string)
+  })
 /** How long after its `startedAt` a `pending:` Dispatch still counts as a start in flight (Host S2
  *  fix round 2, N1). A start waits at most a spawn deadline (SPAWN_DEADLINE_MS, 20 s) plus the
  *  coordinator's idle wait before its prompt (30 s), plus trust and account reads; two minutes covers
@@ -2730,6 +2741,20 @@ export async function handleCommand(
       await deps.setState(r.state)
       deps.startValidation?.({ taskId: id, cwd })
       return okBody({ taskId: id, cwd })
+    }
+    case 'lifecycle-ci-begin': {
+      // The validators' own step (GitHub lifecycle §4): the Host's (its own caller) and the app's (its connection, no
+      // session). Only the Host keeps the round, since only the Host goes on to GitHub (L13).
+      if (caller.sessionId !== HOST_CALLER && !(caller.role === 'app' && caller.sessionId === ''))
+        return denied('lifecycle-ci-begin is the validators’ own step')
+      if (!deps.github?.originOf) return conflict('GitHub CI is checked by the Astera Host')
+      const taskId = str(args.taskId)
+      if (!taskId) return bad('--taskId is required')
+      if (!checkResultsOk(args.done)) return bad("--done must be the round's check results so far")
+      const r = beginLifecycleCi(deps.getState(), { taskId, done: args.done }, now)
+      if (!r.ok) return refused(r)
+      if (r.value === 'begun') await deps.setState(r.state)
+      return okBody({ taskId, ciWait: r.value })
     }
     case 'run-worktree-set': {
       const id = str(args.run)

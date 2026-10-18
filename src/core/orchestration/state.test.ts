@@ -38,6 +38,7 @@ import {
   bindNativeSession,
   beginValidation,
   beginLifecycleValidation,
+  beginLifecycleCi,
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
@@ -3845,6 +3846,42 @@ describe('beginLifecycleValidation', () => {
     const started = unwrap<Task>(beginLifecycleValidation(s, { taskId: lifecycleId }, LATER) as never).state
     expect(beginLifecycleValidation(started, { taskId: lifecycleId }, LATER).ok).toBe(false)
     expect(beginLifecycleValidation(s, { taskId: 'tsk_nope' }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+})
+
+// GitHub lifecycle G3a (design §4, Review Focus 5): the round handed over at github:ci is kept once
+describe('beginLifecycleCi', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const validating = (): { s: OrchState; lifecycleId: string; ordinaryId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const ready = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    return { s: unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state, lifecycleId, ordinaryId: a.value.id }
+  }
+  const lint: CheckResult = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0, outputTail: 'all good', startedAt: NOW, endedAt: NOW }
+
+  it('keeps the round’s results, the passed ones without their output', () => {
+    const { s, lifecycleId } = validating()
+    const r = unwrap<string>(beginLifecycleCi(s, { taskId: lifecycleId, done: [lint] }, LATER) as never)
+    expect(r.value).toBe('begun')
+    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: LATER, done: [{ configId: 'lint', name: 'lint', status: 'passed', exitCode: 0, startedAt: NOW, endedAt: NOW }] })
+  })
+
+  it('a second hand-over changes nothing', () => {
+    const { s, lifecycleId } = validating()
+    const once = unwrap<string>(beginLifecycleCi(s, { taskId: lifecycleId, done: [lint] }, LATER) as never).state
+    const again = beginLifecycleCi(once, { taskId: lifecycleId, done: [] }, EVEN_LATER)
+    expect(again).toMatchObject({ ok: true, value: 'already' })
+    expect(again.ok && again.state).toBe(once)
+  })
+
+  it('refuses an ordinary Task, a lifecycle Task not validating, and an unknown Task', () => {
+    const { s, lifecycleId, ordinaryId } = validating()
+    expect(beginLifecycleCi(s, { taskId: ordinaryId, done: [] }, LATER).ok).toBe(false)
+    const blocked = { ...s, tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'blocked' as const } : t)) }
+    expect(beginLifecycleCi(blocked, { taskId: lifecycleId, done: [] }, LATER).ok).toBe(false)
+    expect(beginLifecycleCi(s, { taskId: 'tsk_nope', done: [] }, LATER)).toMatchObject({ ok: false, missing: true })
   })
 })
 

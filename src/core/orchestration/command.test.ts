@@ -1318,6 +1318,49 @@ describe('handleCommand — lifecycle-start', () => {
   })
 })
 
+// GitHub lifecycle G3a (design §4, Review Focus 5): the Host keeps a handed-off round, once, for its own validators only
+describe('handleCommand — lifecycle-ci-begin', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lint = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0 }
+  const seeded = (host = true) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['lint', 'github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+    // The Host's GitHub deps: what tells this command it runs in the Host
+    if (host) deps.github = { run: async () => ({ ok: true, stdout: '', stderr: '' }), originOf: async () => 'git@github.com:o/r.git' } as never
+    return deps
+  }
+  const begin = (deps: OrchServerDeps, caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }, args: Record<string, unknown> = { taskId: 'tsk_l', done: [lint] }) =>
+    handleCommand(deps, caller, 'lifecycle-ci-begin', args)
+
+  it('keeps the round for the Host’s own validator and for the app’s, once', async () => {
+    const deps = seeded()
+    expect(await begin(deps, { sessionId: HOST_CALLER })).toEqual({ status: 200, body: { taskId: 'tsk_l', ciWait: 'begun' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait?.done).toEqual([lint])
+    const before = deps.getState()
+    expect(await begin(deps, { sessionId: '', role: 'app' })).toEqual({ status: 200, body: { taskId: 'tsk_l', ciWait: 'already' } })
+    expect(deps.getState()).toBe(before)
+  })
+
+  it('refuses anyone else, and anywhere but the Host', async () => {
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'cli' as const }, { sessionId: '', role: 'mcp' as const }, { sessionId: '', role: 'controller' as const }, { sessionId: APP_CALLER }])
+      expect((await begin(seeded(), caller)).status).toBe(403)
+    expect(await begin(seeded(false), { sessionId: HOST_CALLER })).toEqual({ status: 409, body: { error: 'GitHub CI is checked by the Astera Host' } })
+  })
+
+  it('refuses a malformed round, an ordinary Task and an unknown one', async () => {
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_l', done: [{ configId: 3 }] })).status).toBe(400)
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_a', done: [] })).status).toBe(400)
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_x', done: [] })).status).toBe(404)
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

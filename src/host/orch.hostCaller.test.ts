@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHostOrch } from './orch'
 import { emptyState } from '../core/orchestration/state'
-import { HOST_CALLER } from '../core/host/driver'
+import { APP_CALLER, HOST_CALLER } from '../core/host/driver'
 
 let dir: string
 beforeEach(async () => {
@@ -50,5 +50,20 @@ describe('the Host caller id over a socket', () => {
     }
     expect(orch.state().runs[0].githubState).toBeUndefined()
     expect((await orch.handle('runs-github-record', { runId, patch: { sourceChanged: true } })).status).toBe(200)
+  })
+
+  // GitHub lifecycle G3a: starting a lifecycle Task and keeping its handed-off round are the drivers' own steps
+  it('cannot start a lifecycle Task or hand a round over under the Host’s id, nor under the app’s from another client', async () => {
+    const orch = orchIn()
+    await orch.ready()
+    for (const role of ['cli', 'app', 'mcp'] as const)
+      for (const cmd of ['lifecycle-start', 'lifecycle-ci-begin']) {
+        const r = await orch.call({ cmd, args: { task: 'tsk_x', taskId: 'tsk_x', done: [] }, sessionId: HOST_CALLER, from: { role, toOthers: () => {} } as never })
+        expect(r.status).toBe(403)
+      }
+    for (const role of ['cli', 'mcp'] as const) {
+      const r = await orch.call({ cmd: 'lifecycle-start', args: { task: 'tsk_x' }, sessionId: APP_CALLER, from: { role, toOthers: () => {} } as never })
+      expect(r.status).toBe(403)
+    }
   })
 })
