@@ -81,6 +81,8 @@ export interface HostChecks {
    *  false. */
   checking(taskId: string): boolean
   resumeSweep(why: string): void
+  /** A lifecycle round handed over at github:ci, settled with CI's result (GitHub lifecycle G3b1): the watch's settle. */
+  settleHandedOff(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
 }
 
 /** How long stopForeignValidations waits for a killed run to exit. taskkill is asynchronous, and a
@@ -416,6 +418,7 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
   return {
     _validator: validation.validator,
     startValidation: (a) => validation.startValidation(a),
+    settleHandedOff: (a) => validation.settleHandedOff(a),
     startReview,
     startRepair: (a) => {
       void startRepairOnce(a).catch((e) => log(`repair failed dispatch=${a.dispatchId}: ${String(e)}`))

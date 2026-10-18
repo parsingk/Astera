@@ -83,8 +83,10 @@ export interface GitHubCiFailure {
   class: CiFailureClass
   /** At most 1000 characters: the check, its class and one line that says why. */
   summary: string
-  /** At most 20: the annotations that say something (not the runner's boilerplate). */
-  diagnostics: { path?: string; line?: number; message: string }[]
+  /** At most 20: the annotations that say something (not the runner's boilerplate); `warning` marks a warning's. */
+  diagnostics: { path?: string; line?: number; message: string; warning?: true }[]
+  /** How many there were, when more than the 20 kept (G3b1 final review M5). */
+  diagnosticsTotal?: number
   /** The failing step's lines: at most 4000 characters and 80 lines. Absent for a commit status (no job log). */
   logExcerpt?: string
   url?: string
@@ -138,7 +140,8 @@ export interface GitHubCiSnapshot {
   changedAt: string
 }
 
-export type GitHubLogKind = 'pr-bound' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'source-changed'
+/** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found. */
+export type GitHubLogKind = 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'source-changed'
 
 export interface GitHubLogEntry {
   /** From 1, never reused: a public event is one entry past the last one seen. */
@@ -158,6 +161,8 @@ export interface RunGitHubState {
   /** More than one open PR matched the Run's branch and base; none was bound (§7). */
   prCandidates?: number[]
   headSha?: string
+  /** The head Astera last pushed to the Run's branch (G3b1, design §4.2). */
+  lastPushedSha?: string
   pr?: GitHubPrFacts
   ci?: GitHubCiSnapshot
   lastReadError?: { kind: string; since: string }

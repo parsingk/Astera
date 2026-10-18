@@ -40,6 +40,7 @@ import {
   beginLifecycleValidation,
   beginLifecycleCi,
   settleLifecycleCi,
+  recordLifecycleCiWait,
   writeOffDispatch,
   openRepairDispatch,
   interruptStalledTask,
@@ -3951,6 +3952,44 @@ describe('answerCheckUnavailable — the lifecycle Task', () => {
 })
 
 // GitHub lifecycle G3a (design §4): the CI result and the handed-off local results make one verdict, once
+// GitHub lifecycle G3b1 (design §4.4): the round waits on the pull request and the head the Host pushed
+describe('recordLifecycleCiWait', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const SHA = 'c'.repeat(40)
+  const handedOver = (): { s: OrchState; lifecycleId: string; ordinaryId: string } => {
+    const { state, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: policy, convergence: {} }, NOW)
+    const a = unwrap<{ id: string }>(createTask(state, { runId: run.id, title: 'a', spec: 's', deps: [] }, NOW) as never)
+    const ready = withLifecycleTask({ ...a.state, tasks: a.state.tasks.map((t) => (t.id === a.value.id ? { ...t, status: 'completed' as const } : t)) }, run.id, NOW)
+    const lifecycleId = ready.tasks.find((t) => t.kind === 'lifecycle')!.id
+    const validating = unwrap<Task>(beginLifecycleValidation(ready, { taskId: lifecycleId }, NOW) as never).state
+    return { s: unwrap<string>(beginLifecycleCi(validating, { taskId: lifecycleId, done: [] }, NOW) as never).state, lifecycleId, ordinaryId: a.value.id }
+  }
+
+  it('keeps the pull request and the pushed head with the handed-over round, once', () => {
+    const { s, lifecycleId } = handedOver()
+    const r = unwrap<string>(recordLifecycleCiWait(s, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER) as never)
+    expect(r.value).toBe('recorded')
+    expect(r.state.tasks.find((t) => t.id === lifecycleId)!.ciWait).toEqual({ since: NOW, done: [], pr: 12, sha: SHA })
+    const again = recordLifecycleCiWait(r.state, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER)
+    expect(again).toMatchObject({ ok: true, value: 'same' })
+    expect(again.ok && again.state).toBe(r.state)
+  })
+
+  it('refuses a Task with no round handed over, an ordinary Task and an unknown one', () => {
+    const { s, lifecycleId, ordinaryId } = handedOver()
+    const cleared = { ...s, tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, ciWait: undefined } : t)) }
+    expect(recordLifecycleCiWait(cleared, { taskId: lifecycleId, since: NOW, pr: 12, sha: SHA }, LATER).ok).toBe(false)
+    expect(recordLifecycleCiWait(s, { taskId: ordinaryId, since: NOW, pr: 12, sha: SHA }, LATER).ok).toBe(false)
+    expect(recordLifecycleCiWait(s, { taskId: 'tsk_nope', since: NOW, pr: 12, sha: SHA }, LATER)).toMatchObject({ ok: false, missing: true })
+  })
+
+  // G3b1 final review I1: a carrier of an earlier round must not write into the round after it
+  it('refuses a record for another round of the Task', () => {
+    const { s, lifecycleId } = handedOver()
+    expect(recordLifecycleCiWait(s, { taskId: lifecycleId, since: LATER, pr: 12, sha: SHA }, LATER).ok).toBe(false)
+  })
+})
+
 describe('settleLifecycleCi', () => {
   const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
   const lint: CheckResult = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0 }
@@ -3982,6 +4021,13 @@ describe('settleLifecycleCi', () => {
     expect(r.value.checks?.at(-1)).toMatchObject({ configId: 'github:ci', status: 'failed', summary: 'test (test): not ok 1 - adds' })
     expect(r.value.ciWait).toBeUndefined()
     expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-blocked')
+  })
+
+  // G3b1 final review I1: a verdict read for an earlier round does not settle the round after it
+  it('refuses a verdict for another round of the Task', () => {
+    const { s, lifecycleId } = handedOver()
+    expect(settleLifecycleCi(s, { taskId: lifecycleId, since: LATER, result: ci('passed') }, LATER).ok).toBe(false)
+    expect(settleLifecycleCi(s, { taskId: lifecycleId, since: NOW, result: ci('passed') }, LATER).ok).toBe(true)
   })
 
   it('settles once: a Task with no round handed over is refused', () => {

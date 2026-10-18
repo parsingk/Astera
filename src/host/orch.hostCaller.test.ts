@@ -57,7 +57,7 @@ describe('the Host caller id over a socket', () => {
     const orch = orchIn()
     await orch.ready()
     for (const role of ['cli', 'app', 'mcp'] as const)
-      for (const cmd of ['lifecycle-start', 'lifecycle-ci-begin']) {
+      for (const cmd of ['lifecycle-start', 'lifecycle-ci-begin', 'lifecycle-ci-wait']) {
         const r = await orch.call({ cmd, args: { task: 'tsk_x', taskId: 'tsk_x', done: [] }, sessionId: HOST_CALLER, from: { role, toOthers: () => {} } as never })
         expect(r.status).toBe(403)
       }

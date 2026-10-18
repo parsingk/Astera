@@ -24,6 +24,7 @@ import {
   createJob,
   beginLifecycleValidation,
   beginLifecycleCi,
+  recordLifecycleCiWait,
   createTask,
   emptyState,
   latestRun,
@@ -2760,6 +2761,21 @@ export async function handleCommand(
       if (!r.ok) return refused(r)
       if (r.value === 'begun') await deps.setState(r.state)
       return okBody({ taskId, ciWait: r.value })
+    }
+    case 'lifecycle-ci-wait': {
+      // The Host's own record (GitHub lifecycle G3b1): the pull request and the head it pushed for a handed-off round
+      if (caller.sessionId !== HOST_CALLER) return denied('lifecycle-ci-wait is the Host’s own record')
+      const taskId = str(args.taskId)
+      const since = str(args.since)
+      const sha = str(args.sha)
+      if (!taskId) return bad('--taskId is required')
+      if (!since) return bad('--since is required: the round the push was for')
+      if (typeof args.pr !== 'number' || !Number.isInteger(args.pr) || args.pr <= 0) return bad('--pr must be a pull request number')
+      if (!sha) return bad('--sha is required: the head the Host pushed')
+      const r = recordLifecycleCiWait(deps.getState(), { taskId, since, pr: args.pr, sha }, now)
+      if (!r.ok) return refused(r)
+      if (r.value === 'recorded') await deps.setState(r.state)
+      return okBody({ taskId, wait: r.value })
     }
     case 'run-worktree-set': {
       const id = str(args.run)

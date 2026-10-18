@@ -106,6 +106,7 @@ const eventState = (s: OrchState, by: ByTask, t: Task): CompletionState => {
 
 const GITHUB_EVENT: Record<GitHubLogKind, EventType> = {
   'pr-bound': 'github.pr_bound',
+  'pr-created': 'github.pr_created',
   'head-changed': 'github.head_changed',
   'ci-passed': 'github.ci_passed',
   'ci-failed': 'github.ci_failed',

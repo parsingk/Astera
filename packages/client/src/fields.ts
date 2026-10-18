@@ -195,6 +195,7 @@ const EVENT_TYPE_SET = {
   'session.limit_waiting': true,
   'session.account_switched': true,
   'github.pr_bound': true,
+  'github.pr_created': true,
   'github.head_changed': true,
   'github.ci_passed': true,
   'github.ci_failed': true,

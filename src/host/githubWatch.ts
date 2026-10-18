@@ -8,11 +8,13 @@
 // LOW_BUDGET_SHARE of its limit stretches every spacing to LOW_BUDGET_MS until it resets. A failed read backs off
 // along ERROR_BACKOFF_MS. The timer is unref'd: the watch never keeps the Host up (design L15).
 import type { OrchState } from '../core/orchestration/state'
-import type { JobSourceRef } from '../core/orchestration/types'
+import type { CheckResult, JobSourceRef } from '../core/orchestration/types'
+import { openLifecycleTaskOf } from '../core/orchestration/lifecycleTask'
 import type { GhFailed } from '../core/github/gh'
 import { issueBodyHash, type GhIssue } from '../core/github/issue'
-import { EVIDENCE_TRIES, type GitHubBinding, type GitHubCiCheck, type GitHubCiFailure, type GitHubLifecyclePolicy, type RunGitHubState } from '../core/github/lifecycle'
+import { EVIDENCE_TRIES, type CiVerdict, type GitHubBinding, type GitHubCiCheck, type GitHubCiFailure, type GitHubLifecyclePolicy, type RunGitHubState } from '../core/github/lifecycle'
 import { evaluateCi } from '../core/github/ciVerdict'
+import { ciCheckResult } from '../core/github/ciResult'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
 import type { OpenPr } from '../core/github/prBinding'
 import type { PrStateRead } from '../core/github/prState'
@@ -63,6 +65,10 @@ export interface GithubWatchDeps {
   readJobLog(cwd: string, repo: GitHubRepo, jobId: number): Promise<{ ok: true; log: string } | GhFailed>
   /** A check run's annotations. */
   readAnnotations(cwd: string, repo: GitHubRepo, checkRunId: number): Promise<{ ok: true; annotations: RawAnnotation[] } | GhFailed>
+  /** TaskValidation.settleHandedOff (G3b1): a lifecycle round settled with CI's verdict on the head it pushed. */
+  settle?(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
+  /** `gate-create` (G3b1): a CI failure for a cause outside the code asks a person. */
+  openGate?(a: { taskId: string; question: string }): Promise<{ status: number; body: unknown }>
   log(m: string): void
   /** Epoch milliseconds. */
   now?(): number
@@ -85,6 +91,8 @@ interface Target {
   policy: GitHubLifecyclePolicy
   source: JobSourceRef | undefined
   state: RunGitHubState | undefined
+  /** The Run's lifecycle round handed over at github:ci (G3b1): CI on `sha`, once the Host pushed it, settles it. */
+  round?: { taskId: string; since: string; sha?: string }
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -105,6 +113,11 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   const headSeen = new Map<string, { sha: string; at: number }>()
   /** Runs whose record answered 404: deleted, never read again. */
   const gone = new Set<string>()
+  /** Each Run's lifecycle round already settled or asked about (`taskId@since`): a verdict read again is not news. */
+  const decided = new Map<string, string>()
+  /** Each Run's pushed round last seen (`since@sha`): a round pushed again is read at once, not when the verdict before
+   *  put the next read (G3b1 final review M1). */
+  const roundSeen = new Map<string, string>()
   let holdUntil = 0
   let lowUntil = 0
   let timer: ReturnType<typeof setInterval> | null = null
@@ -124,7 +137,12 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       if (!gs?.binding && now() - Date.parse(run.createdAt) > UNBOUND_MAX_AGE_MS) continue
       const worktree = d.worktreeOf(run.worktree)
       if (!worktree) continue
-      out.push({ runId: run.id, cwd: run.worktree, worktree, policy, source: job?.source, state: gs })
+      const open = openLifecycleTaskOf(s, run.id)
+      const round = open?.status === 'validating' && open.ciWait ? { taskId: open.id, since: open.ciWait.since, sha: open.ciWait.sha } : undefined
+      // A round waiting to be pushed is bound by the Host's carrier (lifecycleCi), which may be making the PR right now:
+      // binding it here first would log a PR Astera made as found
+      if (!gs?.binding && round && round.sha === undefined) continue
+      out.push({ runId: run.id, cwd: run.worktree, worktree, policy, source: job?.source, state: gs, ...(round ? { round } : {}) })
     }
     return out
   }
@@ -309,6 +327,39 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
     await record(t.runId, patch)
+    // CI on the head the Host pushed settles the round, and only that head (design §4.4): GitHub can still show the
+    // head before for a few seconds after a push (measured)
+    const round = t.round
+    if (round?.sha !== undefined && read.commitSha === round.sha && read.headSha === round.sha) await settleRound(t.runId, round, ev.verdict, failure, binding)
+  }
+
+  /** A round's verdict, once (G3b1, design §4.6): a pass or a code failure settles it through settleHandedOff; a cause
+   *  outside the code asks a person (G3b2's Gate, G4's rerun); a failure whose evidence a later read can still complete
+   *  waits for it (G2 final review I1). */
+  const settleRound = async (
+    runId: string,
+    round: { taskId: string; since: string },
+    verdict: CiVerdict,
+    failure: GitHubCiFailure | undefined,
+    binding: GitHubBinding
+  ): Promise<void> => {
+    const key = `${round.taskId}@${round.since}`
+    if (decided.get(runId) === key) return
+    if (verdict === 'failed' && failure?.incomplete && !(failure.incomplete.reason === 'read-failed' && failure.incomplete.tries >= EVIDENCE_TRIES)) return
+    const result = ciCheckResult({ verdict, ...(failure ? { failure } : {}), prUrl: binding.url, since: round.since, now: new Date(now()).toISOString() })
+    if (result) {
+      decided.set(runId, key)
+      await d.settle?.({ taskId: round.taskId, result, since: round.since })
+      return
+    }
+    if (verdict !== 'failed' || !failure) return
+    decided.set(runId, key)
+    const asked = await d.openGate?.({
+      taskId: round.taskId,
+      // Any answer to a Gate checks again, so giving up is said apart: the Task marked failed (G3b1 final review M2)
+      question: `GitHub CI 가 코드 밖의 이유로 실패했습니다(${failure.class}): ${failure.summary}. GitHub 에서 다시 돌린 뒤 답하면 다시 확인합니다. 그만두려면 \`astera task-update --id ${round.taskId} --status failed\` 로 이 Task 를 실패로 끝내세요.`
+    })
+    if (asked && asked.status >= 400) d.log(`github watch: run ${runId}: the Gate could not be opened: ${JSON.stringify(asked.body)}`)
   }
 
   /** Drops what is kept for Runs and folders no longer watched, so a Host that lives for weeks (`runtime serve`) does not
@@ -317,7 +368,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   const forgetOthers = (targets: Target[]): void => {
     const runIds = new Set(targets.map((t) => t.runId))
     const cwds = new Set(targets.map((t) => t.cwd))
-    for (const map of [nextAt, failures, issueAt, headSeen]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
+    for (const map of [nextAt, failures, issueAt, headSeen, decided, roundSeen]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
     for (const cwd of repos.keys()) if (!cwds.has(cwd)) repos.delete(cwd)
   }
 
@@ -325,6 +376,13 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (latest === null || now() < holdUntil) return
     const targets = targetsOf(latest)
     forgetOthers(targets)
+    for (const t of targets) {
+      const key = t.round?.sha === undefined ? undefined : `${t.round.since}@${t.round.sha}`
+      // A read in flight sets its own next read when it ends: the round is taken up on the tick after
+      if (key === undefined || inFlight.has(t.runId) || roundSeen.get(t.runId) === key) continue
+      roundSeen.set(t.runId, key)
+      nextAt.delete(t.runId)
+    }
     const due = targets.filter((t) => !inFlight.has(t.runId) && (nextAt.get(t.runId) ?? 0) <= now())
     const work = due.slice(0, Math.max(0, READS_AT_ONCE - inFlight.size))
     await Promise.all(

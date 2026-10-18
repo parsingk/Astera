@@ -491,6 +491,15 @@ describe('createTaskValidation — settleHandedOff', () => {
     await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed' } })
     expect(w.task()).toBe(after)
   })
+
+  // G3b1 final review I1: a verdict read for a round before is not this round's
+  it('a verdict for another round changes nothing', async () => {
+    const w = wired()
+    const before = w.task()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', since: '2026-01-01T00:00:00.000Z', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })
+    expect(w.task()).toBe(before)
+    expect(w.startReview).not.toHaveBeenCalled()
+  })
 })
 
 // G3a final review I1 and M1: a round whose Task already handed one over, or left validating, is not run or handed again

@@ -1381,6 +1381,20 @@ describe('handleCommand — lifecycle-ci-begin', () => {
     expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait).toBeUndefined()
   })
 
+  // G3b1: the Host records what the round waits on, and only the Host does
+  it('lifecycle-ci-wait records the pull request and pushed head for the Host alone', async () => {
+    const deps = seeded()
+    await begin(deps, { sessionId: HOST_CALLER })
+    const sha = 'c'.repeat(40)
+    const since = deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait!.since
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'app' as const }, { sessionId: APP_CALLER }])
+      expect((await handleCommand(deps, caller, 'lifecycle-ci-wait', { taskId: 'tsk_l', since, pr: 12, sha })).status).toBe(403)
+    expect(await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-ci-wait', { taskId: 'tsk_l', since, pr: 12, sha })).toEqual({ status: 200, body: { taskId: 'tsk_l', wait: 'recorded' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait).toMatchObject({ pr: 12, sha })
+    expect((await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-ci-wait', { taskId: 'tsk_l', since, pr: 'x', sha })).status).toBe(400)
+    expect((await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-ci-wait', { taskId: 'tsk_l', pr: 12, sha })).status).toBe(400)
+  })
+
   it('refuses a malformed round, an ordinary Task and an unknown one', async () => {
     expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_l', done: [{ configId: 3 }] })).status).toBe(400)
     expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_a', done: [] })).status).toBe(400)

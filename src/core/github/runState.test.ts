@@ -106,6 +106,15 @@ describe('nextGitHubState', () => {
     expect(nextGitHubState(many, { prCandidates: null }, T2)?.prCandidates).toBeUndefined()
   })
 
+  // G3b1: the pull request Astera made says so in the log; the head it pushed is kept
+  it('logs a pull request Astera created as pr-created, and keeps the head it pushed', () => {
+    const made = nextGitHubState(undefined, { binding: { ...BINDING, createdByAstera: true }, pushed: { sha: A } }, T1)!
+    expect(made.log).toEqual([{ seq: 1, at: T1, kind: 'pr-created', pr: 12 }])
+    expect(made.lastPushedSha).toBe(A)
+    expect(nextGitHubState(made, { pushed: { sha: A } }, T2)).toBeNull()
+    expect(nextGitHubState(made, { pushed: { sha: B } }, T2)!.lastPushedSha).toBe(B)
+  })
+
   it('logs a changed source once', () => {
     const changed = nextGitHubState(undefined, { sourceChanged: true }, T1)!
     expect(changed.log).toEqual([{ seq: 1, at: T1, kind: 'source-changed' }])
@@ -128,6 +137,11 @@ describe('parseRunGitHubPatch', () => {
     const patch = { binding: BINDING, read: read(A, 'passed'), lastReadError: null, prCandidates: null }
     expect(parseRunGitHubPatch(patch)).toEqual(patch)
   })
+  it('accepts the head Astera pushed, and refuses a malformed one', () => {
+    expect(parseRunGitHubPatch({ pushed: { sha: A } })).toEqual({ pushed: { sha: A } })
+    expect(parseRunGitHubPatch({ pushed: { sha: 7 } })).toBe('pushed is malformed')
+  })
+
   // G2 final review I1
   it('accepts evidence that is still incomplete', () => {
     const failure = { check: 'build', externalId: 'run:1', class: 'build' as const, summary: 's', diagnostics: [], incomplete: { reason: 'run-in-progress' as const, tries: 0 } }

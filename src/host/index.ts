@@ -78,10 +78,12 @@ import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
 import { defaultGhRunner } from '../core/github/gh'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { createPullRequest, readCommits } from '../core/github/prCreate'
+import { createPullRequest, readCommits, readCommitsOrNull } from '../core/github/prCreate'
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
+import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
+import { createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
 import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
@@ -352,6 +354,7 @@ async function main(): Promise<void> {
   // Made below, once `orch` exists to record through; the worktrees' merge hooks read it when a merge runs.
   let runGit: RunGitRecorder | null = null
   let githubWatch: GithubWatch | null = null
+  let lifecycleCi: LifecycleCi | null = null
   const worktrees = createHostWorktrees({
     profileDir,
     integrateHooks: () => runGit,
@@ -755,6 +758,7 @@ async function main(): Promise<void> {
       server.broadcast({ t: 'orch-state', state, version })
       runGit?.onState(state)
       githubWatch?.onState(state)
+      lifecycleCi?.onState(state)
     },
     // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
     // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
@@ -852,6 +856,7 @@ async function main(): Promise<void> {
       }
       runGit?.onState(orch.state())
       githubWatch?.onState(orch.state())
+      lifecycleCi?.onState(orch.state())
     },
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
     slack: slackWiring ?? undefined,
@@ -891,10 +896,35 @@ async function main(): Promise<void> {
         readIssue: (cwd, n) => readIssue(defaultGhRunner, cwd, n),
         readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
         readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
+        // G3b1: CI on the pushed head settles a lifecycle round through the Host's own validation (its store is the
+        // authoritative one); a cause outside the code asks a person
+        settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
+        openGate: (a) => orch.handle('gate-create', { task: a.taskId, question: a.question }),
         log: (m) => log.write(m)
       })
     : null
   githubWatch?.start()
+
+  // G3b1 (design §4.1-4.3): a lifecycle round handed over at github:ci is pushed, bound to its pull request, and set to
+  // wait; the watch above then reads CI on that head. Same condition as the watch: no spawner, no worktree registry.
+  lifecycleCi = spawner
+    ? createLifecycleCi({
+        worktreeOf: (p) => worktrees.infoOf(p),
+        originOf,
+        isClean: (cwd) => isCleanWorktree(cwd),
+        readCommits: (cwd, base) => readCommitsOrNull(cwd, base),
+        baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
+        push: (cwd, branch) => pushBranch(realGit, cwd, branch),
+        headOf: (cwd, ref) => headOf(realGit, cwd, ref),
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
+        createDraftPr: (cwd, repo, pr) => createDraftPr(defaultGhRunner, cwd, repo, pr),
+        record: (args) => orch.handle('runs-github-record', args),
+        recordWait: (args) => orch.handle('lifecycle-ci-wait', args),
+        settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
+        openGate: (a) => orch.handle('gate-create', { task: a.taskId, question: a.question }),
+        log: (m) => log.write(m)
+      })
+    : null
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
   // emptying their coordinator slots, and the handover sweep when an app leaves. **Only with a
