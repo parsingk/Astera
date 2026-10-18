@@ -103,7 +103,21 @@ export interface ReviewIssue {
 export type RepairReason = 'check-failure' | 'review-failure'
 /** 앱이 특별히 다루는 Gate. exhausted 의 해소는 retry-once / mark-failed 로 갈라지고(server.ts 의
  *  gate-resolve), blocked 는 보통 Gate 처럼 풀린다 — 질문이 왜 막혔는지 말한다 */
-export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable'
+export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable' | GitHubGateKind
+
+/** The Gates the Host opens for a GitHub lifecycle round (G3b2, design §4.2-4.4, §4.6): each holds the round's wait
+ *  (`ciWait`) while a person answers, and its answers act on that round (state.ts answerGitHubGate). */
+export const GITHUB_GATE_KINDS = [
+  'github-no-ci',
+  'github-ci-cap',
+  'github-external-head',
+  'github-pr-ambiguous',
+  'github-pr-closed',
+  'github-ci-outside'
+] as const
+export type GitHubGateKind = (typeof GITHUB_GATE_KINDS)[number]
+export const isGitHubGateKind = (k: string | undefined): k is GitHubGateKind =>
+  k !== undefined && (GITHUB_GATE_KINDS as readonly string[]).includes(k)
 
 /** worker-start 가 세션을 띄우기 전에 Dispatch 에 적어 두는 자리표시자와 같은 모양(server.ts 의
  *  pendingSessionId). 순수 층은 node:crypto 를 못 쓰므로 newId 의 hex 를 빌린다 — 어떤 세션도 가리키지
@@ -418,6 +432,13 @@ export interface Task {
     /** The bound pull request and the head the Host pushed, once it did (G3b1): CI is read on this head only. */
     pr?: number
     sha?: string
+    /** When the current wait began (G3b2): the recorded push, or a person's "wait again". The no-CI grace and the cap
+     *  count from it, and the watch decides each wait once. */
+    waitingSince?: string
+    /** A person chose to go on without CI (`github-no-ci`): the watch settles the round passed, saying so. */
+    noCi?: true
+    /** A person chose this pull request among several (`github-pr-ambiguous`): the carrier binds it. */
+    bindPr?: number
   }
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
