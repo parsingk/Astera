@@ -78,6 +78,18 @@ describe('executeRecovery', () => {
     expect(spec).not.toContain('## Project knowledge')
   })
 
+  // GitHub lifecycle G3c1: a lost lifecycle repair is rebuilt with what GitHub said, as performRepair writes it
+  it('a recovered lifecycle repair carries the GitHub block', async () => {
+    const h = deps({}, task({ kind: 'lifecycle', checks: [{ configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'test (test): x' }] }))
+    await h.d.setState({
+      ...h.state,
+      runs: h.state.runs.map((r) => ({ ...r, githubState: { binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }, log: [], seq: 0 } }))
+    })
+    const r = await executeRecovery({ attempt: attempt({ repair: 'check-failure' }), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(r.ok).toBe(true)
+    expect((h.started[0] as { specFileContent: string }).specFileContent).toContain('#12 https://github.com/o/r/pull/12')
+  })
+
   it('repair attempt 의 resume-native 도 repair 표시를 잇고 repair spec 을 넘긴다', async () => {
     const h = deps({}, task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] }))
     await executeRecovery(

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from './repair'
+import { lifecycleRepairPrompt } from './coordinator'
 import {
   applyValidationResult, applyWorkerDone, createGate, createJob,
   startJobRun, createTask, emptyState, openDispatch, openRepairDispatch, resolveGate, type OrchState
@@ -116,6 +117,21 @@ describe('repairTargetFor — the lifecycle Task', () => {
     const deps = makeDeps(opened.state)
     expect(await performRepair(deps, { dispatchId: opened.value.id })).toEqual({ ok: true })
     expect(deps.started[0]).toMatchObject({ worktree: 'D:/wt/run', provider: 'codex', accountId: 'accX', rollFrom: ['accX', 'accY'] })
+  })
+
+  // G3c1 (design §4.8): the lifecycle repair's spec says what GitHub said, and a live session is typed the lifecycle words
+  it('writes the GitHub block into a lifecycle repair’s spec and types the lifecycle words into a live session', async () => {
+    const { s, lifecycleId } = lifecycleRun({ rootWork: true })
+    const validating = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'validating' as const, checks: [{ configId: 'github:ci', name: 'GitHub CI', status: 'failed' as const, summary: 'test (test): x' }] } : t)),
+      runs: s.runs.map((r) => ({ ...r, githubState: { binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }, lastPushedSha: 'c'.repeat(40), log: [], seq: 0 } }))
+    }
+    const opened = unwrap<{ id: string }>(openRepairDispatch(validating, { taskId: lifecycleId, reason: 'check-failure', target: { kind: 'same-session', sessionId: 'sessI', cwd: 'D:/wt/run', provider: 'claude', accountId: 'accI' } }, NOW) as never)
+    const deps = makeDeps(opened.state)
+    await performRepair(deps, { dispatchId: opened.value.id })
+    expect(deps.started[0].specFileContent).toContain('#12 https://github.com/o/r/pull/12')
+    expect(deps.started[0].launchPhrase).toBe(lifecycleRepairPrompt('{specPath}'))
   })
 
   it('retry-once opens a lifecycle repair with no attempt before it', async () => {

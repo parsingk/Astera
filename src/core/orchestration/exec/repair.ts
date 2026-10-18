@@ -6,7 +6,7 @@ import { isSamePath } from '../../files/tree'
 import { t, type Lang } from '../../i18n'
 import { latestImplDispatch, policyOf, repairCountOf } from '../convergence'
 import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../state'
-import { isLifecycleTask, latestOrdinaryWork } from '../lifecycleTask'
+import { isLifecycleTask, latestOrdinaryWork, lifecycleRepairFacts } from '../lifecycleTask'
 import {
   canTransition,
   FAILURE_LIMIT,
@@ -16,7 +16,7 @@ import {
   type Task
 } from '../types'
 import type { KnowledgeFiles } from '../../knowledge/detect'
-import { buildSpecFile, repairWorkerPrompt } from './coordinator'
+import { buildSpecFile, lifecycleRepairPrompt, repairWorkerPrompt } from './coordinator'
 import type { OrchServerDeps } from '../command'
 
 export interface RepairDeps {
@@ -91,7 +91,9 @@ function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string },
       // 않았는데 "사람이 허락했다" 고 말하게 된다(execute.ts 에서 고친 것과 같은 거짓말). 대신 이
       // Dispatch 자신이 열릴 때 이미 적어 둔 사실(Dispatch.grantedExtra — repairOnce 가 ignoreCircuit
       // 으로 열 때만 참이다)을 읽는다.
-      ...(d.grantedExtra ? { extra: true } : {})
+      ...(d.grantedExtra ? { extra: true } : {}),
+      // What GitHub said, for a lifecycle Task's repair (GitHub lifecycle G3c1, design §4.8)
+      ...(isLifecycleTask(task) ? { github: lifecycleRepairFacts(s, task) } : {})
     }
   })
 }
@@ -155,7 +157,13 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
       // A lifecycle Task names no account; its repair rolls through the Run's latest ordinary Task's (G3c1)
       ...(isLifecycleTask(task) ? rollFromOf(s, task) : {}),
       ...(same
-        ? { terminal: d.sessionId, terminalCwd: d.cwd, terminalProvider: d.provider, terminalAccountId: d.accountId, launchPhrase: repairWorkerPrompt('{specPath}') }
+        ? {
+            terminal: d.sessionId,
+            terminalCwd: d.cwd,
+            terminalProvider: d.provider,
+            terminalAccountId: d.accountId,
+            launchPhrase: isLifecycleTask(task) ? lifecycleRepairPrompt('{specPath}') : repairWorkerPrompt('{specPath}')
+          }
         : {})
     })
     // 다시 읽고, 세 자리(sessionId·cwd·specPath)만 patch 한다 — startWorker 를 기다리는 동안 다른

@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { emptyState, type OrchState } from './state'
 import type { Task } from './types'
 import { GITHUB_CI_CHECK } from '../github/lifecycle'
-import { LIFECYCLE_TASK_TITLE, isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { LIFECYCLE_TASK_TITLE, isLifecycleTask, lifecycleRepairFacts, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 
 const NOW = '2026-10-18T00:00:00.000Z'
 const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
@@ -48,6 +48,50 @@ describe('withLifecycleTask', () => {
   it('reads only the Run’s own Tasks, not the Job’s definitions', () => {
     const s = state([task('a'), task('def', { runId: undefined, jobId: 'job_1', status: 'pending' })])
     expect(withLifecycleTask(s, 'run_1', NOW).tasks.find(isLifecycleTask)?.deps).toEqual(['a'])
+  })
+})
+
+// GitHub lifecycle G3c1 (design §4.8): what a lifecycle repair is told, from the Run's GitHub record
+describe('lifecycleRepairFacts', () => {
+  const A = 'a'.repeat(40)
+  const B = 'b'.repeat(40)
+  const failedCi = { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'failed' as const, summary: 'test (test): x' }
+  const withGitHub = (checks: Task['checks']): OrchState => {
+    const s = withLifecycleTask(state([task('a')]), 'run_1', NOW)
+    return {
+      ...s,
+      tasks: s.tasks.map((t) => (isLifecycleTask(t) ? { ...t, checks } : t)),
+      runs: s.runs.map((r) => ({
+        ...r,
+        githubState: {
+          binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW },
+          lastPushedSha: B,
+          ci: { sha: B, basis: 'all-reported' as const, verdict: 'failed' as const, failing: 'test', checks: [], changedAt: NOW, failure: { check: 'test', externalId: 'run:1', class: 'test' as const, summary: 'test (test): x', diagnostics: [] } },
+          log: [
+            { seq: 1, at: '2026-10-17T00:00:00.000Z', kind: 'ci-failed' as const, sha: 'f'.repeat(40), check: 'old' },
+            { seq: 2, at: NOW, kind: 'ci-failed' as const, sha: A, check: 'lint', class: 'lint' as const },
+            { seq: 3, at: NOW, kind: 'ci-failed' as const, sha: B, check: 'test', class: 'test' as const }
+          ],
+          seq: 3
+        }
+      }))
+    }
+  }
+
+  it('gives the pull request, the pushed head, the failing check and the earlier failures of this lifecycle Task', () => {
+    const s = withGitHub([failedCi])
+    const facts = lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!)
+    expect(facts).toEqual({
+      pr: { number: 12, url: 'https://github.com/o/r/pull/12' },
+      head: B,
+      failing: { check: 'test', class: 'test', summary: 'test (test): x' },
+      earlier: [{ sha: A, check: 'lint', class: 'lint' }]
+    })
+  })
+
+  it('names no failing CI check when this round failed a local check', () => {
+    const s = withGitHub([{ configId: 'lint', name: 'lint', status: 'failed', exitCode: 1 }, { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'not-run' }])
+    expect(lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!).failing).toBeUndefined()
   })
 })
 

@@ -7,6 +7,7 @@ import { buildCheckpoint, type GitSummary } from '../orchestration/checkpoint'
 import { formatResumeSection } from '../orchestration/resumeSection'
 import { policyOf, repairCountOf } from '../orchestration/convergence'
 import { FAILURE_LIMIT } from '../orchestration/types'
+import { isLifecycleTask, lifecycleRepairFacts } from '../orchestration/lifecycleTask'
 import { isSamePath } from '../files/tree'
 import { t, type Lang } from '../i18n'
 import type { LostAttempt, RecoveryDecision } from './types'
@@ -170,7 +171,9 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         // (Dispatch.grantedExtra, reconciler.ts 가 LostAttempt 로 그대로 옮긴다) 을 읽는다 — 사람이
         // 실제로 retry-once 를 눌렀을 때만 참이고, recovery 가 다시 세는 것과 무관하게 크래시를
         // 넘어 살아남는다.
-        ...(attempt.grantedExtra ? { extra: true } : {})
+        ...(attempt.grantedExtra ? { extra: true } : {}),
+        // What GitHub said, as performRepair writes it for a lifecycle Task (GitHub lifecycle G3c1)
+        ...(isLifecycleTask(task) ? { github: lifecycleRepairFacts(deps.getState(), task) } : {})
       }
     })
   }

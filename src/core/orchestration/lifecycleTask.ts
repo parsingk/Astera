@@ -28,6 +28,38 @@ export function latestOrdinaryWork(s: OrchState, runId: string): { task: Task; d
   return null
 }
 
+/** What a lifecycle Task's repair is told about GitHub (GitHub lifecycle G3c1, design §4.8). */
+export interface LifecycleRepairFacts {
+  pr?: { number: number; url: string }
+  /** The head Astera pushed last. */
+  head?: string
+  /** The GitHub check that failed this round, with the class Astera gave it; absent when a local check failed. */
+  failing?: { check: string; class?: string; summary: string }
+  /** CI failures of this lifecycle Task's earlier rounds, oldest first, at most EARLIER_CI_FAILURES. */
+  earlier: { sha?: string; check?: string; class?: string }[]
+}
+
+const EARLIER_CI_FAILURES = 5
+
+/** The facts a lifecycle repair is told, from the Run's GitHub record: its pull request, the head pushed, the failing
+ *  check of this round when it was GitHub CI's, and the CI failures logged since this lifecycle Task began. */
+export function lifecycleRepairFacts(s: OrchState, task: Task): LifecycleRepairFacts {
+  const gs = s.runs.find((r) => r.id === task.runId)?.githubState
+  const ciFailed = (task.checks ?? []).some((c) => c.configId === GITHUB_CI_CHECK && c.status === 'failed')
+  const failure = ciFailed && gs?.ci?.verdict === 'failed' ? gs.ci.failure : undefined
+  const now = failure ? gs?.ci?.sha : undefined
+  const earlier = (gs?.log ?? [])
+    .filter((e) => e.kind === 'ci-failed' && e.at >= task.createdAt && !(now !== undefined && e.sha === now))
+    .slice(-EARLIER_CI_FAILURES)
+    .map((e) => ({ ...(e.sha ? { sha: e.sha } : {}), ...(e.check ? { check: e.check } : {}), ...(e.class ? { class: e.class } : {}) }))
+  return {
+    ...(gs?.binding ? { pr: { number: gs.binding.number, url: gs.binding.url } } : {}),
+    ...(gs?.lastPushedSha ? { head: gs.lastPushedSha } : {}),
+    ...(failure ? { failing: { check: failure.check, class: failure.class, summary: failure.summary } } : {}),
+    earlier
+  }
+}
+
 /** `s` with the Run's lifecycle Task added when the Run's Job has GitHub lifecycle on, the Run has ordinary Tasks, every
  *  one of them is completed, and the Run has no lifecycle Task yet; else `s` itself. Called by every transition that
  *  moves a Task to completed (applyWorkerDone, applyValidationResult, applyReviewResult, task-update): a table test in
