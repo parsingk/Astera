@@ -23,5 +23,12 @@ export const repoSlug = (r: GitHubRepo): string => `${r.owner}/${r.name}`
 /** gh's `--repo` value: `[HOST/]OWNER/REPO`. */
 export const ghRepoArg = (r: GitHubRepo): string => (r.host === 'github.com' ? repoSlug(r) : `${r.host}/${repoSlug(r)}`)
 
+/** The repository a lifecycle binding names: `owner/name`, and its host when that is not github.com. Null for a
+ *  repository that is not `owner/name`. */
+export function repoOfBinding(b: { repository: string; host?: string }): GitHubRepo | null {
+  const parts = b.repository.split('/')
+  return parts.length === 2 && parts[0] !== '' && parts[1] !== '' ? { host: b.host ?? 'github.com', owner: parts[0], name: parts[1] } : null
+}
+
 /** `gh api` talks to github.com unless told otherwise. */
 export const hostnameArgs = (r: GitHubRepo): string[] => (r.host === 'github.com' ? [] : ['--hostname', r.host])

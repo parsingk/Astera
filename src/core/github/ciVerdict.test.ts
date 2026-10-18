@@ -62,6 +62,12 @@ describe('evaluateCi — all reported (no required checks)', () => {
     expect(ev.failing?.name).toBe('early')
   })
 
+  it('fails when a workflow could not run, however green the other checks are', () => {
+    const broken = check('.github/workflows/ci.yml', { externalId: 'suite:7', conclusion: 'failure' })
+    const ev = evaluateCi({ checks: [check('lint'), broken], suites: done }, REQUIRED, [])
+    expect(ev).toEqual({ basis: 'all-reported', verdict: 'failed', failing: broken })
+  })
+
   it('passes when every check was skipped', () => {
     expect(evaluateCi({ checks: [check('a', { conclusion: 'skipped' })], suites: done }, REQUIRED, []).verdict).toBe('passed')
   })

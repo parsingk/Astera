@@ -62,6 +62,29 @@ describe('nextGitHubState', () => {
     expect(next.ci?.failingUrl).toBe('https://x/run/1')
   })
 
+  // G2: the evidence goes with the verdict, and the log says the class
+  it('keeps the failure evidence with the verdict, and logs its class with ci-failed', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'test' as const, summary: 'build (test): not ok 1', diagnostics: [], logExcerpt: 'not ok 1' }
+    const next = nextGitHubState(undefined, { read: read(A, 'failed', { failing: 'build', failure }) }, T1)!
+    expect(next.ci?.failure).toEqual(failure)
+    expect(next.log.at(-1)).toEqual({ seq: 1, at: T1, kind: 'ci-failed', sha: A, check: 'build', class: 'test' })
+  })
+
+  // G2 final review I1: with its run still going, the class is read from the check's name alone
+  it('logs no class with a verdict whose evidence is still incomplete', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'build' as const, summary: 's', diagnostics: [], incomplete: { reason: 'run-in-progress' as const, tries: 0 } }
+    const next = nextGitHubState(undefined, { read: read(A, 'failed', { failing: 'build', failure }) }, T1)!
+    expect(next.log.at(-1)).toEqual({ seq: 1, at: T1, kind: 'ci-failed', sha: A, check: 'build' })
+  })
+
+  it('a read whose evidence changed is a change; the same evidence again is not', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'test' as const, summary: 's', diagnostics: [] }
+    const first = nextGitHubState(undefined, { read: read(A, 'failed', { failing: 'build' }) }, T1)!
+    const withEvidence = nextGitHubState(first, { read: read(A, 'failed', { failing: 'build', failure }) }, T2)!
+    expect(withEvidence.ci?.failure).toEqual(failure)
+    expect(nextGitHubState(withEvidence, { read: read(A, 'failed', { failing: 'build', failure }) }, T2)).toBeNull()
+  })
+
   it('does not log the same verdict twice for the same commit', () => {
     const first = nextGitHubState(undefined, { binding: BINDING, read: read(A, 'failed', { failing: 'build' }) }, T1)!
     const again = nextGitHubState(first, { read: read(A, 'failed', { failing: 'build', checks: [build({ conclusion: 'failure', completedAt: T2 })] }) }, T2)!
@@ -105,11 +128,26 @@ describe('parseRunGitHubPatch', () => {
     const patch = { binding: BINDING, read: read(A, 'passed'), lastReadError: null, prCandidates: null }
     expect(parseRunGitHubPatch(patch)).toEqual(patch)
   })
+  // G2 final review I1
+  it('accepts evidence that is still incomplete', () => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'build' as const, summary: 's', diagnostics: [], incomplete: { reason: 'run-in-progress' as const, tries: 0 } }
+    const patch = { read: read(A, 'failed', { failing: 'build', failure }) }
+    expect(parseRunGitHubPatch(patch)).toEqual(patch)
+  })
+  it.each([
+    [{ reason: 'later', tries: 0 }],
+    [{ reason: 'read-failed', tries: '1' }],
+    ['yes']
+  ])('refuses evidence whose incomplete mark is %j', (incomplete) => {
+    const failure = { check: 'build', externalId: 'run:1', class: 'build', summary: 's', diagnostics: [], incomplete }
+    expect(parseRunGitHubPatch({ read: { ...read(A, 'failed'), ci: { ...read(A, 'failed').ci, failure } } })).toBe('read is malformed')
+  })
   it.each([
     [null, 'patch must be an object'],
     [{ binding: { number: '12' } }, 'binding is malformed'],
     [{ read: { headSha: 'x', pr: {}, ci: {} } }, 'read is malformed'],
     [{ read: { ...read(A, 'failed'), ci: { ...read(A, 'failed').ci, failingUrl: 7 } } }, 'read is malformed'],
+    [{ read: { ...read(A, 'failed'), ci: { ...read(A, 'failed').ci, failure: { check: 1 } } } }, 'read is malformed'],
     [{ prCandidates: ['12'] }, 'prCandidates is malformed'],
     [{ lastReadError: { kind: 3 } }, 'lastReadError is malformed'],
     [{ sourceChanged: 'yes' }, 'sourceChanged is malformed']

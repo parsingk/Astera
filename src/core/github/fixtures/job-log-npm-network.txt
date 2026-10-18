@@ -1,0 +1,15 @@
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	﻿2026-10-18T05:10:55.0213431Z ##[group]Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.0216937Z ^[[36;1mnpm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund^[[0m
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.0528905Z shell: /usr/bin/bash -e {0}
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.0530047Z ##[endgroup]
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7465259Z npm error code ENOTFOUND
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7466907Z npm error syscall getaddrinfo
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7468034Z npm error errno ENOTFOUND
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7470064Z npm error network request to https://registry.invalid/left-pad failed, reason: getaddrinfo ENOTFOUND registry.invalid
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7472089Z npm error network This is a problem related to network connectivity.
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7474073Z npm error network In most cases you are behind a proxy or have bad network settings.
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7475499Z npm error network
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7476771Z npm error network If you are behind a proxy, please make sure that the
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7478544Z npm error network 'proxy' config is set properly.  See: 'npm help config'
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7480492Z npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-10-18T05_10_55_117Z-debug-0.log
+npm-network	Run npm install left-pad --registry https://registry.invalid/ --fetch-retries 0 --no-audit --no-fund	2026-10-18T05:10:55.7859272Z ##[error]Process completed with exit code 1.

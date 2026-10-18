@@ -1,0 +1,51 @@
+vitest	Run npx vitest run	﻿2026-10-18T05:11:07.0932099Z ##[group]Run npx vitest run
+vitest	Run npx vitest run	2026-10-18T05:11:07.0932439Z ^[[36;1mnpx vitest run^[[0m
+vitest	Run npx vitest run	2026-10-18T05:11:07.0999103Z shell: /usr/bin/bash -e {0}
+vitest	Run npx vitest run	2026-10-18T05:11:07.0999395Z ##[endgroup]
+vitest	Run npx vitest run	2026-10-18T05:11:07.7859592Z 
+vitest	Run npx vitest run	2026-10-18T05:11:07.7871149Z ^[[1m^[[46m RUN ^[[49m^[[22m ^[[36mv3.2.4 ^[[39m^[[90m/home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/fixtures/vitest^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:07.7899247Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2064505Z  ^[[31m❯^[[39m sum.test.js ^[[2m(^[[22m^[[2m1 test^[[22m^[[2m | ^[[22m^[[31m1 failed^[[39m^[[2m)^[[22m^[[32m 13^[[2mms^[[22m^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2072143Z ^[[31m   ^[[31m×^[[31m adds^[[39m^[[32m 12^[[2mms^[[22m^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2096667Z ^[[31m     → expected 2 to be 3 // Object.is equality^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2269704Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2300542Z ^[[31m⎯⎯⎯⎯⎯⎯⎯^[[39m^[[1m^[[41m Failed Tests 1 ^[[49m^[[22m^[[31m⎯⎯⎯⎯⎯⎯⎯^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2309088Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2337207Z ^[[41m^[[1m FAIL ^[[22m^[[49m sum.test.js^[[2m > ^[[22madds
+vitest	Run npx vitest run	2026-10-18T05:11:08.2375512Z ^[[31m^[[1mAssertionError^[[22m: expected 2 to be 3 // Object.is equality^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2380574Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2419342Z ^[[32m- Expected^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2429330Z ^[[31m+ Received^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2458961Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2459033Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2509501Z ^[[32m- 3^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2510395Z ^[[2m Test Files ^[[22m ^[[1m^[[31m1 failed^[[39m^[[22m^[[90m (1)^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2531612Z ^[[31m+ 2^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2532410Z ^[[2m      Tests ^[[22m ^[[1m^[[31m1 failed^[[39m^[[22m^[[90m (1)^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2533005Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2533425Z ^[[2m   Start at ^[[22m 05:11:07
+vitest	Run npx vitest run	2026-10-18T05:11:08.2562177Z ^[[36m ^[[2m❯^[[22m sum.test.js:^[[2m4:17^[[22m^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2563801Z ^[[2m   Duration ^[[22m 441ms^[[2m (transform 53ms, setup 0ms, collect 19ms, tests 13ms, environment 0ms, prepare 158ms)^[[22m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2564796Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2591420Z     ^[[90m  2| ^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2591713Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2653114Z ##[error]AssertionError: expected 2 to be 3 // Object.is equality
+vitest	Run npx vitest run	
+vitest	Run npx vitest run	- Expected
+vitest	Run npx vitest run	+ Received
+vitest	Run npx vitest run	
+vitest	Run npx vitest run	- 3
+vitest	Run npx vitest run	+ 2
+vitest	Run npx vitest run	
+vitest	Run npx vitest run	 ❯ sum.test.js:4:17
+vitest	Run npx vitest run	
+vitest	Run npx vitest run	
+vitest	Run npx vitest run	2026-10-18T05:11:08.2666153Z     ^[[90m  3| ^[[39m^[[34mtest^[[39m(^[[32m'adds'^[[39m^[[33m,^[[39m () ^[[33m=>^[[39m {
+vitest	Run npx vitest run	2026-10-18T05:11:08.2667542Z     ^[[90m  4| ^[[39m  ^[[34mexpect^[[39m(^[[34m1^[[39m ^[[33m+^[[39m ^[[34m1^[[39m)^[[33m.^[[39m^[[34mtoBe^[[39m(^[[34m3^[[39m)
+vitest	Run npx vitest run	2026-10-18T05:11:08.2669086Z     ^[[90m   | ^[[39m                ^[[31m^^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2669852Z     ^[[90m  5| ^[[39m})
+vitest	Run npx vitest run	2026-10-18T05:11:08.2670378Z     ^[[90m  6| ^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2670632Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.2671149Z ^[[31m^[[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯^[[22m^[[39m
+vitest	Run npx vitest run	2026-10-18T05:11:08.2671558Z 
+vitest	Run npx vitest run	2026-10-18T05:11:08.3898470Z ##[error]Process completed with exit code 1.

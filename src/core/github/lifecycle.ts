@@ -38,7 +38,9 @@ export type GitHubCiConclusion =
   | 'unknown'
 
 export interface GitHubCiCheck {
-  /** `run:<databaseId>` for a check run, `status:<context>` for a commit status. */
+  /** `run:<databaseId>` for a check run, `status:<context>` for a commit status, `suite:<workflow run databaseId>` for
+   *  an Actions workflow that failed before any job started (an invalid workflow file: GitHub makes a suite and no check
+   *  run, measured). */
   externalId: string
   name: string
   workflow?: string
@@ -57,6 +59,43 @@ export interface GitHubCiCheck {
 export type CiBasis = 'required' | 'all-reported' | 'selected'
 /** `none`: the commit has no check at all. */
 export type CiVerdict = 'pending' | 'passed' | 'failed' | 'none'
+
+/** Why a check failed (design §4.5): the classes the routing of G3/G4 reads. `code` stays for the spec's list; the
+ *  classifier names the kind of code failure instead (test, build, lint, typecheck). */
+export type CiFailureClass =
+  | 'code'
+  | 'test'
+  | 'build'
+  | 'lint'
+  | 'typecheck'
+  | 'configuration'
+  | 'environment'
+  | 'infrastructure'
+  | 'timeout'
+  | 'cancelled'
+  | 'permission'
+  | 'unknown'
+
+/** What a failed check left to read (design §4.7), bounded and redacted where it was made (evidence.ts). */
+export interface GitHubCiFailure {
+  check: string
+  externalId: string
+  class: CiFailureClass
+  /** At most 1000 characters: the check, its class and one line that says why. */
+  summary: string
+  /** At most 20: the annotations that say something (not the runner's boilerplate). */
+  diagnostics: { path?: string; line?: number; message: string }[]
+  /** The failing step's lines: at most 4000 characters and 80 lines. Absent for a commit status (no job log). */
+  logExcerpt?: string
+  url?: string
+  /** Set while the evidence lacks what a later read can still bring (G2 final review I1): the job log of an Actions run
+   *  still going (gh gives none until the whole run ends, measured), or reads that failed for a reason that passes,
+   *  counted in `tries` up to EVIDENCE_TRIES. A log that is gone (expired) is final and sets nothing. */
+  incomplete?: { reason: 'run-in-progress' | 'read-failed'; tries: number }
+}
+
+/** How many times the watch makes evidence reads that failed for a reason that passes (G2 final review I1). */
+export const EVIDENCE_TRIES = 3
 
 export interface GitHubBinding {
   /** `owner/name`; `host` is set only for a host other than github.com. */
@@ -88,6 +127,8 @@ export interface GitHubCiSnapshot {
   failing?: string
   /** That check's details link, kept with the verdict: a name can repeat, and the check can fall past CI_CHECKS_MAX. */
   failingUrl?: string
+  /** The evidence of `failing` (G2), fetched once per commit and check by the watch. */
+  failure?: GitHubCiFailure
   /** At most CI_CHECKS_MAX. */
   checks: GitHubCiCheck[]
   /** When this snapshot last changed, not when it was last read: a read that finds nothing new writes nothing. */
@@ -104,6 +145,8 @@ export interface GitHubLogEntry {
   pr?: number
   sha?: string
   check?: string
+  /** A ci-failed entry's class, when complete evidence was read with the verdict. */
+  class?: CiFailureClass
 }
 
 /** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written only by `runs-github-record`. */

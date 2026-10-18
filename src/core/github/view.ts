@@ -1,7 +1,7 @@
 // The public face of a lifecycle Run's GitHub side (GitHub lifecycle design §5.3, §8): derived on every read from what
 // the Host last recorded, never stored. `runs get`, `jobs get`, MCP get_run, the SDK's runs.get and the run and github
 // events carry it. Node-free.
-import type { CiBasis, CiVerdict, GitHubCiCheck, GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
+import type { CiBasis, CiFailureClass, CiVerdict, GitHubCiCheck, GitHubLifecyclePolicy, RunGitHubState } from './lifecycle'
 
 /** G1's states. Later slices add the lifecycle Task's (repairing, reviewing, merge-ready, ...). */
 export type GitHubLifecycleState =
@@ -19,7 +19,8 @@ export interface GitHubLifecycleView {
   pr?: { number: number; url: string; isDraft: boolean; state: 'open' | 'closed' | 'merged'; mergeStateStatus?: string }
   headSha?: string
   ci?: { sha: string; basis: CiBasis; verdict: CiVerdict; checks: Pick<GitHubCiCheck, 'name' | 'status' | 'conclusion' | 'required'>[] }
-  failing?: { check: string; detailsUrl?: string }
+  /** The check that failed first; `class` and `summary` say why, as Astera classified it (G2). */
+  failing?: { check: string; class?: CiFailureClass; summary?: string; detailsUrl?: string }
   /** Open PRs that matched the Run's branch when more than one did; none is bound until there is one. */
   candidates?: number[]
   /** The source issue changed after the Job was made (§6); the objective did not. */
@@ -67,7 +68,14 @@ export function githubLifecycleOf(policy: GitHubLifecyclePolicy | undefined, gs:
       verdict: ci.verdict,
       checks: ci.checks.map((c) => ({ name: c.name, status: c.status, ...(c.conclusion ? { conclusion: c.conclusion } : {}), required: c.required }))
     }
-    if (ci.failing !== undefined) view.failing = { check: ci.failing, ...(ci.failingUrl ? { detailsUrl: ci.failingUrl } : {}) }
+    if (ci.failing !== undefined) {
+      const why = ci.failure?.check === ci.failing ? ci.failure : undefined
+      view.failing = {
+        check: ci.failing,
+        ...(why ? { class: why.class, summary: why.summary } : {}),
+        ...(ci.failingUrl ? { detailsUrl: ci.failingUrl } : {})
+      }
+    }
   }
   if (gs?.prCandidates?.length) view.candidates = [...gs.prCandidates]
   if (gs?.sourceChanged) view.sourceChanged = true

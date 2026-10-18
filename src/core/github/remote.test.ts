@@ -1,6 +1,6 @@
 // Which GitHub repository a folder's origin names (GitHub lifecycle L24: origin only).
 import { describe, it, expect } from 'vitest'
-import { ghRepoArg, hostnameArgs, parseGitHubRemote, repoSlug } from './remote'
+import { ghRepoArg, hostnameArgs, parseGitHubRemote, repoOfBinding, repoSlug } from './remote'
 
 describe('parseGitHubRemote', () => {
   it.each([
@@ -27,5 +27,15 @@ describe('gh arguments', () => {
     expect(ghRepoArg(ghe)).toBe('ghe.example.com/o/r')
     expect(hostnameArgs(dotcom)).toEqual([])
     expect(hostnameArgs(ghe)).toEqual(['--hostname', 'ghe.example.com'])
+  })
+})
+
+describe('repoOfBinding', () => {
+  it('reads owner/name and the host a binding names, github.com when it names none', () => {
+    expect(repoOfBinding({ repository: 'o/r' })).toEqual({ host: 'github.com', owner: 'o', name: 'r' })
+    expect(repoOfBinding({ repository: 'o/r', host: 'ghe.example' })).toEqual({ host: 'ghe.example', owner: 'o', name: 'r' })
+  })
+  it('is null for a repository that is not owner/name', () => {
+    for (const repository of ['o', 'o/r/x', '/r', 'o/', '']) expect(repoOfBinding({ repository })).toBeNull()
   })
 })

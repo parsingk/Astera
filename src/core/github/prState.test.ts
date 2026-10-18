@@ -93,6 +93,37 @@ describe('parsePrState', () => {
     expect(read.checks[0]).not.toHaveProperty('detailsUrl')
   })
 
+  // An invalid workflow file leaves a failed Actions suite and no check run (measured on the sandbox, 2026-10-18)
+  it('reads an Actions workflow that failed before any job as a failed check of its own, and still drops other empty suites', () => {
+    const run = (id: number, name: string) => ({ databaseId: id, url: `https://github.com/o/r/actions/runs/${id}`, workflow: { name } })
+    const read = parsePrState(
+      answer({
+        suites: [
+          { status: 'COMPLETED', conclusion: 'FAILURE', app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099661750, '.github/workflows/invalid.yml') },
+          { status: 'COMPLETED', conclusion: 'STARTUP_FAILURE', app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099661751, 'deploy') },
+          { status: 'COMPLETED', conclusion: 'SUCCESS', app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099661752, 'quiet') },
+          { status: 'COMPLETED', conclusion: 'FAILURE', app: { slug: 'other-app' }, checkRuns: { totalCount: 0 } },
+          { status: 'QUEUED', conclusion: null, app: { slug: 'stuck-app' }, checkRuns: { totalCount: 0 } }
+        ]
+      })
+    )!
+    expect(read.checks).toEqual([
+      {
+        externalId: 'suite:39099661750', name: '.github/workflows/invalid.yml', workflow: '.github/workflows/invalid.yml', status: 'completed',
+        conclusion: 'failure', required: false, detailsUrl: 'https://github.com/o/r/actions/runs/39099661750', ciRunId: 39099661750
+      },
+      {
+        externalId: 'suite:39099661751', name: 'deploy', workflow: 'deploy', status: 'completed', conclusion: 'startup-failure', required: false,
+        detailsUrl: 'https://github.com/o/r/actions/runs/39099661751', ciRunId: 39099661751
+      }
+    ])
+    expect(read.suites).toEqual([])
+  })
+
+  it('asks for each suite’s conclusion and workflow run', () => {
+    expect(PR_STATE_QUERY).toMatch(/checkSuites\(first:50\)\{ totalCount nodes\{ status conclusion app\{ slug \} checkRuns\(first:1\)\{ totalCount \} workflowRun\{ databaseId url workflow\{ name \} \} \} \}/)
+  })
+
   // Review Focus 2
   it('reads the data of an answer that also carries errors', () => {
     const read = parsePrState(answer({ errors: [{ type: 'FORBIDDEN', path: ['repository', 'pullRequest', 'commits'], message: 'x' }] }))

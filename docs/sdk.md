@@ -164,7 +164,8 @@ A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, A
 policy as `github` (`GitHubLifecyclePolicy`), and each of its Runs carries `github` (`GitHubLifecycle`): the pull
 request Astera bound for the Run's branch, its head commit, the CI checks of that commit with the `verdict` (`pending`,
 `passed`, `failed`, or `none` when the commit has no check) and its `basis` (the required checks, every reported check,
-or the Job's selection), the check that failed first with its link, and a `state` that sums it up (`unbound`,
+or the Job's selection), the check that failed first with its link, its `class` and a one-line `summary` of why, and a
+`state` that sums it up (`unbound`,
 `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or `external-state-unavailable` while
 GitHub cannot be read). It is derived on every read, so `runs.get` always shows what Astera last read.
 

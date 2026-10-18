@@ -8455,6 +8455,51 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     expect(gh.calls.map((c) => c.cwd)).toEqual([WT, WT])
   })
 
+  // GitHub lifecycle G2 (inventory I-§12.4): a lifecycle Run reads the PR it is bound to, never a branch lookup that can
+  // land on a closed PR of the same branch
+  it('github-ci with a lifecycle Run reads the pull request it is bound to, without looking the branch up', async () => {
+    const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup({ [`${CHECKS(34)} --repo o/r`]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toMatchObject({ status: 200, body: { pr: 34 } })
+    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo o/r`])
+  })
+
+  // design §8 (closes inventory I-§12.4): a bound Run reads the logs of its pull request's checks only
+  it('github-ci refuses a bound Run the log of a CI run that no check of its pull request ran', async () => {
+    const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup({ [`${CHECKS(34)} --repo o/r`]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-ci', { run: 'r1', log: 78 }, '')
+    expect(r).toEqual({ status: 409, body: { error: 'CI run 78 ran no check of pull request #34, the one this Run is bound to' } })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  // G2 final review M10: a checkout with an `upstream` remote makes gh pick another repository's PR of that number
+  it('github-ci reads a bound Run’s checks and log in the bound repository, on any host', async () => {
+    const binding = { repository: 'o/r', host: 'ghe.example', number: 34, url: 'https://ghe.example/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup(
+      {
+        [`${CHECKS(34)} --repo ghe.example/o/r`]: { stdout: JSON.stringify([checkRow]) },
+        'run view 77 --log-failed --repo ghe.example/o/r': { stdout: 'not ok 1' }
+      },
+      { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+    )
+    const r = await call(deps, 'github-ci', { run: 'r1', log: 77 }, '')
+    expect(r).toMatchObject({ status: 200, body: { pr: 34, log: { runId: 77, text: 'not ok 1' } } })
+    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo ghe.example/o/r`, 'run view 77 --log-failed --repo ghe.example/o/r'])
+  })
+
+  // G2 Review Focus 2: the log answer is redacted in the Host, whatever surface asked
+  it('github-ci redacts a secret in the failed log it answers', async () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const { deps, projectId } = setup({
+      [CHECKS(12)]: { stdout: JSON.stringify([checkRow]) },
+      'run view 77 --log-failed': { stdout: `export TOKEN=${token}\nnot ok 1` }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 12, log: 77 }, '')
+    expect(JSON.stringify(r.body)).not.toContain(token)
+  })
+
   it("github-ci with a run whose branch has no PR is 409, and the checks are not read", async () => {
     const { deps, gh } = setup({ [PR_LIST]: { stdout: '[]' } })
     const r = await call(deps, 'github-ci', { run: 'r1' }, '')

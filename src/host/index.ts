@@ -86,6 +86,7 @@ import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
 import { readIssue } from '../core/github/issue'
+import { readAnnotations, readJobLog } from '../core/github/evidence'
 import { normalizeBaseForGh } from '../core/worktrees/push'
 import { readChanges, readFileDiff } from '../core/git/changes'
 import { createMcpHttpSupervisor } from './mcpHttp'
@@ -888,6 +889,8 @@ async function main(): Promise<void> {
         readPrState: (cwd, repo, n) => readPrState(defaultGhRunner, cwd, repo, n),
         ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(defaultGhRunner, cwd, repo, branch),
         readIssue: (cwd, n) => readIssue(defaultGhRunner, cwd, n),
+        readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
+        readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
         log: (m) => log.write(m)
       })
     : null

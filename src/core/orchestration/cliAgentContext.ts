@@ -335,9 +335,9 @@ const SESSION = {
   'github-ci': {
     summary: "the CI checks of a pull request, through the Host's gh (the MCP server's get_ci)",
     detail:
-      "Exactly one of --run or --project. With --run the pull request is its branch's (409 when there is none). A failing or pending check is an answer, not an error.",
+      "Exactly one of --run or --project. With --run the pull request is the one a GitHub lifecycle Run is bound to, read in the bound repository, else its branch's (409 when there is none). A failing or pending check is an answer, not an error. The failed log is redacted before it is answered; a bound Run gets only the logs of its pull request's checks (409 for another CI run).",
     flags: [
-      { name: 'run', value: '<runId>', about: "the Run whose branch's pull request to read" },
+      { name: 'run', value: '<runId>', about: "the Run whose pull request to read: the one it is bound to, else its branch's" },
       { name: 'project', value: '<projectId>', about: 'the project whose repository to look in (from `projects list`)' },
       { name: 'pr', value: '<n>', about: 'the pull request number, with --project' },
       { name: 'log', value: '<ciRunId>', about: "adds the tail of that CI run's failed log (a check's runId)" }

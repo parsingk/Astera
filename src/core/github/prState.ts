@@ -11,7 +11,7 @@ export const PR_STATE_QUERY = `query($owner:String!,$name:String!,$number:Int!){
     pullRequest(number:$number){
       number state isDraft url headRefName headRefOid baseRefName mergeStateStatus reviewDecision
       commits(last:1){ nodes{ commit{ oid
-        checkSuites(first:50){ totalCount nodes{ status app{ slug } checkRuns(first:1){ totalCount } } }
+        checkSuites(first:50){ totalCount nodes{ status conclusion app{ slug } checkRuns(first:1){ totalCount } workflowRun{ databaseId url workflow{ name } } } }
         statusCheckRollup{ contexts(first:100){ totalCount nodes{
           __typename
           ... on CheckRun{ databaseId name status conclusion startedAt completedAt detailsUrl isRequired(pullRequestNumber:$number)
@@ -130,6 +130,29 @@ function statusContextOf(r: Obj): GitHubCiCheck | null {
   return check
 }
 
+/** An Actions workflow that failed before any job started: GitHub leaves a completed suite with no check run (an invalid
+ *  workflow file, measured on the sandbox 2026-10-18). Read as a check of its own, or it is not seen at all and the
+ *  other checks can pass without it. */
+function brokenWorkflowOf(s: Obj | null): GitHubCiCheck | null {
+  if (!s || s.status !== 'COMPLETED' || obj(s.app)?.slug !== 'github-actions' || obj(s.checkRuns)?.totalCount !== 0) return null
+  const conclusion = typeof s.conclusion === 'string' ? CONCLUSION[s.conclusion] : undefined
+  if (conclusion !== 'failure' && conclusion !== 'startup-failure') return null
+  const run = obj(s.workflowRun)
+  if (typeof run?.databaseId !== 'number') return null
+  const name = text(obj(run.workflow)?.name) ?? `workflow run ${run.databaseId}`
+  const details = text(run.url)
+  return {
+    externalId: `suite:${run.databaseId}`,
+    name,
+    workflow: name,
+    status: 'completed',
+    conclusion,
+    required: false,
+    ...(details ? { detailsUrl: details } : {}),
+    ciRunId: run.databaseId
+  }
+}
+
 function checkOf(raw: unknown): GitHubCiCheck | null {
   const r = obj(raw)
   if (r?.__typename === 'CheckRun') return checkRunOf(r)
@@ -170,12 +193,16 @@ export function parsePrState(stdout: string): PrStateRead | null {
   })
   const contexts = obj(obj(commit.statusCheckRollup)?.contexts)
   const contextNodes = nodes(contexts)
-  const checks = contextNodes
-    .flatMap((raw) => {
+  const checks = [
+    ...contextNodes.flatMap((raw) => {
       const c = checkOf(raw)
       return c ? [c] : []
+    }),
+    ...suiteNodes.flatMap((raw) => {
+      const c = brokenWorkflowOf(obj(raw))
+      return c ? [c] : []
     })
-    .sort((a, b) => a.name.localeCompare(b.name) || a.externalId.localeCompare(b.externalId))
+  ].sort((a, b) => a.name.localeCompare(b.name) || a.externalId.localeCompare(b.externalId))
   const beyondPage = (total: unknown, seen: number): boolean => typeof total === 'number' && total > seen
   const read: PrStateRead = {
     number: pr.number,
