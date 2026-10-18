@@ -236,7 +236,9 @@ coordinator plans it first: it breaks the objective into a few Tasks, with depen
 (its own unless the objective names another) and the project's run configurations as checks when
 there are any, and then runs them. A question it must ask before any Task exists goes on its first
 Task, so `list_questions` shows it. To lay the Tasks out yourself instead, add them with
-`create_task` (with the `jobId`) before `run_job`; the coordinator then runs them as they stand.
+`create_task` (with the `jobId`) before `run_job`; the coordinator then runs them as they stand. Once every Task of
+a GitHub lifecycle Run is completed, Astera adds one more (`kind: lifecycle`, no worker) to carry the Run through
+GitHub, and `create_task` on that Run answers `CONFLICT` until it ends.
 
 **Completion convergence.** `create_job` takes the same policy `astera jobs create --convergence`
 does. `convergence: true` turns it on with the default bounds; `maxFixAttempts`,
