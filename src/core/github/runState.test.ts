@@ -131,6 +131,20 @@ describe('nextGitHubState', () => {
     expect(nextGitHubState(chose, { noCi: { sha: A } }, T2)).toBeNull()
   })
 
+  // GitHub lifecycle G4 (design §4.6, §5.2): each CI rerun is kept, by whom, for the head it was asked on
+  it('keeps each CI rerun with its time, the last 20, and logs it with the head and the check', () => {
+    const rerun = { ciRunId: 39099662373, attempt: 1, sha: A, check: 'npm-network', by: 'astera' as const }
+    const once = nextGitHubState({ ...nextGitHubState(undefined, { binding: BINDING }, T1)! }, { rerun }, T2)!
+    expect(once.reruns).toEqual([{ ...rerun, at: T2 }])
+    expect(once.log.at(-1)).toEqual({ seq: 2, at: T2, kind: 'ci-rerun', sha: A, check: 'npm-network' })
+    const again = nextGitHubState(once, { rerun: { ...rerun, attempt: 2, by: 'person' } }, T2)!
+    expect(again.reruns?.map((r) => [r.attempt, r.by])).toEqual([[1, 'astera'], [2, 'person']])
+    let s: RunGitHubState = once
+    for (let i = 0; i < 25; i++) s = nextGitHubState(s, { rerun: { ...rerun, attempt: i + 2 } }, T2)!
+    expect(s.reruns).toHaveLength(20)
+    expect(s.reruns?.[0].attempt).toBe(7)
+  })
+
   it('logs a changed source once', () => {
     const changed = nextGitHubState(undefined, { sourceChanged: true }, T1)!
     expect(changed.log).toEqual([{ seq: 1, at: T1, kind: 'source-changed' }])
@@ -161,6 +175,15 @@ describe('parseRunGitHubPatch', () => {
     expect(parseRunGitHubPatch({ externalHead: { sha: 7 } })).toBe('externalHead is malformed')
     expect(parseRunGitHubPatch({ noCi: { sha: A } })).toEqual({ noCi: { sha: A } })
     expect(parseRunGitHubPatch({ noCi: true })).toBe('noCi is malformed')
+  })
+
+  it('accepts a CI rerun, and refuses a malformed one', () => {
+    const rerun = { ciRunId: 9, attempt: 1, sha: A, by: 'astera' }
+    expect(parseRunGitHubPatch({ rerun })).toEqual({ rerun })
+    expect(parseRunGitHubPatch({ rerun: { ...rerun, check: 'build', by: 'person' } })).toEqual({ rerun: { ...rerun, check: 'build', by: 'person' } })
+    expect(parseRunGitHubPatch({ rerun: { ...rerun, by: 'someone' } })).toBe('rerun is malformed')
+    expect(parseRunGitHubPatch({ rerun: { ...rerun, ciRunId: '9' } })).toBe('rerun is malformed')
+    expect(parseRunGitHubPatch({ rerun: { ...rerun, check: 3 } })).toBe('rerun is malformed')
   })
 
   // G2 final review I1

@@ -340,6 +340,7 @@ outlives a Host restart, and `events` reads it. An event:
 | `github.head_changed` | that pull request's head moved | `Run` |
 | `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
 | `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.ci_rerun_requested` | a CI run of the head was rerun, by Astera (a failure outside the code) or by a person | `Run` |
 | `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its

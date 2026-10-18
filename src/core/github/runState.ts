@@ -4,10 +4,12 @@
 import {
   CI_CHECKS_MAX,
   GITHUB_LOG_MAX,
+  RERUNS_MAX,
   type GitHubBinding,
   type GitHubCiSnapshot,
   type GitHubLogEntry,
   type GitHubPrFacts,
+  type GitHubRerun,
   type RunGitHubState
 } from './lifecycle'
 
@@ -26,6 +28,8 @@ export interface RunGitHubPatch {
   externalHead?: { sha?: string }
   /** A person chose to go on without CI for this head (G3b2). */
   noCi?: { sha: string }
+  /** A CI run's failed jobs were rerun (G4). */
+  rerun?: Omit<GitHubRerun, 'at'>
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -88,6 +92,10 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     delete next.externalHeadChange
   }
   if (patch.noCi && base.ciOverride?.sha !== patch.noCi.sha) next.ciOverride = { sha: patch.noCi.sha, at: now }
+  if (patch.rerun) {
+    next.reruns = [...(base.reruns ?? []), { ...patch.rerun, at: now }].slice(-RERUNS_MAX)
+    entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
+  }
   if (entries.length > 0) {
     let seq = base.seq
     next.log = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))].slice(-GITHUB_LOG_MAX)
@@ -148,6 +156,17 @@ function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
   )
 }
 
+function rerunOk(r: unknown): boolean {
+  return (
+    isObj(r) &&
+    typeof r.ciRunId === 'number' &&
+    typeof r.attempt === 'number' &&
+    isStr(r.sha) &&
+    (r.check === undefined || isStr(r.check)) &&
+    (r.by === 'astera' || r.by === 'person')
+  )
+}
+
 /** The patch `runs-github-record` takes, or why it is refused. Only the Host sends it (in-process), so this is a
  *  sanity check on its shape, not a defence. */
 export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
@@ -163,5 +182,6 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
   if (v.externalHead !== undefined && !(isObj(v.externalHead) && (v.externalHead.sha === undefined || isStr(v.externalHead.sha))))
     return 'externalHead is malformed'
   if (v.noCi !== undefined && !(isObj(v.noCi) && isStr(v.noCi.sha))) return 'noCi is malformed'
+  if (v.rerun !== undefined && !rerunOk(v.rerun)) return 'rerun is malformed'
   return v as RunGitHubPatch
 }

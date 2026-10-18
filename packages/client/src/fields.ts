@@ -199,6 +199,7 @@ const EVENT_TYPE_SET = {
   'github.head_changed': true,
   'github.ci_passed': true,
   'github.ci_failed': true,
+  'github.ci_rerun_requested': true,
   'github.source_changed': true
 } as const satisfies Record<EventType, true>
 /** The event types the Host produces, in the order of the spec's list. */
