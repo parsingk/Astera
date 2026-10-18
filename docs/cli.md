@@ -384,8 +384,9 @@ to GitHub, the task waits on a question whose `kind` says why: `github-no-ci` (n
 head in 3 minutes), `github-ci-cap` (no verdict within the Job's `ciWaitMinutes`), `github-external-head`
 (GitHub has a commit on the branch Astera did not push), `github-pr-ambiguous` (several open pull requests
 for the branch), `github-pr-closed` (the bound pull request was closed or merged), `github-ci-outside`
-(CI failed for a reason outside the code, such as a runner lost or a permission missing, or GitHub refused
-this account's reads) or `github-carry` (the round could not be taken to GitHub: no origin, a HEAD off the
+(CI failed for a reason outside the code, such as a runner lost or a permission missing, GitHub refused this
+account's reads, CI failed again for a reason Astera could not classify after one repair, or a repair reported
+it fixed nothing) or `github-carry` (the round could not be taken to GitHub: no origin, a HEAD off the
 branch, a lookup or a record that failed). The question keeps the round's wait, and its `options` act on it:
 `wait` waits again on the same head, `no-ci` lets the round pass without CI and records that a person chose
 it, `continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from

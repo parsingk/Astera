@@ -246,6 +246,9 @@ describe('buildSpecFile — a lifecycle repair', () => {
     expect(p).toContain('C:/specs/x.md')
     expect(p).not.toMatch(/["&|<>^%\r\n]/)
     expect(p).not.toBe(repairWorkerPrompt('C:/specs/x.md'))
+    // G3c1 final review M1: a review's repair is not told its checks failed
+    expect(lifecycleRepairPrompt('C:/specs/x.md', 'review-failure')).toMatch(/its review/)
+    expect(lifecycleRepairPrompt('C:/specs/x.md', 'review-failure')).not.toMatch(/GitHub CI/)
   })
 })
 

@@ -818,7 +818,7 @@ describe('githubWatch', () => {
         await again.at(0)
         expect(again.settled).toEqual([])
         expect(again.gates).toEqual([
-          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('could not classify again'), options: ['wait', 'retry', 'mark-failed'] }
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('GitHub CI failed again for a reason Astera could not classify'), options: ['wait', 'retry', 'mark-failed'] }
         ])
       })
 

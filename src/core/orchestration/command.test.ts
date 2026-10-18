@@ -5070,8 +5070,10 @@ describe('handleCommand — convergence', () => {
       listAccounts: () => accounts,
       repairTargetFor: () => ({ kind: 'same-session' as const, sessionId: 'sess1', cwd: 'D:/p', provider: 'claude' as const, accountId: 'accA' }),
       startRepair: (a: { dispatchId: string }) => void box.repairs.push(a.dispatchId),
-      repairOnce: async (a: { taskId: string }) => {
+      repairOnce: async (a: { taskId: string; from?: OrchState }) => {
         box.onces.push(a.taskId)
+        // The real repairOnce commits the answered state with its Dispatch (G3c1 final review M4)
+        if (box.onceResult.ok && a.from) await base.setState(a.from)
         return box.onceResult
       },
       readReviewFile: async () => {
@@ -5384,6 +5386,39 @@ describe('handleCommand — convergence', () => {
     expect(deps2.getState().tasks[0].status).toBe('failed')
     expect(deps2.onces).toEqual([])
   })
+  // GitHub lifecycle G3c1 final review M4: the extra repair opens in the same write as the answer, so no loop sees the
+  // Task ready in between (a lifecycle Task would get a fresh round instead of the repair a person asked for)
+  it('gate-resolve retry-once hands the answered state to repairOnce and commits nothing before it', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const s = deps.getState()
+    const g = createGate({ ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const })) }, { taskId, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] }, NOW)
+    if (!g.ok) throw new Error(g.error)
+    await deps.setState(g.state)
+    const seen: { committed: string | undefined; handed: string | undefined }[] = []
+    deps.repairOnce = async (a: { taskId: string; from?: OrchState }) => {
+      seen.push({ committed: deps.getState().gates.find((x) => x.id === g.value.id)?.status, handed: a.from?.gates.find((x) => x.id === g.value.id)?.status })
+      if (a.from) await deps.setState(a.from)
+      return { ok: true }
+    }
+    expect((await call(deps, 'gate-resolve', { id: g.value.id, resolution: 'retry-once' })).status).toBe(200)
+    expect(seen).toEqual([{ committed: 'open', handed: 'resolved' }])
+    // A retry-once that opens nothing still has the answer recorded
+    const deps2 = convDeps()
+    await call(deps2, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps2, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const s2 = deps2.getState()
+    const g2 = createGate({ ...s2, tasks: s2.tasks.map((t) => ({ ...t, status: 'validating' as const })) }, { taskId: s2.tasks[0].id, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] }, NOW)
+    if (!g2.ok) throw new Error(g2.error)
+    await deps2.setState(g2.state)
+    deps2.repairOnce = async () => ({ ok: false, error: 'task is blocked by an open gate' })
+    const r2 = await call(deps2, 'gate-resolve', { id: g2.value.id, resolution: 'retry-once' })
+    expect((r2.body as { retryOnceFailed?: string }).retryOnceFailed).toBe('task is blocked by an open gate')
+    expect(deps2.getState().gates.find((x) => x.id === g2.value.id)?.status).toBe('resolved')
+  })
+
   // 전체 브랜치 리뷰, Finding 5 — 이 Gate 를 retry-once 로 풀어도, 같은 Task 를 막는 두 번째 Gate가
   // 여전히 열려 있으면(resolveGate 의 stillBlocked) repairOnce 의 openDispatch 는 "task is blocked
   // by an open gate" 로 거절된다. 그 답이 조용히 사라지지 않고 200 응답에 남는다.

@@ -73,7 +73,7 @@ describe('repairTargetFor — the lifecycle Task', () => {
   const LATER = '2026-09-19T01:00:00.000Z'
   /** A lifecycle Run whose ordinary Task A was done by sessA (codex, accX) in its own worktree; optionally an integration
    *  Task I done later in the Run root by sessI (claude, accI). The lifecycle Task is added by A's (or I's) completion. */
-  const lifecycleRun = (o: { worktree?: boolean; rootWork?: boolean } = {}): { s: OrchState; lifecycleId: string } => {
+  const lifecycleRun = (o: { worktree?: boolean; rootWork?: boolean; accounts?: boolean } = {}): { s: OrchState; lifecycleId: string } => {
     let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p', github: POLICY, convergence: {} }, NOW)
     if (o.worktree !== false) s = { ...s, runs: s.runs.map((r) => (r.id === run.id ? { ...r, worktree: 'D:/wt/run' } : r)) }
     const done = (title: string, d: { provider: 'claude' | 'codex'; accountId: string; sessionId: string; cwd: string }, at: string, accountIds?: string[]) => {
@@ -82,7 +82,7 @@ describe('repairTargetFor — the lifecycle Task', () => {
       s = unwrap(applyWorkerDone(opened.state, { taskId: t.value.id, dispatchId: opened.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, at) as never).state
     }
     if (o.rootWork) done('I', { provider: 'claude', accountId: 'accI', sessionId: 'sessI', cwd: 'D:\\wt\\run' }, NOW)
-    done('A', { provider: 'codex', accountId: 'accX', sessionId: 'sessA', cwd: 'D:/wt/a' }, LATER, ['accX', 'accY'])
+    done('A', { provider: 'codex', accountId: 'accX', sessionId: 'sessA', cwd: 'D:/wt/a' }, LATER, o.accounts === false ? undefined : ['accX', 'accY'])
     return { s, lifecycleId: s.tasks.find((t) => t.kind === 'lifecycle')!.id }
   }
 
@@ -97,11 +97,12 @@ describe('repairTargetFor — the lifecycle Task', () => {
     expect(repairTargetFor(s, lifecycleId, () => false)).toEqual({ kind: 'fresh', cwd: 'D:/wt/run', provider: 'codex', accountId: 'accX' })
   })
 
-  it('never takes a session another open Dispatch holds', () => {
+  // G3c1 final review M6: that session is at work for another Dispatch, in the Run root; a second agent there would collide
+  it('starts nobody beside a session another open Dispatch holds; a person is asked', () => {
     const { s, lifecycleId } = lifecycleRun({ rootWork: true })
     const other = unwrap<{ id: string }>(createTask(s, { runId: s.runs[0].id, title: 'O', spec: 's', deps: [] }, NOW) as never)
     const held = unwrap(openDispatch(other.state, { taskId: other.value.id, provider: 'claude', accountId: 'accI', sessionId: 'sessI', cwd: 'D:/wt/o', specPath: 'C:/specs/o.md' }, NOW) as never).state
-    expect(repairTargetFor(held, lifecycleId, () => true)).toMatchObject({ kind: 'fresh', cwd: 'D:/wt/run' })
+    expect(repairTargetFor(held, lifecycleId, () => true)).toBeNull()
   })
 
   it('is null for a Run with no folder of its own', () => {
@@ -131,7 +132,34 @@ describe('repairTargetFor — the lifecycle Task', () => {
     const deps = makeDeps(opened.state)
     await performRepair(deps, { dispatchId: opened.value.id })
     expect(deps.started[0].specFileContent).toContain('#12 https://github.com/o/r/pull/12')
-    expect(deps.started[0].launchPhrase).toBe(lifecycleRepairPrompt('{specPath}'))
+    expect(deps.started[0].launchPhrase).toBe(lifecycleRepairPrompt('{specPath}', 'check-failure'))
+    // A live session keeps its own rolling chain (G3c1 final review M7)
+    expect(deps.started[0].rollFrom).toBeUndefined()
+    // G3c1 final review I1: the Run's objective and Tasks, not the lifecycle Task's placeholder or "your previous report"
+    expect(deps.started[0].specFileContent).toContain('- A:')
+    expect(deps.started[0].specFileContent).not.toContain('워커가 없는 Task')
+    expect(deps.started[0].specFileContent).not.toContain('Your previous report')
+  })
+
+  // G3c1 final review M7
+  it('a Run whose Tasks name no accounts starts a fresh lifecycle repair on the one account, rolling through none', async () => {
+    const { s, lifecycleId } = lifecycleRun({ accounts: false })
+    const validating = { ...s, tasks: s.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'validating' as const } : t)) }
+    const opened = unwrap<{ id: string }>(openRepairDispatch(validating, { taskId: lifecycleId, reason: 'check-failure', target: { kind: 'fresh', cwd: 'D:/wt/run', provider: 'codex', accountId: 'accX' } }, NOW) as never)
+    const deps = makeDeps(opened.state)
+    expect(await performRepair(deps, { dispatchId: opened.value.id })).toEqual({ ok: true })
+    expect(deps.started[0]).toMatchObject({ accountId: 'accX', worktree: 'D:/wt/run' })
+    expect(deps.started[0].rollFrom).toBeUndefined()
+  })
+
+  // G3c1 final review M4: it opens on the state it is handed, the answer and the Dispatch in one write
+  it('retry-once opens on the state it is handed and commits it with the Dispatch', async () => {
+    const { s, lifecycleId } = lifecycleRun()
+    const marked = { ...s, messages: [...s.messages] }
+    const deps = makeDeps(emptyState())
+    expect(await repairOnce(deps, { taskId: lifecycleId, from: marked })).toEqual({ ok: true })
+    expect(deps.box.state.tasks.some((t) => t.id === lifecycleId)).toBe(true)
+    expect(deps.box.state.dispatches.some((d) => d.taskId === lifecycleId && d.repair)).toBe(true)
   })
 
   it('retry-once opens a lifecycle repair with no attempt before it', async () => {

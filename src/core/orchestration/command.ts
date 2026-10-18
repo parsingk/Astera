@@ -563,7 +563,7 @@ export interface OrchServerDeps {
    *  못했을 때(예: 이 Task 를 막는 다른 Gate 가 이미 열려 있다) gate-resolve 의 200 응답이 그 사실을
    *  담을 수 있게 한다 — repairOnce 자신은 실패를 이미 로그하므로(그 함수의 주석) 이 반환값은 응답에
    *  싣는 용도이지, 여기서 또 로그할 것이 있어서가 아니다. */
-  repairOnce?(a: { taskId: string }): Promise<{ ok: true } | { ok: false; error: string }>
+  repairOnce?(a: { taskId: string; from?: OrchState }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
    *  으로 그대로 간다); 주입되지 않으면 영어다.
    *
@@ -3910,6 +3910,13 @@ export async function handleCommand(
         // above, and calling applyWorkerDone with the pre-await snapshot (s) would overwrite and
         // lose that change (the same reason as in handleExit — the write inversion this has caused
         // before).
+        // The language only for the one report that opens a question (a lifecycle repair reported failed, G3c1): every
+        // other report must not wait on it, nor fail with it (on the Host it may be the app's answer). Read before the
+        // state, so the state the report applies to is the one read last.
+        const reported = s.dispatches.find((x) => x.id === dispatchId)
+        const reportedTask = reported && s.tasks.find((x) => x.id === reported.taskId)
+        const asks = outcome === 'failed' && reported?.repair !== undefined && reportedTask !== undefined && isLifecycleTask(reportedTask)
+        const lang = asks && deps.lang ? await Promise.resolve(deps.lang()).catch(() => undefined) : undefined
         const result = applyWorkerDone(
           deps.getState(),
           {
@@ -3926,7 +3933,9 @@ export async function handleCommand(
             // 보내면 결과를 가져다줄 것이 없어 Task 가 거기서 영원히 멈춘다(startValidation 참고).
             canValidate: !!deps.startValidation,
             // startValidation 과 같은 이유 — 주입되지 않은 배선에서는 검토가 없는 것으로 동작한다.
-            canReview: !!deps.startReview
+            canReview: !!deps.startReview,
+            // A lifecycle repair reported failed asks a person, in the person's language (GitHub lifecycle G3c1)
+            ...(lang ? { lang } : {})
           },
           now
         )
@@ -4263,7 +4272,13 @@ export async function handleCommand(
           )
         }
       }
-      await deps.setState(finalState)
+      // retry-once opens its Dispatch on the answered state and commits both at once (G3c1 final review M4): committed
+      // apart, the Task would show ready in between, and the loop could start a lifecycle Task's fresh round
+      // (lifecycleToStart) or place an ordinary one (slotsToFill) instead of the repair a person asked for
+      const retrying = exhaustedOpen && resolution === 'retry-once' && deps.repairOnce !== undefined
+      const retried = retrying ? await deps.repairOnce!({ taskId: gate!.taskId, from: finalState }) : undefined
+      // A retry-once that opened nothing committed nothing: the answer is recorded here
+      if (!retried?.ok) await deps.setState(finalState)
       // retry-once 는 repair.ts 의 repairOnce — **그 Dispatch 커밋까지만 기다린다.** repairOnce 는
       // Dispatch 를 열어 커밋한 뒤에야 resolve 하고, 부수 효과(spec 파일 쓰기, 세션 띄우기)는
       // 백그라운드로 넘긴다(repair.ts 의 주석). 여기서 기다리지 않으면 이 응답이 먼저 나가고, 그
@@ -4274,7 +4289,6 @@ export async function handleCommand(
       // 열려 있으면(openDispatch 의 "task is blocked by an open gate") repairOnce 는 아무것도 열지
       // 못한 채 그 사실을 로그만 하고 돌아온다 — 이 Gate 자체는 정상적으로 풀렸으니 200 이 맞지만,
       // 사람의 "한 번 더" 가 조용히 무효가 된 사실까지 감추면 안 된다.
-      const retried = exhaustedOpen && resolution === 'retry-once' ? await deps.repairOnce?.({ taskId: gate!.taskId }) : undefined
       if (retried && !retried.ok)
         return okBody({ ...r.value, retryOnceFailed: retried.error } satisfies AnsweredQuestion)
       return okBody(r.value satisfies AnsweredQuestion)

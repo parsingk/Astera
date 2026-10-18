@@ -717,6 +717,8 @@ export function applyWorkerDone(
      *  reviewing 이고, recomputeReady 는 completed 만 승격시키므로 그 의존 서브트리 전체가
      *  pending 에 멈춘다. 기본값 true — 이 인자를 모르는 호출자에게는 지금까지의 동작이 유지된다. */
     canReview?: boolean
+    /** The language of a question this report opens (a lifecycle repair reported failed, GitHub lifecycle G3c1). */
+    lang?: Lang
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -797,6 +799,22 @@ export function applyWorkerDone(
   // Settle unanswered questions without an answer — the worker is finished, so there is nobody
   // left to answer them. See the settlePendingQuestions comment for why they are not deleted.
   state = { ...state, messages: settlePendingQuestions(state.messages, a.dispatchId) }
+  // A lifecycle repair that could not fix the failure — most often one it judged outside the Run's change, as its spec
+  // asks — goes to a person, as a cause outside the code does (GitHub lifecycle §4.6, G3c1 final review I2): ending the
+  // lifecycle Task here would fail the Run with nobody asked
+  if (to === 'failed' && dispatch.repair && isLifecycleTask(task)) {
+    const asked = createGate(
+      state,
+      {
+        taskId: task.id,
+        question: t(a.lang ?? 'en', 'jobs.gate.github.q.repairDeclined', { reason: oneLine(a.body).slice(0, 300) }),
+        options: ['retry', 'mark-failed'],
+        kind: 'github-ci-outside'
+      },
+      now
+    )
+    if (asked.ok) state = asked.state
+  }
   return ok(state, 'accepted')
 }
 
@@ -1383,8 +1401,11 @@ export function answerGitHubGate(s: OrchState, a: { gateId: string; resolution: 
   const { ciWait, ...base } = task
   if (a.resolution === 'mark-failed') return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'failed', updatedAt: now }) }, { gate: resolved })
   if (a.resolution === 'continue' || a.resolution === 'retry' || !ciWait) {
-    const fresh = moveTask(task, 'pending', now)
-    if (!fresh) return err(`cannot unblock from status: ${task.status}`)
+    const moved = moveTask(task, 'pending', now)
+    if (!moved) return err(`cannot unblock from status: ${task.status}`)
+    // A fresh round a person asked for is not held by the failure circuit the loop reads before it starts a lifecycle
+    // Task (lifecycleToStart), as task-update resets it (G3c1 fix pass); the repair budget counts repairs, not this
+    const fresh: Task = { ...moved, consecutiveFailures: 0 }
     return ok({ ...s, gates, tasks: recomputeReady(replace(s.tasks, fresh)) }, { gate: resolved })
   }
   const bind = BIND_PR_ANSWER.exec(a.resolution)

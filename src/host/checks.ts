@@ -26,7 +26,7 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { isLang, t, type Lang } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import type { OrchServerDeps } from '../core/orchestration/command'
-import type { RepairTarget } from '../core/orchestration/state'
+import type { OrchState, RepairTarget } from '../core/orchestration/state'
 import type { CheckResult } from '../core/orchestration/types'
 import { knowledgeIn } from '../core/orchestration/exec/coordinator'
 import { performRepair, repairOnce, repairTargetFor, type RepairDeps } from '../core/orchestration/exec/repair'
@@ -56,7 +56,7 @@ export interface HostChecks {
   startReview(a: { taskId: string }): void
   startRepair(a: { dispatchId: string }): void
   repairTargetFor(taskId: string): RepairTarget | null
-  repairOnce(a: { taskId: string }): Promise<{ ok: true } | { ok: false; error: string }>
+  repairOnce(a: { taskId: string; from?: OrchState }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Reads app-settings.json now, and refreshes langNow's value (R13). */
   lang(): Promise<Lang>
   /** The value lang() last read, synchronously, for the moved bodies that take a sync lang (B3).

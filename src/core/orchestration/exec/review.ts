@@ -18,7 +18,7 @@ import type { OrchServerDeps } from '../command'
 import { checkConfigIdsOf, policyOf } from '../convergence'
 import { pickReviewer } from '../reviewer'
 import { openReviewDispatch, type OrchState } from '../state'
-import { isLifecycleTask, latestOrdinaryWork } from '../lifecycleTask'
+import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf } from '../lifecycleTask'
 import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
 import { createReviewGate } from './reviewGate'
 
@@ -133,9 +133,11 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       // `onOpenRefused` 안에 있다.
       if (!opened.ok) return void (await reviewGate.onOpenRefused({ taskId, error: opened.error }))
       await c.setState(opened.state)
+      // The reviewer judges the Run's objective and Tasks for a lifecycle Task, not its placeholder (G3c1 final review I1)
+      const brief = lifecycle ? lifecycleBriefOf(fresh, task) : { title: task.title, spec: task.spec }
       const spec = buildReviewSpecFile({
-        title: task.title,
-        spec: task.spec,
+        title: brief.title,
+        spec: brief.spec,
         taskId,
         dispatchId: opened.value.id,
         implReport: task.result,

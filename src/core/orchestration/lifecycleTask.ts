@@ -28,6 +28,27 @@ export function latestOrdinaryWork(s: OrchState, runId: string): { task: Task; d
   return null
 }
 
+const BRIEF_TASKS = 20
+
+/** What a lifecycle Task's repair and review are asked to satisfy (G3c1 final review I1): the Run's objective and the
+ *  Tasks folded into its branch, not the lifecycle Task's own placeholder, which describes Astera's carrying. */
+export function lifecycleBriefOf(s: OrchState, task: Task): { title: string; spec: string } {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const job = run && s.jobs.find((j) => j.id === run.jobId)
+  const objective = job?.objective.trim() ?? ''
+  const own = s.tasks.filter((t) => t.runId === task.runId && !isLifecycleTask(t))
+  const shown = own.slice(0, BRIEF_TASKS)
+  const lines = shown.map((t) => `- ${t.title}: ${(t.spec.split('\n').find((l) => l.trim() !== '') ?? '').trim().slice(0, 200)}`)
+  if (own.length > shown.length) lines.push(`- … ${own.length - shown.length} more`)
+  const head = objective.split('\n')[0].slice(0, 80)
+  return {
+    title: head ? `GitHub: ${head}` : LIFECYCLE_TASK_TITLE,
+    spec:
+      `This task carries the whole Run to GitHub. What the Run has to achieve:\n\n${objective || '(no objective was written)'}\n\n` +
+      `The Tasks folded into this branch:\n${lines.length > 0 ? lines.join('\n') : '- (none)'}`
+  }
+}
+
 /** What a lifecycle Task's repair is told about GitHub (GitHub lifecycle G3c1, design §4.8). */
 export interface LifecycleRepairFacts {
   pr?: { number: number; url: string }
@@ -45,8 +66,10 @@ const EARLIER_CI_FAILURES = 5
  *  check of this round when it was GitHub CI's, and the CI failures logged since this lifecycle Task began. */
 export function lifecycleRepairFacts(s: OrchState, task: Task): LifecycleRepairFacts {
   const gs = s.runs.find((r) => r.id === task.runId)?.githubState
-  const ciFailed = (task.checks ?? []).some((c) => c.configId === GITHUB_CI_CHECK && c.status === 'failed')
-  const failure = ciFailed && gs?.ci?.verdict === 'failed' ? gs.ci.failure : undefined
+  // This round's GitHub CI result, when it is the one CI gave (the carrier's own failure — uncommitted changes, no commits
+  // — reads nothing from CI; the failure kept from an earlier head is not this round's, G3c1 final review M5)
+  const ciResult = (task.checks ?? []).find((c) => c.configId === GITHUB_CI_CHECK && c.status === 'failed')
+  const failure = ciResult && gs?.ci?.verdict === 'failed' && gs.ci.failure?.summary === ciResult.summary ? gs.ci.failure : undefined
   const now = failure ? gs?.ci?.sha : undefined
   const earlier = (gs?.log ?? [])
     .filter((e) => e.kind === 'ci-failed' && e.at >= task.createdAt && !(now !== undefined && e.sha === now))

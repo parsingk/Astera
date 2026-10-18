@@ -6,7 +6,7 @@ import { isSamePath } from '../../files/tree'
 import { t, type Lang } from '../../i18n'
 import { latestImplDispatch, policyOf, repairCountOf } from '../convergence'
 import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../state'
-import { isLifecycleTask, latestOrdinaryWork, lifecycleRepairFacts } from '../lifecycleTask'
+import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf, lifecycleRepairFacts } from '../lifecycleTask'
 import {
   canTransition,
   FAILURE_LIMIT,
@@ -44,8 +44,12 @@ function lifecycleRepairTarget(s: OrchState, task: Task, isAlive: (id: string) =
     .filter((d) => own.has(d.taskId) && !d.review && isSamePath(d.cwd, root))
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
   const held = (id: string): boolean => s.dispatches.some((d) => d.sessionId === id && !d.outcome && !d.endedAt)
-  if (last && !isPlaceholderSessionId(last.sessionId) && isAlive(last.sessionId) && !held(last.sessionId))
+  if (last && !isPlaceholderSessionId(last.sessionId) && isAlive(last.sessionId)) {
+    // A session another open Dispatch holds is at work, in the Run root: a second agent there would collide, so a person
+    // is asked (no target, G3c1 final review M6)
+    if (held(last.sessionId)) return null
     return { kind: 'same-session', sessionId: last.sessionId, cwd: root, provider: last.provider, accountId: last.accountId }
+  }
   const work = latestOrdinaryWork(s, run.id)
   return work ? { kind: 'fresh', cwd: root, provider: work.dispatch.provider, accountId: work.dispatch.accountId } : null
 }
@@ -69,9 +73,11 @@ function repairSpec(s: OrchState, task: Task, d: Dispatch, run: { cwd: string },
   const policy = policyOf(s, task)
   const maxFixAttempts = policy?.maxFixAttempts ?? FAILURE_LIMIT
   const repairs = repairCountOf(s, task.id)
+  // A lifecycle Task's own words describe Astera's carrying: its repair is asked to satisfy the Run's (G3c1 final review I1)
+  const brief = isLifecycleTask(task) ? lifecycleBriefOf(s, task) : { title: task.title, spec: task.spec }
   return buildSpecFile({
-    title: task.title,
-    spec: task.spec,
+    title: brief.title,
+    spec: brief.spec,
     taskId: task.id,
     dispatchId: d.id,
     // startWorker 가 cwd !== runCwd 로 같은 판정을 한다 — 여기서는 파일을 통째로 넘기므로 직접 정한다
@@ -154,15 +160,16 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
       accountId: d.accountId,
       runCwd: run.cwd,
       worktree: d.cwd,
-      // A lifecycle Task names no account; its repair rolls through the Run's latest ordinary Task's (G3c1)
-      ...(isLifecycleTask(task) ? rollFromOf(s, task) : {}),
+      // A lifecycle Task names no account; a fresh repair rolls through the Run's latest ordinary Task's, a live session
+      // keeps its own chain (G3c1, final review M7)
+      ...(isLifecycleTask(task) && !same ? rollFromOf(s, task) : {}),
       ...(same
         ? {
             terminal: d.sessionId,
             terminalCwd: d.cwd,
             terminalProvider: d.provider,
             terminalAccountId: d.accountId,
-            launchPhrase: isLifecycleTask(task) ? lifecycleRepairPrompt('{specPath}') : repairWorkerPrompt('{specPath}')
+            launchPhrase: isLifecycleTask(task) ? lifecycleRepairPrompt('{specPath}', d.repair) : repairWorkerPrompt('{specPath}')
           }
         : {})
     })
@@ -225,9 +232,11 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
  *  바로 그 실패 종류다. */
 export async function repairOnce(
   deps: RepairDeps,
-  a: { taskId: string }
+  /** `from`: the state with the person's answer, not yet committed — the Dispatch opens on it and both are written at
+   *  once, so no loop sees the Task ready in between (G3c1 final review M4). Absent: the committed state. */
+  a: { taskId: string; from?: OrchState }
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const s = deps.getState()
+  const s = a.from ?? deps.getState()
   const task = s.tasks.find((x) => x.id === a.taskId)
   if (!task) return { ok: false, error: `unknown task: ${a.taskId}` }
   const prior = latestImplDispatch(s, a.taskId)

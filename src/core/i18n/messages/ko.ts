@@ -1790,6 +1790,7 @@ export const ko = {
   'jobs.gate.github.q.merged': '이 Run 의 pull request #{pr} 가 Astera 의 판정 전에 병합되었습니다. 다시 기다릴 CI 가 없으면 Task 를 실패로 끝내세요.',
   'jobs.gate.github.q.outside': 'GitHub CI 가 코드 밖의 이유로 실패했습니다({class}): {summary}. GitHub 에서 다시 돌린 뒤 다시 기다리거나, Task 를 실패로 끝내세요.',
   'jobs.gate.github.q.unknownAgain': 'GitHub CI 가 또 Astera 가 분류하지 못한 이유로 실패했습니다: {summary}. 먼저 원인을 따져 보는 수리를 이미 한 번 했습니다. GitHub 에서 다시 돌렸다면 다시 기다리고, 손으로 고쳐 커밋했다면 다시 시도하고, 아니면 Task 를 실패로 끝내세요.',
+  'jobs.gate.github.q.repairDeclined': '이 Run 의 수리 워커가 실패를 고치지 않았다고 보고했습니다: {reason}. GitHub 에서 CI 를 다시 돌렸거나 손으로 고쳐 커밋했다면 다시 시도하고, 아니면 Task 를 실패로 끝내세요.',
   'jobs.gate.github.q.auth': 'GitHub 이 이 계정의 읽기를 받지 않습니다: {reason}. gh 로그인을 고친 뒤 다시 기다리거나, Task 를 실패로 끝내세요.',
   'jobs.gate.github.carry.noBranch': '이 Run 의 브랜치를 찾을 수 없어 GitHub 으로 가져갈 수 없습니다. 고친 뒤 답하면 다시 시도합니다.',
   'jobs.gate.github.carry.noOrigin': '이 Run 의 폴더에 GitHub origin 이 없어 push 할 곳이 없습니다. 고친 뒤 답하면 다시 시도합니다.',

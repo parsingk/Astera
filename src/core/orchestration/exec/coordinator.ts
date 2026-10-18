@@ -166,8 +166,8 @@ export const repairWorkerPrompt = (specPath: string): string =>
 
 /** The line typed into a live session for a lifecycle Task's repair (GitHub lifecycle G3c1): that session may have worked
  *  on another Task of the Run, so it is not told its own report failed. Free of LAUNCH_FORBIDDEN, as the line above. */
-export const lifecycleRepairPrompt = (specPath: string): string =>
-  `The Run's branch did not pass its checks or its GitHub CI. Read ${specPath} — it says what failed and how to report`
+export const lifecycleRepairPrompt = (specPath: string, reason: RepairReason = 'check-failure'): string =>
+  `The Run's branch did not pass ${reason === 'review-failure' ? 'its review' : 'its checks or its GitHub CI'}. Read ${specPath} — it says what failed and how to report`
 
 export interface RepairSection {
   reason: RepairReason
@@ -271,7 +271,7 @@ function repairSection(a: RepairSection): string {
 ---
 ## Repair request (assembled by the app — do not delete)
 
-Your previous report for this task did not satisfy the completion checks — ${reasonText}. ${roundText}
+${a.github ? "The Run's branch, which this task carries to GitHub," : 'Your previous report for this task'} did not satisfy the completion checks — ${reasonText}. ${roundText}
 
 ### What failed
 ${lines.join('\n')}

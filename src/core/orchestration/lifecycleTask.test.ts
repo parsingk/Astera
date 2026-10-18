@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { emptyState, type OrchState } from './state'
 import type { Task } from './types'
 import { GITHUB_CI_CHECK } from '../github/lifecycle'
-import { LIFECYCLE_TASK_TITLE, isLifecycleTask, lifecycleRepairFacts, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { LIFECYCLE_TASK_TITLE, isLifecycleTask, lifecycleBriefOf, lifecycleRepairFacts, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 
 const NOW = '2026-10-18T00:00:00.000Z'
 const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
@@ -89,9 +89,28 @@ describe('lifecycleRepairFacts', () => {
     })
   })
 
+  // G3c1 final review M5: the carrier's own failure (uncommitted, no commits) is not the CI failure read earlier
+  it('names no failing CI check when this round’s GitHub CI result is not the one CI gave', () => {
+    const s = withGitHub([{ configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'failed', summary: "The Run's branch has 1 uncommitted change; Astera pushes commits only. Commit it." }])
+    expect(lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!).failing).toBeUndefined()
+  })
+
   it('names no failing CI check when this round failed a local check', () => {
     const s = withGitHub([{ configId: 'lint', name: 'lint', status: 'failed', exitCode: 1 }, { configId: GITHUB_CI_CHECK, name: 'GitHub CI', status: 'not-run' }])
     expect(lifecycleRepairFacts(s, s.tasks.find(isLifecycleTask)!).failing).toBeUndefined()
+  })
+})
+
+// G3c1 final review I1: a lifecycle repair and review are asked to satisfy the Run's objective, not a placeholder
+describe('lifecycleBriefOf', () => {
+  it('is the Run’s objective and its Tasks', () => {
+    const s = withLifecycleTask(state([task('a', { title: 'Add login', spec: 'Users sign in with a password.\nMore detail.' }), task('b', { title: 'Add logout', spec: 'Users sign out.' })]), 'run_1', NOW)
+    const brief = lifecycleBriefOf({ ...s, jobs: s.jobs.map((j) => ({ ...j, objective: 'Accounts for the shop' })) }, s.tasks.find(isLifecycleTask)!)
+    expect(brief.title).toContain('Accounts for the shop')
+    expect(brief.spec).toContain('Accounts for the shop')
+    expect(brief.spec).toContain('- Add login: Users sign in with a password.')
+    expect(brief.spec).toContain('- Add logout: Users sign out.')
+    expect(brief.spec).not.toContain('워커가 없는 Task')
   })
 })
 

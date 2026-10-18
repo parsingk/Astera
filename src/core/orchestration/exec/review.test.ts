@@ -183,6 +183,9 @@ describe('createReviewStarter — the lifecycle Task', () => {
     expect(h.startWorker.mock.calls[0][0]).toMatchObject({ provider: 'codex', runCwd: h.runRoot, worktree: 'current' })
     expect(h.state().gates).toEqual([])
     expect(h.spec()).toContain(`git diff ${BASE}..${HEAD}`)
+    // G3c1 final review I1: the reviewer judges the Run's objective and Tasks, not the lifecycle Task's placeholder
+    expect(h.spec()).toContain('- A:')
+    expect(h.spec()).not.toContain('워커가 없는 Task')
   })
 
   it('takes the lifecycle Task’s own repair as the implementer to avoid', async () => {
