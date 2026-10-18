@@ -49,6 +49,10 @@ function rig(
     /** Whether the PR's head is in the history of the pushed head (G3b2); absent: the watch has no git. */
     ancestry?: 'ancestor' | 'not' | 'unknown'
     lang?: 'en' | 'ko'
+    /** What lifecycle-gate answers, in turn; the last repeats (G3b2). */
+    gateStatus?: number[]
+    /** How many settles throw first (G3b2). */
+    settleFails?: number
   } = {}
 ) {
   const clock = { now: T0 }
@@ -58,6 +62,7 @@ function rig(
   const settled: { taskId: string; result: CheckResult; since?: string }[] = []
   const gates: { taskId: string; since: string; kind: string; question: string; options: string[] }[] = []
   const status = { record: 200 }
+  const fails = { settle: o.settleFails ?? 0 }
   const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: `failed: ${kind}` })
   const deps: GithubWatchDeps = {
     now: () => clock.now,
@@ -95,8 +100,14 @@ function rig(
         issue: { number: n, title: 't', body: o.issue?.body ?? 'old', state: 'open', labels: [], author: 'pk', authorAssociation: 'OWNER', url: 'u', isPullRequest: false, updatedAt: o.issue?.updatedAt ?? 'T1' }
       }
     },
-    settle: async (a) => void settled.push(a),
-    openGitHubGate: async (a) => (gates.push(a), { status: 200, body: {} }),
+    settle: async (a) => {
+      if (fails.settle > 0) {
+        fails.settle--
+        throw new Error('the store could not be written')
+      }
+      settled.push(a)
+    },
+    openGitHubGate: async (a) => (gates.push(a), { status: o.gateStatus?.[Math.min(gates.length - 1, o.gateStatus.length - 1)] ?? 200, body: {} }),
     ...(o.ancestry ? { ancestry: async () => o.ancestry! } : {}),
     lang: () => o.lang ?? 'en',
     log: (m) => void logs.push(m)
@@ -735,6 +746,30 @@ describe('githubWatch', () => {
           { taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ configId: 'github:ci', status: 'passed', summary: 'No CI ran on aaaaaaa; a person chose to go on without CI.' }) }
         ])
         expect(r.records.filter((x) => x.patch.noCi?.sha === A)).toHaveLength(1)
+      })
+
+      // A question the Host could not write is asked again on the next read; one refused because the round moved is not
+      it('asks again on the next read when the question could not be written, not when the round moved', async () => {
+        const r = rig({ read: TIMED_OUT, log: LOG, gateStatus: [500, 200] })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(SETTLED_MS * 2)
+        await r.at(SETTLED_MS * 4)
+        expect(r.gates).toHaveLength(2)
+        const moved = rig({ read: TIMED_OUT, log: LOG, gateStatus: [400] })
+        moved.watch.onState(waiting())
+        await moved.at(0)
+        await moved.at(SETTLED_MS * 2)
+        expect(moved.gates).toHaveLength(1)
+      })
+
+      it('going on without CI that could not be recorded is tried again on the next read', async () => {
+        const r = rig({ read: NONE, settleFails: 1 })
+        r.watch.onState(waiting({ noCi: true }))
+        await r.at(0)
+        expect(r.settled).toEqual([])
+        await r.at(SETTLED_MS * 2)
+        expect(r.settled).toHaveLength(1)
       })
 
       it('after waiting again the same head is decided again, once', async () => {

@@ -213,11 +213,20 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
 
   const say = (key: Parameters<typeof translate>[1], params: Record<string, string | number>): string => translate(d.lang?.() ?? 'en', key, params)
 
-  /** A GitHub question about a waiting round, once per wait (G3b2). */
+  /** A GitHub question about a waiting round, once per wait (G3b2). A refusal because the round moved (4xx) settles
+   *  the wait; a Host that could not write the question (5xx, a throw) is asked again on the next read. */
   const ask = async (runId: string, round: Round, kind: GitHubGateKind, question: string, options: string[]): Promise<void> => {
     decided.set(runId, decisionOf(round))
-    const r = await d.openGitHubGate?.({ taskId: round.taskId, since: round.since, kind, question, options })
-    if (r && r.status >= 400) d.log(`github watch: run ${runId}: the ${kind} question could not be opened: ${JSON.stringify(r.body)}`)
+    try {
+      const r = await d.openGitHubGate?.({ taskId: round.taskId, since: round.since, kind, question, options })
+      if (r && r.status >= 400) {
+        d.log(`github watch: run ${runId}: the ${kind} question could not be opened: ${JSON.stringify(r.body)}`)
+        if (r.status >= 500) decided.delete(runId)
+      }
+    } catch (e) {
+      d.log(`github watch: run ${runId}: the ${kind} question could not be opened: ${message(e)}`)
+      decided.delete(runId)
+    }
   }
 
   /** A failed check's evidence (design §4.7), fetched once per commit and check: a record that already holds it for this
@@ -427,7 +436,11 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
         endedAt: at,
         ...(t.state?.binding ? { externalUrl: t.state.binding.url } : {})
       }
-      await d.settle?.({ taskId: round.taskId, result, since: round.since })
+      // A settle that could not be written is tried again on the next read
+      await d.settle?.({ taskId: round.taskId, result, since: round.since }).catch((e: unknown) => {
+        d.log(`github watch: run ${t.runId}: going on without CI could not be recorded: ${message(e)}`)
+        decided.delete(t.runId)
+      })
       return
     }
     const minutes = t.policy.ciWaitMinutes
@@ -456,15 +469,15 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       roundSeen.set(t.runId, key)
       nextAt.delete(t.runId)
     }
-    for (const t of targets)
-      if (!inFlight.has(t.runId))
-        await decideUnread(t).catch((e) => d.log(`github watch: run ${t.runId}: ${message(e)}`))
     const due = targets.filter((t) => !inFlight.has(t.runId) && (nextAt.get(t.runId) ?? 0) <= now())
     const work = due.slice(0, Math.max(0, READS_AT_ONCE - inFlight.size))
     await Promise.all(
       work.map(async (t) => {
         inFlight.add(t.runId)
         try {
+          // What the round decides without a read comes first, at the read's own pace, so a question that could not be
+          // written is asked again no faster than the Run is read
+          await decideUnread(t)
           await readOne(t)
         } catch (e) {
           d.log(`github watch: run ${t.runId}: ${message(e)}`)
