@@ -4,7 +4,7 @@
 // is an argument. Main-side (view.ts pulls node:path in): not for tsconfig.web.json.
 import { repairCountOf, reviewRoundOf } from '../orchestration/convergence'
 import { jobOf, runIdOf, type OrchState } from '../orchestration/state'
-import type { Dispatch, Gate, GateKind, TaskStatus } from '../orchestration/types'
+import { isGitHubGateKind, type Dispatch, type Gate, type GateKind, type TaskStatus } from '../orchestration/types'
 import { outcomeOf } from '../orchestration/view'
 import type { JournalActor } from './actor'
 
@@ -199,8 +199,9 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string, stamp: stri
 }
 
 /** Whether a Gate of this kind is a verdict's result. A `check-unavailable` one is not (plugin Phase 5 C9): the check
- *  could not be made, as a Gate with no kind says a check could not run. */
-const isVerdictGate = (kind: GateKind | undefined): boolean => kind !== undefined && kind !== 'check-unavailable'
+ *  could not be made, as a Gate with no kind says a check could not run. Nor is a GitHub one (GitHub lifecycle G3b2): it
+ *  holds the round's wait while a person answers. */
+const isVerdictGate = (kind: GateKind | undefined): boolean => kind !== undefined && kind !== 'check-unavailable' && !isGitHubGateKind(kind)
 
 /** Which events a Task transition is. A check's verdict (validating → a state other than blocked)
  *  comes first; blocked out of validating is ordinarily a question about an interrupted check, not a

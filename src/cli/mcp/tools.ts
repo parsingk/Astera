@@ -385,7 +385,7 @@ const LISTED_TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'questions-answer',
     description:
-      'Answer a blocking question raised in an Astera Run. Use list_questions first to retrieve open questions. When a question lists options, answer with one of them. A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed.',
+      'Answer a blocking question raised in an Astera Run. Use list_questions first to retrieve open questions. When a question lists options, answer with one of them. A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed. A question about a GitHub lifecycle round (kind github-*) takes only the options it lists, among wait, no-ci, continue, mark-failed and pr-<n>.',
     inputSchema: { questionId: id, answer: z.string().min(1).max(MCP_LIMITS.answer), requestId },
     args: (i) => ({ id: i.questionId, answer: i.answer })
   },

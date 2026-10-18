@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { deriveEvents, isContinuityEventType } from './events'
 import { emptyState, type OrchState } from '../orchestration/state'
-import { FAILURE_LIMIT, type Task, type Dispatch } from '../orchestration/types'
+import { FAILURE_LIMIT, GITHUB_GATE_KINDS, type Task, type Dispatch } from '../orchestration/types'
 import { stateFromLegacy } from '../orchestration/legacyState'
 import type { LegacyRun } from '../orchestration/legacy'
 
@@ -387,6 +387,15 @@ describe('deriveEvents — convergence', () => {
     )
     expect(ev.map((e) => e.type)).toEqual(['TASK_WAITING_INPUT'])
     expect(ev[0].payload.checks).toBeUndefined()
+  })
+  // GitHub lifecycle G3b2: a GitHub question holds the round's wait; it ends no round in failure
+  it('a GitHub Gate is no verdict: the round waits on a person', () => {
+    for (const kind of GITHUB_GATE_KINDS) {
+      const gate = { id: 'g1', runId: 'run_1', taskId: 'tsk_1', question: 'q', status: 'open' as const, createdAt: NOW, kind, options: ['wait', 'mark-failed'] }
+      const ev = deriveEvents(withRun(run(), [task({ status: 'validating' })]), { ...withRun(run(), [task({ status: 'blocked', checks })]), gates: [gate] }, NOW)
+      expect(ev.map((e) => e.type), kind).toEqual(['TASK_WAITING_INPUT'])
+      expect(ev[0].payload.checks, kind).toBeUndefined()
+    }
   })
   it('Gate 없는 interrupted block 은 판정이 아니라 이전 라운드의 checks 를 새것처럼 싣지 않는다', () => {
     // A second-round Task still carries round 1's checks (the field is overwritten only when a new
