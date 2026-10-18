@@ -118,6 +118,8 @@ export interface GitHubCiSnapshot {
   failing?: string
   /** That check's details link, kept with the verdict: a name can repeat, and the check can fall past CI_CHECKS_MAX. */
   failingUrl?: string
+  /** The evidence of `failing` (G2), fetched once per commit and check by the watch. */
+  failure?: GitHubCiFailure
   /** At most CI_CHECKS_MAX. */
   checks: GitHubCiCheck[]
   /** When this snapshot last changed, not when it was last read: a read that finds nothing new writes nothing. */
@@ -134,6 +136,8 @@ export interface GitHubLogEntry {
   pr?: number
   sha?: string
   check?: string
+  /** A ci-failed entry's class, when the evidence was read with the verdict. */
+  class?: CiFailureClass
 }
 
 /** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written only by `runs-github-record`. */

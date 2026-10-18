@@ -31,6 +31,7 @@ const sameCi = (a: GitHubCiSnapshot | undefined, b: Omit<GitHubCiSnapshot, 'chan
   a.verdict === b.verdict &&
   a.failing === b.failing &&
   a.failingUrl === b.failingUrl &&
+  JSON.stringify(a.failure) === JSON.stringify(b.failure) &&
   JSON.stringify(a.checks) === JSON.stringify(b.checks.slice(0, CI_CHECKS_MAX))
 
 export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitHubPatch, now: string): RunGitHubState | null {
@@ -58,7 +59,13 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     const ofHead = r.ci.sha === r.headSha
     const moved = ofHead && (!prevCi || prevCi.sha !== r.ci.sha || prevCi.verdict !== r.ci.verdict)
     if (moved && r.ci.verdict === 'passed') entries.push({ kind: 'ci-passed', sha: r.ci.sha })
-    if (moved && r.ci.verdict === 'failed') entries.push({ kind: 'ci-failed', sha: r.ci.sha, ...(r.ci.failing ? { check: r.ci.failing } : {}) })
+    if (moved && r.ci.verdict === 'failed')
+      entries.push({
+        kind: 'ci-failed',
+        sha: r.ci.sha,
+        ...(r.ci.failing ? { check: r.ci.failing } : {}),
+        ...(r.ci.failure ? { class: r.ci.failure.class } : {})
+      })
   }
   if (patch.lastReadError === null) delete next.lastReadError
   else if (patch.lastReadError)
@@ -93,6 +100,10 @@ function bindingOk(b: unknown): b is GitHubBinding {
   )
 }
 
+function failureOk(f: unknown): boolean {
+  return isObj(f) && isStr(f.check) && isStr(f.externalId) && isStr(f.class) && isStr(f.summary) && Array.isArray(f.diagnostics)
+}
+
 function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
   if (!isObj(r) || !isStr(r.headSha) || !isObj(r.pr) || !isObj(r.ci)) return false
   const pr = r.pr
@@ -106,6 +117,7 @@ function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
     (ci.verdict === 'pending' || ci.verdict === 'passed' || ci.verdict === 'failed' || ci.verdict === 'none') &&
     (ci.failing === undefined || isStr(ci.failing)) &&
     (ci.failingUrl === undefined || isStr(ci.failingUrl)) &&
+    (ci.failure === undefined || failureOk(ci.failure)) &&
     Array.isArray(ci.checks) &&
     ci.checks.every((c) => isObj(c) && isStr(c.externalId) && isStr(c.name) && isStr(c.status) && typeof c.required === 'boolean')
   )
