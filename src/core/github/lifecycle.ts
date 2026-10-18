@@ -38,7 +38,9 @@ export type GitHubCiConclusion =
   | 'unknown'
 
 export interface GitHubCiCheck {
-  /** `run:<databaseId>` for a check run, `status:<context>` for a commit status. */
+  /** `run:<databaseId>` for a check run, `status:<context>` for a commit status, `suite:<workflow run databaseId>` for
+   *  an Actions workflow that failed before any job started (an invalid workflow file: GitHub makes a suite and no check
+   *  run, measured). */
   externalId: string
   name: string
   workflow?: string

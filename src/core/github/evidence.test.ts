@@ -1,17 +1,30 @@
 // The evidence of a failed check (GitHub lifecycle design §4.7): the failing step's lines, the annotations that say
-// something, a class and a summary, all bounded and redacted.
+// something, a class and a summary, all bounded and redacted. The job logs and annotations under fixtures/ are real
+// (the sandbox, design §10).
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { GhRunner } from './gh'
 import type { GitHubCiCheck } from './lifecycle'
-import { DIAGNOSTICS_MAX, LOG_EXCERPT_CHARS, LOG_EXCERPT_LINES, ciFailureEvidence, diagnosticsFrom, excerptFromJobLog, readAnnotations, readJobLog } from './evidence'
+import {
+  DIAGNOSTICS_MAX,
+  LOG_EXCERPT_CHARS,
+  LOG_EXCERPT_LINES,
+  ciFailureEvidence,
+  diagnosticsFrom,
+  excerptFromJobLog,
+  readAnnotations,
+  readJobLog,
+  type RawAnnotation
+} from './evidence'
 
-const realLog = readFileSync(path.join(__dirname, 'fixtures', 'job-log-node-test.txt'), 'utf8')
+const fixture = (name: string): string => readFileSync(path.join(__dirname, 'fixtures', name), 'utf8')
+const realLog = fixture('job-log-node-test.txt')
+const realAnnotations = JSON.parse(fixture('annotations-fixture-jobs.json')) as Record<string, RawAnnotation[]>
 const line = (text: string): string => `test\tUNKNOWN STEP\t2026-10-17T20:32:40.5407041Z ${text}`
 const check = (over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({
   externalId: 'run:117497085011', name: 'test', status: 'completed', conclusion: 'failure', required: false, jobId: 117497085011,
-  detailsUrl: 'https://github.com/o/r/actions/runs/1/job/117497085011', ...over
+  ciRunId: 39050000000, detailsUrl: 'https://github.com/o/r/actions/runs/1/job/117497085011', ...over
 })
 const TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
 
@@ -24,14 +37,35 @@ describe('excerptFromJobLog', () => {
     expect(excerpt).toContain('expected: 5')
     expect(excerpt.split('\n').at(-1)).toBe('##[error]Process completed with exit code 1.')
     expect(excerpt).not.toContain('Post job cleanup')
-    // gh writes the colour codes as the text `^[[36;1m` (measured), and could write the ESC byte
-    expect(excerpt).not.toMatch(/\x1b\[|\^\[\[|2026-10-17T|\tUNKNOWN STEP\t|﻿/)
+    // gh writes the colour codes as the text `^[[36;1m` (measured), and could write the ESC byte; the first line's
+    // timestamp carries a BOM, a format character
+    expect(excerpt).not.toMatch(/\x1b\[|\^\[\[|2026-10-17T|\tUNKNOWN STEP\t|\p{Cf}/u)
+  })
+
+  it('a line the runner continued without a timestamp keeps no job or step column (real vitest log)', () => {
+    const { excerpt, output } = excerptFromJobLog(fixture('job-log-vitest.txt'))
+    expect(excerpt).not.toMatch(/\tRun npx vitest run\t|^vitest\t/m)
+    expect(output).toContain('- Expected')
+  })
+
+  it('the output leaves the step’s header out: its command and shell are not output (real eslint log)', () => {
+    const { excerpt, output, step } = excerptFromJobLog(fixture('job-log-eslint.txt'))
+    expect(step).toBe('npx eslint .')
+    expect(excerpt.split('\n').slice(0, 3)).toEqual(['##[group]Run npx eslint .', 'npx eslint .', 'shell: /usr/bin/bash -e {0}'])
+    expect(output).not.toMatch(/npx eslint|shell:/)
+    expect(output).toContain('✖ 1 problem (1 error, 0 warnings)')
   })
 
   // Review Focus 1
   it('without an error line, keeps the last lines before the cleanup', () => {
     const raw = [line('##[group]Run npm test'), line('working'), line('still working'), line('Post job cleanup.'), line('git config noise')].join('\n')
-    expect(excerptFromJobLog(raw)).toEqual({ excerpt: '##[group]Run npm test\nworking\nstill working', step: 'npm test' })
+    expect(excerptFromJobLog(raw)).toEqual({ excerpt: '##[group]Run npm test\nworking\nstill working', output: 'working\nstill working', step: 'npm test' })
+  })
+
+  // G2 final review M2
+  it('an error on the very last line ends the step there, even after the cleanup began', () => {
+    const raw = [line('##[group]Run npm test'), line('out'), line('Post job cleanup.'), line('cleanup out'), line('##[error]cleanup failed')].join('\n')
+    expect(excerptFromJobLog(raw).excerpt.split('\n').at(-1)).toBe('##[error]cleanup failed')
   })
 
   it('keeps at most 80 lines and 4000 characters, from the end', () => {
@@ -65,6 +99,12 @@ describe('diagnosticsFrom', () => {
     const many = Array.from({ length: 30 }, (_, i) => ({ path: `f${i}.ts`, start_line: i, annotation_level: 'failure', message: `m${i}` }))
     expect(diagnosticsFrom(many)).toHaveLength(DIAGNOSTICS_MAX)
   })
+  // G2 final review I5
+  it('redacts a message before cutting it, so no part of a secret is left', () => {
+    const [d] = diagnosticsFrom([{ path: 'a.sh', start_line: 1, annotation_level: 'failure', message: `${'x'.repeat(490)} ${TOKEN}` }])
+    expect(d.message).not.toContain('ghp_')
+    expect(d.message.length).toBeLessThanOrEqual(500)
+  })
 })
 
 describe('ciFailureEvidence', () => {
@@ -74,6 +114,27 @@ describe('ciFailureEvidence', () => {
     expect(e.logExcerpt).toContain('AssertionError')
   })
 
+  // design §10, G2 final review M13: real Actions logs and annotations from the sandbox
+  it.each([
+    ['vitest', 'test', 'vitest (test): ❯ sum.test.js (1 test | 1 failed) 13ms', [{ path: 'fixtures/vitest/sum.test.js', line: 4 }]],
+    ['tsc', 'typecheck', "tsc (typecheck): index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.", [{}]],
+    ['eslint', 'lint', "eslint (lint): 1:7  error  'unused' is assigned a value but never used  no-unused-vars", [{ path: 'fixtures/eslint/index.js', line: 1 }]],
+    ['pretest-eslint', 'test', 'pretest-eslint (test): not ok 1 - adds', []],
+    ['localhost-refused', 'test', 'localhost-refused (test): not ok 1 - the api answers', []],
+    ['npm-network', 'infrastructure', 'npm-network (infrastructure): npm error network request to https://registry.invalid/left-pad failed, reason: getaddrinfo ENOTFOUND registry.invalid', []]
+  ] as const)('the real %s log is %s', (name, cls, summary, where) => {
+    const e = ciFailureEvidence({ check: check({ name }), log: fixture(`job-log-${name}.txt`), annotations: realAnnotations[name] })
+    expect(e.class).toBe(cls)
+    expect(e.summary).toBe(summary)
+    expect(e.diagnostics.map((d) => ({ ...(d.path ? { path: d.path } : {}), ...(d.line !== undefined ? { line: d.line } : {}) }))).toEqual(where)
+  })
+
+  // G2 final review I2
+  it('only failure annotations classify: a warning that names a network error leaves a test failure a test', () => {
+    const annotations = [...realAnnotations['pretest-eslint'], { path: '.github', start_line: 7, annotation_level: 'warning', message: 'Failed to restore cache: read ECONNRESET' }]
+    expect(ciFailureEvidence({ check: check({ name: 'pretest-eslint' }), log: fixture('job-log-pretest-eslint.txt'), annotations }).class).toBe('test')
+  })
+
   // Review Focus 2
   it('never keeps a secret the step printed, in the excerpt, the summary or a diagnostic', () => {
     const raw = [line('##[group]Run ./ci.sh'), line(`export GITHUB_TOKEN=${TOKEN}`), line(`not ok 1 - leaked ${TOKEN}`), line('##[error]Process completed with exit code 1.')].join('\n')
@@ -81,10 +142,33 @@ describe('ciFailureEvidence', () => {
     expect(JSON.stringify(e)).not.toContain(TOKEN)
   })
 
-  // Review Focus 5
+  // G2 final review I5, M6
+  it('leaves no part of a secret in a summary made from a long annotation, nor a credential in the details URL', () => {
+    const e = ciFailureEvidence({
+      check: check({ jobId: undefined, detailsUrl: 'https://ci.example/build/7?token=abcdef0123456789abcdef' }),
+      annotations: [{ path: 'a.sh', start_line: 1, annotation_level: 'failure', message: `${'x'.repeat(990)} ${TOKEN}` }]
+    })
+    expect(JSON.stringify(e)).not.toContain('ghp_')
+    expect(e.url).not.toContain('abcdef0123456789abcdef')
+  })
+
+  // Review Focus 5, G2 final review I7
   it('a commit status with no log is classified from its conclusion and name only', () => {
-    const e = ciFailureEvidence({ check: check({ externalId: 'status:ci/ext', name: 'ci/ext', jobId: undefined, detailsUrl: undefined }) })
-    expect(e).toEqual({ check: 'ci/ext', externalId: 'status:ci/ext', class: 'unknown', summary: 'ci/ext (unknown): failure', diagnostics: [] })
+    const status = (name: string): GitHubCiCheck => check({ externalId: `status:${name}`, name, jobId: undefined, ciRunId: undefined, detailsUrl: undefined })
+    expect(ciFailureEvidence({ check: status('ci/ext') })).toEqual({ check: 'ci/ext', externalId: 'status:ci/ext', class: 'unknown', summary: 'ci/ext (unknown): failure', diagnostics: [] })
+    expect(ciFailureEvidence({ check: status('ci/circleci: lint') })).toMatchObject({ class: 'lint', summary: 'ci/circleci: lint (lint): failure' })
+  })
+
+  it('a workflow that failed before any job is the workflow file’s fault', () => {
+    const suite = check({ externalId: 'suite:39099661750', name: '.github/workflows/invalid.yml', jobId: undefined, ciRunId: 39099661750, detailsUrl: 'https://github.com/o/r/actions/runs/39099661750' })
+    expect(ciFailureEvidence({ check: suite })).toEqual({
+      check: '.github/workflows/invalid.yml',
+      externalId: 'suite:39099661750',
+      class: 'configuration',
+      summary: '.github/workflows/invalid.yml (configuration): the workflow file could not run: no job started',
+      diagnostics: [],
+      url: 'https://github.com/o/r/actions/runs/39099661750'
+    })
   })
 
   it('keeps the summary within 1000 characters', () => {
@@ -106,6 +190,11 @@ describe('readers', () => {
     const run: GhRunner = async (args) => (calls.push(args), { ok: true, stdout: JSON.stringify([{ path: 'a', start_line: 1, annotation_level: 'failure', message: 'm' }]), stderr: '' })
     expect(await readAnnotations(run, '/wt', repo, 7)).toEqual({ ok: true, annotations: [{ path: 'a', start_line: 1, annotation_level: 'failure', message: 'm' }] })
     expect(calls[0]).toEqual(['api', 'repos/o/r/check-runs/7/annotations?per_page=50'])
+  })
+  // G2 final review M7
+  it('keeps only the objects of an annotations answer', async () => {
+    const run: GhRunner = async () => ({ ok: true, stdout: JSON.stringify([null, 'x', 3, { annotation_level: 'failure', message: 'm' }]), stderr: '' })
+    expect(await readAnnotations(run, '/wt', repo, 7)).toEqual({ ok: true, annotations: [{ annotation_level: 'failure', message: 'm' }] })
   })
   it('passes gh failures on', async () => {
     const run: GhRunner = async () => ({ ok: false, stdout: '', stderr: 'HTTP 404: Not Found', exitCode: 1 })

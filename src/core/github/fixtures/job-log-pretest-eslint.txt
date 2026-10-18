@@ -1,0 +1,47 @@
+pretest-eslint	Run npm test	﻿2026-10-18T05:11:01.5394830Z ##[group]Run npm test
+pretest-eslint	Run npm test	2026-10-18T05:11:01.5395157Z ^[[36;1mnpm test^[[0m
+pretest-eslint	Run npm test	2026-10-18T05:11:01.5463375Z shell: /usr/bin/bash -e {0}
+pretest-eslint	Run npm test	2026-10-18T05:11:01.5463711Z ##[endgroup]
+pretest-eslint	Run npm test	2026-10-18T05:11:01.6646155Z 
+pretest-eslint	Run npm test	2026-10-18T05:11:01.6647374Z > pretest
+pretest-eslint	Run npm test	2026-10-18T05:11:01.6648259Z > eslint .
+pretest-eslint	Run npm test	2026-10-18T05:11:01.6648805Z 
+pretest-eslint	Run npm test	2026-10-18T05:11:02.1000830Z 
+pretest-eslint	Run npm test	2026-10-18T05:11:02.1031265Z > test
+pretest-eslint	Run npm test	2026-10-18T05:11:02.1032020Z > node --test
+pretest-eslint	Run npm test	2026-10-18T05:11:02.1051457Z 
+pretest-eslint	Run npm test	2026-10-18T05:11:02.1598306Z TAP version 13
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2022430Z # Subtest: adds
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2041736Z not ok 1 - adds
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2042809Z   ---
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2043980Z   duration_ms: 1.541212
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2045009Z   type: 'test'
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2046557Z   location: '/home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/fixtures/pretest/add.test.js:4:1'
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2048169Z   failureType: 'testCodeFailure'
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2049117Z   error: |-
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2050022Z     Expected values to be strictly equal:
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2051399Z     
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2052140Z     2 !== 3
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2052838Z     
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2053551Z   code: 'ERR_ASSERTION'
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2054425Z   name: 'AssertionError'
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2055320Z   expected: 3
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2056203Z   actual: 2
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2057219Z   operator: 'strictEqual'
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2058405Z   stack: |-
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2060391Z     TestContext.<anonymous> (file:///home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/fixtures/pretest/add.test.js:5:10)
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2062263Z     Test.runInAsyncScope (node:async_hooks:214:14)
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2063443Z     Test.run (node:internal/test_runner/test:1047:25)
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2064629Z     Test.start (node:internal/test_runner/test:944:17)
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2065952Z     startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2067358Z   ...
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2159301Z 1..1
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2160768Z # tests 1
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2161858Z # suites 0
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2162760Z # pass 0
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2163721Z # fail 1
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2164695Z # cancelled 0
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2165533Z # skipped 0
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2166987Z # todo 0
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2168011Z # duration_ms 79.301224
+pretest-eslint	Run npm test	2026-10-18T05:11:02.2317651Z ##[error]Process completed with exit code 1.

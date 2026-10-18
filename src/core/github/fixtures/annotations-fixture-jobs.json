@@ -1,0 +1,266 @@
+{
+  "vitest": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 2,
+      "start_column": null,
+      "end_line": 2,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 51,
+      "start_column": null,
+      "end_line": 51,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 1.",
+      "raw_details": ""
+    },
+    {
+      "path": "fixtures/vitest/sum.test.js",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/fixtures/vitest/sum.test.js",
+      "start_line": 4,
+      "start_column": null,
+      "end_line": 4,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "sum.test.js > adds",
+      "message": "AssertionError: expected 2 to be 3 // Object.is equality\n\n- Expected\n+ Received\n\n- 3\n+ 2\n\n ❯ sum.test.js:4:17\n\n",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ],
+  "tsc": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 2,
+      "start_column": null,
+      "end_line": 2,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 6,
+      "start_column": null,
+      "end_line": 6,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 2.",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": 14,
+      "end_line": 1,
+      "end_column": 14,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Type 'string' is not assignable to type 'number'.",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ],
+  "eslint": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 2,
+      "start_column": null,
+      "end_line": 2,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 11,
+      "start_column": null,
+      "end_line": 11,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 1.",
+      "raw_details": ""
+    },
+    {
+      "path": "fixtures/eslint/index.js",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/fixtures/eslint/index.js",
+      "start_line": 1,
+      "start_column": 7,
+      "end_line": 1,
+      "end_column": 7,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "'unused' is assigned a value but never used",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ],
+  "pretest-eslint": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 2,
+      "start_column": null,
+      "end_line": 2,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 47,
+      "start_column": null,
+      "end_line": 47,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 1.",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ],
+  "localhost-refused": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 2,
+      "start_column": null,
+      "end_line": 2,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 36,
+      "start_column": null,
+      "end_line": 36,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 1.",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ],
+  "npm-network": [
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 2,
+      "start_column": null,
+      "end_line": 2,
+      "end_column": null,
+      "annotation_level": "warning",
+      "title": "",
+      "message": "Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 15,
+      "start_column": null,
+      "end_line": 15,
+      "end_column": null,
+      "annotation_level": "failure",
+      "title": "",
+      "message": "Process completed with exit code 1.",
+      "raw_details": ""
+    },
+    {
+      "path": ".github",
+      "blob_href": "https://github.com/parsingk/astera-lifecycle-sandbox/blob/9ecb7effb52d478506d719037f79892b714e8cbb/.github",
+      "start_line": 1,
+      "start_column": null,
+      "end_line": 1,
+      "end_column": null,
+      "annotation_level": "notice",
+      "title": "",
+      "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\"",
+      "raw_details": ""
+    }
+  ]
+}
