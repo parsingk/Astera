@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { createGithubWatch, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, PENDING_MS, RATE_HOLD_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
 import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
-import type { Job, JobRun } from '../core/orchestration/types'
+import type { CheckResult, Job, JobRun } from '../core/orchestration/types'
 import type { PrStateRead } from '../core/github/prState'
 import type { RunGitHubPatch } from '../core/github/runState'
 import { EVIDENCE_TRIES, type GitHubCiFailure, type RunGitHubState } from '../core/github/lifecycle'
@@ -52,6 +52,8 @@ function rig(
   const records: { runId: string; patch: RunGitHubPatch }[] = []
   const calls: string[] = []
   const logs: string[] = []
+  const settled: { taskId: string; result: CheckResult }[] = []
+  const gates: { taskId: string; question: string }[] = []
   const status = { record: 200 }
   const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: `failed: ${kind}` })
   const deps: GithubWatchDeps = {
@@ -90,6 +92,8 @@ function rig(
         issue: { number: n, title: 't', body: o.issue?.body ?? 'old', state: 'open', labels: [], author: 'pk', authorAssociation: 'OWNER', url: 'u', isPullRequest: false, updatedAt: o.issue?.updatedAt ?? 'T1' }
       }
     },
+    settle: async (a) => void settled.push(a),
+    openGate: async (a) => (gates.push(a), { status: 200, body: {} }),
     log: (m) => void logs.push(m)
   }
   const watch = createGithubWatch(deps)
@@ -97,7 +101,7 @@ function rig(
     clock.now = T0 + ms
     await watch.tick()
   }
-  return { watch, clock, records, calls, logs, status, at }
+  return { watch, clock, records, calls, logs, status, at, settled, gates }
 }
 
 describe('githubWatch', () => {
@@ -507,5 +511,78 @@ describe('githubWatch', () => {
     expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
     await r.at(1)
     expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(3)
+  })
+
+  // GitHub lifecycle G3b1 (design §4.4, §4.6): CI on the pushed head settles the handed-over round, once
+  describe('the lifecycle round (G3b1)', () => {
+    const A = 'a'.repeat(40)
+    const withRound = (ciWait: Record<string, unknown> = { since: ISO0, done: [], pr: 12, sha: A }, run: Partial<JobRun> = { githubState: BOUND }): OrchState => ({
+      ...stateOf({ job: { convergence: {} }, run }),
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0 },
+        {
+          id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+          reviewRequested: true, consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0, ciWait: ciWait as never
+        }
+      ]
+    })
+    const LOG = ['##[group]Run npm test', 'not ok 1 - adds', '##[error]Process completed with exit code 1.'].map((l) => `t\tUNKNOWN STEP\t2026-10-17T20:32:40.1Z ${l}`).join('\n')
+    const failed = (name = 'test') =>
+      prRead({ checks: [{ externalId: 'run:1', name, status: 'completed', conclusion: 'failure', required: false, jobId: 1, ciRunId: 9, detailsUrl: 'https://x/run/1' }] })
+
+    it('a pass on the pushed head settles the round passed, linked to the pull request', async () => {
+      const r = rig()
+      r.watch.onState(withRound())
+      await r.at(0)
+      expect(r.settled).toEqual([{ taskId: 'tsk_l', result: expect.objectContaining({ configId: 'github:ci', status: 'passed', externalUrl: 'https://github.com/o/r/pull/12' }) }])
+    })
+
+    it('a test failure settles the round failed with its evidence', async () => {
+      const r = rig({ read: failed(), log: LOG })
+      r.watch.onState(withRound())
+      await r.at(0)
+      expect(r.settled[0].result).toMatchObject({ status: 'failed', summary: 'test (test): not ok 1 - adds', externalUrl: 'https://x/run/1' })
+    })
+
+    // Review Focus 2
+    it('a verdict on a commit that is not the pushed head settles nothing', async () => {
+      const r = rig()
+      r.watch.onState(withRound({ since: ISO0, done: [], pr: 12, sha: 'b'.repeat(40) }))
+      await r.at(0)
+      expect(r.settled).toEqual([])
+    })
+
+    // Review Focus 5
+    it('a failure whose evidence is incomplete waits; the same verdict read again settles once', async () => {
+      const o: Parameters<typeof rig>[0] = { read: prRead({ suites: [{ app: 'github-actions', completed: false }], checks: [
+        { externalId: 'run:1', name: 'test', status: 'completed', conclusion: 'failure', required: false, jobId: 1, ciRunId: 9 },
+        { externalId: 'run:2', name: 'slow', status: 'in-progress', required: false, jobId: 2, ciRunId: 9 }
+      ] }), log: LOG }
+      const r = rig(o)
+      r.watch.onState(withRound())
+      await r.at(0)
+      expect(r.settled).toEqual([])
+      const passed = rig()
+      passed.watch.onState(withRound())
+      await passed.at(0)
+      await passed.at(PENDING_MS)
+      await passed.at(SETTLED_MS * 2)
+      expect(passed.settled).toHaveLength(1)
+    })
+
+    it('a cause outside the code asks a person and settles nothing', async () => {
+      const r = rig({ read: prRead({ checks: [{ externalId: 'run:1', name: 'deploy', status: 'completed', conclusion: 'timed-out', required: false, jobId: 1, ciRunId: 9 }] }), log: LOG })
+      r.watch.onState(withRound())
+      await r.at(0)
+      expect(r.settled).toEqual([])
+      expect(r.gates[0]).toMatchObject({ taskId: 'tsk_l', question: expect.stringContaining('timeout') })
+    })
+
+    it('leaves the binding of a Run whose round waits to be pushed to the Host’s carrier', async () => {
+      const r = rig()
+      r.watch.onState(withRound({ since: ISO0, done: [] }, {}))
+      await r.at(0)
+      expect(r.calls.some((c) => c.startsWith('find'))).toBe(false)
+    })
   })
 })

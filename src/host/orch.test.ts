@@ -3027,7 +3027,7 @@ describe('Host-local spawn (S2)', () => {
     startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
     repairTargetFor: vi.fn(() => null), repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'en' as const),
     stopValidation: vi.fn(() => false), stopForeignValidations: vi.fn(async () => 0), checking: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'en' as const),
-    accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false)
+    accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false), settleHandedOff: vi.fn(async () => {})
   })
   /** R10's fixture: a --validate Task whose Host-spawned worker has just reported, with no app. */
   const reportWithNoApp = async (drive: Parameters<typeof createHostOrch>[0]['drive']) => {
