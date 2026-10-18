@@ -4620,6 +4620,9 @@ export async function handleCommand(
       const checks = await readPrChecks(t.gh, t.cwd, pr, repo)
       if (!checks.ok) return ghRefusal(checks)
       if (log === undefined) return okBody({ pr, checks: checks.checks })
+      // A bound Run reads the logs of its pull request's checks only (design §8, closes inventory I-§12.4).
+      if (bound && !checks.checks.some((c) => c.runId === log))
+        return conflict(`CI run ${log} ran no check of pull request #${pr}, the one this Run is bound to`)
       const tail = await failedLogTail(t.gh, t.cwd, log, repo)
       if (!tail.ok) return ghRefusal(tail)
       // Redacted here, in the Host, so the CLI and a Runtime's controller get what MCP gets (G2, design L22).

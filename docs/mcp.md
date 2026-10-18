@@ -331,7 +331,8 @@ upstream, but also a failed login, the network or a timeout), with "The push was
 when the branch already has a pull request (the message ends with its URL).
 
 **`get_ci` with a `runId`** reads the pull request a GitHub lifecycle Run is bound to, in the bound
-repository; for any other Run it answers `CONFLICT` ("This Run's branch has no pull request") when the
+repository, and answers `CONFLICT` for a `failedLogOf` that no check of that pull request ran; for any
+other Run it answers `CONFLICT` ("This Run's branch has no pull request") when the
 Run's branch has no pull request yet. With a `runId` and `failedLogOf` it makes up to three `gh`
 calls (the branch's pull request, its checks, the failed log; two for a bound Run), which together can
 take longer than the MCP call timeout (see [`TIMEOUT`](#troubleshooting)); it only reads, so a retry is

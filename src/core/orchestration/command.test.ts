@@ -8465,6 +8465,15 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo o/r`])
   })
 
+  // design §8 (closes inventory I-§12.4): a bound Run reads the logs of its pull request's checks only
+  it('github-ci refuses a bound Run the log of a CI run that no check of its pull request ran', async () => {
+    const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup({ [`${CHECKS(34)} --repo o/r`]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-ci', { run: 'r1', log: 78 }, '')
+    expect(r).toEqual({ status: 409, body: { error: 'CI run 78 ran no check of pull request #34, the one this Run is bound to' } })
+    expect(gh.calls).toHaveLength(1)
+  })
+
   // G2 final review M10: a checkout with an `upstream` remote makes gh pick another repository's PR of that number
   it('github-ci reads a bound Run’s checks and log in the bound repository, on any host', async () => {
     const binding = { repository: 'o/r', host: 'ghe.example', number: 34, url: 'https://ghe.example/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
