@@ -497,6 +497,9 @@ export function buildReviewSpecFile(a: {
   checks?: CheckResult[]
   /** 직전 라운드의 이슈. blocking 만 싣는다 — 리뷰어가 "고쳐졌는지" 확인할 것들이다 */
   previousIssues?: ReviewIssue[]
+  /** The range a lifecycle Task's reviewer reads (GitHub lifecycle G3c1): its pull request is the Run's whole branch,
+   *  from the Run's base to the head Astera pushed. Absent for every other Task. */
+  diff?: { base: string; head: string }
   /** check 의 동작을 바꾸는 파일들(설계 §8.3) */
   suspiciousFiles?: string[]
   /** 완료 정책의 지문이 라운드 사이에 달라졌다(2조각 설계 G3, 명세 §36·§37). 의심 파일과 같은 자리,
@@ -622,7 +625,16 @@ ${a.implReport?.trim() || '(nothing was reported)'}
 ## Files the implementer says it changed
 
 ${a.filesModified?.length ? a.filesModified.map((f) => `- ${f}`).join('\n') : '(none reported)'}
+${
+  a.diff
+    ? `
+## The pull request's changes
 
+This Task carries the whole Run to GitHub: review every change of its pull request, not only the files above. Read them
+with \`git diff ${a.diff.base}..${a.diff.head}\` in this folder.
+`
+    : ''
+}
 ## What is already decided — do not re-judge it
 
 ${

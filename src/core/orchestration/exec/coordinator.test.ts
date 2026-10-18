@@ -202,6 +202,15 @@ describe('buildSpecFile', () => {
   })
 })
 
+// GitHub lifecycle G3c1: a lifecycle Task's reviewer reads the pull request's whole diff
+describe('buildReviewSpecFile — the pull request diff', () => {
+  const base = { title: 'GitHub', spec: 's', taskId: 'tsk_l', dispatchId: 'dsp_r', validated: true }
+  it('names the diff to review when it is given, and nothing when it is not', () => {
+    expect(buildReviewSpecFile({ ...base, diff: { base: 'b'.repeat(40), head: 'c'.repeat(40) } })).toContain(`git diff ${'b'.repeat(40)}..${'c'.repeat(40)}`)
+    expect(buildReviewSpecFile(base)).not.toContain('git diff')
+  })
+})
+
 describe('buildReviewSpecFile', () => {
   // 이 기능이 있는 이유는 에이전트가 이미 닫힌 결정을 다시 열지 않게 하는 것이고, **닫힌 결정이
   // 다시 열렸는지 잡는 것이 바로 검토자의 일**이다. 검토자에게만 그 목록을 주지 않으면 그 자리가 빈다

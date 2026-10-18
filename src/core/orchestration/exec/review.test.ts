@@ -128,6 +128,70 @@ function rig(o: RigOpts) {
   }
 }
 
+// GitHub lifecycle G3c1 (design §3.4 S7): a lifecycle Task has no attempt of its own; it is reviewed in the Run root,
+// over its pull request's diff, by a provider other than the last implementer
+describe('createReviewStarter — the lifecycle Task', () => {
+  const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const BASE = 'b'.repeat(40)
+  const HEAD = 'c'.repeat(40)
+  function lifecycleRig(o: { repairBy?: 'claude' | 'codex' } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astera-review-'))
+    dirs.push(dir)
+    const runRoot = path.join(dir, 'run')
+    const own = path.join(dir, 'a')
+    const specsDir = path.join(dir, 'specs')
+    for (const d of [runRoot, own, specsDir]) fs.mkdirSync(d)
+    const planned = unwrap<{ id: string }>(createJob(emptyState(), { objective: 'o', cwd: dir, github: POLICY, convergence: {} }, NOW) as never)
+    const run = unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, NOW) as never)
+    const rooted = { ...run.state, runs: run.state.runs.map((r) => ({ ...r, worktree: runRoot, git: { base: BASE }, githubState: { lastPushedSha: HEAD, log: [], seq: 0 } })) }
+    const a = unwrap<{ id: string }>(createTask(rooted, { runId: run.value.id, title: 'A', spec: 's', deps: [] }, NOW) as never)
+    const d = unwrap<{ id: string }>(openDispatch(a.state, { taskId: a.value.id, provider: 'claude', accountId: 'c1', sessionId: 'sessA', cwd: own, specPath: path.join(dir, 'a.md') }, NOW) as never)
+    let state = unwrap(applyWorkerDone(d.state, { taskId: a.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+    const lifecycleId = state.tasks.find((t) => t.kind === 'lifecycle')!.id
+    if (o.repairBy)
+      state = {
+        ...state,
+        dispatches: [...state.dispatches, {
+          id: 'dsp_fix', taskId: lifecycleId, provider: o.repairBy, accountId: o.repairBy === 'claude' ? 'c1' : 'x1', sessionId: 'sessFix', cwd: runRoot,
+          specPath: path.join(dir, 'fix.md'), startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'ready', retained: false, repair: 'check-failure'
+        }]
+      }
+    state = { ...state, tasks: state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'reviewing' as const } : t)) }
+    let spec = ''
+    const startWorker = vi.fn(async (x: StartArgs) => {
+      spec = x.specFileContent ?? ''
+      return { sessionId: 's-review', cwd: x.runCwd, specPath: path.join(specsDir, 'x.md') }
+    })
+    const ctx: ReviewContext = {
+      getState: () => state,
+      setState: async (next) => void (state = next),
+      now: () => NOW,
+      log: () => {},
+      accounts: () => [claude('c1'), codex('x1')],
+      loginStatus: async () => true,
+      assertAllowedPath: async (p) => p,
+      startWorker,
+      specsDir
+    }
+    return { start: createReviewStarter(ctx), lifecycleId, runRoot, startWorker, spec: () => spec, state: () => state }
+  }
+
+  it('reviews a lifecycle Task with no attempt of its own in the Run root, on a provider other than the latest ordinary work’s', async () => {
+    const h = lifecycleRig()
+    await h.start({ taskId: h.lifecycleId })
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    expect(h.startWorker.mock.calls[0][0]).toMatchObject({ provider: 'codex', runCwd: h.runRoot, worktree: 'current' })
+    expect(h.state().gates).toEqual([])
+    expect(h.spec()).toContain(`git diff ${BASE}..${HEAD}`)
+  })
+
+  it('takes the lifecycle Task’s own repair as the implementer to avoid', async () => {
+    const h = lifecycleRig({ repairBy: 'codex' })
+    await h.start({ taskId: h.lifecycleId })
+    expect(h.startWorker.mock.calls[0][0]).toMatchObject({ provider: 'claude', runCwd: h.runRoot })
+  })
+})
+
 describe('createReviewStarter', () => {
   it('starts the reviewer on the other provider, in the implementer’s tree, after committing its Dispatch', async () => {
     const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'] })

@@ -6,7 +6,7 @@ import { isSamePath } from '../../files/tree'
 import { t, type Lang } from '../../i18n'
 import { latestImplDispatch, policyOf, repairCountOf } from '../convergence'
 import { createGate, jobOf, openDispatch, type OrchState, type RepairTarget } from '../state'
-import { isLifecycleTask } from '../lifecycleTask'
+import { isLifecycleTask, latestOrdinaryWork } from '../lifecycleTask'
 import {
   canTransition,
   FAILURE_LIMIT,
@@ -30,18 +30,6 @@ export interface RepairDeps {
   lang(): Lang
   log(m: string): void
   now(): string
-}
-
-/** The Run's most recently completed ordinary Task that a worker did, with that worker's Dispatch (GitHub lifecycle
- *  §3.4): whose provider and accounts a lifecycle Task's repair and review take, having none of its own. Read from the
- *  Run's Tasks, not the lifecycle Task's deps, which a later lifecycle Task (reconverge) would not share. */
-export function latestOrdinaryWork(s: OrchState, runId: string): { task: Task; dispatch: Dispatch } | null {
-  const done = s.tasks.filter((t) => t.runId === runId && !isLifecycleTask(t) && t.status === 'completed').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  for (const task of done) {
-    const dispatch = latestImplDispatch(s, task.id)
-    if (dispatch) return { task, dispatch }
-  }
-  return null
 }
 
 /** A lifecycle Task's repair works in the Run root, the branch Astera pushes (GitHub lifecycle §3.4): typed into the live
