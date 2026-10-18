@@ -69,7 +69,7 @@ export interface GithubWatchDeps {
   /** A check run's annotations. */
   readAnnotations(cwd: string, repo: GitHubRepo, checkRunId: number): Promise<{ ok: true; annotations: RawAnnotation[] } | GhFailed>
   /** TaskValidation.settleHandedOff (G3b1): a lifecycle round settled with CI's verdict on the head it pushed. */
-  settle?(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
+  settle?(a: { taskId: string; result: CheckResult; since?: string; ciClass?: string }): Promise<void>
   /** `lifecycle-gate` (G3b2): a GitHub question about the round `since` names, which keeps the round's wait. */
   openGitHubGate?(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<{ status: number; body: unknown }>
   /** Whether the PR's head is in the history of the head Astera pushed, read in the Run root (G3b2): an earlier head of
@@ -110,6 +110,8 @@ interface Round {
   sha?: string
   waitingSince: string
   noCi?: true
+  /** How many CI failures of this lifecycle Task Astera could not classify (G3c1). */
+  unknowns: number
 }
 
 /** Each wait is decided once: a person's "wait again" begins another (G3b2). */
@@ -158,7 +160,14 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       const wait = open?.status === 'validating' ? open.ciWait : undefined
       const round: Round | undefined =
         open && wait
-          ? { taskId: open.id, since: wait.since, sha: wait.sha, waitingSince: wait.waitingSince ?? wait.since, ...(wait.noCi ? { noCi: true as const } : {}) }
+          ? {
+              taskId: open.id,
+              since: wait.since,
+              sha: wait.sha,
+              waitingSince: wait.waitingSince ?? wait.since,
+              ...(wait.noCi ? { noCi: true as const } : {}),
+              unknowns: open.ciUnknowns ?? 0
+            }
           : undefined
       // A closed PR is read no more, unless a round waits on it: a person is asked (G3b2)
       if (gs?.pr && gs.pr.state !== 'open' && round?.sha === undefined) continue
@@ -412,9 +421,12 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (decided.get(runId) === key) return
     if (verdict === 'failed' && failure?.incomplete && !(failure.incomplete.reason === 'read-failed' && failure.incomplete.tries >= EVIDENCE_TRIES)) return
     const result = ciCheckResult({ verdict, ...(failure ? { failure } : {}), prUrl: binding.url, since: round.since, now: new Date(now()).toISOString() })
+    // A second failure Astera cannot classify asks a person: one repair that diagnosed first already ran (G3c1, §4.6)
+    if (result?.status === 'failed' && failure?.class === 'unknown' && round.unknowns >= 1)
+      return ask(runId, round, 'github-ci-outside', say('jobs.gate.github.q.unknownAgain', { summary: failure.summary }), ['wait', 'retry', 'mark-failed'])
     if (result) {
       decided.set(runId, key)
-      await d.settle?.({ taskId: round.taskId, result, since: round.since })
+      await d.settle?.({ taskId: round.taskId, result, since: round.since, ...(failure ? { ciClass: failure.class } : {}) })
       return
     }
     if (verdict !== 'failed' || !failure) return

@@ -484,6 +484,13 @@ describe('createTaskValidation — settleHandedOff', () => {
     expect(w.startReview).toHaveBeenCalledTimes(1)
   })
 
+  // G3c1: the class the Host read reaches the count
+  it('carries the class of a failed CI to the lifecycle Task’s count', async () => {
+    const w = wired()
+    await w.validation.settleHandedOff({ taskId: 'tsk_l', ciClass: 'unknown', result: { configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'deploy (unknown): exit 1' } })
+    expect(w.task().ciUnknowns).toBe(1)
+  })
+
   it('a second settle changes nothing', async () => {
     const w = wired()
     await w.validation.settleHandedOff({ taskId: 'tsk_l', result: { configId: 'github:ci', name: 'GitHub CI', status: 'passed' } })

@@ -442,6 +442,9 @@ export interface Task {
     /** A person chose this pull request among several (`github-pr-ambiguous`): the carrier binds it. */
     bindPr?: number
   }
+  /** How many of a lifecycle Task's GitHub CI failures Astera could not classify (G3c1, design §4.6): the first gets a
+   *  repair that diagnoses first, a second asks a person. Kept back from the public surface. */
+  ciUnknowns?: number
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
   createdAt: string

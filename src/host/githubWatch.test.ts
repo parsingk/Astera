@@ -777,7 +777,7 @@ describe('githubWatch', () => {
         const f = rig({ read: failed(), log: LOG })
         f.watch.onState(waiting({ noCi: true }))
         await f.at(0)
-        expect(f.settled).toEqual([{ taskId: 'tsk_l', since: ISO0, result: expect.objectContaining({ status: 'failed' }) }])
+        expect(f.settled).toEqual([{ taskId: 'tsk_l', since: ISO0, ciClass: 'test', result: expect.objectContaining({ status: 'failed' }) }])
         expect(f.records.some((x) => x.patch.noCi)).toBe(false)
         const o = rig({ read: TIMED_OUT, log: LOG })
         o.watch.onState(waiting({ noCi: true }))
@@ -802,6 +802,24 @@ describe('githubWatch', () => {
         r.watch.onState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'blocked' as const } : t)) })
         await r.at(0)
         expect(r.calls.some((c) => c.startsWith('find'))).toBe(false)
+      })
+
+      // G3c1 (design §4.6): an unknown failure gets one repair; a second in the same lifecycle Task asks a person
+      it('settles a first failure Astera cannot classify, with its class, and asks on the second', async () => {
+        const ODD = ['##[group]Run ./deploy.sh', 'exit 1', '##[error]Process completed with exit code 1.'].map((l) => `t\tUNKNOWN STEP\t2026-10-17T20:32:40.1Z ${l}`).join('\n')
+        const first = rig({ read: failed('deploy-preview'), log: ODD })
+        first.watch.onState(waiting())
+        await first.at(0)
+        expect(first.settled).toEqual([expect.objectContaining({ taskId: 'tsk_l', ciClass: 'unknown', result: expect.objectContaining({ status: 'failed' }) })])
+        expect(first.gates).toEqual([])
+        const again = rig({ read: failed('deploy-preview'), log: ODD })
+        const s = waiting()
+        again.watch.onState({ ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_l' ? { ...t, ciUnknowns: 1 } : t)) })
+        await again.at(0)
+        expect(again.settled).toEqual([])
+        expect(again.gates).toEqual([
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('could not classify again'), options: ['wait', 'retry', 'mark-failed'] }
+        ])
       })
 
       it('after waiting again the same head is decided again, once', async () => {

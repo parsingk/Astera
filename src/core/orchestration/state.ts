@@ -1313,7 +1313,7 @@ export function recordLifecycleCiWait(s: OrchState, a: { taskId: string; since: 
  *  cleared in the same write. A Task with no round handed over is refused: a verdict is applied exactly once. */
 export function settleLifecycleCi(
   s: OrchState,
-  a: { taskId: string; result: CheckResult; since?: string; repair?: RepairTarget; lang?: Lang },
+  a: { taskId: string; result: CheckResult; since?: string; repair?: RepairTarget; lang?: Lang; ciClass?: string },
   now: string
 ): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
@@ -1321,7 +1321,9 @@ export function settleLifecycleCi(
   if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to settle`)
   // A verdict read for an earlier round settles nothing of the round after it (G3b1 final review I1)
   if (a.since !== undefined && task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
-  const { ciWait, ...rest } = task
+  const { ciWait, ...kept } = task
+  // A failure Astera could not classify is counted on the Task, so a second one asks a person (G3c1, design §4.6)
+  const rest: Task = a.result.status === 'failed' && a.ciClass === 'unknown' ? { ...kept, ciUnknowns: (kept.ciUnknowns ?? 0) + 1 } : kept
   const cleared: OrchState = { ...s, tasks: replace(s.tasks, rest) }
   return applyValidationResult(
     cleared,

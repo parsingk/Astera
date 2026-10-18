@@ -4189,6 +4189,19 @@ describe('settleLifecycleCi', () => {
     expect(d.retryOf).toBeUndefined()
   })
 
+  // G3c1 (design §4.6): a CI failure Astera could not classify is counted on the lifecycle Task
+  it('counts a failed GitHub CI that Astera could not classify, and nothing else', () => {
+    const target = { kind: 'fresh' as const, cwd: 'D:/wt/run', provider: 'claude' as const, accountId: 'acc1' }
+    const count = (result: CheckResult, ciClass?: string) => {
+      const { s, lifecycleId } = handedOver()
+      return unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result, repair: target, ...(ciClass ? { ciClass } : {}) }, LATER) as never).value.ciUnknowns
+    }
+    expect(count(ci('failed'), 'unknown')).toBe(1)
+    expect(count(ci('failed'), 'test')).toBeUndefined()
+    expect(count(ci('failed'))).toBeUndefined()
+    expect(count(ci('passed'), 'unknown')).toBeUndefined()
+  })
+
   // G3b1 final review I1: a verdict read for an earlier round does not settle the round after it
   it('refuses a verdict for another round of the Task', () => {
     const { s, lifecycleId } = handedOver()
