@@ -731,9 +731,9 @@ const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
  *  부르는 쪽이 문구를 읽어야 알 수 있었다. */
 const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
-/** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2); `jobs-create` with the lifecycle on and
- *  `jobs-create-from-source` from the github source or with the lifecycle on are refused beside them.
- *  `runs-reconverge` joins when it exists (G5). */
+/** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2, and `runs-reconverge` since G5c);
+ *  `jobs-create` with the lifecycle on and `jobs-create-from-source` from the github source or with the lifecycle on are
+ *  refused beside them. */
 const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue', 'runs-reconverge'])
 const githubWriteRefusal = (cmd: string): string => `worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`
 /** A pure-layer refusal handed straight to the caller: 404 when it is marked `missing` (the id the
@@ -2791,6 +2791,21 @@ export async function handleCommand(
       // same Run, which the dispatch loop starts as it started the first. A worker never gets here (GITHUB_WRITES).
       const id = str(args.id)
       if (!id) return bad('--id is required')
+      // What the record may not know, asked where the Host can (G5c final review M3, M11): the Run's branch still there
+      // (a scheduled Run's is reaped when it ends), and the bound pull request still open now — the record can be older
+      // than a merge while the Host was down, and carrying again would push the branch GitHub deleted on that merge.
+      const known = deps.getState().runs.find((r) => r.id === id)
+      if (known?.worktree !== undefined && deps.github) {
+        if (deps.github.worktreeOf && !deps.github.worktreeOf(known.worktree))
+          return conflict('This Run’s branch is gone (its worktree was removed), so it cannot be carried through GitHub again')
+        const binding = known.githubState?.binding
+        const bound = binding ? repoOfBinding(binding) : null
+        if (binding && bound) {
+          const live = await prByNumber(deps.github.run, known.worktree, bound, binding.number)
+          if (!live.ok) return ghRefusal(live)
+          if (live.pr && live.pr.state !== 'open') return conflict(`This Run’s pull request is ${live.pr.state}, so there is nothing left to carry`)
+        }
+      }
       const r = reconvergeRun(deps.getState(), id, now)
       if (!r.ok) return r.missing ? notFound(r.error) : conflict(r.error)
       await deps.setState(r.state)

@@ -1362,6 +1362,77 @@ describe('handleCommand — runs-reconverge', () => {
       expect(deps.getState()).toBe(before)
     }
   })
+
+  // G5c final review M9: the other three refusals, through the command
+  it('refuses with 409 a Run never carried, a Job without lifecycle and a Run without a branch', async () => {
+    type S = ReturnType<ReturnType<typeof seeded>['getState']>
+    const variant = async (f: (s: S) => S) => { const d = seeded(); await d.setState(f(d.getState())); return d }
+    const never = await variant((s) => ({ ...s, tasks: s.tasks.filter((t) => t.kind !== 'lifecycle') }))
+    const plain = await variant((s) => ({ ...s, jobs: s.jobs.map(({ github: _g, ...j }) => j) }))
+    const branchless = await variant((s) => ({ ...s, runs: s.runs.map(({ worktree: _w, ...r }) => r) }))
+    for (const deps of [never, plain, branchless]) {
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(409)
+      expect(deps.getState()).toBe(before)
+    }
+  })
+
+  // G5c final review M3, M11: what the record may not know, asked where the Host can — the bound pull request now, and
+  // whether the Run's branch is still there
+  describe('on the Host, with gh', () => {
+    const WT = 'D:/wt/run'
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+    const prJson = (state: string) => JSON.stringify({ number: 12, title: 'x', state, isDraft: false, url: binding.url, headRefName: 'u/a', statusCheckRollup: [] })
+    const onHost = (o: { view?: { ok: boolean; stdout?: string; stderr?: string }; branch?: boolean } = {}) => {
+      const deps = seeded()
+      const s = deps.getState()
+      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState: { log: [], seq: 0, binding, pr: { state: 'open' as const, isDraft: true, baseBranch: 'main' } } })) })
+      const calls: string[] = []
+      deps.github = {
+        run: async (args: string[]) => {
+          calls.push(args.join(' '))
+          const v = o.view ?? { ok: true, stdout: prJson('OPEN') }
+          return args.join(' ') === VIEW ? { stdout: '', stderr: '', ...v } : { ok: false, stdout: '', stderr: 'unexpected', exitCode: 1 }
+        },
+        worktreeOf: (p: string) => (o.branch === false || p !== WT ? null : ({ path: WT, repoPath: 'D:/p', branch: 'u/a', baseRef: 'main' } as never)),
+        createPr: async () => { throw new Error('no') },
+        readCommits: async () => { throw new Error('no') },
+        isClean: async () => { throw new Error('no') }
+      } as never
+      return { deps, calls }
+    }
+
+    it('reads the bound pull request now and carries the Run again while it is open', async () => {
+      const { deps, calls } = onHost()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
+      expect(calls).toEqual([VIEW])
+    })
+
+    it('refuses a pull request merged since the record was written, writing nothing', async () => {
+      const { deps } = onHost({ view: { ok: true, stdout: prJson('MERGED') } })
+      const before = deps.getState()
+      const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+      expect(r.status).toBe(409)
+      expect(JSON.stringify(r.body)).toContain('merged')
+      expect(deps.getState()).toBe(before)
+    })
+
+    it('refuses when gh cannot read the pull request, writing nothing', async () => {
+      const { deps } = onHost({ view: { ok: false, stderr: 'HTTP 502' } })
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBeGreaterThanOrEqual(400)
+      expect(deps.getState()).toBe(before)
+    })
+
+    it('refuses a Run whose branch is gone (its worktree was removed), writing nothing', async () => {
+      const { deps } = onHost({ branch: false })
+      const before = deps.getState()
+      const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+      expect(r.status).toBe(409)
+      expect(deps.getState()).toBe(before)
+    })
+  })
 })
 
 describe('handleCommand — lifecycle-start', () => {
