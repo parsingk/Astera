@@ -784,6 +784,18 @@ describe('githubWatch', () => {
         expect(reruns(r)).toEqual(['rerun 9 o/r'])
       })
 
+      // G5c (design §3.5): a reconverged lifecycle Task has a budget of its own — the Run's reruns before it stay on record
+      // and do not count
+      it('counts only the reruns of the lifecycle Task that waits, not those before a reconverge', async () => {
+        const EARLIER = new Date(T0 - 60 * 60_000).toISOString()
+        const before = (attempt: number): GitHubRerun => ({ ...rerun(attempt), at: EARLIER })
+        const r = rig({ read: INFRA(3) })
+        r.watch.onState(withRound(undefined, reran(before(1), before(2))))
+        await r.at(0)
+        expect(reruns(r)).toEqual(['rerun 9 o/r'])
+        expect(r.gates).toEqual([])
+      })
+
       it('with automatic reruns off it asks at once, offering the rerun', async () => {
         const s = withRound()
         const r = rig({ read: INFRA() })
