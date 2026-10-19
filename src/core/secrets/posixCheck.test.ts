@@ -29,17 +29,22 @@ describe('pathChain', () => {
 describe('widenedAbove', () => {
   const deep = path.join(P, 'plugins', 'secrets', 'demo', 'token')
   const chain = pathChain(deep, P)
-  it('names the folders above the strict part that are this user’s and group or other writable', () => {
+  // Farthest first (final review I1): each folder is changed only once the folder above it is closed, so nobody else
+  // can swap it between the look and the change
+  it('names the folders above the strict part that are this user’s and group or other writable, farthest first', () => {
     const lstat = fsOver({ [path.join(P, 'plugins')]: st({ dir: true, mode: 0o775 }), [path.join(P, 'plugins', 'secrets')]: st({ dir: true, mode: 0o757 }) }, deep)
-    expect(widenedAbove(chain, lstat, 1000, 2)).toEqual([path.join(P, 'plugins', 'secrets'), path.join(P, 'plugins')])
+    expect(widenedAbove(chain, lstat, 1000, 2)).toEqual([path.join(P, 'plugins'), path.join(P, 'plugins', 'secrets')])
   })
-  it('leaves the strict part, another user’s folder and a symlink alone', () => {
-    const lstat = fsOver({
-      [path.join(P, 'plugins', 'secrets', 'demo')]: st({ dir: true, mode: 0o775 }),
-      [path.join(P, 'plugins', 'secrets')]: st({ dir: true, mode: 0o775, uid: 0 }),
-      [path.join(P, 'plugins')]: st({ dir: true, mode: 0o777, link: true })
-    }, deep)
+  it('leaves the strict part alone', () => {
+    const lstat = fsOver({ [path.join(P, 'plugins', 'secrets', 'demo')]: st({ dir: true, mode: 0o775 }) }, deep)
     expect(widenedAbove(chain, lstat, 1000, 2)).toEqual([])
+  })
+  // Below a symlink or another user's folder someone else could swap what is looked at, and the check refuses the
+  // store whatever is changed there
+  it('stops at a symlink or another user’s folder, naming only the folders above it', () => {
+    const own = st({ dir: true, mode: 0o775 })
+    expect(widenedAbove(chain, fsOver({ [path.join(P, 'plugins')]: st({ dir: true, mode: 0o777, link: true }), [path.join(P, 'plugins', 'secrets')]: own }, deep), 1000, 2)).toEqual([])
+    expect(widenedAbove(chain, fsOver({ [path.join(P, 'plugins')]: own, [path.join(P, 'plugins', 'secrets')]: st({ dir: true, mode: 0o755, uid: 0 }) }, deep), 1000, 2)).toEqual([path.join(P, 'plugins')])
   })
 })
 

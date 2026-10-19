@@ -24,17 +24,17 @@ export function pathChain(file: string, profileDir: string): string[] {
 
 /**
  * The folders above the strict part of the chain (see posixProblem) that are this user's and group or other writable,
- * nearest first: what the store tightens before it checks (issue #8). Ubuntu's default umask 002 makes every folder
+ * farthest first: what the store tightens before it checks (issue #8). Ubuntu's default umask 002 makes every folder
  * another process creates 775, and these are the app's own folders inside its profile, so dropping their group and
- * other write bits is all posixProblem asks of them. A symlink or another user's folder is never named: those stay
- * refusals.
+ * other write bits is all posixProblem asks of them. Farthest first, so each is changed once the folder above it is
+ * closed (final review I1). It stops at a symlink or another user's folder: below one, someone else could swap what is
+ * looked at, and the check refuses the store anyway.
  */
 export function widenedAbove(chain: string[], lstat: (p: string) => StatLike, uid: number, strict = 2): string[] {
   const out: string[] = []
-  for (const [i, p] of chain.entries()) {
-    if (i < strict) continue
+  for (const p of chain.slice(strict).reverse()) {
     const st = lstat(p)
-    if (st.isSymbolicLink() || st.uid !== uid) continue
+    if (st.isSymbolicLink() || st.uid !== uid) break
     if ((st.mode & 0o022) !== 0) out.push(p)
   }
   return out

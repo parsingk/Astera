@@ -50,6 +50,23 @@ const BREAK_GUARD = '.lock-break'
 
 const missing = (e: unknown): boolean => (e as NodeJS.ErrnoException).code === 'ENOENT'
 
+/**
+ * Drops group and other write from a folder above a store (issue #8), through a handle that refuses a symlink and
+ * anything but a folder, and only when the folder it opened is this user's (final review I1): a folder swapped for a
+ * symlink after the look is never followed, and the mode comes from the folder it changes, so nothing is ever given a
+ * bit it did not have. The sticky and setgid bits stay (M2).
+ */
+export async function tightenDir(p: string, uid: number): Promise<void> {
+  const h = await fs.open(p, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0))
+  try {
+    const st = await h.stat()
+    if (!st.isDirectory() || st.uid !== uid) return
+    await h.chmod(st.mode & 0o7777 & ~0o022)
+  } finally {
+    await h.close()
+  }
+}
+
 export function openSecretStore(a: {
   dir: string
   profileDir: string
@@ -57,6 +74,8 @@ export function openSecretStore(a: {
   acl?: WinAcl
   lstat?: (p: string) => StatLike
   uid?: number
+  /** Test seam for `tightenDir`. */
+  tighten?: (p: string, uid: number) => Promise<void>
   lockWaitMs?: number
   staleMs?: number
   now?: () => number
@@ -65,6 +84,7 @@ export function openSecretStore(a: {
   const dir = path.resolve(a.dir)
   const platform = a.platform ?? process.platform
   const lstat = a.lstat ?? ((p: string): StatLike => lstatSync(p))
+  const tighten = a.tighten ?? tightenDir
   const now = a.now ?? Date.now
   const lives = a.pidLives ?? realPidLives
   const waitMs = a.lockWaitMs ?? 5000
@@ -98,7 +118,12 @@ export function openSecretStore(a: {
       if (file) await aclCheck(file, false)
       return
     }
-    const problem = posixProblem(chain, lstat, a.uid ?? process.getuid?.() ?? -1, file ? 2 : 1)
+    const uid = a.uid ?? process.getuid?.() ?? -1
+    // The folders above the store lose group and other write before they are judged (issue #8): Ubuntu's default umask
+    // 002 makes every folder another process creates 775, and a store made or left under one was refused for good, on
+    // every read too (final review C2). One that cannot be changed is left for the check to refuse with its reason (M1).
+    for (const p of widenedAbove(pathChain(dir, a.profileDir), lstat, uid, 1)) await tighten(p, uid).catch(() => {})
+    const problem = posixProblem(chain, lstat, uid, file ? 2 : 1)
     if (problem) throw new SecretFileUnsafe(problem.slice(0, problem.indexOf(' ')), problem)
   }
 
@@ -130,11 +155,9 @@ export function openSecretStore(a: {
   const createDir = async (): Promise<void> => {
     const parent = path.dirname(dir)
     if (platform !== 'win32') {
-      // No group or other write on the folders above (issue #8): made so here, and tightened when another process made
-      // them under a group-writable umask (Ubuntu's default 002 makes 775). They are this user's own, inside the profile.
+      // No group or other write on the folders made here (issue #8); ones another process made under a group-writable
+      // umask are tightened by the check that follows.
       await fs.mkdir(parent, { recursive: true, mode: 0o755 })
-      const uid = a.uid ?? process.getuid?.() ?? -1
-      for (const p of widenedAbove(pathChain(dir, a.profileDir), lstat, uid, 1)) await fs.chmod(p, lstat(p).mode & 0o755)
       await fs.mkdir(dir, { mode: 0o700 }).catch((e: NodeJS.ErrnoException) => {
         if (e.code !== 'EEXIST') throw e
       })
@@ -153,7 +176,8 @@ export function openSecretStore(a: {
     }
   }
 
-  /** Only a directory made here is secured here. One that already existed is checked, never silently tightened. */
+  /** Only a store directory made here is secured here. One that already existed is checked, never silently tightened;
+   *  the folders above it are tightened by every check (issue #8). */
   const ensureDir = async (): Promise<void> => {
     try {
       await fs.lstat(dir)
