@@ -100,11 +100,20 @@ export type GitHubLifecycleState =
   | 'waiting-for-user'
   | 'exhausted'
   | 'ci-infrastructure-failure'
+  | 'merge-ready'
 
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {
   readonly state: GitHubLifecycleState
-  readonly pr?: { readonly number: number; readonly url: string; readonly isDraft: boolean; readonly state: 'open' | 'closed' | 'merged'; readonly mergeStateStatus?: string }
+  readonly pr?: {
+    readonly number: number
+    readonly url: string
+    readonly isDraft: boolean
+    readonly state: 'open' | 'closed' | 'merged'
+    readonly mergeStateStatus?: string
+    /** GitHub's own review decision (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED); shown, never Astera's verdict. */
+    readonly reviewDecision?: string
+  }
   /** The PR's head commit. */
   readonly headSha?: string
   readonly ci?: {
@@ -120,6 +129,13 @@ export interface GitHubLifecycle {
   readonly failing?: { readonly check: string; readonly class?: string; readonly summary?: string; readonly detailsUrl?: string }
   readonly candidates?: readonly number[]
   readonly sourceChanged?: true
+  /** Merge-ready while it holds: the head Astera's review found ready, when, and `ciOverride: 'no-ci'` when a person chose
+   *  to go on without CI. */
+  readonly mergeReady?: { readonly headSha: string; readonly evaluatedAt: string; readonly ciOverride?: 'no-ci' }
+  /** Why merge-ready was withheld by the review's verdict (not-bound, pr-not-open, head-not-pushed,
+   *  review-of-another-head, ci-not-passed, question-open, local-check-failed) or withdrawn since (closed, merged,
+   *  head-changed, base-changed, ci-failed, checks-changed). */
+  readonly invalidated?: { readonly reason: string; readonly at: string }
 }
 
 export interface Job {

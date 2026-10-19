@@ -38,6 +38,37 @@ describe('githubLifecycleOf', () => {
     expect(githubLifecycleOf(POLICY, gs as RunGitHubState | undefined)?.state).toBe(state)
   })
 
+  // GitHub lifecycle G5b (design §5.3, §5.4, §8): merge-ready while its evidence's head is the PR's and nothing withdrew it
+  describe('merge-ready', () => {
+    const evidence = { pullRequestNumber: 12, headSha: A, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: ['build'], evaluatedAt: 'T' }
+    const ready = (over: Partial<RunGitHubState> = {}): RunGitHubState =>
+      bound({ headSha: A, ci: ci('passed'), pr: { state: 'open', isDraft: true, baseBranch: 'develop' }, mergeReady: evidence, ...over })
+
+    it('reads merge-ready and shows the evidence’s head and time', () => {
+      const v = githubLifecycleOf(POLICY, ready())!
+      expect(v.state).toBe('merge-ready')
+      expect(v.mergeReady).toEqual({ headSha: A, evaluatedAt: 'T' })
+      expect(v).not.toHaveProperty('invalidated')
+    })
+
+    it('shows a person’s choice to go on without CI', () => {
+      expect(githubLifecycleOf(POLICY, ready({ mergeReady: { ...evidence, requiredCiPassed: false, ciOverride: 'no-ci' } }))?.mergeReady).toEqual({ headSha: A, evaluatedAt: 'T', ciOverride: 'no-ci' })
+    })
+
+    it('a withdrawal or a newer head reads what the record says, with why', () => {
+      const withdrawn = githubLifecycleOf(POLICY, ready({ invalidated: { reason: 'checks-changed', at: 'T2' } }))!
+      expect(withdrawn.state).toBe('ci-passed')
+      expect(withdrawn.invalidated).toEqual({ reason: 'checks-changed', at: 'T2' })
+      expect(withdrawn).not.toHaveProperty('mergeReady')
+      expect(githubLifecycleOf(POLICY, ready({ headSha: 'b'.repeat(40) }))?.state).not.toBe('merge-ready')
+      expect(githubLifecycleOf(POLICY, ready({ pr: { state: 'merged', isDraft: false, baseBranch: 'develop' } }))?.state).toBe('pr-merged')
+    })
+
+    it('shows GitHub’s own review decision beside it', () => {
+      expect(githubLifecycleOf(POLICY, ready({ pr: { state: 'open', isDraft: true, baseBranch: 'develop', reviewDecision: 'CHANGES_REQUESTED' } }))?.pr).toMatchObject({ reviewDecision: 'CHANGES_REQUESTED' })
+    })
+  })
+
   // GitHub lifecycle G3c2 (design §5.3): while the lifecycle Task is open, its own state is the Run's
   describe('the lifecycle Task’s states', () => {
     const task = (over: Partial<Task> = {}): Task => ({
