@@ -11,7 +11,7 @@ import type { GhFailed } from '../core/github/gh'
 import { GITHUB_CI_CHECK, type GitHubBinding } from '../core/github/lifecycle'
 import { refsLine, type PushFailure } from '../core/github/lifecyclePush'
 import type { OpenPr } from '../core/github/prBinding'
-import { parseGitHubRemote, repoSlug, type GitHubRepo } from '../core/github/remote'
+import { parseGitHubRemote, repoOfBinding, repoSlug, type GitHubRepo } from '../core/github/remote'
 import type { RunGitHubPatch } from '../core/github/runState'
 import { isLifecycleTask } from '../core/orchestration/lifecycleTask'
 import type { OrchState } from '../core/orchestration/state'
@@ -46,6 +46,11 @@ export interface LifecycleCiDeps {
   settle(a: { taskId: string; result: CheckResult; since?: string }): Promise<void>
   /** `lifecycle-gate` (G3b2): a GitHub question about the round `since` names, which keeps the round's wait. */
   openGitHubGate(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<Reply>
+  /** The bound pull request's state now, read before a push (G6, spec §30): one merged or closed while the lifecycle Task
+   *  repaired, or while the Host was down, is not pushed onto. Without it the record decides. */
+  readPr?(cwd: string, repo: GitHubRepo, n: number): Promise<{ ok: true; state: 'open' | 'closed' | 'merged' | null } | GhFailed>
+  /** Runs `run` after `ms`; the carrier's retry of a network failure (G6). Defaults to an unref'd timer. */
+  schedule?(ms: number, run: () => void): void
   /** The person's language, for the questions (G3b2). */
   lang?(): Lang
   log(m: string): void
@@ -72,6 +77,13 @@ const PUSH_WORDS: Record<Exclude<PushFailure['kind'], 'rejected'>, MessageKey> =
 /** The wait a carry took up: its round, and a person's choice of pull request (G3b2), which is news to take up at once. */
 const waitKey = (t: Task): string => `${t.ciWait!.since}#${t.ciWait!.bindPr ?? ''}`
 
+/** How many network failures in a row a round's carry takes before it asks a person (G6, spec §29: bounded retry, then
+ *  user action). auth and every other kind ask at once. */
+export const TRANSIENT_TRIES = 3
+
+/** A failure the network may cure: a later try can go through. */
+const transientKind = (kind: string): boolean => kind === 'network' || kind === 'rate-limit'
+
 /** A round handed over whose wait has no pushed head yet. */
 const awaitingPush = (t: Task): boolean => isLifecycleTask(t) && t.status === 'validating' && t.ciWait !== undefined && t.ciWait.sha === undefined
 
@@ -86,12 +98,34 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
   const inFlight = new Map<string, Promise<void>>()
   /** Each round last carried (`taskId` → the wait it carried, `waitKey`) and when it may be taken again. */
   const cooling = new Map<string, { wait: string; until: number }>()
+  /** Network failures in a row, per round (`taskId#since`) (G6). */
+  const transient = new Map<string, number>()
+  /** The last state seen, for a retry the carrier schedules itself: nothing else may come to take the round again. */
+  let latest: OrchState | null = null
+  const schedule = d.schedule ?? ((ms: number, run: () => void) => void setTimeout(run, ms).unref?.())
 
   const carry = async (s: OrchState, task: Task): Promise<void> => {
     const since = task.ciWait!.since
     const askGitHub = (kind: GitHubGateKind, question: string, options: string[]): Promise<void> => askAbout(task, kind, question, options)
     /** The carrier's own stop: a person fixes it and tries again, or gives up (G3b2 final review M7). */
     const ask = (question: string): Promise<void> => askGitHub('github-carry', question, ['retry', 'mark-failed'])
+    const tries = `${task.id}#${since}`
+    /** A failure the network may cure is tried again after the cooling, and asked about only on the TRANSIENT_TRIES-th in a
+     *  row (G6, spec §29); any other kind asks at once. */
+    const askUnlessTransient = (kind: string, question: string): Promise<void> => {
+      if (!transientKind(kind)) return ask(question)
+      const n = (transient.get(tries) ?? 0) + 1
+      if (n >= TRANSIENT_TRIES) {
+        transient.delete(tries)
+        return ask(question)
+      }
+      transient.set(tries, n)
+      d.log(`lifecycle ci: task ${task.id}: ${kind} failure ${n} of ${TRANSIENT_TRIES}, tried again in ${RETRY_MS / 1000} s — ${question}`)
+      schedule(RETRY_MS + 1_000, () => {
+        if (latest) api.onState(latest)
+      })
+      return Promise.resolve()
+    }
     const fail = (summary: string): Promise<void> =>
       d.settle({
         taskId: task.id,
@@ -124,6 +158,18 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
     if (sha === null) return ask(say('jobs.gate.github.carry.headUnread'))
     const tip = await d.headOf(cwd, `refs/heads/${info.branch}`)
     if (tip !== sha) return ask(say('jobs.gate.github.carry.headOffTip', { branch: info.branch }))
+    // G6 (spec §30): the bound pull request as it is now — merged or closed while the Task repaired, or while the Host was
+    // down — is not pushed onto: GitHub deleted a merged PR's branch, and a push would make it again. Asked as the watch
+    // asks a waiting round (G3b2); without a live read, the record decides.
+    const held = run.githubState?.binding
+    if (held) {
+      const heldRepo = repoOfBinding(held) ?? repo
+      const live = d.readPr ? await d.readPr(cwd, heldRepo, held.number) : null
+      if (live && !live.ok) return askUnlessTransient(live.kind, say('jobs.gate.github.carry.lookupFailed', { message: live.message }))
+      const state = live?.ok ? live.state : run.githubState?.pr?.state
+      if (state === 'merged') return askGitHub('github-pr-closed', say('jobs.gate.github.q.merged', { pr: held.number }), ['mark-failed'])
+      if (state === 'closed') return askGitHub('github-pr-closed', say('jobs.gate.github.q.closed', { pr: held.number }), ['wait', 'mark-failed'])
+    }
     const pushed = await d.push(cwd, info.branch)
     if (!pushed.ok) {
       // design §4.2: GitHub has commits on the branch Astera does not know; "continue" brings them in (G3b2)
@@ -132,7 +178,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
         if (noted.status >= 300) d.log(`lifecycle ci: run ${run.id}: the refused push could not be recorded: ${JSON.stringify(noted.body)}`)
         return askGitHub('github-external-head', say('jobs.gate.github.q.externalHeadPush', { branch: info.branch, detail: pushed.detail }), ['continue', 'mark-failed'])
       }
-      return ask(say('jobs.gate.github.carry.pushFailed', { why: say(PUSH_WORDS[pushed.kind]), detail: pushed.detail }))
+      return askUnlessTransient(pushed.kind, say('jobs.gate.github.carry.pushFailed', { why: say(PUSH_WORDS[pushed.kind]), detail: pushed.detail }))
     }
     if ((await d.headOf(cwd)) !== sha) return ask(say('jobs.gate.github.carry.pushMoved'))
 
@@ -151,7 +197,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
         boundAt: new Date(now()).toISOString()
       })
       const found = await d.findOpenPrs(cwd, repo, info.branch, base)
-      if (!found.ok) return ask(say('jobs.gate.github.carry.lookupFailed', { message: found.message }))
+      if (!found.ok) return askUnlessTransient(found.kind, say('jobs.gate.github.carry.lookupFailed', { message: found.message }))
       // design §4.3: several open pull requests → a person chooses, and the answer binds it (G3b2). A choice no longer
       // open is asked about again, never swapped for what is left (G3b2 final review M3); with none left, a draft is opened
       const numbers = found.prs.map((p) => `#${p.number}`).join(', ')
@@ -175,7 +221,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
           // A create that failed may still have made it (a timeout): look before asking (L16)
           const again = await d.findOpenPrs(cwd, repo, info.branch, base)
           if (!again.ok || again.prs.length !== 1)
-            return ask(say('jobs.gate.github.carry.createFailed', { message: created.message }))
+            return askUnlessTransient(again.ok ? created.kind : again.kind, say('jobs.gate.github.carry.createFailed', { message: created.message }))
           made = bind(again.prs[0], true)
         }
       }
@@ -187,10 +233,12 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
     if (recorded.status >= 300) return ask(say('jobs.gate.github.carry.recordFailed', { reason: JSON.stringify(recorded.body) }))
     const waited = await d.recordWait({ taskId: task.id, since, pr: binding.number, sha })
     if (waited.status >= 300) return ask(say('jobs.gate.github.carry.waitFailed', { reason: JSON.stringify(waited.body) }))
+    transient.delete(tries)
   }
 
-  return {
+  const api: LifecycleCi = {
     onState: (s) => {
+      latest = s
       for (const task of s.tasks) {
         if (!awaitingPush(task) || inFlight.has(task.id)) continue
         const cool = cooling.get(task.id)
@@ -213,4 +261,5 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
       while (inFlight.size > 0) await Promise.all([...inFlight.values()])
     }
   }
+  return api
 }

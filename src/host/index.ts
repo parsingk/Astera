@@ -87,6 +87,7 @@ import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
 import { ancestry, createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
 import { findOpenPrs } from '../core/github/prBinding'
 import { readPrState } from '../core/github/prState'
+import { prByNumber } from '../core/github/prs'
 import { readRuleCheckNames } from '../core/github/ciVerdict'
 import { readIssue } from '../core/github/issue'
 import { readAnnotations, readJobLog } from '../core/github/evidence'
@@ -929,6 +930,11 @@ async function main(): Promise<void> {
         headOf: (cwd, ref) => headOf(realGit, cwd, ref),
         findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
         createDraftPr: (cwd, repo, pr) => createDraftPr(defaultGhRunner, cwd, repo, pr),
+        // G6 (spec §30): the bound pull request as it is now, read before every push
+        readPr: async (cwd, repo, n) => {
+          const r = await prByNumber(defaultGhRunner, cwd, repo, n)
+          return r.ok ? { ok: true, state: r.pr?.state ?? null } : r
+        },
         record: (args) => orch.handle('runs-github-record', args),
         recordWait: (args) => orch.handle('lifecycle-ci-wait', args),
         settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),

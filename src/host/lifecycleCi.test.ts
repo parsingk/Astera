@@ -12,10 +12,13 @@ const SHA = 'c'.repeat(40)
 const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
 const ISSUE: JobSourceRef = { id: 'github', itemId: '7', label: 'GitHub issue #7', url: 'https://github.com/parsingk/astera-lifecycle-sandbox/issues/7' }
 
-const stateWith = (o: { binding?: GitHubBinding; source?: JobSourceRef; ciWait?: { since: string; done: CheckResult[]; pr?: number; sha?: string; bindPr?: number } } = {}): OrchState => ({
+const stateWith = (o: { binding?: GitHubBinding; source?: JobSourceRef; ciWait?: { since: string; done: CheckResult[]; pr?: number; sha?: string; bindPr?: number }; prState?: 'open' | 'closed' | 'merged' } = {}): OrchState => ({
   ...emptyState(),
   jobs: [{ id: 'job_1', objective: 'o', cwd: '/repo', createdAt: ISO, github: POLICY, convergence: {}, ...(o.source ? { source: o.source } : {}) }],
-  runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: ISO, worktree: '/wt-run', ...(o.binding ? { githubState: { binding: o.binding, log: [], seq: 0 } } : {}) }],
+  runs: [{
+    id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: ISO, worktree: '/wt-run',
+    ...(o.binding ? { githubState: { binding: o.binding, log: [], seq: 0, ...(o.prState ? { pr: { state: o.prState, isDraft: true, baseBranch: 'main' } } : {}) } } : {})
+  }],
   tasks: [
     { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: ISO, updatedAt: ISO },
     {
@@ -40,6 +43,10 @@ function rig(o: {
   worktree?: boolean
   origin?: string | null
   lang?: 'en' | 'ko'
+  /** The bound pull request read live before a push (G6); each call takes the next answer, the last repeating. */
+  live?: Awaited<ReturnType<NonNullable<LifecycleCiDeps['readPr']>>>[]
+  /** Answers for the n-th push (G6 retries), the last repeating; overrides `push`. */
+  pushes?: Awaited<ReturnType<LifecycleCiDeps['push']>>[]
 } = {}) {
   const calls: string[] = []
   const settled: { taskId: string; result: CheckResult }[] = []
@@ -50,13 +57,16 @@ function rig(o: {
   const lookups = [...(o.open ?? [[]])]
   const clock = { now: NOW }
   let headCalls = 0
+  const lives = [...(o.live ?? [])]
+  const pushes = [...(o.pushes ?? [])]
+  const scheduled: { ms: number; run: () => void }[] = []
   const deps: LifecycleCiDeps = {
     worktreeOf: (p) => (o.worktree !== false && p === '/wt-run' ? { repoPath: '/repo', branch: 'u/a', baseRef: 'origin/main' } : null),
     originOf: async () => (o.origin === undefined ? 'git@github.com:parsingk/astera-lifecycle-sandbox.git' : o.origin),
     isClean: async () => (calls.push('isClean'), { clean: o.clean ?? true, changedCount: o.changed ?? 0 }),
     readCommits: async () => (calls.push('readCommits'), o.commits === undefined ? [{ subject: 'Fix add', body: 'add adds now' }] : o.commits),
     baseBranch: async () => 'main',
-    push: async () => (calls.push('push'), o.push ?? { ok: true }),
+    push: async () => (calls.push('push'), pushes.length > 1 ? pushes.shift()! : pushes[0] ?? o.push ?? { ok: true }),
     headOf: async (_cwd, ref) => (calls.push(ref ? `headOf ${ref}` : 'headOf'), o.heads ? o.heads(ref, headCalls++) : SHA),
     findOpenPrs: async () => {
       calls.push('findOpenPrs')
@@ -70,11 +80,20 @@ function rig(o: {
     openGitHubGate: async (a) => (calls.push('openGitHubGate'), githubGates.push(a), { status: o.gateStatus ?? 200, body: {} }),
     lang: () => o.lang ?? 'ko',
     log: () => {},
-    now: () => clock.now
+    now: () => clock.now,
+    ...(o.live ? { readPr: async () => (calls.push('readPr'), lives.length > 1 ? lives.shift()! : lives[0]) } : {}),
+    schedule: (ms, run) => void scheduled.push({ ms, run })
   }
   const ci = createLifecycleCi(deps)
   return {
-    ci, calls, settled, githubGates, records, waits, created, clock,
+    ci, calls, settled, githubGates, records, waits, created, clock, scheduled,
+    /** Lets the cooling pass and runs what the carrier scheduled, then waits for it. */
+    async retry() {
+      const due = scheduled.splice(0)
+      clock.now += RETRY_MS + 1_000
+      for (const s of due) s.run()
+      await ci.drain()
+    },
     /** The carrier's own stops (G3b2 final review M7): a GitHub question whose answers are retry and mark-failed. */
     get gates() {
       return githubGates.filter((g) => g.kind === 'github-carry')
@@ -140,11 +159,17 @@ describe('createLifecycleCi', () => {
     expect(r.records[0]).toMatchObject({ patch: { binding: { number: 3, createdByAstera: true } } })
   })
 
-  it('a create that failed with nothing found after asks a person and makes no second one', async () => {
+  // G6 (spec §29): a create that failed for the network, with nothing found after, is tried again — one create per try,
+  // each after a lookup (L16) — and asks on the third try in a row
+  it('a create that failed with nothing found after makes no second one in the same try, and asks on the third', async () => {
     const r = rig({ open: [[], []], create: { ok: false, kind: 'network', message: 'Could not reach GitHub' } })
     r.ci.onState(stateWith())
     await r.ci.drain()
     expect(r.calls.filter((c) => c === 'createDraftPr')).toHaveLength(1)
+    expect(r.gates).toEqual([])
+    await r.retry()
+    await r.retry()
+    expect(r.calls.filter((c) => c === 'createDraftPr')).toHaveLength(3)
     expect(r.gates[0].question).toContain('Could not reach GitHub')
     expect(r.waits).toEqual([])
   })
@@ -248,6 +273,81 @@ describe('createLifecycleCi', () => {
     await refused.ci.drain()
     expect(refused.gates[0].question).toContain('Permission denied (publickey).')
     expect(refused.calls).not.toContain('findOpenPrs')
+  })
+
+  // G6 (spec §30, facts 21-22): a pull request merged or closed while the lifecycle Task repaired, or while the Host was
+  // down, is read live before the push — GitHub deleted a merged PR's branch, and pushing would make it again
+  describe('the bound pull request read before the push (G6)', () => {
+    const binding: GitHubBinding = { repository: 'parsingk/astera-lifecycle-sandbox', number: 3, url: 'u', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: ISO }
+    it('a merged one is not pushed, and asks with mark-failed only', async () => {
+      const r = rig({ live: [{ ok: true, state: 'merged' }] })
+      r.ci.onState(stateWith({ binding }))
+      await r.ci.drain()
+      expect(r.calls).not.toContain('push')
+      expect(r.githubGates).toEqual([{ taskId: 'tsk_l', since: ISO, kind: 'github-pr-closed', question: expect.stringContaining('#3'), options: ['mark-failed'] }])
+    })
+    it('a closed one is not pushed, and asks with wait or mark-failed', async () => {
+      const r = rig({ live: [{ ok: true, state: 'closed' }] })
+      r.ci.onState(stateWith({ binding }))
+      await r.ci.drain()
+      expect(r.calls).not.toContain('push')
+      expect(r.githubGates[0]).toMatchObject({ kind: 'github-pr-closed', options: ['wait', 'mark-failed'] })
+    })
+    it('an open one is pushed as before', async () => {
+      const r = rig({ live: [{ ok: true, state: 'open' }] })
+      r.ci.onState(stateWith({ binding, prState: 'closed' }))
+      await r.ci.drain()
+      expect(r.calls).toContain('push')
+      expect(r.waits).toHaveLength(1)
+    })
+    it('with no live read it goes by the record', async () => {
+      const r = rig()
+      r.ci.onState(stateWith({ binding, prState: 'merged' }))
+      await r.ci.drain()
+      expect(r.calls).not.toContain('push')
+      expect(r.githubGates[0]).toMatchObject({ kind: 'github-pr-closed' })
+    })
+  })
+
+  // G6 (spec §29): GitHub briefly unreachable is not a person's problem at once — the carry is tried again, and asks only
+  // after the third network failure in a row of the same round
+  describe('a network failure is tried again before asking (G6)', () => {
+    const NET = { ok: false as const, kind: 'network' as const, detail: 'Could not resolve host: github.com' }
+    it('a push that failed for the network is retried, and asks on the third failure', async () => {
+      const r = rig({ pushes: [NET] })
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      expect(r.gates).toEqual([])
+      expect(r.scheduled).toHaveLength(1)
+      await r.retry()
+      expect(r.gates).toEqual([])
+      await r.retry()
+      expect(r.calls.filter((c) => c === 'push')).toHaveLength(3)
+      expect(r.gates).toHaveLength(1)
+      expect(r.gates[0].question).toContain('Could not resolve host')
+    })
+    it('a push that comes through on a retry carries the round', async () => {
+      const r = rig({ pushes: [NET, { ok: true }] })
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      await r.retry()
+      expect(r.gates).toEqual([])
+      expect(r.waits).toHaveLength(1)
+    })
+    it('a live read that failed for the network is retried too; one refused for auth asks at once', async () => {
+      const binding: GitHubBinding = { repository: 'parsingk/astera-lifecycle-sandbox', number: 3, url: 'u', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: ISO }
+      const net = rig({ live: [{ ok: false, kind: 'network', message: 'Could not reach GitHub' }, { ok: true, state: 'open' }] })
+      net.ci.onState(stateWith({ binding }))
+      await net.ci.drain()
+      expect(net.gates).toEqual([])
+      await net.retry()
+      expect(net.waits).toHaveLength(1)
+      const auth = rig({ live: [{ ok: false, kind: 'auth', message: 'gh is not logged in' }] })
+      auth.ci.onState(stateWith({ binding }))
+      await auth.ci.drain()
+      expect(auth.gates).toHaveLength(1)
+      expect(auth.calls).not.toContain('push')
+    })
   })
 
   // G3b2 (design §4.2): a push GitHub refused because the branch moved is a head Astera did not push
