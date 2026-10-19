@@ -2638,7 +2638,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    this it fell through to the browser's bare h4 (bold, 1.33em margins), centred by the grid above
    into something that looked like an error banner rather than this screen's usual small print. */
 .hiw-pane-empty h4 { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--text); }
-.hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-fhead { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
 /* Clamped the same way as the sidebar's .hiw-name — the prompt only *asks* the write-up agent for a
    title under 40 characters, nothing enforces it, and the fallback heading (record.request) is a
    whole paragraph when there is no title at all. */
@@ -2647,10 +2647,14 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    that h4's `title` tooltip — a touch device or several screen readers cannot reach a tooltip.
    RecordDetail.tsx renders this only when a title is actually standing in for the heading, so the
    same sentence never appears twice. */
-.hiw-req { margin: 2px 0 0; font-size: 11px; color: var(--text-faint); }
+/* A long one scrolls in a box of its own height: taller than the pane, it left the write-up below with no way to reach it
+   (G8 demo findings review M3). Scrolled rather than cut, so the words stay on screen. */
+.hiw-req { margin: 2px 0 0; font-size: 11px; color: var(--text-faint); max-height: 5em; overflow-y: auto; }
 /* A long request wraps in the heading's column, which may shrink; the status and the buttons beside it may not, nor wrap
-   (G8 demo: a ticket Job's objective squeezed them into one-letter columns). */
-.hiw-fhead > div { min-width: 0; }
+   (G8 demo: a ticket Job's objective squeezed them into one-letter columns). The column takes the row's room first and
+   keeps 12em of its own: narrower than that, the buttons wrap below it rather than run past the pane's edge (review
+   M1). A token with no break in it, a path, breaks anywhere rather than run over them (review M2). */
+.hiw-fhead > div { flex: 999 1 12em; min-width: 0; overflow-wrap: anywhere; }
 .hiw-fhead > .hiw-st, .hiw-fhead > button { flex-shrink: 0; white-space: nowrap; }
 /* Colour comes from the same table as .hiw-g and .tab-glyph (RECORD_GLYPH_COLOR) */
 .hiw-st { font-size: 11px; }
