@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runningCount, isStoppedWorker, runningRunCount } from './running'
+import { runningCount, isStoppedWorker, runningRunCount, outcomeOfTasks } from './running'
 import { snapshotFor } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
@@ -30,6 +30,26 @@ const task = (id: string, status: Task['status']): Task => ({
   createdAt: '2026-08-20T00:00:00.000Z',
   updatedAt: '2026-08-20T00:00:00.000Z'
 })
+// GitHub lifecycle G5c (design §3.5): `runs reconverge` adds a lifecycle Task beside a terminal one. The Run's outcome
+// reads only the latest — an earlier failed one, superseded, must not fail a Run whose new carrying passed.
+describe('outcomeOfTasks with a reconverged lifecycle Task', () => {
+  // A failed Task is terminal only at the failure limit (isTerminal); these are, so the outcome is decided
+  const done = (t: Task): Task => (t.status === 'failed' ? { ...t, consecutiveFailures: 3 } : t)
+  const life = (id: string, status: Task['status'], createdAt: string): Task => done({ ...task(id, status), kind: 'lifecycle', createdAt })
+  const T1 = '2026-08-20T01:00:00.000Z'
+  const T2 = '2026-08-20T02:00:00.000Z'
+
+  it('reads the latest lifecycle Task, not an earlier one', () => {
+    expect(outcomeOfTasks([task('a', 'completed'), life('l1', 'failed', T1), life('l2', 'completed', T2)])).toBe('completed')
+    expect(outcomeOfTasks([task('a', 'completed'), life('l1', 'completed', T1), life('l2', 'failed', T2)])).toBe('failed')
+    expect(outcomeOfTasks([task('a', 'completed'), life('l1', 'completed', T1), life('l2', 'ready', T2)])).toBe('running')
+  })
+
+  it('still fails a Run on a failed ordinary Task', () => {
+    expect(outcomeOfTasks([done(task('a', 'failed')), life('l1', 'failed', T1), life('l2', 'completed', T2)])).toBe('failed')
+  })
+})
+
 /** 열린 Dispatch — outcome 도 endedAt 도 없다. 이것만이 "지금 워커가 붙어 있다"를 말한다 */
 const open = (id: string, taskId: string): Dispatch => ({
   id,

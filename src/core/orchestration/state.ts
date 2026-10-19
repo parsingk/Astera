@@ -45,7 +45,7 @@ import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
 import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
-import { isLifecycleTask, mergeReadyOf, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, latestLifecycleTaskOf, lifecycleTaskFor, mergeReadyOf, withLifecycleTask } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -540,6 +540,38 @@ export function recordRunGitHub(s: OrchState, runId: string, patch: RunGitHubPat
   if (githubState === null) return ok(s, run)
   const next = { ...run, githubState }
   return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? next : r)) }, next)
+}
+
+/** `runs reconverge` (GitHub lifecycle §3.5, G5c): carries a finished lifecycle Run through GitHub again. A new lifecycle
+ *  Task joins the same Run — a fresh id, so a fresh repair budget, and ready at once — and the old merge-ready evidence
+ *  and its withdrawal go in the same write, so the view does not show merge-ready while the new Task works. The earlier
+ *  lifecycle Task stays as it ended; the Run's outcome reads only the latest (outcomeOfTasks).
+ *
+ *  Its deps are the earlier one's deps — the Run's ordinary Tasks, all completed — not the earlier one itself: a failed
+ *  one would hold the new Task pending for ever (recomputeReady), and the dispatch loop folds the Run root and picks the
+ *  accounts for an integration Task from these deps (startLifecycle).
+ *
+ *  Refused: an unknown Run (missing); a Job without lifecycle; a Run without a branch of its own; a Run never carried,
+ *  or whose latest lifecycle Task still works; a bound pull request merged or closed. */
+export function reconvergeRun(s: OrchState, runId: string, now: string): Res<Task> {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return gone(`unknown run: ${runId}`)
+  if (!s.jobs.find((j) => j.id === run.jobId)?.github) return err('This Run’s Job is not carried through GitHub')
+  if (run.worktree === undefined) return err('This Run has no branch of its own, so it cannot be carried through GitHub')
+  const latest = latestLifecycleTaskOf(s, runId)
+  if (!latest) return err('This Run has not been carried through GitHub yet: its lifecycle Task comes once its Tasks complete')
+  if (latest.status !== 'completed' && latest.status !== 'failed')
+    return err(`This Run’s lifecycle Task is still ${latest.status}: it is carried through GitHub already`)
+  const pr = run.githubState?.pr
+  if (pr && pr.state !== 'open') return err(`This Run’s pull request is ${pr.state}, so there is nothing left to carry`)
+  const task = lifecycleTaskFor(runId, latest.deps, latest.validateConfigIds ?? [GITHUB_CI_CHECK], now)
+  let next: OrchState = { ...s, tasks: recomputeReady([...s.tasks, task]) }
+  if (run.githubState?.mergeReady || run.githubState?.invalidated) {
+    const cleared = recordRunGitHub(next, runId, { mergeReady: null }, now)
+    if (!cleared.ok) return err(cleared.error)
+    next = cleared.state
+  }
+  return ok(next, next.tasks.find((t) => t.id === task.id)!)
 }
 
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {

@@ -41,11 +41,18 @@ export function outcomeOf(state: OrchState, runId: string): RunOutcome {
   return outcomeOfTasks(tasksOwnedBy(state, runId))
 }
 
-/** outcomeOf for Tasks already gathered (the Jobs sidebar fold indexes them once, performance audit M1) */
+/** outcomeOf for Tasks already gathered (the Jobs sidebar fold indexes them once, performance audit M1).
+ *
+ *  **Only the latest lifecycle Task counts** (GitHub lifecycle G5c): `runs reconverge` adds a new one beside a terminal
+ *  one, and a failed one so superseded must not fail a Run whose new carrying passed. The kind is read here rather than
+ *  through lifecycleTask.ts, which imports this file. */
 export function outcomeOfTasks(tasks: readonly Task[]): RunOutcome {
-  if (tasks.length === 0) return 'running'
-  if (!tasks.every(isTerminal)) return 'running'
-  return tasks.some((t) => t.status === 'failed') ? 'failed' : 'completed'
+  let latest: Task | undefined
+  for (const t of tasks) if (t.kind === 'lifecycle' && (!latest || t.createdAt >= latest.createdAt)) latest = t
+  const counted = latest === undefined ? tasks : tasks.filter((t) => t.kind !== 'lifecycle' || t === latest)
+  if (counted.length === 0) return 'running'
+  if (!counted.every(isTerminal)) return 'running'
+  return counted.some((t) => t.status === 'failed') ? 'failed' : 'completed'
 }
 
 /** 지금 일이 도는 Task 의 개수. 사이드바의 `+N` 과 두 화면(JobsView·RunDetail)의 머리 숫자가

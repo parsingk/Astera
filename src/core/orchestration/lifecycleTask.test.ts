@@ -1,10 +1,10 @@
 // The Run-level lifecycle Task (GitHub lifecycle design §3.2): added in the same write as the last ordinary
 // completion of a lifecycle Run, never otherwise.
 import { describe, it, expect } from 'vitest'
-import { emptyState, type OrchState } from './state'
+import { emptyState, reconvergeRun, type OrchState } from './state'
 import type { Task } from './types'
 import { GITHUB_CI_CHECK } from '../github/lifecycle'
-import { LIFECYCLE_TASK_TITLE, isLifecycleTask, lifecycleBriefOf, lifecycleRepairFacts, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { LIFECYCLE_TASK_TITLE, isLifecycleTask, latestLifecycleTaskOf, lifecycleBriefOf, lifecycleRepairFacts, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 
 const NOW = '2026-10-18T00:00:00.000Z'
 const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
@@ -48,6 +48,82 @@ describe('withLifecycleTask', () => {
   it('reads only the Run’s own Tasks, not the Job’s definitions', () => {
     const s = state([task('a'), task('def', { runId: undefined, jobId: 'job_1', status: 'pending' })])
     expect(withLifecycleTask(s, 'run_1', NOW).tasks.find(isLifecycleTask)?.deps).toEqual(['a'])
+  })
+})
+
+// GitHub lifecycle G5c (design §3.5): `runs reconverge` adds a new lifecycle Task to a finished lifecycle Run — a fresh
+// id and budget, ready at once — and clears the old merge-ready evidence in the same write.
+describe('reconvergeRun', () => {
+  const LATER = '2026-10-19T00:00:00.000Z'
+  const H = 'c'.repeat(40)
+  const finished = (status: 'completed' | 'failed', github: Partial<NonNullable<OrchState['runs'][number]['githubState']>> = {}): OrchState => {
+    const s = withLifecycleTask(state([task('a', { validateConfigIds: ['lint'] }), task('b')]), 'run_1', NOW)
+    return {
+      ...s,
+      tasks: s.tasks.map((t) => (isLifecycleTask(t) ? { ...t, status } : t)),
+      runs: s.runs.map((r) => ({ ...r, githubState: { log: [], seq: 0, ...github } }))
+    }
+  }
+
+  it('adds a ready lifecycle Task with the ordinary Tasks as deps, after a completed one', () => {
+    const s = finished('completed')
+    const old = s.tasks.find(isLifecycleTask)!
+    const r = reconvergeRun(s, 'run_1', LATER)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value).toMatchObject({
+      kind: 'lifecycle', runId: 'run_1', status: 'ready', deps: ['a', 'b'], title: LIFECYCLE_TASK_TITLE,
+      validateConfigIds: ['lint', GITHUB_CI_CHECK], reviewRequested: true, consecutiveFailures: 0, createdAt: LATER
+    })
+    expect(r.value.id).not.toBe(old.id)
+    expect(r.state.tasks.find((t) => t.id === old.id)?.status).toBe('completed') // completed stays terminal
+    expect(latestLifecycleTaskOf(r.state, 'run_1')?.id).toBe(r.value.id)
+  })
+
+  // Review Focus 1: deps on the failed predecessor would keep the new Task pending for ever (recomputeReady)
+  it('is ready at once after a failed one too', () => {
+    const r = reconvergeRun(finished('failed'), 'run_1', LATER)
+    expect(r.ok && r.value.status).toBe('ready')
+  })
+
+  // Review Focus 4: the view must not show merge-ready while the new Task works
+  it('clears the old merge-ready evidence and its withdrawal in the same write', () => {
+    const evidence = {
+      pullRequestNumber: 12, headSha: H, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true,
+      unresolvedQuestions: 0, ciChecks: [], evaluatedAt: NOW
+    }
+    const ready = reconvergeRun(finished('completed', { mergeReady: evidence }), 'run_1', LATER)
+    expect(ready.ok && ready.state.runs[0].githubState?.mergeReady).toBeUndefined()
+    const withdrawn = reconvergeRun(finished('completed', { invalidated: { reason: 'head-changed', at: NOW } }), 'run_1', LATER)
+    expect(withdrawn.ok && withdrawn.state.runs[0].githubState?.invalidated).toBeUndefined()
+  })
+
+  // Review Focus 2: each refusal writes nothing
+  it('refuses an open lifecycle Task, a Run never carried, a Job without lifecycle, a Run without a branch, and a merged or closed PR', () => {
+    const pr = (state: 'open' | 'closed' | 'merged') => ({ pr: { state, isDraft: true, baseBranch: 'main' } })
+    const open = { ...finished('completed'), tasks: finished('completed').tasks.map((t) => (isLifecycleTask(t) ? { ...t, status: 'validating' as const } : t)) }
+    const never = state([task('a'), task('b', { status: 'validating' })])
+    const plain = state([task('a')], false)
+    const branchless = { ...finished('completed'), runs: finished('completed').runs.map(({ worktree: _w, ...r }) => r) }
+    for (const s of [open, never, plain, branchless, finished('completed', pr('merged')), finished('failed', pr('closed'))]) {
+      const r = reconvergeRun(s, 'run_1', LATER)
+      expect(r.ok).toBe(false)
+      if (!r.ok) expect(r.missing).toBeUndefined()
+    }
+    expect(reconvergeRun(finished('completed', pr('open')), 'run_1', LATER).ok).toBe(true)
+  })
+
+  // A failed lifecycle Task under the failure limit is not terminal (mark-failed keeps the count): after a reconverge the
+  // Run has two lifecycle Tasks that are not terminal, and the open one is the new one, not the first in the list
+  it('makes the new Task the open one, even beside a failed one that is not terminal', () => {
+    const r = reconvergeRun(finished('failed'), 'run_1', LATER)
+    expect(r.ok && openLifecycleTaskOf(r.state, 'run_1')?.id).toBe(r.ok && r.value.id)
+  })
+
+  it('answers an unknown Run as missing', () => {
+    const r = reconvergeRun(finished('completed'), 'run_nope', LATER)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.missing).toBe(true)
   })
 })
 
