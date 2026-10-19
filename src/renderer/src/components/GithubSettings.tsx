@@ -108,10 +108,11 @@ export function GithubSettings(): React.JSX.Element {
         <GithubLifecycleDefaultsView
           value={lifecycle}
           onChange={(next) => {
-            const before = lifecycle
-            setLifecycle(next) // optimistic — reverted below on failure
+            setLifecycle(next) // optimistic — read back below on failure
             void window.api.settings.setGithubLifecycle(next).catch((err) => {
-              setLifecycle(before)
+              // What the file holds, not the value before this save: a later save may already have landed (final
+              // review M8)
+              void window.api.settings.getGithubLifecycle().then(setLifecycle, () => {})
               toast.error(t('github.settings.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
             })
           }}
