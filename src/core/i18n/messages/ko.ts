@@ -1785,7 +1785,7 @@ export const ko = {
   'jobs.github.invalidated': '병합 준비 철회: {reason}',
   'jobs.github.externalHead': 'Astera 가 푸시하지 않은 커밋이 PR 에 있습니다: {sha}',
   'jobs.github.externalHeadNoSha': 'PR 이 Astera 가 푸시한 커밋을 지나갔습니다',
-  'jobs.github.rebound': 'base 를 {branch} 로 다시 묶었습니다',
+  'jobs.github.rebound': 'base 를 {branch} 브랜치로 다시 묶었습니다',
   'jobs.github.noCi': '이 head 는 CI 없이 진행하기로 했습니다',
   'jobs.github.sourceChanged': 'Job 을 만든 뒤 소스 이슈가 바뀌었습니다',
   'jobs.github.noLocalCheck': '로컬 검사를 지정한 Task 가 없어, 모든 수리가 로컬 확인 없이 GitHub CI 로 갑니다.',
