@@ -149,8 +149,9 @@ What a Runtime offers is the same list its pairing is checked against:
 - **Changes**, with a full-control pairing only: creating, running, stopping and resuming Jobs and runs, adding tasks,
   answering questions, creating, typing into, resizing and ending sessions, a Job carried through GitHub
   (`jobs create --github-lifecycle`, made from an objective: issue → Job is not offered remotely) and carrying a run
-  through GitHub again (`runs reconverge`). The pushes, pull requests and CI reruns those lead to are the Runtime's
-  Host's, with the Runtime's own `gh` login; your credentials never reach it.
+  through GitHub again (`runs reconverge`). Such a Job takes the Runtime's own Settings › GitHub defaults, and the
+  pushes, pull requests and CI reruns it leads to are the Runtime's Host's, with the Runtime's own `gh` login; your
+  credentials never reach it.
 - **Never remotely**: anything on this machine only (`host`, `skills`, `higgsfield`, `mcp`, `runtime`, `runtimes`,
   `projects add`, `browser js`, `app js`), How It Works records, GitHub writes of your own (`github-pr-create`,
   `github-ci-rerun`, Jobs from issues and job sources), and the Host's own management.

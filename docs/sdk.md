@@ -256,7 +256,7 @@ An event's `kind` is one of `run-created`, `task-created`, `dispatch-started`, `
 `github-pr-bound`, `github-pr-created`, `github-pushed`, `github-ci-started`, `github-ci-failed`, `github-ci-rerun`,
 `github-ci-passed`, `github-merge-ready`, `github-invalidated` (the reason in `summary`) and `github-source-changed`.
 
-It throws `NOT_FOUND` when the Run is deleted and `HOST_NOT_RUNNING` when the Host goes away; it does not pick up again
+`runs.follow` throws `NOT_FOUND` when the Run is deleted and `HOST_NOT_RUNNING` when the Host goes away; it does not pick up again
 by itself (an [events](#events) subscription does). Leaving the loop (`break`, `return()`) or aborting its `signal`
 ends the call it is waiting on. [follow-a-run.ts](../examples/sdk/follow-a-run.ts) prints a Run this way.
 

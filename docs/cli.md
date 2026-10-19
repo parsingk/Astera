@@ -919,8 +919,9 @@ policy as `github`. A worker session Astera started is refused the flag with a 5
 `jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create`, `github-ci-rerun` and `runs reconverge`: those
 writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off
 Astera's GitHub commands and is not a sandbox.
-In the app, **New job** and **+ From source** have the same switch (**Carry it through GitHub**, off by default),
-which asks the Host about the folder before the Job is made and holds **Create** until it can carry it. The rerun and
+In the app, **New job** and **From a source** have the same switch (**Carry it through GitHub**, off by default),
+which asks the Host about the folder before the Job is made and holds **Create** (**Make the job** in the source
+window) until it can carry it. The rerun and
 CI-wait policy a Job takes comes from **Settings › GitHub** (reruns of a CI failure outside the code, 1 to 10; the wait
 for CI, 10 to 1440 minutes), read by the Host when the Job is made and kept by the Job.
 

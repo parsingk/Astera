@@ -1493,7 +1493,7 @@ export const ja: Catalog = {
   'jobs.gate.github.q.chosenGone': '選んだ pull request #{pr} はもう開いていません。ブランチ {branch} で今開いているもの: {numbers}。この Run に結び付けるものを選んでください。',
   'jobs.gate.github.q.closed': 'この Run の pull request #{pr} が閉じられました。GitHub で開き直してもう一度待つか、Task を失敗にしてください。',
   'jobs.gate.github.q.merged': 'この Run の pull request #{pr} は Astera の判定の前にマージされました。待つべき CI はもうないので、Task を失敗にしてください。',
-  'jobs.gate.github.q.outside': 'GitHub CI がコード以外の理由（{class}）で失敗しました: {summary}。GitHub でもう一度実行してから待つか、Task を失敗にしてください。',
+  'jobs.gate.github.q.outside': 'GitHub CI がコード以外の理由（{class}）で失敗しました: {summary}。GitHub でもう一度実行してからもう一度待つか、Task を失敗にしてください。',
   'jobs.gate.github.q.infraRerunOff': 'GitHub CI がコード以外の理由（{class}）で失敗しました: {summary}。この Job では自動の再実行がオフです。再実行するか、GitHub で再実行したならもう一度待つか、Task を失敗にしてください。',
   'jobs.gate.github.q.infraRerunSpent': 'GitHub CI がまたコード以外の理由（{class}）で失敗しました: {summary}。Astera はこの Job が許す回数（{reruns}）だけすでに再実行しました。もう一度再実行するか、GitHub で再実行したならもう一度待つか、Task を失敗にしてください。',
   'jobs.gate.github.q.infraRerunFailed': 'GitHub CI がコード以外の理由（{class}）で失敗しました: {summary}。Astera は再実行できませんでした: {reason}。再実行するか、GitHub で再実行したならもう一度待つか、Task を失敗にしてください。',
