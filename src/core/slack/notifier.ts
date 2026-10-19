@@ -786,7 +786,7 @@ export class SlackNotifier {
   }
 
   /** Taps the rolling state — only waiting (a resume is scheduled), switching (changing account), nudged
-   *  (blind-spot auto-resume), and stalled (auto-resume failed) are announced; trust and none are ignored */
+   *  (resumed in place once the wait is over), and stalled (auto-resume failed) are announced; trust and none are ignored */
   onRollState(ev: RollStateEvent): void {
     const record = this.records.get(ev.sessionId)
     if (!record) return

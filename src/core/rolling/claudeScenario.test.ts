@@ -153,21 +153,19 @@ describe('목 계정 롤링 시나리오 — 단일 계정', () => {
     w.dump('단일 계정 · 5시간 한도 → 대기 → 같은 세션에서 재개')
   })
 
-  it('한도 증거 없이 리셋 시각만 도달하면 아무것도 하지 않는다 (증거 게이트)', async () => {
+  // 한도를 감지한 적이 없으면 "이어서 하라" 는 가지 않는다 — 사용률이 한도 가까이(97%)여도.
+  // 사용률로 한도를 짐작해 보내던 리셋 앵커는 2026-10-19 에 없앴다.
+  it('한도를 감지한 적 없이 리셋 시각만 도달하면 아무것도 하지 않는다', async () => {
     const start = Date.now()
-    const w = world({
-      probeActivity: () => Promise.resolve(start - 60_000), // 리셋 한참 전에 멈춘 활동
-      readPending: () => Promise.resolve(1) // 남은 백그라운드 작업도 있다
-    })
-    // 사용률 30% — 한도에 걸린 적이 없는 세션. 사용자가 그냥 자리를 비웠을 뿐이다.
-    w.payloads.set('s1', mkPayload({ five: 30, fiveReset: new Date(start + 10 * MIN).toISOString() }))
+    const w = world()
+    w.payloads.set('s1', mkPayload({ five: 97, fiveReset: new Date(start + 10 * MIN).toISOString() }))
     w.coord.register(w.session(['a1']))
 
-    await vi.advanceTimersByTimeAsync(16 * MIN) // 리셋(+10분) + GRACE(5분) 경과
+    await vi.advanceTimersByTimeAsync(16 * MIN) // 리셋(+10분)을 한참 지난다
 
     expect(w.written).toEqual([]) // 프롬프트가 나가면 안 된다
     expect(w.spawned).toEqual([])
-    w.dump('단일 계정 · 한도 증거 없음 → 리셋 시각 도달해도 무개입')
+    w.dump('단일 계정 · 한도 감지 없음 → 리셋 시각 도달해도 무개입')
   })
 })
 
@@ -215,7 +213,7 @@ describe('목 계정 롤링 시나리오 — 멀티 계정', () => {
     w.dump('멀티 계정 · a1→a2→a3 전부 차단 → 대기 → a1 복귀')
   })
 
-  it('전환에 성공하면 증거 게이트가 정상 세션의 진행을 막지 않는다', async () => {
+  it('전환에 성공한 뒤 쉬는 세션에는 아무것도 보내지 않는다', async () => {
     const w = world()
     w.payloads.set('s1', mkPayload({ five: 100, weekly: 30 }))
     w.coord.register(w.session(['a1', 'a2', 'a3']))
@@ -227,11 +225,10 @@ describe('목 계정 롤링 시나리오 — 멀티 계정', () => {
     const afterRoll = w.written.length
 
     await vi.advanceTimersByTimeAsync(2 * MIN) // 정상 동작 구간
-    w.coord.onHookEvent('s2', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
     await vi.advanceTimersByTimeAsync(15 * MIN) // 자리를 비운다
 
-    // 한도 기록은 healthyTimer가 지웠고 사용률도 5%다 → 개입할 근거가 없다
+    // 감지한 한도는 이미 풀려 재개했다 — 쉬는 세션에 다시 보낼 것이 없다
     expect(w.written.length).toBe(afterRoll)
-    w.dump('멀티 계정 · 전환 성공 후 유휴 → 증거 없으므로 무개입')
+    w.dump('멀티 계정 · 전환 성공 후 유휴 → 무개입')
   })
 })

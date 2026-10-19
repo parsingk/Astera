@@ -141,18 +141,18 @@ export class SchedulerCoordinator {
       case 'waiting':
       case 'nudged':
         // nudged is suppressed too now. It used to be excluded because rolling's reset-anchor verdict
-        // (resetAnchorCheck) did not publish pushState('none') after a nudge: suppressing here would then
-        // latch forever, because the signal that releases it would never arrive. resetAnchorCheck has
-        // since been fixed to publish 'none' right after sending Enter, following the same pattern as
-        // sendPrompt, so that risk is gone — and the remaining risk, a schedule firing inside the window
-        // where a nudge writes its prompt to the PTY and sends Enter 150ms later, is now suppressed just
-        // like every other resume window.
+        // (resetAnchorCheck, removed 2026-10-19) did not publish pushState('none') after a nudge: suppressing
+        // here would then latch forever, because the signal that releases it would never arrive. Every
+        // 'nudged' now comes from an in-place resume, which publishes 'none' right after sending Enter,
+        // following the same pattern as sendPrompt, so that risk is gone — and the remaining risk, a schedule
+        // firing inside the window where the resume writes its prompt to the PTY and sends Enter 150ms later,
+        // is suppressed just like every other resume window.
         entry.suppressed = true
         return
       case 'none':
         // Only lift the suppression — do not fire immediately. rolling.sendPrompt() and
-        // resetAnchorCheck() were fixed to publish 'none' *after* actually sending the Enter for the
-        // resume prompt or the nudge prompt, but if that prompt is still being submitted to the PTY (the
+        // resumeInPlace() publish 'none' *after* actually sending the Enter for the
+        // resume prompt, but if that prompt is still being submitted to the PTY (the
         // same input line) and we write here immediately, the two inputs merge into one line. A backed-up
         // round is handled by the next tick (≤15 seconds), which sees pending and suppressed —
         // deliberately different from handleBusy's immediate fire on the transition to idle (which is

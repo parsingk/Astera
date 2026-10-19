@@ -6,8 +6,9 @@
 // not a judgement, so one chain's discovery is usable by the others.
 //
 // What it deliberately does NOT replace: a chain's own recovery array. "Did *this* chain record a
-// block on its current account" is a per-chain question (claudeCoordinator.ts's limitEvidence) and answering it
-// from another chain's discovery would spread a false positive into a session that saw nothing.
+// block on its current account" is a per-chain question (claudeCoordinator.ts's declareHealthy clears only that
+// answer, and the snapshot carries it), and answering it from another chain's discovery would spread a false
+// positive into a session that saw nothing.
 //
 // No timers, no I/O, no logging — the coordinators own those. `now` is passed in for the same reason
 // the rest of core/rolling takes it: so tests can drive time.

@@ -126,7 +126,6 @@ let schedulerRef: SchedulerCoordinator | null = null
 let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let slackOwnershipRef: SlackOwnership | null = null // who owns Slack — its hand-back timer is cut on quit
-let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
 let hostClientStopRef: (() => Promise<void>) | null = null // Astera Host client — closes the socket on quit
 // Asks the Host to leave. Only the update path uses it: an installer cannot write over a running
@@ -696,8 +695,7 @@ app.whenReady().then(async () => {
             onHookEvent: (sid, p) => {
               if (slackOwnership.local()) slack.onHookEvent(sid, p)
             }
-          },
-          rolling: rollingRef
+          }
         },
         sessionId,
         payload
@@ -1098,7 +1096,6 @@ app.whenReady().then(async () => {
     // 같은 배선과 같은 자리, 같은 값이다.
     resumeStrategy: () => core!.appSettings.getResumeStrategy()
   })
-  rollingRef = rolling
 
   // Codex account rolling. Uses the same log file and event channels as the Claude coordinator, but
   // does not depend on statusLine or Slack.

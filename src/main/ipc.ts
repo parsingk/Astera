@@ -2917,8 +2917,9 @@ export function registerIpc(
     // 쪽에 떨어진다 — 하루 종일 파일을 고치고 명령을 돌리는 워커다. 읽기 도구는 matcher 밖이라
     // 그쪽 지연은 그대로다.
     //
-    // 그래도 지금 이 조합을 그대로 두는 이유: 롤링의 idle nudge 는 Notification 훅을 정지 신호로
-    // 쓴다(claudeCoordinator.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
+    // 이 조합을 그대로 두던 이유였던 롤링의 idle nudge(Notification 훅을 정지 신호로 썼다)는
+    // 2026-10-19 에 없어졌다. 롤링 조건이 훅 설치 조건에 남은 이유는 core/sessions/manager.ts 의
+    // wantToolHooks 주석에 있다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     // Folder trust before an orchestration spawn — the reasoning lives on preTrustWorkspace in
     // core/orchestration/exec/workerStart.ts, which the Host will call (Task 9).

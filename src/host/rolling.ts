@@ -428,13 +428,9 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       log(`rolling could not take an exit session=${m.id}: ${String(err)}`)
     }
   })
-  /** One hook event to the claude coordinator, then to the tap; each isolated. */
+  /** One hook event to the tap, isolated. The claude coordinator took them too until its idle-stall nudge, their only
+   *  reader there, was removed (2026-10-19): "continue" goes only after a limit it detected is lifted. */
   const onHook = (sid: string, p: unknown): void => {
-    try {
-      claude.onHookEvent(sid, p)
-    } catch (err) {
-      log(`a hook event could not be taken session=${sid}: ${String(err)}`)
-    }
     if (d.hookTap) {
       try {
         d.hookTap(sid, p)

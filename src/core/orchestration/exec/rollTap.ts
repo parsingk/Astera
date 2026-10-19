@@ -244,12 +244,12 @@ export class OrchRollTap {
    *  'waiting' 을 덮어쓴다. 그래서 세션별 기억(`stopped`)이 필요하다.
    *
    *  **에피소드는 'none' 또는 'stalled' 로 끝난다.**
-   *   - 'none' — 두 코디네이터 모두 재개가 실제로 이뤄진 뒤에 게시한다(in-place 재개·idle nudge·
-   *     리셋 앵커는 Enter 뒤, claude 롤은 auto-prompt 뒤, codex 롤은 롤 끝에서). 포기하는 갈래에서도
+   *   - 'none' — 두 코디네이터 모두 재개가 실제로 이뤄진 뒤에 게시한다(in-place 재개는 Enter 뒤,
+   *     claude 롤은 auto-prompt 뒤, codex 롤은 롤 끝에서). 포기하는 갈래에서도
    *     게시한다(롤 중단·롤 실패·체인 dispose).
    *   - 'stalled' — 재개가 듣지 않았다는 **판정**이다. 그 회복 시도는 그것으로 끝나고 **뒤에 'none'
-   *     이 오지 않는다** — claudeCoordinator.ts 의 두 게시 자리(scheduleAutoPrompt 의 auto-prompt 타임아웃,
-   *     idleNudgeCheck 의 nudge 후 재정지)가 모두 'stalled' 를 게시하고 곧바로 return 한다. 앞쪽은
+   *     이 오지 않는다** — claudeCoordinator.ts 의 게시 자리(scheduleAutoPrompt 의 auto-prompt 타임아웃)가
+   *     'stalled' 를 게시하고 곧바로 return 한다. 그것은
    *     **롤 경로**다: kill·respawn 까지 갔는데 ready 신호가 끝내 오지 않은 경우다. 이것을 끝으로
    *     세지 않으면 그 세션의 표시가 영구히 남아, **다음 정지가
    *     전부 건너뛰어진다** — 그러면 Checkpoint 는 몇 시간 전 에피소드의 기준점과 리셋 시각을 계속
@@ -258,7 +258,7 @@ export class OrchRollTap {
    *  나머지는 전부 에피소드 *안*에서 일어난다: 'trust' 는 respawn 뒤 신뢰 프롬프트를 받는 중이고,
    *  'nudged' 는 재개 프롬프트를 보내기 직전이다.
    *
-   *  **표시를 지우는 것은 'none'/'stalled' 만이 아니다.** 네 재개 경로의 'none' 은 조건부이고
+   *  **표시를 지우는 것은 'none'/'stalled' 만이 아니다.** 재개 경로의 'none' 은 조건부이고
    *  (`chain.stateSeq === stateSeq`) Enter 를 기다리는 150ms 사이에 다른 상태가 게시되면 건너뛰어진다
    *  — 롤 뒤 전사 재생이 옛 한도 문구를 되울려 'waiting' 이 게시되는 것이 그 갈래다. 그것만 믿었을
    *  때는 표시가 새 세션에 **영구히 남아 그 뒤의 모든 정지가 건너뛰어졌고**, 화면은 몇 시간을
@@ -287,11 +287,10 @@ export class OrchRollTap {
     // 이벤트가 유일한 신호다.** 여기서 버리면 계정 하나짜리 워커는 몇 번 이어졌는지가 영원히
     // 기록되지 않는다.
     //
-    // **`stopped` 로 가른다.** `'nudged'` 는 이 경로 말고도 두 곳에서 더 온다 — idle stall nudge
-    // (한도와 무관한 재촉)와 reset anchor(그 가드가 대기 중이 아닐 때만 닿으므로, 여기 온 것은
-    // 'waiting'/'switching' 없이 온 것이다). 그 둘은 이 세션에 정지를 남기지 않았으므로 `stopped`
-    // 에 없다 — 표식이 없으면 이력을 지어내지 않고 조용히 넘긴다. `Set.delete` 는 지우면서 있었는지도
-    // 함께 알려 주므로 그 반환값을 판별자로 쓴다.
+    // **`stopped` 로 가른다.** 정지를 남기지 않은 'nudged' 가 있다 — 이미 닫힌 정지의 복원된 대기
+    // (아래 reattach 갈래가 표식을 넣지 않는다). (2026-10-19 까지는 idle stall nudge 와 reset anchor 도
+    // 정지 없이 'nudged' 를 게시했다.) 표식이 없으면 이력을 지어내지 않고 조용히 넘긴다.
+    // `Set.delete` 는 지우면서 있었는지도 함께 알려 주므로 그 반환값을 판별자로 쓴다.
     if (e.state === 'nudged') {
       if (!this.stopped.delete(e.sessionId)) return
       void this.recordResumed(e.sessionId).catch((err) =>

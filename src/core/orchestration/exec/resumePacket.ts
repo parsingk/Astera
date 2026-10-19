@@ -192,7 +192,7 @@ export async function buildResumePacket(
  * 새것이고 작업을 이어 주는 것이 transcript 파일 하나뿐이므로 구조화된 인계가 값을 낸다. 호출되지
  * 않으면 같은 프로세스가 계속 도는 것이고 **떨어뜨린 것이 없으니 인계할 것도 없다.** 이 앱에서
  * `--resume` 을 부르는 재개는 두 자리(codex 의 `roll()`, claude 의 `roll()`)이고, 부르지 않는
- * 재개는 네 자리(claude 의 `resumeInPlace`·idle nudge·리셋 앵커, codex 의 `resumeInPlace`)다 —
+ * 재개는 두 자리(claude 의 `resumeInPlace`, codex 의 `resumeInPlace`)다 —
  * 그리고 **Job 워커의 체인은 계정이 하나라서 양쪽 워커 모두 기본적으로 `resumeInPlace` 를 탄다.**
  * 즉 이 함수가 워커의 정상 경로다. 그쪽에 전체 packet 을 주면 대화가 온전한 에이전트에게 방금
  * 리셋된 할당량으로 이미 아는 것을 재구성시키는 일이 된다.
@@ -231,8 +231,8 @@ export async function buildResumeNote(
     // 이름을 담는다** — `docs/R&D notes.md` 하나가 저장소에 있으면 `&` 때문에 검사가 걸리고, 노트가
     // 통째로 버려진다. 그 저장소에서는 이 Phase 의 claude 쪽 가치 전부가 흔적도 없이 사라진다.
     //
-    // 검사가 지킬 것도 이 경로에는 없다: 'update' 를 묻는 자리는 네 곳이고(claudeCoordinator.ts 의
-    // resumeInPlace · idle nudge · 리셋 앵커, 그리고 codexCoordinator.ts 의 resumeInPlace) **넷 다
+    // 검사가 지킬 것도 이 경로에는 없다: 'update' 를 묻는 자리는 두 곳이고(claudeCoordinator.ts 의
+    // resumeInPlace, 그리고 codexCoordinator.ts 의 resumeInPlace) **둘 다
     // 살아 있는 PTY 에 타이핑한다.** codex 쪽 자리가 생겼어도 결론이 그대로인 이유가 그것이다 —
     // 이 문자열은 argv 로 가지 않으므로 codex 의 인자 sanitizer(sanitizeResumePrompt)가 도는 자리가
     // 아니다. 지키는 것 없이 파일 이름 한 글자로 기능을 끄는 검사는 순손실이다.
