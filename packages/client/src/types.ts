@@ -378,6 +378,17 @@ export type RunEventKind =
   | 'resumed'
   | 'runtime-lost'
   | 'recovery'
+  // A GitHub lifecycle Run's GitHub steps, from the pull request to merge-ready
+  | 'github-pr-bound'
+  | 'github-pr-created'
+  | 'github-pushed'
+  | 'github-ci-started'
+  | 'github-ci-failed'
+  | 'github-ci-rerun'
+  | 'github-ci-passed'
+  | 'github-merge-ready'
+  | 'github-invalidated'
+  | 'github-source-changed'
 
 /** One event of a Run's timeline, as `runs.follow` yields it. */
 export interface RunEvent {

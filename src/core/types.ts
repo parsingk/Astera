@@ -1,4 +1,5 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
 import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
@@ -542,6 +543,17 @@ export type JobEventKind =
   | 'runtime-lost'
   /** Job Continuity: recovery strategy decision (journal RECOVERY_STRATEGY_SELECTED). */
   | 'recovery'
+  // A lifecycle Run's GitHub steps (GitHub lifecycle design §5.5, G7b), from its record's log
+  | 'github-pr-bound'
+  | 'github-pr-created'
+  | 'github-pushed'
+  | 'github-ci-started'
+  | 'github-ci-failed'
+  | 'github-ci-rerun'
+  | 'github-ci-passed'
+  | 'github-merge-ready'
+  | 'github-invalidated'
+  | 'github-source-changed'
 
 /** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
  *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */
@@ -580,6 +592,8 @@ export interface JobEvent {
   /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
    *  판정이고 같은 이유로 주입받는다 */
   sessionId?: string
+  /** A `github-*` line's facts (G7b): the commit, the check, its failure class, the pull request, a withdrawal's reason. */
+  github?: { sha?: string; check?: string; class?: CiFailureClass; pr?: number; reason?: GitHubInvalidatedReason }
 }
 
 /** 상세 창이 한 번에 받는 것. 이벤트만 오던 것을 그래프까지 함께 주도록 넓혔고, 그래서 이름이

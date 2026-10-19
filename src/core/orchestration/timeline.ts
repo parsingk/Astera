@@ -8,6 +8,8 @@
 // view.ts 와 달리 node: 모듈을 끌고 오지 않지만, 그래도 tsconfig.web.json 에 넣지 않는다 —
 // 렌더러는 이미 접힌 값(JobEvent[])만 IPC 로 받는다.
 import type { JobEvent, JobEventKind } from '../types'
+import type { GitHubLogKind } from '../github/lifecycle'
+import { latestLifecycleTaskOf } from './lifecycleTask'
 import { jobOf, type OrchState } from './state'
 import type { Dispatch, MessageType } from './types'
 
@@ -24,7 +26,36 @@ const KIND_RANK: Record<JobEventKind, number> = {
   'limit-hit': 6,
   resumed: 7,
   'runtime-lost': 8,
-  recovery: 9
+  recovery: 9,
+  // The GitHub steps share one rank: one write can record several, and their log order (the padded seq in sourceId)
+  // is the order they happened in
+  'github-pr-bound': 10,
+  'github-pr-created': 10,
+  'github-pushed': 10,
+  'github-ci-started': 10,
+  'github-ci-failed': 10,
+  'github-ci-rerun': 10,
+  'github-ci-passed': 10,
+  'github-merge-ready': 10,
+  'github-invalidated': 10,
+  'github-source-changed': 10
+}
+
+/** A GitHub log entry's timeline line (G7b, design §5.5), or null for none. `head-changed` is not a line: Astera's own
+ *  push moves the head too, and a commit Astera did not push is asked about (github-external-head) and shown in the
+ *  Run's GitHub block. */
+const GITHUB_LINE: Record<GitHubLogKind, JobEventKind | null> = {
+  'pr-bound': 'github-pr-bound',
+  'pr-created': 'github-pr-created',
+  pushed: 'github-pushed',
+  'ci-started': 'github-ci-started',
+  'ci-failed': 'github-ci-failed',
+  'ci-rerun': 'github-ci-rerun',
+  'ci-passed': 'github-ci-passed',
+  'merge-ready': 'github-merge-ready',
+  invalidated: 'github-invalidated',
+  'source-changed': 'github-source-changed',
+  'head-changed': null
 }
 
 /** 타임라인에서 빼는 메시지 종류.
@@ -153,6 +184,27 @@ function collect(
       })
     }
   }
+  // The GitHub steps, with the lifecycle Task they belong to when there is one (the latest, as everything reads it)
+  const lifecycle = run.githubState ? latestLifecycleTaskOf(state, runId) : undefined
+  for (const e of run.githubState?.log ?? []) {
+    const kind = GITHUB_LINE[e.kind]
+    if (kind === null) continue
+    const facts = {
+      ...(e.sha !== undefined ? { sha: e.sha } : {}),
+      ...(e.check !== undefined ? { check: e.check } : {}),
+      ...(e.class !== undefined ? { class: e.class } : {}),
+      ...(e.pr !== undefined ? { pr: e.pr } : {}),
+      ...(e.reason !== undefined ? { reason: e.reason } : {})
+    }
+    events.push({
+      at: e.at,
+      kind,
+      sourceId: `${run.id}:github:${String(e.seq).padStart(6, '0')}`,
+      ...(lifecycle ? { taskId: lifecycle.id, taskTitle: lifecycle.title } : {}),
+      summary: e.check ?? (e.pr !== undefined ? `#${e.pr}` : (e.reason ?? (e.sha ? e.sha.slice(0, 7) : ''))),
+      ...(Object.keys(facts).length > 0 ? { github: facts } : {})
+    })
+  }
   return events
 }
 
@@ -221,5 +273,7 @@ export function eventCountsOf(state: OrchState): Map<string, number> {
   }
   for (const m of state.messages) if (!SKIP.has(m.type)) add(m.runId, 1)
   for (const g of state.gates) add(g.runId, g.resolvedAt ? 2 : 1)
+  // One per GitHub log entry that is a timeline line (G7b)
+  for (const r of state.runs) if (r.githubState) add(r.id, r.githubState.log.filter((e) => GITHUB_LINE[e.kind] !== null).length)
   return counts
 }

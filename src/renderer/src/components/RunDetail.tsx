@@ -1,3 +1,4 @@
+import { invalidatedReasonKey } from './githubText'
 import { useEffect, useState } from 'react'
 import type {
   Account,
@@ -65,7 +66,17 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
   'limit-hit': 'jobs.event.limitHit',
   resumed: 'jobs.event.resumed',
   'runtime-lost': 'jobs.event.runtimeLost',
-  recovery: 'jobs.event.recovery'
+  recovery: 'jobs.event.recovery',
+  'github-pr-bound': 'jobs.event.github.prBound',
+  'github-pr-created': 'jobs.event.github.prCreated',
+  'github-pushed': 'jobs.event.github.pushed',
+  'github-ci-started': 'jobs.event.github.ciStarted',
+  'github-ci-failed': 'jobs.event.github.ciFailed',
+  'github-ci-rerun': 'jobs.event.github.ciRerun',
+  'github-ci-passed': 'jobs.event.github.ciPassed',
+  'github-merge-ready': 'jobs.event.github.mergeReady',
+  'github-invalidated': 'jobs.event.github.invalidated',
+  'github-source-changed': 'jobs.event.github.sourceChanged'
 }
 
 /** A recovery line's summary is the strategy as the journal stored it (core/continuity/timelineRows.ts
@@ -1031,7 +1042,10 @@ export function RunDetail({
                           ? (accounts?.find((a) => a.id === e.summary)?.label ?? '')
                           : recoveryKey
                             ? t(recoveryKey)
-                            : e.summary
+                            : // A withdrawal says why in the app's language (G7b); the summary is the Host's code
+                              e.kind === 'github-invalidated' && e.github?.reason
+                              ? t(invalidatedReasonKey(e.github.reason))
+                              : e.summary
                     return (
                       <div key={key} className="detail-event">
                         <div

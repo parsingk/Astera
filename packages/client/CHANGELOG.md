@@ -31,6 +31,10 @@ is the guide.
   `github-ci-outside` (CI failed for a reason outside the code, again for one Astera could not classify, or a repair
   fixed nothing) and `github-carry` (the round could not be taken to GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `rerun`, `mark-failed` and `pr-<n>`;
   `questions.answer` takes one of them.
+- Ten `RunEventKind`s for a GitHub lifecycle Run's steps on its timeline (`runs.follow`): `github-pr-bound`,
+  `github-pr-created`, `github-pushed`, `github-ci-started`, `github-ci-failed`, `github-ci-rerun`, `github-ci-passed`,
+  `github-merge-ready`, `github-invalidated` and `github-source-changed`, each with the commit, check or pull request in
+  its `summary`. A script that switches on every `RunEventKind` meets ten more.
 
 ## 0.3.0
 

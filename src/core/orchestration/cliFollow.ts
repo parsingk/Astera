@@ -26,6 +26,20 @@ export { eventKey } from '../publicContract'
 /** A summary is often a first line already, but a message subject is whatever its writer sent. */
 const oneLine = (text: string | undefined): string => (text ?? '').replace(/\s*\r?\n\s*/g, ' ').trim()
 
+/** A GitHub lifecycle Run's steps (G7b), the commit, check or pull request after them. */
+const GITHUB_WORDS: Partial<Record<JobEvent['kind'], string>> = {
+  'github-pr-bound': 'pull request bound',
+  'github-pr-created': 'pull request opened',
+  'github-pushed': 'pushed',
+  'github-ci-started': 'GitHub CI started',
+  'github-ci-failed': 'GitHub CI failed',
+  'github-ci-rerun': 'GitHub CI rerun',
+  'github-ci-passed': 'GitHub CI passed',
+  'github-merge-ready': 'merge-ready',
+  'github-invalidated': 'merge-ready withdrawn',
+  'github-source-changed': 'source issue changed'
+}
+
 function whatHappened(e: JobEvent): string {
   const task = e.taskId ?? ''
   const summary = oneLine(e.summary)
@@ -57,8 +71,11 @@ function whatHappened(e: JobEvent): string {
       if (e.messageType === 'worker_done')
         return `worker done: ${task}${e.outcome ? ` (${e.outcome})` : ''}${summary === '' ? '' : `: ${summary}`}`
       return `${summary}${task === '' ? '' : ` (${task})`}`
-    default:
+    default: {
+      const words = GITHUB_WORDS[e.kind]
+      if (words !== undefined) return `${words}${summary === '' ? '' : `: ${summary}`}`
       return `${e.kind}: ${summary}`
+    }
   }
 }
 

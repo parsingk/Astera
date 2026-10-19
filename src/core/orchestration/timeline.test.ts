@@ -248,6 +248,56 @@ describe('timelineFor', () => {
   })
 })
 
+// G7b (design §5.5): a lifecycle Run's GitHub log as timeline lines, with the lifecycle Task they belong to
+describe('the GitHub lines', () => {
+  const A = 'a'.repeat(40)
+  const withLog = (log: NonNullable<OrchState['runs'][number]['githubState']>['log'], lifecycle = true): OrchState => {
+    const s = state({ runs: [run('r1')] })
+    const lt: Task = { ...task('tsk_l', 'r1', T(5)), title: 'GitHub 전달', kind: 'lifecycle' } as Task
+    return {
+      ...s,
+      tasks: lifecycle ? [lt] : [],
+      runs: s.runs.map((r) => ({ ...r, githubState: { log, seq: log.length } }))
+    }
+  }
+  const log = [
+    { seq: 1, at: T(6), kind: 'pr-created' as const, pr: 12 },
+    { seq: 2, at: T(6), kind: 'pushed' as const, sha: A },
+    { seq: 3, at: T(7), kind: 'head-changed' as const, sha: A },
+    { seq: 4, at: T(7), kind: 'ci-started' as const, sha: A },
+    { seq: 5, at: T(8), kind: 'ci-failed' as const, sha: A, check: 'build', class: 'test' as const },
+    { seq: 6, at: T(8), kind: 'ci-rerun' as const, sha: A, check: 'build' },
+    { seq: 7, at: T(9), kind: 'ci-passed' as const, sha: A },
+    { seq: 8, at: T(9), kind: 'merge-ready' as const, sha: A, pr: 12 },
+    { seq: 9, at: T(9), kind: 'invalidated' as const, reason: 'head-changed' as const },
+    { seq: 10, at: T(9), kind: 'source-changed' as const },
+    { seq: 11, at: T(9), kind: 'pr-bound' as const, pr: 13 }
+  ]
+
+  it('turns each entry into its line, in order, with the lifecycle Task, and leaves the head moving off', () => {
+    const evts = timelineFor(withLog(log), 'r1', anySession).filter((e) => e.kind.startsWith('github-'))
+    expect(evts.map((e) => e.kind)).toEqual([
+      'github-pr-created', 'github-pushed', 'github-ci-started', 'github-ci-failed', 'github-ci-rerun', 'github-ci-passed',
+      'github-merge-ready', 'github-invalidated', 'github-source-changed', 'github-pr-bound'
+    ])
+    expect(evts[0]).toMatchObject({ sourceId: 'r1:github:000001', taskId: 'tsk_l', taskTitle: 'GitHub 전달', summary: '#12', github: { pr: 12 } })
+    expect(evts[1]).toMatchObject({ summary: 'aaaaaaa', github: { sha: A } })
+    expect(evts[3]).toMatchObject({ summary: 'build', github: { sha: A, check: 'build', class: 'test' } })
+    expect(evts[7]).toMatchObject({ summary: 'head-changed', github: { reason: 'head-changed' } })
+  })
+
+  it('a Run with no lifecycle Task yet has its lines without a Task, and a Run with no record has none', () => {
+    const evts = timelineFor(withLog(log.slice(0, 1), false), 'r1', anySession)
+    expect(evts.find((e) => e.kind === 'github-pr-created')).not.toHaveProperty('taskId')
+    expect(timelineFor(state({ runs: [run('r1')] }), 'r1', anySession).map((e) => e.kind)).toEqual(['run-created'])
+  })
+
+  it('counts what it shows', () => {
+    const s = withLog(log)
+    expect(eventCountsOf(s).get('r1')).toBe(timelineFor(s, 'r1', anySession).length)
+  })
+})
+
 describe('eventCountFor', () => {
   it('timelineFor 와 같은 수를 센다', () => {
     const s = state({
