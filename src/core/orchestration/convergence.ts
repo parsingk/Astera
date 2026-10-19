@@ -120,7 +120,22 @@ const SUSPICIOUS: RegExp[] = [
   /(^|\/)tsconfig[^/]*\.json$/,
   /(^|\/)\.?eslint[^/]*$/,
   /(^|\/)biome\.json$/,
-  /(^|\/)\.github\/workflows\//
+  /(^|\/)\.github\/workflows\//,
+  // GitHub lifecycle G5a (설계 §7.4): 커버리지·Python·JVM·컨테이너 설정도 check 가 무엇을 하는지 정한다
+  /(^|\/)\.nycrc(\.[a-z]+)?$/,
+  /(^|\/)\.c8rc(\.[a-z]+)?$/,
+  /(^|\/)\.?codecov\.ya?ml$/,
+  /(^|\/)\.coveragerc$/,
+  /(^|\/)pytest\.ini$/,
+  /(^|\/)pyproject\.toml$/,
+  /(^|\/)setup\.cfg$/,
+  /(^|\/)tox\.ini$/,
+  /(^|\/)\.?ruff\.toml$/,
+  /(^|\/)mypy\.ini$/,
+  /(^|\/)build\.gradle(\.kts)?$/,
+  /(^|\/)pom\.xml$/,
+  /(^|\/)Dockerfile[^/]*$/,
+  /(^|\/)docker-compose[^/]*\.ya?ml$/
 ]
 export const suspiciousCheckFiles = (paths: string[]): string[] =>
   paths.filter((p) => {
