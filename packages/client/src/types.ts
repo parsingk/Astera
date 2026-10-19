@@ -152,6 +152,16 @@ export interface GitHubLifecycle {
   readonly mergeReady?: { readonly headSha: string; readonly evaluatedAt: string; readonly ciOverride?: 'no-ci' }
   /** Why merge-ready was withheld by the review's verdict or withdrawn since (`GitHubInvalidatedReason`). */
   readonly invalidated?: { readonly reason: GitHubInvalidatedReason; readonly at: string }
+  /** The commit Astera last pushed. */
+  readonly pushedSha?: string
+  /** A head on GitHub Astera did not push, until Astera pushes again. */
+  readonly externalHead?: { readonly sha?: string; readonly at: string }
+  /** The pull request's base as bound, and when it was bound again after the pull request was retargeted. */
+  readonly base?: { readonly branch: string; readonly reboundAt?: string }
+  /** The lifecycle Task's repair attempt against the Job's budget, once it has repaired. */
+  readonly repair?: { readonly attempt: number; readonly max: number }
+  /** A person chose to go on without CI for the head. */
+  readonly noCi?: true
 }
 
 export interface Job {

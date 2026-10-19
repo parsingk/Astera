@@ -1,6 +1,7 @@
 // The views the public reads answer with (`jobs get`, `runs get`, `tasks list --brief`), and the public events carry
 // (publicEvents.ts, SDK 1d): one definition, so an event's payload is what a read of the same object shows. Moved out
 // of command.ts with no change.
+import { policyOf, repairCountOf } from './convergence'
 import type { JobOutcome, RunOutcome as RunOutcomePublic } from '../publicContract'
 import type { RunOutcome } from '../types'
 import type { OrchState } from './state'
@@ -74,7 +75,10 @@ function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | und
   const task = latestLifecycleTaskOf(s, runId)
   if (!task) return undefined
   const openGate = s.gates.find((g) => g.taskId === task.id && g.status === 'open')
-  return { task, ...(openGate ? { openGate } : {}) }
+  // The node's "Fix N/M" numbers (view.ts jobTaskOf), for the Run's GitHub block (G7b)
+  const policy = policyOf(s, task)
+  const repairs = policy ? { done: repairCountOf(s, task.id), max: policy.maxFixAttempts } : undefined
+  return { task, ...(openGate ? { openGate } : {}), ...(repairs ? { repairs } : {}) }
 }
 
 /** A spec longer than this is cut in a brief Task (`tasks list --brief`, and every Task an event carries). */

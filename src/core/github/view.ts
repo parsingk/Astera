@@ -38,6 +38,8 @@ export type GitHubLifecycleState =
 export interface LifecycleTaskFacts {
   task: Task
   openGate?: Gate
+  /** Its repairs so far against the Job's budget (G7b): the numbers the node's "Fix N/M" shows. */
+  repairs?: { done: number; max: number }
 }
 
 /** The lifecycle Task's state while it works (design §5.3), or undefined to let the read speak: a question open on it,
@@ -79,6 +81,16 @@ export interface GitHubLifecycleView {
   mergeReady?: { headSha: string; evaluatedAt: string; ciOverride?: 'no-ci' }
   /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
   invalidated?: { reason: GitHubInvalidatedReason; at: string }
+  /** The commit Astera last pushed (G7b). */
+  pushedSha?: string
+  /** A head on GitHub Astera did not push, until Astera pushes again (G3b2; G7b shows it). */
+  externalHead?: { sha?: string; at: string }
+  /** The pull request's base as bound, and when a reconverge bound it again after a retarget (G6). */
+  base?: { branch: string; reboundAt?: string }
+  /** The lifecycle Task's repair attempt against the Job's budget, once it has repaired (G7b). */
+  repair?: { attempt: number; max: number }
+  /** A person chose to go on without CI for the head (G3b2). */
+  noCi?: true
 }
 
 /** Merge-ready holds while its evidence's head is the PR's head, the PR is open and nothing withdrew it (§5.4). */
@@ -146,5 +158,12 @@ export function githubLifecycleOf(
   if (gs?.mergeReady && mergeReadyHolds(gs))
     view.mergeReady = { headSha: gs.mergeReady.headSha, evaluatedAt: gs.mergeReady.evaluatedAt, ...(gs.mergeReady.ciOverride ? { ciOverride: gs.mergeReady.ciOverride } : {}) }
   if (gs?.invalidated) view.invalidated = { reason: gs.invalidated.reason, at: gs.invalidated.at }
+  if (gs?.lastPushedSha) view.pushedSha = gs.lastPushedSha
+  if (gs?.externalHeadChange)
+    view.externalHead = { ...(gs.externalHeadChange.sha !== undefined ? { sha: gs.externalHeadChange.sha } : {}), at: gs.externalHeadChange.at }
+  if (gs?.binding) view.base = { branch: gs.binding.baseBranch, ...(gs.baseReboundAt ? { reboundAt: gs.baseReboundAt } : {}) }
+  if (lifecycle?.repairs && lifecycle.repairs.done > 0)
+    view.repair = { attempt: Math.min(lifecycle.repairs.done, lifecycle.repairs.max), max: lifecycle.repairs.max }
+  if (gs?.ciOverride && gs.ciOverride.sha === gs.headSha) view.noCi = true
   return view
 }
