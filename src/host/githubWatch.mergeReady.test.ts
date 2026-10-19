@@ -140,6 +140,25 @@ describe('merge-ready kept and withdrawn on the same checks (G5b final review)',
     expect(mergeReadyOf(stateWith(recorded(prRead([ok('build')]))), task, reviewDispatch)).toEqual({ reason: 'local-check-skipped' })
   })
 
+  // G6 (spec §30): a pull request retargeted to another base is not merge-ready against the base Astera bound; the next
+  // read would only withdraw it again (`base-changed`), and runs reconverge binds the new base
+  it('withholds merge-ready while the pull request’s base is not the binding’s', () => {
+    const gs = recorded(prRead([ok('build')]))
+    const retargeted = { ...gs, pr: { ...gs.pr!, baseBranch: 'main' } }
+    expect(mergeReadyOf(stateWith(retargeted), lifecycleTask('completed'), reviewDispatch)).toEqual({ reason: 'base-changed' })
+  })
+
+  // G6 final review I2: a retarget does not make GitHub run CI again (`pull_request.edited` is not a default trigger), so
+  // checks that started before runs reconverge bound the new base were judged against the old one (spec §30: existing
+  // green CI is not trusted as it is). Only CI that started after the re-bind stands for merge-ready.
+  it('after the base was re-bound, takes only CI that started after it', () => {
+    const gs = recorded(prRead([ok('build', { startedAt: '2026-10-18T00:00:00.000Z' })]))
+    const rebound = { ...gs, baseReboundAt: '2026-10-18T00:05:00.000Z' }
+    expect(mergeReadyOf(stateWith(rebound), lifecycleTask('completed'), reviewDispatch)).toEqual({ reason: 'base-changed' })
+    const fresh = { ...recorded(prRead([ok('build', { startedAt: '2026-10-18T00:06:00.000Z' })])), baseReboundAt: '2026-10-18T00:05:00.000Z' }
+    expect(mergeReadyOf(stateWith(fresh), lifecycleTask('completed'), reviewDispatch)).toMatchObject({ evidence: { requiredCiPassed: true } })
+  })
+
   // M6
   it('withholds merge-ready while GitHub cannot be read', () => {
     const gs = { ...recorded(prRead([ok('build')])), lastReadError: { kind: 'network', since: ISO0 } }

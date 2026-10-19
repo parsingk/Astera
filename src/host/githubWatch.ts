@@ -240,8 +240,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
               taskSince: open.createdAt
             }
           : undefined
-      // A closed PR is read no more, unless a round waits on it: a person is asked (G3b2)
-      if (gs?.pr && gs.pr.state !== 'open' && round?.sha === undefined) continue
+      // A merged PR is read no more, unless a round waits on it: a person is asked (G3b2). A closed one is read while the
+      // Run's lifecycle Task works, so a reopening on GitHub during a repair or the review is seen (G6, spec §30); once
+      // the Run is not carried any more, `runs reconverge` reads it live itself.
+      if (gs?.pr && gs.pr.state !== 'open' && round?.sha === undefined && (gs.pr.state === 'merged' || !open)) continue
       if (!gs?.binding && now() - Date.parse(run.createdAt) > UNBOUND_MAX_AGE_MS) continue
       const worktree = d.worktreeOf(run.worktree)
       if (!worktree) continue
@@ -588,7 +590,11 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
     const minutes = t.policy.ciWaitMinutes
     if (now() - Date.parse(round.waitingSince) < minutes * 60_000) return
-    await ask(t.runId, round, 'github-ci-cap', say('jobs.gate.github.q.cap', { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }), ['wait', 'mark-failed'])
+    // While the reads fail it is GitHub that could not be read, not CI that gave no verdict (G6, map fact 25) — decided by
+    // this watch's own reads, which a good read clears, not by the record taken before this pass (G6 final review M5)
+    const unreadable = failures.has(t.runId)
+    const params = { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }
+    await ask(t.runId, round, 'github-ci-cap', say(unreadable ? 'jobs.gate.github.q.capUnreadable' : 'jobs.gate.github.q.cap', params), ['wait', 'mark-failed'])
   }
 
   /** Drops what is kept for Runs and folders no longer watched, so a Host that lives for weeks (`runtime serve`) does not

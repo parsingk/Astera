@@ -99,6 +99,7 @@ export type MergeReadyRefusal = Extract<
   | 'not-bound'
   | 'external-state-unavailable'
   | 'pr-not-open'
+  | 'base-changed'
   | 'head-not-pushed'
   | 'review-of-another-head'
   | 'ci-not-passed'
@@ -108,7 +109,7 @@ export type MergeReadyRefusal = Extract<
 >
 
 /** Merge-ready, decided from state alone when a lifecycle Task's review passes (G5b, design §3.5, §5.4, S3): GitHub
- *  readable, the pull request open, its head the one Astera pushed, the review read that head (`reviewHead`), CI passed
+ *  readable, the pull request open on the base Astera bound (G6), its head the one Astera pushed, the review read that head (`reviewHead`), CI passed
  *  on it — or a person chose to go on without CI there and the head still has none — no question open on the Run, the
  *  local checks passed (one a person skipped withholds it as skipped). The evidence, with the names CI was judged on as
  *  the read recorded them, or the first part that failed. */
@@ -122,10 +123,19 @@ export function mergeReadyOf(
   if (!run || !gs?.binding) return { reason: 'not-bound' }
   if (gs.lastReadError) return { reason: 'external-state-unavailable' }
   if (gs.pr?.state !== 'open') return { reason: 'pr-not-open' }
+  // A pull request retargeted to another base is not ready against the base Astera bound: the next read would withdraw it
+  // (`base-changed`), and runs reconverge binds the new base (G6, spec §30)
+  if (gs.pr.baseBranch !== gs.binding.baseBranch) return { reason: 'base-changed' }
   const head = gs.lastPushedSha
   if (head === undefined || gs.headSha !== head) return { reason: 'head-not-pushed' }
   if (review.reviewHead !== head) return { reason: 'review-of-another-head' }
+  // After runs reconverge bound a retargeted base, only CI that started after the re-bind was judged against it: a retarget
+  // does not run CI again (G6 final review I2; spec §30, existing green CI is not trusted as it is)
+  const reboundAt = gs.baseReboundAt
+  const started = (gs.ci?.checks ?? []).filter((c) => c.startedAt !== undefined)
+  const freshForBase = reboundAt === undefined || (started.length > 0 && started.every((c) => c.startedAt! >= reboundAt))
   const ciPassed = gs.ci?.sha === head && gs.ci.verdict === 'passed'
+  if (ciPassed && !freshForBase) return { reason: 'base-changed' }
   // A person's go-on-without-CI was for a head with no check at all (S10): CI that ran on it since decides
   const noCi = gs.ciOverride?.sha === head && !(gs.ci?.sha === head && gs.ci.verdict !== 'none')
   if (!ciPassed && !noCi) return { reason: 'ci-not-passed' }

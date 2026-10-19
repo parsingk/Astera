@@ -183,13 +183,34 @@ describe('githubWatch', () => {
     expect(r.records[0].patch.read?.ci.basis).toBe('selected')
   })
 
-  it('leaves a merged or closed PR alone', async () => {
+  it('leaves a merged PR alone, and a closed one once the Run is not carried any more', async () => {
     for (const state of ['merged', 'closed'] as const) {
       const r = rig()
       r.watch.onState(stateOf({ run: { githubState: { ...BOUND, pr: { state, isDraft: false, baseBranch: 'develop' } } } }))
       await r.at(0)
       expect(r.calls).toEqual([])
     }
+  })
+
+  // G6 (spec §30): a pull request closed while its lifecycle Task repairs or is reviewed can be reopened on GitHub; the
+  // watch keeps reading it, so the reopening is recorded. A merged one cannot be reopened and stays unread.
+  it('keeps reading a closed PR while the Run’s lifecycle Task works, and records its reopening', async () => {
+    const working = (state: 'closed' | 'merged'): OrchState => ({
+      ...stateOf({ run: { githubState: { ...BOUND, pr: { state, isDraft: false, baseBranch: 'develop' } } } }),
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0 },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'dispatched', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0 }
+      ]
+    })
+    const r = rig({ read: prRead() })
+    r.watch.onState(working('closed'))
+    await r.at(0)
+    expect(r.calls).toContain('read 12')
+    expect(r.records[0].patch.read?.pr.state).toBe('open')
+    const merged = rig({ read: prRead() })
+    merged.watch.onState(working('merged'))
+    await merged.at(0)
+    expect(merged.calls).toEqual([])
   })
 
   it('stops looking for a PR three days after the Run was made', async () => {
@@ -934,17 +955,35 @@ describe('githubWatch', () => {
         expect(r.gates.map((g) => g.kind)).toEqual(['github-no-ci'])
       })
 
-      it('a wait past the Job’s ciWaitMinutes asks whether to wait again or fail, even while reads fail, once', async () => {
+      // G6 (map fact 25): while the reads fail the question says GitHub could not be read, not that CI gave no verdict
+      it('a wait past the Job’s ciWaitMinutes asks whether to wait again or fail, even while reads fail, once — and says GitHub could not be read', async () => {
         const r = rig({ fail: { at: 'read', kind: 'network' } })
         r.watch.onState(waiting())
         await r.at(0)
         expect(r.gates).toEqual([])
         await r.at(90 * 60_000)
         expect(r.gates).toEqual([
-          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-cap', question: expect.stringContaining('gave no verdict in 90 minutes (PR #12)'), options: ['wait', 'mark-failed'] }
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-cap', question: expect.stringContaining('GitHub could not be read'), options: ['wait', 'mark-failed'] }
         ])
+        expect(r.gates[0].question).toContain('90 minutes')
         await r.at(90 * 60_000 + 5_000)
         expect(r.gates).toHaveLength(1)
+      })
+
+      // G6 final review M5: the record's lastReadError is from before this pass; a good read on the cap means GitHub answered
+      it('a good read on the cap after an outage says CI gave no verdict, whatever the record still says', async () => {
+        const r = rig({ read: running })
+        r.watch.onState(waiting({}, { githubState: { ...BOUND, lastReadError: { kind: 'network', since: ISO0 } } }))
+        await r.at(90 * 60_000)
+        expect(r.gates.map((g) => g.question)).toEqual([expect.stringContaining('gave no verdict in 90 minutes (PR #12)')])
+      })
+
+      it('a wait past the cap while CI still runs says CI gave no verdict', async () => {
+        const r = rig({ read: running })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(90 * 60_000)
+        expect(r.gates.map((g) => g.question)).toEqual([expect.stringContaining('gave no verdict in 90 minutes (PR #12)')])
       })
 
       it('a read GitHub refuses for this account asks at once; a network failure does not', async () => {

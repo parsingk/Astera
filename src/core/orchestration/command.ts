@@ -2795,6 +2795,8 @@ export async function handleCommand(
       // (a scheduled Run's is reaped when it ends), and the bound pull request still open now — the record can be older
       // than a merge while the Host was down, and carrying again would push the branch GitHub deleted on that merge.
       const known = deps.getState().runs.find((r) => r.id === id)
+      let prState: 'open' | 'closed' | 'merged' | undefined
+      let baseBranch: string | undefined
       if (known?.worktree !== undefined && deps.github) {
         if (deps.github.worktreeOf && !deps.github.worktreeOf(known.worktree))
           return conflict('This Run’s branch is gone (its worktree was removed), so it cannot be carried through GitHub again')
@@ -2804,9 +2806,12 @@ export async function handleCommand(
           const live = await prByNumber(deps.github.run, known.worktree, bound, binding.number)
           if (!live.ok) return ghRefusal(live)
           if (live.pr && live.pr.state !== 'open') return conflict(`This Run’s pull request is ${live.pr.state}, so there is nothing left to carry`)
+          // Open now: a PR reopened since the record said closed is carried again (G6, spec §30)
+          if (live.pr) prState = live.pr.state
+          baseBranch = live.base
         }
       }
-      const r = reconvergeRun(deps.getState(), id, now)
+      const r = reconvergeRun(deps.getState(), id, now, { ...(prState ? { prState } : {}), ...(baseBranch !== undefined ? { baseBranch } : {}) })
       if (!r.ok) return r.missing ? notFound(r.error) : conflict(r.error)
       await deps.setState(r.state)
       return okBody({ runId: id, taskId: r.value.id })

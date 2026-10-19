@@ -185,6 +185,22 @@ describe('nextGitHubState', () => {
     })
   })
 
+  // G6 (spec §30): runs reconverge binds the base the pull request was retargeted to; nothing else of the binding moves
+  it('re-binds the base, and only the base, and notes when', () => {
+    const bound = nextGitHubState(undefined, { binding: BINDING }, T1)!
+    const rebound = nextGitHubState(bound, { rebase: { baseBranch: 'release' } }, T2)!
+    expect(rebound.binding).toEqual({ ...BINDING, baseBranch: 'release' })
+    expect(rebound.baseReboundAt).toBe(T2)
+    expect(nextGitHubState(rebound, { rebase: { baseBranch: 'release' } }, T2)).toBeNull()
+    expect(nextGitHubState(undefined, { rebase: { baseBranch: 'release' } }, T2)).toBeNull()
+  })
+
+  // G6 final review M8: the re-bind is the state function's own, never a wire patch
+  it('does not take a re-bind off the wire', () => {
+    const parsed = parseRunGitHubPatch({ pushed: { sha: 'a'.repeat(40) }, rebase: { baseBranch: 'release' } })
+    expect(parsed).toEqual({ pushed: { sha: 'a'.repeat(40) } })
+  })
+
   it('logs a changed source once', () => {
     const changed = nextGitHubState(undefined, { sourceChanged: true }, T1)!
     expect(changed.log).toEqual([{ seq: 1, at: T1, kind: 'source-changed' }])

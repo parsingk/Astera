@@ -249,6 +249,9 @@ export interface RunGitHubState {
   mergeReady?: MergeReadyEvidence
   /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
   invalidated?: { reason: GitHubInvalidatedReason; at: string }
+  /** When runs reconverge bound the base the pull request was retargeted to (G6): CI that started before it was judged
+   *  against the old base, and stands for merge-ready no more (G6 final review I2). */
+  baseReboundAt?: string
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
   /** The last entry's seq. */
