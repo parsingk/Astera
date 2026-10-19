@@ -95,7 +95,7 @@ export function composeHostRolling(a: {
    *  for the new proc to start, and the carry-on turn's notices must find the thread already moved. Its own
    *  try: a tap that throws costs neither the apps nor the journal. */
   onRollEvent?(e: HostRollEvent): void
-  /** Every hook event the rolling's watcher reads, after the coordinators (Slack in the Host Task 6). */
+  /** Every hook event the rolling's watcher reads (Slack in the Host Task 6). */
   hookTap?(sessionId: string, payload: unknown): void
   /** Test seams. */
   every?(ms: number, fn: () => void): () => void

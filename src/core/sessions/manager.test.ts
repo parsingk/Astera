@@ -554,8 +554,9 @@ describe('SessionManager', () => {
     vi.unstubAllEnvs()
   })
 
-  // idle nudge가 Notification 훅을 신호로 쓰므로 롤링 세션에도 훅이 필요하다.
-  // 종전에는 slackNotify 세션에만 주입돼 슬랙을 끈 롤링 세션은 신호를 받을 수 없었다.
+  // 롤링 세션에도 도구 호출 훅을 넣는다. 처음 이유였던 idle nudge(Notification 훅을 신호로 썼다)는
+  // 2026-10-19 에 없어졌고, 지금 그 세션에서 이 훅을 읽는 것은 attention 과 pendingPrompt 다
+  // (manager.ts 의 wantToolHooks 주석).
   it('롤링 세션은 slackNotify가 꺼져 있어도 toolHooks=true로 주입한다', () => {
     const factory: PtyFactory = () => new FakePty()
     const hookCalls: ({ toolHooks?: boolean } | undefined)[] = []

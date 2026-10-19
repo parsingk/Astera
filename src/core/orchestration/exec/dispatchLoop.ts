@@ -1111,8 +1111,8 @@ export function createDispatchLoop(c: DispatchLoopContext): DispatchLoop {
    *
    *  **바쁜 세션은 건드리지 않는다.** 두 가지를 함께 막는다: (1) 턴 중인 코디네이터는 이미 일하고
    *  있어 깨울 것이 없고, (2) 권한 요청 대화상자는 턴 중에 뜨므로 그때 타이핑하면 Enter 가 화면의
-   *  선택지를 승인해 버린다 — 롤링이 같은 위험을 훅 알림으로 막는다(claudeCoordinator.ts 의 onHookEvent).
-   *  훅이 아니라 바쁨으로 막는 것은 더 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
+   *  선택지를 승인해 버린다. 롤링이 화면을 보고 막는 것은 한도 선택지 하나뿐이다(claudeCoordinator.ts 의
+   *  choicePending) — 권한 요청 대화상자는 롤링도 막지 않는다. 바쁨으로 막는 것은 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
    *  있으면 이 가드는 새어 나간다. 그 경우를 실측한 적은 없다. */
   /** What each coordinator was last nudged about (audit OR-2), and whether a nudge pass is running: two ticks that
    *  overlapped typed the same line twice. */

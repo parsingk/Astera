@@ -258,8 +258,11 @@ export class SessionManager {
     // desktop notification for a choice or an approval is offered for any session, and gating it here
     // is what left that feature inert. What is still gated is what only slack.ts reads: the turn
     // summary's Stop, and the per-tool-call capture pair.
-    // Rolling is kept in the condition even though its idle nudge only needs the Notification hook:
-    // its own tap reads the same pending-tool captures when deciding what a stalled screen shows.
+    // Rolling is in the condition for a reason that is gone: its idle nudge read the Notification hook,
+    // and that nudge was removed on 2026-10-19 — rolling itself reads no hook now. What a rolling session
+    // still gets from the tool-call pair is what attention and pendingPrompt read off it (the call a
+    // session is waiting on). Whether that is worth a node process per write/execute call in a session
+    // that only rolls is a separate decision; the condition is left as it was.
     // SlackNotifier.register gates separately on info.slackNotify, so Slack traffic does not grow.
     const wantToolHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
     const sl = d.usesStatusLine

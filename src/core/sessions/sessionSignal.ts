@@ -59,6 +59,7 @@ export function parseSessionSignal(v: unknown): SessionSignal | null {
     if (e.nextRetryAt !== undefined && typeof e.nextRetryAt !== 'string') return null
     if (e.scope !== undefined && e.scope !== 'session' && e.scope !== 'weekly') return null
     if (e.reattach !== undefined && typeof e.reattach !== 'boolean') return null
+    if (e.manual !== undefined && typeof e.manual !== 'boolean') return null
     return { kind: 'roll-state', session, event: e as unknown as RollStateEvent }
   }
   return null

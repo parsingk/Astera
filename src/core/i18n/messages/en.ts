@@ -1084,6 +1084,8 @@ export const en: Record<keyof typeof ko, string> = {
   'session.terminal.trustAccepting': 'Automatically accepting folder trust…',
   'session.terminal.weeklyLimitWaiting': 'Weekly limit reached — resuming automatically at {time}',
   'session.terminal.limitWaiting': 'Limit reached — resuming automatically at {time}',
+  'session.terminal.limitShown': 'Limit reached — resets at {time}; nothing resumes automatically',
+  'session.terminal.weeklyLimitShown': 'Weekly limit reached — resets at {time}; nothing resumes automatically',
   'session.terminal.rollAdopted':
     'Taken back after a restart — the limit on this account is unknown, so it will not switch until Codex reports usage again',
   'session.toast.stalled':
@@ -1372,6 +1374,7 @@ export const en: Record<keyof typeof ko, string> = {
   'rolling.continuePrompt': 'Continue the work',
   'slack.turnDone': '✅ Response complete',
   'slack.limitWaiting': '⏸ Limit reached — resuming at {at} ({scope} limit)',
+  'slack.limitShown': '⏸ Limit reached — resets {at} ({scope} limit). Judged from usage alone, so nothing resumes automatically',
   'slack.limitScope.weekly': 'weekly',
   'slack.limitScope.session': '5-hour',
   'slack.accountSwitched': '🔁 Switched account → {label}',
@@ -1413,6 +1416,7 @@ export const en: Record<keyof typeof ko, string> = {
   'slack.offline.stalled': 'stuck at {time}, needs a look',
   'notify.inputNeeded': 'Needs your confirmation',
   'notify.limitWaiting': 'Stopped on a limit, waiting to resume',
+  'notify.limitShown': 'Stopped on a limit; nothing resumes automatically',
   'notify.accountSwitched': 'Switched to {label}',
   'notify.fallbackTitle': 'Astera',
   'notify.offlineRolls': 'While Astera was away from the Host, {n} session(s) hit a usage limit',

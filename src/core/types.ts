@@ -391,6 +391,10 @@ export interface RollStateEvent {
   reattach?: boolean
   nextRetryAt?: string // ISO — the retry time, when state='waiting'
   scope?: 'session' | 'weekly' // which limit, when state='waiting' — selects the banner wording and time format
+  // When state='waiting': the limit was inferred from a usage figure alone (the claude coordinator's
+  // fallback trigger), so nothing is typed when it lifts — the person resumes. `nextRetryAt` is then when
+  // the window resets, not a resume time; the banner and the notices word it so (2026-10-19).
+  manual?: boolean
 }
 
 /** Schedule progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */

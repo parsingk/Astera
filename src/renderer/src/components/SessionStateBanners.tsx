@@ -1,4 +1,5 @@
 import type { RollStateEvent, SchedStateEvent } from '../../../core/types'
+import type { MessageKey } from '../../../core/i18n'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -20,6 +21,17 @@ const fmtDateTime = (iso?: string): string =>
 // condition would only be made on one side and the offset would silently drift.
 export const rollBannerVisible = (s: RollStateEvent | null): s is RollStateEvent =>
   !!s && s.state !== 'none' && s.state !== 'nudged' && s.state !== 'stalled'
+
+/** Which sentence a waiting banner says. A limit shown off a usage figure alone (`manual`) names the reset
+ *  and says nothing resumes by itself; a planned wait names its automatic resume. */
+export const waitingBannerKey = (s: RollStateEvent): MessageKey =>
+  s.manual
+    ? s.scope === 'weekly'
+      ? 'session.terminal.weeklyLimitShown'
+      : 'session.terminal.limitShown'
+    : s.scope === 'weekly'
+      ? 'session.terminal.weeklyLimitWaiting'
+      : 'session.terminal.limitWaiting'
 
 /** One banner's height in the strip — the same 25px `.sched-banner.below-roll` offsets by, measured
  *  there. Kept beside that rule so the two move together. */
@@ -65,11 +77,9 @@ export function SessionStateBanners({
               retry armed nor a reset to name. See RollStateEvent's own note on the state. */}
           {rollState.state === 'adopted' && t('session.terminal.rollAdopted')}
           {rollState.state === 'waiting' &&
-            (rollState.scope === 'weekly'
-              ? t('session.terminal.weeklyLimitWaiting', {
-                  time: fmtDateTime(rollState.nextRetryAt)
-                })
-              : t('session.terminal.limitWaiting', { time: fmtTime(rollState.nextRetryAt) }))}
+            t(waitingBannerKey(rollState), {
+              time: rollState.scope === 'weekly' ? fmtDateTime(rollState.nextRetryAt) : fmtTime(rollState.nextRetryAt)
+            })}
         </div>
       )}
       {schedState && schedState.state === 'active' && (

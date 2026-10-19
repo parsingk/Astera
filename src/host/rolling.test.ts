@@ -283,7 +283,7 @@ describe('createHostRolling (S6 Task 9)', () => {
     r.rolling.dispose()
   })
 
-  it('hands every hook event to the tap too, and a throwing tap costs the coordinators nothing (Slack in the Host)', async () => {
+  it('hands every hook event to the tap, and a throwing tap does not escape (Slack in the Host)', async () => {
     const heard: string[] = []
     const r = await rig({ hookTap: (sid) => { heard.push(sid); throw new Error('boom') } })
     expect(() => r.rolling.onHookEvent('s1', { hook_event_name: 'Stop' })).not.toThrow()

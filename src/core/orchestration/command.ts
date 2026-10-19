@@ -301,7 +301,7 @@ export interface OrchServerDeps {
    *
    *  **Dispatch 가 닫혔는데 세션이 살아 있는 자리에서만 부른다.** 워커는 보고한 뒤에도 일부러 살아
    *  있고(가이드 8절), 롤링 체인은 세션이 죽을 때만 버려졌다. 그 사이의 창에서 롤링은 이미 끝난 일의
-   *  세션에 재개 프롬프트를 타이핑하거나(claude 의 idle nudge) 그 세션을 죽이고 다시 띄운다(codex 의
+   *  세션에 재개 프롬프트를 타이핑하거나(먼저 걸린 대기가 끝난 claude 의 resumeInPlace) 그 세션을 죽이고 다시 띄운다(codex 의
    *  maxed+silent 폴백) — 아무도 요청하지 않은 작업이고, 워크트리 워커라면 커밋 의무까지 딸린다.
    *
    *  **세션을 죽이는 경로에서는 부르지 않는다**(worker-stop, run-delete, run-pause, 그리고

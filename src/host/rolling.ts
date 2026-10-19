@@ -106,8 +106,8 @@ export interface HostRollingDeps {
   chatMayAct?(procId: string): boolean
   /** Test seam; default findClaudeTranscript. */
   findTranscript?(configDir: string, threadId: string): Promise<string | null>
-  /** Every hook event, after the coordinators have it (Slack in the Host Task 6: the Host's Slack reads
-   *  the same watcher). Its own try: a tap that throws costs the coordinators nothing. */
+  /** Every hook event the rolling's watcher reads (Slack in the Host Task 6: the Host's Slack reads the
+   *  same watcher). The coordinators take none since 2026-10-19. Its own try: a tap that throws is logged. */
   hookTap?(sessionId: string, payload: unknown): void
   /** Every roll event the moment a coordinator sends it (Slack in the Host: the Host's own rolls are its
    *  Slack's source). Not `onEvent`: a chat roll is announced only once its new proc has started, and the
@@ -428,13 +428,9 @@ export function createHostRolling(d: HostRollingDeps): HostRolling {
       log(`rolling could not take an exit session=${m.id}: ${String(err)}`)
     }
   })
-  /** One hook event to the claude coordinator, then to the tap; each isolated. */
+  /** One hook event to the tap, isolated. The claude coordinator took them too until its idle-stall nudge, their only
+   *  reader there, was removed (2026-10-19): "continue" goes only after a limit it detected is lifted. */
   const onHook = (sid: string, p: unknown): void => {
-    try {
-      claude.onHookEvent(sid, p)
-    } catch (err) {
-      log(`a hook event could not be taken session=${sid}: ${String(err)}`)
-    }
     if (d.hookTap) {
       try {
         d.hookTap(sid, p)
