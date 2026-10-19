@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import type { GhRunner } from './gh'
 import type { GitHubCiCheck } from './lifecycle'
-import { evaluateCi, parseRuleCheckNames, readRuleCheckNames } from './ciVerdict'
+import { ciTargetNames, evaluateCi, parseRuleCheckNames, readRuleCheckNames } from './ciVerdict'
 
 const check = (name: string, over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({
   externalId: `run:${name}`, name, status: 'completed', conclusion: 'success', required: false, ...over
@@ -31,6 +31,17 @@ describe('evaluateCi — required', () => {
   it('counts skipped and neutral required checks as passing, as branch protection does', () => {
     const ev = evaluateCi({ checks: [check('a', { required: true, conclusion: 'skipped' }), check('b', { required: true, conclusion: 'neutral' })], suites: done }, REQUIRED, [])
     expect(ev.verdict).toBe('passed')
+  })
+})
+
+// GitHub lifecycle G5b (design §5.4): the checks CI was judged on, kept with merge-ready and compared on later reads
+describe('ciTargetNames', () => {
+  const c = (name: string, over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({ externalId: `run:${name}`, name, status: 'completed', conclusion: 'success', required: false, ...over })
+  it('names the required checks, the selected ones present, or every reported one but skipped and neutral, sorted, once', () => {
+    const checks = [c('lint', { required: true }), c('build', { required: true }), c('docs', { conclusion: 'skipped' }), c('e2e'), c('build', { required: true, externalId: 'run:b2' })]
+    expect(ciTargetNames(checks, 'required')).toEqual(['build', 'lint'])
+    expect(ciTargetNames(checks, 'selected', ['e2e', 'missing'])).toEqual(['e2e'])
+    expect(ciTargetNames(checks, 'all-reported')).toEqual(['build', 'e2e', 'lint'])
   })
 })
 

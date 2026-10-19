@@ -58,6 +58,7 @@ import { withLifecycleTask } from './lifecycleTask'
 import { outcomeOf } from './running'
 import { derivePublicEvents } from './publicEvents'
 import { t } from '../i18n'
+import type { RunGitHubState } from '../github/lifecycle'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
@@ -4293,6 +4294,75 @@ describe('settleLifecycleCi', () => {
       const repair = r.state.dispatches.find((d) => d.taskId === lifecycleId && d.repair)!
       expect(repair).toMatchObject({ repair: 'review-failure', cwd: 'D:/wt/run', provider: 'claude' })
       expect(repair.retryOf).toBeUndefined()
+    })
+
+    // GitHub lifecycle G5b (design §3.5, §5.4): the verdict decides merge-ready from state, in the same write
+    describe('merge-ready', () => {
+      const H = 'e'.repeat(40)
+      const G = 'f'.repeat(40)
+      const BINDING = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/run', createdByAstera: true, boundAt: NOW }
+      const good = (): RunGitHubState => ({
+        binding: BINDING,
+        headSha: H,
+        lastPushedSha: H,
+        pr: { state: 'open', isDraft: true, baseBranch: 'develop' },
+        ci: { sha: H, basis: 'all-reported', verdict: 'passed', changedAt: NOW, checks: [{ externalId: 'run:1', name: 'build', status: 'completed', conclusion: 'success', required: false }] },
+        log: [],
+        seq: 0
+      })
+      /** The review opened on a Run whose record is `before`; the record is `after` when the verdict comes. */
+      const verdict = (before: RunGitHubState, after: RunGitHubState = before) => {
+        const { s, lifecycleId } = handedOver()
+        const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+        const withRecord = (st: OrchState, gs: RunGitHubState): OrchState => ({ ...st, runs: st.runs.map((r) => ({ ...r, githubState: gs })) })
+        const opened = unwrap<Dispatch>(
+          openReviewDispatch(withRecord(inReview, before), { taskId: lifecycleId, provider: 'codex', accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/run', specPath: '' }, LATER) as never
+        )
+        const r = unwrap(
+          applyReviewResult(withRecord(opened.state, after), { taskId: lifecycleId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [], repair: target }, LATER) as never
+        )
+        return { task: r.state.tasks.find((t) => t.id === lifecycleId)!, gs: r.state.runs[0].githubState! }
+      }
+
+      it('records the evidence when the pull request is open on the pushed head, CI passed on it and the review read it', () => {
+        const { task, gs } = verdict(good())
+        expect(task.status).toBe('completed')
+        expect(gs.mergeReady).toEqual({
+          pullRequestNumber: 12, headSha: H, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: ['build'], evaluatedAt: LATER
+        })
+        expect(gs.invalidated).toBeUndefined()
+        expect(gs.log.at(-1)).toMatchObject({ kind: 'merge-ready', sha: H, pr: 12 })
+      })
+
+      it('records a person’s choice to go on without CI, never CI passed', () => {
+        const noCi = { ...good(), ci: { ...good().ci!, verdict: 'none' as const, checks: [] }, ciOverride: { sha: H, at: NOW } }
+        expect(verdict(noCi).gs.mergeReady).toMatchObject({ requiredCiPassed: false, ciOverride: 'no-ci', ciChecks: [] })
+      })
+
+      it.each([
+        ['pr-not-open', { ...good(), pr: { state: 'closed' as const, isDraft: false, baseBranch: 'develop' } }],
+        ['head-not-pushed', { ...good(), headSha: G }],
+        ['ci-not-passed', { ...good(), ci: { ...good().ci!, verdict: 'failed' as const } }],
+        ['ci-not-passed', { ...good(), ci: { ...good().ci!, sha: G } }],
+        ['review-of-another-head', { ...good(), headSha: G, lastPushedSha: G, ci: { ...good().ci!, sha: G } }]
+      ] as const)('completes the Task without merge-ready, saying why: %s', (reason, after) => {
+        const { task, gs } = verdict(good(), after as RunGitHubState)
+        expect(task.status).toBe('completed')
+        expect(gs.mergeReady).toBeUndefined()
+        expect(gs.invalidated).toEqual({ reason, at: LATER })
+        expect(gs.log.at(-1)).toMatchObject({ kind: 'invalidated' })
+      })
+
+      it('withholds it while a question is open on the Run', () => {
+        const { s, lifecycleId } = handedOver()
+        const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+        const recorded = { ...inReview, runs: inReview.runs.map((r) => ({ ...r, githubState: good() })) }
+        const opened = unwrap<Dispatch>(openReviewDispatch(recorded, { taskId: lifecycleId, provider: 'codex', accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/run', specPath: '' }, LATER) as never)
+        const ordinary = opened.state.tasks.find((t) => t.kind !== 'lifecycle')!.id
+        const asked = { ...opened.state, gates: [{ id: 'gat_x', runId: opened.state.runs[0].id, taskId: ordinary, question: 'q', status: 'open' as const, createdAt: NOW }] }
+        const r = unwrap(applyReviewResult(asked, { taskId: lifecycleId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [], repair: target }, LATER) as never)
+        expect(r.state.runs[0].githubState?.invalidated?.reason).toBe('question-open')
+      })
     })
 
     it('a blocking issue past the round cap asks a person', () => {
