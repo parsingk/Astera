@@ -4251,6 +4251,47 @@ describe('settleLifecycleCi', () => {
     expect(settleLifecycleCi(once, { taskId: lifecycleId, result: ci('passed') }, LATER).ok).toBe(false)
     expect(settleLifecycleCi(s, { taskId: 'tsk_nope', result: ci('passed') }, LATER)).toMatchObject({ ok: false, missing: true })
   })
+
+  // GitHub lifecycle G5a: the review of a lifecycle Task, pinned — a pass completes it (and its Run), a blocking issue
+  // repairs it in the Run root, and past the round cap a person is asked
+  describe('its review verdict', () => {
+    const reviewed = (): { s: OrchState; lifecycleId: string; reviewId: string } => {
+      const { s, lifecycleId } = handedOver()
+      const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+      const opened = unwrap<Dispatch>(
+        openReviewDispatch(inReview, { taskId: lifecycleId, provider: 'codex', accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/run', specPath: '' }, LATER) as never
+      )
+      return { s: opened.state, lifecycleId, reviewId: opened.value.id }
+    }
+    const blocking = { severity: 'high' as const, title: 'CI weakened: a test skipped the objective does not need', file: 'src/a.test.ts', line: 3 }
+    const target = { kind: 'fresh' as const, cwd: 'D:/wt/run', provider: 'claude' as const, accountId: 'acc1' }
+
+    it('a pass completes the lifecycle Task, and with it the Run', () => {
+      const { s, lifecycleId, reviewId } = reviewed()
+      const r = unwrap(applyReviewResult(s, { taskId: lifecycleId, dispatchId: reviewId, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [], repair: target }, LATER) as never)
+      expect(r.state.tasks.find((t) => t.id === lifecycleId)?.status).toBe('completed')
+      expect(r.state.tasks.filter((t) => t.kind === 'lifecycle')).toHaveLength(1)
+      expect(r.state.tasks.every((t) => t.status === 'completed')).toBe(true)
+    })
+
+    it('a blocking issue opens a review-failure repair in the Run root, with no attempt to retry', () => {
+      const { s, lifecycleId, reviewId } = reviewed()
+      const r = unwrap(applyReviewResult(s, { taskId: lifecycleId, dispatchId: reviewId, outcome: 'failed', subject: 'weakened', body: 'see', issues: [blocking], repair: target }, LATER) as never)
+      expect(r.state.tasks.find((t) => t.id === lifecycleId)?.status).toBe('dispatched')
+      const repair = r.state.dispatches.find((d) => d.taskId === lifecycleId && d.repair)!
+      expect(repair).toMatchObject({ repair: 'review-failure', cwd: 'D:/wt/run', provider: 'claude' })
+      expect(repair.retryOf).toBeUndefined()
+    })
+
+    it('a blocking issue past the round cap asks a person', () => {
+      const { s, lifecycleId, reviewId } = reviewed()
+      // The cap is the Job's review rounds (reviewRoundOf ≥ maxReviewRounds); one round on a Job that allows one
+      const capped = { ...s, jobs: s.jobs.map((j) => ({ ...j, convergence: { ...j.convergence, maxReviewRounds: 1 } })) }
+      const r = unwrap(applyReviewResult(capped, { taskId: lifecycleId, dispatchId: reviewId, outcome: 'failed', subject: 'weakened', body: 'see', issues: [blocking], repair: target }, LATER) as never)
+      expect(r.state.tasks.find((t) => t.id === lifecycleId)?.status).toBe('blocked')
+      expect(r.state.gates.find((g) => g.taskId === lifecycleId && g.status === 'open')?.kind).toBe('convergence-exhausted')
+    })
+  })
 })
 
 // GitHub lifecycle G3a (design §3.2): every pure transition that completes a lifecycle Run's last ordinary Task adds the
