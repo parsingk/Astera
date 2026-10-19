@@ -1877,7 +1877,7 @@ export interface SourcesApi {
   list(): Promise<SourcesCallAnswer>
   items(a: { source: string; projectPath: string; query?: string; cursor?: string }): Promise<SourcesCallAnswer>
   show(a: { source: string; item: string; projectPath: string }): Promise<SourcesCallAnswer>
-  create(a: { source: string; item: string; projectPath: string; coordinatorAccount: string; convergence?: boolean }): Promise<SourcesCallAnswer>
+  create(a: { source: string; item: string; projectPath: string; coordinatorAccount: string; convergence?: boolean; githubLifecycle?: boolean }): Promise<SourcesCallAnswer>
 }
 
 /** Settings › Plugins (plugin runtime design slice 2d): the Host's `plugins-*` commands the tab uses, as the app, and
