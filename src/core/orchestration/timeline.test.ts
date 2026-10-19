@@ -298,6 +298,20 @@ describe('the GitHub lines', () => {
     expect(eventCountsOf(s).get('r1')).toBe(timelineFor(s, 'r1', anySession).length)
   })
 
+  // Final review M9: after a reconverge each line belongs to the lifecycle Task of its round, and a line from before any
+  // lifecycle Task (a pull request found while the ordinary Tasks ran) to none
+  it('ties each line to the lifecycle Task made at or before it', () => {
+    const s = withLog([
+      { seq: 1, at: T(4), kind: 'pr-bound' as const, pr: 12 },
+      { seq: 2, at: T(6), kind: 'ci-failed' as const, sha: A, check: 'build' },
+      { seq: 3, at: T(9), kind: 'ci-passed' as const, sha: A }
+    ])
+    const second: Task = { ...task('tsk_l2', 'r1', T(8)), title: 'GitHub 전달', kind: 'lifecycle' } as Task
+    const two = { ...s, tasks: [...s.tasks, second] }
+    const lines = timelineFor(two, 'r1', anySession).filter((e) => e.kind.startsWith('github-'))
+    expect(lines.map((e) => e.taskId ?? null)).toEqual([null, 'tsk_l', 'tsk_l2'])
+  })
+
   // The log's own rule for what is a line (it counts the dropped ones) and the timeline's are the same rule
   it('shows a line for exactly the kinds the log counts as lines', () => {
     const evts = timelineFor(withLog(log), 'r1', anySession).filter((e) => e.kind.startsWith('github-'))

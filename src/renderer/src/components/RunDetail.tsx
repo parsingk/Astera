@@ -27,7 +27,7 @@ import { confirmModal } from '../lib/confirm'
 import { ChangedFilesBlock } from './ChangedFilesBlock'
 import { CompletionBlock } from './CompletionBlock'
 import { GateAnswer } from './GateAnswer'
-import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, taskTitleOf, type GlyphKind } from './checkText'
+import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, taskTitleOf, eventTitleOf, type GlyphKind } from './checkText'
 import { toast } from '../lib/toast'
 import { errText } from '../hooks/useFileOps'
 import {
@@ -725,9 +725,6 @@ export function RunDetail({
    *  다시 하지 않는다.
    *
    *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다. */
-  /** A timeline line's Task title as the app shows it: the lifecycle Task's in the app's language (G7b). */
-  const eventTaskTitle = (e: JobEvent): string =>
-    taskTitleOf({ title: e.taskTitle ?? '', lifecycle: run?.tasks.find((x) => x.id === e.taskId)?.lifecycle }, t as never)
   /** `github`: a GitHub question, whose answer goes to the Host; its refusal is said in its words (G7a final review I1). */
   const resolveGate = async (gateId: string, resolution: string, github = false): Promise<void> => {
     const taskId = answering
@@ -1046,6 +1043,9 @@ export function RunDetail({
                     const summary =
                       e.kind === 'dispatch-started'
                         ? ''
+                        : // A Task added line's summary is the Task's title, the lifecycle Task's translated (final review I2)
+                          e.kind === 'task-created'
+                          ? eventTitleOf(e, run?.tasks ?? [], t as never)
                         : e.kind === 'limit-hit' || e.kind === 'resumed'
                           ? (accounts?.find((a) => a.id === e.summary)?.label ?? '')
                           : recoveryKey
@@ -1104,8 +1104,8 @@ export function RunDetail({
                               {/* 어느 Task 의 일인가. 걸러 놓은 동안에는 위의 필터 줄이 이미 같은
                                   말을 하고 있어서 적지 않는다 */}
                               {!selectedTask && e.taskTitle && (
-                                <span className="detail-ev-task" title={eventTaskTitle(e)}>
-                                  {eventTaskTitle(e)}
+                                <span className="detail-ev-task" title={eventTitleOf(e, run?.tasks ?? [], t as never)}>
+                                  {eventTitleOf(e, run?.tasks ?? [], t as never)}
                                 </span>
                               )}
                               {sessionId && (

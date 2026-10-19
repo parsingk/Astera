@@ -64,6 +64,17 @@ export function checkChoicesOf(configs: { id: string; name: string }[], plugins:
 export const taskTitleOf = (task: { title: string; lifecycle?: unknown }, t: Translate): string =>
   task.lifecycle !== undefined ? t('jobs.lifecycle.title') : task.title
 
+/** A timeline line's Task title as the app shows it (G7b final review I2): the Task's, translated when it is the
+ *  lifecycle Task; the line's own when the Task is gone. */
+export const eventTitleOf = (
+  e: { taskId?: string; taskTitle?: string },
+  tasks: readonly { id: string; title: string; lifecycle?: unknown }[],
+  t: Translate
+): string => {
+  const task = tasks.find((x) => x.id === e.taskId)
+  return task ? taskTitleOf(task, t) : (e.taskTitle ?? '')
+}
+
 /** nodeMetaOf 의 판정을 문장으로. 우선순위는 그쪽에 있다 — 여기는 kind 마다 문구 하나다. undefined 면 줄을 그리지 않는다 */
 export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
   switch (m.kind) {

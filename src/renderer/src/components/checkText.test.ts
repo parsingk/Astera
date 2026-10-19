@@ -2,7 +2,7 @@
 // block, in all four languages.
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from '../../../core/i18n'
-import { GLYPH, checkChoicesOf, checkTooltip, checkVerdict, nodeMetaText, taskTitleOf } from './checkText'
+import { GLYPH, checkChoicesOf, checkTooltip, checkVerdict, nodeMetaText, taskTitleOf, eventTitleOf } from './checkText'
 
 const t = (key: string, p?: Record<string, string | number>): string => (p ? `${key} ${JSON.stringify(p)}` : key)
 
@@ -34,6 +34,13 @@ describe('the lifecycle Task', () => {
   it('its title is translated; any other Task’s is its own', () => {
     expect(taskTitleOf({ title: 'GitHub 전달', lifecycle: {} }, t)).toBe('jobs.lifecycle.title')
     expect(taskTitleOf({ title: 'Fix the login' }, t)).toBe('Fix the login')
+  })
+  // Final review I2: a timeline line names its Task by the Task's title, the lifecycle Task's translated
+  it('a timeline line’s Task title, and a Task added line, say the lifecycle Task in the app’s language', () => {
+    const tasks = [{ id: 'tsk_l', title: 'GitHub 전달', lifecycle: {} }, { id: 'tsk_1', title: 'Fix the login' }]
+    expect(eventTitleOf({ taskId: 'tsk_l', taskTitle: 'GitHub 전달' }, tasks, t)).toBe('jobs.lifecycle.title')
+    expect(eventTitleOf({ taskId: 'tsk_1', taskTitle: 'Fix the login' }, tasks, t)).toBe('Fix the login')
+    expect(eventTitleOf({ taskId: 'tsk_gone', taskTitle: 'Old' }, tasks, t)).toBe('Old')
   })
   it('its words are in every language', () => {
     for (const k of ['jobs.convergence.node.ciWaiting', 'jobs.convergence.node.ciWaitingNoPr', 'jobs.lifecycle.title'])
