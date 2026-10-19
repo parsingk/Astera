@@ -222,6 +222,7 @@ describe('runRecordInputOf: a GitHub lifecycle Run', () => {
   const BINDING = {
     repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'main', headBranch: 'astera/x', createdByAstera: true, boundAt: T
   }
+  const OPEN = { state: 'open' as const, isDraft: true, baseBranch: 'main' }
   const ordinary: Task = {
     id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], validateConfigIds: ['cfg_test'], status: 'completed', consecutiveFailures: 0, createdAt: T, updatedAt: T
   }
@@ -242,7 +243,7 @@ describe('runRecordInputOf: a GitHub lifecycle Run', () => {
     runs: [
       {
         id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: T,
-        ...(o.github === null ? {} : { githubState: { binding: BINDING, headSha: HEAD, lastPushedSha: HEAD, ci: ci('passed'), ...o.github, log: [], seq: 0 } })
+        ...(o.github === null ? {} : { githubState: { binding: BINDING, headSha: HEAD, lastPushedSha: HEAD, pr: OPEN, ci: ci('passed'), ...o.github, log: [], seq: 0 } })
       }
     ],
     tasks: o.task === null ? [ordinary] : [ordinary, o.task ?? lifecycle()]
@@ -250,6 +251,28 @@ describe('runRecordInputOf: a GitHub lifecycle Run', () => {
   const MERGE_READY = {
     pullRequestNumber: 34, headSha: HEAD, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: [], evaluatedAt: T
   }
+
+  // G8 final review I1: the watch withdraws merge-ready by recording `invalidated` and keeps the evidence, and the Run's
+  // GitHub block reads it as holding only while nothing withdrew it, its head is the PR's head and the PR is open
+  it('merge-ready withdrawn since, of an earlier head, or of a pull request no longer open, is not merge-ready', () => {
+    const ready = (github: Partial<Omit<RunGitHubState, 'seq' | 'log'>>): boolean | undefined =>
+      runRecordInputOf(lifecycleState({ github: { mergeReady: MERGE_READY, ...github } }), 'run_1')?.github?.mergeReady
+    expect(ready({ invalidated: { reason: 'head-changed', at: T } })).toBe(false)
+    expect(ready({ headSha: 'd'.repeat(40) })).toBe(false)
+    expect(ready({ pr: { ...OPEN, state: 'closed' } })).toBe(false)
+  })
+
+  it('a lifecycle Task that did not complete is not merge-ready, whatever evidence an earlier carry left', () => {
+    const task = lifecycle({ status: 'failed' })
+    expect(runRecordInputOf(lifecycleState({ task, github: { mergeReady: MERGE_READY } }), 'run_1')?.github?.mergeReady).toBe(false)
+  })
+
+  // G8 final review M1: before the lifecycle Task, the local checks that ran are the ordinary Tasks' own
+  it('an ordinary Task whose local check failed, before the lifecycle Task, has local failed', () => {
+    const failed = { ...ordinary, status: 'failed' as const, checks: [{ configId: 'cfg_test', name: 'test', status: 'failed' as const }] }
+    const s = { ...lifecycleState({ task: null, github: null }), tasks: [failed] }
+    expect(runRecordInputOf(s, 'run_1')?.github?.local).toBe('failed')
+  })
 
   it('a merge-ready Run names its issue and pull request, and its local checks, CI at the head, and review passed', () => {
     expect(runRecordInputOf(lifecycleState({ github: { mergeReady: MERGE_READY } }), 'run_1')?.github).toEqual({

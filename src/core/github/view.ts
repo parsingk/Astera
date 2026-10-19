@@ -114,7 +114,7 @@ export interface GitHubLifecycleView {
 }
 
 /** Merge-ready holds while its evidence's head is the PR's head, the PR is open and nothing withdrew it (§5.4). */
-const mergeReadyHolds = (gs: RunGitHubState | undefined): boolean =>
+export const mergeReadyHolds = (gs: RunGitHubState | undefined): boolean =>
   gs?.mergeReady !== undefined && !gs.invalidated && gs.mergeReady.headSha === gs.headSha && gs.pr?.state === 'open'
 
 function stateOf(gs: RunGitHubState | undefined): GitHubLifecycleState {

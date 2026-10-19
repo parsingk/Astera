@@ -15,6 +15,7 @@ import { jobNameOf } from './jobName'
 import { isLifecycleTask } from './lifecycleTask'
 import { checkConfigIdsOf } from './convergence'
 import { GITHUB_CI_CHECK } from '../github/lifecycle'
+import { mergeReadyHolds } from '../github/view'
 
 export function justFinished(
   before: OrchState,
@@ -85,15 +86,16 @@ export function runRecordInputOf(state: OrchState, runId: string): (RunRecordInp
 const FAILED_CHECK: ReadonlySet<CheckResult['status']> = new Set(['failed', 'timed-out', 'error'])
 
 /** A GitHub lifecycle Run's evidence (G8, spec §40), read from the Run's state as it finished; nothing waits on GitHub.
- *  The local checks are the latest lifecycle Task's last round, or, before it was added, the checks its ordinary Tasks
- *  named; CI is GitHub's on the head Astera pushed; the review passed only when it completed that Task — a person's
- *  completion past the policy is not one. */
+ *  The local checks are the latest lifecycle Task's last round, or, before it was added, its ordinary Tasks' own; CI is
+ *  GitHub's on the head Astera pushed; the review passed only when it completed that Task — a person's completion past
+ *  the policy is not one. Merge-ready is the Run's GitHub block's own reading (mergeReadyHolds: a withdrawal keeps the
+ *  evidence), and only for a lifecycle Task that completed: evidence an earlier carry left says nothing of this one. */
 function githubEvidenceOf(run: JobRun, job: Job, tasks: Task[]): RecordGitHub {
   const gs = run.githubState
   const life = tasks.find(isLifecycleTask)
   const configured = (life ? checkConfigIdsOf(life) : tasks.flatMap((t) => checkConfigIdsOf(t))).filter((id) => id !== GITHUB_CI_CHECK)
   const local = (): EvidenceStatus => {
-    const results = (life?.checks ?? []).filter((c) => c.configId !== GITHUB_CI_CHECK)
+    const results = (life ? (life.checks ?? []) : tasks.flatMap((t) => t.checks ?? [])).filter((c) => c.configId !== GITHUB_CI_CHECK)
     if (results.some((c) => FAILED_CHECK.has(c.status))) return 'failed'
     const passed = (id: string): boolean => results.some((c) => c.configId === id && c.status === 'passed' && c.skipped !== true)
     return configured.every(passed) ? 'passed' : 'skipped'
@@ -118,7 +120,7 @@ function githubEvidenceOf(run: JobRun, job: Job, tasks: Task[]): RecordGitHub {
     ...(configured.length > 0 ? { local: local() } : {}),
     ci: ci(),
     review,
-    mergeReady: gs?.mergeReady !== undefined
+    mergeReady: life?.status === 'completed' && mergeReadyHolds(gs)
   }
 }
 
