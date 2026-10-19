@@ -545,6 +545,10 @@ export interface Dispatch {
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께
    *  붙으므로, worker_done 이 도착했을 때 어느 쪽인지 아는 유일한 방법이다. */
   review?: boolean
+  /** The head a lifecycle Task's review reads: the Run's pushed head when the review opened, the one its spec's diff
+   *  names (GitHub lifecycle G5b). Merge-ready needs it to be the PR's head; the Host records `git.head` only after the
+   *  Dispatch ended, too late for the verdict. */
+  reviewHead?: string
   /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
    *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
   repair?: RepairReason

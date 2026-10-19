@@ -1482,6 +1482,9 @@ export function openReviewDispatch(
     workerState: 'ready',
     retained: false
   }
+  // A lifecycle review reads the head Astera pushed (G5b): the verdict's merge-ready needs to know which
+  const reviewHead = isLifecycleTask(task) ? s.runs.find((r) => r.id === task.runId)?.githubState?.lastPushedSha : undefined
+  if (reviewHead !== undefined) dispatch.reviewHead = reviewHead
   return ok({ ...s, dispatches: [...s.dispatches, dispatch] }, dispatch)
 }
 

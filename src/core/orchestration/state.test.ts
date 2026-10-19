@@ -4252,6 +4252,18 @@ describe('settleLifecycleCi', () => {
     expect(settleLifecycleCi(s, { taskId: 'tsk_nope', result: ci('passed') }, LATER)).toMatchObject({ ok: false, missing: true })
   })
 
+  // GitHub lifecycle G5b (design §5.4): the review reads the head Astera pushed, and its Dispatch says which, since the
+  // Host records a Dispatch's git head only after it ended
+  it('a lifecycle review’s Dispatch records the head it reviews; one with nothing pushed has none', () => {
+    const { s, lifecycleId } = handedOver()
+    const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+    const H = 'e'.repeat(40)
+    const pushed = { ...inReview, runs: inReview.runs.map((r) => ({ ...r, githubState: { lastPushedSha: H, log: [], seq: 0 } })) }
+    const args = { taskId: lifecycleId, provider: 'codex' as const, accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/run', specPath: '' }
+    expect(unwrap<Dispatch>(openReviewDispatch(pushed, args, LATER) as never).value.reviewHead).toBe(H)
+    expect(unwrap<Dispatch>(openReviewDispatch(inReview, args, LATER) as never).value).not.toHaveProperty('reviewHead')
+  })
+
   // GitHub lifecycle G5a: the review of a lifecycle Task, pinned — a pass completes it (and its Run), a blocking issue
   // repairs it in the Run root, and past the round cap a person is asked
   describe('its review verdict', () => {
