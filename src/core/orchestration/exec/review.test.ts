@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createReviewStarter, type ReviewContext } from './review'
-import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../state'
+import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, reconvergeRun, startJobRun, type OrchState } from '../state'
 import type { Account } from '../../types'
 import type { GitHubLogEntry } from '../../github/lifecycle'
 
@@ -135,7 +135,7 @@ describe('createReviewStarter — the lifecycle Task', () => {
   const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
   const BASE = 'b'.repeat(40)
   const HEAD = 'c'.repeat(40)
-  function lifecycleRig(o: { repairBy?: 'claude' | 'codex'; rangeDiff?: ReviewContext['rangeDiff']; log?: GitHubLogEntry[] } = {}) {
+  function lifecycleRig(o: { repairBy?: 'claude' | 'codex'; rangeDiff?: ReviewContext['rangeDiff']; log?: GitHubLogEntry[]; reconverged?: boolean } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astera-review-'))
     dirs.push(dir)
     const runRoot = path.join(dir, 'run')
@@ -148,7 +148,7 @@ describe('createReviewStarter — the lifecycle Task', () => {
     const a = unwrap<{ id: string }>(createTask(rooted, { runId: run.value.id, title: 'A', spec: 's', deps: [] }, NOW) as never)
     const d = unwrap<{ id: string }>(openDispatch(a.state, { taskId: a.value.id, provider: 'claude', accountId: 'c1', sessionId: 'sessA', cwd: own, specPath: path.join(dir, 'a.md') }, NOW) as never)
     let state = unwrap(applyWorkerDone(d.state, { taskId: a.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
-    const lifecycleId = state.tasks.find((t) => t.kind === 'lifecycle')!.id
+    let lifecycleId = state.tasks.find((t) => t.kind === 'lifecycle')!.id
     if (o.repairBy)
       state = {
         ...state,
@@ -157,6 +157,14 @@ describe('createReviewStarter — the lifecycle Task', () => {
           specPath: path.join(dir, 'fix.md'), startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'ready', retained: false, repair: 'check-failure'
         }]
       }
+    if (o.reconverged) {
+      // G5c: the repair above was the earlier lifecycle Task's; runs reconverge adds the one under review now
+      state = { ...state, tasks: state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'completed' as const } : t)) }
+      const again = reconvergeRun(state, run.value.id, '2026-08-21T00:00:00.000Z')
+      if (!again.ok) throw new Error(again.error)
+      state = again.state
+      lifecycleId = again.value.id
+    }
     state = { ...state, tasks: state.tasks.map((t) => (t.id === lifecycleId ? { ...t, status: 'reviewing' as const } : t)) }
     let spec = ''
     const startWorker = vi.fn(async (x: StartArgs) => {
@@ -188,6 +196,14 @@ describe('createReviewStarter — the lifecycle Task', () => {
     // G3c1 final review I1: the reviewer judges the Run's objective and Tasks, not the lifecycle Task's placeholder
     expect(h.spec()).toContain('- A:')
     expect(h.spec()).not.toContain('워커가 없는 Task')
+  })
+
+  // G5c final review M4: after a reconverge the branch's latest changes are the earlier lifecycle Task's repairs, so their
+  // provider is the one the review avoids — not the ordinary work's
+  it('a reconverged lifecycle Task with no repair of its own is reviewed on a provider other than the earlier one’s repairs', async () => {
+    const h = lifecycleRig({ repairBy: 'codex', reconverged: true })
+    await h.start({ taskId: h.lifecycleId })
+    expect(h.startWorker.mock.calls[0][0]).toMatchObject({ provider: 'claude' })
   })
 
   // GitHub lifecycle G5a (design §7.4, §7.5)
