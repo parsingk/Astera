@@ -118,6 +118,35 @@ describe('readRangeDiff', { timeout: 30_000 }, () => {
     commit(repo, 'base')
     expect(await readRangeDiff(repo, 'f'.repeat(40), head(repo))).toBeNull()
   })
+
+  // G5a final review I-1: a person's prefix setting would leave the parser with no path
+  it('names the paths a/ and b/ whatever diff.noprefix says', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'a.txt', 'a\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    await write(repo, 'a.txt', 'b\n')
+    commit(repo, 'work')
+    gitSync(repo, ['config', 'diff.noprefix', 'true'])
+    const r = (await readRangeDiff(repo, base, head(repo)))!
+    expect(r.diff).toContain('diff --git a/a.txt b/a.txt')
+    expect(r.diff).toContain('+++ b/a.txt')
+  })
+
+  // G5a final review M-8: a lockfile does not spend the budget before the tests
+  it('leaves lockfiles out, so a big one does not push the tests past the bound', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'package-lock.json', '{}\n')
+    await write(repo, 'test/a.test.ts', 'it("a")\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    await write(repo, 'package-lock.json', Array.from({ length: 2000 }, (_, i) => `"dep${i}": "1.0.${i}",`).join('\n') + '\n')
+    await write(repo, 'test/a.test.ts', 'it.skip("a")\n')
+    commit(repo, 'work')
+    const r = (await readRangeDiff(repo, base, head(repo), { maxBytes: 4000 }))!
+    expect(r.diff).toContain('it.skip("a")')
+    expect(r.diff).not.toContain('package-lock.json')
+  })
 })
 
 describe('readFileDiff', { timeout: 30_000 }, () => {

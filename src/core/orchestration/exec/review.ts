@@ -20,7 +20,7 @@ import { pickReviewer } from '../reviewer'
 import { openReviewDispatch, type OrchState } from '../state'
 import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf } from '../lifecycleTask'
 import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
-import { weakeningFindings } from '../../github/weakening'
+import { promptText, weakeningFindings } from '../../github/weakening'
 import type { RunGitHubState } from '../../github/lifecycle'
 import { createReviewGate } from './reviewGate'
 
@@ -43,7 +43,10 @@ export interface ReviewContext {
 /** The Run's CI failures of the verification configuration (G5a, design §4.6), each check and head once, from the Run's
  *  GitHub log: the snapshot is overwritten by later reads. */
 function configurationNotesOf(gs: RunGitHubState | undefined): string[] {
-  const notes = (gs?.log ?? []).filter((e) => e.kind === 'ci-failed' && e.class === 'configuration').map((e) => `${e.check ?? 'a check'} on ${(e.sha ?? '').slice(0, 7)}`)
+  // The check's name is a workflow's own, which an agent can write: made fit for the prompt (G5a final review M-5)
+  const notes = (gs?.log ?? [])
+    .filter((e) => e.kind === 'ci-failed' && e.class === 'configuration')
+    .map((e) => `${promptText(e.check ?? 'a check')}${e.sha ? ` on ${e.sha.slice(0, 7)}` : ''}`)
   return [...new Set(notes)]
 }
 

@@ -106,8 +106,17 @@ export async function readChanges(
  *  request; the reviewer reads the diff itself. */
 export const RANGE_DIFF_MAX_BYTES = 2 * 1024 * 1024
 
-/** The whole diff from `base` to `head`, as `git diff -M` prints it; cut at a line past `maxBytes`. Null when git cannot
- *  answer (an unknown commit, a folder that is not a repo). */
+/** Left out of a whole range's diff (G5a final review M-8): lockfiles and minified bundles say nothing about the checks,
+ *  and one big lockfile would spend the bound before the tests (git prints paths in order). */
+const RANGE_DIFF_EXCLUDED = [
+  'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'Cargo.lock', 'poetry.lock',
+  'Pipfile.lock', 'uv.lock', 'Gemfile.lock', 'composer.lock', 'go.sum', '*.min.js'
+].map((name) => `:(glob,exclude)**/${name}`)
+
+/** The whole diff from `base` to `head`, as `git diff -M` prints it, with `a/` and `b/` whatever the person's prefix
+ *  settings say (G5a final review I-1: the parser reads the paths by them), lockfiles left out; cut at a line past
+ *  `maxBytes`. Null when git cannot answer (an unknown commit, a folder that is not a repo). The pathspecs are magic
+ *  ones, so this read alone goes without `--literal-pathspecs`. */
 export async function readRangeDiff(
   repo: string,
   base: string,
@@ -115,7 +124,8 @@ export async function readRangeDiff(
   o: { maxBytes?: number } = {}
 ): Promise<{ diff: string; truncated: boolean } | null> {
   const maxBytes = o.maxBytes ?? RANGE_DIFF_MAX_BYTES
-  const r = await gitBounded([...QUOTEPATH_OFF, 'diff', ...PLAIN, '-M', ...range(base, head)], repo, maxBytes)
+  const args = ['-c', 'core.quotePath=false', 'diff', ...PLAIN, '--src-prefix=a/', '--dst-prefix=b/', '-M', ...range(base, head), '--', '.', ...RANGE_DIFF_EXCLUDED]
+  const r = await gitBounded(args, repo, maxBytes)
   if (!r.ok) return null
   if (r.out.length <= maxBytes) return { diff: r.out.toString('utf8'), truncated: false }
   const cut = r.out.subarray(0, maxBytes).toString('utf8')

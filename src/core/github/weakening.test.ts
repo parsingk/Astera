@@ -129,3 +129,105 @@ describe('weakeningFindings', () => {
     expect(weakeningFindings('diff --git a/x b/x\nnew file mode 100644\n')).toEqual({ findings: [], total: 0 })
   })
 })
+
+// GitHub lifecycle G5a final review: the parser and the detectors on what real pull requests hold
+describe('weakeningFindings — final review', () => {
+  /** A raw diff from header lines and hunk lines, as git prints it. */
+  const raw = (...lines: string[]): string => lines.join('\n') + '\n'
+
+  // I-1, M-3: the path is the +++ / --- / rename line's, not a guess from the header
+  it('reads a path that holds " b/", a quoted one, and a deleted file’s from its --- line', () => {
+    const files = parseUnifiedDiff(
+      raw(
+        'diff --git a/tests b/x.test.ts b/tests b/x.test.ts', '--- a/tests b/x.test.ts', '+++ b/tests b/x.test.ts', '@@ -1 +1 @@', '-a', '+b',
+        'diff --git "a/q\\ty.ts" "b/q\\ty.ts"', '--- "a/q\\ty.ts"', '+++ "b/q\\ty.ts"', '@@ -1 +1 @@', '-a', '+b',
+        'diff --git a/old.test.ts b/old.test.ts', 'deleted file mode 100644', '--- a/old.test.ts', '+++ /dev/null', '@@ -1 +0,0 @@', '-x'
+      )
+    )
+    expect(files.map((f) => f.path)).toEqual(['tests b/x.test.ts', 'q' + String.fromCharCode(9) + 'y.ts', 'old.test.ts'])
+  })
+
+  // M-4: diff.suppressBlankEmpty prints an empty context line with no space
+  it('counts an empty line inside a hunk as context', () => {
+    const files = parseUnifiedDiff(raw('diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -1,2 +1,3 @@', ' a', '', '+b'))
+    expect(files[0].added).toEqual([{ line: 3, text: 'b' }])
+  })
+
+  // I-5
+  it('finds a test step removed from a workflow', () => {
+    expect(kinds(diff(file('.github/workflows/ci.yml', ['-      - run: npm test', '-      - run: pytest -q', '-      - run: go test ./...', '       - run: echo ok'])))).toEqual([
+      'check-step-removed .github/workflows/ci.yml',
+      'check-step-removed .github/workflows/ci.yml',
+      'check-step-removed .github/workflows/ci.yml'
+    ])
+  })
+
+  // M-1
+  it('finds skip markers on test calls and in the forms that were missed, and not an iterator’s skip or a vendored file', () => {
+    const text = diff(
+      file('src/lib.rs', ['+    let rest = args.iter().skip(1);']),
+      file('src/db.ts', ['+  return Model.find().skip(20)']),
+      file('vendor/rx.min.js', ['+b.skip(1);it.only(x)']),
+      file('src/a.test.ts', ['+it.skipIf(true)("x", () => {})', '+it.skip.each([1])("y", () => {})', '+it.skipIf(process.platform === "win32")("z", () => {})']),
+      file('src/test/java/ATest.java', ['+  @Ignore']),
+      file('tests/test_b.py', ['+@pytest.mark.xfail', '+        self.skipTest("later")']),
+      file('pkg/a_test.go', ['+	t.Skip("later")'])
+    )
+    expect(kinds(text)).toEqual([
+      'skip-marker pkg/a_test.go#1',
+      'skip-marker src/a.test.ts#1', 'skip-marker src/a.test.ts#2',
+      'skip-marker src/test/java/ATest.java#1',
+      'skip-marker tests/test_b.py#1', 'skip-marker tests/test_b.py#2'
+    ])
+  })
+
+  // M-2: triggers
+  it('finds a trigger name that the workflow no longer has, and not a push: option of a step or a trigger added', () => {
+    const text = diff(
+      file('.github/workflows/docker.yml', ['-          push: true', '+          push: false']),
+      file('.github/workflows/a.yml', ['-on: push', '+on: [push, pull_request]']),
+      file('.github/workflows/b.yml', ['-on: [push, pull_request]', '+on: push'])
+    )
+    expect(kinds(text)).toEqual(['trigger-removed .github/workflows/b.yml'])
+  })
+
+  // M-2: coverage
+  it('reads coverage by its own keys: not eslint’s max-lines; codecov’s target lowered and threshold raised; repeated keys in order', () => {
+    const text = diff(
+      file('.eslintrc.json', ['-    "max-lines": 500,', '+    "max-lines": 300,']),
+      file('codecov.yml', ['-        target: 80%', '+        target: 50%', '-        threshold: 1%', '+        threshold: 5%']),
+      file('.codecov.yml', ['-        threshold: 5%', '+        threshold: 1%']),
+      file('vitest.config.ts', ['-        lines: 90,', '-        lines: 80,', '+        lines: 85,', '+        lines: 80,'])
+    )
+    expect(kinds(text)).toEqual(['coverage-lowered codecov.yml#1', 'coverage-lowered codecov.yml#2', 'coverage-lowered vitest.config.ts#1'])
+  })
+
+  // M-2: ignored failures
+  it('finds a Makefile recipe that ignores its error and || :, and not || true after a cleanup or exit 0 in a new script', () => {
+    const text = diff(
+      file('Makefile', ['+' + String.fromCharCode(9) + '-pytest', '+' + String.fromCharCode(9) + 'pytest || :']),
+      file('.github/workflows/ci.yml', ['+      - run: rm -rf dist || true']),
+      ['diff --git a/scripts/new.sh b/scripts/new.sh', 'new file mode 100755', '--- /dev/null', '+++ b/scripts/new.sh', '@@ -0,0 +1,2 @@', '+echo done', '+exit 0'].join('\n')
+    )
+    expect(kinds(text)).toEqual(['ignored-failure Makefile#1', 'ignored-failure Makefile#2'])
+  })
+
+  // M-5
+  it('drops line and paragraph separators, C1 and format characters, and cuts paths too', () => {
+    const odd = [0x2028, 0x85, 0x202e, 0x9b].map((c) => String.fromCharCode(c)).join('')
+    const r = weakeningFindings(diff(file('.github/workflows/ci.yml', [`+      continue-on-error: true ${odd}x`]), file(`tests/${'d'.repeat(300)}.test.ts`, ['-x'], { deleted: true })))
+    const flag = r.findings.find((f) => f.kind === 'continue-on-error')!
+    expect(flag.text).toBe('continue-on-error: true x')
+    const gone = r.findings.find((f) => f.kind === 'test-deleted')!
+    expect(gone.text.length).toBeLessThanOrEqual(200)
+    expect(gone.file.length).toBeLessThanOrEqual(200)
+  })
+
+  // M-9
+  it('reads a long run of spaces in a coverage line quickly', () => {
+    const line = `+lines${' '.repeat(200_000)}x`
+    const t0 = Date.now()
+    weakeningFindings(diff(file('vitest.config.ts', ['-lines: 80', line])))
+    expect(Date.now() - t0).toBeLessThan(1000)
+  })
+})
