@@ -31,9 +31,11 @@ import {
 } from './detect'
 import { RollCycle } from './cycle'
 import {
+  blockedUntil,
   laterBlock,
   pickAvailable,
   planRetry,
+  RETRY_FALLBACK_MS,
   type BlockRecord,
   type RetryState
 } from './retry'
@@ -366,6 +368,12 @@ interface Chain {
   // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
   // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
   chatValveSpent: boolean
+  // A limit inferred from a usage figure alone (showLimit): its banner is up until this time, and nothing
+  // is typed when it passes. null when none is shown.
+  shownUntil: number | null
+  // Whether this silence has already had its shown limit — cleared by output. The statusline freezes while
+  // a session rests, so without it a banner that ended on time would come straight back off the same figure.
+  shownSpent: boolean
   // The wait armWait armed, for the snapshot (S6 R4): when it fires, the account it aims at and the limit
   // it waits out. null whenever no wait is armed — cleared the moment the timer fires.
   waitPlan: { retryAt: number; target: number; weekly: boolean } | null
@@ -514,6 +522,8 @@ export class RollingCoordinator {
       chatLimitInTurn: false,
       chatPrevStatus: 'idle',
       chatValveSpent: false,
+      shownUntil: null,
+      shownSpent: false,
       waitPlan: null,
       heldTimer: null,
       snapKey: ''
@@ -619,6 +629,10 @@ export class RollingCoordinator {
     const chain = this.chains.get(e.sessionId)
     if (!chain || chain.disposed) return
     chain.lastOutputAt = this.now()
+    // A session that speaks is not held by a limit nobody detected: a shown limit goes, and the next
+    // silence may show one again.
+    chain.shownSpent = false
+    if (chain.shownUntil !== null) this.clearShown(chain)
     const hit = chain.scanner.push(e.data)
     chain.lastScreen = hit.text
     if (hit.trust && chain.awaitingReady && !chain.trustSeen) {
@@ -1146,6 +1160,8 @@ export class RollingCoordinator {
     if (chain.rolling || chain.waitTimer || chain.disposed || chain.awaitingReady) return false
     // Quiet (S6 R1): no verdict, no shared record, no roll or wait. forceRoll and the tick reach here too.
     if (!this.acts(chain)) return false
+    // A detected limit replaces a shown one; the roll or the wait below publishes its own state.
+    chain.shownUntil = null
     if (chain.healthyTimer) {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
@@ -1263,7 +1279,8 @@ export class RollingCoordinator {
    *  changing — a background Dynamic Workflow is a child of the claude CLI and dies with that kill alone.
    *
    *  It deliberately does not ask "is the session working right now". Once the evidence gate filters out
-   *  the false positives, a wait only ever happens on a genuine limit, and Claude Code does not carry on
+   *  the false positives, a wait only ever happens on a genuine limit (the usage-only fallback shows its
+   *  limit and arms no wait — showLimit), and Claude Code does not carry on
    *  by itself when the limit lifts — so the session at this moment is necessarily halted. An early
    *  design tried to stack that verdict three ways and produced a fresh defect each time (the threshold
    *  collided with the retry floor, the coordinator's own key input was read back as activity, and the
@@ -2122,7 +2139,7 @@ export class RollingCoordinator {
     // latched here rather than inside declareHealthy so the pty timer path stays exactly what it was —
     // that path arms its timer once per arrival and so is its own latch already.
     //
-    // A quiet chain (S6 R27) skips the health, the nudge and the fallback below, and still reads the
+    // A quiet chain (S6 R27) skips the health and the fallback below, and still reads the
     // statusline for identity and usage, so it wakes knowing what the process that held the pty learned.
     const quiet = !this.acts(chain)
     if (!quiet && chain.kind === 'chat' && chain.chatTurnDone) {
@@ -2151,6 +2168,7 @@ export class RollingCoordinator {
       this.snap(chain)
       return
     }
+    if (chain.shownUntil !== null && this.now() >= chain.shownUntil) this.clearShown(chain)
     const five = u?.session?.usedPercent
     const seven = u?.weekly?.usedPercent
     const maxed =
@@ -2169,11 +2187,13 @@ export class RollingCoordinator {
     // Only asked when the snapshot has already failed to justify a roll and the session has gone quiet,
     // so a working session never reaches it; the lookup's own five-minute cache holds the rate down
     // across the 15-second ticks that do.
-    const queried = silent && !maxed ? await this.readAccountUsage(chain) : null
+    // Nothing to ask while a shown limit stands, or once this silence has had one.
+    const showable = chain.shownUntil === null && !chain.shownSpent
+    const queried = silent && !maxed && showable ? await this.readAccountUsage(chain) : null
     // The across-await guard, for the reason the gate gives above — a roll can finish inside the lookup.
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
     const queriedMaxed = queried !== null && queried.percent >= LIMIT_PCT
-    if ((maxed || queriedMaxed) && silent) {
+    if ((maxed || queriedMaxed) && silent && showable) {
       // claudeSession and tail exist to measure ①'s (the transcript's) coverage after the fact.
       // ① (limitTailCheck) was already awaited to completion above, and if ① had caught a hit we would have
       // returned at the guard — so this log surviving now genuinely guarantees that ① did not catch
@@ -2198,9 +2218,49 @@ export class RollingCoordinator {
           `claudeSession=${chain.claudeSessionId ?? 'unknown'} tail=${tailState}`
       )
       this.recordRecovery(chain, payload, undefined, undefined, queried)
-      this.onLimit(chain)
+      this.showLimit(chain)
     }
     this.snap(chain)
+  }
+
+  /** The fallback trigger's verdict: a limit inferred from a usage figure alone — a silent session whose
+   *  statusline, or whose account, reads 100%. **It is shown, never acted on** (2026-10-19, the person's
+   *  decision): the banner and the block record go up, and no roll, no wait and no typing follow. A
+   *  figure is not a refused turn — another session on the account can fill the window, or a per-model
+   *  bucket the session does not use — and "continue" goes to a session only after a limit Astera
+   *  detected is lifted. A refused turn that does arrive (the phrase, the transcript, a chat rejection)
+   *  goes through onLimit and replaces this.
+   *
+   *  The record is still shared: the account is at its limit whoever filled it, so other chains skip it.
+   *  The healthy timer is cleared as onLimit clears it — an in-place resume that meets a full window has
+   *  not settled. The banner comes down at the record's time (the tick), on output (handleData), or when a
+   *  detected limit replaces it (onLimit). */
+  private showLimit(chain: Chain): void {
+    const now = this.now()
+    const i = chain.cycle.currentIndex
+    const record = chain.recovery[i]
+    if (record) this.deps.blocks.record(chain.accountIds[i], record, now)
+    if (chain.healthyTimer) {
+      clearTimeout(chain.healthyTimer)
+      chain.healthyTimer = null
+    }
+    const until = record ? blockedUntil(record) : now + RETRY_FALLBACK_MS
+    chain.shownUntil = until
+    chain.shownSpent = true
+    this.deps.log(
+      `limit shown — usage figure only, nothing will be typed until=${new Date(until).toISOString()} session=${chain.liveId}`
+    )
+    this.pushState(chain, 'waiting', {
+      nextRetryAt: new Date(until).toISOString(),
+      scope: record?.weekly ? 'weekly' : 'session',
+      manual: true
+    })
+  }
+
+  /** Takes a shown limit's banner down. Nothing is typed — the person resumes. */
+  private clearShown(chain: Chain): void {
+    chain.shownUntil = null
+    if (this.acts(chain)) this.pushState(chain, 'none')
   }
 
   /** Transcript limit detection. This is the primary signal, independent of the statusLine snapshot —
@@ -2275,7 +2335,7 @@ export class RollingCoordinator {
   }
 
   /** parsed: if the caller already has a parseStatusLinePayload result, passing it avoids re-parsing.
-   *  Without it (undefined), parsing happens only on the single-account path. */
+   *  Without it (undefined), the payload is parsed here. */
   private applyMeta(chain: Chain, payload: unknown, parsed?: SessionUsage | null): void {
     const meta = extractStatusLineSession(payload)
     if (meta.sessionId) {
@@ -2295,11 +2355,11 @@ export class RollingCoordinator {
       chain.transcriptPath = meta.transcriptPath
     }
     const u = parsed !== undefined ? parsed : parseStatusLinePayload(payload)
-    // Refreshes the observed usage — the input of both the limit-evidence gate and the replay grace.
+    // Refreshes the observed usage — the input of the replay grace.
     // It is updated here rather than on the 15-second tick because the value has to exist right after a
     // roll for the replay grace to answer "is the new account already exhausted", and what fetches that
     // first snapshot is not tick but the ready polling in scheduleAutoPrompt (a few seconds after the
-    // roll). When no window is carried at all it is null — treated as no evidence.
+    // roll). When no window is carried at all it is null, and the grace applies.
     const pcts = [u?.session?.usedPercent, u?.weekly?.usedPercent].filter(
       (p): p is number => typeof p === 'number'
     )

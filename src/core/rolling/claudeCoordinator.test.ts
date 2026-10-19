@@ -809,17 +809,24 @@ describe('RollingCoordinator 주간 한도 롤링', () => {
     expect(h.spawned.length).toBe(spawnedBefore + 1) // 폴백으로 재시도 발생
   })
 
-  it('무출력 폴백 트리거를 주간 100%에서도 발동한다 (틱)', async () => {
-    const h = harness()
-    h.payloads.set('s1', payloadEx({ five: 20, weekly: 100, weeklyReset: new Date(Date.now() + 20 * MIN).toISOString() }))
+  // 폴백은 사용률만 본 판단이라 표시만 한다(2026-10-19 사람의 결정): 대기 배너와 차단 기록은 남기고,
+  // 계정을 바꾸지도 '이어서' 를 치지도 않는다 — 배너에는 그 사실이 실린다(manual).
+  it('무출력 폴백 트리거를 주간 100%에서도 발동한다 (틱) — 표시만 한다', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const resetAt = Date.now() + 20 * MIN
+    h.payloads.set('s1', payloadEx({ five: 20, weekly: 100, weeklyReset: new Date(resetAt).toISOString() }))
     h.coord.register(h.info1)
-    // handleData(출력) 없이 30초 이상 무출력 → 15초 틱이 주간 100%를 보고 폴백 롤.
+    // handleData(출력) 없이 30초 이상 무출력 → 15초 틱이 주간 100%를 보고 폴백.
     // tickChain이 이제 limitTailCheck(①)를 await한 뒤에야 폴백을 평가한다 — 이 체인의
     // transcript_path는 존재하지 않는 더미 경로라 ①의 open()이 실패로 안착하는 데도 실제 fs I/O
     // 완료 콜백이 필요하다. 순수 fake-timer 진행만으로는 그 콜백이 돌지 않으므로(파일 하단 advanceIo
-    // 주석 참고) advanceIo로 바꿔 실제 타이머 틱을 끼워 넣는다 — 발동 조건·기대값은 그대로다.
+    // 주석 참고) advanceIo로 바꿔 실제 타이머 틱을 끼워 넣는다.
     await advanceIo(46_000)
-    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    expect(h.events).toEqual([]) // 롤하지 않는다
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true, scope: 'weekly' })
+    expect(Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))).toBe(resetAt)
+    expect(blocks.get('a1', Date.now())).not.toBeNull() // 다른 체인은 이 계정을 피한다
   })
 
   it('reset이 이미 지난 경우 즉시가 아니라 최소 대기(하한) 후 재시도한다', async () => {
@@ -1261,15 +1268,33 @@ describe('이어서 하라는 문구는 감지한 한도가 풀린 뒤에만 간
     expect(h.sent.filter((s) => s.payload.state === 'nudged' || s.payload.state === 'stalled')).toEqual([])
   })
 
+  // 없앤 리셋 앵커가 실제로 발화하던 모양 그대로 차린다: 단일 계정, 사용률 97%, 실제 전사 파일의 마지막
+  // turn_duration 에 남은 백그라운드 작업 1, 초기화 전에 멈춘 활동. 2026-10-19 까지는 초기화 5분 뒤
+  // "이어서" 가 나갔다 — 한도를 감지한 적이 없는데도.
   it('단일 계정 세션의 사용 창이 초기화되어도, 한도를 감지한 적이 없으면 아무것도 보내지 않는다', async () => {
-    const start = Date.now()
-    const resetSec = Math.floor(start / 1000) + 600
-    const h = harness()
-    h.payloads.set('s1', payloadReset(97, resetSec))
-    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
-    await vi.advanceTimersByTimeAsync(16 * MIN) // 초기화(+10분)를 한참 지난다
-    expect(h.written).toEqual([])
-    expect(h.sent.filter((s) => s.payload.state === 'nudged')).toEqual([])
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'astera-reset-'))
+    try {
+      const tPath = path.join(dir, 'claude-sess.jsonl')
+      await fsp.writeFile(tPath, JSON.stringify({ type: 'system', subtype: 'turn_duration', pendingWorkflowCount: 1 }) + '\n')
+      const start = Date.now()
+      const stale = new Date(start - 60_000)
+      await fsp.utimes(tPath, stale, stale) // 초기화 한참 전에 멈춘 활동
+      const resetSec = Math.floor(start / 1000) + 600
+      const h = harness()
+      h.payloads.set('s1', {
+        session_id: 'claude-sess',
+        transcript_path: tPath,
+        rate_limits: { five_hour: { used_percentage: 97, resets_at: resetSec } }
+      })
+      h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+      // 나눠 흘린다 — 틱과 그 뒤의 판정이 실제 파일 I/O 를 기다리므로 매번 안착시킨다(advanceIo 주석)
+      for (let i = 0; i < 4; i++) await advanceIo(5 * MIN) // 초기화(+10분)와 그 뒤 5분을 지난다
+      await vi.advanceTimersByTimeAsync(200)
+      expect(h.written).toEqual([])
+      expect(h.sent.filter((s) => s.payload.state === 'nudged')).toEqual([])
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
   })
 
   // 다른 조건 — 현재 계정에 차단 기록이 남아 있다 — 도 근거가 되지 않는다. 그 기록을 남기는 살아 있는
@@ -1326,6 +1351,37 @@ describe('이어서 하라는 문구는 감지한 한도가 풀린 뒤에만 간
     await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
     expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
     expect(h.events).toEqual([]) // 같은 계정이므로 kill·spawn 없이 제자리 재개다
+  })
+})
+
+// Dispatch 가 닫힌 워커 세션(unregister). 세션은 살아 있고 체인만 버린다 — 그 전에 걸어 둔 대기가 끝나도
+// 재개 문장이 들어가면 안 된다. 둘째 테스트가 짝이다: 같은 차림에서 체인이 살아 있으면 문장이 들어간다.
+describe('unregister — 체인을 버린 세션에는 쓰지 않는다', () => {
+  const MIN = 60_000
+  const waiting = (h: ReturnType<typeof harness>): void => {
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+  }
+
+  it('unregister한 세션은 걸어 둔 대기가 끝나도 재개 문장을 받지 않는다', async () => {
+    const h = harness()
+    waiting(h)
+    await flush()
+    expect(lastWaiting(h.sent)).toBeDefined()
+    h.coord.unregister('s1') // Dispatch 가 닫혔다 — 세션은 살아 있다
+    await vi.advanceTimersByTimeAsync(12 * MIN)
+    expect(h.written).toEqual([])
+    expect(h.events).toEqual([])
+  })
+
+  it('unregister는 등록되지 않은 id에 무해하다 — 다른 체인도 건드리지 않는다', async () => {
+    const h = harness()
+    waiting(h)
+    await flush()
+    expect(() => h.coord.unregister('s-nope')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(12 * MIN)
+    expect(h.written.filter((w) => w.id === 's1' && w.data === RESUME_PROMPT)).toHaveLength(1)
   })
 })
 
@@ -2071,7 +2127,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     // tickChain이 limitTailCheck를 await하는데 더미 transcript 경로의 open() 실패에도 실제 fs I/O
     // 완료 콜백이 필요하다 — 순수 fake-timer 진행으로는 돌지 않는다(advanceIo 주석 참조).
     await advanceIo(46_000)
-    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
     expect(calls).toBe(0)
   })
 
@@ -2080,12 +2136,14 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
   // statusLine 은 세션이 입력 대기에서 멈추는 순간 갱신을 멈추고, 그 전 값에 얼어붙는다. 폴백은
   // 바로 그 얼어붙은 값을 읽고 "아직 여유 있다"고 판단했다. 문구 경로는 배너가 없어서, 트랜스크립트
   // 경로는 기록이 안 남아서 각각 실패했으니, 세 그물이 모두 같은 죽은 정보를 보고 있었다.
-  it('statusLine 이 얼어붙어도 계정이 100% 라고 하면 롤링한다', async () => {
+  // 그 그물은 남긴다 — 다만 표시만 한다. 사용률만 본 판단이라 계정을 바꾸지도 '이어서' 를 치지도 않는다.
+  it('statusLine 이 얼어붙어도 계정이 100% 라고 하면 한도를 표시한다 — 롤하지 않는다', async () => {
     const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
     h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 })) // 한도에 걸리기 전 값에 멈춰 있다
     h.coord.register(h.info1)
     await advanceIo(46_000)
-    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
+    expect(h.events).toEqual([])
   })
 
   // 돌고 있는 세션은 묻지 않는다 — 조회는 네트워크 왕복이고, 출력이 흐르는 동안 statusLine 은
@@ -2107,22 +2165,67 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
 
   // 문구가 없으면 파싱할 시각도 없고, 스냅샷은 문턱(GATE_PCT) 아래라 후보가 아니다. 그때 남는
   // 유일한 시각이 계정이 알려 준 것이다 — 없으면 대기가 실제 리셋이 아니라 기본 간격을 겨냥한다.
-  it('계정이 알려 준 리셋 시각으로 기다린다 — 문구도 스냅샷도 없을 때', async () => {
+  it('계정이 알려 준 리셋 시각까지 표시한다 — 문구도 스냅샷도 없을 때, 그 뒤에도 치지 않는다', async () => {
     vi.setSystemTime(new Date(Date.UTC(2026, 7, 30, 0, 0)))
     const resetsAt = new Date(Date.UTC(2026, 7, 30, 2, 0)).toISOString() // 2시간 뒤
     const h = harness({ readUsage: () => Promise.resolve(peak(100, resetsAt, false)) })
     h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 }))
-    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] }) // 단일 계정 — 롤 대신 대기
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
     await advanceIo(46_000)
-    expect(resumeCount(h)).toBe(0)
+    // 기본 간격(15분)이 아니라 계정이 준 시각이 배너에 실린다
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true, nextRetryAt: resetsAt })
+    await advanceIo(30 * 60_000)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 아직 그 시각 전이다
+    await advanceIo(100 * 60_000) // 2시간을 넘긴다
+    expect(h.sent.at(-1)?.payload.state).toBe('none') // 배너는 내려간다
+    expect(h.written).toEqual([]) // 아무것도 치지 않는다
+  })
 
-    // 30분: 기본 대기 간격(15분)을 썼다면 여기서 이미 재개했다. 계정이 준 시각을 썼다는 증거가
-    // 이 0 이다 — 이 줄이 이 테스트의 판별력 전부다.
-    await vi.advanceTimersByTimeAsync(30 * 60_000)
-    expect(resumeCount(h)).toBe(0)
+  // 표시는 한 번 쉬는 동안 한 번이다. 상태줄은 세션이 쉬는 동안 갱신되지 않아 100% 에 얼어 있으므로,
+  // 시각이 지나 배너가 내려간 뒤에도 같은 값으로 다시 띄우면 쉬는 세션에 배너가 끝없이 돌아온다.
+  it('표시가 시각으로 끝난 뒤에는 세션이 다시 말할 때까지 다시 띄우지 않는다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() }))
+    h.coord.register(h.info1)
+    await advanceIo(46_000)
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
+    for (let i = 0; i < 4; i++) await advanceIo(10 * MIN) // 초기화가 지나고도 한참 — 상태줄은 100% 그대로
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toHaveLength(1)
+    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    expect(h.written).toEqual([])
+  })
 
-    await vi.advanceTimersByTimeAsync(100 * 60_000) // 2시간을 넘긴다
-    expect(resumeCount(h)).toBeGreaterThan(0)
+  // 세션이 말하면(출력) 막힌 것이 아니다 — 배너를 내린다. 다시 조용해지면 다시 판단한다.
+  it('표시 중에 세션이 말하면 배너를 내리고, 다시 조용해지면 다시 판단한다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 60 * MIN).toISOString() }))
+    h.coord.register(h.info1)
+    await advanceIo(46_000)
+    expect(h.sent.at(-1)?.payload).toMatchObject({ state: 'waiting', manual: true })
+    h.coord.handleData({ sessionId: 's1', data: 'working on it' })
+    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    await advanceIo(46_000) // 다시 30초 넘게 조용하다
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toHaveLength(2)
+    expect(h.events).toEqual([])
+    expect(h.written).toEqual([])
+  })
+
+  // 표시 중에 진짜 한도(화면 문구)가 오면 그쪽이 이긴다: 감지한 한도이므로 대기하고, 풀린 뒤 이어서 친다.
+  it('표시 중에 화면 문구로 한도를 감지하면 진짜 대기로 바뀌고, 풀린 뒤 이어서를 친다', async () => {
+    const h = harness()
+    const resetAt = Date.now() + 10 * MIN
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(resetAt).toISOString() }))
+    h.coord.register(infoSelf())
+    await advanceIo(46_000)
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    const real = lastWaiting(h.sent)
+    expect(real).toBeDefined()
+    expect(real?.manual).toBeUndefined()
+    await advanceIo(resetAt - Date.now() + 2 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(resumeCount(h)).toBe(1)
   })
 })
 
@@ -3036,8 +3139,7 @@ describe('chat chains', () => {
   })
 
   // Ruling 4c-7 (spec §8.1's utilization clause). A chat session writes no statusLine, so the number
-  // the replay grace, the limit-evidence gate and the single-account blind-spot check all read can only
-  // arrive on the rateLimit event. Without it the grace is unconditional for the whole 60 seconds after
+  // the replay grace reads can only arrive on the rateLimit event. Without it the grace is unconditional for the whole 60 seconds after
   // a roll, and switching onto an account that is already exhausted is met with silence.
   it('a rateLimit records the usage figure, so an exhausted account is not shielded by the replay grace', async () => {
     const h = harness({ readUsage: () => Promise.resolve(peak(100)) })

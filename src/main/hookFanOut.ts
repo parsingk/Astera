@@ -55,7 +55,7 @@ export interface HookFanOutTaps {
  * The taps before the last run inside their own `try` so one tap's exception cannot swallow another's —
  * `attention`'s `try` matters even more now that it is first: without it, a throw there would cost
  * `pendingPrompt` and `slack` their turn too, not just itself. `slack` itself is intentionally left unguarded,
- * matching its behaviour before this task; it comes second only because `attention` moved ahead of it.
+ * matching its behaviour before this task; it comes last, after `attention` and `pendingPrompt`.
  */
 export function fanOutHookEvent(taps: HookFanOutTaps, sessionId: string, payload: unknown): void {
   try {

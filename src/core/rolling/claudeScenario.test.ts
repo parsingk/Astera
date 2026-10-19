@@ -152,21 +152,6 @@ describe('목 계정 롤링 시나리오 — 단일 계정', () => {
     expect(w.written.every((x) => x.id === 's1')).toBe(true)
     w.dump('단일 계정 · 5시간 한도 → 대기 → 같은 세션에서 재개')
   })
-
-  // 한도를 감지한 적이 없으면 "이어서 하라" 는 가지 않는다 — 사용률이 한도 가까이(97%)여도.
-  // 사용률로 한도를 짐작해 보내던 리셋 앵커는 2026-10-19 에 없앴다.
-  it('한도를 감지한 적 없이 리셋 시각만 도달하면 아무것도 하지 않는다', async () => {
-    const start = Date.now()
-    const w = world()
-    w.payloads.set('s1', mkPayload({ five: 97, fiveReset: new Date(start + 10 * MIN).toISOString() }))
-    w.coord.register(w.session(['a1']))
-
-    await vi.advanceTimersByTimeAsync(16 * MIN) // 리셋(+10분)을 한참 지난다
-
-    expect(w.written).toEqual([]) // 프롬프트가 나가면 안 된다
-    expect(w.spawned).toEqual([])
-    w.dump('단일 계정 · 한도 감지 없음 → 리셋 시각 도달해도 무개입')
-  })
 })
 
 describe('목 계정 롤링 시나리오 — 멀티 계정', () => {

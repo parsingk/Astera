@@ -105,7 +105,9 @@ export class DesktopNotifier {
   onRollState(ev: RollStateEvent): void {
     // D7 (S6 Task 5): a waiting with reattach is a restored wait (a session taken back after a
     // restart), not a new limit; its first owner announced it, or it is in the offline notice below.
-    if (ev.state === 'waiting' && !ev.reattach) this.fire('limitWaiting', ev.sessionId)
+    // A limit judged from usage alone (manual) resumes nothing, so it does not say it waits to resume.
+    if (ev.state === 'waiting' && !ev.reattach)
+      this.fire('limitWaiting', ev.sessionId, undefined, undefined, ev.manual ? 'notify.limitShown' : undefined)
     // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — it
     // is not a new switch, and slack.ts excludes it at this same point for this same reason. A missing
     // accountLabel is excluded too, matching the identical guard in SlackNotifier's own onRollState:
@@ -138,7 +140,13 @@ export class DesktopNotifier {
     this.fire('inputNeeded', key, undefined, title)
   }
 
-  private fire(event: DesktopNotifyEvent, sessionId: string, accountLabel?: string, title?: string | null): void {
+  private fire(
+    event: DesktopNotifyEvent,
+    sessionId: string,
+    accountLabel?: string,
+    title?: string | null,
+    bodyKey?: MessageKey
+  ): void {
     if (!this.deps.settings.getDesktopNotify()[event]) return
     // Suppressed when the window is focused and this is the session on screen — you are already
     // looking at it (§7).
@@ -151,7 +159,7 @@ export class DesktopNotifier {
       body:
         event === 'accountSwitched'
           ? t(lang, BODY_KEY[event], { label: accountLabel ?? '' })
-          : t(lang, BODY_KEY[event])
+          : t(lang, bodyKey ?? BODY_KEY[event])
     })
   }
 }

@@ -383,6 +383,20 @@ describe('OrchRollTap 정지 스냅샷', () => {
     expect(g.calls).toBe(0)
   })
 
+  // 사용량으로만 판단한 한도(manual)는 아무것도 재개하지 않는다 — 정지로 적으면 그 항목을 닫을 재개가
+  // 영영 오지 않아, 워커가 다시 일한 뒤에도 `runs wait` 가 limited 로 끝난다(limitedUntil). 적지 않는다.
+  it('사용량으로만 판단한 한도는 정지로 적지 않는다 — 닫을 재개가 오지 않는다', async () => {
+    const { s } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['x'])
+    new OrchRollTap(deps, { git: g.git }).onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z', manual: true })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(s)
+    expect(g.calls).toBe(0)
+  })
+
   it('기록한 리셋 시각이 Checkpoint 까지 도달한다', async () => {
     const { s, dispatchId } = seed()
     const deps = makeDeps(s)
@@ -416,8 +430,8 @@ describe('OrchRollTap 정지 스냅샷', () => {
 
 // task 2 — 재개의 두 경로: 계정을 유지하는 'nudged' 와 계정이 바뀌는 rekey. 둘 다 정지가 기록돼
 // 있을 때만 이력의 마지막 항목을 닫는다(recordResume 자신의 no-op 규칙). 'nudged' 쪽은 추가로
-// `stopped` 판별자가 필요하다 — 그 이벤트는 idle stall nudge·reset anchor 에서도 오는데, 그 둘은
-// 이 세션에 정지를 남기지 않았기 때문이다.
+// `stopped` 판별자가 필요하다 — 이미 닫힌 정지의 복원된 대기가 정지를 남기지 않은 채 그 이벤트를
+// 보낸다(2026-10-19 까지는 idle stall nudge·reset anchor 도 그랬다).
 
 const resumesOf = (deps: { state: () => OrchState }, dispatchId: string) =>
   deps.state().dispatches.find((d) => d.id === dispatchId)?.resumes
@@ -486,7 +500,7 @@ describe('OrchRollTap 재개 기록', () => {
     // 회복이 듣지 않았다는 판정 — 표식만 지운다, 이력의 항목은 열린 채 남는다(recordStopSnapshot 의
     // "'stalled' 로 끝난 에피소드" 규칙과 같다)
     tap.onRollState(rollState({ sessionId: 'sess1', state: 'stalled' }))
-    // 표식이 없는 'nudged' — idle stall nudge 나 reset anchor 처럼 이 정지와 무관한 것일 수 있다
+    // 표식이 없는 'nudged' — 이 정지와 무관한 것으로 보고 이력을 지어내지 않는다
     tap.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
     await vi.advanceTimersByTimeAsync(0)
     const resumes = resumesOf(deps, dispatchId)

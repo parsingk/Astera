@@ -168,6 +168,15 @@ describe('the Host session events', () => {
     ])
   })
 
+  // A limit judged from usage alone (manual) resumes nothing, so the public event carries no retry time —
+  // a plugin then says the session stopped at a limit, not that it tries again at a time (2026-10-19).
+  it('records a waiting judged from usage alone without a retry time', async () => {
+    const r = rig({ rows: { s1: row('s1') } })
+    r.events.onRollState({ sessionId: 's1', state: 'waiting', scope: 'session', nextRetryAt: '2026-10-15T03:00:00.000Z', manual: true })
+    await r.events.settled()
+    expect(r.drafts).toEqual([{ type: 'session.limit_waiting', sessionId: 's1', payload: { session, scope: 'session' } }])
+  })
+
   it('records what an app forwards for the sessions the Host does not source', async () => {
     const r = rig()
     const appChat = { id: 'c9', kind: 'chat', title: 'App chat', provider: 'claude', cwd: 'D:\\a' }

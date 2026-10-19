@@ -273,8 +273,8 @@ describe('buildResumePacket', () => {
   })
 })
 
-// fix round 2 — SPEC §11.5: `--resume` 없이 이어가는 재개 경로(claude 의 resumeInPlace·idle nudge·
-// 리셋 앵커)는 살아 있는 세션이다. Job 워커의 체인은 계정이 하나라서 claude 워커는 언제나 그쪽으로
+// fix round 2 — SPEC §11.5: `--resume` 없이 이어가는 재개 경로(claude 의 resumeInPlace)는 살아 있는
+// 세션이다. Job 워커의 체인은 계정이 하나라서 claude 워커는 언제나 그쪽으로
 // 가므로, 이 함수가 claude 워커의 정상 경로다 — spec 파일을 건드리면 안 된다.
 describe('buildResumeNote', () => {
   const withChanges = (): typeof git =>

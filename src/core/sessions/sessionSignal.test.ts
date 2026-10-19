@@ -39,7 +39,8 @@ describe('parseSessionSignal', () => {
       { kind: 'roll-state', session, event: { sessionId: 's1', state: 'switching', accountLabel: 5 } },
       { kind: 'roll-state', session, event: { sessionId: 's1', state: 'waiting', scope: 'monthly' } },
       { kind: 'roll-state', session, event: { sessionId: 's1', state: 'waiting', nextRetryAt: 7 } },
-      { kind: 'roll-state', session, event: { sessionId: 's1', state: 'waiting', reattach: 'yes' } }
+      { kind: 'roll-state', session, event: { sessionId: 's1', state: 'waiting', reattach: 'yes' } },
+      { kind: 'roll-state', session, event: { sessionId: 's1', state: 'waiting', manual: 'yes' } }
     ]
     for (const v of bad) expect(parseSessionSignal(v), JSON.stringify(v)).toBeNull()
   })

@@ -2918,8 +2918,8 @@ export function registerIpc(
     // 그쪽 지연은 그대로다.
     //
     // 이 조합을 그대로 두던 이유였던 롤링의 idle nudge(Notification 훅을 정지 신호로 썼다)는
-    // 2026-10-19 에 없어졌다. 롤링 조건이 훅 설치 조건에 남은 이유는 core/sessions/manager.ts 의
-    // wantToolHooks 주석에 있다.
+    // 2026-10-19 에 없어졌다 — 롤링은 이제 어떤 훅도 읽지 않는다. 워커가 이 훅에서 아직 얻는 것과,
+    // 롤링 조건을 그대로 둔 사정은 core/sessions/manager.ts 의 wantToolHooks 주석에 있다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     // Folder trust before an orchestration spawn — the reasoning lives on preTrustWorkspace in
     // core/orchestration/exec/workerStart.ts, which the Host will call (Task 9).

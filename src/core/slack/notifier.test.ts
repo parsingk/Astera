@@ -663,6 +663,20 @@ describe('SlackNotifier 롤링·한도·종료', () => {
     expect(h.sent[0]).toMatch(/\d{1,2}\/\d{1,2} \d{2}:\d{2}/)
   })
 
+  // 사용량으로만 판단한 한도(manual)는 아무것도 재개하지 않는다 — "재개 예정" 이라고 말하면 안 된다(2026-10-19)
+  it('rollState waiting(manual) → 초기화 시각과 자동 재개 안 함을 알린다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.onRollState({
+      sessionId: 's-1', state: 'waiting', nextRetryAt: '2026-07-23T06:30:00.000Z', scope: 'session', manual: true
+    })
+    await flush()
+    expect(h.sent[0]).toContain('⏸ 한도 도달')
+    expect(h.sent[0]).toContain('초기화 (5시간 한도)')
+    expect(h.sent[0]).toContain('자동으로 재개하지 않습니다')
+    expect(h.sent[0]).not.toContain('재개 예정')
+  })
+
   it('rollState switching → 계정 전환 알림, trust/none은 무시', async () => {
     const h = setup()
     h.notifier.register(info())

@@ -927,6 +927,8 @@ export const es: Catalog = {
   // {time} here is fmtDateTime (M/D HH:MM), not fmtTime — no preposition can precede it
   'session.terminal.weeklyLimitWaiting': 'Límite semanal agotado — reanudación: {time}',
   'session.terminal.limitWaiting': 'Límite alcanzado — se reanudará a las {time}',
+  'session.terminal.limitShown': 'Límite alcanzado — se restablece a las {time}; no se reanudará automáticamente',
+  'session.terminal.weeklyLimitShown': 'Límite semanal agotado — se restablece: {time}; no se reanudará automáticamente',
   // Auto-resume failure toast
   'session.toast.stalled':
     'La sesión «{title}» está detenida — falló la reanudación automática, hay que revisarla',
@@ -1235,6 +1237,7 @@ export const es: Catalog = {
   // {at} is HH:MM for the 5-hour scope but M/D HH:MM for the weekly one (fmtAt in core/slack/notifier.ts),
   // so no preposition can precede it
   'slack.limitWaiting': '⏸ Límite alcanzado — reanudación: {at} (límite {scope})',
+  'slack.limitShown': '⏸ Límite alcanzado — se restablece: {at} (límite {scope}). Se juzgó solo por el uso, así que no se reanudará automáticamente',
   'slack.limitScope.weekly': 'semanal',
   'slack.limitScope.session': 'de 5 horas',
   'slack.accountSwitched': '🔁 Cambio de cuenta → {label}',

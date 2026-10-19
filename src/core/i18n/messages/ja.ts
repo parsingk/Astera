@@ -916,6 +916,8 @@ export const ja: Catalog = {
   // {time} here is fmtDateTime (M/D HH:MM), not fmtTime — no preposition can precede it
   'session.terminal.weeklyLimitWaiting': '週間上限に到達 — {time} に自動再開',
   'session.terminal.limitWaiting': '上限に到達 — {time} に自動再開',
+  'session.terminal.limitShown': '上限に到達 — {time} にリセット・自動再開はしません',
+  'session.terminal.weeklyLimitShown': '週間上限に到達 — {time} にリセット・自動再開はしません',
   // Auto-resume failure toast
   'session.toast.stalled':
     'セッション「{title}」が停止しています — 自動再開に失敗しました。確認が必要です',
@@ -1219,6 +1221,7 @@ export const ja: Catalog = {
   // slack.ts — the notification text that goes out to Slack. Follows the app language.
   'slack.turnDone': '✅ 応答完了',
   'slack.limitWaiting': '⏸ 上限に到達 — {at} に再開予定 ({scope}上限)',
+  'slack.limitShown': '⏸ 上限に到達 — {at} にリセット ({scope}上限)。使用量のみで判断したため自動再開はしません',
   'slack.limitScope.weekly': '週間',
   'slack.limitScope.session': '5時間',
   'slack.accountSwitched': '🔁 アカウント切り替え → {label}',

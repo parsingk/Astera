@@ -799,7 +799,8 @@ export class SlackNotifier {
       if (!Number.isFinite(at)) return
       const lang = this.deps.lang()
       const scope = t(lang, weekly ? 'slack.limitScope.weekly' : 'slack.limitScope.session')
-      void this.send(record, t(lang, 'slack.limitWaiting', { at: resumeAtText(at, weekly), scope }))
+      // A limit judged from usage alone (manual) resumes nothing — its time is the reset, not a resume.
+      void this.send(record, t(lang, ev.manual ? 'slack.limitShown' : 'slack.limitWaiting', { at: resumeAtText(at, weekly), scope }))
     } else if (ev.state === 'switching' && ev.accountLabel && !ev.reattach) {
       // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — the
       // same switch is not announced twice. (The account in the prefix differs before and after the switch,
@@ -811,8 +812,9 @@ export class SlackNotifier {
     } else if (ev.state === 'nudged') {
       void this.send(record, t(this.deps.lang(), 'slack.limitReset'))
     } else if (ev.state === 'stalled') {
-      // The case where the stall continues even after one nudge has been sent. The machine calls a person
-      // instead of repeating the same attempt — this notification is the only path to a person in this design.
+      // A roll's automatic prompt never found the new session ready (claude's 120-second deadline), or a
+      // reopened codex conversation showed a limit sentence its file does not back (judgedByPriorBlock). The
+      // machine calls a person instead of acting — this notification is the only path to a person in this design.
       void this.send(record, t(this.deps.lang(), 'slack.stalled'))
     }
   }

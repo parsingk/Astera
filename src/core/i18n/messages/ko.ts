@@ -1205,6 +1205,9 @@ export const ko = {
   'session.terminal.trustAccepting': '폴더 신뢰 자동 수락 중…',
   'session.terminal.weeklyLimitWaiting': '주간 한도 소진 — {time} 자동 재개',
   'session.terminal.limitWaiting': '한도 도달 — {time} 자동 재개',
+  // A limit judged from a usage figure alone (RollStateEvent.manual): nothing resumes by itself.
+  'session.terminal.limitShown': '한도 도달 — {time} 초기화 · 자동으로 재개하지 않습니다',
+  'session.terminal.weeklyLimitShown': '주간 한도 소진 — {time} 초기화 · 자동으로 재개하지 않습니다',
   // Slice 2 of the Astera Host: a codex rolling chain the app took back from the Host. It is
   // deliberately not asked whether the account was already blocked (CodexRollingCoordinator.register
   // says why), so if it came back blocked it stops until codex writes its next record — which used
@@ -1548,6 +1551,7 @@ export const ko = {
   // slack.ts — the notification text that goes out to Slack. Follows the app language (core.lang at send time).
   'slack.turnDone': '✅ 응답 완료',
   'slack.limitWaiting': '⏸ 한도 도달 — {at} 재개 예정 ({scope} 한도)',
+  'slack.limitShown': '⏸ 한도 도달 — {at} 초기화 ({scope} 한도). 사용량으로만 판단해 자동으로 재개하지 않습니다',
   'slack.limitScope.weekly': '주간',
   'slack.limitScope.session': '5시간',
   'slack.accountSwitched': '🔁 계정 전환 → {label}',
@@ -1599,6 +1603,7 @@ export const ko = {
   // title is the session's own title, so the body says only what happened.
   'notify.inputNeeded': '사용자 확인이 필요합니다',
   'notify.limitWaiting': '한도에 걸려 재개를 기다립니다',
+  'notify.limitShown': '한도에 걸렸습니다 — 자동으로 재개하지 않습니다',
   'notify.accountSwitched': '계정을 {label} 로 전환했습니다',
   'notify.fallbackTitle': 'Astera',
   // The one desktop notice for everything the Host rolled while no app was attached (S6 D6).

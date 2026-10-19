@@ -249,7 +249,8 @@ export class OrchRollTap {
    *     게시한다(롤 중단·롤 실패·체인 dispose).
    *   - 'stalled' — 재개가 듣지 않았다는 **판정**이다. 그 회복 시도는 그것으로 끝나고 **뒤에 'none'
    *     이 오지 않는다** — claudeCoordinator.ts 의 게시 자리(scheduleAutoPrompt 의 auto-prompt 타임아웃)가
-   *     'stalled' 를 게시하고 곧바로 return 한다. 그것은
+   *     'stalled' 를 게시하고 곧바로 return 한다. (codexCoordinator.ts 의 judgedByPriorBlock 도 파일이
+   *     뒷받침하지 않는 문구 한 줄에 'stalled' 로 사람을 부르는데, 그것은 정지를 연 적이 없다.) 앞의 것은
    *     **롤 경로**다: kill·respawn 까지 갔는데 ready 신호가 끝내 오지 않은 경우다. 이것을 끝으로
    *     세지 않으면 그 세션의 표시가 영구히 남아, **다음 정지가
    *     전부 건너뛰어진다** — 그러면 Checkpoint 는 몇 시간 전 에피소드의 기준점과 리셋 시각을 계속
@@ -299,6 +300,10 @@ export class OrchRollTap {
       return
     }
     if (e.state !== 'waiting' && e.state !== 'switching') return
+    // A limit judged from usage alone (manual, claudeCoordinator.ts's showLimit) resumes nothing, so it is
+    // no stop: nothing would ever close the entry, and `runs wait` (limitedUntil) would end `limited`
+    // after the worker carried on.
+    if (e.manual) return
     if (e.reattach) {
       // A restored wait (S6 final review I1). `restore` on the Host's takeover, or in a new app
       // instance, republishes 'waiting' with reattach to a tap whose `stopped` is empty: the stop

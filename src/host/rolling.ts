@@ -106,8 +106,8 @@ export interface HostRollingDeps {
   chatMayAct?(procId: string): boolean
   /** Test seam; default findClaudeTranscript. */
   findTranscript?(configDir: string, threadId: string): Promise<string | null>
-  /** Every hook event, after the coordinators have it (Slack in the Host Task 6: the Host's Slack reads
-   *  the same watcher). Its own try: a tap that throws costs the coordinators nothing. */
+  /** Every hook event the rolling's watcher reads (Slack in the Host Task 6: the Host's Slack reads the
+   *  same watcher). The coordinators take none since 2026-10-19. Its own try: a tap that throws is logged. */
   hookTap?(sessionId: string, payload: unknown): void
   /** Every roll event the moment a coordinator sends it (Slack in the Host: the Host's own rolls are its
    *  Slack's source). Not `onEvent`: a chat roll is announced only once its new proc has started, and the
