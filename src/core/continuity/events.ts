@@ -140,9 +140,12 @@ const EVENT_TYPES: Record<ContinuityEventType, true> = {
 
 /** The journal row of each GitHub log kind (GitHub lifecycle G6, design §5.5) — a Record, so a new log kind is a compile
  *  error here as it is in publicEvents.ts's GITHUB_EVENT. */
-const GITHUB_ROW: Record<GitHubLogKind, ContinuityEventType> = {
+/** null: a timeline line only (G7b; design §5.5 names no journal row for it). */
+const GITHUB_ROW: Record<GitHubLogKind, ContinuityEventType | null> = {
   'pr-bound': 'GITHUB_PR_BOUND',
   'pr-created': 'GITHUB_PR_CREATED',
+  pushed: null,
+  'ci-started': null,
   'head-changed': 'GITHUB_HEAD_CHANGED',
   'ci-passed': 'GITHUB_CI_PASSED',
   'ci-failed': 'GITHUB_CI_FAILED',
@@ -461,13 +464,15 @@ function githubEvents(prev: OrchState, next: OrchState): ContinuityEvent[] {
     for (const e of gs.log) {
       if (e.seq <= seen) continue
       const type = GITHUB_ROW[e.kind]
+      if (type === null) continue
       out.push(
         ev({ runId: run.id }, type, e.at, `${type}:${run.id}:${e.seq}`, {
           seq: e.seq,
           ...(e.pr !== undefined ? { pr: e.pr } : {}),
           ...(e.sha !== undefined ? { sha: e.sha } : {}),
           ...(e.check !== undefined ? { check: e.check } : {}),
-          ...(e.class !== undefined ? { class: e.class } : {})
+          ...(e.class !== undefined ? { class: e.class } : {}),
+          ...(e.reason !== undefined ? { reason: e.reason } : {})
         })
       )
     }

@@ -156,10 +156,13 @@ export interface GitHubCiSnapshot {
 
 /** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found;
  *  `ci-rerun`: a CI run of the head was rerun (G4); `merge-ready` / `invalidated`: the review's verdict made the pull
- *  request ready to merge, or merge-ready was withheld or withdrawn (G5b). */
+ *  request ready to merge, or merge-ready was withheld or withdrawn (G5b); `pushed`: Astera pushed the branch, and
+ *  `ci-started`: a read first saw the head's CI running (G7b, the timeline's lines; no public event or journal row). */
 export type GitHubLogKind =
   | 'pr-bound'
   | 'pr-created'
+  | 'pushed'
+  | 'ci-started'
   | 'head-changed'
   | 'ci-passed'
   | 'ci-failed'
@@ -227,6 +230,8 @@ export interface GitHubLogEntry {
   check?: string
   /** A ci-failed entry's class, when complete evidence was read with the verdict. */
   class?: CiFailureClass
+  /** An invalidated entry's reason (G7b): why merge-ready was withheld or withdrawn. */
+  reason?: GitHubInvalidatedReason
 }
 
 /** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written by the Host's `runs-github-record`

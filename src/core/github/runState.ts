@@ -84,6 +84,10 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     // A verdict is news about the PR only for its head: a read can catch GitHub between a push and the PR's own move,
     // with the checks of the commit before (final review I1). That verdict is kept, never announced.
     const ofHead = r.ci.sha === r.headSha
+    // CI starts on the timeline when a read first sees the head's checks running (G7b). One already finished at the
+    // first read is said by its verdict alone; a run started again after a verdict starts again.
+    const running = (c: Omit<GitHubCiSnapshot, 'changedAt'> | undefined): boolean => c !== undefined && c.verdict === 'pending' && c.checks.length > 0
+    if (ofHead && running(r.ci) && !(prevCi?.sha === r.ci.sha && running(prevCi))) entries.push({ kind: 'ci-started', sha: r.ci.sha })
     const moved = ofHead && (!prevCi || prevCi.sha !== r.ci.sha || prevCi.verdict !== r.ci.verdict)
     if (moved && r.ci.verdict === 'passed') entries.push({ kind: 'ci-passed', sha: r.ci.sha })
     if (moved && r.ci.verdict === 'failed')
@@ -105,6 +109,7 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   if (patch.externalHead && !(base.externalHeadChange && base.externalHeadChange.sha === patch.externalHead.sha))
     next.externalHeadChange = { ...(patch.externalHead.sha !== undefined ? { sha: patch.externalHead.sha } : {}), at: now }
   if (patch.pushed) {
+    if (base.lastPushedSha !== patch.pushed.sha) entries.push({ kind: 'pushed', sha: patch.pushed.sha })
     next.lastPushedSha = patch.pushed.sha
     delete next.externalHeadChange
   }
@@ -125,7 +130,7 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   // can be older than a reconverge that already cleared the evidence (G5c final review M2)
   if (patch.invalidated && !next.invalidated && (patch.mergeReady !== undefined || next.mergeReady !== undefined)) {
     next.invalidated = { reason: patch.invalidated.reason, at: now }
-    entries.push({ kind: 'invalidated' })
+    entries.push({ kind: 'invalidated', reason: patch.invalidated.reason })
   }
   if (entries.length > 0) {
     let seq = base.seq

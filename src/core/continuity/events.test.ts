@@ -527,6 +527,12 @@ describe('GITHUB_* rows', () => {
     expect(again.map((e) => e.idempotencyKey)).toEqual(once.map((e) => e.idempotencyKey))
   })
 
+  // G7b: the push and CI starting are timeline lines; design §5.5 names no journal row for them
+  it('writes no row for a push or CI starting', () => {
+    const next = lifecycle([{ seq: 1, at: T2, kind: 'pushed' }, { seq: 2, at: T2, kind: 'ci-started' }, { seq: 3, at: T2, kind: 'ci-passed' }])
+    expect(deriveEvents(lifecycle([]), next, NOW).filter((e) => e.type.startsWith('GITHUB_')).map((e) => e.type)).toEqual(['GITHUB_CI_PASSED'])
+  })
+
   it('comes before the write’s Task rows: merge-ready ahead of the lifecycle Task completing', () => {
     const rows = deriveEvents(lifecycle([bound]), lifecycle([bound, { seq: 2, at: NOW, kind: 'merge-ready', sha: 'a'.repeat(40), pr: 12 }], 'completed'), NOW)
     const ready = rows.findIndex((e) => e.type === 'GITHUB_MERGE_READY')

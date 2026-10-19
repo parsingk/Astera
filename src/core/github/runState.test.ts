@@ -45,6 +45,28 @@ describe('nextGitHubState', () => {
     expect(next.ci?.changedAt).toBe(T2)
   })
 
+  // G7b (design §5.5): the timeline's push and CI start. CI is said to start when a read first sees the head's checks
+  // running; one already finished at the first read is said by its verdict alone
+  it('logs a push, and CI starting on the head once', () => {
+    const bound = nextGitHubState(undefined, { binding: BINDING }, T1)!
+    const pushed = nextGitHubState(bound, { pushed: { sha: A } }, T1)!
+    expect(pushed.log.at(-1)).toEqual({ seq: 2, at: T1, kind: 'pushed', sha: A })
+    const running = nextGitHubState(pushed, { read: read(A, 'pending', { checks: [build({ status: 'in-progress', conclusion: undefined })] }) }, T2)!
+    expect(running.log.at(-1)).toEqual({ seq: 3, at: T2, kind: 'ci-started', sha: A })
+    const still = nextGitHubState(running, { read: read(A, 'pending', { checks: [build({ status: 'in-progress', conclusion: undefined }), build({ externalId: 'run:2', name: 'lint', status: 'queued', conclusion: undefined })] }) }, T2)!
+    expect(still.log.filter((e) => e.kind === 'ci-started')).toHaveLength(1)
+    const none = nextGitHubState(pushed, { read: read(A, 'pending', { checks: [] }) }, T2)!
+    expect(none.log.map((e) => e.kind)).toEqual(['pr-bound', 'pushed'])
+    const done = nextGitHubState(pushed, { read: read(A, 'passed') }, T2)!
+    expect(done.log.map((e) => e.kind)).toEqual(['pr-bound', 'pushed', 'ci-passed'])
+  })
+
+  it('logs why merge-ready was withdrawn', () => {
+    const ready = nextGitHubState(undefined, { binding: BINDING, read: read(A, 'passed'), mergeReady: { pullRequestNumber: 12, headSha: A, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0 } as never }, T1)!
+    const gone = nextGitHubState(ready, { invalidated: { reason: 'head-changed' } as never }, T2)!
+    expect(gone.log.at(-1)).toEqual({ seq: gone.seq, at: T2, kind: 'invalidated', reason: 'head-changed' })
+  })
+
   // Final review I1: a verdict for a commit that is not the PR's head is no news about the head
   it('does not log a verdict for a commit that is not the head', () => {
     const lagging = { ...read(A, 'passed'), headSha: B }
@@ -109,7 +131,11 @@ describe('nextGitHubState', () => {
   // G3b1: the pull request Astera made says so in the log; the head it pushed is kept
   it('logs a pull request Astera created as pr-created, and keeps the head it pushed', () => {
     const made = nextGitHubState(undefined, { binding: { ...BINDING, createdByAstera: true }, pushed: { sha: A } }, T1)!
-    expect(made.log).toEqual([{ seq: 1, at: T1, kind: 'pr-created', pr: 12 }])
+    // G7b: the push is a timeline line, once per head pushed
+    expect(made.log).toEqual([
+      { seq: 1, at: T1, kind: 'pr-created', pr: 12 },
+      { seq: 2, at: T1, kind: 'pushed', sha: A }
+    ])
     expect(made.lastPushedSha).toBe(A)
     expect(nextGitHubState(made, { pushed: { sha: A } }, T2)).toBeNull()
     expect(nextGitHubState(made, { pushed: { sha: B } }, T2)!.lastPushedSha).toBe(B)
@@ -160,7 +186,7 @@ describe('nextGitHubState', () => {
       const ready = nextGitHubState(bound(), { mergeReady: evidence }, T2)!
       const withdrawn = nextGitHubState(ready, { invalidated: { reason: 'head-changed' } }, T2)!
       expect(withdrawn.invalidated).toEqual({ reason: 'head-changed', at: T2 })
-      expect(withdrawn.log.at(-1)).toEqual({ seq: 3, at: T2, kind: 'invalidated' })
+      expect(withdrawn.log.at(-1)).toEqual({ seq: 3, at: T2, kind: 'invalidated', reason: 'head-changed' })
       expect(nextGitHubState(withdrawn, { invalidated: { reason: 'closed' } }, T2)).toBeNull()
     })
 

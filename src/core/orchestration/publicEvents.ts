@@ -104,9 +104,12 @@ const eventState = (s: OrchState, by: ByTask, t: Task): CompletionState => {
   return open !== undefined && isPlaceholderSessionId(open.sessionId) ? 'not-started' : state
 }
 
-const GITHUB_EVENT: Record<GitHubLogKind, EventType> = {
+/** null: a timeline line only (G7b; design §5.5 names no public event for it). */
+const GITHUB_EVENT: Record<GitHubLogKind, EventType | null> = {
   'pr-bound': 'github.pr_bound',
   'pr-created': 'github.pr_created',
+  pushed: null,
+  'ci-started': null,
   'head-changed': 'github.head_changed',
   'ci-passed': 'github.ci_passed',
   'ci-failed': 'github.ci_failed',
@@ -120,7 +123,10 @@ const GITHUB_EVENT: Record<GitHubLogKind, EventType> = {
 export function githubEventsOf(prev: RunGitHubState | undefined, next: RunGitHubState | undefined): EventType[] {
   if (next === undefined || next === prev) return []
   const seen = prev?.seq ?? 0
-  return next.log.filter((e) => e.seq > seen).map((e) => GITHUB_EVENT[e.kind])
+  return next.log
+    .filter((e) => e.seq > seen)
+    .map((e) => GITHUB_EVENT[e.kind])
+    .filter((t): t is EventType => t !== null)
 }
 
 export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft[] {
