@@ -5,6 +5,7 @@ import { SOURCES_DEADLINE_MS, createSourcesRoute } from './sourcesRoute'
 import { NO_HOST_CONNECTION, hostDeadlineMessage } from './worktreeRoute'
 import { JOB_SOURCE_TIMEOUT_MS } from '../../host/jobSources'
 import { TIMEOUT_HEADROOM_MS } from '../../core/publicContract'
+import { HOST_GITHUB_DEADLINE_MS } from './hostGitHubRoute'
 
 type Sent = { cmd: string; args: Record<string, unknown>; timeoutMs?: number }
 
@@ -62,6 +63,8 @@ describe('createSourcesRoute', () => {
       { source: 'github', item: '12', project: 'proj_1', coordinatorAccount: 'acc_1', githubLifecycle: true },
       { source: 'github', item: '12', project: 'proj_1', coordinatorAccount: 'acc_1' }
     ])
+    // G7a final review M6: the item's read and then the preflight's gh calls, before the Job is made
+    expect(sent.filter((s) => s.cmd === 'jobs-create-from-source').map((s) => s.timeoutMs)).toEqual([JOB_SOURCE_TIMEOUT_MS + HOST_GITHUB_DEADLINE_MS, SOURCES_DEADLINE_MS])
   })
 
   it('makes a Job in the project, convergence only when asked for, and none for a folder the Host does not know', async () => {
