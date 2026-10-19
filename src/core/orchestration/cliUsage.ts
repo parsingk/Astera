@@ -378,6 +378,12 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     summary: 'let a paused run go again',
     flags: [ID('<runId>', 'the run to resume')]
   },
+  'runs-reconverge': {
+    summary: 'carry a finished GitHub lifecycle run through GitHub again',
+    detail:
+      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own, a run whose lifecycle task still works, and a pull request that is merged or closed. A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting.',
+    flags: [ID('<runId>', 'the run to carry again')]
+  },
   'runs-checks': {
     summary: "each task's validation and review, and what they came to",
     detail:

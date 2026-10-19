@@ -52,6 +52,7 @@ import {
   setRunWorktree,
   recordRunGit,
   recordRunGitHub,
+  reconvergeRun,
   resolveRunId,
   recordDispatchGit,
   placedByApp,
@@ -733,7 +734,7 @@ const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
 /** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2); `jobs-create` with the lifecycle on and
  *  `jobs-create-from-source` from the github source or with the lifecycle on are refused beside them.
  *  `runs-reconverge` joins when it exists (G5). */
-const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue'])
+const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue', 'runs-reconverge'])
 const githubWriteRefusal = (cmd: string): string => `worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`
 /** A pure-layer refusal handed straight to the caller: 404 when it is marked `missing` (the id the
  *  caller named is not there — state.ts marks it where it refuses), 400 otherwise. For the cases that
@@ -2781,6 +2782,16 @@ export async function handleCommand(
       // Nothing changed: no write, as runs-git-record does for a head read twice.
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
+    }
+    case 'runs-reconverge': {
+      // GitHub lifecycle §3.5 (G5c): a finished lifecycle Run carried through GitHub again — a new lifecycle Task on the
+      // same Run, which the dispatch loop starts as it started the first. A worker never gets here (GITHUB_WRITES).
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      const r = reconvergeRun(deps.getState(), id, now)
+      if (!r.ok) return r.missing ? notFound(r.error) : conflict(r.error)
+      await deps.setState(r.state)
+      return okBody({ runId: id, taskId: r.value.id })
     }
     case 'lifecycle-start': {
       // The dispatch loop's own step (GitHub lifecycle §3.3), after it folded every Task worktree into the Run root: a
