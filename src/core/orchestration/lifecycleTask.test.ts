@@ -142,6 +142,13 @@ describe('reconvergeRun', () => {
     expect(reconvergeRun(open, 'run_1', LATER, { prState: 'merged' }).ok).toBe(false)
   })
 
+  // G6 (spec §30): a pull request retargeted while the Run was carried; the new lifecycle Task is judged against the new base
+  it('binds the base the pull request was retargeted to', () => {
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const r = reconvergeRun(finished('completed', { binding, pr: { state: 'open', isDraft: true, baseBranch: 'release' } }), 'run_1', LATER)
+    expect(r.ok && r.state.runs[0].githubState?.binding?.baseBranch).toBe('release')
+  })
+
   it('answers an unknown Run as missing', () => {
     const r = reconvergeRun(finished('completed'), 'run_nope', LATER)
     expect(r.ok).toBe(false)

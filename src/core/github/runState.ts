@@ -30,6 +30,9 @@ export interface RunGitHubPatch {
   externalHead?: { sha?: string }
   /** A person chose to go on without CI for this head (G3b2). */
   noCi?: { sha: string }
+  /** The base the pull request was retargeted to, bound by `runs reconverge` (G6, spec §30): the binding is made once,
+   *  and this is the one part of it that moves. Not on the wire: only the state function writes it. */
+  rebase?: { baseBranch: string }
   /** A CI run's failed jobs were rerun (G4). */
   rerun?: Omit<GitHubRerun, 'at'>
   /** The review's verdict (G5b): the evidence of merge-ready, or null for a fresh verdict that is not (it clears both
@@ -62,6 +65,8 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     delete next.prCandidates
     entries.push({ kind: patch.binding.createdByAstera ? 'pr-created' : 'pr-bound', pr: patch.binding.number })
   }
+  if (patch.rebase && next.binding && next.binding.baseBranch !== patch.rebase.baseBranch)
+    next.binding = { ...next.binding, baseBranch: patch.rebase.baseBranch }
   if (patch.prCandidates !== undefined && !next.binding) {
     if (patch.prCandidates === null || patch.prCandidates.length === 0) delete next.prCandidates
     else next.prCandidates = [...patch.prCandidates]

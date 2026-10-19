@@ -140,6 +140,14 @@ describe('merge-ready kept and withdrawn on the same checks (G5b final review)',
     expect(mergeReadyOf(stateWith(recorded(prRead([ok('build')]))), task, reviewDispatch)).toEqual({ reason: 'local-check-skipped' })
   })
 
+  // G6 (spec §30): a pull request retargeted to another base is not merge-ready against the base Astera bound; the next
+  // read would only withdraw it again (`base-changed`), and runs reconverge binds the new base
+  it('withholds merge-ready while the pull request’s base is not the binding’s', () => {
+    const gs = recorded(prRead([ok('build')]))
+    const retargeted = { ...gs, pr: { ...gs.pr!, baseBranch: 'main' } }
+    expect(mergeReadyOf(stateWith(retargeted), lifecycleTask('completed'), reviewDispatch)).toEqual({ reason: 'base-changed' })
+  })
+
   // M6
   it('withholds merge-ready while GitHub cannot be read', () => {
     const gs = { ...recorded(prRead([ok('build')])), lastReadError: { kind: 'network', since: ISO0 } }

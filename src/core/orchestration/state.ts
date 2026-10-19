@@ -572,8 +572,16 @@ export function reconvergeRun(s: OrchState, runId: string, now: string, live: { 
   const at = now > latest.createdAt ? now : new Date(Date.parse(latest.createdAt) + 1).toISOString()
   const task = lifecycleTaskFor(runId, latest.deps, latest.validateConfigIds ?? [GITHUB_CI_CHECK], at)
   let next: OrchState = { ...s, tasks: recomputeReady([...s.tasks, task]) }
-  if (run.githubState?.mergeReady || run.githubState?.invalidated) {
-    const cleared = recordRunGitHub(next, runId, { mergeReady: null }, now)
+  // A pull request retargeted to another base is carried against that base from now on (G6, spec §30)
+  const gs = run.githubState
+  const retargeted = gs?.binding && gs.pr && gs.pr.baseBranch !== gs.binding.baseBranch ? gs.pr.baseBranch : undefined
+  if (gs?.mergeReady || gs?.invalidated || retargeted) {
+    const cleared = recordRunGitHub(
+      next,
+      runId,
+      { ...(gs?.mergeReady || gs?.invalidated ? { mergeReady: null } : {}), ...(retargeted ? { rebase: { baseBranch: retargeted } } : {}) },
+      now
+    )
     if (!cleared.ok) return err(cleared.error)
     next = cleared.state
   }
