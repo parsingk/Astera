@@ -990,11 +990,15 @@ describe('githubLifecycle', () => {
     expect(store.getGithubLifecycle()).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, ciWaitMinutes: 30 })
   })
 
-  it('a recovered profile reads the defaults', async () => {
+  // G7a final review M4: the narrower side, as the permission mode and MCP access take — the file may have said "do not
+  // rerun", and the recovered file is what the Host reads next
+  it('a recovered profile does not rerun CI by itself, and the Host reads that', async () => {
     await fs.writeFile(file(), '{ not json', 'utf8')
     const store = new AppSettingsStore(file())
     expect(await store.load()).toEqual({ recovered: true })
-    expect(store.getGithubLifecycle()).toEqual(GITHUB_LIFECYCLE_DEFAULTS)
+    expect(store.getGithubLifecycle()).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false })
+    await store.setLang('ko')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).githubLifecycle).toEqual({ ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false })
   })
 })
 

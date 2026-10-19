@@ -7,6 +7,7 @@ import { handleCommand, handleExit, PENDING_START_WINDOW_MS, type HostSession, t
 import { SPAWN_DEADLINE_MS } from '../host/unresponsive'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { ensureProject } from './projects'
+import { RepairNeeded } from '../settings/repairNeeded'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { DEFAULT_IDLE_WAIT_TIMEOUT_MS, OrchCoordinator, type CoordinatorDeps } from './exec/coordinator'
@@ -9832,6 +9833,20 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(r.status).toBe(409)
     expect((r.body as { error: string }).error).toBe('the GitHub lifecycle defaults in Settings could not be read: app-settings.json could not be read')
     expect(deps.getState().jobs).toEqual([])
+  })
+
+  // G7a final review M5: a file only the app repairs is named, as every other such refusal names it, so the CLI offers
+  // no command to run (opening Astera is the step)
+  it('names the settings file to repair when it is the app’s to repair', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => {
+      throw new RepairNeeded('app-settings.json cannot be read; open Astera to repair it', 'app-settings.json')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r).toEqual({
+      status: 409,
+      body: { error: 'the GitHub lifecycle defaults in Settings could not be read: app-settings.json cannot be read; open Astera to repair it', repair: 'app-settings.json' }
+    })
   })
 
   it('selects checks by name, from a comma list or a list, once each', async () => {

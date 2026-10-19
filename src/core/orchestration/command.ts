@@ -131,6 +131,7 @@ import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
+import { RepairNeeded } from '../settings/repairNeeded'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
@@ -1905,7 +1906,9 @@ export async function handleCommand(
           try {
             defaults = await deps.github.lifecycleDefaults()
           } catch (e) {
-            return conflict(`the GitHub lifecycle defaults in Settings could not be read: ${e instanceof Error ? e.message : String(e)}`)
+            const refused = conflict(`the GitHub lifecycle defaults in Settings could not be read: ${e instanceof Error ? e.message : String(e)}`)
+            // A file only the app repairs is named, as the Host names it for every such refusal (final review M5)
+            return e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused
           }
           github = { ...github, ...defaults }
         }
