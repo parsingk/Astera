@@ -1789,6 +1789,7 @@ export const ko = {
   'jobs.gate.github.bindPrHint': '이 Run 을 이 pull request 에 묶고 그 CI 를 기다립니다.',
   'jobs.gate.github.q.noCi': '{sha} 에 GitHub CI 가 {minutes}분이 지나도록 하나도 생기지 않았습니다(PR #{pr}). 다시 기다리거나, CI 없이 진행하거나, Task 를 실패로 끝내세요.',
   'jobs.gate.github.q.cap': '{sha} 의 GitHub CI 를 {minutes}분 기다렸지만 판정이 나지 않았습니다(PR #{pr}). 다시 기다리거나 Task 를 실패로 끝내세요.',
+  'jobs.gate.github.q.capUnreadable': '{sha} 의 GitHub CI 를 {minutes}분 기다리는 동안 GitHub 을 읽을 수 없었습니다(PR #{pr}). 다시 기다리거나 Task 를 실패로 끝내세요.',
   'jobs.gate.github.q.externalHead': 'GitHub 의 브랜치 {branch} 에 Astera 가 push 하지 않은 커밋 {sha} 이 있습니다. 이어 가면 그 커밋을 fast-forward 로 받은 뒤 처음 검사부터 다시 돌립니다.',
   'jobs.gate.github.q.externalHeadPush': 'GitHub 이 브랜치 {branch} 의 push 를 거절했습니다. Astera 가 모르는 커밋이 있습니다: {detail}. 이어 가면 그 커밋을 fast-forward 로 받은 뒤 처음 검사부터 다시 돌립니다. Run 폴더에도 GitHub 에 없는 커밋이 있어 기록이 갈라졌으면 fast-forward 가 거절됩니다: Run 폴더에서 손으로 합친 뒤 이어 가거나, Task 를 실패로 끝내세요.',
   'jobs.gate.github.q.ambiguous': '브랜치 {branch} 에 열린 pull request 가 여럿입니다({numbers}). 이 Run 을 묶을 것을 고르세요.',

@@ -1578,6 +1578,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.gate.github.bindPrHint': 'Binds this Run to this pull request and waits for its CI.',
   'jobs.gate.github.q.noCi': 'No GitHub CI appeared on {sha} in {minutes} minutes (PR #{pr}). Wait again, go on without CI, or mark the Task failed.',
   'jobs.gate.github.q.cap': 'GitHub CI on {sha} gave no verdict in {minutes} minutes (PR #{pr}). Wait again or mark the Task failed.',
+  'jobs.gate.github.q.capUnreadable': 'GitHub could not be read while Astera waited {minutes} minutes for CI on {sha} (PR #{pr}). Wait again or mark the Task failed.',
   'jobs.gate.github.q.externalHead': 'The branch {branch} on GitHub has a commit Astera did not push ({sha}). Going on brings it in by fast-forward and runs the checks again from the first.',
   'jobs.gate.github.q.externalHeadPush': "GitHub refused the push of the branch {branch}: it has commits Astera does not know: {detail}. Going on brings them in by fast-forward and runs the checks again from the first. If the Run's folder also has commits GitHub lacks, the histories parted and the fast-forward is refused: merge them by hand in the Run's folder and go on, or mark the Task failed.",
   'jobs.gate.github.q.ambiguous': 'The branch {branch} has several open pull requests ({numbers}). Choose the one to bind this Run to.',

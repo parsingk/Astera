@@ -955,17 +955,27 @@ describe('githubWatch', () => {
         expect(r.gates.map((g) => g.kind)).toEqual(['github-no-ci'])
       })
 
-      it('a wait past the Job’s ciWaitMinutes asks whether to wait again or fail, even while reads fail, once', async () => {
+      // G6 (map fact 25): while the reads fail the question says GitHub could not be read, not that CI gave no verdict
+      it('a wait past the Job’s ciWaitMinutes asks whether to wait again or fail, even while reads fail, once — and says GitHub could not be read', async () => {
         const r = rig({ fail: { at: 'read', kind: 'network' } })
         r.watch.onState(waiting())
         await r.at(0)
         expect(r.gates).toEqual([])
         await r.at(90 * 60_000)
         expect(r.gates).toEqual([
-          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-cap', question: expect.stringContaining('gave no verdict in 90 minutes (PR #12)'), options: ['wait', 'mark-failed'] }
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-cap', question: expect.stringContaining('GitHub could not be read'), options: ['wait', 'mark-failed'] }
         ])
+        expect(r.gates[0].question).toContain('90 minutes')
         await r.at(90 * 60_000 + 5_000)
         expect(r.gates).toHaveLength(1)
+      })
+
+      it('a wait past the cap while CI still runs says CI gave no verdict', async () => {
+        const r = rig({ read: running })
+        r.watch.onState(waiting())
+        await r.at(0)
+        await r.at(90 * 60_000)
+        expect(r.gates.map((g) => g.question)).toEqual([expect.stringContaining('gave no verdict in 90 minutes (PR #12)')])
       })
 
       it('a read GitHub refuses for this account asks at once; a network failure does not', async () => {

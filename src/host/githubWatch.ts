@@ -590,7 +590,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
     const minutes = t.policy.ciWaitMinutes
     if (now() - Date.parse(round.waitingSince) < minutes * 60_000) return
-    await ask(t.runId, round, 'github-ci-cap', say('jobs.gate.github.q.cap', { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }), ['wait', 'mark-failed'])
+    // While the reads fail it is GitHub that could not be read, not CI that gave no verdict (G6, map fact 25)
+    const unreadable = failures.has(t.runId) || t.state?.lastReadError !== undefined
+    const params = { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }
+    await ask(t.runId, round, 'github-ci-cap', say(unreadable ? 'jobs.gate.github.q.capUnreadable' : 'jobs.gate.github.q.cap', params), ['wait', 'mark-failed'])
   }
 
   /** Drops what is kept for Runs and folders no longer watched, so a Host that lives for weeks (`runtime serve`) does not
