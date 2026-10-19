@@ -120,8 +120,8 @@ describe('mcpRefusal', () => {
 
   describe('GitHub commands', () => {
     const OFF_MSG = /Let MCP clients act on GitHub/
-    it('the write list is the three GitHub writes; the three reads are plain reads', () => {
-      expect([...MCP_GITHUB_WRITE_COMMANDS]).toEqual(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue'])
+    it('the write list is the four GitHub writes; the three reads are plain reads', () => {
+      expect([...MCP_GITHUB_WRITE_COMMANDS]).toEqual(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue', 'runs-reconverge'])
       for (const cmd of ['github-pr', 'github-ci', 'github-issue']) expect(MCP_READ_COMMANDS).toContain(cmd)
     })
     it('access off refuses everything whatever mcpGithubWrite says', () => {

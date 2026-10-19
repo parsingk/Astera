@@ -158,7 +158,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'mcp-serve': {
     summary: 'serve Astera to an MCP client over stdio',
     detail:
-      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves forty tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
+      'For an MCP client to launch, not for a person to type: stdout carries the MCP protocol. It connects to the Host of this profile, starting one when none answers, and serves forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in Settings (CLI tab). See docs/mcp.md.'
   },
   'runtime-start': {
     summary: 'turn Remote Runtime on: other machines may pair with this one',

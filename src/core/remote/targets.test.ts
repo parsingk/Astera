@@ -3,7 +3,7 @@ import { remoteTarget } from './targets'
 
 describe('remoteTarget (remote runtime design §3.4, X1-14)', () => {
   it('is yes exactly for what the controller gate lets through', () => {
-    for (const cmd of ['projects-list', 'accounts-list', 'jobs-list', 'jobs-create', 'jobs-run', 'runs-stop', 'runs-wait', 'jobs-wait', 'runs-follow', 'sessions-create', 'questions-answer'])
+    for (const cmd of ['projects-list', 'accounts-list', 'jobs-list', 'jobs-create', 'jobs-run', 'runs-stop', 'runs-wait', 'jobs-wait', 'runs-follow', 'sessions-create', 'questions-answer', 'runs-reconverge'])
       expect(remoteTarget(cmd), cmd).toBe('yes')
   })
   it('is no for what runs on this machine only, and for what a controller never reaches', () => {

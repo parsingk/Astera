@@ -53,7 +53,7 @@ export const MCP_SESSION_WRITE_COMMANDS = ['sessions-send', 'sessions-create'] a
 
 /** GitHub writes are a second gate on top of the access level, like the session commands: they need
  *  `mcpGithubWrite` too (P2-B design). The GitHub reads are plain reads in MCP_READ_COMMANDS. */
-export const MCP_GITHUB_WRITE_COMMANDS = ['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue'] as const
+export const MCP_GITHUB_WRITE_COMMANDS = ['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue', 'runs-reconverge'] as const
 
 const READ: ReadonlySet<string> = new Set(MCP_READ_COMMANDS)
 const CONTROL: ReadonlySet<string> = new Set(MCP_CONTROL_COMMANDS)

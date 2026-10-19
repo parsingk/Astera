@@ -17,7 +17,7 @@ const TOOLS = [
   'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
-  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
+  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue', 'reconverge_run',
   'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record',
   'list_job_sources', 'list_source_items', 'get_source_item', 'create_job_from_source'
 ]
@@ -85,7 +85,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-eight tools (a server with no Runtimes behind it)', async () => {
+  it('lists exactly the thirty-nine tools (a server with no Runtimes behind it)', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -1357,12 +1357,12 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-eight tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-nine tools, seven of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(38)
+    expect(tools).toHaveLength(39)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
-    for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
+    for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue', 'reconverge_run']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
   })
 
   it('maps each tool to its command and exact args', async () => {
@@ -1376,6 +1376,7 @@ describe('the GitHub tools (MCP P2-B)', () => {
       ['create_pr', { runId: 'r1', title: 'T', body: 'B', draft: false }, 'github-pr-create', { run: 'r1', title: 'T', body: 'B', draft: false }],
       ['retry_ci', { projectId: 'p1', ciRunId: 55, requestId: 'q2' }, 'github-ci-rerun', { project: 'p1', runId: 55 }, 'q2'],
       ['retry_ci', { runId: 'run_1', ciRunId: 55, requestId: 'q3' }, 'github-ci-rerun', { run: 'run_1', runId: 55 }, 'q3'],
+      ['reconverge_run', { runId: 'run_1', requestId: 'q4' }, 'runs-reconverge', { id: 'run_1' }, 'q4'],
       [
         'create_job_from_issue',
         { projectId: 'p1', number: 3, requestId: 'q3' },
