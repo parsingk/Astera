@@ -102,6 +102,27 @@ export async function readChanges(
   return files
 }
 
+/** A whole range's diff past this is cut at a line (GitHub lifecycle G5a): what `weakeningFindings` reads of a pull
+ *  request; the reviewer reads the diff itself. */
+export const RANGE_DIFF_MAX_BYTES = 2 * 1024 * 1024
+
+/** The whole diff from `base` to `head`, as `git diff -M` prints it; cut at a line past `maxBytes`. Null when git cannot
+ *  answer (an unknown commit, a folder that is not a repo). */
+export async function readRangeDiff(
+  repo: string,
+  base: string,
+  head: string,
+  o: { maxBytes?: number } = {}
+): Promise<{ diff: string; truncated: boolean } | null> {
+  const maxBytes = o.maxBytes ?? RANGE_DIFF_MAX_BYTES
+  const r = await gitBounded([...QUOTEPATH_OFF, 'diff', ...PLAIN, '-M', ...range(base, head)], repo, maxBytes)
+  if (!r.ok) return null
+  if (r.out.length <= maxBytes) return { diff: r.out.toString('utf8'), truncated: false }
+  const cut = r.out.subarray(0, maxBytes).toString('utf8')
+  const at = cut.lastIndexOf('\n')
+  return { diff: at < 0 ? '' : cut.slice(0, at + 1), truncated: true }
+}
+
 /** git with its output read up to `maxBytes`: past it git is stopped, so a file of any size costs no more than that. */
 function gitBounded(args: string[], cwd: string, maxBytes: number): Promise<{ ok: boolean; out: Buffer; cut: boolean }> {
   return new Promise((resolve) => {

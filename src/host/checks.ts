@@ -44,6 +44,7 @@ import { RunManager } from '../core/run/runManager'
 import { treeKillCommand } from '../core/run/kill'
 import { isSamePath } from '../core/files/tree'
 import { changedNames } from '../core/git/changedNames'
+import { readRangeDiff } from '../core/git/changes'
 import { git as runGit } from '../core/worktrees/git'
 import { readFileRetrying } from '../core/renameRetry'
 import { settingsObjectOf } from '../core/settings/settingsObject'
@@ -241,7 +242,8 @@ export function createHostChecksForTest(d: HostChecksDeps): HostChecks & { _vali
     loginStatus,
     assertAllowedPath,
     startWorker: (w) => d.deps().startWorker(w),
-    specsDir: d.specsDir
+    specsDir: d.specsDir,
+    rangeDiff: (cwd, base, head) => readRangeDiff(cwd, base, head)
   })
   /** The review starts in flight, by Task (`checking`). Both callers, the validator's `onSettled` and
    *  the driver's doors, go through this, so a Task is held from the call until the start has opened

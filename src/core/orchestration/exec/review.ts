@@ -33,6 +33,9 @@ export interface ReviewContext {
   /** The start wrapper that attaches the chain and the tail — never the bare coordinator. */
   startWorker: OrchServerDeps['startWorker']
   specsDir: string
+  /** The whole diff of a range in a folder, capped (`readRangeDiff`): what a lifecycle review's weakening findings are
+   *  read from (GitHub lifecycle G5a). Absent: no findings. */
+  rangeDiff?(cwd: string, base: string, head: string): Promise<{ diff: string; truncated: boolean } | null>
 }
 
 /** OrchServerDeps.startReview 의 본문을 돌려준다. 돌려준 함수는 흘려보내는 쪽이 종단 .catch 를
