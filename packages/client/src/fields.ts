@@ -200,7 +200,9 @@ const EVENT_TYPE_SET = {
   'github.ci_passed': true,
   'github.ci_failed': true,
   'github.ci_rerun_requested': true,
-  'github.source_changed': true
+  'github.source_changed': true,
+  'github.merge_ready': true,
+  'github.merge_ready_invalidated': true
 } as const satisfies Record<EventType, true>
 /** The event types the Host produces, in the order of the spec's list. */
 export const EVENT_TYPES: readonly EventType[] = Object.freeze(Object.keys(EVENT_TYPE_SET) as EventType[])

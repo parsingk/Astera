@@ -432,6 +432,8 @@ export type EventType =
   | 'github.ci_failed'
   | 'github.ci_rerun_requested'
   | 'github.source_changed'
+  | 'github.merge_ready'
+  | 'github.merge_ready_invalidated'
 
 /** The session a session event is about: five of the fields `astera sessions list` shows for it. `title`, `provider`
  *  and `cwd` are absent when the Host does not know them. */
@@ -494,6 +496,8 @@ export interface EventPayloads {
   readonly 'github.ci_failed': Run
   readonly 'github.ci_rerun_requested': Run
   readonly 'github.source_changed': Run
+  readonly 'github.merge_ready': Run
+  readonly 'github.merge_ready_invalidated': Run
 }
 
 /** One event. A notification, not the source of truth: read the object again when it matters. Delivered at least

@@ -122,6 +122,8 @@ for await (const e of astera.events.subscribe({ types: ['run.completed', 'run.fa
 | `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
 | `github.ci_rerun_requested` | a CI run of the head was rerun through Astera: by Astera itself (a failure outside the code) or by a person's answer or `github-ci-rerun --run` (a rerun made on GitHub's own page is not seen) | `Run` |
 | `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
+| `github.merge_ready` | the review passed and the pull request is ready to merge: `run.github.mergeReady` holds the evidence | `Run` |
+| `github.merge_ready_invalidated` | the review's verdict withheld merge-ready, or the pull request moved since (a new head, another base, a check failing or changed, closed or merged): `run.github.invalidated.reason` says which | `Run` |
 
 - An event is `{ id, type, sequence, occurredAt, projectId?, jobId?, runId?, taskId?, sessionId?, payload }`, the
   payload the object as it stood right after the change (a session event's is `{ session, ... }`). A Task is cut like

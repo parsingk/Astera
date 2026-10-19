@@ -111,7 +111,9 @@ const GITHUB_EVENT: Record<GitHubLogKind, EventType> = {
   'ci-passed': 'github.ci_passed',
   'ci-failed': 'github.ci_failed',
   'ci-rerun': 'github.ci_rerun_requested',
-  'source-changed': 'github.source_changed'
+  'source-changed': 'github.source_changed',
+  'merge-ready': 'github.merge_ready',
+  invalidated: 'github.merge_ready_invalidated'
 }
 
 /** The GitHub events a Run's record gained in one commit: its log entries numbered past the last one it had. */

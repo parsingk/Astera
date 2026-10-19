@@ -10,6 +10,7 @@ import {
   type GitHubLogEntry,
   type GitHubPrFacts,
   type GitHubRerun,
+  type MergeReadyEvidence,
   type RunGitHubState
 } from './lifecycle'
 
@@ -30,6 +31,11 @@ export interface RunGitHubPatch {
   noCi?: { sha: string }
   /** A CI run's failed jobs were rerun (G4). */
   rerun?: Omit<GitHubRerun, 'at'>
+  /** The review's verdict (G5b): the evidence of merge-ready, or null for a fresh verdict that is not (it clears both
+   *  the evidence and an earlier withdrawal, so the `invalidated` beside it is this verdict's). */
+  mergeReady?: Omit<MergeReadyEvidence, 'evaluatedAt'> | null
+  /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. */
+  invalidated?: { reason: string }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -96,6 +102,18 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     next.reruns = [...(base.reruns ?? []), { ...patch.rerun, at: now }].slice(-RERUNS_MAX)
     entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
   }
+  if (patch.mergeReady !== undefined) {
+    delete next.invalidated
+    if (patch.mergeReady === null) delete next.mergeReady
+    else {
+      next.mergeReady = { ...patch.mergeReady, evaluatedAt: now }
+      entries.push({ kind: 'merge-ready', sha: patch.mergeReady.headSha, pr: patch.mergeReady.pullRequestNumber })
+    }
+  }
+  if (patch.invalidated && !next.invalidated) {
+    next.invalidated = { reason: patch.invalidated.reason, at: now }
+    entries.push({ kind: 'invalidated' })
+  }
   if (entries.length > 0) {
     let seq = base.seq
     next.log = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))].slice(-GITHUB_LOG_MAX)
@@ -156,6 +174,21 @@ function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
   )
 }
 
+function mergeReadyOk(m: unknown): boolean {
+  return (
+    isObj(m) &&
+    typeof m.pullRequestNumber === 'number' &&
+    isStr(m.headSha) &&
+    typeof m.localChecksPassed === 'boolean' &&
+    typeof m.requiredCiPassed === 'boolean' &&
+    (m.ciOverride === undefined || m.ciOverride === 'no-ci') &&
+    typeof m.reviewPassed === 'boolean' &&
+    typeof m.unresolvedQuestions === 'number' &&
+    Array.isArray(m.ciChecks) &&
+    m.ciChecks.every(isStr)
+  )
+}
+
 function rerunOk(r: unknown): boolean {
   return (
     isObj(r) &&
@@ -184,5 +217,7 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
     return 'externalHead is malformed'
   if (v.noCi !== undefined && !(isObj(v.noCi) && isStr(v.noCi.sha))) return 'noCi is malformed'
   if (v.rerun !== undefined && !rerunOk(v.rerun)) return 'rerun is malformed'
+  if (v.mergeReady !== undefined && v.mergeReady !== null && !mergeReadyOk(v.mergeReady)) return 'mergeReady is malformed'
+  if (v.invalidated !== undefined && !(isObj(v.invalidated) && isStr(v.invalidated.reason))) return 'invalidated is malformed'
   return v as RunGitHubPatch
 }

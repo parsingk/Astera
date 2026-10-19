@@ -17,11 +17,12 @@ is the guide.
   question about one) and `exhausted` (a script that switches on every state meets seven more).
 - `Task.kind`: `'lifecycle'` for the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to
   carry the Run through GitHub. It has no worker, and `tasks.create` on that Run is refused while it is open.
-- Seven event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,
+- Nine event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,
   `github.ci_passed`, `github.ci_failed`, `github.ci_rerun_requested` (a CI run of the head was rerun through Astera: by
   Astera itself when it failed for a reason outside the code, within the Job's `maxInfrastructureReruns`, or by a
-  person's answer or command) and `github.source_changed`, each carrying the `Run` it moved. A script that switches on
-  every `EventType` meets seven more.
+  person's answer or command), `github.source_changed`, `github.merge_ready` (the review passed and the pull request is
+  ready to merge) and `github.merge_ready_invalidated` (merge-ready withheld by the verdict or withdrawn since), each
+  carrying the `Run` it moved. A script that switches on every `EventType` meets nine more.
 - Seven `GateKind`s for the questions Astera asks about a GitHub lifecycle round: `github-no-ci` (no CI on the pushed
   head), `github-ci-cap` (the wait ran past `ciWaitMinutes`), `github-external-head` (a head Astera did not push),
   `github-pr-ambiguous` (several open pull requests), `github-pr-closed` (the bound pull request was closed or merged),

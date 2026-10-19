@@ -145,6 +145,37 @@ describe('nextGitHubState', () => {
     expect(s.reruns?.[0].attempt).toBe(7)
   })
 
+  // GitHub lifecycle G5b (design §5.2, §5.4): merge-ready with its evidence, and why it was withdrawn
+  describe('merge-ready', () => {
+    const evidence = { pullRequestNumber: 12, headSha: A, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: ['build'] }
+    const bound = (): RunGitHubState => nextGitHubState(undefined, { binding: BINDING }, T1)!
+
+    it('records merge-ready with its evidence and logs it with the head and the pull request', () => {
+      const ready = nextGitHubState(bound(), { mergeReady: evidence }, T2)!
+      expect(ready.mergeReady).toEqual({ ...evidence, evaluatedAt: T2 })
+      expect(ready.log.at(-1)).toEqual({ seq: 2, at: T2, kind: 'merge-ready', sha: A, pr: 12 })
+    })
+
+    it('withdraws it once: a second withdrawal while one stands changes nothing', () => {
+      const ready = nextGitHubState(bound(), { mergeReady: evidence }, T2)!
+      const withdrawn = nextGitHubState(ready, { invalidated: { reason: 'head-changed' } }, T2)!
+      expect(withdrawn.invalidated).toEqual({ reason: 'head-changed', at: T2 })
+      expect(withdrawn.log.at(-1)).toEqual({ seq: 3, at: T2, kind: 'invalidated' })
+      expect(nextGitHubState(withdrawn, { invalidated: { reason: 'closed' } }, T2)).toBeNull()
+    })
+
+    it('a fresh verdict replaces both: merge-ready again clears the withdrawal, and a failed one replaces the reason', () => {
+      const ready = nextGitHubState(bound(), { mergeReady: evidence }, T2)!
+      const withdrawn = nextGitHubState(ready, { invalidated: { reason: 'head-changed' } }, T2)!
+      const again = nextGitHubState(withdrawn, { mergeReady: { ...evidence, headSha: B } }, T2)!
+      expect(again.invalidated).toBeUndefined()
+      expect(again.mergeReady?.headSha).toBe(B)
+      const refused = nextGitHubState(withdrawn, { mergeReady: null, invalidated: { reason: 'ci-not-passed' } }, T2)!
+      expect(refused.mergeReady).toBeUndefined()
+      expect(refused.invalidated).toEqual({ reason: 'ci-not-passed', at: T2 })
+    })
+  })
+
   it('logs a changed source once', () => {
     const changed = nextGitHubState(undefined, { sourceChanged: true }, T1)!
     expect(changed.log).toEqual([{ seq: 1, at: T1, kind: 'source-changed' }])
@@ -186,6 +217,16 @@ describe('parseRunGitHubPatch', () => {
     expect(parseRunGitHubPatch({ rerun: { ...rerun, check: 3 } })).toBe('rerun is malformed')
     expect(parseRunGitHubPatch({ rerun: { ...rerun, externalId: 'run:70' } })).toEqual({ rerun: { ...rerun, externalId: 'run:70' } })
     expect(parseRunGitHubPatch({ rerun: { ...rerun, externalId: 70 } })).toBe('rerun is malformed')
+  })
+
+  it('accepts merge-ready and its withdrawal, and refuses malformed ones', () => {
+    const evidence = { pullRequestNumber: 12, headSha: A, localChecksPassed: true, requiredCiPassed: false, ciOverride: 'no-ci', reviewPassed: true, unresolvedQuestions: 0, ciChecks: [] }
+    expect(parseRunGitHubPatch({ mergeReady: evidence })).toEqual({ mergeReady: evidence })
+    expect(parseRunGitHubPatch({ mergeReady: null, invalidated: { reason: 'pr-not-open' } })).toEqual({ mergeReady: null, invalidated: { reason: 'pr-not-open' } })
+    expect(parseRunGitHubPatch({ mergeReady: { ...evidence, headSha: 7 } })).toBe('mergeReady is malformed')
+    expect(parseRunGitHubPatch({ mergeReady: { ...evidence, ciOverride: 'yes' } })).toBe('mergeReady is malformed')
+    expect(parseRunGitHubPatch({ mergeReady: { ...evidence, ciChecks: [1] } })).toBe('mergeReady is malformed')
+    expect(parseRunGitHubPatch({ invalidated: { reason: 3 } })).toBe('invalidated is malformed')
   })
 
   // G2 final review I1

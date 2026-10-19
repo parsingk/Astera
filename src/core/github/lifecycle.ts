@@ -147,8 +147,34 @@ export interface GitHubCiSnapshot {
 }
 
 /** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found;
- *  `ci-rerun`: a CI run of the head was rerun (G4). */
-export type GitHubLogKind = 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'ci-rerun' | 'source-changed'
+ *  `ci-rerun`: a CI run of the head was rerun (G4); `merge-ready` / `invalidated`: the review's verdict made the pull
+ *  request ready to merge, or merge-ready was withheld or withdrawn (G5b). */
+export type GitHubLogKind =
+  | 'pr-bound'
+  | 'pr-created'
+  | 'head-changed'
+  | 'ci-passed'
+  | 'ci-failed'
+  | 'ci-rerun'
+  | 'source-changed'
+  | 'merge-ready'
+  | 'invalidated'
+
+/** Why the pull request is ready to merge, decided from Astera's state when the lifecycle review passed (G5b, design
+ *  §5.2, §5.4): its head is the one Astera pushed, CI passed on it (or a person chose to go on without CI), the review
+ *  read that head, and no question was open. `ciChecks`: the checks CI was judged on, by the record's basis; a read of
+ *  the same head that judges on others withdraws it. */
+export interface MergeReadyEvidence {
+  pullRequestNumber: number
+  headSha: string
+  localChecksPassed: boolean
+  requiredCiPassed: boolean
+  ciOverride?: 'no-ci'
+  reviewPassed: boolean
+  unresolvedQuestions: number
+  ciChecks: string[]
+  evaluatedAt: string
+}
 
 /** One rerun of a CI run's failed jobs (G4, design §4.6, §5.2). `attempt` is the attempt that failed and was rerun, so
  *  the rerun has shown once a read gives that run a later one; `sha` is the head it was asked on. `by: 'astera'` is the
@@ -195,6 +221,11 @@ export interface RunGitHubState {
   sourceChanged?: { at: string }
   /** At most RERUNS_MAX, oldest dropped (G4). */
   reruns?: GitHubRerun[]
+  /** The pull request is ready to merge, as the review's verdict decided (G5b); shown while its head is the PR's head
+   *  and nothing withdrew it. */
+  mergeReady?: MergeReadyEvidence
+  /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
+  invalidated?: { reason: string; at: string }
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
   /** The last entry's seq. */

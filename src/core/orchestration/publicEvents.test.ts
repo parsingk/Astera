@@ -297,7 +297,7 @@ describe('derivePublicEvents', () => {
 
 describe('github events (GitHub lifecycle G1)', () => {
   const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
-  const entry = (seq: number, kind: 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'ci-rerun' | 'source-changed') => ({ seq, at: NOW, kind })
+  const entry = (seq: number, kind: 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'ci-rerun' | 'source-changed' | 'merge-ready' | 'invalidated') => ({ seq, at: NOW, kind })
   const withLog = (log: ReturnType<typeof entry>[]): OrchState =>
     state({ jobs: [job({ github: policy })], runs: [{ ...run, githubState: { log, seq: log.at(-1)?.seq ?? 0 } }] })
 
@@ -313,10 +313,12 @@ describe('github events (GitHub lifecycle G1)', () => {
 
   it('maps every kind', () => {
     const next = withLog([
-      entry(1, 'pr-bound'), entry(2, 'head-changed'), entry(3, 'ci-passed'), entry(4, 'ci-failed'), entry(5, 'source-changed'), entry(6, 'pr-created'), entry(7, 'ci-rerun')
+      entry(1, 'pr-bound'), entry(2, 'head-changed'), entry(3, 'ci-passed'), entry(4, 'ci-failed'), entry(5, 'source-changed'), entry(6, 'pr-created'), entry(7, 'ci-rerun'),
+      entry(8, 'merge-ready'), entry(9, 'invalidated')
     ])
     expect(types(derivePublicEvents(withLog([]), next))).toEqual([
-      'github.pr_bound', 'github.head_changed', 'github.ci_passed', 'github.ci_failed', 'github.source_changed', 'github.pr_created', 'github.ci_rerun_requested'
+      'github.pr_bound', 'github.head_changed', 'github.ci_passed', 'github.ci_failed', 'github.source_changed', 'github.pr_created', 'github.ci_rerun_requested',
+      'github.merge_ready', 'github.merge_ready_invalidated'
     ])
   })
 
