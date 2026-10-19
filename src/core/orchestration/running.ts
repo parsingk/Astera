@@ -41,15 +41,21 @@ export function outcomeOf(state: OrchState, runId: string): RunOutcome {
   return outcomeOfTasks(tasksOwnedBy(state, runId))
 }
 
+/** A Run's Tasks less every lifecycle Task but the latest (GitHub lifecycle G5c): one `runs reconverge` superseded is
+ *  not part of the Run's work any more. The outcome, the progress and what counts as moving all read through this, so
+ *  they cannot disagree about it. The kind is read here rather than through lifecycleTask.ts, which imports this file. */
+export function withoutSupersededLifecycle<T extends Pick<Task, 'kind' | 'createdAt'>>(tasks: readonly T[]): readonly T[] {
+  let latest: T | undefined
+  for (const t of tasks) if (t.kind === 'lifecycle' && (!latest || t.createdAt >= latest.createdAt)) latest = t
+  return latest === undefined ? tasks : tasks.filter((t) => t.kind !== 'lifecycle' || t === latest)
+}
+
 /** outcomeOf for Tasks already gathered (the Jobs sidebar fold indexes them once, performance audit M1).
  *
- *  **Only the latest lifecycle Task counts** (GitHub lifecycle G5c): `runs reconverge` adds a new one beside a terminal
- *  one, and a failed one so superseded must not fail a Run whose new carrying passed. The kind is read here rather than
- *  through lifecycleTask.ts, which imports this file. */
+ *  **Only the latest lifecycle Task counts** (GitHub lifecycle G5c, withoutSupersededLifecycle): `runs reconverge` adds a
+ *  new one beside a terminal one, and a failed one so superseded must not fail a Run whose new carrying passed. */
 export function outcomeOfTasks(tasks: readonly Task[]): RunOutcome {
-  let latest: Task | undefined
-  for (const t of tasks) if (t.kind === 'lifecycle' && (!latest || t.createdAt >= latest.createdAt)) latest = t
-  const counted = latest === undefined ? tasks : tasks.filter((t) => t.kind !== 'lifecycle' || t === latest)
+  const counted = withoutSupersededLifecycle(tasks)
   if (counted.length === 0) return 'running'
   if (!counted.every(isTerminal)) return 'running'
   return counted.some((t) => t.status === 'failed') ? 'failed' : 'completed'

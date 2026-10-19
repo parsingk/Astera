@@ -121,6 +121,15 @@ describe('progressOf', () => {
     expect(progressOf(s, 'r1')).toEqual({ done: 2, total: 3 })
   })
 
+  // G5c final review M1: a lifecycle Task superseded by `runs reconverge` is not part of the Run's work any more
+  it('counts only the latest lifecycle Task of a reconverged Run', () => {
+    const life = (id: string, status: Task['status'], createdAt: string): Task => ({ ...task(id, 'r1', status), kind: 'lifecycle', createdAt })
+    const s = withRuns([run('r1', absPath('p'))], [
+      task('t1', 'r1', 'completed'), life('l1', 'failed', '2026-08-20T01:00:00.000Z'), life('l2', 'completed', '2026-08-20T02:00:00.000Z')
+    ])
+    expect(progressOf(s, 'r1')).toEqual({ done: 2, total: 2 })
+  })
+
   // failed 를 완료로 세면 재시도가 남아 있는데도 진행률이 앞서 보이고, 재시도가 실패하면 되돌아간다
   it('failed 는 완료로 세지 않는다', () => {
     const s = withRuns([run('r1', absPath('p'))], [

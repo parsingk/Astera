@@ -115,7 +115,7 @@ import type { Provider } from '../providers/meta'
 import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
-import { runningRunCount } from './running'
+import { runningRunCount, withoutSupersededLifecycle } from './running'
 import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
@@ -820,7 +820,8 @@ const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined =
  * never one `jobs run` refuses on, and a Run `jobs run` refuses on is never replaced.
  */
 const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => {
-  const tasks = s.tasks.filter((t) => t.runId === run.id)
+  // A lifecycle Task `runs reconverge` superseded is not part of the Run's work any more (G5c final review I1)
+  const tasks = withoutSupersededLifecycle(s.tasks.filter((t) => t.runId === run.id))
   if (tasks.length > 0 && tasks.every(taskFinished)) return false
   if (run.paused === true || job.paused === true) return false
   if (coordinatorStarting(run, Date.parse(now))) return true
@@ -871,7 +872,9 @@ const startable = (tasks: readonly Task[], coordinated: boolean): Set<string> =>
         return t.consecutiveFailures < FAILURE_LIMIT
       case 'failed':
       case 'dispatched':
-        return coordinated && t.consecutiveFailures < FAILURE_LIMIT
+        // A lifecycle Task has no worker, so a coordinator never starts it again: worker-start refuses it (G5c final
+        // review I1). Only a person's task-update or `runs reconverge` moves it on.
+        return coordinated && t.kind !== 'lifecycle' && t.consecutiveFailures < FAILURE_LIMIT
       case 'pending':
         return t.deps.every(canComplete)
       default:

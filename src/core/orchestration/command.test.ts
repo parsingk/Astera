@@ -8052,6 +8052,37 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
   })
 })
 
+// G5c final review I1: a lifecycle Task is never a coordinator's to start (worker-start refuses it), and one superseded
+// by `runs reconverge` is not part of the Run's work any more. Counting either kept a finished coordinator Run moving.
+describe('a Run with lifecycle Tasks: what counts as moving', () => {
+  const life = (id: string, status: Task['status'], createdAt: string): Task => ({
+    id, runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status, validateConfigIds: ['github:ci'],
+    reviewRequested: true, consecutiveFailures: 0, createdAt, updatedAt: createdAt
+  })
+  const seeded = (lifecycle: Task[]) =>
+    Object.assign(
+      makeDeps({
+        ...emptyState(),
+        jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
+        runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, coordinatorSessionId: 'coord' }],
+        tasks: [{ id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }, ...lifecycle]
+      }),
+      { listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }] }
+    )
+  const running = async (deps: ReturnType<typeof seeded>): Promise<boolean> => {
+    const r = await call(deps, 'jobs-run', { id: 'job_1' })
+    return r.status === 409 && JSON.stringify(r.body).includes('run_1')
+  }
+
+  it('a reconverged Run whose new lifecycle Task completed is not running, beside a superseded failed one', async () => {
+    expect(await running(seeded([life('tsk_l1', 'failed', '2026-08-04T01:00:00.000Z'), life('tsk_l2', 'completed', '2026-08-04T02:00:00.000Z')]))).toBe(false)
+  })
+
+  it('a failed lifecycle Task under the failure limit is not something its coordinator can start', async () => {
+    expect(await running(seeded([life('tsk_l1', 'failed', '2026-08-04T01:00:00.000Z')]))).toBe(false)
+  })
+})
+
 // Task 1 small round 2: the clauses of runMoves each pinned, and a start drops only its own mark.
 describe('fix round 2: each clause of what counts as running', () => {
   const noCoordDeps = () =>
