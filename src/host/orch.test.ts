@@ -820,6 +820,17 @@ describe('createHostOrch', () => {
       expect((second.body as { boot: unknown }).boot).toBeNull()
     })
 
+    // GitHub lifecycle G6 (design §6.3 S5): a load with no app attached is the Host's own — it drives and sweeps itself —
+    // so its findings are spent, and an app attaching later does not act on them again
+    it('an unattended load spends the findings: a later app asking for boot gets none', async () => {
+      await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      await orch.loadUnattended()
+      const app = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+      expect((app.body as { boot: unknown }).boot).toBeNull()
+      expect((app.body as { state: OrchState }).state.dispatches).toHaveLength(1)
+    })
+
     // **`boot: true` 는 읽기가 아니다** — 가져가면 없어진다. CLI 가 (실수로든 아니든) 그것을
     // 집어 가면 앱은 boot 없이 뜨고, 재시작이 끊어 놓은 검증은 아무도 다시 시작하지 않는다.
     it('CLI 는 boot 를 물어도 받지 못하고, 앱 몫을 축내지도 않는다', async () => {

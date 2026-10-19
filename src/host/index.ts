@@ -82,6 +82,7 @@ import { createPullRequest, readCommits, readCommitsOrNull } from '../core/githu
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
 import { createGithubWatch, type GithubWatch } from './githubWatch'
+import { armEarlyLoad } from './earlyLoad'
 import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
 import { ancestry, createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
 import { findOpenPrs } from '../core/github/prBinding'
@@ -911,6 +912,9 @@ async function main(): Promise<void> {
       })
     : null
   githubWatch?.start()
+  // G6 (design §6.3 S5): a Remote Host with no app attached loads its state by itself, so its CI waits resume after a
+  // restart with no client (host/earlyLoad.ts)
+  armEarlyLoad({ remoteEnabled: () => remoteEnabled, hasApp: () => server.hasApp(), load: () => orch.loadUnattended(), log: (m) => log.write(m) })
 
   // G3b1 (design §4.1-4.3): a lifecycle round handed over at github:ci is pushed, bound to its pull request, and set to
   // wait; the watch above then reads CI on that head. Same condition as the watch: no spawner, no worktree registry.

@@ -361,6 +361,10 @@ export const OBSERVED: Record<string, ObservedReplay> = {
 export interface HostOrch extends OrchCall {
   /** Loads the state, once. Lazy and memoized on purpose — see `createHostOrch`. */
   ready(): Promise<void>
+  /** Loads with no app attached (GitHub lifecycle G6, host/earlyLoad.ts): the Host drives and runs the resume sweep itself
+   *  at the load's handover, so the load's findings are spent here — an app attaching later does not act on them
+   *  again, and the Host's own journal already recorded the load. */
+  loadUnattended(): Promise<void>
   /** Runs with work actually in flight — what `astera host stop` refuses over and names (ruling F57,
    *  docs/cli.md).
    *
@@ -1474,6 +1478,10 @@ export function createHostOrch(a: {
 
   return {
     ready,
+    loadUnattended: async () => {
+      await ready()
+      bootHandedOut = true
+    },
     runningRuns: () => runningRunCount(store.get()),
     state: () => store.get(),
     // Atomic: the snapshot and the registration happen in one synchronous step, so no commit falls
