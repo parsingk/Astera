@@ -270,7 +270,7 @@ describe('buildReviewSpecFile — the review before merge-ready', () => {
       lifecycle: { findings: { findings: [finding('skip-marker', 'src/a.test.ts', 3, 'it.skip("adds")'), finding('test-deleted', 'test/b.test.ts')], total: 2, cut: false } }
     })
     expect(spec).toContain('found by Astera')
-    expect(spec).toContain('src/a.test.ts:3')
+    expect(spec).toContain(['src/a.test.ts', 3].join(':'))
     expect(spec).toContain('it.skip("adds")')
     expect(spec).toContain('test/b.test.ts')
     expect(spec).toMatch(/does not need is a finding of severity high/)

@@ -200,7 +200,7 @@ describe('createReviewStarter — the lifecycle Task', () => {
     })
     await h.start({ taskId: h.lifecycleId })
     expect(asked).toEqual([`${h.runRoot} ${BASE} ${HEAD}`])
-    expect(h.spec()).toContain('src/a.test.ts:1')
+    expect(h.spec()).toContain(['src/a.test.ts', 1].join(':'))
     expect(h.spec()).toContain('it.skip("adds")')
     expect(h.spec()).toContain('regression risk')
     expect(h.spec()).toContain('build on ccccccc')

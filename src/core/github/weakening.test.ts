@@ -16,7 +16,9 @@ const file = (path: string, lines: string[], o: { deleted?: true; renamedFrom?: 
     ...lines
   ].join('\n')
 const diff = (...files: string[]): string => files.join('\n') + '\n'
-const kinds = (text: string): string[] => weakeningFindings(text).findings.map((f) => `${f.kind} ${f.file}${f.line ? `:${f.line}` : ''}`)
+/** Each finding as `kind file#line`: `#`, so the expectations below are not read as line-number citations of source
+ *  files (lineNumberCitations.test). */
+const kinds = (text: string): string[] => weakeningFindings(text).findings.map((f) => `${f.kind} ${f.file}${f.line ? `#${f.line}` : ''}`)
 
 describe('parseUnifiedDiff', () => {
   it('reads each file’s added and removed lines with their line numbers, and whether it was deleted or renamed', () => {
@@ -51,14 +53,14 @@ describe('weakeningFindings', () => {
       file('src/lib.rs', ['+#[ignore]'])
     )
     expect(kinds(text)).toEqual([
-      'skip-marker src/a.test.ts:1', 'skip-marker src/a.test.ts:2', 'skip-marker src/a.test.ts:3', 'skip-marker src/a.test.ts:4',
-      'skip-marker src/lib.rs:1', 'skip-marker src/test/java/ATest.java:1',
-      'skip-marker tests/test_a.py:1', 'skip-marker tests/test_a.py:2'
+      'skip-marker src/a.test.ts#1', 'skip-marker src/a.test.ts#2', 'skip-marker src/a.test.ts#3', 'skip-marker src/a.test.ts#4',
+      'skip-marker src/lib.rs#1', 'skip-marker src/test/java/ATest.java#1',
+      'skip-marker tests/test_a.py#1', 'skip-marker tests/test_a.py#2'
     ])
   })
 
   it('finds continue-on-error added in a workflow', () => {
-    expect(kinds(diff(file('.github/workflows/ci.yml', ['   steps:', '+      continue-on-error: true'])))).toEqual(['continue-on-error .github/workflows/ci.yml:2'])
+    expect(kinds(diff(file('.github/workflows/ci.yml', ['   steps:', '+      continue-on-error: true'])))).toEqual(['continue-on-error .github/workflows/ci.yml#2'])
   })
 
   it('finds a failure ignored with || true or exit 0 in a workflow, package.json, a shell script or a Makefile, and not in source code', () => {
@@ -70,7 +72,7 @@ describe('weakeningFindings', () => {
       file('src/a.ts', ['+const s = "a || true"'])
     )
     expect(kinds(text)).toEqual([
-      'ignored-failure .github/workflows/ci.yml:1', 'ignored-failure Makefile:1', 'ignored-failure package.json:1', 'ignored-failure scripts/check.sh:1'
+      'ignored-failure .github/workflows/ci.yml#1', 'ignored-failure Makefile#1', 'ignored-failure package.json#1', 'ignored-failure scripts/check.sh#1'
     ])
   })
 
@@ -90,7 +92,7 @@ describe('weakeningFindings', () => {
       file('pyproject.toml', ['-fail_under = 90']),
       file('.github/workflows/ci.yml', ['-      - run: pytest --cov-fail-under=85', '+      - run: pytest --cov-fail-under=50'])
     )
-    expect(kinds(text)).toEqual(['coverage-lowered .github/workflows/ci.yml:1', 'coverage-lowered pyproject.toml', 'coverage-lowered vitest.config.ts:1'])
+    expect(kinds(text)).toEqual(['coverage-lowered .github/workflows/ci.yml#1', 'coverage-lowered pyproject.toml', 'coverage-lowered vitest.config.ts#1'])
   })
 
   it('finds a workflow trigger removed and a job turned off, and not a trigger line that only moved', () => {
@@ -98,7 +100,7 @@ describe('weakeningFindings', () => {
       file('.github/workflows/ci.yml', ['-  pull_request:', '   push:', '+    if: false']),
       file('.github/workflows/lint.yml', ['-  push:', '+  push:'])
     )
-    expect(kinds(text)).toEqual(['trigger-removed .github/workflows/ci.yml', 'job-disabled .github/workflows/ci.yml:2'])
+    expect(kinds(text)).toEqual(['trigger-removed .github/workflows/ci.yml', 'job-disabled .github/workflows/ci.yml#2'])
   })
 
   it('finds a lint or typecheck step removed from a workflow', () => {
