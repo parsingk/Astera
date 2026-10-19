@@ -20,6 +20,8 @@ import { pickReviewer } from '../reviewer'
 import { openReviewDispatch, type OrchState } from '../state'
 import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf } from '../lifecycleTask'
 import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
+import { weakeningFindings } from '../../github/weakening'
+import type { RunGitHubState } from '../../github/lifecycle'
 import { createReviewGate } from './reviewGate'
 
 export interface ReviewContext {
@@ -36,6 +38,13 @@ export interface ReviewContext {
   /** The whole diff of a range in a folder, capped (`readRangeDiff`): what a lifecycle review's weakening findings are
    *  read from (GitHub lifecycle G5a). Absent: no findings. */
   rangeDiff?(cwd: string, base: string, head: string): Promise<{ diff: string; truncated: boolean } | null>
+}
+
+/** The Run's CI failures of the verification configuration (G5a, design §4.6), each check and head once, from the Run's
+ *  GitHub log: the snapshot is overwritten by later reads. */
+function configurationNotesOf(gs: RunGitHubState | undefined): string[] {
+  const notes = (gs?.log ?? []).filter((e) => e.kind === 'ci-failed' && e.class === 'configuration').map((e) => `${e.check ?? 'a check'} on ${(e.sha ?? '').slice(0, 7)}`)
+  return [...new Set(notes)]
 }
 
 /** OrchServerDeps.startReview 의 본문을 돌려준다. 돌려준 함수는 흘려보내는 쪽이 종단 .catch 를
@@ -99,6 +108,10 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       // PTY 를 띄울 경로는 가드를 통과해야 한다 — validator.start 와 같은 이유(Dispatch.cwd 는
       // 오케스트레이션 소켓에서 온 값이고 정규화는 검증이 아니다, ADR-003).
       await c.assertAllowedPath(cwd)
+      // The pull request's whole diff, read for what can weaken its checks (GitHub lifecycle G5a, §7.4 S9): a read that
+      // fails gives no findings, never a review that does not start
+      const read = lifecycle && diff && c.rangeDiff ? await c.rangeDiff(cwd, diff.base, diff.head).catch(() => null) : null
+      const findings = read ? { ...weakeningFindings(read.diff), cut: read.truncated } : undefined
       // Dispatch 를 먼저 커밋한다 — 세션을 띄우기 전에 id 가 있어야 spec 파일의 보고 문장에
       // 그것을 실을 수 있다. worker-start 가 같은 순서다(server.ts: openDispatch 커밋 → startWorker).
       //
@@ -165,6 +178,7 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
         checks: task.checks,
         previousIssues: task.reviewIssues,
         ...(diff ? { diff } : {}),
+        ...(lifecycle ? { lifecycle: { ...(findings ? { findings } : {}), configurationNotes: configurationNotesOf(run?.githubState) } } : {}),
         suspiciousFiles: freshTask.suspiciousFiles,
         policyChanged: freshTask.policyChanged === true,
         // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일

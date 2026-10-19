@@ -22,6 +22,7 @@ import type { Provider } from '../../providers/meta'
 import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../knowledge/detect'
 import type { CheckResult, RepairReason, ReviewIssue } from '../types'
 import type { LifecycleRepairFacts } from '../lifecycleTask'
+import type { WeakeningFinding } from '../../github/weakening'
 import { REPAIR_DIAGNOSTICS, diagnosticLine, findingsCountOf } from '../pluginChecks'
 import { boundedSlug } from '../../worktrees/naming'
 
@@ -514,6 +515,18 @@ For files you changed, give the paths through --files-modified.
  *
  *  검토자가 고치기 시작하면 그것은 구현이고 그 변경은 아무도 검증하지 않는다: 검증은 이미 지나갔고
  *  검토자를 검토하는 층은 없다. */
+/** What each weakening finding is, in the review's words (G5a). */
+const WEAKENING_WORDS: Record<WeakeningFinding['kind'], string> = {
+  'skip-marker': 'a test skipped or narrowed (skip, only)',
+  'continue-on-error': 'a workflow step allowed to fail',
+  'ignored-failure': 'a failure ignored (|| true, exit 0)',
+  'test-deleted': 'a test file deleted',
+  'coverage-lowered': 'a coverage threshold lowered or removed',
+  'trigger-removed': 'a workflow trigger removed',
+  'job-disabled': 'a workflow job turned off (if: false)',
+  'check-step-removed': 'a lint or typecheck step removed'
+}
+
 export function buildReviewSpecFile(a: {
   title: string
   spec: string
@@ -537,6 +550,14 @@ export function buildReviewSpecFile(a: {
   diff?: { base: string; head: string }
   /** check 의 동작을 바꾸는 파일들(설계 §8.3) */
   suspiciousFiles?: string[]
+  /** The review before a GitHub lifecycle Run is ready to merge (G5a, design §7.4, §7.5): it also judges regression risk,
+   *  tests, CI, configuration, unrelated changes and security, and is shown what Astera found in the pull request's
+   *  diff that can weaken the checks and the Run's CI failures of the verification configuration. Absent for every
+   *  other review, whose one question stays narrow. */
+  lifecycle?: {
+    findings?: { findings: WeakeningFinding[]; total: number; cut: boolean }
+    configurationNotes?: string[]
+  }
   /** 완료 정책의 지문이 라운드 사이에 달라졌다(2조각 설계 G3, 명세 §36·§37). 의심 파일과 같은 자리,
    *  같은 이유로 실린다 — 앱은 표시만 하고 판정은 리뷰어의 몫이다 */
   policyChanged?: boolean
@@ -600,7 +621,7 @@ ${previous.map((i, n) => `${n + 1}. ${i.severity.toUpperCase()} — ${i.title}${
     ? `
 ## Files that change how the checks run
 
-This attempt touched files that decide what the checks do. Scrutinise these first: a change here can make
+${a.lifecycle ? 'This pull request touched' : 'This attempt touched'} files that decide what the checks do. Scrutinise these first: a change here can make
 a check pass without making the work correct.
 
 ${a.suspiciousFiles.map((f) => `- ${f}`).join('\n')}
@@ -616,6 +637,52 @@ being correct.
 
 Judge the change itself: did it make a check ask for less? If it did, say so as a finding. If it fixed
 a check that was wrong, say that too, so the record shows it was looked at.
+`
+    : ''
+  const findings = a.lifecycle?.findings
+  const findingsSection =
+    findings && (findings.total > 0 || findings.cut)
+      ? `
+## Changes that can weaken the checks (found by Astera)
+
+Astera read the pull request's diff and found the changes below; each can make a check pass without the work being
+right. For each one, decide whether the requirement needs it.
+One the requirement does not need is a finding of severity high: report it, naming the file.
+One it does need, say so in your report, so the record shows it was looked at.${findings.cut ? '\n\nThe diff was longer than Astera reads: these come from its first part. Read the rest yourself.' : ''}
+
+${findings.findings.map((f) => `- ${WEAKENING_WORDS[f.kind]} — ${f.file}${f.line !== undefined ? `:${f.line}` : ''}: ${f.text}`).join('\n')}${
+          findings.total > findings.findings.length ? `\n- (and ${findings.total - findings.findings.length} more: read the diff for them)` : ''
+        }
+`
+      : ''
+  const configurationSection = a.lifecycle?.configurationNotes?.length
+    ? `
+## The verification configuration failed in this Run
+
+GitHub CI failed for its own configuration during this Run (a workflow that could not run):
+
+${a.lifecycle.configurationNotes.map((n) => `- ${n}`).join('\n')}
+
+A repair may have changed how the checks run to get past it. Judge whether that change was needed by the requirement;
+one that was not is a finding of severity high.
+`
+    : ''
+  // §7.5: the last review before merge-ready asks more than the one question, and says which of it may block
+  const mergeReadySection = a.lifecycle
+    ? `
+## Before this pull request is marked ready to merge
+
+This is the last review before Astera marks the pull request ready to merge, so the question above is not the only one.
+Also judge, over the whole pull request:
+
+- regression risk: what the change can break outside the requirement;
+- whether the tests are meaningful: they exercise the change and would fail without it;
+- that CI was not weakened and that workflow and test configuration was not gamed (see the sections above);
+- unrelated changes: anything the requirement does not need;
+- security: secrets, injection, permissions widened.
+
+Report each as a finding. Use high only where merging would be wrong — a regression, CI weakened without the requirement
+asking for it, a security hole; anything else at medium or below.
 `
     : ''
   // "The one question you answer" 뒤에 온다(리뷰 fix 1차, Important 3) — 무엇이 결함인지 먼저 읽은
@@ -680,7 +747,7 @@ ${
       : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
 }
 
-${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}${policySection}
+${knowledgeSection}${checksSection}${previousSection}${suspiciousSection}${policySection}${findingsSection}${configurationSection}
 ## The one question you answer
 
 **Was the requirement above satisfied?** Not "is this the code I would have written", not "could this be
@@ -691,7 +758,7 @@ subtree behind it.
 Reject when the work does not do what was asked: a missing case, a requirement addressed in name only, a
 change that contradicts the spec. Say concretely what is missing, because your body text is the only
 record the next attempt gets.
-${verdictSection}
+${mergeReadySection}${verdictSection}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 
