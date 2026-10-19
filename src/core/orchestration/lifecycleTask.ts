@@ -1,7 +1,6 @@
 // The Run-level lifecycle Task (GitHub lifecycle design L1, §3.2): added by Astera in the same write that completes a
 // lifecycle Run's last ordinary Task, so no outcome reader ever sees the Run all-terminal in between. Pure.
-import { GITHUB_CI_CHECK, type MergeReadyEvidence } from '../github/lifecycle'
-import { ciTargetNames } from '../github/ciVerdict'
+import { GITHUB_CI_CHECK, ciTargetNames, type MergeReadyEvidence } from '../github/lifecycle'
 import { checkConfigIdsOf, latestImplDispatch } from './convergence'
 import { isTerminal, tasksOwnedBy } from './running'
 import type { OrchState } from './state'

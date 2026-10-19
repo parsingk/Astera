@@ -23,19 +23,6 @@ const NOTHING_CHECKED: readonly GitHubCiConclusion[] = ['skipped', 'neutral']
 /** Completed with a conclusion that is a verdict. STALE is not: GitHub will run it again. */
 const settled = (c: GitHubCiCheck): boolean => c.status === 'completed' && c.conclusion !== undefined && c.conclusion !== 'stale'
 
-/** The names of the checks CI is judged on by `basis`, sorted, once (GitHub lifecycle G5b): the required ones present,
- *  the selected ones present, or every reported one but those settled skipped or neutral. Kept with merge-ready; a
- *  later read of the same head that judges on other names withdraws it. */
-export function ciTargetNames(checks: readonly GitHubCiCheck[], basis: CiBasis, selected: readonly string[] = []): string[] {
-  const targets =
-    basis === 'required'
-      ? checks.filter((c) => c.required)
-      : basis === 'selected'
-        ? checks.filter((c) => selected.includes(c.name))
-        : checks.filter((c) => !(settled(c) && NOTHING_CHECKED.includes(c.conclusion!)))
-  return [...new Set(targets.map((c) => c.name))].sort()
-}
-
 /** `ruleNames` is null when the branch rules could not be read. In `required` mode that, or a read that could not say
  *  whether some check is required, keeps a verdict from passing (spec §9: do not guess a pass), and so does a read
  *  that ran past its page in any mode; a failure seen still fails (final review C1, I2, M1). */

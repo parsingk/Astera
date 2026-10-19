@@ -18,6 +18,7 @@ import {
   EVIDENCE_TRIES,
   GITHUB_CI_CHECK,
   GITHUB_LIFECYCLE_DEFAULTS,
+  ciTargetNames,
   roundReruns,
   type CiFailureClass,
   type CiVerdict,
@@ -27,7 +28,7 @@ import {
   type GitHubLifecyclePolicy,
   type RunGitHubState
 } from '../core/github/lifecycle'
-import { ciTargetNames, evaluateCi, type CiEvaluation } from '../core/github/ciVerdict'
+import { evaluateCi, type CiEvaluation } from '../core/github/ciVerdict'
 import { ciCheckResult } from '../core/github/ciResult'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
 import type { OpenPr } from '../core/github/prBinding'

@@ -236,6 +236,22 @@ export const CI_CHECKS_MAX = 50
 export const GITHUB_LOG_MAX = 100
 export const RERUNS_MAX = 20
 
+/** The names of the checks CI is judged on by `basis`, sorted, once (GitHub lifecycle G5b): the required ones present,
+ *  the selected ones present, or every reported one but those settled skipped or neutral (evaluateCi's all-reported
+ *  targets). Kept with merge-ready; a later read of the same head that judges on other names withdraws it. Here, not in
+ *  ciVerdict, because the renderer's build reaches it through lifecycleTask and ciVerdict reaches gh. */
+export function ciTargetNames(checks: readonly GitHubCiCheck[], basis: CiBasis, selected: readonly string[] = []): string[] {
+  const nothingChecked = (c: GitHubCiCheck): boolean =>
+    c.status === 'completed' && (c.conclusion === 'skipped' || c.conclusion === 'neutral')
+  const targets =
+    basis === 'required'
+      ? checks.filter((c) => c.required)
+      : basis === 'selected'
+        ? checks.filter((c) => selected.includes(c.name))
+        : checks.filter((c) => !nothingChecked(c))
+  return [...new Set(targets.map((c) => c.name))].sort()
+}
+
 /** The reruns asked in the round `since` names, on its head `sha` (G4 final review I1, M5): a rerun of an earlier round
  *  of the same head is that round's, not this one's. */
 export const roundReruns = (reruns: readonly GitHubRerun[] | undefined, sha: string, since: string): GitHubRerun[] =>

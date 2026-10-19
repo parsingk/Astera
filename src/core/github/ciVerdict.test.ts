@@ -2,7 +2,8 @@
 import { describe, it, expect } from 'vitest'
 import type { GhRunner } from './gh'
 import type { GitHubCiCheck } from './lifecycle'
-import { ciTargetNames, evaluateCi, parseRuleCheckNames, readRuleCheckNames } from './ciVerdict'
+import { evaluateCi, parseRuleCheckNames, readRuleCheckNames } from './ciVerdict'
+import { ciTargetNames } from './lifecycle'
 
 const check = (name: string, over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({
   externalId: `run:${name}`, name, status: 'completed', conclusion: 'success', required: false, ...over
