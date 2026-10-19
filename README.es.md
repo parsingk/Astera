@@ -78,8 +78,8 @@
 - El Run queda listo para fusionar solo cuando el head actual del pull request ha pasado las
   comprobaciones configuradas y la revisión no encontró nada que bloquee. Astera no lo fusiona; esa
   decisión es tuya
-- Nada llega a GitHub salvo que un Job active **Llevarlo hasta GitHub**; los valores por defecto están
-  en Configuración › GitHub. How It Works guarda el issue, el pull request y con qué se verificó el
+- Solo un Job que active **Llevarlo hasta GitHub** se lleva así; los valores por defecto están en
+  Configuración › GitHub. How It Works guarda el issue, el pull request y con qué se verificó el
   trabajo
 
 **Programación y control remoto**

@@ -12,6 +12,15 @@ const READMES: [string, Lang][] = [
   ['README.es.md', 'es']
 ]
 
+/** What the switch scopes, in each README (G8 final review M2): the Job it is on. Not the app's GitHub use as a whole —
+ *  the same README's GitHub section pushes and opens pull requests without it, and the issue source reads GitHub. */
+const SCOPE: Record<Lang, string> = {
+  en: 'Only a Job that turns on',
+  ko: '켠 Job만',
+  ja: 'をオンにした Job だけ',
+  es: 'Solo un Job que active'
+}
+
 describe('the README’s GitHub lifecycle entry', () => {
   it.each(READMES)('%s names the switch and Settings › GitHub as the app does', (file, lang) => {
     const readme = readFileSync(path.join(__dirname, '../../..', file), 'utf8')
@@ -23,5 +32,10 @@ describe('the README’s GitHub lifecycle entry', () => {
     expect(readme).toContain(`**${toggle}**`)
     expect(readme).toContain(settings)
     expect(readme).toContain('How It Works')
+  })
+
+  it.each(READMES)('%s says the switch carries the Job it is on, not that nothing else reaches GitHub', (file, lang) => {
+    const readme = readFileSync(path.join(__dirname, '../../..', file), 'utf8').replace(/\s+/g, ' ')
+    expect(readme).toContain(SCOPE[lang])
   })
 })

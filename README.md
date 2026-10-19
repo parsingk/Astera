@@ -74,7 +74,7 @@
   worker, checks the repair locally, pushes the new commit and waits for CI again
 - The Run is merge-ready only when the pull request's current head has passed the configured checks
   and the review found nothing blocking. Astera does not merge it; that stays your call
-- Nothing reaches GitHub unless a Job turns on **Carry it through GitHub**; the defaults are in
+- Only a Job that turns on **Carry it through GitHub** is carried this way; the defaults are in
   Settings › GitHub. How It Works keeps the issue, the pull request and what verified the work
 
 **Scheduling and remote control**
