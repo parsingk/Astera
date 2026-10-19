@@ -514,7 +514,7 @@ as quoted data.
 | --- | --- |
 | Off | Nothing. Every tool is refused. |
 | Read only | The list and get tools, `get_run`, `wait_for_run`, `get_completion`, `list_run_configs`, `get_check_output`, `get_task_output`, `get_pr_status`, `get_ci`, `get_issue`, `list_job_sources`, `list_source_items`, `get_source_item`, `list_work_records` and `get_work_record` included; `list_sessions` and `get_session` only with the session setting on. |
-| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run`, `answer_question`, `create_job_from_source` (from a plugin's source) and `regenerate_work_record`; with the session setting on, `send_message` and `create_session`; and with the GitHub setting on, `create_pr`, `retry_ci`, `create_job_from_issue` and `create_job_from_source` from the `github` source. This is the default. |
+| Read and control | The above, plus `create_job`, `create_task`, `run_job`, `stop_run`, `resume_run`, `answer_question`, `create_job_from_source` (from a plugin's source) and `regenerate_work_record`; with the session setting on, `send_message` and `create_session`; and with the GitHub setting on, `create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`, `create_job_from_source` from the `github` source, and a Job made with `githubLifecycle`. This is the default. |
 
 **Sessions are a second setting.** `list_sessions`, `get_session`, `send_message` and
 `create_session` also need **Let MCP clients see and use sessions** (Settings, CLI tab), which is off
@@ -526,7 +526,7 @@ and control" and the session setting on, a client can start an agent that runs c
 asking. `get_check_output` and `get_task_output` read
 Job data and need only MCP access, not the session setting.
 
-**GitHub writes are a third setting.** `create_pr`, `retry_ci`, `create_job_from_issue` and `create_job_from_source` with `source: "github"` also need
+**GitHub writes are a third setting.** `create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`, `create_job_from_source` with `source: "github"` and any `create_job*` with `githubLifecycle` also need
 **Let MCP clients act on GitHub** (Settings, CLI tab), which is off by default: they push branches,
 open pull requests and rerun CI as your `gh` login, and turn issues into Jobs that agents then work
 on. With it on they need "Read and control"; with it off, each is refused with `PERMISSION_DENIED`

@@ -919,6 +919,11 @@ policy as `github`. A worker session Astera started is refused the flag with a 5
 `jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create`, `github-ci-rerun` and `runs reconverge`: those
 writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off
 Astera's GitHub commands and is not a sandbox.
+In the app, **New job** and **From a source** have the same switch (**Carry it through GitHub**, off by default),
+which asks the Host about the folder before the Job is made and holds **Create** (**Make the job** in the source
+window) until it can carry it. The rerun and
+CI-wait policy a Job takes comes from **Settings › GitHub** (reruns of a CI failure outside the code, 1 to 10; the wait
+for CI, 10 to 1440 minutes), read by the Host when the Job is made and kept by the Job.
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it
@@ -1329,7 +1334,9 @@ nothing, so run it again a moment later. It refuses while a dispatch is held ope
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
 reviewers and repair workers starting, their reports and status messages, questions opened and
 answered, usage limits hit and resumed, and, with Job Continuity on, the rows of the run's journal: a
-worker lost when the Host restarted, and each recovery decision. It prints every event so far first, then each new one as
+worker lost when the Host restarted, and each recovery decision. For a `--github-lifecycle` run they include its
+GitHub steps: the pull request bound or opened, each push, CI starting, failing, rerun and passing, merge-ready, not
+merge-ready (with the reason), and its issue changing. It prints every event so far first, then each new one as
 it lands, each exactly once.
 
 With `--human` each event is one line, the local time first:

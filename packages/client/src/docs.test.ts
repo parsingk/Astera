@@ -44,10 +44,18 @@ const hostConstant = (file: string, name: string): number => {
 }
 /** The members of a string-literal union of the Host's source or this package's, `export type NAME =\n  | 'a'\n  | 'b'`,
  *  read as text for the same reason. */
+/** A string union's members, read from its source: one `  | 'member'` per line, doc comments between them stepped over. */
 const unionOf = (file: string, name: string): string[] => {
-  const m = new RegExp(`^export type ${name} =\\n((?:  \\| '[\\w-]+'\\n)+)`, 'm').exec(read(file))
-  if (!m) throw new Error(`${file} has no ${name}`)
-  return [...m[1].matchAll(/'([\w-]+)'/g)].map((x) => x[1])
+  const lines = read(file).split(/\r?\n/)
+  const at = lines.findIndex((l) => l.startsWith(`export type ${name} =`))
+  if (at < 0) throw new Error(`${file} has no ${name}`)
+  const out: string[] = []
+  for (const l of lines.slice(at + 1)) {
+    const member = /^ {2}\| '([\w-]+)'$/.exec(l)
+    if (member) out.push(member[1])
+    else if (!/^ {2}(\/\*\*|\/\/)/.test(l)) break
+  }
+  return out
 }
 const RECEIPT_TTL_MS = hostConstant('src/host/orch.ts', 'RECEIPT_TTL_MS')
 const RECEIPTS_PER_CALLER = hostConstant('src/host/orch.ts', 'RECEIPTS_PER_CALLER')
@@ -88,6 +96,19 @@ describe('docs/sdk.md', () => {
     expect(reasons).toContain('checks-changed')
     expect(unionOf('packages/client/src/types.ts', 'GitHubInvalidatedReason')).toEqual(reasons)
     for (const r of reasons) expect(section(guide, '## What you can do'), r).toContain(`\`${r}\``)
+  })
+
+  // GitHub lifecycle G7c: RunEventKind is typed twice too; a kind the Host's timeline makes and the package does not
+  // name, or the guide does not, is a line a script cannot switch on
+  it('types every timeline kind the Host makes, as the Host does, and names each', () => {
+    const kinds = unionOf('src/core/types.ts', 'JobEventKind')
+    expect(kinds).toContain('github-merge-ready')
+    expect(unionOf('packages/client/src/types.ts', 'RunEventKind')).toEqual(kinds)
+    // In the paragraph that lists them, where a missing one shows (final review M6)
+    const at = guide.indexOf("An event's `kind` is one of")
+    const paragraph = guide.slice(at, guide.indexOf('\n\n', at))
+    expect(at).toBeGreaterThan(0)
+    for (const k of kinds) expect(paragraph, k).toContain(`\`${k}\``)
   })
 
   it('names every event type in its Events section, and the README does too', () => {
