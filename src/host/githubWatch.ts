@@ -27,7 +27,7 @@ import {
   type GitHubLifecyclePolicy,
   type RunGitHubState
 } from '../core/github/lifecycle'
-import { evaluateCi } from '../core/github/ciVerdict'
+import { ciTargetNames, evaluateCi, type CiEvaluation } from '../core/github/ciVerdict'
 import { ciCheckResult } from '../core/github/ciResult'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
 import type { OpenPr } from '../core/github/prBinding'
@@ -59,6 +59,9 @@ export const NO_CI_GRACE_MS = 180_000
  *  shows within seconds; a run that has not shown by then is read as it is, and a rerun still starting is held by its
  *  suite (the reader counts an Actions suite with no check run yet as running). */
 export const RERUN_SHOW_MS = 180_000
+/** How often a Run whose lifecycle Task is in review is read (G5b, design §6.2): its head is fresh when the verdict
+ *  decides merge-ready, and a head that moves meanwhile shows. */
+export const REVIEWING_MS = 30_000
 const READS_AT_ONCE = 2
 /** gh's words for a job log asked for while its Actions run still goes (measured on the sandbox, 2026-10-18). */
 const STILL_RUNNING = /is still in progress; logs will be available when it is complete/i
@@ -122,6 +125,8 @@ interface Target {
   policy: GitHubLifecyclePolicy
   source: JobSourceRef | undefined
   state: RunGitHubState | undefined
+  /** Its lifecycle Task is in review (G5b): read every REVIEWING_MS. */
+  reviewing: boolean
   /** The Run's lifecycle round handed over at github:ci (G3b1): CI on `sha`, once the Host pushed it, settles it.
    *  `waitingSince` (G3b2) is when the current wait began; `noCi` a person's choice to go on without CI. */
   round?: Round
@@ -148,6 +153,21 @@ const rerunUnshown = (gs: RunGitHubState | undefined, round: { sha: string; sinc
       (checks.some((c) => r.externalId !== undefined && c.externalId === r.externalId) ||
         !checks.some((c) => c.ciRunId === r.ciRunId && (c.ciRunAttempt ?? 1) > r.attempt))
   )
+
+/** Why a read withdraws a Run's merge-ready (G5b, design §5.4), or undefined: the pull request closed or merged, a head
+ *  that is not the evidence's, another base than the binding's, a failing check on that head, or other checks judged on
+ *  it than the evidence kept. A review asking for changes on GitHub is shown, never a withdrawal; one withdrawn already
+ *  stays as it was. */
+function withdrawalOf(gs: RunGitHubState | undefined, read: PrStateRead, ev: CiEvaluation, selected?: readonly string[]): string | undefined {
+  const evidence = gs?.mergeReady
+  if (!evidence || gs.invalidated) return undefined
+  if (read.state !== 'open') return read.state
+  if (read.headSha !== evidence.headSha) return 'head-changed'
+  if (gs.binding && read.baseBranch !== gs.binding.baseBranch) return 'base-changed'
+  if (read.commitSha !== evidence.headSha) return undefined
+  if (ev.verdict === 'failed') return 'ci-failed'
+  return ciTargetNames(read.checks, ev.basis, selected).join('\n') !== evidence.ciChecks.join('\n') ? 'checks-changed' : undefined
+}
 
 /** Each wait is decided once: a person's "wait again" begins another (G3b2). */
 const decisionOf = (round: Round): string => `${round.taskId}@${round.since}@${round.waitingSince}`
@@ -176,6 +196,9 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   /** Each Run's pushed wait last seen (`since@sha@waitingSince`): a round pushed again, or waited on again, is read at
    *  once, not when the verdict before put the next read (G3b1 final review M1). */
   const roundSeen = new Map<string, string>()
+  /** Each Run's merge-ready evidence last seen (its evaluatedAt): a Run that just became merge-ready is read at once, so a
+   *  head that moved during the review shows now (G5b, design §3.5). */
+  const mergeSeen = new Map<string, string>()
   let holdUntil = 0
   let lowUntil = 0
   let timer: ReturnType<typeof setInterval> | null = null
@@ -213,7 +236,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       // waits on a person's choice among several (G3b2 final review M3): binding it here first would log a PR Astera made
       // as found, or bind one the person did not choose
       if (!gs?.binding && open?.ciWait && open.ciWait.sha === undefined) continue
-      out.push({ runId: run.id, cwd: run.worktree, worktree, policy, source: job?.source, state: gs, ...(round ? { round } : {}) })
+      out.push({ runId: run.id, cwd: run.worktree, worktree, policy, source: job?.source, state: gs, reviewing: open?.status === 'reviewing', ...(round ? { round } : {}) })
     }
     return out
   }
@@ -422,7 +445,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     // A rerun of the waited head that has not shown yet is seconds away (G4)
     const reran = round?.sha !== undefined && rerunUnshown(t.state, { sha: round.sha, since: round.since }, read.checks, now())
     const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable || awaited || reran
-    nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : SETTLED_MS))
+    nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : t.reviewing ? REVIEWING_MS : SETTLED_MS))
+    // A merge-ready Run whose pull request moved withdraws merge-ready, in the read's own record (G5b, design §5.4)
+    const withdrawn = withdrawalOf(t.state, read, ev, t.policy.ci.selectedChecks)
+    if (withdrawn) patch.invalidated = { reason: withdrawn }
     await record(t.runId, patch)
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
     const sha = round.sha
@@ -554,7 +580,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   const forgetOthers = (targets: Target[]): void => {
     const runIds = new Set(targets.map((t) => t.runId))
     const cwds = new Set(targets.map((t) => t.cwd))
-    for (const map of [nextAt, failures, issueAt, headSeen, decided, roundSeen]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
+    for (const map of [nextAt, failures, issueAt, headSeen, decided, roundSeen, mergeSeen]) for (const id of map.keys()) if (!runIds.has(id) && !inFlight.has(id)) map.delete(id)
     for (const cwd of repos.keys()) if (!cwds.has(cwd)) repos.delete(cwd)
   }
 
@@ -563,6 +589,11 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const targets = targetsOf(latest)
     forgetOthers(targets)
     for (const t of targets) {
+      const ready = t.state?.mergeReady?.evaluatedAt
+      if (ready !== undefined && !inFlight.has(t.runId) && mergeSeen.get(t.runId) !== ready) {
+        mergeSeen.set(t.runId, ready)
+        nextAt.delete(t.runId)
+      }
       const key = t.round?.sha === undefined ? undefined : `${t.round.since}@${t.round.sha}@${t.round.waitingSince}`
       // A read in flight sets its own next read when it ends: the round is taken up on the tick after
       if (key === undefined || inFlight.has(t.runId) || roundSeen.get(t.runId) === key) continue
