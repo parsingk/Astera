@@ -1937,6 +1937,13 @@ export const ko = {
   'jobs.new.githubDefaults': '코드 밖의 이유로 실패한 CI 는 최대 {reruns}번 다시 돌리고, CI 를 최대 {minutes}분 기다립니다 — 설정 › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'CI 를 스스로 다시 돌리지 않고, 최대 {minutes}분 기다립니다 — 설정 › GitHub',
   'jobs.new.githubDefaultsRuntime': '그 Runtime 의 설정 › GitHub 기본값을 따릅니다.',
+  'github.settings.lifecycle.title': 'GitHub 까지 진행하는 Job',
+  'github.settings.lifecycle.hint': '새 Job 이 만들어질 때 이 값을 가져가고, 그 뒤로는 바뀌지 않습니다.',
+  'github.settings.lifecycle.autoRerun': '코드 밖의 이유로 실패한 CI 다시 돌리기',
+  'github.settings.lifecycle.maxReruns': '최대 재실행 횟수',
+  'github.settings.lifecycle.ciWait': 'CI 를 기다리는 시간(분)',
+  'github.settings.lifecycle.bounds': '재실행 {min}~{max}번, 기다리는 시간 {waitMin}~{waitMax}분.',
+  'github.settings.lifecycle.invalid': '허용 범위를 벗어나 저장하지 않았습니다.',
   'jobs.new.create': '만들기',
   // 동시 실행 1 을 골랐는데 그 폴더에 이미 워커가 있을 때. 막지 않고 알려만 준다 —
   // 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다
