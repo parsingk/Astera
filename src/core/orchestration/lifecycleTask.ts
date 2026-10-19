@@ -1,7 +1,8 @@
 // The Run-level lifecycle Task (GitHub lifecycle design L1, §3.2): added by Astera in the same write that completes a
 // lifecycle Run's last ordinary Task, so no outcome reader ever sees the Run all-terminal in between. Pure.
 import { GITHUB_CI_CHECK, ciTargetNames, type GitHubInvalidatedReason, type MergeReadyEvidence } from '../github/lifecycle'
-import { checkConfigIdsOf, latestImplDispatch } from './convergence'
+import { checkConfigIdsOf, latestImplDispatch, policyOf, repairCountOf } from './convergence'
+import type { LifecycleTaskFacts } from '../github/view'
 import { isTerminal, tasksOwnedBy } from './running'
 import type { OrchState } from './state'
 import { newId, recomputeReady, type Dispatch, type Task } from './types'
@@ -17,6 +18,18 @@ export function latestLifecycleTaskOf(s: OrchState, runId: string): Task | undef
   let latest: Task | undefined
   for (const t of s.tasks) if (t.runId === runId && isLifecycleTask(t) && (!latest || t.createdAt >= latest.createdAt)) latest = t
   return latest
+}
+
+/** The Run's latest lifecycle Task with the question open on it (GitHub lifecycle G3c2): what the Run's `github.state`
+ *  reads while that Task works. Read for a lifecycle Job's Run only: by runView and by the Jobs rows (G7b). */
+export function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | undefined {
+  const task = latestLifecycleTaskOf(s, runId)
+  if (!task) return undefined
+  const openGate = s.gates.find((g) => g.taskId === task.id && g.status === 'open')
+  // The node's "Fix N/M" numbers (view.ts jobTaskOf), for the Run's GitHub block (G7b)
+  const policy = policyOf(s, task)
+  const repairs = policy ? { done: repairCountOf(s, task.id), max: policy.maxFixAttempts } : undefined
+  return { task, ...(openGate ? { openGate } : {}), ...(repairs ? { repairs } : {}) }
 }
 
 /** The Run's lifecycle Task while it still works: the latest one, neither completed nor terminally failed. Only the

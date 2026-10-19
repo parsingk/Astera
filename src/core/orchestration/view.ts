@@ -18,6 +18,8 @@ import { coordinatorStarting, type OrchState } from './state'
 import { eventCountsOf } from './timeline'
 import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy, withoutSupersededLifecycle } from './running'
 import { policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
+import { githubLifecycleOf } from '../github/view'
+import { isLifecycleTask, lifecycleFactsOf } from './lifecycleTask'
 import type { Dispatch, Gate, Job, JobRun, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
@@ -163,6 +165,20 @@ function jobTaskOf(
   // "켜진 것" 으로 읽히면 안 된다. 기본값이 채워진 정책이라 화면이 3/2 를 지어내지 않는다.
   const policy = policyOfJob(task.runId === undefined ? undefined : ix.jobOfRun(task.runId))
   return {
+    // The lifecycle Task, and what its round waits on (G7b)
+    ...(isLifecycleTask(task)
+      ? {
+          lifecycle: task.ciWait
+            ? {
+                ciWait: {
+                  ...(task.ciWait.pr !== undefined ? { pr: task.ciWait.pr } : {}),
+                  ...(task.ciWait.sha !== undefined ? { sha: task.ciWait.sha } : {}),
+                  since: task.ciWait.waitingSince ?? task.ciWait.since
+                }
+              }
+            : {}
+        }
+      : {}),
     id: task.id,
     title: task.title,
     status: task.status,
@@ -410,6 +426,8 @@ export function snapshotFor(
       ...(run !== undefined ? { fireOrdinal: run.ordinal } : {}),
       // Where the Job came from (plugin Phase 4 J18), on every row of the Job: the chip opens the ticket
       ...(job.source ? { source: job.source } : {}),
+      // A lifecycle Run's GitHub side, as runs get derives it (G7b)
+      ...(run !== undefined && job.github ? { github: githubLifecycleOf(job.github, run.githubState, lifecycleFactsOf(state, run.id)) } : {}),
       ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
         ? { nextFireAt: nextFireOf(job.id) as number }
         : {}),

@@ -1,5 +1,6 @@
 import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
+import type { GitHubLifecycleView } from './github/view'
 import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
@@ -470,6 +471,9 @@ export interface JobConvergence {
 export interface JobTask {
   id: string
   title: string
+  /** The Task Astera adds to carry a GitHub lifecycle Run through GitHub (G7b): `ciWait` while its round waits for
+   *  CI on the head it pushed (`since` is when the current wait began). Its stored title is not translated. */
+  lifecycle?: { ciWait?: { pr?: number; sha?: string; since: string } }
   status: TaskStatus
   /** The worker session this Task was dispatched to, when this app process still has that session —
    *  so it is present for a worker that has exited as well as a running one, because the tab is still
@@ -719,6 +723,9 @@ export interface JobRow {
   children?: JobRow[]
   /** The job source's item the Job was made from (plugin Phase 4 J18): the chip on its card and in its detail. */
   source?: JobSourceRef
+  /** A GitHub lifecycle Run's GitHub side (G7b, design §8): the view `runs get` gives, for the Run detail's block and
+   *  the card's chip. Absent for a Job without the lifecycle, and on a Job row with no Run yet. */
+  github?: GitHubLifecycleView
   tasks: JobTask[]
 }
 /** Why the Jobs view has nothing to draw, when the reason is the Host rather than the state.

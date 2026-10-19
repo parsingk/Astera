@@ -64,6 +64,20 @@ describe('jobs-view (remote runtime design §2.7, X1-05)', () => {
     expect(objectives(r.body)).toEqual(['in repo'])
   })
 
+  // G7b (Review Focus 4): a Runtime's lifecycle Run shows the same GitHub block in the controller's window
+  it("carries a lifecycle Run's GitHub side, as the local fold does", async () => {
+    const s = stateWith([{ id: 'p1', path: '/srv/repo' }], [{ objective: 'carried', cwd: '/srv/repo' }])
+    const gs = { binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }, log: [], seq: 0 }
+    const withGithub = {
+      ...s,
+      jobs: s.jobs.map((j) => ({ ...j, github: { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 } })),
+      runs: s.runs.map((r) => ({ ...r, githubState: gs }))
+    } as OrchState
+    const r = await (await host(withGithub)).ask('jobs-view', { project: 'p1' })
+    const row = (r.body as { snapshot: { runs: Array<{ github?: { state: string; pr?: { number: number } } }> } }).snapshot.runs[0]
+    expect(row.github).toMatchObject({ state: 'pr-bound', pr: { number: 12 } })
+  })
+
   it('lists a Job whose folder is no registered project under unregistered, and only there', async () => {
     const h = await host(stateWith([{ id: 'p1', path: '/srv/repo' }], [{ objective: 'in repo', cwd: '/srv/repo' }, { objective: 'loose', cwd: '/srv/other' }]))
     expect(objectives((await h.ask('jobs-view', { project: 'unregistered' })).body)).toEqual(['loose'])
