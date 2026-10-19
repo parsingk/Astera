@@ -1487,7 +1487,7 @@ export const ja: Catalog = {
   'jobs.new.githubHostOld': '実行中の Astera Host がこのアプリより古いため確認できません。Host を再起動してください。',
   'jobs.new.githubDefaults': 'コード以外の理由で失敗した CI を最大 {reruns} 回まで再実行し、CI を最大 {minutes} 分待ちます — 設定 › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'CI を自動では再実行せず、最大 {minutes} 分待ちます — 設定 › GitHub',
-  'jobs.new.githubDefaultsRuntime': 'その Runtime の 設定 › GitHub の既定値が使われます。',
+  'jobs.new.githubDefaultsRuntime': 'その Runtime の設定 › GitHub の既定値が使われます。',
   'github.settings.lifecycle.title': 'GitHub まで進める Job',
   'github.settings.lifecycle.hint': '新しい Job は作成時にこの値を受け取り、その後は変わりません。',
   'github.settings.lifecycle.autoRerun': 'コード以外の理由で失敗した CI を再実行する',

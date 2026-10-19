@@ -5945,6 +5945,11 @@ export function registerIpc(
   // Whether an MCP client may act on GitHub (MCP P2-B design). The Host reads the file on every MCP
   // call (readMcpGithubWrite), so saving it is the whole effect.
   ipcMain.handle('settings.getMcpGithubWrite', () => core.appSettings.getMcpGithubWrite())
+  ipcMain.handle('settings.setMcpGithubWrite', async (_e, v: unknown) => {
+    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_GITHUB_WRITE: ${String(v)}`)
+    await core.appSettings.setMcpGithubWrite(v)
+  })
+
   // The GitHub lifecycle's defaults (G7a, design §5.1): the Host reads the file when a lifecycle Job is made, so saving
   // it is the whole effect. A value is taken whole or not at all, as the pane's bounds say.
   ipcMain.handle('settings.getGithubLifecycle', () => core.appSettings.getGithubLifecycle())
@@ -5952,10 +5957,6 @@ export function registerIpc(
     const exact = exactGithubLifecycleDefaults(v)
     if (!exact) throw new Error(`INVALID_GITHUB_LIFECYCLE: ${JSON.stringify(v)}`)
     await core.appSettings.setGithubLifecycle(exact)
-  })
-  ipcMain.handle('settings.setMcpGithubWrite', async (_e, v: unknown) => {
-    if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_GITHUB_WRITE: ${String(v)}`)
-    await core.appSettings.setMcpGithubWrite(v)
   })
 
   // MCP over HTTP (MCP HTTP design §4). Saving is followed by `mcp-http-reload`, which makes the Host
