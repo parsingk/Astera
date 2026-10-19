@@ -68,6 +68,20 @@
 - El ciclo sobrevive al relevo de cuentas, a las pausas y a los reinicios de la aplicación,
   así que un Job sigue avanzando en vez de empezar de cero
 
+**Llevarlo hasta GitHub**
+- Empieza desde un issue de GitHub y deja que Astera lleve el trabajo por la implementación, las
+  comprobaciones locales, un pull request, GitHub CI, la reparación, la nueva comprobación y la
+  revisión
+- Una comprobación de CI obligatoria que falla se convierte en una señal más de finalización: Astera
+  pasa la evidencia a la cuenta trabajadora, comprueba la reparación en local, sube el nuevo commit y
+  vuelve a esperar a la CI
+- El Run queda listo para fusionar solo cuando el head actual del pull request ha pasado las
+  comprobaciones configuradas y la revisión no encontró nada que bloquee. Astera no lo fusiona; esa
+  decisión es tuya
+- Nada llega a GitHub salvo que un Job active **Llevarlo hasta GitHub**; los valores por defecto están
+  en Configuración › GitHub. How It Works guarda el issue, el pull request y con qué se verificó el
+  trabajo
+
 **Programación y control remoto**
 - Programa sesiones para que empiecen a una hora determinada
 - Notificaciones de Slack cuando termina un turno o se alcanza un límite, y respuestas desde Slack
