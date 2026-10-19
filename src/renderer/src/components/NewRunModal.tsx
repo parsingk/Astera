@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Account, ScheduleRule } from '../../../core/types'
 import { DEFAULT_BLOCKING_SEVERITY } from '../../../core/orchestration/convergence'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS } from '../../../core/orchestration/types'
@@ -7,6 +7,8 @@ import { formFailure, type OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
 import { backdropProps } from '../lib/backdrop'
+import { LifecycleField, lifecycleBlocksCreate, useLifecyclePreflight } from './LifecycleField'
+import type { GitHubLifecycleDefaults } from '../../../core/github/lifecycleDefaults'
 
 /** 사이드바의 '+ 새 작업'이 여는 폼. 여기서 만든 Run 은 앱이 스스로 돌린다 — 워커를 붙이고
  *  검증·병합까지 미는 스케줄러는 이미 있고(Task 1~6), 이 컴포넌트는 그 스케줄러가 볼 첫 Run 하나를
@@ -49,6 +51,18 @@ export function NewRunModal({
   /** 통과할 때까지 자동 수정(Plan 1 설계 D12). 기본 꺼짐 — 켜면 검사·검토 실패가 코디네이터가 아니라 앱의 손으로
    *  같은 워커에게 돌아간다. 이 폼은 켜기만 하고 숫자 셋은 CLI 플래그(--max-fix-attempts 등)에 남긴다. */
   const [convergence, setConvergence] = useState(false)
+  /** The GitHub lifecycle (G7a, design §8): off by default. On, the folder is asked of the Host that makes the Job
+   *  (`github-preflight`, through the door: this computer's Host or the paired Runtime's) and Create waits for it. */
+  const [github, setGithub] = useState(false)
+  const githubPreflight = useLifecyclePreflight((c) => door.command('github-preflight', { cwd: c }), github, cwd)
+  /** This computer's Settings › GitHub; a paired Runtime makes the Job with its own, which this computer cannot read. */
+  const [githubDefaults, setGithubDefaults] = useState<GitHubLifecycleDefaults | 'runtime' | null>(null)
+  const remote = door.runtimeId !== undefined
+  useEffect(() => {
+    if (!github) return
+    if (remote) setGithubDefaults('runtime')
+    else void window.api.settings.getGithubLifecycle().then(setGithubDefaults, () => {})
+  }, [github, remote])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   /** The create may have gone through on a Runtime whose answer was lost: not sent again from this form. */
@@ -59,7 +73,7 @@ export function NewRunModal({
     // busy 로 다시 걸러 이중 클릭이 Run 을 두 개 만들지 못하게 한다 — 버튼의 disabled 는 같은
     // 프레임에 반영되지 않을 수 있어 여기서도 확인한다.
     // 계정도 함께 본다 — 아래 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석)
-    if (!trimmed || !coordinatorAccountId || busy || cwd === null || locked) return
+    if (!trimmed || !coordinatorAccountId || busy || cwd === null || locked || lifecycleBlocksCreate(github, githubPreflight)) return
     setBusy(true)
     setError(null)
     try {
@@ -87,12 +101,16 @@ export function NewRunModal({
         ...(scheduled && schedule ? { schedule } : {}),
         // run-create 는 `convergence === true` 를 본다(server.ts). 안 켰으면 키 자체를 보내지 않는다 — false 를
         // 보내면 서버가 "플래그가 왔다" 로 읽을 여지를 남긴다.
-        ...(convergence ? { convergence: true } : {}),
+        ...(convergence || github ? { convergence: true } : {}),
+        // G7a: the Host makes it (the app sends a lifecycle create there, needsHostGitHub) and copies Settings › GitHub in
+        ...(github ? { githubLifecycle: true } : {}),
         auto: true
       })
       if (reply.status >= 400) {
         // 실패해도 모달은 닫지 않는다 — 닫으면 사용자는 눌러도 아무 일도 없었다고 여긴다
-        const f = formFailure(reply, t as never, 'jobs.new.failed')
+        // A lifecycle create went to the Host, whose reason (a preflight gone stale, Settings it could not read) is the
+        // person's to read (G7a final review I1)
+        const f = formFailure(reply, t as never, 'jobs.new.failed', { reason: github })
         setError(f.message)
         if (f.lock) setLocked(true)
         return
@@ -197,9 +215,11 @@ export function NewRunModal({
             없다. 값은 core 의 상수에서 읽는다 — 문자 그대로 박으면 상수가 바뀌는 날 화면이 거짓말한다. */}
         <div className="field">
           <label className="check-small">
+            {/* On with the GitHub lifecycle, which repairs through it */}
             <input
               type="checkbox"
-              checked={convergence}
+              checked={convergence || github}
+              disabled={github}
               onChange={(e) => setConvergence(e.target.checked)}
             />
             {t('jobs.new.convergence')}
@@ -215,6 +235,7 @@ export function NewRunModal({
             {t('jobs.new.convergenceCliOnly')}
           </p>
         </div>
+        <LifecycleField checked={github} onChange={setGithub} preflight={githubPreflight} defaults={githubDefaults} />
         {error && <p className="warn">{error}</p>}
         <div className="row right">
           <button onClick={onClose} disabled={busy}>
@@ -224,7 +245,13 @@ export function NewRunModal({
             className="primary"
             // 코디네이터 계정 없이는 만들 수 없다 — 이 폼은 관리자 있는 Run 만 만든다
             disabled={
-              busy || locked || cwd === null || !objective.trim() || !coordinatorAccountId || (scheduled && schedule === null)
+              busy ||
+              locked ||
+              cwd === null ||
+              !objective.trim() ||
+              !coordinatorAccountId ||
+              (scheduled && schedule === null) ||
+              lifecycleBlocksCreate(github, githubPreflight)
             }
             onClick={() => void create()}
           >

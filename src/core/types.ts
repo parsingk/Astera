@@ -1,3 +1,4 @@
+import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
 import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
@@ -1398,6 +1399,9 @@ export interface CoreApi {
     // Whether an MCP client may act on GitHub (off by default; needs access Read and control).
     getMcpGithubWrite(): Promise<boolean>
     setMcpGithubWrite(v: boolean): Promise<void>
+    // The GitHub lifecycle's policy defaults a new lifecycle Job takes (G7a); a value out of bounds is refused.
+    getGithubLifecycle(): Promise<GitHubLifecycleDefaults>
+    setGithubLifecycle(v: GitHubLifecycleDefaults): Promise<void>
     // MCP over HTTP (off by default). Saving also asks the Host to apply it (mcp-http-reload).
     getMcpHttp(): Promise<McpHttpSettings>
     setMcpHttp(v: McpHttpSettings): Promise<void>
@@ -1873,7 +1877,7 @@ export interface SourcesApi {
   list(): Promise<SourcesCallAnswer>
   items(a: { source: string; projectPath: string; query?: string; cursor?: string }): Promise<SourcesCallAnswer>
   show(a: { source: string; item: string; projectPath: string }): Promise<SourcesCallAnswer>
-  create(a: { source: string; item: string; projectPath: string; coordinatorAccount: string; convergence?: boolean }): Promise<SourcesCallAnswer>
+  create(a: { source: string; item: string; projectPath: string; coordinatorAccount: string; convergence?: boolean; githubLifecycle?: boolean }): Promise<SourcesCallAnswer>
 }
 
 /** Settings › Plugins (plugin runtime design slice 2d): the Host's `plugins-*` commands the tab uses, as the app, and

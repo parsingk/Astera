@@ -16,7 +16,7 @@ import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { canStopConvergence, nodeMetaOf, retryingCheckOf } from '../../../core/orchestration/nodeMeta'
-import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
+import { DEFAULT_CONCURRENCY, isGitHubGateKind, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
 import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
@@ -713,7 +713,8 @@ export function RunDetail({
    *  다시 하지 않는다.
    *
    *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다. */
-  const resolveGate = async (gateId: string, resolution: string): Promise<void> => {
+  /** `github`: a GitHub question, whose answer goes to the Host; its refusal is said in its words (G7a final review I1). */
+  const resolveGate = async (gateId: string, resolution: string, github = false): Promise<void> => {
     const taskId = answering
     const trimmed = resolution.trim()
     if (taskId === null || !trimmed) return
@@ -725,7 +726,7 @@ export function RunDetail({
         resolution: trimmed
       })
       if (reply.status >= 400) {
-        setGateError(replyNote(reply, t as never, t('jobs.node.failed')))
+        setGateError(replyNote(reply, t as never, t('jobs.node.failed'), { reason: github }))
         return
       }
       // 설계 §5(V4): 소진 Gate 에 "한 번 더 수정" 으로 답했는데 그 수정을 열지 못하는 경우가 있다 —
@@ -916,7 +917,7 @@ export function RunDetail({
                     busy={busy !== null}
                     error={gateError}
                     onAnswer={setAnswer}
-                    onResolve={(resolution) => void resolveGate(gate.id, resolution)}
+                    onResolve={(resolution) => void resolveGate(gate.id, resolution, isGitHubGateKind(gate.kind))}
                     onCancel={cancelAnswer}
                   />
                 )

@@ -35,6 +35,12 @@ describe('controllerRefusal (remote runtime design §3.4)', () => {
     expect(controllerRefusal('jobs-list', undefined)).toMatchObject({ status: 401, body: { code: 'RUNTIME_AUTH_FAILED' } })
   })
 
+  // G7a: a paired Runtime's New Job window asks that Runtime whether its folder can carry the lifecycle
+  it('lets github-preflight through as a read', () => {
+    expect(CONTROLLER_READ_COMMANDS).toContain('github-preflight')
+    expect(controllerRefusal('github-preflight', p('read-only'))).toBeNull()
+  })
+
   // Phase 4 ruling: the two waits are long-poll reads (§3.1 budgets them as in-flight calls).
   it('lets runs-wait and jobs-wait through as reads', () => {
     for (const cmd of ['runs-wait', 'jobs-wait'])

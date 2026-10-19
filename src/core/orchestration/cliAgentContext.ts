@@ -366,6 +366,12 @@ const SESSION = {
       { name: 'branch', value: '<branch>', about: 'the head branch, with --project' }
     ]
   },
+  'github-preflight': {
+    summary: "whether a folder can carry a Job through GitHub, through the Host's gh (the GitHub lifecycle's preflight)",
+    detail:
+      'The check run-create makes before a Job with --github-lifecycle: origin is a GitHub repository, gh is logged in, and you may push and rerun CI there. Answers `{ ok: true, repo }`, or `{ ok: false, reason }` with the reason a create would be refused with. The app asks it before you make the Job. Only the Host answers it (409 elsewhere).',
+    flags: [req('cwd', '<path>', 'the project folder to check')]
+  },
   'github-ci': {
     summary: "the CI checks of a pull request, through the Host's gh (the MCP server's get_ci)",
     detail:

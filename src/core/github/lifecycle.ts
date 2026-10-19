@@ -18,6 +18,11 @@ export interface GitHubLifecyclePolicy {
   ciWaitMinutes: number
 }
 
+/** How many checks a Job may name to wait for, and how long a name may be (G7a): a Run keeps at most 50 checks of a
+ *  read, and a name is a check's name, not a document. run-create and MCP's create_job hold both. */
+export const LIFECYCLE_CHECKS_MAX = 20
+export const LIFECYCLE_CHECK_NAME_MAX = 100
+
 export const GITHUB_LIFECYCLE_DEFAULTS: Omit<GitHubLifecyclePolicy, 'ci'> = {
   autoRerunInfrastructureFailures: true,
   maxInfrastructureReruns: 2,

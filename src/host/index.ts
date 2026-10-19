@@ -3,6 +3,7 @@
 // `astera` CLI shuttle already avoids shipping a Node binary.
 //
 // Everything it needs arrives in the environment, because it has no `app.getPath('userData')` to ask.
+import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { hostJobSources } from './jobSources'
@@ -819,7 +820,9 @@ async function main(): Promise<void> {
       // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
       originOf,
       // G3b2: "continue" on a GitHub external-head question, over this Host's own merge path into the Run root
-      ...(spawner ? { fastForward: (cwd: string, branch: string) => worktrees.fastForwardRoot(cwd, branch) } : {})
+      ...(spawner ? { fastForward: (cwd: string, branch: string) => worktrees.fastForwardRoot(cwd, branch) } : {}),
+      // G7a: Settings › GitHub's defaults, read from the app's settings in this profile when a lifecycle Job is made
+      lifecycleDefaults: () => readGitHubLifecycleDefaults(path.join(profileDir, 'app-settings.json'))
     },
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.

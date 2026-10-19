@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import { LIST_LIMIT } from './lists'
 import { SESSION_TEXT_CAP } from './sessionText'
+import { LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX } from '../../core/github/lifecycle'
 
 export const MCP_LIMITS = {
   objective: 20_000,
@@ -93,7 +94,9 @@ export const GITHUB_LIFECYCLE_FIELDS = {
       "Carry the Job's work through GitHub: Astera binds the open pull request of each Run's branch and watches its CI. The project's origin must be a GitHub repository you can push to. Turns convergence on. Needs \"Let MCP clients act on GitHub\" in Astera Settings (CLI tab)."
     ),
   githubChecks: z
-    .array(z.string().min(1))
+    .array(z.string().min(1).max(LIFECYCLE_CHECK_NAME_MAX))
+    // Counted once each, as run-create counts them (G7a final review M9)
+    .refine((names) => new Set(names.map((n) => n.trim())).size <= LIFECYCLE_CHECKS_MAX, { message: `at most ${LIFECYCLE_CHECKS_MAX} check names` })
     .optional()
     .describe("With githubLifecycle: decide by these CI checks only, by name. Without it the branch rules' required checks decide, or every reported check when the rules name none.")
 }

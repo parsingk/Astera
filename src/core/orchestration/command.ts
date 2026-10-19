@@ -121,15 +121,17 @@ import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
-import { repoOfBinding, type GitHubRepo } from '../github/remote'
+import { ghRepoArg, repoOfBinding, type GitHubRepo } from '../github/remote'
 import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
-import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
+import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
+import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
+import { RepairNeeded } from '../settings/repairNeeded'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
@@ -663,6 +665,9 @@ export interface OrchServerDeps {
     /** The Run root brought up to `origin/<branch>`, fast-forward only: "continue" on a GitHub external-head question
      *  (GitHub lifecycle G3b2). */
     fastForward?(cwd: string, branch: string): Promise<{ ok: true } | { ok: false; message: string }>
+    /** Settings › GitHub's policy defaults a new lifecycle Job takes (G7a, design §5.1): app-settings.json read when the
+     *  Job is made. Rejects when the file cannot be read. Absent, the built-in defaults. */
+    lifecycleDefaults?(): Promise<GitHubLifecycleDefaults>
   }
   /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
@@ -1803,6 +1808,8 @@ export async function handleCommand(
       if (wantsGithub) {
         const checks = checkNamesOf(args.githubChecks)
         if (checks === null) return bad('--github-checks takes check names, comma separated')
+        if (checks.length > LIFECYCLE_CHECKS_MAX || checks.some((n) => n.length > LIFECYCLE_CHECK_NAME_MAX))
+          return bad(`--github-checks takes at most ${LIFECYCLE_CHECKS_MAX} check names, each at most ${LIFECYCLE_CHECK_NAME_MAX} characters`)
         github = {
           ci: checks.length > 0 ? { mode: 'selected', selectedChecks: checks } : { mode: 'required' },
           ...GITHUB_LIFECYCLE_DEFAULTS
@@ -1892,6 +1899,19 @@ export async function handleCommand(
         if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
         const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
         if (!pre.ok) return conflict(`the GitHub lifecycle cannot be turned on here: ${pre.reason}`)
+        // Settings › GitHub's defaults, copied into the Job now and never read for it again (design §5.1). A file that
+        // cannot be read refuses: it may have turned the reruns off, and a guess would rerun what the person did not want.
+        if (deps.github.lifecycleDefaults) {
+          let defaults: GitHubLifecycleDefaults
+          try {
+            defaults = await deps.github.lifecycleDefaults()
+          } catch (e) {
+            const refused = conflict(`the GitHub lifecycle defaults in Settings could not be read: ${e instanceof Error ? e.message : String(e)}`)
+            // A file only the app repairs is named, as the Host names it for every such refusal (final review M5)
+            return e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused
+          }
+          github = { ...github, ...defaults }
+        }
       }
       const latest = deps.getState()
       // **등록되어 있으면 그 프로젝트에 매단다.** 등록은 여기서 하지 않는다 — 프로젝트 목록을
@@ -4820,6 +4840,20 @@ export async function handleCommand(
                 : `prompt ${id} is no longer open; nothing was answered`
         )
       return okBody({ sessionId: target.sessionId, id, decision, answered: true })
+    }
+    // The New Job window's inline check (GitHub lifecycle G7a, design §7.2): run-create's own preflight, asked before the
+    // Job is made, so the window can say why this folder cannot carry it. Its result is the answer, refusal included;
+    // only the Host has gh and the folder's origin.
+    case 'github-preflight': {
+      if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
+      const cwd = str(args.cwd)
+      if (!cwd) return bad('--cwd is required')
+      // A paired device asks about the Runtime's own projects only (final review M2): any folder would tell it whose
+      // origin and what push permission sit anywhere on this machine, and run git there
+      if (caller.role === 'controller' && !findProjectContaining(s, cwd))
+        return denied('github-preflight answers a controller only for a folder inside a project this Host knows')
+      const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
+      return okBody(pre.ok ? { ok: true, repo: ghRepoArg(pre.repo) } : { ok: false, reason: pre.reason })
     }
     /**
      * GitHub reads through the user's gh (MCP P2-B), answered by the Host only (`deps.github`). The

@@ -7,6 +7,7 @@ import { handleCommand, handleExit, PENDING_START_WINDOW_MS, type HostSession, t
 import { SPAWN_DEADLINE_MS } from '../host/unresponsive'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { ensureProject } from './projects'
+import { RepairNeeded } from '../settings/repairNeeded'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { DEFAULT_IDLE_WAIT_TIMEOUT_MS, OrchCoordinator, type CoordinatorDeps } from './exec/coordinator'
@@ -9810,6 +9811,44 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5 })
   })
 
+  // G7a: Settings › GitHub's defaults, read by the Host when the Job is made and copied into it (design §5.1)
+  it('takes the rerun and CI-wait policy from the defaults the Host reads, and the checks from the call', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => ({ autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 5, ciWaitMinutes: 30 })
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build' })
+    expect(deps.getState().jobs[0].github).toEqual({
+      ci: { mode: 'selected', selectedChecks: ['build'] },
+      autoRerunInfrastructureFailures: false,
+      maxInfrastructureReruns: 5,
+      ciWaitMinutes: 30
+    })
+  })
+
+  it('refuses when the defaults cannot be read, rather than guess what the person set, and makes no Job', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => {
+      throw new Error('app-settings.json could not be read')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toBe('the GitHub lifecycle defaults in Settings could not be read: app-settings.json could not be read')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  // G7a final review M5: a file only the app repairs is named, as every other such refusal names it, so the CLI offers
+  // no command to run (opening Astera is the step)
+  it('names the settings file to repair when it is the app’s to repair', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => {
+      throw new RepairNeeded('app-settings.json cannot be read; open Astera to repair it', 'app-settings.json')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r).toEqual({
+      status: 409,
+      body: { error: 'the GitHub lifecycle defaults in Settings could not be read: app-settings.json cannot be read; open Astera to repair it', repair: 'app-settings.json' }
+    })
+  })
+
   it('selects checks by name, from a comma list or a list, once each', async () => {
     const a = withGithub()
     await call(a.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build, test,build' })
@@ -9825,6 +9864,46 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build,' })).status).toBe(400)
     expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: true })).status).toBe(400)
     expect(deps.getState().jobs).toEqual([])
+  })
+
+  // G7a: the app's inline check, before a Job is made: the same preflight run-create holds, answered as a result
+  it('github-preflight answers whether this folder can carry a Job through GitHub, and why not', async () => {
+    const ok = withGithub()
+    expect(await call(ok.deps, 'github-preflight', { cwd: 'D:/p' })).toEqual({ status: 200, body: { ok: true, repo: 'o/r' } })
+    const none = withGithub({ origin: null })
+    expect(await call(none.deps, 'github-preflight', { cwd: 'D:/p' })).toEqual({ status: 200, body: { ok: false, reason: 'this folder has no git remote named origin' } })
+    const reader = withGithub({ permission: 'READ' })
+    const r = await call(reader.deps, 'github-preflight', { cwd: 'D:/p' })
+    expect(r.body).toMatchObject({ ok: false, reason: expect.stringContaining('your permission on o/r is READ') })
+    expect((await call(ok.deps, 'github-preflight', {})).status).toBe(400)
+    expect((await call(makeDeps(), 'github-preflight', { cwd: 'D:/p' })).status).toBe(409)
+    expect(ok.deps.getState().jobs).toEqual([])
+  })
+
+  // G7a final review M2: a paired device asks only about the Runtime's own projects; any folder would tell it whose
+  // origin and what push permission sit anywhere on the Runtime, and run git there
+  it('github-preflight from a controller answers only for a folder inside a registered project', async () => {
+    const proj = absPath('proj')
+    const { deps } = withGithub({ initial: ensureProject(emptyState(), { path: proj, now: NOW }).state })
+    const controller = { sessionId: '', role: 'controller' as const }
+    const outside = await handleCommand(deps, controller, 'github-preflight', { cwd: absPath('elsewhere') })
+    expect(outside.status).toBe(403)
+    expect((outside.body as { error: string }).error).toBe('github-preflight answers a controller only for a folder inside a project this Host knows')
+    expect(await handleCommand(deps, controller, 'github-preflight', { cwd: path.join(proj, 'sub') })).toEqual({ status: 200, body: { ok: true, repo: 'o/r' } })
+    // The app on this computer asks about the folder its window shows
+    expect((await handleCommand(deps, { sessionId: '', role: 'app' }, 'github-preflight', { cwd: absPath('elsewhere') })).status).toBe(200)
+  })
+
+  // G7a: a Run keeps at most 50 checks of a read, and a name is a check's name, not a document
+  it('refuses more than 20 check names, or a name over 100 characters, and makes no Job', async () => {
+    const { deps } = withGithub()
+    const many = Array.from({ length: 21 }, (_, i) => `check-${i}`)
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: many })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toBe('--github-checks takes at most 20 check names, each at most 100 characters')
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'x'.repeat(101) })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: many.slice(0, 20) })).status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(1)
   })
 
   it('refuses a permission that cannot push, says why, and makes no Job', async () => {

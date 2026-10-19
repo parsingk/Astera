@@ -51,6 +51,10 @@ const render = (over: Partial<ViewProps> = {}): string =>
       onOpenLink: noop,
       onAccount: noop,
       onConvergence: noop,
+      github: false,
+      onGithub: noop,
+      githubPreflight: null,
+      githubDefaults: null,
       onMake: noop,
       onClose: noop,
       onRetrySources: noop,
@@ -59,6 +63,19 @@ const render = (over: Partial<ViewProps> = {}): string =>
   )
 
 describe('SourceJobView', () => {
+  // G7a (design §8): issue → Job can carry the Job through GitHub, off by default, with the folder checked
+  it('offers the GitHub lifecycle, off, and turns convergence on with it', () => {
+    const off = render({ source: 'github' })
+    expect(off).toContain('jobs.new.github')
+    expect(off).not.toContain('jobs.new.githubChecking')
+    const on = render({ source: 'github', github: true, githubPreflight: { kind: 'checking' } })
+    expect(on).toContain('jobs.new.githubChecking')
+    // The convergence box is checked and cannot be turned off while the lifecycle is on
+    const box = /<input([^>]*)\/>jobs\.new\.convergence</.exec(on)?.[1] ?? ''
+    expect(box).toContain('checked=""')
+    expect(box).toContain('disabled=""')
+  })
+
   // Review Focus 4
   it('greys a source that is not ready, with its reason, and shows no list before a source is picked', () => {
     expect(sourceChoice(SOURCES[1], t)).toEqual({ value: 'astera-linear-source', label: 'Linear (astera-linear-source is disabled)', disabled: true })
@@ -112,6 +129,8 @@ describe('SourceJobView', () => {
     expect(canMake({ item, account: '', busy: false, locked: false })).toBe(false)
     expect(canMake({ item: { ...item, selectable: false }, account: 'acc_1', busy: false, locked: false })).toBe(false)
     expect(canMake({ item: null, account: 'acc_1', busy: false, locked: false })).toBe(false)
+    // G7a: the lifecycle on, and the folder not known to carry it
+    expect(canMake({ item, account: 'acc_1', busy: false, locked: false, held: true })).toBe(false)
     expect(canMake({ item, account: 'acc_1', busy: true, locked: false })).toBe(false)
     expect(canMake({ item, account: 'acc_1', busy: false, locked: true })).toBe(false)
     const disabledMake = (html: string): boolean => /<button class="primary" disabled="">jobs\.source\.make<\/button>/.test(html)

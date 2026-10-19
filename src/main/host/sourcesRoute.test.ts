@@ -5,6 +5,7 @@ import { SOURCES_DEADLINE_MS, createSourcesRoute } from './sourcesRoute'
 import { NO_HOST_CONNECTION, hostDeadlineMessage } from './worktreeRoute'
 import { JOB_SOURCE_TIMEOUT_MS } from '../../host/jobSources'
 import { TIMEOUT_HEADROOM_MS } from '../../core/publicContract'
+import { HOST_GITHUB_DEADLINE_MS } from './hostGitHubRoute'
 
 type Sent = { cmd: string; args: Record<string, unknown>; timeoutMs?: number }
 
@@ -51,6 +52,19 @@ describe('createSourcesRoute', () => {
     const { route, sent } = host(unknown)
     await route.items({ source: 'astera-linear-source', projectPath: 'D:/q' })
     expect(sent.at(-1)).toEqual({ cmd: 'sources-items', args: { source: 'astera-linear-source' }, timeoutMs: SOURCES_DEADLINE_MS })
+  })
+
+  // G7a: the lifecycle as the window turned it on; nothing sent when it is off
+  it('makes a Job carried through GitHub only when asked for', async () => {
+    const { route, sent } = host({ ...found, 'jobs-create-from-source': { status: 200, body: { id: 'job_1' } } })
+    await route.create({ source: 'github', item: '12', projectPath: 'D:/p', coordinatorAccount: 'acc_1', githubLifecycle: true })
+    await route.create({ source: 'github', item: '12', projectPath: 'D:/p', coordinatorAccount: 'acc_1' })
+    expect(sent.filter((s) => s.cmd === 'jobs-create-from-source').map((s) => s.args)).toEqual([
+      { source: 'github', item: '12', project: 'proj_1', coordinatorAccount: 'acc_1', githubLifecycle: true },
+      { source: 'github', item: '12', project: 'proj_1', coordinatorAccount: 'acc_1' }
+    ])
+    // G7a final review M6: the item's read and then the preflight's gh calls, before the Job is made
+    expect(sent.filter((s) => s.cmd === 'jobs-create-from-source').map((s) => s.timeoutMs)).toEqual([JOB_SOURCE_TIMEOUT_MS + HOST_GITHUB_DEADLINE_MS, SOURCES_DEADLINE_MS])
   })
 
   it('makes a Job in the project, convergence only when asked for, and none for a folder the Host does not know', async () => {

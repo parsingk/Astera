@@ -23,6 +23,8 @@ import { agentPermissionModeOf } from '../core/settings/agentPermissionMode'
 import { mcpAccessOf } from '../core/settings/mcpAccess'
 import { mcpSessionsOf } from '../core/settings/mcpSessions'
 import { mcpGithubWriteOf } from '../core/settings/mcpGithubWrite'
+import { githubLifecycleDefaultsOf, type GitHubLifecycleDefaults } from '../core/github/lifecycleDefaults'
+import { GITHUB_LIFECYCLE_DEFAULTS } from '../core/github/lifecycle'
 import { MCP_HTTP_DEFAULT_PORT, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 
@@ -125,6 +127,9 @@ export class AppSettingsStore {
   /** Whether an MCP client may act on GitHub: push, open pull requests, rerun CI, make Jobs from
    *  issues (MCP P2-B design). Off by default; only true is written. */
   private mcpGithubWrite = false
+  /** The GitHub lifecycle's policy defaults a new lifecycle Job takes (GitHub lifecycle design §5.1, G7a). Written only
+   *  while a value differs from the built-in one; the Host reads the file when the Job is made. */
+  private githubLifecycle: GitHubLifecycleDefaults = { ...GITHUB_LIFECYCLE_DEFAULTS }
   /** MCP over HTTP (MCP HTTP design §2). Off by default; written only while a field differs from its default. */
   private mcpHttp: McpHttpSettings = mcpHttpOf(undefined)
   private terminalFont: TerminalFont = { latin: null, hangul: null }
@@ -204,6 +209,8 @@ export class AppSettingsStore {
       this.mcpSessions = mcpSessionsOf((parsed as { mcpSessions?: unknown }).mcpSessions)
       // Likewise the Host's readMcpGithubWrite: only an explicit true turns it on.
       this.mcpGithubWrite = mcpGithubWriteOf((parsed as { mcpGithubWrite?: unknown }).mcpGithubWrite)
+      // The Host's readGitHubLifecycleDefaults narrows with the same function
+      this.githubLifecycle = githubLifecycleDefaultsOf((parsed as { githubLifecycle?: unknown }).githubLifecycle)
       // The same function the Host's readMcpHttp uses, so the two cannot differ.
       this.mcpHttp = mcpHttpOf((parsed as { mcpHttp?: unknown }).mcpHttp)
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
@@ -256,6 +263,7 @@ export class AppSettingsStore {
         this.mcpAccess = 'control'
         this.mcpSessions = false
         this.mcpGithubWrite = false
+        this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS }
         this.mcpHttp = mcpHttpOf(undefined)
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
@@ -292,6 +300,8 @@ export class AppSettingsStore {
       this.mcpAccess = 'off'
       this.mcpSessions = false
       this.mcpGithubWrite = false
+      // The narrower side too (G7a final review M4): the file may have said "do not rerun", and the Host reads this one
+      this.githubLifecycle = { ...GITHUB_LIFECYCLE_DEFAULTS, autoRerunInfrastructureFailures: false }
       this.mcpHttp = mcpHttpOf(undefined)
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
@@ -441,6 +451,17 @@ export class AppSettingsStore {
 
   getMcpGithubWrite(): boolean {
     return this.mcpGithubWrite
+  }
+
+  getGithubLifecycle(): GitHubLifecycleDefaults {
+    return { ...this.githubLifecycle }
+  }
+
+  /** The Host reads the file when a lifecycle Job is made (readGitHubLifecycleDefaults), so saving it is the whole
+   *  effect. Narrowed here too: the file holds only what the Host would read back. */
+  async setGithubLifecycle(v: GitHubLifecycleDefaults): Promise<void> {
+    this.githubLifecycle = githubLifecycleDefaultsOf(v)
+    await this.persist()
   }
 
   /** The Host reads the file on every MCP call (readMcpGithubWrite), so saving it is the whole effect. */
@@ -597,6 +618,7 @@ export class AppSettingsStore {
       mcpAccess?: McpAccess
       mcpSessions?: true
       mcpGithubWrite?: true
+      githubLifecycle?: GitHubLifecycleDefaults
       mcpHttp?: McpHttpSettings
       terminalFont?: TerminalFont
       theme?: ThemeId
@@ -635,6 +657,7 @@ export class AppSettingsStore {
     if (this.mcpAccess !== 'control') data.mcpAccess = this.mcpAccess
     if (this.mcpSessions) data.mcpSessions = true
     if (this.mcpGithubWrite) data.mcpGithubWrite = true
+    if (JSON.stringify(this.githubLifecycle) !== JSON.stringify(githubLifecycleDefaultsOf(undefined))) data.githubLifecycle = { ...this.githubLifecycle }
     const h = this.mcpHttp
     if (h.enabled || h.lan || h.port !== MCP_HTTP_DEFAULT_PORT || h.hosts.length > 0) data.mcpHttp = h
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those

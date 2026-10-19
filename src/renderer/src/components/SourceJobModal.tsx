@@ -8,6 +8,9 @@ import { AccountSelect } from './AccountSelect'
 import { failureLine } from './pluginsText'
 import { backdropProps } from '../lib/backdrop'
 import { createPause } from '../lib/pausedSearch'
+import { localDoor } from '../lib/orchDoor'
+import { LifecycleField, lifecycleBlocksCreate, useLifecyclePreflight, type PreflightView } from './LifecycleField'
+import type { GitHubLifecycleDefaults } from '../../../core/github/lifecycleDefaults'
 
 // The Jobs view's "+ 소스에서" (plugin Phase 4 J20, §3): pick a source, find a ticket, read it, and make a Job from it
 // in one step. The Host does the work (window.api.sources, main's sources route); this window keeps what the person
@@ -119,8 +122,9 @@ export function paneOnDetail(pane: PaneState, id: string, answer: SourcesCallAns
 
 /** Whether "Make the Job" may be pressed: an item that can be picked, read whole; a coordinator account (§3.4); not
  *  while a make is out, and never again after one whose answer was lost (Review Focus 3). */
-export function canMake(a: { item: ItemRow | null; account: string; busy: boolean; locked: boolean }): boolean {
-  return a.item !== null && a.item.selectable !== false && a.account !== '' && !a.busy && !a.locked
+/** `held`: the GitHub lifecycle is on and the folder is not known to carry it (G7a, `lifecycleBlocksCreate`). */
+export function canMake(a: { item: ItemRow | null; account: string; busy: boolean; locked: boolean; held?: boolean }): boolean {
+  return a.item !== null && a.item.selectable !== false && a.account !== '' && !a.busy && !a.locked && a.held !== true
 }
 
 /** What a make's answer means: the Job made, or why not. A lost answer or a deadline may have made the Job, so the
@@ -148,6 +152,10 @@ export interface SourceJobViewProps {
   accounts: Account[] | null
   account: string
   convergence: boolean
+  /** The GitHub lifecycle (G7a): off by default; on, convergence is on with it. */
+  github: boolean
+  githubPreflight: PreflightView | null
+  githubDefaults: GitHubLifecycleDefaults | null
   busy: boolean
   locked: boolean
   error?: string
@@ -161,13 +169,14 @@ export interface SourceJobViewProps {
   onOpenLink(url: string): void
   onAccount(id: string): void
   onConvergence(on: boolean): void
+  onGithub(on: boolean): void
   onMake(): void
   onClose(): void
 }
 
 export function SourceJobView(p: SourceJobViewProps): React.JSX.Element {
   const { t } = useI18n()
-  const makeable = canMake({ item: p.detail, account: p.account, busy: p.busy, locked: p.locked })
+  const makeable = canMake({ item: p.detail, account: p.account, busy: p.busy, locked: p.locked, held: lifecycleBlocksCreate(p.github, p.githubPreflight) })
   return (
     <div className="modal-backdrop" {...backdropProps(() => !p.busy && p.onClose())}>
       <div className="modal source-job" onClick={(e) => e.stopPropagation()}>
@@ -316,7 +325,8 @@ export function SourceJobView(p: SourceJobViewProps): React.JSX.Element {
         {/* As the new-Job window has them (plan P4, 4c final review M16) */}
         <div className="field">
           <label className="check-small">
-            <input type="checkbox" checked={p.convergence} onChange={(e) => p.onConvergence(e.target.checked)} />
+            {/* On with the GitHub lifecycle, which repairs through it */}
+            <input type="checkbox" checked={p.convergence || p.github} disabled={p.github} onChange={(e) => p.onConvergence(e.target.checked)} />
             {t('jobs.new.convergence')}
           </label>
           <p className="modal-hint">{t('jobs.new.convergenceHint')}</p>
@@ -326,6 +336,9 @@ export function SourceJobView(p: SourceJobViewProps): React.JSX.Element {
             {t('jobs.new.convergenceCliOnly')}
           </p>
         </div>
+        {/* G7a (design §8): issue → Job can carry the Job through GitHub, off by default. Offered for every source: the
+            lifecycle is about where the code goes, not where the work came from. */}
+        <LifecycleField checked={p.github} onChange={p.onGithub} preflight={p.githubPreflight} defaults={p.githubDefaults} />
         {p.error !== undefined && <p className="warn">{p.error}</p>}
         <div className="row right">
           <button onClick={p.onClose} disabled={p.busy}>
@@ -367,6 +380,13 @@ export function SourceJobModal({
   const [pane, setPane] = useState<PaneState>(EMPTY_PANE)
   const [account, setAccount] = useState('')
   const [convergence, setConvergence] = useState(false)
+  const [github, setGithub] = useState(false)
+  const [githubDefaults, setGithubDefaults] = useState<GitHubLifecycleDefaults | null>(null)
+  // The folder the Job is made in, asked of the Host before the Job is (G7a)
+  const githubPreflight = useLifecyclePreflight((cwd) => localDoor(window.api, projectPath).command('github-preflight', { cwd }), github, projectPath)
+  useEffect(() => {
+    if (github) void window.api.settings.getGithubLifecycle().then((d) => live.current && setGithubDefaults(d), () => {})
+  }, [github])
   const [busy, setBusy] = useState(false)
   const [locked, setLocked] = useState(false)
   /** The latest list request: an answer to an older one is dropped (Review Focus 1). */
@@ -438,13 +458,20 @@ export function SourceJobModal({
 
   const make = async (): Promise<void> => {
     const item = pane.detail
-    if (making.current || !canMake({ item, account, busy, locked }) || item === null) return
+    if (making.current || !canMake({ item, account, busy, locked, held: lifecycleBlocksCreate(github, githubPreflight) }) || item === null) return
     making.current = true
     setBusy(true)
     setPane((p) => ({ ...p, error: undefined }))
     try {
       const outcome = madeOutcome(
-        await window.api.sources.create({ source: sourceRef.current, item: item.id, projectPath, coordinatorAccount: account, ...(convergence ? { convergence: true } : {}) })
+        await window.api.sources.create({
+          source: sourceRef.current,
+          item: item.id,
+          projectPath,
+          coordinatorAccount: account,
+          ...(convergence || github ? { convergence: true } : {}),
+          ...(github ? { githubLifecycle: true } : {})
+        })
       )
       if ('made' in outcome) {
         onCreated(outcome.made)
@@ -506,6 +533,10 @@ export function SourceJobModal({
       onOpenLink={(url) => void window.api.system.openExternal(url)}
       onAccount={setAccount}
       onConvergence={setConvergence}
+      github={github}
+      githubPreflight={githubPreflight}
+      githubDefaults={githubDefaults}
+      onGithub={setGithub}
       onMake={() => void make()}
       onClose={onClose}
     />
