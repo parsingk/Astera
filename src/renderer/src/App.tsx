@@ -155,6 +155,7 @@ import { backdropProps } from './lib/backdrop'
 import { createTouched } from './lib/touched'
 import { SlackSettings } from './components/SlackSettings'
 import { needsUnderstanding } from './lib/understandingRead'
+import { requestShownOf } from '../../core/understanding/requestShown'
 
 sessionBus.init()
 
@@ -3067,7 +3068,8 @@ export default function App(): React.JSX.Element {
     // has no root
     if (!currentProject || !record) return
     const id = recordTab(recordId)
-    const tab: RecordTab = { id, recordId, title: record.request, projectRoot: currentProject }
+    // Named as How It Works names it: a Job made from a ticket by the sentence that names the ticket (G8 demo)
+    const tab: RecordTab = { id, recordId, title: requestShownOf(record.request), projectRoot: currentProject }
     // Reopening the same tab id replaces it. `record:<id>` carries no project, so two projects
     // sharing a record id would share one tab — keeping the earlier record would let a tab just
     // opened from B draw A's explanation. The one just pressed wins.

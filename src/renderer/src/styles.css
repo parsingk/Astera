@@ -2648,6 +2648,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    RecordDetail.tsx renders this only when a title is actually standing in for the heading, so the
    same sentence never appears twice. */
 .hiw-req { margin: 2px 0 0; font-size: 11px; color: var(--text-faint); }
+/* A long request wraps in the heading's column, which may shrink; the status and the buttons beside it may not, nor wrap
+   (G8 demo: a ticket Job's objective squeezed them into one-letter columns). */
+.hiw-fhead > div { min-width: 0; }
+.hiw-fhead > .hiw-st, .hiw-fhead > button { flex-shrink: 0; white-space: nowrap; }
 /* Colour comes from the same table as .hiw-g and .tab-glyph (RECORD_GLYPH_COLOR) */
 .hiw-st { font-size: 11px; }
 .hiw-sp { flex: 1; }
