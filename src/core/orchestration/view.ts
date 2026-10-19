@@ -17,7 +17,7 @@ import { repoPathOf } from '../worktrees/repo'
 import { coordinatorStarting, type OrchState } from './state'
 import { eventCountsOf } from './timeline'
 import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy, withoutSupersededLifecycle } from './running'
-import { policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
+import { checkConfigIdsOf, policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
 import { githubLifecycleOf } from '../github/view'
 import { isLifecycleTask, lifecycleFactsOf } from './lifecycleTask'
 import type { Dispatch, Gate, Job, JobRun, Task } from './types'
@@ -342,6 +342,13 @@ function foldIndex(state: OrchState): FoldIndex {
  *  core.worktrees, and runsForProject needs it to map a worktree-rooted Run.cwd back to its
  *  repository (see there). nextFireOf is injected for the same reason again — a template's next
  *  fire time lives in the ticker's memory, not in OrchState. */
+/** Ordinary Tasks there are, and none names a local check (design §7.2 S16): every repair goes to GitHub CI unchecked
+ *  locally. The lifecycle Task is not one of them. */
+const noLocalCheck = (tasks: readonly Task[]): boolean => {
+  const ordinary = tasks.filter((t) => !isLifecycleTask(t))
+  return ordinary.length > 0 && ordinary.every((t) => checkConfigIdsOf(t).length === 0)
+}
+
 export function snapshotFor(
   state: OrchState,
   projectPath: string,
@@ -428,6 +435,7 @@ export function snapshotFor(
       ...(job.source ? { source: job.source } : {}),
       // A lifecycle Run's GitHub side, as runs get derives it (G7b)
       ...(run !== undefined && job.github ? { github: githubLifecycleOf(job.github, run.githubState, lifecycleFactsOf(state, run.id)) } : {}),
+      ...(run !== undefined && job.github && noLocalCheck(ix.tasksByRun.get(run.id) ?? []) ? { githubNoLocalCheck: true } : {}),
       ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
         ? { nextFireAt: nextFireOf(job.id) as number }
         : {}),

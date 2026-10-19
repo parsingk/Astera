@@ -680,6 +680,16 @@ describe('snapshotFor: the GitHub side', () => {
     expect(row.tasks[0].lifecycle).toEqual({ ciWait: { pr: 12, sha: 'a'.repeat(40), since: 'T2' } })
   })
 
+  // Design §7.2 S16: every repair would go to GitHub CI unchecked locally
+  it('marks a lifecycle Run whose ordinary Tasks name no local check, once it has one', () => {
+    const s = withGithub(lifecycle())
+    const none = { ...s, tasks: [...s.tasks, task('t1', 'r1', 'completed')] }
+    expect(snapshotFor(none, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].githubNoLocalCheck).toBe(true)
+    const checked = { ...s, tasks: [...s.tasks, { ...task('t1', 'r1', 'completed'), validateConfigIds: ['cfg_test'] }] }
+    expect(snapshotFor(checked, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]).not.toHaveProperty('githubNoLocalCheck')
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]).not.toHaveProperty('githubNoLocalCheck')
+  })
+
   it('a lifecycle Task not waiting is marked without a wait; a Run of a Job without the lifecycle has no GitHub side', () => {
     const row = snapshotFor(withGithub(lifecycle({ status: 'dispatched' })), absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]
     expect(row.github?.state).toBe('repairing')

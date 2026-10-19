@@ -726,6 +726,9 @@ export interface JobRow {
   /** A GitHub lifecycle Run's GitHub side (G7b, design §8): the view `runs get` gives, for the Run detail's block and
    *  the card's chip. Absent for a Job without the lifecycle, and on a Job row with no Run yet. */
   github?: GitHubLifecycleView
+  /** A lifecycle Run with ordinary Tasks of which none names a local check (design §7.2 S16): every repair goes to
+   *  GitHub CI unchecked locally, which the Run's GitHub block says. */
+  githubNoLocalCheck?: true
   tasks: JobTask[]
 }
 /** Why the Jobs view has nothing to draw, when the reason is the Host rather than the state.

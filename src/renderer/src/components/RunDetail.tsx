@@ -1,4 +1,5 @@
 import { invalidatedReasonKey } from './githubText'
+import { GitHubBlock } from './GitHubBlock'
 import { useEffect, useState } from 'react'
 import type {
   Account,
@@ -1013,6 +1014,10 @@ export function RunDetail({
                 {/* 고른 Task 의 완료 상세 — 왜 못 넘었는가(설계 §2). 필터 줄 바로 아래, 이벤트
                     목록 위다: 이벤트는 "무슨 일이 있었나" 이고 이것은 "지금 무엇이 막고 있나" 라,
                     찾는 사람이 스크롤하지 않고 만나야 하는 쪽이 이것이다. */}
+                {/* A lifecycle Run's GitHub side (G7b, design §8): the pull request, its checks, where Astera stands */}
+                {run?.github && (
+                  <GitHubBlock github={run.github} noLocalCheck={run.githubNoLocalCheck === true} onOpen={(url) => void window.api.system.openExternal(url)} />
+                )}
                 {selectedTask && (
                   <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} runtimeId={runtimeId} />
                 )}
