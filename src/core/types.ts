@@ -534,6 +534,8 @@ export interface JobTask {
   convergence?: JobConvergence
 }
 
+/** A Run's timeline kinds; the `github-*` ones are a lifecycle Run's GitHub steps (GitHub lifecycle design §5.5, G7b),
+ *  from its record's log. */
 export type JobEventKind =
   | 'run-created'
   | 'task-created'
@@ -547,7 +549,6 @@ export type JobEventKind =
   | 'runtime-lost'
   /** Job Continuity: recovery strategy decision (journal RECOVERY_STRATEGY_SELECTED). */
   | 'recovery'
-  // A lifecycle Run's GitHub steps (GitHub lifecycle design §5.5, G7b), from its record's log
   | 'github-pr-bound'
   | 'github-pr-created'
   | 'github-pushed'

@@ -90,6 +90,27 @@ describe('docs/sdk.md', () => {
     for (const r of reasons) expect(section(guide, '## What you can do'), r).toContain(`\`${r}\``)
   })
 
+  // GitHub lifecycle G7c: RunEventKind is typed twice too; a kind the Host's timeline makes and the package does not
+  // name, or the guide does not, is a line a script cannot switch on
+  it('types every timeline kind the Host makes, as the Host does, and names each', () => {
+    // The Host's union carries doc comments between its members
+    const kindsOf = (file: string, name: string): string[] => {
+      const lines = read(file).split(/\r?\n/)
+      const at = lines.findIndex((l) => l.startsWith(`export type ${name} =`))
+      const out: string[] = []
+      for (const l of lines.slice(at + 1)) {
+        const kind = /^ {2}\| '([\w-]+)'$/.exec(l)
+        if (kind) out.push(kind[1])
+        else if (!/^ {2}(\/\*\*|\/\/)/.test(l)) break
+      }
+      return out
+    }
+    const kinds = kindsOf('src/core/types.ts', 'JobEventKind')
+    expect(kinds).toContain('github-merge-ready')
+    expect(kindsOf('packages/client/src/types.ts', 'RunEventKind')).toEqual(kinds)
+    for (const k of kinds) expect(guide, k).toContain(`\`${k}\``)
+  })
+
   it('names every event type in its Events section, and the README does too', () => {
     const events = section(guide, '## Events')
     for (const t of EVENT_TYPES) {

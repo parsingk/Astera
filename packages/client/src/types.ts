@@ -382,6 +382,7 @@ export interface RunCompletion {
   readonly tasks: readonly TaskCompletion[]
 }
 
+/** A Run's timeline kinds; the `github-*` ones are a GitHub lifecycle Run's steps, from the pull request to merge-ready. */
 export type RunEventKind =
   | 'run-created'
   | 'task-created'
@@ -393,7 +394,6 @@ export type RunEventKind =
   | 'resumed'
   | 'runtime-lost'
   | 'recovery'
-  // A GitHub lifecycle Run's GitHub steps, from the pull request to merge-ready
   | 'github-pr-bound'
   | 'github-pr-created'
   | 'github-pushed'

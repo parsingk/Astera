@@ -180,7 +180,12 @@ closed or merged), `invalidated.reason` says why and `state` reads the record ag
 `external-state-unavailable`, `pr-not-open`, `head-not-pushed`, `review-of-another-head`, `ci-not-passed`,
 `question-open`, `local-check-failed` or `local-check-skipped`, a later read's `closed`, `merged`, `head-changed`,
 `base-changed`, `ci-failed` or `checks-changed`. Astera never merges; GitHub's own
-review decision is `pr.reviewDecision`. It is derived on every read, so `runs.get` always shows what Astera last read.
+review decision is `pr.reviewDecision`. It also carries `pushedSha` (the commit Astera last pushed), `externalHead` (a
+head on GitHub Astera did not push, until it pushes again), `base` (the pull request's base as bound, with `reboundAt`
+once `runs reconverge` bound it again after a retarget), `repair` (`attempt` of `max` once the lifecycle Task has
+repaired, and while a repair runs its `subject`: `ci` with the failing `check`, `local` with the check, or `review`)
+and `noCi` (a person chose to go on without CI for the head). It is derived on every read, so `runs.get` always shows
+what Astera last read.
 
 ### Jobs and Runs
 
@@ -245,6 +250,11 @@ for await (const item of astera.runs.follow(runId)) {
   else console.log('ended:', item.ending.state)
 }
 ```
+
+An event's `kind` is one of `run-created`, `task-created`, `dispatch-started`, `message`, `gate-opened`,
+`gate-resolved`, `limit-hit`, `resumed`, `runtime-lost` and `recovery`, and for a GitHub lifecycle Run its GitHub steps:
+`github-pr-bound`, `github-pr-created`, `github-pushed`, `github-ci-started`, `github-ci-failed`, `github-ci-rerun`,
+`github-ci-passed`, `github-merge-ready`, `github-invalidated` (the reason in `summary`) and `github-source-changed`.
 
 It throws `NOT_FOUND` when the Run is deleted and `HOST_NOT_RUNNING` when the Host goes away; it does not pick up again
 by itself (an [events](#events) subscription does). Leaving the loop (`break`, `return()`) or aborting its `signal`
@@ -595,6 +605,8 @@ Node 22.6 to 22.17 needs `--experimental-strip-types`; on anything else use `npx
 - An HTTP mode (`mode: 'http'`) for a Host on another machine, and Runtime targets (`runtimeId`).
 - The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile; a GitHub
   lifecycle Run's pull request and CI are already on `runs.get` (`github`).
+- A GitHub lifecycle option on `jobs.create`, and a method that carries a Run through GitHub again: use
+  `call('jobs-create', { objective, cwd, githubLifecycle: true })` and `call('runs-reconverge', { id })`.
 - A Run cancel (`runs.cancel`, `run.cancelled`): a stop pauses.
 - Paging done by the Host for the lists other than events.
 - `runtime.*` events.
