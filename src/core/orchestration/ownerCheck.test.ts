@@ -6,8 +6,11 @@ import { ownerMismatchOf } from './ownerCheck'
 import type { OrchState } from './state'
 
 const state = {
-  jobs: [],
-  runs: [{ id: 'run_mine' }, { id: 'run_theirs' }],
+  jobs: [{ id: 'job_mine' }, { id: 'job_theirs' }],
+  runs: [
+    { id: 'run_mine', jobId: 'job_mine', ordinal: 1 },
+    { id: 'run_theirs', jobId: 'job_theirs', ordinal: 1 }
+  ],
   tasks: [
     { id: 'tsk_mine', runId: 'run_mine' },
     { id: 'tsk_theirs', runId: 'run_theirs' }
@@ -27,6 +30,9 @@ describe('ownerMismatchOf', () => {
     expect(check('run-start', { run: 'run_mine' })).toBe(null)
     expect(check('task-update', { id: 'tsk_theirs' })).toBe('task tsk_theirs does not belong to D:/mine')
     expect(check('worker-stop', { dispatch: 'dsp_theirs' })).toBe('dispatch dsp_theirs does not belong to D:/mine')
+    // Phase 10 review I3: a Job id is read as its latest Run, as the commands read it, so it is no way past the check
+    expect(check('run-start', { run: 'job_theirs' })).toBe('run run_theirs does not belong to D:/mine')
+    expect(check('run-start', { run: 'job_mine' })).toBe(null)
     // An id nothing has is the command's own error, not this check's
     expect(check('run-start', { run: 'run_none' })).toBe(null)
     expect(check('task-create', {})).toBe(null)

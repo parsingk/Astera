@@ -794,7 +794,7 @@ describe('githubWatch', () => {
         expect(reruns(spent)).toEqual([])
         expect(spent.settled).toEqual([])
         expect(spent.gates).toEqual([
-          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('Astera reran it 2 times, the limit this Job allows'), options: OPTIONS }
+          { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('Astera already reran it as many times as this Job allows (2)'), options: OPTIONS }
         ])
       })
 
