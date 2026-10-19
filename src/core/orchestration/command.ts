@@ -121,7 +121,7 @@ import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
-import { repoOfBinding, type GitHubRepo } from '../github/remote'
+import { ghRepoArg, repoOfBinding, type GitHubRepo } from '../github/remote'
 import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
 import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
@@ -4837,6 +4837,16 @@ export async function handleCommand(
                 : `prompt ${id} is no longer open; nothing was answered`
         )
       return okBody({ sessionId: target.sessionId, id, decision, answered: true })
+    }
+    // The New Job window's inline check (GitHub lifecycle G7a, design §7.2): run-create's own preflight, asked before the
+    // Job is made, so the window can say why this folder cannot carry it. Its result is the answer, refusal included;
+    // only the Host has gh and the folder's origin.
+    case 'github-preflight': {
+      if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
+      const cwd = str(args.cwd)
+      if (!cwd) return bad('--cwd is required')
+      const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
+      return okBody(pre.ok ? { ok: true, repo: ghRepoArg(pre.repo) } : { ok: false, reason: pre.reason })
     }
     /**
      * GitHub reads through the user's gh (MCP P2-B), answered by the Host only (`deps.github`). The

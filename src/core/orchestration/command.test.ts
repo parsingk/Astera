@@ -9851,6 +9851,20 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(deps.getState().jobs).toEqual([])
   })
 
+  // G7a: the app's inline check, before a Job is made: the same preflight run-create holds, answered as a result
+  it('github-preflight answers whether this folder can carry a Job through GitHub, and why not', async () => {
+    const ok = withGithub()
+    expect(await call(ok.deps, 'github-preflight', { cwd: 'D:/p' })).toEqual({ status: 200, body: { ok: true, repo: 'o/r' } })
+    const none = withGithub({ origin: null })
+    expect(await call(none.deps, 'github-preflight', { cwd: 'D:/p' })).toEqual({ status: 200, body: { ok: false, reason: 'this folder has no git remote named origin' } })
+    const reader = withGithub({ permission: 'READ' })
+    const r = await call(reader.deps, 'github-preflight', { cwd: 'D:/p' })
+    expect(r.body).toMatchObject({ ok: false, reason: expect.stringContaining('your permission on o/r is READ') })
+    expect((await call(ok.deps, 'github-preflight', {})).status).toBe(400)
+    expect((await call(makeDeps(), 'github-preflight', { cwd: 'D:/p' })).status).toBe(409)
+    expect(ok.deps.getState().jobs).toEqual([])
+  })
+
   // G7a: a Run keeps at most 50 checks of a read, and a name is a check's name, not a document
   it('refuses more than 20 check names, or a name over 100 characters, and makes no Job', async () => {
     const { deps } = withGithub()

@@ -37,6 +37,8 @@ export const CONTROLLER_READ_COMMANDS = [
   'github-pr',
   'github-ci',
   'github-issue',
+  // G7a: the New Job window's inline check, asked of the Runtime whose folder it is
+  'github-preflight',
   // Only the controller's own receipts: they are keyed by its principal (§3.9).
   'requests-show',
   // Sanitized for a controller (§3.6).
