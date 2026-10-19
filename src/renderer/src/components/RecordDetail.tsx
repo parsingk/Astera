@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { MessageKey } from '../../../core/i18n'
 import type { Verification, WorkRecord } from '../../../core/understanding/types'
 import { scopeToStep } from '../../../core/understanding/scope'
+import { requestShownOf } from '../../../core/understanding/requestShown'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { FlowDiagram } from './FlowDiagram'
@@ -70,6 +71,8 @@ export function RecordDetail({
   const { t } = useI18n()
   const explanation = record.explanation
   const verification = verificationOf(record)
+  // A Job made from a ticket by the sentence that names it: its quoted content is the write-up's material (G8 demo)
+  const request = requestShownOf(record.request)
   // A lifecycle Run's evidence is the Run's, not the write-up's: shown with or without one (G8)
   const github = record.github && <RecordGitHub github={record.github} onOpen={(url) => void window.api.system.openExternal(url)} />
 
@@ -78,7 +81,7 @@ export function RecordDetail({
     // back from, but the person's own words are still worth showing here rather than nothing.
     return (
       <div className="hiw-pane hiw-pane-empty">
-        <h4 title={record.request}>{record.request}</h4>
+        <h4 title={request}>{request}</h4>
         {t('hiw.pane.noExplanation')}
         {github}
       </div>
@@ -151,15 +154,15 @@ export function RecordDetail({
     <div className="hiw-pane">
       <div className="hiw-fhead">
         <div>
-          <h4 title={record.request}>{explanation.title ?? record.request}</h4>
+          <h4 title={request}>{explanation.title ?? request}</h4>
           {/* The write-up's title took the heading — spec §5.5 still wants the person's own words
               *shown in the pane*, not reachable only through the h4's `title` tooltip above, which a
               touch device and several screen readers cannot reach. Rendered only when a title is
               actually standing in for the heading: with no title the heading above already *is* this
               same sentence, and repeating it here would just say it twice. */}
           {explanation.title && (
-            <p className="hiw-req" title={record.request}>
-              {record.request}
+            <p className="hiw-req" title={request}>
+              {request}
             </p>
           )}
         </div>
