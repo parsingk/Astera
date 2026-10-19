@@ -1529,7 +1529,7 @@ describe('요청 영수증', () => {
       path.join(dir, 'accounts.json'),
       JSON.stringify({
         accounts: [
-          { id: 'acc1', label: '일', configDir: 'D:/cfg', color: '#fff', createdAt: 'T', provider: 'claude' }
+          { id: 'acc1', label: '일', configDir: path.join(dir, 'cfg'), color: '#fff', createdAt: 'T', provider: 'claude' }
         ]
       }),
       'utf8'
@@ -1568,7 +1568,7 @@ describe('요청 영수증', () => {
       path.join(dir, 'accounts.json'),
       JSON.stringify({
         accounts: [
-          { id: 'acc1', label: '일', configDir: 'D:/cfg', color: '#fff', createdAt: 'T', provider: 'claude' }
+          { id: 'acc1', label: '일', configDir: path.join(dir, 'cfg'), color: '#fff', createdAt: 'T', provider: 'claude' }
         ]
       }),
       'utf8'
@@ -2625,7 +2625,7 @@ describe('Host-local spawn (S2)', () => {
     const { taskId } = await seed()
     for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
     await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
-    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] }))
     const forkedDir = path.join(dir, 'wt-a'); await fs.mkdir(forkedDir)
     const spawned: { cwd: string }[] = []
     const registry = new PtyRegistry({
@@ -3297,7 +3297,9 @@ describe('Host-local spawn (S2)', () => {
  * edits the one thing that was right.
  */
 describe('repair refusals (S2)', () => {
-  const ACCOUNTS = JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] })
+  // A config folder inside the test's own profile (issue #8): 'D:/cfg' is a relative path on Linux, and on Windows it is
+  // a real folder outside the repository, where the spawn's pre-trust kept writing .claude.json
+  const ACCOUNTS = (): string => JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] })
   const withSpawner = async () => {
     for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
     await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
@@ -3343,7 +3345,7 @@ describe('repair refusals (S2)', () => {
 
   it('answers a Host-local worker-start over a corrupt app-settings.json with 409 and repair', async () => {
     const { taskId } = await seed()
-    await fs.writeFile(path.join(dir, 'accounts.json'), ACCOUNTS)
+    await fs.writeFile(path.join(dir, 'accounts.json'), ACCOUNTS())
     await fs.writeFile(path.join(dir, 'app-settings.json'), '{not json')
     const orch = await withSpawner()
     const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
@@ -3389,7 +3391,7 @@ describe('a retiring Host refuses new spawns (S2)', () => {
     const { taskId } = await seed()
     for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
     await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
-    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] }))
     const spawned: string[] = []
     const registry = new PtyRegistry({
       spawn: (file) => { spawned.push(file); return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} } },
