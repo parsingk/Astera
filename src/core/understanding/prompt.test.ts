@@ -84,4 +84,25 @@ describe('buildRecordPrompt', () => {
     expect(withChecks).toContain("The agent's own one-line summary")
     expect(withChecks).toContain('한도 감지를 고쳤다')
   })
+
+  // GitHub lifecycle G8: what did not happen is material too, and the write-up must not read it as passed
+  it('a lifecycle Run that stopped short says what was not done, never passed', () => {
+    const p = buildRecordPrompt({
+      ...req,
+      github: { local: 'skipped', ci: { status: 'skipped' }, review: 'skipped', mergeReady: false }
+    })
+    expect(p).toContain('- Pull request: none')
+    expect(p).toContain('- Local checks: not all run')
+    expect(p).toContain('- GitHub CI: not run on the head')
+    expect(p).toContain('- Astera review: not done')
+    expect(p).toContain('- Merge-ready: no')
+    expect(p).not.toMatch(/: passed/)
+  })
+
+  it('a head a person let go on without CI is said as such', () => {
+    const sha = 'c'.repeat(40)
+    const p = buildRecordPrompt({ ...req, github: { ci: { status: 'skipped', sha, noCi: true }, review: 'passed', mergeReady: true } })
+    expect(p).toContain(`- GitHub CI: skipped — a person chose to go on without CI at ${sha}`)
+    expect(p).not.toContain('Local checks')
+  })
 })

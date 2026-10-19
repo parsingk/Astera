@@ -7,7 +7,7 @@
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
 import type { Lang } from '../i18n'
-import type { SessionCheck } from './types'
+import type { RecordGitHub, SessionCheck } from './types'
 
 /** What to call each language **inside the prompt**. The model is told to write in one of these, so
  *  the name is given in English — that is the language the rest of the prompt is in, and a model
@@ -69,6 +69,8 @@ export interface RecordRequest {
   checks?: readonly SessionCheck[]
   /** Session only: the agent's own one-line summary from `session-task-complete`. */
   resultSummary?: string
+  /** A GitHub lifecycle Run only: its issue, pull request and what verified it (WorkRecord.github) */
+  github?: RecordGitHub
   projectRoot: string
 }
 
@@ -95,6 +97,7 @@ export function buildRecordPrompt(req: RecordRequest): string {
         req.checks.map((c) => `- ${c.name}: ${c.status}`).join('\n')
       : ''
   const said = req.resultSummary ? `\n\nThe agent's own one-line summary:\n${req.resultSummary}` : ''
+  const github = req.github ? `\n\nGitHub, as Astera recorded it when the run finished:\n${githubLines(req.github).join('\n')}` : ''
 
   return `${EXPLANATION_CONTRACT}
 
@@ -105,7 +108,7 @@ What the person asked for, verbatim:
 ${req.request}
 
 Files that changed while this work was open:
-${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${checks}${said}${jobSection}${validation}
+${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${checks}${said}${jobSection}${validation}${github}
 
 Write every sentence a person reads in ${language}: "title", "overview", "userVisibleChanges", every
 "label", "description" and "condition" in "flow", every "title" and "reason" in "decisions", every
@@ -148,3 +151,20 @@ in "flow".
 Every step and every decision must name the files it is built from, in its own "evidencePaths".
 The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked.`
 
+/** The record's GitHub evidence as material: what did not happen says so, never passed. */
+function githubLines(g: RecordGitHub): string[] {
+  const ci =
+    g.ci.status === 'skipped'
+      ? g.ci.noCi && g.ci.sha
+        ? `skipped — a person chose to go on without CI at ${g.ci.sha}`
+        : 'not run on the head'
+      : `${g.ci.status} at ${g.ci.sha ?? ''}`
+  return [
+    ...(g.source ? [`- Source: ${g.source.label}${g.source.url ? ` (${g.source.url})` : ''}`] : []),
+    ...(g.pr ? [`- Pull request: #${g.pr.number} (${g.pr.url})`] : ['- Pull request: none']),
+    ...(g.local ? [`- Local checks: ${g.local === 'skipped' ? 'not all run' : g.local}`] : []),
+    `- GitHub CI: ${ci}`,
+    `- Astera review: ${g.review === 'skipped' ? 'not done' : g.review}`,
+    `- Merge-ready: ${g.mergeReady ? 'yes' : 'no'}`
+  ]
+}

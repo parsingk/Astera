@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { Account, Provider } from '../types'
 import type { ProviderDescriptor } from '../providers/descriptor'
-import type { ProjectUnderstanding, RecordExplanation, WorkRecord } from './types'
+import type { ProjectUnderstanding, RecordExplanation, RecordGitHub, WorkRecord } from './types'
 import type { GeneratorSettings } from './generatorSettings'
 import type { SessionWorkUnit } from '../workUnit/types'
 import { verificationOf } from '../workUnit/verification'
@@ -69,6 +69,8 @@ export interface RunRecordInput {
   /** The folder the work happened in, when it is not the project root — the Run's own worktree, whose
    *  changes are not in the project folder until someone merges them. Stored on the record (WorkRecord.workDir). */
   workDir?: string
+  /** A GitHub lifecycle Run's evidence, stored on the record as it is (WorkRecord.github) */
+  github?: RecordGitHub
 }
 
 export class UnderstandingPipeline {
@@ -175,6 +177,7 @@ export class UnderstandingPipeline {
           : undefined,
         jobTasks: input.tasks,
         ...(input.workDir !== undefined ? { workDir: input.workDir } : {}),
+        ...(input.github !== undefined ? { github: input.github } : {}),
         status: 'generating'
       }
       await this.prepend(projectRoot, record)
@@ -240,6 +243,7 @@ export class UnderstandingPipeline {
         // measurement. Job records carry none of this; their outcome is the validation above.
         checks: cur.source.kind === 'session' ? cur.verification?.checks : undefined,
         resultSummary: cur.source.kind === 'session' ? cur.verification?.summary : undefined,
+        github: cur.source.kind === 'job' ? cur.github : undefined,
         projectRoot: base,
         lang: this.deps.lang()
       }),
