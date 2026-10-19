@@ -119,6 +119,18 @@ describe('the MCP server', () => {
     expect(r.structuredContent).toMatchObject({ id: 'job_1' })
   })
 
+  // G7a: the same bounds run-create holds, refused before anything is sent
+  it('create_job refuses more than 20 check names, or one over 100 characters', async () => {
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    const many = Array.from({ length: 21 }, (_, i) => `check-${i}`)
+    for (const githubChecks of [many, ['x'.repeat(101)]]) {
+      const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', githubLifecycle: true, githubChecks } })
+      expect(r.isError).toBe(true)
+    }
+    expect(calls).toEqual([])
+  })
+
   it('create_job stops at a project the Host does not know', async () => {
     const { link, calls } = answering({ 'projects-get': { status: 404, body: { error: 'unknown project: p9' } } })
     const r = await (await connected(link)).callTool({

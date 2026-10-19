@@ -128,7 +128,7 @@ import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
-import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
+import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
 import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
@@ -1807,6 +1807,8 @@ export async function handleCommand(
       if (wantsGithub) {
         const checks = checkNamesOf(args.githubChecks)
         if (checks === null) return bad('--github-checks takes check names, comma separated')
+        if (checks.length > LIFECYCLE_CHECKS_MAX || checks.some((n) => n.length > LIFECYCLE_CHECK_NAME_MAX))
+          return bad(`--github-checks takes at most ${LIFECYCLE_CHECKS_MAX} check names, each at most ${LIFECYCLE_CHECK_NAME_MAX} characters`)
         github = {
           ci: checks.length > 0 ? { mode: 'selected', selectedChecks: checks } : { mode: 'required' },
           ...GITHUB_LIFECYCLE_DEFAULTS

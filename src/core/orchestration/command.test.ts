@@ -9851,6 +9851,18 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(deps.getState().jobs).toEqual([])
   })
 
+  // G7a: a Run keeps at most 50 checks of a read, and a name is a check's name, not a document
+  it('refuses more than 20 check names, or a name over 100 characters, and makes no Job', async () => {
+    const { deps } = withGithub()
+    const many = Array.from({ length: 21 }, (_, i) => `check-${i}`)
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: many })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toBe('--github-checks takes at most 20 check names, each at most 100 characters')
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'x'.repeat(101) })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: many.slice(0, 20) })).status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(1)
+  })
+
   it('refuses a permission that cannot push, says why, and makes no Job', async () => {
     const { deps } = withGithub({ permission: 'READ' })
     const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
