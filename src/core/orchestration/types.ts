@@ -315,8 +315,9 @@ export interface JobRun {
   /** The git range this Run worked over (remote runtime design Phase 10): its base when it began and its head as it
    *  moved, recorded by the Host, so its changed files and diffs outlive a reaped worktree. */
   git?: GitRange
-  /** What the Host last read of this Run's pull request and CI (GitHub lifecycle). Written only by the Host's
-   *  `runs-github-record`; kept back from the public surface, whose `github` field is derived from it (runView). */
+  /** What the Host last read of this Run's pull request and CI (GitHub lifecycle). Written by the Host's
+   *  `runs-github-record` and, for merge-ready, by the lifecycle review's verdict (G5b); kept back from the public
+   *  surface, whose `github` field is derived from it (runView). */
   githubState?: RunGitHubState
   /** 예약을 세울 때 이 회차도 함께 멈췄다.
    *

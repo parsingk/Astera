@@ -4353,6 +4353,46 @@ describe('settleLifecycleCi', () => {
         expect(gs.log.at(-1)).toMatchObject({ kind: 'invalidated' })
       })
 
+      // G5b final review M7
+      it('withholds it when nothing is bound, and when a local check failed', () => {
+        expect(verdict(good(), { ...good(), binding: undefined }).gs.invalidated?.reason).toBe('not-bound')
+        const { s, lifecycleId } = handedOver()
+        const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+        const recorded = { ...inReview, runs: inReview.runs.map((r) => ({ ...r, githubState: good() })) }
+        const opened = unwrap<Dispatch>(openReviewDispatch(recorded, { taskId: lifecycleId, provider: 'codex', accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/run', specPath: '' }, LATER) as never)
+        const failedLocal = { ...opened.state, tasks: opened.state.tasks.map((t) => (t.id === lifecycleId ? { ...t, checks: [{ configId: 'lint', name: 'lint', status: 'failed' as const }, ci('passed')] } : t)) }
+        const r = unwrap(applyReviewResult(failedLocal, { taskId: lifecycleId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [], repair: target }, LATER) as never)
+        expect(r.state.runs[0].githubState?.invalidated?.reason).toBe('local-check-failed')
+      })
+
+      it('publishes merge-ready ahead of the Task and the Run completing', () => {
+        const { s, lifecycleId } = handedOver()
+        const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state
+        const recorded = { ...inReview, runs: inReview.runs.map((r) => ({ ...r, githubState: good() })) }
+        const opened = unwrap<Dispatch>(openReviewDispatch(recorded, { taskId: lifecycleId, provider: 'codex', accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/run', specPath: '' }, LATER) as never)
+        const r = unwrap(applyReviewResult(opened.state, { taskId: lifecycleId, dispatchId: opened.value.id, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [], repair: target }, LATER) as never)
+        const types = derivePublicEvents(opened.state, r.state).map((e) => e.type)
+        expect(types.indexOf('github.merge_ready')).toBeGreaterThanOrEqual(0)
+        expect(types.indexOf('github.merge_ready')).toBeLessThan(types.indexOf('task.completed'))
+        expect(types.indexOf('task.completed')).toBeLessThan(types.indexOf('run.completed'))
+      })
+
+      // Focus 5: an ordinary Task's review records nothing on the Run, and its Dispatch names no head
+      it('an ordinary Task’s review records no merge-ready and its Dispatch names no head', () => {
+        const { s } = handedOver()
+        const ordinary = s.tasks.find((t) => t.kind !== 'lifecycle')!.id
+        const reviewingOrdinary = {
+          ...s,
+          tasks: s.tasks.filter((t) => t.kind !== 'lifecycle').map((t) => (t.id === ordinary ? { ...t, status: 'reviewing' as const } : t)),
+          runs: s.runs.map((r) => ({ ...r, githubState: good() }))
+        }
+        const opened = unwrap<Dispatch>(openReviewDispatch(reviewingOrdinary, { taskId: ordinary, provider: 'codex', accountId: 'accX', sessionId: 'rev1', cwd: 'D:/wt/a', specPath: '' }, LATER) as never)
+        expect(opened.value).not.toHaveProperty('reviewHead')
+        const r = unwrap(applyReviewResult(opened.state, { taskId: ordinary, dispatchId: opened.value.id, outcome: 'succeeded', subject: 'ok', body: 'fine', issues: [], repair: target }, LATER) as never)
+        expect(r.state.runs[0].githubState?.mergeReady).toBeUndefined()
+        expect(r.state.runs[0].githubState?.invalidated).toBeUndefined()
+      })
+
       it('withholds it while a question is open on the Run', () => {
         const { s, lifecycleId } = handedOver()
         const inReview = unwrap<Task>(settleLifecycleCi(s, { taskId: lifecycleId, result: ci('passed') }, LATER) as never).state

@@ -142,6 +142,9 @@ export interface GitHubCiSnapshot {
   failure?: GitHubCiFailure
   /** At most CI_CHECKS_MAX. */
   checks: GitHubCiCheck[]
+  /** The names CI was judged on, from the whole read (`ciTargets`): kept whole, though `checks` keeps CI_CHECKS_MAX, so
+   *  merge-ready's evidence and the watch's later comparison see the same set (G5b final review I1). */
+  targetNames?: string[]
   /** When this snapshot last changed, not when it was last read: a read that finds nothing new writes nothing. */
   changedAt: string
 }
@@ -159,6 +162,25 @@ export type GitHubLogKind =
   | 'source-changed'
   | 'merge-ready'
   | 'invalidated'
+
+/** Why merge-ready was withheld by the review's verdict (the first seven, and external-state-unavailable while GitHub
+ *  cannot be read) or withdrawn by a later read (the last six) (G5b, design §5.4): a code a script switches on. */
+export type GitHubInvalidatedReason =
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+  | 'closed'
+  | 'merged'
+  | 'head-changed'
+  | 'base-changed'
+  | 'ci-failed'
+  | 'checks-changed'
 
 /** Why the pull request is ready to merge, decided from Astera's state when the lifecycle review passed (G5b, design
  *  §5.2, §5.4): its head is the one Astera pushed, CI passed on it (or a person chose to go on without CI), the review
@@ -202,7 +224,8 @@ export interface GitHubLogEntry {
   class?: CiFailureClass
 }
 
-/** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written only by `runs-github-record`. */
+/** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written by the Host's `runs-github-record`
+ *  and, for merge-ready, by the lifecycle review's verdict in its own write (G5b). */
 export interface RunGitHubState {
   binding?: GitHubBinding
   /** More than one open PR matched the Run's branch and base; none was bound (§7). */
@@ -225,7 +248,7 @@ export interface RunGitHubState {
    *  and nothing withdrew it. */
   mergeReady?: MergeReadyEvidence
   /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
-  invalidated?: { reason: string; at: string }
+  invalidated?: { reason: GitHubInvalidatedReason; at: string }
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
   /** The last entry's seq. */

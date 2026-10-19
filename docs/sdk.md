@@ -176,7 +176,10 @@ merged or closed, `pr-merged` or `pr-closed` instead). Once its review passed, `
 ready to merge: open, its head the one Astera pushed and reviewed, CI passed on it (or a person chose to go on without
 CI, `mergeReady.ciOverride: 'no-ci'`), no question open; `mergeReady` holds that head and when, while it holds. When the
 review's verdict withheld it, or the pull request moved since (a new head, another base, a check failing or changed,
-closed or merged), `invalidated.reason` says why and `state` reads the record again. Astera never merges; GitHub's own
+closed or merged), `invalidated.reason` says why and `state` reads the record again: the verdict's `not-bound`,
+`external-state-unavailable`, `pr-not-open`, `head-not-pushed`, `review-of-another-head`, `ci-not-passed`,
+`question-open`, `local-check-failed` or `local-check-skipped`, a later read's `closed`, `merged`, `head-changed`,
+`base-changed`, `ci-failed` or `checks-changed`. Astera never merges; GitHub's own
 review decision is `pr.reviewDecision`. It is derived on every read, so `runs.get` always shows what Astera last read.
 
 ### Jobs and Runs

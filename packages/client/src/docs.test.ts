@@ -82,6 +82,14 @@ describe('docs/sdk.md', () => {
     for (const s of states) expect(section(guide, '## What you can do'), s).toContain(`\`${s}\``)
   })
 
+  // GitHub lifecycle G5b final review M9: why merge-ready was withheld or withdrawn is a code a script switches on
+  it('types every reason merge-ready is withheld or withdrawn for, as the Host does, and names each', () => {
+    const reasons = unionOf('src/core/github/lifecycle.ts', 'GitHubInvalidatedReason')
+    expect(reasons).toContain('checks-changed')
+    expect(unionOf('packages/client/src/types.ts', 'GitHubInvalidatedReason')).toEqual(reasons)
+    for (const r of reasons) expect(section(guide, '## What you can do'), r).toContain(`\`${r}\``)
+  })
+
   it('names every event type in its Events section, and the README does too', () => {
     const events = section(guide, '## Events')
     for (const t of EVENT_TYPES) {

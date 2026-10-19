@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import type { GhRunner } from './gh'
 import type { GitHubCiCheck } from './lifecycle'
-import { evaluateCi, parseRuleCheckNames, readRuleCheckNames } from './ciVerdict'
+import { ciTargets, evaluateCi, parseRuleCheckNames, readRuleCheckNames } from './ciVerdict'
 import { ciTargetNames } from './lifecycle'
 
 const check = (name: string, over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({
@@ -32,6 +32,19 @@ describe('evaluateCi — required', () => {
   it('counts skipped and neutral required checks as passing, as branch protection does', () => {
     const ev = evaluateCi({ checks: [check('a', { required: true, conclusion: 'skipped' }), check('b', { required: true, conclusion: 'neutral' })], suites: done }, REQUIRED, [])
     expect(ev.verdict).toBe('passed')
+  })
+})
+
+// G5b final review I1, M2: the checks evaluateCi judges on, from the whole read, and whether it can know them
+describe('ciTargets', () => {
+  const c = (name: string, over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({ externalId: `run:${name}`, name, status: 'completed', conclusion: 'success', required: false, ...over })
+  it('names what evaluateCi judges on, rule names included, and says when a read cannot know it', () => {
+    const read = { checks: [c('build'), c('lint'), c('docs')], suites: [] }
+    expect(ciTargets(read, { mode: 'required' }, ['build'])).toMatchObject({ basis: 'required', names: ['build'] })
+    expect(ciTargets(read, { mode: 'required' }, [])).toMatchObject({ basis: 'all-reported', names: ['build', 'docs', 'lint'] })
+    expect(ciTargets({ ...read, requiredUnknown: true }, { mode: 'required' }, ['build']).unknowable).toBe(true)
+    expect(ciTargets(read, { mode: 'required' }, null).unknowable).toBe(true)
+    expect(ciTargets(read, { mode: 'selected', selectedChecks: ['lint'] }, null)).toMatchObject({ basis: 'selected', names: ['lint'], unknowable: false })
   })
 })
 

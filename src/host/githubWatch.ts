@@ -18,8 +18,8 @@ import {
   EVIDENCE_TRIES,
   GITHUB_CI_CHECK,
   GITHUB_LIFECYCLE_DEFAULTS,
-  ciTargetNames,
   roundReruns,
+  type GitHubInvalidatedReason,
   type CiFailureClass,
   type CiVerdict,
   type GitHubBinding,
@@ -28,7 +28,7 @@ import {
   type GitHubLifecyclePolicy,
   type RunGitHubState
 } from '../core/github/lifecycle'
-import { evaluateCi, type CiEvaluation } from '../core/github/ciVerdict'
+import { ciTargets, evaluateCi, type CiEvaluation } from '../core/github/ciVerdict'
 import { ciCheckResult } from '../core/github/ciResult'
 import { ciFailureEvidence, type RawAnnotation } from '../core/github/evidence'
 import type { OpenPr } from '../core/github/prBinding'
@@ -156,18 +156,26 @@ const rerunUnshown = (gs: RunGitHubState | undefined, round: { sha: string; sinc
   )
 
 /** Why a read withdraws a Run's merge-ready (G5b, design §5.4), or undefined: the pull request closed or merged, a head
- *  that is not the evidence's, another base than the binding's, a failing check on that head, or other checks judged on
- *  it than the evidence kept. A review asking for changes on GitHub is shown, never a withdrawal; one withdrawn already
- *  stays as it was. */
-function withdrawalOf(gs: RunGitHubState | undefined, read: PrStateRead, ev: CiEvaluation, selected?: readonly string[]): string | undefined {
+ *  that is not the evidence's, another base than the binding's, a check failing on that head, or other checks judged on
+ *  it than the evidence kept. A read that cannot know its targets (required-ness unresolved, no rule names, cut) counts a
+ *  failure only of a check the evidence was judged on, and compares no set; nor does one still running (a rerun, a
+ *  conditional job that will skip again) (final review M2, M3). A review asking for changes on GitHub is shown, never a
+ *  withdrawal; one withdrawn already stays as it was. */
+function withdrawalOf(
+  gs: RunGitHubState | undefined,
+  read: PrStateRead,
+  ev: CiEvaluation,
+  judged: { names: string[]; unknowable: boolean }
+): GitHubInvalidatedReason | undefined {
   const evidence = gs?.mergeReady
   if (!evidence || gs.invalidated) return undefined
   if (read.state !== 'open') return read.state
   if (read.headSha !== evidence.headSha) return 'head-changed'
   if (gs.binding && read.baseBranch !== gs.binding.baseBranch) return 'base-changed'
   if (read.commitSha !== evidence.headSha) return undefined
-  if (ev.verdict === 'failed') return 'ci-failed'
-  return ciTargetNames(read.checks, ev.basis, selected).join('\n') !== evidence.ciChecks.join('\n') ? 'checks-changed' : undefined
+  if (ev.verdict === 'failed' && ev.failing && (!judged.unknowable || evidence.ciChecks.includes(ev.failing.name))) return 'ci-failed'
+  if (judged.unknowable || ev.verdict === 'pending') return undefined
+  return judged.names.join('\n') !== evidence.ciChecks.join('\n') ? 'checks-changed' : undefined
 }
 
 /** Each wait is decided once: a person's "wait again" begins another (G3b2). */
@@ -408,6 +416,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
       lowUntil = Date.parse(read.rateLimit.resetAt) || now() + LOW_BUDGET_MS
     const names = t.policy.ci.mode === 'required' ? await ruleNamesFor(t, repo, read.baseBranch) : []
     const ev = evaluateCi(read, t.policy.ci, names)
+    // What CI is judged on, from the whole read, kept with the snapshot (G5b final review I1)
+    const judged = ciTargets(read, t.policy.ci, names)
     // Evidence only for the head: a verdict of another commit is not news (final review I1), and its log would be stale.
     const failure =
       ev.verdict === 'failed' && ev.failing && read.commitSha === read.headSha ? await evidenceFor(t, repo, read.commitSha, ev.failing, read.checks) : undefined
@@ -427,7 +437,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
         ...(ev.failing ? { failing: ev.failing.name } : {}),
         ...(ev.failing?.detailsUrl ? { failingUrl: ev.failing.detailsUrl } : {}),
         ...(failure ? { failure } : {}),
-        checks: read.checks
+        checks: read.checks,
+        targetNames: judged.names
       }
     }
     patch.lastReadError = null
@@ -448,7 +459,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const soon = ev.verdict === 'pending' || read.commitSha !== read.headSha || (ev.verdict === 'none' && newHead) || completable || awaited || reran
     nextAt.set(t.runId, now() + spaced(soon ? PENDING_MS : t.reviewing ? REVIEWING_MS : SETTLED_MS))
     // A merge-ready Run whose pull request moved withdraws merge-ready, in the read's own record (G5b, design §5.4)
-    const withdrawn = withdrawalOf(t.state, read, ev, t.policy.ci.selectedChecks)
+    const withdrawn = withdrawalOf(t.state, read, ev, judged)
     if (withdrawn) patch.invalidated = { reason: withdrawn }
     await record(t.runId, patch)
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
@@ -590,6 +601,9 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const targets = targetsOf(latest)
     forgetOthers(targets)
     for (const t of targets) {
+      // A Run whose lifecycle Task went to review is read within REVIEWING_MS, whatever read was due (final review M1)
+      const due = nextAt.get(t.runId)
+      if (t.reviewing && !inFlight.has(t.runId) && due !== undefined && due > now() + REVIEWING_MS) nextAt.set(t.runId, now())
       const ready = t.state?.mergeReady?.evaluatedAt
       if (ready !== undefined && !inFlight.has(t.runId) && mergeSeen.get(t.runId) !== ready) {
         mergeSeen.set(t.runId, ready)

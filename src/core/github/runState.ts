@@ -9,6 +9,7 @@ import {
   type GitHubCiSnapshot,
   type GitHubLogEntry,
   type GitHubPrFacts,
+  type GitHubInvalidatedReason,
   type GitHubRerun,
   type MergeReadyEvidence,
   type RunGitHubState
@@ -35,7 +36,7 @@ export interface RunGitHubPatch {
    *  the evidence and an earlier withdrawal, so the `invalidated` beside it is this verdict's). */
   mergeReady?: Omit<MergeReadyEvidence, 'evaluatedAt'> | null
   /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. */
-  invalidated?: { reason: string }
+  invalidated?: { reason: GitHubInvalidatedReason }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -47,6 +48,7 @@ const sameCi = (a: GitHubCiSnapshot | undefined, b: Omit<GitHubCiSnapshot, 'chan
   a.verdict === b.verdict &&
   a.failing === b.failing &&
   a.failingUrl === b.failingUrl &&
+  JSON.stringify(a.targetNames) === JSON.stringify(b.targetNames) &&
   JSON.stringify(a.failure) === JSON.stringify(b.failure) &&
   JSON.stringify(a.checks) === JSON.stringify(b.checks.slice(0, CI_CHECKS_MAX))
 
@@ -169,6 +171,7 @@ function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
     (ci.failing === undefined || isStr(ci.failing)) &&
     (ci.failingUrl === undefined || isStr(ci.failingUrl)) &&
     (ci.failure === undefined || failureOk(ci.failure)) &&
+    (ci.targetNames === undefined || (Array.isArray(ci.targetNames) && ci.targetNames.every(isStr))) &&
     Array.isArray(ci.checks) &&
     ci.checks.every((c) => isObj(c) && isStr(c.externalId) && isStr(c.name) && isStr(c.status) && typeof c.required === 'boolean')
   )

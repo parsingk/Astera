@@ -102,6 +102,24 @@ export type GitHubLifecycleState =
   | 'ci-infrastructure-failure'
   | 'merge-ready'
 
+/** Why merge-ready was withheld by the review's verdict or withdrawn by a later read (Astera 1.4.15 and later). */
+export type GitHubInvalidatedReason =
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+  | 'closed'
+  | 'merged'
+  | 'head-changed'
+  | 'base-changed'
+  | 'ci-failed'
+  | 'checks-changed'
+
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {
   readonly state: GitHubLifecycleState
@@ -132,10 +150,8 @@ export interface GitHubLifecycle {
   /** Merge-ready while it holds: the head Astera's review found ready, when, and `ciOverride: 'no-ci'` when a person chose
    *  to go on without CI. */
   readonly mergeReady?: { readonly headSha: string; readonly evaluatedAt: string; readonly ciOverride?: 'no-ci' }
-  /** Why merge-ready was withheld by the review's verdict (not-bound, pr-not-open, head-not-pushed,
-   *  review-of-another-head, ci-not-passed, question-open, local-check-failed) or withdrawn since (closed, merged,
-   *  head-changed, base-changed, ci-failed, checks-changed). */
-  readonly invalidated?: { readonly reason: string; readonly at: string }
+  /** Why merge-ready was withheld by the review's verdict or withdrawn since (`GitHubInvalidatedReason`). */
+  readonly invalidated?: { readonly reason: GitHubInvalidatedReason; readonly at: string }
 }
 
 export interface Job {

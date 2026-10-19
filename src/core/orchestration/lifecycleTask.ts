@@ -1,6 +1,6 @@
 // The Run-level lifecycle Task (GitHub lifecycle design L1, §3.2): added by Astera in the same write that completes a
 // lifecycle Run's last ordinary Task, so no outcome reader ever sees the Run all-terminal in between. Pure.
-import { GITHUB_CI_CHECK, ciTargetNames, type MergeReadyEvidence } from '../github/lifecycle'
+import { GITHUB_CI_CHECK, ciTargetNames, type GitHubInvalidatedReason, type MergeReadyEvidence } from '../github/lifecycle'
 import { checkConfigIdsOf, latestImplDispatch } from './convergence'
 import { isTerminal, tasksOwnedBy } from './running'
 import type { OrchState } from './state'
@@ -83,18 +83,25 @@ export function lifecycleRepairFacts(s: OrchState, task: Task): LifecycleRepairF
   }
 }
 
-/** `s` with the Run's lifecycle Task added when the Run's Job has GitHub lifecycle on, the Run has ordinary Tasks, every
- *  one of them is completed, and the Run has no lifecycle Task yet; else `s` itself. Called by every transition that
- *  moves a Task to completed (applyWorkerDone, applyValidationResult, applyReviewResult, task-update): a table test in
- *  state.test.ts walks each, so a new site without it fails there. A Run that already had one gets the next only from
- *  `runs reconverge` (design §3.5). */
 /** Why a passing lifecycle review is not merge-ready (G5b), as `invalidated.reason`. */
-export type MergeReadyRefusal = 'not-bound' | 'pr-not-open' | 'head-not-pushed' | 'review-of-another-head' | 'ci-not-passed' | 'question-open' | 'local-check-failed'
+export type MergeReadyRefusal = Extract<
+  GitHubInvalidatedReason,
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+>
 
-/** Merge-ready, decided from state alone when a lifecycle Task's review passes (G5b, design §3.5, §5.4, S3): the pull
- *  request open, its head the one Astera pushed, the review read that head (`reviewHead`), CI passed on it or a person
- *  chose to go on without CI there, no question open on the Run, the local checks passed. The evidence, or the first
- *  part that failed. */
+/** Merge-ready, decided from state alone when a lifecycle Task's review passes (G5b, design §3.5, §5.4, S3): GitHub
+ *  readable, the pull request open, its head the one Astera pushed, the review read that head (`reviewHead`), CI passed
+ *  on it — or a person chose to go on without CI there and the head still has none — no question open on the Run, the
+ *  local checks passed (one a person skipped withholds it as skipped). The evidence, with the names CI was judged on as
+ *  the read recorded them, or the first part that failed. */
 export function mergeReadyOf(
   s: OrchState,
   task: Task,
@@ -103,15 +110,19 @@ export function mergeReadyOf(
   const run = s.runs.find((r) => r.id === task.runId)
   const gs = run?.githubState
   if (!run || !gs?.binding) return { reason: 'not-bound' }
+  if (gs.lastReadError) return { reason: 'external-state-unavailable' }
   if (gs.pr?.state !== 'open') return { reason: 'pr-not-open' }
   const head = gs.lastPushedSha
   if (head === undefined || gs.headSha !== head) return { reason: 'head-not-pushed' }
   if (review.reviewHead !== head) return { reason: 'review-of-another-head' }
   const ciPassed = gs.ci?.sha === head && gs.ci.verdict === 'passed'
-  const noCi = gs.ciOverride?.sha === head
+  // A person's go-on-without-CI was for a head with no check at all (S10): CI that ran on it since decides
+  const noCi = gs.ciOverride?.sha === head && !(gs.ci?.sha === head && gs.ci.verdict !== 'none')
   if (!ciPassed && !noCi) return { reason: 'ci-not-passed' }
   if (s.gates.some((g) => g.runId === run.id && g.status === 'open')) return { reason: 'question-open' }
-  if ((task.checks ?? []).some((c) => c.configId !== GITHUB_CI_CHECK && c.status !== 'passed')) return { reason: 'local-check-failed' }
+  const local = (task.checks ?? []).filter((c) => c.configId !== GITHUB_CI_CHECK)
+  if (local.some((c) => c.skipped === true)) return { reason: 'local-check-skipped' }
+  if (local.some((c) => c.status !== 'passed')) return { reason: 'local-check-failed' }
   const selected = s.jobs.find((j) => j.id === run.jobId)?.github?.ci.selectedChecks
   return {
     evidence: {
@@ -122,10 +133,17 @@ export function mergeReadyOf(
       ...(ciPassed ? {} : { ciOverride: 'no-ci' as const }),
       reviewPassed: true,
       unresolvedQuestions: 0,
-      ciChecks: ciPassed && gs.ci ? ciTargetNames(gs.ci.checks, gs.ci.basis, selected) : []
+      // The names as the read judged on them, whole; a record from before G5b's fix computes them from its checks
+      ciChecks: ciPassed && gs.ci ? (gs.ci.targetNames ?? ciTargetNames(gs.ci.checks, gs.ci.basis, selected)) : []
     }
   }
 }
+
+/** `s` with the Run's lifecycle Task added when the Run's Job has GitHub lifecycle on, the Run has ordinary Tasks, every
+ *  one of them is completed, and the Run has no lifecycle Task yet; else `s` itself. Called by every transition that
+ *  moves a Task to completed (applyWorkerDone, applyValidationResult, applyReviewResult, task-update): a table test in
+ *  state.test.ts walks each, so a new site without it fails there. A Run that already had one gets the next only from
+ *  `runs reconverge` (design §3.5). */
 
 export function withLifecycleTask(s: OrchState, runId: string | undefined, now: string): OrchState {
   if (runId === undefined) return s

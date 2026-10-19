@@ -1,7 +1,16 @@
 // The public face of a lifecycle Run's GitHub side (GitHub lifecycle design §5.3, §8): derived on every read from what
 // the Host last recorded, never stored. `runs get`, `jobs get`, MCP get_run, the SDK's runs.get and the run and github
 // events carry it. Node-free.
-import { roundReruns, type CiBasis, type CiFailureClass, type CiVerdict, type GitHubCiCheck, type GitHubLifecyclePolicy, type RunGitHubState } from './lifecycle'
+import {
+  roundReruns,
+  type CiBasis,
+  type CiFailureClass,
+  type CiVerdict,
+  type GitHubCiCheck,
+  type GitHubInvalidatedReason,
+  type GitHubLifecyclePolicy,
+  type RunGitHubState
+} from './lifecycle'
 import type { Gate, Task } from '../orchestration/types'
 
 /** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open, with
@@ -69,7 +78,7 @@ export interface GitHubLifecycleView {
    *  go on without CI if that is why CI did not decide. */
   mergeReady?: { headSha: string; evaluatedAt: string; ciOverride?: 'no-ci' }
   /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
-  invalidated?: { reason: string; at: string }
+  invalidated?: { reason: GitHubInvalidatedReason; at: string }
 }
 
 /** Merge-ready holds while its evidence's head is the PR's head, the PR is open and nothing withdrew it (§5.4). */
