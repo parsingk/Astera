@@ -109,8 +109,9 @@ export function attachPtyHost(a: {
         const ended = a.registry.exitCodeOf(m.id)
         if (ended) send({ t: 'pty-exit', id: m.id, exitCode: ended.code ?? ENDED_WITHOUT_A_CODE })
         // A live pty's program draws again for the tab that attached, after the replay (issue #8): POSIX sends SIGWINCH
-        // only when the size changes, and the tab asks for the size the pty has. Windows' console repaints on its own.
-        else if ((a.platform ?? process.platform) !== 'win32') a.registry.redraw(m.id)
+        // only when the size changes, and the tab asks for the size the pty has. Not for a pty that drew nothing yet (a
+        // worker the app takes up as it starts draws its first screen on its own), and not on Windows, left as it was.
+        else if (buffered !== '' && (a.platform ?? process.platform) !== 'win32') a.registry.redraw(m.id)
         return true
       }
       default:

@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { attachPtyHost } from './ptyHost'
 import { ENDED_WITHOUT_A_CODE } from './exits'
-import { PtyRegistry, type RegistryPty } from './registry'
+import { PtyRegistry, REDRAW_HOLD_MS, type RegistryPty } from './registry'
 import { HOST_FEATURE_PTY_SEQ, type ClientMessage, type HostMessage } from '../core/host/protocol'
 
 function fakePty(pid = 11): RegistryPty & { sent: string[]; sizes: [number, number][]; emit(d: string): void; exit(c: number): void } {
@@ -115,24 +115,75 @@ describe('attachPtyHost', () => {
 
   // Issue #8 (Linux): a reattached tab asks for the size the pty already has, and POSIX sends SIGWINCH only when the size
   // changes, so Claude Code, which draws on SIGWINCH, left the tab blank until a person resized the window. On POSIX the
-  // attach makes the program draw again: one row fewer and back, the size ending where it was and nothing recorded.
-  it('on POSIX, attaching to a live pty makes its program draw again, ending at the same size', () => {
-    const h = harness(fakePty(), 'linux')
-    h.send(spawnMsg)
-    h.pty.emit('earlier output')
-    h.send({ t: 'pty-attach', id: 'p1' })
-    expect(h.pty.sizes).toEqual([[80, 23], [80, 24]])
-    expect(h.registry.size('p1')).toEqual({ cols: 80, rows: 24 })
-    expect(h.broadcast.filter((m) => m.t === 'pty-size')).toEqual([])
+  // attach makes the program draw again the way Claude Code repaints its own ptys: a column narrower, and the size back
+  // REDRAW_HOLD_MS later. Node reads the size once per SIGWINCH and acts only on a change, so a resize undone at once is
+  // one signal that finds the old size and draws nothing. Nothing is recorded or told: the size ends where it was.
+  describe('a reattach on POSIX', () => {
+    beforeEach(() => void vi.useFakeTimers())
+    afterEach(() => void vi.useRealTimers())
+    const attached = (cols = 80) => {
+      const h = harness(fakePty(), 'linux')
+      h.send({ t: 'pty-spawn', id: 'p1', file: 'claude', args: [], opts: { cwd: 'D:/p', cols, rows: 24, env: {} } })
+      h.pty.emit('earlier output')
+      h.send({ t: 'pty-attach', id: 'p1' })
+      return h
+    }
+
+    it('narrows a live pty by a column and gives the size back after the hold', () => {
+      const h = attached()
+      expect(h.pty.sizes).toEqual([[79, 24]])
+      vi.advanceTimersByTime(REDRAW_HOLD_MS - 1)
+      expect(h.pty.sizes).toEqual([[79, 24]])
+      vi.advanceTimersByTime(1)
+      expect(h.pty.sizes).toEqual([[79, 24], [80, 24]])
+      expect(h.registry.size('p1')).toEqual({ cols: 80, rows: 24 })
+      expect(h.broadcast.filter((m) => m.t === 'pty-size')).toEqual([])
+    })
+
+    it('a resize during the hold wins, and the old size is not put back over it', () => {
+      const h = attached()
+      h.send({ t: 'pty-resize', id: 'p1', cols: 100, rows: 30 })
+      vi.advanceTimersByTime(REDRAW_HOLD_MS)
+      expect(h.pty.sizes).toEqual([[79, 24], [100, 30]])
+    })
+
+    it('a pty that ends during the hold is given nothing more', () => {
+      const h = attached()
+      h.pty.exit(0)
+      vi.advanceTimersByTime(REDRAW_HOLD_MS)
+      expect(h.pty.sizes).toEqual([[79, 24]])
+    })
+
+    it('several attaches during the hold make one redraw', () => {
+      const h = attached()
+      h.send({ t: 'pty-attach', id: 'p1' })
+      h.send({ t: 'pty-attach', id: 'p1' })
+      vi.advanceTimersByTime(REDRAW_HOLD_MS)
+      expect(h.pty.sizes).toEqual([[79, 24], [80, 24]])
+    })
+
+    it('a pty two columns wide or less is widened by one instead', () => {
+      const h = attached(2)
+      vi.advanceTimersByTime(REDRAW_HOLD_MS)
+      expect(h.pty.sizes).toEqual([[3, 24], [2, 24]])
+    })
   })
 
-  it('on Windows, and for a pty that ended, attaching changes no size', () => {
+  // A pty that has drawn nothing yet (a worker the app takes up as it starts) draws its first screen on its own, and a
+  // resize while it boots is only noise; Windows is left as it was; an ended pty is answered with its exit.
+  it('attaching changes no size for a pty that drew nothing yet, on Windows, or for a pty that ended', () => {
+    const fresh = harness(fakePty(), 'linux')
+    fresh.send(spawnMsg)
+    fresh.send({ t: 'pty-attach', id: 'p1' })
+    expect(fresh.pty.sizes).toEqual([])
     const win = harness(fakePty(), 'win32')
     win.send(spawnMsg)
+    win.pty.emit('earlier output')
     win.send({ t: 'pty-attach', id: 'p1' })
     expect(win.pty.sizes).toEqual([])
     const ended = harness(fakePty(), 'linux')
     ended.send(spawnMsg)
+    ended.pty.emit('earlier output')
     ended.pty.exit(0)
     ended.send({ t: 'pty-attach', id: 'p1' })
     expect(ended.pty.sizes).toEqual([])
