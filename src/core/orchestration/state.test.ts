@@ -4067,6 +4067,15 @@ describe('GitHub Gates (G3b2)', () => {
     expect(taskOf(a.state, lifecycleId)).toMatchObject({ status: 'validating', ciWait: { ...before, waitingSince: EVEN_LATER } })
   })
 
+  // G4: the command reruns the CI run first; the answer itself is a wait from now
+  it('rerun goes back to the same wait, from now', () => {
+    const { s, lifecycleId } = waiting()
+    const before = taskOf(s, lifecycleId).ciWait!
+    const r = open(s, lifecycleId, 'github-ci-outside', ['rerun', 'wait', 'mark-failed'])
+    const a = unwrap<{ gate: Gate }>(answerGitHubGate(r.state, { gateId: r.value.id, resolution: 'rerun' }, EVEN_LATER) as never)
+    expect(taskOf(a.state, lifecycleId)).toMatchObject({ status: 'validating', ciWait: { ...before, waitingSince: EVEN_LATER } })
+  })
+
   it('no-ci goes back to the wait marked to go on without CI', () => {
     const { s, lifecycleId } = waiting()
     const r = open(s, lifecycleId)

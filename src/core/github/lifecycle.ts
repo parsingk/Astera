@@ -50,6 +50,8 @@ export interface GitHubCiCheck {
   detailsUrl?: string
   /** The Actions run behind a check run. */
   ciRunId?: number
+  /** That run's attempt as read: 1, then one more for each rerun (G4). */
+  ciRunAttempt?: number
   /** The Actions job behind a check run: its databaseId. */
   jobId?: number
   startedAt?: string
@@ -94,6 +96,10 @@ export interface GitHubCiFailure {
    *  still going (gh gives none until the whole run ends, measured), or reads that failed for a reason that passes,
    *  counted in `tries` up to EVIDENCE_TRIES. A log that is gone (expired) is final and sets nothing. */
   incomplete?: { reason: 'run-in-progress' | 'read-failed'; tries: number }
+  /** The failing check's Actions run and that run's attempt as read (G4 final review M2): the run a rerun reruns, known
+   *  whatever the snapshot keeps of the checks. Absent for a commit status. */
+  ciRunId?: number
+  ciRunAttempt?: number
 }
 
 /** How many times the watch makes evidence reads that failed for a reason that passes (G2 final review I1). */
@@ -140,8 +146,23 @@ export interface GitHubCiSnapshot {
   changedAt: string
 }
 
-/** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found. */
-export type GitHubLogKind = 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'source-changed'
+/** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found;
+ *  `ci-rerun`: a CI run of the head was rerun (G4). */
+export type GitHubLogKind = 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'ci-rerun' | 'source-changed'
+
+/** One rerun of a CI run's failed jobs (G4, design §4.6, §5.2). `attempt` is the attempt that failed and was rerun, so
+ *  the rerun has shown once a read gives that run a later one; `sha` is the head it was asked on. `by: 'astera'` is the
+ *  Host's own (L9), which the Job's budget counts; `'person'` was asked by a person's answer or command. */
+export interface GitHubRerun {
+  ciRunId: number
+  attempt: number
+  sha: string
+  check?: string
+  /** The failing check run that was rerun (G4 final review M3): while a read still shows it, the rerun has not shown. */
+  externalId?: string
+  by: 'astera' | 'person'
+  at: string
+}
 
 export interface GitHubLogEntry {
   /** From 1, never reused: a public event is one entry past the last one seen. */
@@ -172,6 +193,8 @@ export interface RunGitHubState {
   ci?: GitHubCiSnapshot
   lastReadError?: { kind: string; since: string }
   sourceChanged?: { at: string }
+  /** At most RERUNS_MAX, oldest dropped (G4). */
+  reruns?: GitHubRerun[]
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
   /** The last entry's seq. */
@@ -180,3 +203,9 @@ export interface RunGitHubState {
 
 export const CI_CHECKS_MAX = 50
 export const GITHUB_LOG_MAX = 100
+export const RERUNS_MAX = 20
+
+/** The reruns asked in the round `since` names, on its head `sha` (G4 final review I1, M5): a rerun of an earlier round
+ *  of the same head is that round's, not this one's. */
+export const roundReruns = (reruns: readonly GitHubRerun[] | undefined, sha: string, since: string): GitHubRerun[] =>
+  (reruns ?? []).filter((r) => r.sha === sha && r.at >= since)

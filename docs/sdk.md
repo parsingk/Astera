@@ -163,15 +163,16 @@ A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, A
 0.4.0 and later) carries its
 policy as `github` (`GitHubLifecyclePolicy`), and each of its Runs carries `github` (`GitHubLifecycle`): the pull
 request Astera bound for the Run's branch, its head commit, the CI checks of that commit with the `verdict` (`pending`,
-`passed`, `failed`, or `none` when the commit has no check) and its `basis` (the required checks, every reported check,
+`passed`, `failed`, or `none` when the commit has no check and no workflow starting) and its `basis` (the required checks, every reported check,
 or the Job's selection), the check that failed first with its link, its `class` and a one-line `summary` of why, and a
 `state` that sums it up (`unbound`,
 `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or `external-state-unavailable` while
 GitHub cannot be read). While the Run's lifecycle Task works, `state` says where it stands instead: `pr-ready` (its local
 checks run before the first push), `awaiting-push` (they run again after an earlier push: after a repair, or in a round a
 person started again), `ci-pending` (CI is awaited), `repairing`, `reviewing`, `waiting-for-user` (a question is open on
-it) or `exhausted` (its repair budget ran out, or it failed; once its pull request is merged or closed, `pr-merged` or
-`pr-closed` instead). It is derived on every read, so `runs.get` always shows what Astera last read.
+it), `ci-infrastructure-failure` (CI failed for a reason a rerun can cure: a rerun of the head's CI is in flight, or a
+question about rerunning it is open) or `exhausted` (its repair budget ran out, or it failed; once its pull request is
+merged or closed, `pr-merged` or `pr-closed` instead). It is derived on every read, so `runs.get` always shows what Astera last read.
 
 ### Jobs and Runs
 
@@ -261,8 +262,8 @@ lifecycle round (`kind` `github-no-ci`, `github-ci-cap`, `github-external-head`,
 `github-pr-closed`, `github-ci-outside` — also after a second failure Astera could not classify, or a repair that fixed
 nothing — or `github-carry`) takes only the `options` it lists: `wait` waits again on
 the same head, `no-ci` lets the round pass without CI, `continue` brings GitHub's commits in by fast-forward and
-starts the checks again, `retry` starts the round again, `pr-<n>` binds pull request n, and `mark-failed` fails the
-Task.
+starts the checks again, `retry` starts the round again, `rerun` reruns the failed jobs of the CI run and waits for
+its new attempt, `pr-<n>` binds pull request n, and `mark-failed` fails the Task.
 
 A question someone already answered (in the app, say) keeps that answer, and `questions.answer` gives it back, so
 compare `resolution` with what you sent. When a person takes a while to type, read the question again
@@ -340,6 +341,7 @@ outlives a Host restart, and `events` reads it. An event:
 | `github.head_changed` | that pull request's head moved | `Run` |
 | `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
 | `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.ci_rerun_requested` | a CI run of the head was rerun through Astera: by Astera itself (a failure outside the code) or by a person's answer or `github-ci-rerun --run` (a rerun made on GitHub's own page is not seen) | `Run` |
 | `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its

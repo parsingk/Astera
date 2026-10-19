@@ -13,17 +13,20 @@ is the guide.
 - `GitHubLifecycle.failing.class` and `summary`: why the first failing check failed, as Astera classified it (test,
   build, lint, typecheck, infrastructure, timeout, permission, configuration, environment, cancelled, unknown).
 - `GitHubLifecycle.state` also says where a Run's lifecycle Task stands while it works: `pr-ready`, `awaiting-push`,
-  `repairing`, `reviewing`, `waiting-for-user` and `exhausted` (a script that switches on every state meets six more).
+  `repairing`, `reviewing`, `waiting-for-user`, `ci-infrastructure-failure` (a rerun of the head's CI in flight, or a
+  question about one) and `exhausted` (a script that switches on every state meets seven more).
 - `Task.kind`: `'lifecycle'` for the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to
   carry the Run through GitHub. It has no worker, and `tasks.create` on that Run is refused while it is open.
-- Six event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,
-  `github.ci_passed`, `github.ci_failed` and `github.source_changed`, each carrying the `Run` it moved. A script that
-  switches on every `EventType` meets six more.
+- Seven event types: `github.pr_bound`, `github.pr_created` (the pull request is one Astera opened), `github.head_changed`,
+  `github.ci_passed`, `github.ci_failed`, `github.ci_rerun_requested` (a CI run of the head was rerun through Astera: by
+  Astera itself when it failed for a reason outside the code, within the Job's `maxInfrastructureReruns`, or by a
+  person's answer or command) and `github.source_changed`, each carrying the `Run` it moved. A script that switches on
+  every `EventType` meets seven more.
 - Seven `GateKind`s for the questions Astera asks about a GitHub lifecycle round: `github-no-ci` (no CI on the pushed
   head), `github-ci-cap` (the wait ran past `ciWaitMinutes`), `github-external-head` (a head Astera did not push),
   `github-pr-ambiguous` (several open pull requests), `github-pr-closed` (the bound pull request was closed or merged),
   `github-ci-outside` (CI failed for a reason outside the code, again for one Astera could not classify, or a repair
-  fixed nothing) and `github-carry` (the round could not be taken to GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `mark-failed` and `pr-<n>`;
+  fixed nothing) and `github-carry` (the round could not be taken to GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `rerun`, `mark-failed` and `pr-<n>`;
   `questions.answer` takes one of them.
 
 ## 0.3.0

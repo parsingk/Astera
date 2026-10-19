@@ -110,6 +110,7 @@ const GITHUB_EVENT: Record<GitHubLogKind, EventType> = {
   'head-changed': 'github.head_changed',
   'ci-passed': 'github.ci_passed',
   'ci-failed': 'github.ci_failed',
+  'ci-rerun': 'github.ci_rerun_requested',
   'source-changed': 'github.source_changed'
 }
 

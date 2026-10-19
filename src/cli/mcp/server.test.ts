@@ -560,7 +560,7 @@ describe('the MCP server', () => {
     // 5b final review M9: only a check-unavailable question refuses an answer that is not one of its options
     expect(of('answer_question').description).toContain('A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed.')
     // GitHub lifecycle G3b2
-    expect(of('answer_question').description).toContain('A question about a GitHub lifecycle round (kind github-*) takes only the options it lists, among wait, no-ci, continue, retry, mark-failed and pr-<n>.')
+    expect(of('answer_question').description).toContain('A question about a GitHub lifecycle round (kind github-*) takes only the options it lists, among wait, no-ci, continue, retry, rerun, mark-failed and pr-<n>.')
     expect(of('answer_question').description).not.toContain('takes one of them')
     expect(of('get_completion').description).toMatch(/diagnostics.*externalUrl.*check-unavailable/)
     // 5b final review M10: a plugin's check has no output; its findings are in get_completion
@@ -1375,6 +1375,7 @@ describe('the GitHub tools (MCP P2-B)', () => {
       ['create_pr', { runId: 'r1', requestId: 'q1' }, 'github-pr-create', { run: 'r1', draft: true }, 'q1'],
       ['create_pr', { runId: 'r1', title: 'T', body: 'B', draft: false }, 'github-pr-create', { run: 'r1', title: 'T', body: 'B', draft: false }],
       ['retry_ci', { projectId: 'p1', ciRunId: 55, requestId: 'q2' }, 'github-ci-rerun', { project: 'p1', runId: 55 }, 'q2'],
+      ['retry_ci', { runId: 'run_1', ciRunId: 55, requestId: 'q3' }, 'github-ci-rerun', { run: 'run_1', runId: 55 }, 'q3'],
       [
         'create_job_from_issue',
         { projectId: 'p1', number: 3, requestId: 'q3' },
@@ -1415,7 +1416,10 @@ describe('the GitHub tools (MCP P2-B)', () => {
       ['get_ci', { runId: 'r1', projectId: 'p1', pr: 1 }],
       ['get_ci', {}],
       ['get_ci', { projectId: 'p1' }],
-      ['get_ci', { runId: 'r1', pr: 1 }]
+      ['get_ci', { runId: 'r1', pr: 1 }],
+      // G4: retry_ci takes a Run or a project
+      ['retry_ci', { runId: 'r1', projectId: 'p1', ciRunId: 5 }],
+      ['retry_ci', { ciRunId: 5 }]
     ]
     for (const [name, input] of bad) {
       const { r, calls } = await call(name, input)

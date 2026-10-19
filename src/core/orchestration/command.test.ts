@@ -34,6 +34,7 @@ import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
 import type { GhResult } from '../github/gh'
 import type { CommitSummary } from '../github/fill'
+import type { RunGitHubState } from '../github/lifecycle'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { parseIssue } from '../github/issue'
 import { issueContext } from '../github/issueSource'
@@ -1523,6 +1524,83 @@ describe('handleCommand — GitHub Gates', () => {
     expect(ran).toEqual([])
     expect((await call(deps, 'gate-resolve', { id, resolution: 'mark-failed' })).status).toBe(409)
     expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+  })
+
+  // GitHub lifecycle G4 (design §4.6): answering rerun reruns the failed Actions run of the waited head first, and the
+  // record of that rerun is written with the answer
+  describe('rerun (G4)', () => {
+    const BOUND = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/run', createdByAstera: true, boundAt: NOW }
+    const failedCi = {
+      sha: SHA, basis: 'all-reported' as const, verdict: 'failed' as const, failing: 'npm-network', changedAt: NOW,
+      checks: [
+        { externalId: 'run:50', name: 'build', status: 'completed' as const, conclusion: 'success' as const, required: false, jobId: 50, ciRunId: 8, ciRunAttempt: 1 },
+        { externalId: 'run:70', name: 'npm-network', status: 'completed' as const, conclusion: 'startup-failure' as const, required: false, jobId: 70, ciRunId: 9, ciRunAttempt: 2 }
+      ],
+      failure: { check: 'npm-network', externalId: 'run:70', class: 'infrastructure' as const, summary: 'npm-network (infrastructure): startup failure', diagnostics: [] }
+    }
+    const rerunRig = (answer: { ok: boolean; stderr?: string }, githubState: RunGitHubState = { binding: BOUND, headSha: SHA, ci: failedCi, log: [], seq: 0 }) => {
+      const deps = seeded()
+      const ran: { args: string[]; cwd: string }[] = []
+      const s = deps.getState()
+      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState })) })
+      const github = deps.github as unknown as Record<string, unknown>
+      deps.github = { ...github, run: async (args: string[], cwd: string) => (ran.push({ args, cwd }), { ok: answer.ok, stdout: '', stderr: answer.stderr ?? '' }) } as never
+      return { deps, ran }
+    }
+    const OPTIONS = ['rerun', 'wait', 'mark-failed']
+
+    it('reruns the failed Actions run in the Run’s repository, records it by a person, and the round waits again', async () => {
+      const { deps, ran } = rerunRig({ ok: true })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(ran).toEqual([{ args: ['run', 'rerun', '9', '--failed', '--repo', 'o/r'], cwd: 'D:/wt/run' }])
+      expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 9, attempt: 2, sha: SHA, check: 'npm-network', externalId: 'run:70', by: 'person', at: NOW }])
+      expect(deps.getState().runs[0].githubState?.log.at(-1)).toMatchObject({ kind: 'ci-rerun', sha: SHA, check: 'npm-network' })
+      expect(taskOf(deps)).toMatchObject({ status: 'validating', ciWait: { sha: SHA } })
+      expect(deps.getState().gates.find((g) => g.id === id)).toMatchObject({ status: 'resolved', resolution: 'rerun' })
+    })
+
+    // G4 final review M2: the snapshot keeps 50 checks; the failure itself names its run
+    it('reruns the run the failure names when the snapshot no longer holds its check, and never another of the same name', async () => {
+      const beyond = { ...failedCi, checks: [failedCi.checks[0]], failure: { ...failedCi.failure, ciRunId: 9, ciRunAttempt: 2 } }
+      const { deps, ran } = rerunRig({ ok: true }, { binding: BOUND, headSha: SHA, ci: beyond, log: [], seq: 0 })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(ran.map((r) => r.args.join(' '))).toEqual(['run rerun 9 --failed --repo o/r'])
+      const sameName = { ...failedCi, checks: [{ ...failedCi.checks[1], externalId: 'run:99', ciRunId: 77 }] }
+      const other = rerunRig({ ok: true }, { binding: BOUND, headSha: SHA, ci: sameName, log: [], seq: 0 })
+      const otherId = await open(other.deps, 'github-ci-outside', OPTIONS)
+      expect((await call(other.deps, 'gate-resolve', { id: otherId, resolution: 'rerun' })).status).toBe(409)
+      expect(other.ran).toEqual([])
+    })
+
+    it('a run already going again is waited on, with nothing recorded', async () => {
+      const { deps } = rerunRig({ ok: false, stderr: 'run 9 cannot be rerun; This workflow is already running' })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(deps.getState().runs[0].githubState?.reruns).toBeUndefined()
+      expect(taskOf(deps).status).toBe('validating')
+    })
+
+    it('a rerun GitHub refuses is refused with its reason, and the question stays open', async () => {
+      const { deps } = rerunRig({ ok: false, stderr: 'run 9 cannot be rerun; This workflow run cannot be retried' })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      const r = await call(deps, 'gate-resolve', { id, resolution: 'rerun' })
+      expect(r.status).toBe(502)
+      expect((r.body as { error: string }).error).toContain('This workflow run cannot be retried')
+      expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+      expect(taskOf(deps).status).toBe('blocked')
+    })
+
+    it('nothing to rerun on the waited head is a conflict, before GitHub is asked', async () => {
+      const passed = { ...failedCi, verdict: 'passed' as const, failure: undefined, failing: undefined }
+      for (const githubState of [{ binding: BOUND, headSha: SHA, ci: passed, log: [], seq: 0 }, { binding: BOUND, headSha: SHA, ci: { ...failedCi, sha: 'd'.repeat(40) }, log: [], seq: 0 }, { log: [], seq: 0 }]) {
+        const { deps, ran } = rerunRig({ ok: true }, githubState)
+        const id = await open(deps, 'github-ci-outside', OPTIONS)
+        expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(409)
+        expect(ran).toEqual([])
+      }
+    })
   })
 
   // G3b2 (S10): a check-unavailable question answers only what it offers
@@ -9148,12 +9226,78 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(gh.calls).toEqual([{ args: ['run', 'rerun', '77', '--failed'], cwd: projectPath }])
     })
 
-    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or a --run, is 400', async () => {
+    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or both targets, is 400', async () => {
       const { deps, gh, projectId } = setup({ 'run rerun 77 --failed': { ok: false, stderr: 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/77/rerun-failed-jobs)' } })
       expect((await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).status).toBe(404)
-      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1', runId: 77 }])
+      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1' }, { run: 'r1', project: projectId, runId: 77 }])
         expect((await call(deps, 'github-ci-rerun', args, '')).status, JSON.stringify(args)).toBe(400)
       expect(gh.calls).toHaveLength(1)
+    })
+
+    // GitHub lifecycle G4 (design §8 Actions, closes inventory I-§12.4): through a Run, only a CI run of its pull request's
+    // head is rerun, in the bound repository, and the Run keeps the rerun so its wait holds for the new attempt
+    describe('github-ci-rerun --run (G4)', () => {
+      const HEAD = '9ecb7effb52d478506d719037f79892b714e8cbb'
+      const OLD = '1'.repeat(40)
+      const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+      const PR_HEAD = 'pr view 34 --json headRefOid,state'
+      const RUN_HEAD = (id: number) => `run view ${id} --json headSha,attempt,status`
+      const runOn = (sha: string, attempt = 1) => ({ stdout: JSON.stringify({ headSha: sha, attempt, status: 'completed' }) })
+
+      it('reruns a CI run of the bound pull request’s head in the bound repository, and the Run keeps it', async () => {
+        const { deps, gh } = setup(
+          {
+            [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+            [`${RUN_HEAD(77)} --repo o/r`]: runOn(HEAD, 2),
+            'run rerun 77 --failed --repo o/r': {}
+          },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 34 } })
+        expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${PR_HEAD} --repo o/r`, `${RUN_HEAD(77)} --repo o/r`, 'run rerun 77 --failed --repo o/r'])
+        expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 77, attempt: 2, sha: HEAD, by: 'person', at: NOW }])
+      })
+
+      // G4 final review M4: a CI run still going is not rerun, and says so as a conflict
+      it('a CI run still going is a conflict before any rerun', async () => {
+        const { deps, gh } = setup(
+          {
+            [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+            [`${RUN_HEAD(77)} --repo o/r`]: { stdout: JSON.stringify({ headSha: HEAD, attempt: 2, status: 'in_progress' }) }
+          },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 409, body: { error: 'CI run 77 is still running: rerun it once it has finished' } })
+        expect(gh.calls.some((c) => c.args[1] === 'rerun')).toBe(false)
+      })
+
+      it('refuses a CI run of another commit before any rerun, naming both', async () => {
+        const { deps, gh } = setup(
+          { [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) }, [`${RUN_HEAD(78)} --repo o/r`]: runOn(OLD) },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 78 }, '')).toEqual({
+          status: 409,
+          body: { error: 'CI run 78 ran on 1111111, not on the head of pull request #34 (9ecb7ef)' }
+        })
+        expect(gh.calls.some((c) => c.args[1] === 'rerun')).toBe(false)
+        expect(deps.getState().runs[0].githubState?.reruns).toBeUndefined()
+      })
+
+      it('a Run not bound yet uses its branch’s pull request; a branch with none is a conflict', async () => {
+        const list = (rows: unknown[]) => ({ stdout: JSON.stringify(rows) })
+        const row = { number: 35, title: 't', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/35', headRefName: 'u/a', statusCheckRollup: [] }
+        const { deps, gh } = setup({
+          [PR_LIST]: list([row]),
+          'pr view 35 --json headRefOid,state': { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+          [RUN_HEAD(77)]: runOn(HEAD),
+          'run rerun 77 --failed': {}
+        })
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 35 } })
+        expect(gh.calls.at(-1)?.args).toEqual(['run', 'rerun', '77', '--failed'])
+        const none = setup({ [PR_LIST]: list([]) })
+        expect((await call(none.deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).status).toBe(409)
+      })
     })
 
     const ISSUE_API = 'api repos/{owner}/{repo}/issues/5'

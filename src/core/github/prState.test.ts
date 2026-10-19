@@ -120,8 +120,39 @@ describe('parsePrState', () => {
     expect(read.suites).toEqual([])
   })
 
-  it('asks for each suite’s conclusion and workflow run', () => {
-    expect(PR_STATE_QUERY).toMatch(/checkSuites\(first:50\)\{ totalCount nodes\{ status conclusion app\{ slug \} checkRuns\(first:1\)\{ totalCount \} workflowRun\{ databaseId url workflow\{ name \} \} \} \}/)
+  it('asks for each suite’s conclusion and workflow run, and each workflow run’s attempt', () => {
+    expect(PR_STATE_QUERY).toMatch(/checkSuites\(first:50\)\{ totalCount nodes\{ status conclusion app\{ slug \} checkRuns\(first:1\)\{ totalCount \} workflowRun\{ databaseId runAttempt url workflow\{ name \} \} \} \}/)
+    expect(PR_STATE_QUERY).toContain('checkSuite{ workflowRun{ databaseId runAttempt workflow{ name } } }')
+  })
+
+  // GitHub lifecycle G4 (measured on the sandbox 2026-10-19): a rerun leaves its workflow's suite QUEUED with no check
+  // run for seconds, and the rollup without that workflow's checks
+  it('counts an Actions suite that has not started its jobs as running, and knows each workflow run’s attempt', () => {
+    const run = (id: number, name: string, attempt: number) => ({ databaseId: id, runAttempt: attempt, url: `https://github.com/o/r/actions/runs/${id}`, workflow: { name } })
+    const read = parsePrState(
+      answer({
+        suites: [
+          { status: 'QUEUED', conclusion: null, app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099662373, 'fixtures', 1) },
+          { status: 'COMPLETED', conclusion: 'SUCCESS', app: { slug: 'github-actions' }, checkRuns: { totalCount: 1 }, workflowRun: run(39100211754, 'Lint', 1) },
+          { status: 'COMPLETED', conclusion: 'FAILURE', app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: run(39099661750, 'broken', 2) },
+          { status: 'QUEUED', conclusion: null, app: { slug: 'stuck-app' }, checkRuns: { totalCount: 0 } },
+          // G4 final review I2: no workflow run behind it, so nothing is starting
+          { status: 'QUEUED', conclusion: null, app: { slug: 'github-actions' }, checkRuns: { totalCount: 0 }, workflowRun: null }
+        ],
+        contexts: [
+          {
+            __typename: 'CheckRun', databaseId: 117594766611, name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', isRequired: false,
+            checkSuite: { workflowRun: { databaseId: 39100211754, runAttempt: 3, workflow: { name: 'Lint' } } }
+          }
+        ]
+      })
+    )!
+    expect(read.suites).toEqual([
+      { app: 'github-actions', completed: false },
+      { app: 'github-actions', completed: true }
+    ])
+    expect(read.checks.find((c) => c.name === 'lint')).toMatchObject({ ciRunId: 39100211754, ciRunAttempt: 3 })
+    expect(read.checks.find((c) => c.name === 'broken')).toMatchObject({ externalId: 'suite:39099661750', ciRunAttempt: 2 })
   })
 
   // Review Focus 2

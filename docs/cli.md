@@ -391,8 +391,10 @@ branch, a lookup or a record that failed). The question keeps the round's wait, 
 `wait` waits again on the same head, `no-ci` lets the round pass without CI and records that a person chose
 it, `continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from
 the first (a history that cannot fast-forward is refused with git's reason, and the question stays open),
-`retry` runs the round again from the first check, `pr-<n>` binds pull request n, and `mark-failed` fails
-the task. Any answer it does not list is a 2.
+`retry` runs the round again from the first check, `rerun` reruns the failed jobs of the CI run on GitHub and
+waits for its new attempt (offered for a failure outside the code a rerun can cure, once Astera's own reruns are
+spent or turned off, or GitHub refused one), `pr-<n>` binds pull request n, and `mark-failed` fails the task. Any
+answer it does not list is a 2.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and
@@ -838,7 +840,7 @@ branch, its head, the CI checks of that head with the `verdict` and the check th
 as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sums
 it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
 `external-state-unavailable` while GitHub cannot be read; while the run's lifecycle Task works, `pr-ready`,
-`awaiting-push`, `ci-pending`, `repairing`, `reviewing`, `waiting-for-user` or `exhausted`). [sdk.md](sdk.md) lists the fields. Once every Task of
+`awaiting-push`, `ci-pending`, `repairing`, `reviewing`, `waiting-for-user`, `ci-infrastructure-failure` or `exhausted`). [sdk.md](sdk.md) lists the fields. Once every Task of
 such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle`, no worker): it folds the Task
 worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
 those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft

@@ -113,7 +113,9 @@ export function ciFailureEvidence(a: { check: GitHubCiCheck; log?: string; annot
     diagnostics: diagnosticsFrom(annotations),
     ...(diagnosticsCount(annotations) > DIAGNOSTICS_MAX ? { diagnosticsTotal: diagnosticsCount(annotations) } : {}),
     ...(logExcerpt !== undefined ? { logExcerpt } : {}),
-    ...(a.check.detailsUrl ? { url: sanitize(a.check.detailsUrl) } : {})
+    ...(a.check.detailsUrl ? { url: sanitize(a.check.detailsUrl) } : {}),
+    ...(a.check.ciRunId !== undefined ? { ciRunId: a.check.ciRunId } : {}),
+    ...(a.check.ciRunAttempt !== undefined ? { ciRunAttempt: a.check.ciRunAttempt } : {})
   }
 }
 

@@ -99,6 +99,7 @@ export type GitHubLifecycleState =
   | 'reviewing'
   | 'waiting-for-user'
   | 'exhausted'
+  | 'ci-infrastructure-failure'
 
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {
@@ -429,6 +430,7 @@ export type EventType =
   | 'github.head_changed'
   | 'github.ci_passed'
   | 'github.ci_failed'
+  | 'github.ci_rerun_requested'
   | 'github.source_changed'
 
 /** The session a session event is about: five of the fields `astera sessions list` shows for it. `title`, `provider`
@@ -490,6 +492,7 @@ export interface EventPayloads {
   readonly 'github.head_changed': Run
   readonly 'github.ci_passed': Run
   readonly 'github.ci_failed': Run
+  readonly 'github.ci_rerun_requested': Run
   readonly 'github.source_changed': Run
 }
 

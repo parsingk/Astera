@@ -113,6 +113,13 @@ describe('diagnosticsFrom', () => {
 })
 
 describe('ciFailureEvidence', () => {
+  // G4 final review M2: the run to rerun is known whatever the snapshot keeps of the checks
+  it('carries the failing check’s Actions run and its attempt', () => {
+    const f = ciFailureEvidence({ check: { externalId: 'run:70', name: 'npm-network', status: 'completed', conclusion: 'startup-failure', required: false, jobId: 70, ciRunId: 9, ciRunAttempt: 2 } })
+    expect(f).toMatchObject({ externalId: 'run:70', ciRunId: 9, ciRunAttempt: 2 })
+    expect(ciFailureEvidence({ check: { externalId: 'status:ci/x', name: 'ci/x', status: 'completed', conclusion: 'failure', required: false } })).not.toHaveProperty('ciRunId')
+  })
+
   it('classifies the real log as test and says why in one line', () => {
     const e = ciFailureEvidence({ check: check(), log: realLog, annotations: [{ path: '.github', start_line: 43, annotation_level: 'failure', message: 'Process completed with exit code 1.' }] })
     expect(e).toMatchObject({ check: 'test', externalId: 'run:117497085011', class: 'test', summary: 'test (test): not ok 1 - adds', diagnostics: [], url: 'https://github.com/o/r/actions/runs/1/job/117497085011' })
@@ -172,7 +179,8 @@ describe('ciFailureEvidence', () => {
       class: 'configuration',
       summary: '.github/workflows/invalid.yml (configuration): the workflow file could not run: no job started',
       diagnostics: [],
-      url: 'https://github.com/o/r/actions/runs/39099661750'
+      url: 'https://github.com/o/r/actions/runs/39099661750',
+      ciRunId: 39099661750
     })
   })
 

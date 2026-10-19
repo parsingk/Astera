@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parsePrList, prByNumber, prForBranch, PR_LIST_ARGS, PR_LIST_LIMIT } from './prs'
+import { parsePrList, prByNumber, prForBranch, prHead, PR_LIST_ARGS, PR_LIST_LIMIT } from './prs'
 import type { GhResult, GhRunner } from './gh'
 
 type Row = Record<string, unknown>
@@ -148,5 +148,21 @@ describe('prForBranch', () => {
       ok: false,
       kind: 'other'
     })
+  })
+})
+
+// GitHub lifecycle G4: the head a CI run must have run on to be rerun through a Run
+describe('prHead', () => {
+  const runner = (stdout: string, ok = true, calls: string[][] = []) => async (args: string[]) => (calls.push(args), { ok, stdout, stderr: ok ? '' : 'HTTP 404: Not Found' })
+  it('reads a pull request’s head commit and state, in the given repository', async () => {
+    const calls: string[][] = []
+    const r = await prHead(runner(JSON.stringify({ headRefOid: 'a'.repeat(40), state: 'OPEN' }), true, calls), 'd', 34, { host: 'github.com', owner: 'o', name: 'r' })
+    expect(calls).toEqual([['pr', 'view', '34', '--json', 'headRefOid,state', '--repo', 'o/r']])
+    expect(r).toEqual({ ok: true, headSha: 'a'.repeat(40), state: 'OPEN' })
+  })
+
+  it('an answer that is not one is a failed read', async () => {
+    expect(await prHead(runner('{"state":"OPEN"}'), 'd', 34)).toMatchObject({ ok: false, kind: 'other' })
+    expect(await prHead(runner('', false), 'd', 34)).toMatchObject({ ok: false })
   })
 })

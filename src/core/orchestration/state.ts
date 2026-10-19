@@ -1408,6 +1408,7 @@ export function answerGitHubGate(s: OrchState, a: { gateId: string; resolution: 
     const fresh: Task = { ...moved, consecutiveFailures: 0 }
     return ok({ ...s, gates, tasks: recomputeReady(replace(s.tasks, fresh)) }, { gate: resolved })
   }
+  // wait, and rerun (G4: the command reran the CI run first), go back to the wait from now
   const bind = BIND_PR_ANSWER.exec(a.resolution)
   const wait: NonNullable<Task['ciWait']> =
     a.resolution === 'no-ci' ? { ...ciWait, noCi: true, waitingSince: now } : bind ? { ...ciWait, bindPr: Number(bind[1]) } : { ...ciWait, waitingSince: now }

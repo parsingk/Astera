@@ -446,7 +446,7 @@ describe('publicFor runs-completion', () => {
 // SDK 1d: the public events (SDK spec §6). The envelope is an allowlist like any answer, and the payload is the public
 // DTO of its type, shaped by the same rules as the read that returns that object.
 describe('the event types', () => {
-  it('are the twenty-four the Host produces, once each, frozen', () => {
+  it('are the twenty-five the Host produces, once each, frozen', () => {
     expect(pkg.EVENT_TYPES).toEqual([
       'job.created',
       'job.updated',
@@ -471,6 +471,7 @@ describe('the event types', () => {
       'github.head_changed',
       'github.ci_passed',
       'github.ci_failed',
+      'github.ci_rerun_requested',
       'github.source_changed'
     ])
     expect(Object.isFrozen(pkg.EVENT_TYPES)).toBe(true)

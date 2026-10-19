@@ -63,7 +63,9 @@ describe('runView — GitHub lifecycle (G1)', () => {
         { tasks: [{ ...lifecycleTask, id: 'tsk_old', status: 'failed', createdAt: 'T1' }, lifecycleTask] },
         'pr-ready'
       ],
-      ['a repair whose worker is gone, no Dispatch open', { tasks: [{ ...lifecycleTask, status: 'dispatched' }] }, 'repairing']
+      ['a repair whose worker is gone, no Dispatch open', { tasks: [{ ...lifecycleTask, status: 'dispatched' }] }, 'repairing'],
+      // G4: the question past the rerun budget
+      ['a question offering a CI rerun', { tasks: [{ ...lifecycleTask, status: 'blocked' }], gates: [gate({ kind: 'github-ci-outside', options: ['rerun', 'wait', 'mark-failed'] })] }, 'ci-infrastructure-failure']
     ]
     it.each(rows)('%s', (_name, over, state) => {
       expect(runView(stateWith(over), runOf).github).toMatchObject({ state })

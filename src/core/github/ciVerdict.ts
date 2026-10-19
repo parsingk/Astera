@@ -50,7 +50,8 @@ export function evaluateCi(
       targets = read.checks.filter((c) => !(settled(c) && NOTHING_CHECKED.includes(c.conclusion!)))
     }
   }
-  if (basis === 'all-reported' && read.checks.length === 0) return { basis, verdict: 'none' }
+  // An Actions suite with no check yet is a workflow starting: CI is coming, not absent (G4)
+  if (basis === 'all-reported' && read.checks.length === 0) return { basis, verdict: read.suites.some((s) => !s.completed) ? 'pending' : 'none' }
   const failing = targets
     .filter((c) => settled(c) && !PASSING.includes(c.conclusion!))
     .sort((a, b) => (a.completedAt ?? '').localeCompare(b.completedAt ?? ''))[0]
