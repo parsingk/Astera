@@ -30,6 +30,7 @@ export function GithubLifecycleDefaultsView(p: { value: GitHubLifecycleDefaults;
       // A new saved value replaces what the field shows
       key={p.value[field]}
       type="number"
+      className="settings-gen-input settings-lifecycle-number"
       min={b.min}
       max={b.max}
       defaultValue={p.value[field]}

@@ -1178,6 +1178,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .settings-gen-input { min-width: 200px; padding: 5px 8px; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 12.5px; }
 .settings-gen-input:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* Settings › GitHub's lifecycle defaults (G7a): a count and minutes, not a line of text */
+.settings-lifecycle-number { min-width: 0; width: 96px; }
+.settings-lifecycle-number:disabled { opacity: 0.5; }
 .settings-gen-refresh { align-self: flex-start; padding: 5px 10px; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; font-size: 12px; }
 .settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }
