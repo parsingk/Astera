@@ -17,7 +17,7 @@ import { isLifecycleTask } from '../core/orchestration/lifecycleTask'
 import type { OrchState } from '../core/orchestration/state'
 import type { CheckResult, GitHubGateKind, Task } from '../core/orchestration/types'
 import { t as translate, type Lang, type MessageKey, type MessageParams } from '../core/i18n'
-import type { WatchedWorktree } from './githubWatch'
+import { RATE_HOLD_MS, type WatchedWorktree } from './githubWatch'
 
 type Reply = { status: number; body: unknown }
 
@@ -48,7 +48,7 @@ export interface LifecycleCiDeps {
   openGitHubGate(a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] }): Promise<Reply>
   /** The bound pull request's state now, read before a push (G6, spec §30): one merged or closed while the lifecycle Task
    *  repaired, or while the Host was down, is not pushed onto. Without it the record decides. */
-  readPr?(cwd: string, repo: GitHubRepo, n: number): Promise<{ ok: true; state: 'open' | 'closed' | 'merged' | null } | GhFailed>
+  readPr?(cwd: string, repo: GitHubRepo, n: number): Promise<{ ok: true; state: 'open' | 'closed' | 'merged' } | GhFailed>
   /** Runs `run` after `ms`; the carrier's retry of a network failure (G6). Defaults to an unref'd timer. */
   schedule?(ms: number, run: () => void): void
   /** The person's language, for the questions (G3b2). */
@@ -61,6 +61,8 @@ export interface LifecycleCi {
   onState(s: OrchState): void
   /** Resolves when no round is being carried (tests). */
   drain(): Promise<void>
+  /** The Host leaves: nothing more is carried, a scheduled retry included (G6 final review M2). */
+  stop(): void
 }
 
 /** A round a carry left where it was (a Gate that could not open, a record that failed) is taken again after this,
@@ -74,8 +76,9 @@ const PUSH_WORDS: Record<Exclude<PushFailure['kind'], 'rejected'>, MessageKey> =
   other: 'jobs.gate.github.push.other'
 }
 
-/** The wait a carry took up: its round, and a person's choice of pull request (G3b2), which is news to take up at once. */
-const waitKey = (t: Task): string => `${t.ciWait!.since}#${t.ciWait!.bindPr ?? ''}`
+/** The wait a carry took up: its round, a person's choice of pull request (G3b2) and when the wait last began — a
+ *  person's `wait` answer moves only that (G6 final review I1) — each news to take up at once, cooling or not. */
+const waitKey = (t: Task): string => `${t.ciWait!.since}#${t.ciWait!.bindPr ?? ''}#${t.ciWait!.waitingSince ?? ''}`
 
 /** How many network failures in a row a round's carry takes before it asks a person (G6, spec §29: bounded retry, then
  *  user action). auth and every other kind ask at once. */
@@ -98,13 +101,16 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
   const inFlight = new Map<string, Promise<void>>()
   /** Each round last carried (`taskId` → the wait it carried, `waitKey`) and when it may be taken again. */
   const cooling = new Map<string, { wait: string; until: number }>()
-  /** Network failures in a row, per round (`taskId#since`) (G6). */
+  /** Network failures in a row, per round (`taskId#since`) (G6). A carry that ends any other way drops its entry, so
+   *  another stop between two failures starts the count again, and a round that ended leaves nothing behind (G6 final
+   *  review M3). */
   const transient = new Map<string, number>()
+  let stopped = false
   /** The last state seen, for a retry the carrier schedules itself: nothing else may come to take the round again. */
   let latest: OrchState | null = null
   const schedule = d.schedule ?? ((ms: number, run: () => void) => void setTimeout(run, ms).unref?.())
 
-  const carry = async (s: OrchState, task: Task): Promise<void> => {
+  const carry = async (s: OrchState, task: Task): Promise<void | 'retry'> => {
     const since = task.ciWait!.since
     const askGitHub = (kind: GitHubGateKind, question: string, options: string[]): Promise<void> => askAbout(task, kind, question, options)
     /** The carrier's own stop: a person fixes it and tries again, or gives up (G3b2 final review M7). */
@@ -112,19 +118,18 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
     const tries = `${task.id}#${since}`
     /** A failure the network may cure is tried again after the cooling, and asked about only on the TRANSIENT_TRIES-th in a
      *  row (G6, spec §29); any other kind asks at once. */
-    const askUnlessTransient = (kind: string, question: string): Promise<void> => {
+    const askUnlessTransient = (kind: string, question: string): Promise<void | 'retry'> => {
       if (!transientKind(kind)) return ask(question)
       const n = (transient.get(tries) ?? 0) + 1
-      if (n >= TRANSIENT_TRIES) {
-        transient.delete(tries)
-        return ask(question)
-      }
+      if (n >= TRANSIENT_TRIES) return ask(question)
       transient.set(tries, n)
-      d.log(`lifecycle ci: task ${task.id}: ${kind} failure ${n} of ${TRANSIENT_TRIES}, tried again in ${RETRY_MS / 1000} s — ${question}`)
-      schedule(RETRY_MS + 1_000, () => {
-        if (latest) api.onState(latest)
+      // A rate limit holds every read of the watch for RATE_HOLD_MS; the carrier waits as long (G6 final review M4)
+      const wait = kind === 'rate-limit' ? RATE_HOLD_MS : RETRY_MS + 1_000
+      d.log(`lifecycle ci: task ${task.id}: ${kind} failure ${n} of ${TRANSIENT_TRIES}, tried again in ${Math.round(wait / 1000)} s — ${question}`)
+      schedule(wait, () => {
+        if (latest && !stopped) api.onState(latest)
       })
-      return Promise.resolve()
+      return Promise.resolve('retry')
     }
     const fail = (summary: string): Promise<void> =>
       d.settle({
@@ -233,19 +238,24 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
     if (recorded.status >= 300) return ask(say('jobs.gate.github.carry.recordFailed', { reason: JSON.stringify(recorded.body) }))
     const waited = await d.recordWait({ taskId: task.id, since, pr: binding.number, sha })
     if (waited.status >= 300) return ask(say('jobs.gate.github.carry.waitFailed', { reason: JSON.stringify(waited.body) }))
-    transient.delete(tries)
   }
 
   const api: LifecycleCi = {
     onState: (s) => {
+      if (stopped) return
       latest = s
       for (const task of s.tasks) {
         if (!awaitingPush(task) || inFlight.has(task.id)) continue
         const cool = cooling.get(task.id)
         if (cool && cool.wait === waitKey(task) && now() < cool.until) continue
+        const tries = `${task.id}#${task.ciWait!.since}`
         // A step that throws asks a person: left alone, every state would take the round again at once
         const p = carry(s, task)
+          .then((r) => {
+            if (r !== 'retry') transient.delete(tries)
+          })
           .catch(async (e) => {
+            transient.delete(tries)
             d.log(`lifecycle ci: task ${task.id}: ${String(e)}`)
             await askAbout(task, 'github-carry', say('jobs.gate.github.carry.threw', { error: String(e) }), ['retry', 'mark-failed'])
           })
@@ -259,6 +269,9 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
     },
     drain: async () => {
       while (inFlight.size > 0) await Promise.all([...inFlight.values()])
+    },
+    stop: () => {
+      stopped = true
     }
   }
   return api

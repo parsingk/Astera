@@ -246,8 +246,11 @@ async function main(): Promise<void> {
     // check: the Task stays validating or reviewing, and the next Host restarts it (a convergence Job)
     // or gates it (otherwise). Never throws.
     wiring?.dispose()
-    // The GitHub watch reads no more: a read under way records into a state that is about to be saved and left.
+    // The GitHub watch reads no more: a read under way records into a state that is about to be saved and left. Nor does
+    // the carrier push, a retry it scheduled included, nor does the early load load (G6 final review M2).
     githubWatch?.stop()
+    lifecycleCi?.stop()
+    earlyLoad?.cancel()
     // No reap from here on: a leaked console host ends with the Host (measured 2026-09-26).
     conhostReaper.dispose()
     // **The rolling stops with it** (S6 R16): its tick and the app-gone watch stop, so no takeover starts
@@ -358,6 +361,7 @@ async function main(): Promise<void> {
   let runGit: RunGitRecorder | null = null
   let githubWatch: GithubWatch | null = null
   let lifecycleCi: LifecycleCi | null = null
+  let earlyLoad: { cancel(): void } | null = null
   const worktrees = createHostWorktrees({
     profileDir,
     integrateHooks: () => runGit,
@@ -913,9 +917,6 @@ async function main(): Promise<void> {
       })
     : null
   githubWatch?.start()
-  // G6 (design §6.3 S5): a Remote Host with no app attached loads its state by itself, so its CI waits resume after a
-  // restart with no client (host/earlyLoad.ts)
-  armEarlyLoad({ remoteEnabled: () => remoteEnabled, hasApp: () => server.hasApp(), load: () => orch.loadUnattended(), log: (m) => log.write(m) })
 
   // G3b1 (design §4.1-4.3): a lifecycle round handed over at github:ci is pushed, bound to its pull request, and set to
   // wait; the watch above then reads CI on that head. Same condition as the watch: no spawner, no worktree registry.
@@ -933,7 +934,9 @@ async function main(): Promise<void> {
         // G6 (spec §30): the bound pull request as it is now, read before every push
         readPr: async (cwd, repo, n) => {
           const r = await prByNumber(defaultGhRunner, cwd, repo, n)
-          return r.ok ? { ok: true, state: r.pr?.state ?? null } : r
+          // A pull request gh cannot find is a read that failed, never one to push onto (G6 final review M7)
+          if (!r.ok) return r
+          return r.pr ? { ok: true, state: r.pr.state } : { ok: false, kind: 'other', message: `pull request #${n} was not found` }
         },
         record: (args) => orch.handle('runs-github-record', args),
         recordWait: (args) => orch.handle('lifecycle-ci-wait', args),
@@ -1125,6 +1128,10 @@ async function main(): Promise<void> {
   void mcpHttp.reload()
   // And the Remote Gateway (remote runtime design §2.3: every Host start reads remote-runtime.json).
   void gateway.reload()
+  // G6 (design §6.3 S5): a Remote Host with no app attached loads its state by itself, so its CI waits resume after a
+  // restart with no client (host/earlyLoad.ts). Armed once the server listens, so `hasApp` has a server to ask, and
+  // cancelled when the Host leaves (G6 final review M2).
+  earlyLoad = armEarlyLoad({ remoteEnabled: () => remoteEnabled, hasApp: () => server.hasApp(), load: () => orch.loadUnattended(), log: (m) => log.write(m) })
   // And the enabled plugins (plugin runtime design P11), once the orch that answers them listens. Never rejects.
   void plugins.startAll()
 

@@ -2,6 +2,7 @@
 // push, the open or new draft pull request, and the wait recorded; on fakes for git, gh and the Host's commands.
 import { describe, it, expect } from 'vitest'
 import { RETRY_MS, createLifecycleCi, type LifecycleCiDeps } from './lifecycleCi'
+import { RATE_HOLD_MS } from './githubWatch'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, JobSourceRef } from '../core/orchestration/types'
 import type { GitHubBinding } from '../core/github/lifecycle'
@@ -47,6 +48,8 @@ function rig(o: {
   live?: Awaited<ReturnType<NonNullable<LifecycleCiDeps['readPr']>>>[]
   /** Answers for the n-th push (G6 retries), the last repeating; overrides `push`. */
   pushes?: Awaited<ReturnType<LifecycleCiDeps['push']>>[]
+  /** The first lookups fail with these, one each, before `open` answers (G6 final review M10). */
+  lookupFails?: { ok: false; kind: 'network' | 'rate-limit' | 'auth' | 'other'; message: string }[]
 } = {}) {
   const calls: string[] = []
   const settled: { taskId: string; result: CheckResult }[] = []
@@ -58,6 +61,7 @@ function rig(o: {
   const clock = { now: NOW }
   let headCalls = 0
   const lives = [...(o.live ?? [])]
+  const lookupFails = [...(o.lookupFails ?? [])]
   const pushes = [...(o.pushes ?? [])]
   const scheduled: { ms: number; run: () => void }[] = []
   const deps: LifecycleCiDeps = {
@@ -70,6 +74,8 @@ function rig(o: {
     headOf: async (_cwd, ref) => (calls.push(ref ? `headOf ${ref}` : 'headOf'), o.heads ? o.heads(ref, headCalls++) : SHA),
     findOpenPrs: async () => {
       calls.push('findOpenPrs')
+      const fail = lookupFails.shift()
+      if (fail) return fail
       const next = lookups.length > 1 ? lookups.shift()! : lookups[0]
       return { ok: true, prs: next.map((n) => ({ number: n, url: `https://github.com/parsingk/astera-lifecycle-sandbox/pull/${n}` })) }
     },
@@ -300,6 +306,20 @@ describe('createLifecycleCi', () => {
       expect(r.calls).toContain('push')
       expect(r.waits).toHaveLength(1)
     })
+    // G6 final review I1: a person's `wait` is news, as a chosen pull request is — answered inside the cooling, the round is
+    // taken again at once (the answer moves only `waitingSince`), or a quiet Host never carries it
+    it('a wait answered inside the cooling takes the round again at once', async () => {
+      const r = rig({ live: [{ ok: true, state: 'closed' }, { ok: true, state: 'open' }] })
+      r.ci.onState(stateWith({ binding }))
+      await r.ci.drain()
+      expect(r.githubGates[0]).toMatchObject({ kind: 'github-pr-closed' })
+      r.clock.now += 50_000 // inside the cooling
+      r.ci.onState(stateWith({ binding, ciWait: { since: ISO, done: [], waitingSince: new Date(r.clock.now).toISOString() } as never }))
+      await r.ci.drain()
+      expect(r.calls).toContain('push')
+      expect(r.waits).toHaveLength(1)
+    })
+
     it('with no live read it goes by the record', async () => {
       const r = rig()
       r.ci.onState(stateWith({ binding, prState: 'merged' }))
@@ -334,6 +354,67 @@ describe('createLifecycleCi', () => {
       expect(r.gates).toEqual([])
       expect(r.waits).toHaveLength(1)
     })
+    // G6 final review M3: "in a row" — another stop between two network failures starts the count again
+    it('another stop between network failures starts the count again', async () => {
+      const binding: GitHubBinding = { repository: 'parsingk/astera-lifecycle-sandbox', number: 3, url: 'u', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: ISO }
+      const r = rig({ pushes: [NET], live: [{ ok: true, state: 'open' }, { ok: true, state: 'closed' }, { ok: true, state: 'open' }] })
+      r.ci.onState(stateWith({ binding }))
+      await r.ci.drain() // network failure 1
+      await r.retry() // the PR was closed: a question, not a network failure
+      expect(r.githubGates.map((g) => g.kind)).toEqual(['github-pr-closed'])
+      r.clock.now += 1_000
+      r.ci.onState(stateWith({ binding, ciWait: { since: ISO, done: [], waitingSince: new Date(r.clock.now).toISOString() } as never })) // answered wait
+      await r.ci.drain() // network failure 1 again
+      await r.retry() // network failure 2
+      expect(r.gates).toEqual([])
+    })
+
+    // G6 final review M4: the watch holds every read for RATE_HOLD_MS on a rate limit; the carrier waits as long
+    it('a rate limit is tried again only after the watch’s hold', async () => {
+      const r = rig({ lookupFails: [{ ok: false, kind: 'rate-limit', message: 'API rate limit exceeded' }] })
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      expect(r.gates).toEqual([])
+      expect(r.scheduled.map((s) => s.ms)).toEqual([RATE_HOLD_MS])
+    })
+
+    // G6 final review M10
+    it('a lookup that failed for the network is retried, and binds on the next try', async () => {
+      const r = rig({ lookupFails: [{ ok: false, kind: 'network', message: 'Could not reach GitHub' }], open: [[5]] })
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      expect(r.gates).toEqual([])
+      await r.retry()
+      expect(r.records[0]).toMatchObject({ patch: { binding: { number: 5 } } })
+      expect(r.waits).toHaveLength(1)
+    })
+
+    it('a scheduled retry that meets the round already being carried carries it once', async () => {
+      const r = rig({ pushes: [NET, { ok: true }] })
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      const [due] = r.scheduled.splice(0)
+      r.clock.now += RETRY_MS + 1_000
+      due.run()
+      due.run()
+      await r.ci.drain()
+      expect(r.calls.filter((c) => c === 'push')).toHaveLength(2)
+      expect(r.waits).toHaveLength(1)
+    })
+
+    // G6 final review M2: a retry scheduled before the Host leaves does nothing after it
+    it('does nothing once stopped, a scheduled retry included', async () => {
+      const r = rig({ pushes: [NET, { ok: true }] })
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      r.ci.stop()
+      await r.retry()
+      expect(r.calls.filter((c) => c === 'push')).toHaveLength(1)
+      r.ci.onState(stateWith())
+      await r.ci.drain()
+      expect(r.calls.filter((c) => c === 'push')).toHaveLength(1)
+    })
+
     it('a live read that failed for the network is retried too; one refused for auth asks at once', async () => {
       const binding: GitHubBinding = { repository: 'parsingk/astera-lifecycle-sandbox', number: 3, url: 'u', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: ISO }
       const net = rig({ live: [{ ok: false, kind: 'network', message: 'Could not reach GitHub' }, { ok: true, state: 'open' }] })
