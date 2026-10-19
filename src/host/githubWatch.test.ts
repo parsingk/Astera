@@ -970,6 +970,14 @@ describe('githubWatch', () => {
         expect(r.gates).toHaveLength(1)
       })
 
+      // G6 final review M5: the record's lastReadError is from before this pass; a good read on the cap means GitHub answered
+      it('a good read on the cap after an outage says CI gave no verdict, whatever the record still says', async () => {
+        const r = rig({ read: running })
+        r.watch.onState(waiting({}, { githubState: { ...BOUND, lastReadError: { kind: 'network', since: ISO0 } } }))
+        await r.at(90 * 60_000)
+        expect(r.gates.map((g) => g.question)).toEqual([expect.stringContaining('gave no verdict in 90 minutes (PR #12)')])
+      })
+
       it('a wait past the cap while CI still runs says CI gave no verdict', async () => {
         const r = rig({ read: running })
         r.watch.onState(waiting())

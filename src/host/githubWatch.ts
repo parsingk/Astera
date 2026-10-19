@@ -590,8 +590,9 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (round?.sha === undefined || decided.get(t.runId) === decisionOf(round)) return
     const minutes = t.policy.ciWaitMinutes
     if (now() - Date.parse(round.waitingSince) < minutes * 60_000) return
-    // While the reads fail it is GitHub that could not be read, not CI that gave no verdict (G6, map fact 25)
-    const unreadable = failures.has(t.runId) || t.state?.lastReadError !== undefined
+    // While the reads fail it is GitHub that could not be read, not CI that gave no verdict (G6, map fact 25) — decided by
+    // this watch's own reads, which a good read clears, not by the record taken before this pass (G6 final review M5)
+    const unreadable = failures.has(t.runId)
     const params = { sha: short(round.sha), minutes, pr: t.state?.binding?.number ?? 0 }
     await ask(t.runId, round, 'github-ci-cap', say(unreadable ? 'jobs.gate.github.q.capUnreadable' : 'jobs.gate.github.q.cap', params), ['wait', 'mark-failed'])
   }

@@ -33,6 +33,7 @@ import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { PrStateRead } from '../core/github/prState'
 import type { GitHubBinding } from '../core/github/lifecycle'
 import type { Provider } from '../core/types'
+import { JournalReader } from '../core/continuity/journalReader'
 
 const WAIT = { timeout: 20_000, interval: 20 }
 const until = <T>(fn: () => T | Promise<T>): Promise<T> => vi.waitFor(fn, WAIT)
@@ -60,7 +61,8 @@ async function profile(seed: (a: { repo: string; sha: string; since: string }) =
   gitSync(repo, ['add', 'add.js'])
   gitSync(repo, ['commit', '-m', 'Fix add'])
   const sha = gitSync(repo, ['rev-parse', 'HEAD']).trim()
-  await fs.writeFile(path.join(profileDir, 'app-settings.json'), JSON.stringify({ orchAlwaysOnMigrated: true }))
+  // Job Continuity on: the Host journals what it does, the GITHUB_* rows included (G6, design §5.5)
+  await fs.writeFile(path.join(profileDir, 'app-settings.json'), JSON.stringify({ orchAlwaysOnMigrated: true, jobContinuityEnabled: true }))
   await fs.writeFile(path.join(profileDir, 'worktrees.json'), JSON.stringify({ root: path.join(home, 'wt'), items: [] }))
   const configDir = path.join(home, 'cfg', 'acc_1')
   await fs.mkdir(configDir, { recursive: true })
@@ -228,13 +230,23 @@ async function boot(p: { profileDir: string; home: string; repo: string }, gh: {
 
 const lifecycleTaskOf = (s: OrchState) => s.tasks.find((t) => t.id === 'tsk_l')!
 
+const journalTypes = (profileDir: string): string[] => {
+  const r = new JournalReader(path.join(profileDir, 'orch', 'continuity.sqlite'))
+  try {
+    return r.eventsFor('run_1').map((e) => e.type)
+  } finally {
+    r.close()
+  }
+}
+
 describe('a lifecycle Run after a Host restart (GitHub lifecycle G6, design §6.3, §10)', { timeout: 60_000 }, () => {
   // Characterization: G3a gave the restart cleanup its lifecycle branch and G3b1 the watch's round from state, so this
   // passes on the code before G6 once the Host has loaded (g6 code map facts 8-11)
-  it('a CI wait the killed Host left is read at once and settled once: no push, no pull request, no rerun', async () => {
+  // Loaded as the early load loads a Remote Host with no client (loadUnattended, host/earlyLoad.ts), and journaled
+  it('a CI wait the killed Host left is read at once and settled once: no push, no pull request, no rerun, and journaled', async () => {
     const p = await profile(({ repo, sha, since }) => lifecycleRun({ repo, since, ciWait: { since, done: [], pr: 12, sha }, github: { lastPushedSha: sha, pr: { state: 'open', isDraft: true, baseBranch: 'main' } } }))
     const h = await boot(p, { read: passed(p.sha) })
-    await h.orch.ready()
+    await h.orch.loadUnattended()
     await h.watch.tick()
     await until(() => expect(lifecycleTaskOf(h.state()).status).not.toBe('validating'))
     const task = lifecycleTaskOf(h.state())
@@ -242,6 +254,7 @@ describe('a lifecycle Run after a Host restart (GitHub lifecycle G6, design §6.
     expect(task.checks?.find((c) => c.configId === 'github:ci')?.status).toBe('passed')
     expect(h.calls.filter((c) => c === 'push' || c === 'createDraftPr' || c === 'rerunCi')).toEqual([])
     expect(h.calls.filter((c) => c === 'readPrState')).toHaveLength(1)
+    await until(() => expect(journalTypes(p.profileDir)).toContain('GITHUB_CI_PASSED'))
   })
 
   it('a round the killed Host was about to push is pushed once, to the pull request it is bound to, and waits', async () => {
