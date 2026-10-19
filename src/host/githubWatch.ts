@@ -240,8 +240,10 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
               taskSince: open.createdAt
             }
           : undefined
-      // A closed PR is read no more, unless a round waits on it: a person is asked (G3b2)
-      if (gs?.pr && gs.pr.state !== 'open' && round?.sha === undefined) continue
+      // A merged PR is read no more, unless a round waits on it: a person is asked (G3b2). A closed one is read while the
+      // Run's lifecycle Task works, so a reopening on GitHub during a repair or the review is seen (G6, spec §30); once
+      // the Run is not carried any more, `runs reconverge` reads it live itself.
+      if (gs?.pr && gs.pr.state !== 'open' && round?.sha === undefined && (gs.pr.state === 'merged' || !open)) continue
       if (!gs?.binding && now() - Date.parse(run.createdAt) > UNBOUND_MAX_AGE_MS) continue
       const worktree = d.worktreeOf(run.worktree)
       if (!worktree) continue

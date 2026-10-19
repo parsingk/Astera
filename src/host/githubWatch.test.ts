@@ -183,13 +183,34 @@ describe('githubWatch', () => {
     expect(r.records[0].patch.read?.ci.basis).toBe('selected')
   })
 
-  it('leaves a merged or closed PR alone', async () => {
+  it('leaves a merged PR alone, and a closed one once the Run is not carried any more', async () => {
     for (const state of ['merged', 'closed'] as const) {
       const r = rig()
       r.watch.onState(stateOf({ run: { githubState: { ...BOUND, pr: { state, isDraft: false, baseBranch: 'develop' } } } }))
       await r.at(0)
       expect(r.calls).toEqual([])
     }
+  })
+
+  // G6 (spec §30): a pull request closed while its lifecycle Task repairs or is reviewed can be reopened on GitHub; the
+  // watch keeps reading it, so the reopening is recorded. A merged one cannot be reopened and stays unread.
+  it('keeps reading a closed PR while the Run’s lifecycle Task works, and records its reopening', async () => {
+    const working = (state: 'closed' | 'merged'): OrchState => ({
+      ...stateOf({ run: { githubState: { ...BOUND, pr: { state, isDraft: false, baseBranch: 'develop' } } } }),
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0 },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'dispatched', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0 }
+      ]
+    })
+    const r = rig({ read: prRead() })
+    r.watch.onState(working('closed'))
+    await r.at(0)
+    expect(r.calls).toContain('read 12')
+    expect(r.records[0].patch.read?.pr.state).toBe('open')
+    const merged = rig({ read: prRead() })
+    merged.watch.onState(working('merged'))
+    await merged.at(0)
+    expect(merged.calls).toEqual([])
   })
 
   it('stops looking for a PR three days after the Run was made', async () => {

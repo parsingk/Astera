@@ -552,8 +552,9 @@ export function recordRunGitHub(s: OrchState, runId: string, patch: RunGitHubPat
  *  accounts for an integration Task from these deps (startLifecycle).
  *
  *  Refused: an unknown Run (missing); a Job without lifecycle; a Run without a branch of its own; a Run never carried,
- *  or whose latest lifecycle Task still works; a bound pull request merged or closed. */
-export function reconvergeRun(s: OrchState, runId: string, now: string): Res<Task> {
+ *  or whose latest lifecycle Task still works; a bound pull request merged or closed — by the Host's live read when it
+ *  gives one (`live.prState`), else by the record. */
+export function reconvergeRun(s: OrchState, runId: string, now: string, live: { prState?: 'open' | 'closed' | 'merged' } = {}): Res<Task> {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return gone(`unknown run: ${runId}`)
   if (!s.jobs.find((j) => j.id === run.jobId)?.github) return err('This Run’s Job is not carried through GitHub')
@@ -562,8 +563,10 @@ export function reconvergeRun(s: OrchState, runId: string, now: string): Res<Tas
   if (!latest) return err('This Run has not been carried through GitHub yet: its lifecycle Task comes once its Tasks complete')
   if (latest.status !== 'completed' && latest.status !== 'failed')
     return err(`This Run’s lifecycle Task is still ${latest.status}: it is carried through GitHub already`)
-  const pr = run.githubState?.pr
-  if (pr && pr.state !== 'open') return err(`This Run’s pull request is ${pr.state}, so there is nothing left to carry`)
+  // What the Host just read from GitHub wins over the record (G6, spec §30): a PR reopened after the Run completed is
+  // carried again, and one merged since the last read is not
+  const prState = live.prState ?? run.githubState?.pr?.state
+  if (prState !== undefined && prState !== 'open') return err(`This Run’s pull request is ${prState}, so there is nothing left to carry`)
   // "Latest" is read by createdAt, so the new Task is stamped after the earlier one even if the clock went back between
   // the two (G5c final review M6)
   const at = now > latest.createdAt ? now : new Date(Date.parse(latest.createdAt) + 1).toISOString()

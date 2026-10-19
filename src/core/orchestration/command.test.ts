@@ -1384,10 +1384,10 @@ describe('handleCommand — runs-reconverge', () => {
     const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
     const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
     const prJson = (state: string) => JSON.stringify({ number: 12, title: 'x', state, isDraft: false, url: binding.url, headRefName: 'u/a', statusCheckRollup: [] })
-    const onHost = (o: { view?: { ok: boolean; stdout?: string; stderr?: string }; branch?: boolean } = {}) => {
+    const onHost = (o: { view?: { ok: boolean; stdout?: string; stderr?: string }; branch?: boolean; recorded?: 'open' | 'closed' } = {}) => {
       const deps = seeded()
       const s = deps.getState()
-      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState: { log: [], seq: 0, binding, pr: { state: 'open' as const, isDraft: true, baseBranch: 'main' } } })) })
+      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState: { log: [], seq: 0, binding, pr: { state: o.recorded ?? ('open' as const), isDraft: true, baseBranch: 'main' } } })) })
       const calls: string[] = []
       deps.github = {
         run: async (args: string[]) => {
@@ -1407,6 +1407,12 @@ describe('handleCommand — runs-reconverge', () => {
       const { deps, calls } = onHost()
       expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
       expect(calls).toEqual([VIEW])
+    })
+
+    // G6 (spec §30): reopened on GitHub after the Run completed — the record still says closed
+    it('carries again a pull request reopened since the record said closed', async () => {
+      const { deps } = onHost({ recorded: 'closed', view: { ok: true, stdout: prJson('OPEN') } })
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
     })
 
     it('refuses a pull request merged since the record was written, writing nothing', async () => {

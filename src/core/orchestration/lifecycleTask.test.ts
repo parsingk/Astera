@@ -132,6 +132,16 @@ describe('reconvergeRun', () => {
     expect(latestLifecycleTaskOf(r.state, 'run_1')?.id).toBe(r.value.id)
   })
 
+  // G6 (spec §30): the Host reads the pull request live before it answers; a PR reopened since the record said closed is
+  // carried again, and one merged since the record said open is refused
+  it('takes a live pull request state over the recorded one', () => {
+    const closed = finished('completed', { pr: { state: 'closed', isDraft: true, baseBranch: 'main' } })
+    expect(reconvergeRun(closed, 'run_1', LATER).ok).toBe(false)
+    expect(reconvergeRun(closed, 'run_1', LATER, { prState: 'open' }).ok).toBe(true)
+    const open = finished('completed', { pr: { state: 'open', isDraft: true, baseBranch: 'main' } })
+    expect(reconvergeRun(open, 'run_1', LATER, { prState: 'merged' }).ok).toBe(false)
+  })
+
   it('answers an unknown Run as missing', () => {
     const r = reconvergeRun(finished('completed'), 'run_nope', LATER)
     expect(r.ok).toBe(false)
