@@ -2659,7 +2659,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-verify { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-verify .hiw-p { margin: 0; }
 .hiw-verify .hiw-fine { margin: 3px 0 0; }
-.hiw-github { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-github { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); color: var(--text); }
+.hiw-pane-empty .hiw-github { border-bottom: 0; }
 .hiw-github-line { margin: 0 0 2px; font-size: 12px; }
 .hiw-github-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
 .hiw-github-link:hover { text-decoration: underline; background: none; }
