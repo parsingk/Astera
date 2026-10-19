@@ -22,6 +22,8 @@ export type PtyHandler = ((m: ClientMessage, send: (h: HostMessage) => void, fro
 
 export function attachPtyHost(a: {
   registry: PtyRegistry
+  /** Test seam; defaults to the process's. A reattach redraws on POSIX only (issue #8). */
+  platform?: NodeJS.Platform
   /** `to` filters by the client's hello: its yields and its features. */
   broadcast(m: HostMessage, to?: (yields: ReadonlySet<string>, features: ReadonlySet<string>) => boolean): void
 }): PtyHandler {
@@ -106,6 +108,9 @@ export function attachPtyHost(a: {
         // it has adopted exactly as it ends one on a broadcast exit.
         const ended = a.registry.exitCodeOf(m.id)
         if (ended) send({ t: 'pty-exit', id: m.id, exitCode: ended.code ?? ENDED_WITHOUT_A_CODE })
+        // A live pty's program draws again for the tab that attached, after the replay (issue #8): POSIX sends SIGWINCH
+        // only when the size changes, and the tab asks for the size the pty has. Windows' console repaints on its own.
+        else if ((a.platform ?? process.platform) !== 'win32') a.registry.redraw(m.id)
         return true
       }
       default:

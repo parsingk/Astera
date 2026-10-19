@@ -4,16 +4,17 @@ import { ENDED_WITHOUT_A_CODE } from './exits'
 import { PtyRegistry, type RegistryPty } from './registry'
 import { HOST_FEATURE_PTY_SEQ, type ClientMessage, type HostMessage } from '../core/host/protocol'
 
-function fakePty(pid = 11): RegistryPty & { sent: string[]; emit(d: string): void; exit(c: number): void } {
+function fakePty(pid = 11): RegistryPty & { sent: string[]; sizes: [number, number][]; emit(d: string): void; exit(c: number): void } {
   let onData: (d: string) => void = () => {}
   let onExit: (e: { exitCode: number }) => void = () => {}
   return {
     pid,
     sent: [],
+    sizes: [],
     onData: (cb) => { onData = cb },
     onExit: (cb) => { onExit = cb },
     write(d) { this.sent.push(d) },
-    resize: () => {},
+    resize(cols, rows) { this.sizes.push([cols, rows]) },
     kill: () => {},
     pause: () => {},
     resume: () => {},
@@ -22,12 +23,12 @@ function fakePty(pid = 11): RegistryPty & { sent: string[]; emit(d: string): voi
   }
 }
 
-const harness = (pty = fakePty()) => {
+const harness = (pty = fakePty(), platform: NodeJS.Platform = 'win32') => {
   const broadcast: HostMessage[] = []
   const replies: HostMessage[] = []
   const registry = new PtyRegistry({ spawn: () => pty, log: () => {} })
   // A client without `pty-seq`, as every client before Phase 8: frames filtered to others are not its.
-  const handle = attachPtyHost({ registry, broadcast: (m, to) => void (!to || to(new Set(), new Set()) ? broadcast.push(m) : 0) })
+  const handle = attachPtyHost({ registry, platform, broadcast: (m, to) => void (!to || to(new Set(), new Set()) ? broadcast.push(m) : 0) })
   const send = (m: ClientMessage): boolean => handle(m, (h) => replies.push(h))
   return { pty, registry, broadcast, replies, send }
 }
@@ -110,6 +111,31 @@ describe('attachPtyHost', () => {
     h.replies.length = 0
     h.send({ t: 'pty-attach', id: 'p1' })
     expect(h.replies).toEqual([{ t: 'pty-data', id: 'p1', data: 'earlier output' }])
+  })
+
+  // Issue #8 (Linux): a reattached tab asks for the size the pty already has, and POSIX sends SIGWINCH only when the size
+  // changes, so Claude Code, which draws on SIGWINCH, left the tab blank until a person resized the window. On POSIX the
+  // attach makes the program draw again: one row fewer and back, the size ending where it was and nothing recorded.
+  it('on POSIX, attaching to a live pty makes its program draw again, ending at the same size', () => {
+    const h = harness(fakePty(), 'linux')
+    h.send(spawnMsg)
+    h.pty.emit('earlier output')
+    h.send({ t: 'pty-attach', id: 'p1' })
+    expect(h.pty.sizes).toEqual([[80, 23], [80, 24]])
+    expect(h.registry.size('p1')).toEqual({ cols: 80, rows: 24 })
+    expect(h.broadcast.filter((m) => m.t === 'pty-size')).toEqual([])
+  })
+
+  it('on Windows, and for a pty that ended, attaching changes no size', () => {
+    const win = harness(fakePty(), 'win32')
+    win.send(spawnMsg)
+    win.send({ t: 'pty-attach', id: 'p1' })
+    expect(win.pty.sizes).toEqual([])
+    const ended = harness(fakePty(), 'linux')
+    ended.send(spawnMsg)
+    ended.pty.exit(0)
+    ended.send({ t: 'pty-attach', id: 'p1' })
+    expect(ended.pty.sizes).toEqual([])
   })
 
   // The note is the app's own record of what a pty is, and the app can learn more about it after the

@@ -549,6 +549,17 @@ export class PtyRegistry {
     return this.entries.get(id)?.lastPersonWriteAt ?? null
   }
 
+  /** Makes the program in a live pty draw its screen again (issue #8): one row fewer and back. POSIX sends SIGWINCH only
+   *  when the size changes, and a reattached tab asks for the size the pty already has, so a program that draws on
+   *  SIGWINCH (Claude Code) left the tab blank until a person resized the window. The size ends where it was, so
+   *  nothing is recorded or told. */
+  redraw(id: string): void {
+    const e = this.live(id)
+    if (!e || e.rows < 2) return
+    e.pty.resize(e.cols, e.rows - 1)
+    e.pty.resize(e.cols, e.rows)
+  }
+
   resize(id: string, cols: number, rows: number): void {
     const e = this.live(id)
     if (!e) return
