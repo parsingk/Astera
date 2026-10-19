@@ -65,6 +65,8 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './host/worktreeRoute'
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
+import { createHostGitHubRoute } from './host/hostGitHubRoute'
+import { needsHostGitHub } from '../core/orchestration/hostGitHub'
 import { createAppCompletionChecks } from './host/pluginChecksRoute'
 import { createHostGitOps } from '../core/workUnit/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
@@ -4655,6 +4657,9 @@ export function registerIpc(
   // Dispatch id 가 **그 projectPath 의 것인지**는 별개의 질문이고, 여기까지는 그것을 아무도 묻지
   // 않았다. orch.runDetail(위)은 정확히 같은 질문을 runId 에 대해 이미 묻고 있고("소유 판정을
   // 복제하지 않는다"는 그 주석), 그 판정을 orchOwnerMismatch 가 그대로 재사용한다.
+  // The app's GitHub commands go to the Host (GitHub lifecycle G7a, `needsHostGitHub`): this process's copy of the
+  // command layer has no gh, so a lifecycle Job made here or a GitHub question's continue or rerun answered 409.
+  const hostGitHub = createHostGitHubRoute({ call: (m) => orchCall(m) })
   const orchLocalCommand = async (projectPath: string, cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
       await assertAllowedPath(projectPath)
       // The server is not up — a boot that failed, or one still in flight. Not 'orchestration is
@@ -4683,6 +4688,8 @@ export function registerIpc(
         orchLog(`orch.command: rejected ${cmd} — ${mismatch}`)
         return { status: 403, body: { error: mismatch } }
       }
+      // After the ownership check, which holds for the Host's commands as for this process's own
+      if (needsHostGitHub(orch.deps.getState(), cmd, args ?? {})) return hostGitHub(cmd, args ?? {})
       try {
         return await orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
       } catch (err) {
