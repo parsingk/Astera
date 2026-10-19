@@ -724,8 +724,9 @@ export function RunDetail({
    *  ready 로 올리지 않고 pending 으로 내린 뒤 recomputeReady 가 판단한다. 여기서 그 판단을
    *  다시 하지 않는다.
    *
-   *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다. */
-  /** `github`: a GitHub question, whose answer goes to the Host; its refusal is said in its words (G7a final review I1). */
+   *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다.
+   *
+   *  `github`: a GitHub question, whose answer goes to the Host; its refusal is said in its words (G7a final review I1). */
   const resolveGate = async (gateId: string, resolution: string, github = false): Promise<void> => {
     const taskId = answering
     const trimmed = resolution.trim()

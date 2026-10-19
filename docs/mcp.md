@@ -289,7 +289,10 @@ shows as waiting.
 
 `events` holds the Run's timeline entries the caller has not been sent, in the timeline's order
 (time, then kind): each has `at`, `kind` (`run-created`, `task-created`, `dispatch-started`,
-`message`, `gate-opened`, `gate-resolved`, `limit-hit`, `resumed`, `runtime-lost`, `recovery`),
+`message`, `gate-opened`, `gate-resolved`, `limit-hit`, `resumed`, `runtime-lost`, `recovery`, and
+for a GitHub lifecycle Run `github-pr-bound`, `github-pr-created`, `github-pushed`,
+`github-ci-started`, `github-ci-failed`, `github-ci-rerun`, `github-ci-passed`, `github-merge-ready`,
+`github-invalidated`, `github-source-changed`),
 `sourceId`, and when they apply `taskId`, `taskTitle`, `messageType`, `summary`, `outcome`,
 `provider`, `retry`, `review` and `repair`: the fields `astera runs follow` prints. A new event does
 not always sort last: a journal row the Host serves late can carry an earlier time. So, like

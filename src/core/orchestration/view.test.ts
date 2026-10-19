@@ -690,6 +690,16 @@ describe('snapshotFor: the GitHub side', () => {
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]).not.toHaveProperty('githubNoLocalCheck')
   })
 
+  // Final review M8: the app's snapshot push compares the folds; a GitHub record that moved changes the fold, so the
+  // window learns of it without a Task or an event moving
+  it('a GitHub record that moved changes the snapshot', () => {
+    const fold = (s: OrchState) => snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
+    const before = withGithub(lifecycle({ ciWait: { since: 'T1', done: [], pr: 12 } }), bound)
+    const after = { ...before, runs: before.runs.map((r) => ({ ...r, githubState: { ...bound, pr: { state: 'open' as const, isDraft: false, baseBranch: 'develop', mergeStateStatus: 'BLOCKED' } } })) }
+    expect(sameSnapshot(fold(before), fold(after))).toBe(false)
+    expect(sameSnapshot(fold(before), fold(before))).toBe(true)
+  })
+
   it('a lifecycle Task not waiting is marked without a wait; a Run of a Job without the lifecycle has no GitHub side', () => {
     const row = snapshotFor(withGithub(lifecycle({ status: 'dispatched' })), absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]
     expect(row.github?.state).toBe('repairing')
