@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { pidLives as realPidLives } from '../host/pidFile'
 import { takeFileLock } from '../fileLock'
-import { pathChain, posixProblem, symlinkProblem, type StatLike } from './posixCheck'
+import { pathChain, posixProblem, symlinkProblem, widenedAbove, type StatLike } from './posixCheck'
 import { sddlProblem, systemWinAcl, type WinAcl } from './winAcl'
 
 export class SecretFileUnsafe extends Error {
@@ -129,13 +129,18 @@ export function openSecretStore(a: {
    */
   const createDir = async (): Promise<void> => {
     const parent = path.dirname(dir)
-    await fs.mkdir(parent, { recursive: true })
     if (platform !== 'win32') {
+      // No group or other write on the folders above (issue #8): made so here, and tightened when another process made
+      // them under a group-writable umask (Ubuntu's default 002 makes 775). They are this user's own, inside the profile.
+      await fs.mkdir(parent, { recursive: true, mode: 0o755 })
+      const uid = a.uid ?? process.getuid?.() ?? -1
+      for (const p of widenedAbove(pathChain(dir, a.profileDir), lstat, uid, 1)) await fs.chmod(p, lstat(p).mode & 0o755)
       await fs.mkdir(dir, { mode: 0o700 }).catch((e: NodeJS.ErrnoException) => {
         if (e.code !== 'EEXIST') throw e
       })
       return
     }
+    await fs.mkdir(parent, { recursive: true })
     const tmp = path.join(parent, `.${path.basename(dir)}-${randomBytes(6).toString('hex')}`)
     await fs.mkdir(tmp)
     try {

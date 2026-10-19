@@ -22,6 +22,24 @@ export function pathChain(file: string, profileDir: string): string[] {
   return chain
 }
 
+/**
+ * The folders above the strict part of the chain (see posixProblem) that are this user's and group or other writable,
+ * nearest first: what the store tightens before it checks (issue #8). Ubuntu's default umask 002 makes every folder
+ * another process creates 775, and these are the app's own folders inside its profile, so dropping their group and
+ * other write bits is all posixProblem asks of them. A symlink or another user's folder is never named: those stay
+ * refusals.
+ */
+export function widenedAbove(chain: string[], lstat: (p: string) => StatLike, uid: number, strict = 2): string[] {
+  const out: string[] = []
+  for (const [i, p] of chain.entries()) {
+    if (i < strict) continue
+    const st = lstat(p)
+    if (st.isSymbolicLink() || st.uid !== uid) continue
+    if ((st.mode & 0o022) !== 0) out.push(p)
+  }
+  return out
+}
+
 export function symlinkProblem(chain: string[], lstat: (p: string) => StatLike): string | null {
   for (const p of chain) if (lstat(p).isSymbolicLink()) return `${p} is a symbolic link or junction`
   return null

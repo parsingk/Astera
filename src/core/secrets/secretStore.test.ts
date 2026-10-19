@@ -107,6 +107,18 @@ describe('SecretStore (remote runtime design §4.6)', () => {
     await fs.chmod(path.join(dir, 'a'), 0o644)
     await expect(s.read('a')).rejects.toBeInstanceOf(SecretFileUnsafe)
   })
+  // Issue #8 (Ubuntu 24.04): another process made a folder above the store 775 under the default umask 002; the store
+  // tightens it (this user's own, inside the profile) instead of refusing every plugin secret
+  it.runIf(process.platform !== 'win32')('tightens a group-writable folder above the store it creates, and works', async () => {
+    const plugins = path.join(profile, 'plugins')
+    await fs.mkdir(plugins)
+    await fs.chmod(plugins, 0o775)
+    const s = openSecretStore({ dir: path.join(plugins, 'secrets', 'demo'), profileDir: profile })
+    await s.withLock((tx) => tx.write('token', 't'))
+    expect(await s.read('token')).toBe('t')
+    expect((await fs.stat(plugins)).mode & 0o022).toBe(0)
+    expect((await fs.stat(path.join(plugins, 'secrets'))).mode & 0o022).toBe(0)
+  })
   it('two processes adding and removing at once lose no update (X1-12)', async () => {
     const s = openSecretStore({ dir, profileDir: profile })
     await s.withLock((tx) => tx.write('set.json', JSON.stringify(Array.from({ length: 20 }, (_, i) => `r${i}`))))
