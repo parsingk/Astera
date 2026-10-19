@@ -1709,12 +1709,13 @@ describe('CodexRollingCoordinator', () => {
   })
 
   // 이 갈래는 설계에서 가장 약한 증거다 — 스캐너는 재개 화면 전체를 읽으므로 에이전트 자신의 출력이나
-  // 인용된 로그에 한도 모양의 문장이 있으면 여기까지 온다. 그래서 대기는 이 체인 안에서만 하고 공유
-  // 레지스트리에는 아무것도 쓰지 않는다(judgedByPriorBlock): 방송하면 그 한 줄로 다른 체인 전부가 15분간
-  // 그 계정을 피한다. 대기 간격은 그대로다 — planRetry 는 빈 슬롯을 now+폴백으로 읽는다.
-  it('한도 기록이 없는 대화는 문구만으로 대기한다 (사용량 스냅숏 없이, 공유 기록 없이)', async () => {
+  // 인용된 로그에 한도 모양의 문장이 있으면 여기까지 온다. 감지한 한도가 아니므로(2026-10-19 사람의 결정)
+  // 기다리지도 롤하지도 '이어서' 를 치지도 않고 사람을 부른다('stalled'). 공유 레지스트리에도 아무것도
+  // 쓰지 않는다. 진짜 한도라면 다음 턴이 파일에 거부를 적고, 일반 경로가 그것을 잡는다.
+  it('한도 기록이 없는 대화의 문구 한 줄은 사람을 부른다 — 대기·롤·이어서 없이, 공유 기록 없이', async () => {
+    const logs: string[] = []
     const blocks = new BlockRegistry()
-    const h = harness({ blocks })
+    const h = harness({ blocks, log: (m) => logs.push(m) })
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     // rate_limits 가 한 줄도 없는 파일 — 이 대화는 여기서 한 번도 막힌 적이 없다. 그러면 다시 그릴
     // 옛 줄도 없으므로 확정 문구가 유일한 증거고, 리셋 시각은 모른다
@@ -1723,14 +1724,14 @@ describe('CodexRollingCoordinator', () => {
     await advance(100)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
-    expect(h.sent.at(-1)?.payload.scope).toBe('session')
+    expect(h.sent.at(-1)?.payload.state).toBe('stalled')
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toEqual([])
     expect(blocks.get('c1', Date.now())).toBeNull() // 문구 한 줄은 다른 체인의 계정 선택을 바꾸지 못한다
-    // 리셋을 모르므로 planRetry 의 폴백 간격(15분)이 덮는다
-    await advance(14 * 60_000)
-    expect(h.written).toEqual([]) // 아직 기다린다
-    await advanceIntoResume(70_000) // 15분 경과 → 제자리 재개
-    expect(h.written.length).toBe(2)
+    expect(logs.some((l) => l.includes('a person is called'))).toBe(true)
+    await advance(16 * 60_000) // 옛 폴백 간격(15분)을 지난다
+    expect(h.written).toEqual([]) // 아무것도 치지 않는다
+    expect(h.events).toEqual([])
+    expect(h.sent.filter((s) => s.payload.state === 'stalled')).toHaveLength(1) // 같은 문구로 다시 부르지 않는다
     h.coord.stop()
   })
 

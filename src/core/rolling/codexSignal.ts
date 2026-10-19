@@ -553,7 +553,7 @@ export function priorLimitVerdict(
   // planRetry's fallback interval covers that. **This branch is the weakest evidence in the design**:
   // the premise covers codex's own error line, but the scanner reads the whole redraw, so an agent's own
   // output or a quoted log carrying a limit-shaped sentence lands here too. That is why its consumer
-  // keeps a verdict with at === null out of the shared block registry — the wait is this chain's alone
-  // (judgedByPriorBlock in codexCoordinator.ts).
+  // does not act on a verdict with at === null: it calls a person, and nothing waits, rolls or goes into
+  // the shared block registry (judgedByPriorBlock in codexCoordinator.ts, 2026-10-19).
   return opts.textHit ? { kind: 'limited', at: null, weekly: false } : { kind: 'none' }
 }
