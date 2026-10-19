@@ -158,6 +158,30 @@ describe('replyNote', () => {
   })
 })
 
+// G7a final review I1, I2: what the app's GitHub commands sent to the Host say. A Host that is not running says so; a
+// call that went with the connection or past its deadline may have been done; the Host's own reason for a lifecycle
+// create or a GitHub question's answer is said, after the window's own sentence.
+describe('replyNote for commands sent to the Host', () => {
+  const t = (key: string): string => key
+  it('says the Host is not running, in its words', () => {
+    expect(replyNote({ status: 409, body: { code: 'HOST_NOT_RUNNING', error: 'The Astera Host is not running' } }, t, 'generic')).toBe('The Astera Host is not running')
+  })
+  it('a lost connection or a deadline may have done it, and locks a form', () => {
+    for (const code of ['HOST_LOST', 'TIMEOUT']) {
+      const r = { status: code === 'TIMEOUT' ? 504 : 502, body: { code, error: 'x' } }
+      expect(isOutcomeUnknown(r), code).toBe(true)
+      expect(formFailure(r, t, 'jobs.new.failed'), code).toEqual({ message: 'jobs.runtime.outcomeUnknown', lock: true })
+    }
+  })
+  it("with the reason asked for, the Host's refusal follows the window's sentence; without it, the sentence alone", () => {
+    const refused = { status: 409, body: { error: 'the GitHub lifecycle defaults in Settings could not be read: broken' } }
+    expect(replyNote(refused, t, 'generic', { reason: true })).toBe('generic — the GitHub lifecycle defaults in Settings could not be read: broken')
+    expect(replyNote(refused, t, 'generic')).toBe('generic')
+    expect(formFailure(refused, t, 'jobs.new.failed', { reason: true })).toEqual({ message: 'jobs.new.failed — the GitHub lifecycle defaults in Settings could not be read: broken', lock: false })
+    expect(replyNote({ status: 409, body: {} }, t, 'generic', { reason: true })).toBe('generic')
+  })
+})
+
 // Phase 7 review I1: a form whose create may have gone through is not sent again by a second press (a new request id
 // would make a second Job on the Runtime).
 describe('formFailure', () => {

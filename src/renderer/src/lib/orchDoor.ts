@@ -42,20 +42,26 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 const codeOf = (r: CommandReply): unknown => (r.body as { code?: unknown } | null)?.code
 
 /** A change whose answer was lost (the link dropped after sending it): it may have run on the Runtime. Main answers
- *  it as a 409 with RUNTIME_OUTCOME_UNKNOWN, or REMOTE_TIMEOUT for a change (runtimeClient.ts replyOf). */
+ *  it as a 409 with RUNTIME_OUTCOME_UNKNOWN, or REMOTE_TIMEOUT for a change (runtimeClient.ts replyOf). The app's
+ *  GitHub commands sent to this computer's Host (hostGitHubRoute.ts, G7a) answer HOST_LOST or TIMEOUT when the
+ *  connection went or the deadline passed with the command out: it may have been done too (final review I2). */
 export function isOutcomeUnknown(r: CommandReply): boolean {
   const code = codeOf(r)
-  return code === 'RUNTIME_OUTCOME_UNKNOWN' || (r.status === 409 && code === 'REMOTE_TIMEOUT')
+  return code === 'RUNTIME_OUTCOME_UNKNOWN' || (r.status === 409 && code === 'REMOTE_TIMEOUT') || code === 'HOST_LOST' || code === 'TIMEOUT'
 }
 
 /** What a refused or lost command says (Phase 7 review I1, M2): that it may have gone through, the Runtime's own
- *  reason for a permission refusal, that the Runtime does not answer, or else `fallback`. */
-export function replyNote(r: CommandReply, t: T, fallback: string): string {
+ *  reason for a permission refusal, that the Runtime does not answer, that this computer's Host is not running (G7a),
+ *  or else `fallback`. `reason`: the command went to a Host whose refusal is the person's to read (a lifecycle create,
+ *  a GitHub question's answer; G7a final review I1), so its words follow `fallback`. */
+export function replyNote(r: CommandReply, t: T, fallback: string, o: { reason?: boolean } = {}): string {
   if (isOutcomeUnknown(r)) return t('jobs.runtime.outcomeUnknown')
   const code = codeOf(r)
   const error = (r.body as { error?: unknown } | null)?.error
   if (code === 'RUNTIME_PERMISSION_DENIED' && typeof error === 'string') return error
   if (code === 'RUNTIME_OFFLINE') return t('jobs.runtime.unreachable')
+  if (code === 'HOST_NOT_RUNNING' && typeof error === 'string') return error
+  if (o.reason === true && typeof error === 'string' && error !== '') return `${fallback} — ${error}`
   return fallback
 }
 
@@ -158,6 +164,6 @@ export function remoteDoor(
 
 /** A form's failed submit: what it says (replyNote), and whether the form locks against a second submit, which it
  *  does when the first may have gone through (a lost answer: pressing again would send a new request, a second Job). */
-export function formFailure(r: CommandReply, t: T, fallbackKey: string): { message: string; lock: boolean } {
-  return { message: replyNote(r, t, t(fallbackKey)), lock: isOutcomeUnknown(r) }
+export function formFailure(r: CommandReply, t: T, fallbackKey: string, o: { reason?: boolean } = {}): { message: string; lock: boolean } {
+  return { message: replyNote(r, t, t(fallbackKey), o), lock: isOutcomeUnknown(r) }
 }

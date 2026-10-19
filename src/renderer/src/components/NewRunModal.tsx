@@ -108,7 +108,9 @@ export function NewRunModal({
       })
       if (reply.status >= 400) {
         // 실패해도 모달은 닫지 않는다 — 닫으면 사용자는 눌러도 아무 일도 없었다고 여긴다
-        const f = formFailure(reply, t as never, 'jobs.new.failed')
+        // A lifecycle create went to the Host, whose reason (a preflight gone stale, Settings it could not read) is the
+        // person's to read (G7a final review I1)
+        const f = formFailure(reply, t as never, 'jobs.new.failed', { reason: github })
         setError(f.message)
         if (f.lock) setLocked(true)
         return
