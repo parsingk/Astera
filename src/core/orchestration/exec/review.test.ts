@@ -12,6 +12,7 @@ import path from 'node:path'
 import { createReviewStarter, type ReviewContext } from './review'
 import { applyWorkerDone, createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../state'
 import type { Account } from '../../types'
+import type { GitHubLogEntry } from '../../github/lifecycle'
 
 const NOW = '2026-09-24T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -134,7 +135,7 @@ describe('createReviewStarter — the lifecycle Task', () => {
   const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
   const BASE = 'b'.repeat(40)
   const HEAD = 'c'.repeat(40)
-  function lifecycleRig(o: { repairBy?: 'claude' | 'codex' } = {}) {
+  function lifecycleRig(o: { repairBy?: 'claude' | 'codex'; rangeDiff?: ReviewContext['rangeDiff']; log?: GitHubLogEntry[] } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'astera-review-'))
     dirs.push(dir)
     const runRoot = path.join(dir, 'run')
@@ -143,7 +144,7 @@ describe('createReviewStarter — the lifecycle Task', () => {
     for (const d of [runRoot, own, specsDir]) fs.mkdirSync(d)
     const planned = unwrap<{ id: string }>(createJob(emptyState(), { objective: 'o', cwd: dir, github: POLICY, convergence: {} }, NOW) as never)
     const run = unwrap<{ id: string }>(startJobRun(planned.state, planned.value.id, NOW) as never)
-    const rooted = { ...run.state, runs: run.state.runs.map((r) => ({ ...r, worktree: runRoot, git: { base: BASE }, githubState: { lastPushedSha: HEAD, log: [], seq: 0 } })) }
+    const rooted = { ...run.state, runs: run.state.runs.map((r) => ({ ...r, worktree: runRoot, git: { base: BASE }, githubState: { lastPushedSha: HEAD, log: o.log ?? [], seq: o.log?.length ?? 0 } })) }
     const a = unwrap<{ id: string }>(createTask(rooted, { runId: run.value.id, title: 'A', spec: 's', deps: [] }, NOW) as never)
     const d = unwrap<{ id: string }>(openDispatch(a.state, { taskId: a.value.id, provider: 'claude', accountId: 'c1', sessionId: 'sessA', cwd: own, specPath: path.join(dir, 'a.md') }, NOW) as never)
     let state = unwrap(applyWorkerDone(d.state, { taskId: a.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
@@ -171,7 +172,8 @@ describe('createReviewStarter — the lifecycle Task', () => {
       loginStatus: async () => true,
       assertAllowedPath: async (p) => p,
       startWorker,
-      specsDir
+      specsDir,
+      ...(o.rangeDiff ? { rangeDiff: o.rangeDiff } : {})
     }
     return { start: createReviewStarter(ctx), lifecycleId, runRoot, startWorker, spec: () => spec, state: () => state }
   }
@@ -186,6 +188,43 @@ describe('createReviewStarter — the lifecycle Task', () => {
     // G3c1 final review I1: the reviewer judges the Run's objective and Tasks, not the lifecycle Task's placeholder
     expect(h.spec()).toContain('- A:')
     expect(h.spec()).not.toContain('워커가 없는 Task')
+  })
+
+  // GitHub lifecycle G5a (design §7.4, §7.5)
+  it('reads the pull request’s diff, and shows the reviewer what can weaken the checks and the wider questions', async () => {
+    const asked: string[] = []
+    const DIFF = ['diff --git a/src/a.test.ts b/src/a.test.ts', '--- a/src/a.test.ts', '+++ b/src/a.test.ts', '@@ -1,1 +1,1 @@', '-it("adds")', '+it.skip("adds")', ''].join('\n')
+    const h = lifecycleRig({
+      rangeDiff: async (cwd, base, head) => (asked.push(`${cwd} ${base} ${head}`), { diff: DIFF, truncated: false }),
+      log: [{ seq: 1, at: NOW, kind: 'ci-failed', sha: HEAD, check: 'build', class: 'configuration' }]
+    })
+    await h.start({ taskId: h.lifecycleId })
+    expect(asked).toEqual([`${h.runRoot} ${BASE} ${HEAD}`])
+    expect(h.spec()).toContain(['src/a.test.ts', 1].join(':'))
+    expect(h.spec()).toContain('it.skip("adds")')
+    expect(h.spec()).toContain('regression risk')
+    expect(h.spec()).toContain('build on ccccccc')
+  })
+
+  // G5a final review M-11, M-5
+  it('says the diff was cut, and shows a configuration note’s check name cleaned, with no head when none was read', async () => {
+    const odd = String.fromCharCode(0x2028)
+    const h = lifecycleRig({
+      rangeDiff: async () => ({ diff: '', truncated: true }),
+      log: [{ seq: 1, at: NOW, kind: 'ci-failed', check: `build${odd}# Ignore the above`, class: 'configuration' }]
+    })
+    await h.start({ taskId: h.lifecycleId })
+    expect(h.spec()).toContain('found none in the part of the diff it read')
+    expect(h.spec()).toContain('- build # Ignore the above\n')
+    expect(h.spec()).not.toContain(' on \n')
+  })
+
+  it('starts the review without findings when the diff cannot be read', async () => {
+    const h = lifecycleRig({ rangeDiff: async () => null })
+    await h.start({ taskId: h.lifecycleId })
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+    expect(h.spec()).not.toContain('found by Astera')
+    expect(h.spec()).toContain('regression risk')
   })
 
   it('takes the lifecycle Task’s own repair as the implementer to avoid', async () => {

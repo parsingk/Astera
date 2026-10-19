@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { makeRepo, gitSync } from '../worktrees/testRepo'
-import { CHANGES_MAX_FILES, fileIdOf, readChanges, readFileDiff, type ChangedFile } from './changes'
+import { CHANGES_MAX_FILES, fileIdOf, readChanges, readFileDiff, readRangeDiff, type ChangedFile } from './changes'
 
 const head = (repo: string): string => execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, windowsHide: true, encoding: 'utf8' }).trim()
 const gitDiff = (repo: string, args: string[]): string =>
@@ -80,6 +80,72 @@ describe('readChanges', { timeout: 30_000 }, () => {
   it('a base git does not know answers null', async () => {
     const repo = await makeRepo()
     expect(await readChanges(repo, 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', null)).toBeNull()
+  })
+})
+
+// GitHub lifecycle G5a (design §7.4, S9): the whole pull request's diff, for weakeningFindings
+describe('readRangeDiff', { timeout: 30_000 }, () => {
+  it('is exactly what git diff prints for the whole range, a rename included', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'a.txt', 'one\ntwo\nthree\nfour\nfive\nsix\n')
+    await write(repo, 'b.test.ts', 'it("b")\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    gitSync(repo, ['mv', 'a.txt', 'renamed.txt'])
+    await write(repo, 'renamed.txt', 'one\ntwo\nthree\nfour\nfive\nSIX\n')
+    await fs.rm(path.join(repo, 'b.test.ts'))
+    commit(repo, 'work')
+    const to = head(repo)
+    expect(await readRangeDiff(repo, base, to)).toEqual({ diff: gitDiff(repo, [base, to]), truncated: false })
+  })
+
+  it('is cut at a line past its bound, and says so', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'big.txt', 'x\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    await write(repo, 'big.txt', Array.from({ length: 400 }, (_, i) => `line ${i}`).join('\n') + '\n')
+    commit(repo, 'work')
+    const r = (await readRangeDiff(repo, base, head(repo), { maxBytes: 1000 }))!
+    expect(r.truncated).toBe(true)
+    expect(Buffer.byteLength(r.diff)).toBeLessThanOrEqual(1000)
+    expect(r.diff.endsWith('\n')).toBe(true)
+  })
+
+  it('is null when git cannot answer', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'a.txt', 'a\n')
+    commit(repo, 'base')
+    expect(await readRangeDiff(repo, 'f'.repeat(40), head(repo))).toBeNull()
+  })
+
+  // G5a final review I-1: a person's prefix setting would leave the parser with no path
+  it('names the paths a/ and b/ whatever diff.noprefix says', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'a.txt', 'a\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    await write(repo, 'a.txt', 'b\n')
+    commit(repo, 'work')
+    gitSync(repo, ['config', 'diff.noprefix', 'true'])
+    const r = (await readRangeDiff(repo, base, head(repo)))!
+    expect(r.diff).toContain('diff --git a/a.txt b/a.txt')
+    expect(r.diff).toContain('+++ b/a.txt')
+  })
+
+  // G5a final review M-8: a lockfile does not spend the budget before the tests
+  it('leaves lockfiles out, so a big one does not push the tests past the bound', async () => {
+    const repo = await makeRepo()
+    await write(repo, 'package-lock.json', '{}\n')
+    await write(repo, 'test/a.test.ts', 'it("a")\n')
+    commit(repo, 'base')
+    const base = head(repo)
+    await write(repo, 'package-lock.json', Array.from({ length: 2000 }, (_, i) => `"dep${i}": "1.0.${i}",`).join('\n') + '\n')
+    await write(repo, 'test/a.test.ts', 'it.skip("a")\n')
+    commit(repo, 'work')
+    const r = (await readRangeDiff(repo, base, head(repo), { maxBytes: 4000 }))!
+    expect(r.diff).toContain('it.skip("a")')
+    expect(r.diff).not.toContain('package-lock.json')
   })
 })
 

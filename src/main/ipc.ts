@@ -103,7 +103,7 @@ import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { readChanges, readFileDiff } from '../core/git/changes'
+import { readChanges, readFileDiff, readRangeDiff } from '../core/git/changes'
 import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
@@ -3088,7 +3088,8 @@ export function registerIpc(
       assertAllowedPath: (p) => assertAllowedPath(p),
       // `(w)` 는 일부러다 — ipcConvergenceWiring.test.ts 의 남은 가드가 첫 `startWorker: (a) =>` 에 닻을 내린다.
       startWorker: (w) => deps.startWorker(w),
-      specsDir
+      specsDir,
+      rangeDiff: (cwd, base, head) => readRangeDiff(cwd, base, head)
     })
 
     /** What reapWorktree (core/orchestration/exec/integrateGit.ts) may close and ask in the app.
