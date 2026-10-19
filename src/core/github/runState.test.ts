@@ -1,7 +1,7 @@
 // How a read changes a Run's GitHub record (GitHub lifecycle G1): what moved is logged once, numbered, and a read that
 // finds nothing new changes nothing.
 import { describe, it, expect } from 'vitest'
-import type { GitHubBinding, GitHubCiCheck, RunGitHubState } from './lifecycle'
+import { GITHUB_LOG_MAX, type GitHubBinding, type GitHubCiCheck, type GitHubLogKind, type RunGitHubState } from './lifecycle'
 import { nextGitHubState, parseRunGitHubPatch, type RunGitHubPatch } from './runState'
 
 const T1 = '2026-10-18T00:00:00.000Z'
@@ -59,6 +59,26 @@ describe('nextGitHubState', () => {
     expect(none.log.map((e) => e.kind)).toEqual(['pr-bound', 'pushed'])
     const done = nextGitHubState(pushed, { read: read(A, 'passed') }, T2)!
     expect(done.log.map((e) => e.kind)).toEqual(['pr-bound', 'pushed', 'ci-passed'])
+  })
+
+  // G7b final review M8: a rerun of the same commit starts CI again
+  it('logs CI starting again on the same commit after a verdict', () => {
+    const running = (sha: string) => read(sha, 'pending', { checks: [build({ status: 'in-progress', conclusion: undefined })] })
+    const first = nextGitHubState(undefined, { binding: BINDING, read: running(A) }, T1)!
+    const failed = nextGitHubState(first, { read: read(A, 'failed', { failing: 'build', checks: [build({ conclusion: 'failure' })] }) }, T1)!
+    const rerun = nextGitHubState(failed, { read: running(A) }, T2)!
+    expect(rerun.log.map((e) => e.kind)).toEqual(['pr-bound', 'ci-started', 'ci-failed', 'ci-started'])
+  })
+
+  // G7b final review I3: the log keeps the newest GITHUB_LOG_MAX; the timeline lines it dropped are counted, so a Run's
+  // event count (runs follow's) still grows with each new line once the log is full
+  it('counts the timeline lines it drops past the cap, and not the entries that are no line', () => {
+    const full = { ...nextGitHubState(undefined, { binding: BINDING }, T1)!, log: Array.from({ length: GITHUB_LOG_MAX }, (_, i) => ({ seq: i + 1, at: T1, kind: (i === 0 ? 'head-changed' : 'pushed') as GitHubLogKind, sha: A })), seq: GITHUB_LOG_MAX }
+    const one = nextGitHubState(full, { rerun: { ciRunId: 1, attempt: 1, sha: A, by: 'person' } }, T2)!
+    expect(one.log).toHaveLength(GITHUB_LOG_MAX)
+    expect(one.droppedLines ?? 0).toBe(0)
+    const two = nextGitHubState(one, { rerun: { ciRunId: 2, attempt: 1, sha: A, by: 'person' } }, T2)!
+    expect(two.droppedLines).toBe(1)
   })
 
   it('logs why merge-ready was withdrawn', () => {
@@ -131,10 +151,10 @@ describe('nextGitHubState', () => {
   // G3b1: the pull request Astera made says so in the log; the head it pushed is kept
   it('logs a pull request Astera created as pr-created, and keeps the head it pushed', () => {
     const made = nextGitHubState(undefined, { binding: { ...BINDING, createdByAstera: true }, pushed: { sha: A } }, T1)!
-    // G7b: the push is a timeline line, once per head pushed
+    // G7b: the push is a timeline line, once per head pushed, before the pull request it opened (final review M4)
     expect(made.log).toEqual([
-      { seq: 1, at: T1, kind: 'pr-created', pr: 12 },
-      { seq: 2, at: T1, kind: 'pushed', sha: A }
+      { seq: 1, at: T1, kind: 'pushed', sha: A },
+      { seq: 2, at: T1, kind: 'pr-created', pr: 12 }
     ])
     expect(made.lastPushedSha).toBe(A)
     expect(nextGitHubState(made, { pushed: { sha: A } }, T2)).toBeNull()

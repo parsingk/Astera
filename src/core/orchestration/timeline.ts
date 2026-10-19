@@ -273,7 +273,9 @@ export function eventCountsOf(state: OrchState): Map<string, number> {
   }
   for (const m of state.messages) if (!SKIP.has(m.type)) add(m.runId, 1)
   for (const g of state.gates) add(g.runId, g.resolvedAt ? 2 : 1)
-  // One per GitHub log entry that is a timeline line (G7b)
-  for (const r of state.runs) if (r.githubState) add(r.id, r.githubState.log.filter((e) => GITHUB_LINE[e.kind] !== null).length)
+  // One per GitHub log entry that is a timeline line (G7b), and the lines the full log dropped (final review I3): runs
+  // follow waits for this count to pass what it printed, so it never falls back
+  for (const r of state.runs)
+    if (r.githubState) add(r.id, r.githubState.log.filter((e) => GITHUB_LINE[e.kind] !== null).length + (r.githubState.droppedLines ?? 0))
   return counts
 }

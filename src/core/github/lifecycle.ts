@@ -264,9 +264,26 @@ export interface RunGitHubState {
   baseReboundAt?: string
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
+  /** How many timeline lines (GITHUB_LINE_KINDS) the cap has dropped (G7b final review I3): a Run's event count is what
+   *  runs follow waits on, and it must keep growing with each new line once the log is full. */
+  droppedLines?: number
   /** The last entry's seq. */
   seq: number
 }
+
+/** The log kinds that are timeline lines (G7b, design §5.5): all but head-changed, which Astera's own push makes too. */
+export const GITHUB_LINE_KINDS: ReadonlySet<GitHubLogKind> = new Set<GitHubLogKind>([
+  'pr-bound',
+  'pr-created',
+  'pushed',
+  'ci-started',
+  'ci-failed',
+  'ci-rerun',
+  'ci-passed',
+  'merge-ready',
+  'invalidated',
+  'source-changed'
+])
 
 export const CI_CHECKS_MAX = 50
 export const GITHUB_LOG_MAX = 100

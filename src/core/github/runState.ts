@@ -3,6 +3,7 @@
 // is written. Pure.
 import {
   CI_CHECKS_MAX,
+  GITHUB_LINE_KINDS,
   GITHUB_LOG_MAX,
   RERUNS_MAX,
   type GitHubBinding,
@@ -61,6 +62,8 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   const base: RunGitHubState = prev ?? { log: [], seq: 0 }
   const next: RunGitHubState = { ...base }
   const entries: NewEntry[] = []
+  // The push first: it comes before the pull request it opens, and before what a read of it finds (final review M4)
+  if (patch.pushed && base.lastPushedSha !== patch.pushed.sha) entries.push({ kind: 'pushed', sha: patch.pushed.sha })
   if (patch.binding && !base.binding) {
     next.binding = patch.binding
     delete next.prCandidates
@@ -109,7 +112,6 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   if (patch.externalHead && !(base.externalHeadChange && base.externalHeadChange.sha === patch.externalHead.sha))
     next.externalHeadChange = { ...(patch.externalHead.sha !== undefined ? { sha: patch.externalHead.sha } : {}), at: now }
   if (patch.pushed) {
-    if (base.lastPushedSha !== patch.pushed.sha) entries.push({ kind: 'pushed', sha: patch.pushed.sha })
     next.lastPushedSha = patch.pushed.sha
     delete next.externalHeadChange
   }
@@ -134,7 +136,12 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   }
   if (entries.length > 0) {
     let seq = base.seq
-    next.log = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))].slice(-GITHUB_LOG_MAX)
+    const all = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))]
+    const cut = all.length - GITHUB_LOG_MAX
+    // The lines the cap drops are counted, so the Run's event count keeps growing (final review I3)
+    const lost = cut > 0 ? all.slice(0, cut).filter((e) => GITHUB_LINE_KINDS.has(e.kind)).length : 0
+    if (lost > 0) next.droppedLines = (base.droppedLines ?? 0) + lost
+    next.log = cut > 0 ? all.slice(cut) : all
     next.seq = seq
   }
   return JSON.stringify(next) === JSON.stringify(base) ? null : next

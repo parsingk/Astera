@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { timelineFor, eventCountFor, eventCountsOf, timelineWith } from './timeline'
+import { GITHUB_LINE_KINDS } from '../github/lifecycle'
 import type { JobEvent } from '../types'
 import { emptyState } from './state'
 import type { OrchState } from './state'
@@ -295,6 +296,20 @@ describe('the GitHub lines', () => {
   it('counts what it shows', () => {
     const s = withLog(log)
     expect(eventCountsOf(s).get('r1')).toBe(timelineFor(s, 'r1', anySession).length)
+  })
+
+  // The log's own rule for what is a line (it counts the dropped ones) and the timeline's are the same rule
+  it('shows a line for exactly the kinds the log counts as lines', () => {
+    const evts = timelineFor(withLog(log), 'r1', anySession).filter((e) => e.kind.startsWith('github-'))
+    expect(evts).toHaveLength(log.filter((e) => GITHUB_LINE_KINDS.has(e.kind)).length)
+    expect(GITHUB_LINE_KINDS.size).toBe(10)
+  })
+
+  // Final review I3: runs follow waits for the count to pass what it printed, so the lines the full log dropped count too
+  it('counts the lines the full log dropped, past what it shows', () => {
+    const s = withLog(log)
+    const dropped = { ...s, runs: s.runs.map((r) => ({ ...r, githubState: { ...r.githubState!, droppedLines: 3 } })) }
+    expect(eventCountsOf(dropped).get('r1')).toBe(timelineFor(dropped, 'r1', anySession).length + 3)
   })
 })
 
