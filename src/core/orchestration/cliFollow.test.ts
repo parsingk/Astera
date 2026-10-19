@@ -52,7 +52,8 @@ describe('followLine', () => {
     expect(line({ kind: 'github-ci-rerun', summary: 'build' })).toBe('GitHub CI rerun: build')
     expect(line({ kind: 'github-ci-passed', summary: 'aaaaaaa' })).toBe('GitHub CI passed: aaaaaaa')
     expect(line({ kind: 'github-merge-ready', summary: '#12' })).toBe('merge-ready: #12')
-    expect(line({ kind: 'github-invalidated', summary: 'head-changed' })).toBe('merge-ready withdrawn: head-changed')
+    // Final review M5: withheld by the verdict or withdrawn since, it is not merge-ready
+    expect(line({ kind: 'github-invalidated', summary: 'head-changed' })).toBe('not merge-ready: head-changed')
     expect(line({ kind: 'github-source-changed', summary: '' })).toBe('source issue changed')
   })
 

@@ -7,24 +7,26 @@ import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { invalidatedReasonKey } from './githubText'
 
-const STATES: readonly GitHubLifecycleState[] = [
-  'unbound',
-  'pr-bound',
-  'ci-pending',
-  'ci-passed',
-  'ci-failed',
-  'pr-merged',
-  'pr-closed',
-  'external-state-unavailable',
-  'pr-ready',
-  'awaiting-push',
-  'repairing',
-  'reviewing',
-  'waiting-for-user',
-  'exhausted',
-  'ci-infrastructure-failure',
-  'merge-ready'
-]
+/** Every state, as a Record over the union so a new state does not compile without its words (final review M7). */
+const STATE_WORDS: Record<GitHubLifecycleState, true> = {
+  unbound: true,
+  'pr-bound': true,
+  'ci-pending': true,
+  'ci-passed': true,
+  'ci-failed': true,
+  'pr-merged': true,
+  'pr-closed': true,
+  'external-state-unavailable': true,
+  'pr-ready': true,
+  'awaiting-push': true,
+  repairing: true,
+  reviewing: true,
+  'waiting-for-user': true,
+  exhausted: true,
+  'ci-infrastructure-failure': true,
+  'merge-ready': true
+}
+const STATES = Object.keys(STATE_WORDS) as GitHubLifecycleState[]
 const stateKey = (s: GitHubLifecycleState): MessageKey => `jobs.github.state.${s}` as MessageKey
 
 /** Every key the block says, for the all-languages test. */
@@ -41,7 +43,11 @@ export const GITHUB_BLOCK_KEYS: readonly string[] = [
   'jobs.github.failingClass',
   'jobs.github.mergeReady',
   'jobs.github.githubDraft',
-  'jobs.github.githubMergeState',
+  'jobs.github.mergeState.blocked',
+  'jobs.github.mergeState.behind',
+  'jobs.github.mergeState.dirty',
+  'jobs.github.mergeState.unstable',
+  'jobs.github.ciOtherCommit',
   'jobs.github.invalidated',
   'jobs.github.externalHead',
   'jobs.github.externalHeadNoSha',
@@ -70,9 +76,23 @@ function repairLine(r: NonNullable<GitHubLifecycleView['repair']>, t: (key: Mess
   }
 }
 
-/** A check's mark: ✓ passed, ✗ failed, ● still going, · anything else (skipped, neutral). */
-const markOf = (c: { status: string; conclusion?: string }): string =>
-  c.status !== 'completed' ? '●' : c.conclusion === 'success' ? '✓' : c.conclusion === 'failure' || c.conclusion === 'timed-out' || c.conclusion === 'startup-failure' ? '✗' : '·'
+/** A check's mark by the verdict's own rules (ciVerdict.ts; final review M2): ● while it goes (stale included: GitHub
+ *  runs it again), ✓ for what branch protection counts as passing, ✗ for every other conclusion. */
+export const checkMarkOf = (c: { status: string; conclusion?: string }): string =>
+  c.status !== 'completed' || c.conclusion === undefined || c.conclusion === 'stale'
+    ? '●'
+    : c.conclusion === 'success' || c.conclusion === 'neutral' || c.conclusion === 'skipped'
+      ? '✓'
+      : '✗'
+
+/** GitHub's merge states that disagree with merge-ready, in words (final review M3); clean, hooks and a state GitHub is
+ *  still computing (UNKNOWN, after each push) are no disagreement. */
+const MERGE_STATE_KEY: Partial<Record<string, MessageKey>> = {
+  BLOCKED: 'jobs.github.mergeState.blocked',
+  BEHIND: 'jobs.github.mergeState.behind',
+  DIRTY: 'jobs.github.mergeState.dirty',
+  UNSTABLE: 'jobs.github.mergeState.unstable'
+}
 
 export function GitHubBlock(p: {
   github: GitHubLifecycleView
@@ -87,8 +107,8 @@ export function GitHubBlock(p: {
     g.mergeReady && g.pr
       ? g.pr.isDraft
         ? t('jobs.github.githubDraft')
-        : g.pr.mergeStateStatus && g.pr.mergeStateStatus !== 'CLEAN'
-          ? t('jobs.github.githubMergeState', { state: g.pr.mergeStateStatus.toLowerCase() })
+        : g.pr.mergeStateStatus && MERGE_STATE_KEY[g.pr.mergeStateStatus]
+          ? t(MERGE_STATE_KEY[g.pr.mergeStateStatus]!)
           : null
       : null
   return (
@@ -128,12 +148,14 @@ export function GitHubBlock(p: {
       {g.noCi && <p className="detail-github-line">{t('jobs.github.noCi')}</p>}
       {g.sourceChanged && <p className="detail-github-line">{t('jobs.github.sourceChanged')}</p>}
       {p.noLocalCheck && <p className="detail-github-line warn-text">{t('jobs.github.noLocalCheck')}</p>}
+      {/* Checks of a commit that is not the head yet, just after a push (final review M6) */}
+      {g.ci && g.headSha && g.ci.sha !== g.headSha && <p className="detail-github-line modal-hint">{t('jobs.github.ciOtherCommit', { sha: short(g.ci.sha) })}</p>}
       {g.pr &&
         (g.ci && g.ci.checks.length > 0 ? (
           <ul className="detail-completion-checks">
             {g.ci.checks.map((c, i) => (
               <li key={`${c.name}-${i}`}>
-                <span className="detail-github-mark">{markOf(c)}</span>
+                <span className="detail-github-mark">{checkMarkOf(c)}</span>
                 <span className="detail-completion-name">{c.name}</span>
                 {c.required && <span className="detail-chip">{t('jobs.github.required')}</span>}
               </li>

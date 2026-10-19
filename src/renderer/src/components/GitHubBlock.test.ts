@@ -10,7 +10,7 @@ vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({ lang: 'en', t: (key: string, p?: Record<string, unknown>) => (p ? `${key} ${JSON.stringify(p)}` : key) })
 }))
 
-const { GitHubBlock, GITHUB_BLOCK_KEYS } = await import('./GitHubBlock')
+const { GitHubBlock, GITHUB_BLOCK_KEYS, checkMarkOf } = await import('./GitHubBlock')
 const A = 'a'.repeat(40)
 const B = 'b'.repeat(40)
 const PR = { number: 12, url: 'https://github.com/o/r/pull/12', isDraft: false, state: 'open' as const }
@@ -56,9 +56,12 @@ describe('GitHubBlock', () => {
     expect(render({ state: 'merge-ready', pr: { ...PR, isDraft: true }, mergeReady: { headSha: A, evaluatedAt: 'T' } })).toContain('jobs.github.githubDraft')
     const blocked = render({ state: 'merge-ready', pr: { ...PR, mergeStateStatus: 'BLOCKED' }, mergeReady: { headSha: A, evaluatedAt: 'T' } })
     expect(blocked).toContain('jobs.github.mergeReady {"sha":"aaaaaaa"}')
-    expect(blocked).toContain('jobs.github.githubMergeState {"state":"blocked"}')
-    const clean = render({ state: 'merge-ready', pr: { ...PR, mergeStateStatus: 'CLEAN' }, mergeReady: { headSha: A, evaluatedAt: 'T' } })
-    expect(clean).not.toContain('jobs.github.githubMergeState')
+    expect(blocked).toContain('jobs.github.mergeState.blocked')
+    // Final review M3: GitHub's states in words; the ones that are no disagreement (clean, hooks, still computing) say nothing
+    for (const [s, k] of [['BEHIND', 'behind'], ['DIRTY', 'dirty'], ['UNSTABLE', 'unstable']])
+      expect(render({ state: 'merge-ready', pr: { ...PR, mergeStateStatus: s }, mergeReady: { headSha: A, evaluatedAt: 'T' } }), s).toContain(`jobs.github.mergeState.${k}`)
+    for (const s of ['CLEAN', 'HAS_HOOKS', 'UNKNOWN'])
+      expect(render({ state: 'merge-ready', pr: { ...PR, mergeStateStatus: s }, mergeReady: { headSha: A, evaluatedAt: 'T' } }), s).not.toContain('jobs.github.mergeState')
   })
 
   it('a withdrawn merge-ready says why, an outside head, a base bound again, going on without CI and a changed issue', () => {
@@ -76,6 +79,22 @@ describe('GitHubBlock', () => {
     expect(html).toContain('jobs.github.rebound {"branch":"main"}')
     expect(html).toContain('jobs.github.noCi')
     expect(html).toContain('jobs.github.sourceChanged')
+  })
+
+  // Final review M6: checks of a commit that is not the head (just after a push, before the read catches up) say so
+  it('says when the checks shown are of another commit than the head', () => {
+    const ci = { sha: A, basis: 'required' as const, verdict: 'failed' as const, checks: [{ name: 'build', status: 'completed' as const, conclusion: 'failure' as const, required: true }] }
+    expect(render({ state: 'ci-pending', pr: PR, headSha: B, ci })).toContain('jobs.github.ciOtherCommit {"sha":"aaaaaaa"}')
+    expect(render({ state: 'ci-failed', pr: PR, headSha: A, ci })).not.toContain('jobs.github.ciOtherCommit')
+  })
+
+  // Final review M2: a check's mark from the verdict's own rules
+  it('marks a check passed, failed or still going as the verdict reads it', () => {
+    for (const c of ['success', 'neutral', 'skipped']) expect(checkMarkOf({ status: 'completed', conclusion: c }), c).toBe('✓')
+    for (const c of ['failure', 'cancelled', 'timed-out', 'action-required', 'startup-failure', 'unknown']) expect(checkMarkOf({ status: 'completed', conclusion: c }), c).toBe('✗')
+    expect(checkMarkOf({ status: 'completed', conclusion: 'stale' })).toBe('●')
+    expect(checkMarkOf({ status: 'in-progress' })).toBe('●')
+    expect(checkMarkOf({ status: 'queued' })).toBe('●')
   })
 
   // Design §7.2 S16

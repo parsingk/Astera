@@ -3,24 +3,26 @@ import type { GitHubInvalidatedReason } from '../../../core/github/lifecycle'
 import type { MessageKey } from '../../../core/i18n'
 import type { JobRow } from '../../../core/types'
 
-/** Every reason the Host records for merge-ready withheld or withdrawn (lifecycle.ts), each with its words. */
-export const INVALIDATED_REASONS: readonly GitHubInvalidatedReason[] = [
-  'not-bound',
-  'external-state-unavailable',
-  'pr-not-open',
-  'head-not-pushed',
-  'review-of-another-head',
-  'ci-not-passed',
-  'question-open',
-  'local-check-failed',
-  'local-check-skipped',
-  'closed',
-  'merged',
-  'head-changed',
-  'base-changed',
-  'ci-failed',
-  'checks-changed'
-]
+/** Every reason the Host records for merge-ready withheld or withdrawn (lifecycle.ts), as a Record over the union so a
+ *  new reason does not compile without its words (final review M7). */
+const REASON_WORDS: Record<GitHubInvalidatedReason, true> = {
+  'not-bound': true,
+  'external-state-unavailable': true,
+  'pr-not-open': true,
+  'head-not-pushed': true,
+  'review-of-another-head': true,
+  'ci-not-passed': true,
+  'question-open': true,
+  'local-check-failed': true,
+  'local-check-skipped': true,
+  closed: true,
+  merged: true,
+  'head-changed': true,
+  'base-changed': true,
+  'ci-failed': true,
+  'checks-changed': true
+}
+export const INVALIDATED_REASONS = Object.keys(REASON_WORDS) as GitHubInvalidatedReason[]
 
 export const invalidatedReasonKey = (r: GitHubInvalidatedReason): MessageKey => `jobs.github.reason.${r}` as MessageKey
 

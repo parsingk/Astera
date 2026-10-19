@@ -5,13 +5,10 @@ import type { GitHubInvalidatedReason } from '../../../core/github/lifecycle'
 import { INVALIDATED_REASONS, invalidatedReasonKey } from './githubText'
 
 describe('invalidatedReasonKey', () => {
+  // Final review M7: the list is the union's (a Record over it), so a new reason does not compile without its word
   it('names a word for every reason the Host records, in every language', () => {
-    const all: GitHubInvalidatedReason[] = [
-      'not-bound', 'external-state-unavailable', 'pr-not-open', 'head-not-pushed', 'review-of-another-head', 'ci-not-passed',
-      'question-open', 'local-check-failed', 'local-check-skipped', 'closed', 'merged', 'head-changed', 'base-changed',
-      'ci-failed', 'checks-changed'
-    ]
-    expect([...INVALIDATED_REASONS].sort()).toEqual([...all].sort())
+    const all: readonly GitHubInvalidatedReason[] = INVALIDATED_REASONS
+    expect(all).toHaveLength(15)
     for (const r of all)
       for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[invalidatedReasonKey(r)], `${lang} ${r}`).toBeTruthy()
   })

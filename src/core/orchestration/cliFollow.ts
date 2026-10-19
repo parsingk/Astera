@@ -36,7 +36,7 @@ const GITHUB_WORDS: Partial<Record<JobEvent['kind'], string>> = {
   'github-ci-rerun': 'GitHub CI rerun',
   'github-ci-passed': 'GitHub CI passed',
   'github-merge-ready': 'merge-ready',
-  'github-invalidated': 'merge-ready withdrawn',
+  'github-invalidated': 'not merge-ready',
   'github-source-changed': 'source issue changed'
 }
 
