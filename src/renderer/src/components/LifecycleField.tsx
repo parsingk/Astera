@@ -5,7 +5,13 @@ import { useEffect, useRef, useState } from 'react'
 import type { GitHubLifecycleDefaults } from '../../../core/github/lifecycleDefaults'
 import { useI18n } from '../i18n/I18nProvider'
 
-export type PreflightView = { kind: 'checking' } | { kind: 'ok'; repo: string } | { kind: 'refused'; reason: string } | { kind: 'failed'; message: string }
+export type PreflightView =
+  | { kind: 'checking' }
+  | { kind: 'ok'; repo: string }
+  | { kind: 'refused'; reason: string }
+  | { kind: 'failed'; message: string }
+  /** A Host from before this app, which does not know the check (it outlives an app update; final review M7). */
+  | { kind: 'outdated' }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -15,6 +21,7 @@ export function preflightOf(reply: { status: number; body: unknown }): Preflight
   const body = isObject(reply.body) ? reply.body : {}
   if (reply.status === 200 && body.ok === true && typeof body.repo === 'string') return { kind: 'ok', repo: body.repo }
   if (reply.status === 200 && body.ok === false && typeof body.reason === 'string') return { kind: 'refused', reason: body.reason }
+  if (reply.status === 501) return { kind: 'outdated' }
   return { kind: 'failed', message: typeof body.error === 'string' ? body.error : `the Host answered ${reply.status}` }
 }
 
@@ -23,6 +30,12 @@ export function preflightOf(reply: { status: number; body: unknown }): Preflight
 export function currentPreflight(key: string | null, held: { key: string; view: PreflightView } | null): PreflightView | null {
   if (key === null) return null
   return held?.key === key ? held.view : { kind: 'checking' }
+}
+
+/** What is kept of an answer while the lifecycle is off: nothing, so turning it on again asks afresh rather than show
+ *  the answer from before (final review M1). */
+export function heldWhile(key: string | null, held: { key: string; view: PreflightView } | null): { key: string; view: PreflightView } | null {
+  return key === null ? null : held
 }
 
 /** Create waits while the lifecycle is on and the folder is not known to carry it: the Host would refuse the Job with
@@ -36,6 +49,9 @@ export function useLifecyclePreflight(ask: (cwd: string) => Promise<{ status: nu
   askRef.current = ask
   const [held, setHeld] = useState<{ key: string; view: PreflightView } | null>(null)
   const key = checked && cwd !== null ? cwd : null
+  // Forgotten in the render that turns it off, before anything is drawn (React's state from the previous render)
+  const kept = heldWhile(key, held)
+  if (kept !== held) setHeld(kept)
   useEffect(() => {
     if (key === null) return
     let live = true
@@ -47,7 +63,7 @@ export function useLifecyclePreflight(ask: (cwd: string) => Promise<{ status: nu
       live = false
     }
   }, [key])
-  return currentPreflight(key, held)
+  return currentPreflight(key, kept)
 }
 
 export function LifecycleField(p: {
@@ -68,14 +84,16 @@ export function LifecycleField(p: {
       </label>
       <p className="modal-hint">{t('jobs.new.githubHint')}</p>
       {p.checked && pre !== null && (
-        <p className={pre.kind === 'refused' || pre.kind === 'failed' ? 'warn-text' : 'modal-hint'}>
+        <p className={pre.kind === 'checking' || pre.kind === 'ok' ? 'modal-hint' : 'warn-text'}>
           {pre.kind === 'checking'
             ? t('jobs.new.githubChecking')
             : pre.kind === 'ok'
               ? t('jobs.new.githubOk', { repo: pre.repo })
               : pre.kind === 'refused'
                 ? t('jobs.new.githubRefused', { reason: pre.reason })
-                : t('jobs.new.githubFailed', { message: pre.message })}
+                : pre.kind === 'outdated'
+                  ? t('jobs.new.githubHostOld')
+                  : t('jobs.new.githubFailed', { message: pre.message })}
         </p>
       )}
       {p.checked && p.defaults !== null && (

@@ -1934,6 +1934,7 @@ export const ko = {
   'jobs.new.githubOk': 'GitHub: {repo}',
   'jobs.new.githubRefused': '이 폴더로는 할 수 없습니다: {reason}',
   'jobs.new.githubFailed': '확인하지 못했습니다: {message}',
+  'jobs.new.githubHostOld': '이 앱보다 오래된 Astera Host 가 돌고 있어 확인하지 못했습니다. Host 를 다시 시작하세요.',
   'jobs.new.githubDefaults': '코드 밖의 이유로 실패한 CI 는 최대 {reruns}번 다시 돌리고, CI 를 최대 {minutes}분 기다립니다 — 설정 › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'CI 를 스스로 다시 돌리지 않고, 최대 {minutes}분 기다립니다 — 설정 › GitHub',
   'jobs.new.githubDefaultsRuntime': '그 Runtime 의 설정 › GitHub 기본값을 따릅니다.',

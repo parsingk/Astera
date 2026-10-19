@@ -10,7 +10,7 @@ vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({ lang: 'en', t: (key: string, p?: Record<string, unknown>) => (p ? `${key} ${JSON.stringify(p)}` : key) })
 }))
 
-const { LifecycleField, currentPreflight, lifecycleBlocksCreate, preflightOf } = await import('./LifecycleField')
+const { LifecycleField, currentPreflight, heldWhile, lifecycleBlocksCreate, preflightOf } = await import('./LifecycleField')
 type Props = React.ComponentProps<typeof LifecycleField>
 
 /** The markup with its quotes as the mocked `t` wrote them. */
@@ -48,6 +48,13 @@ describe('preflightOf', () => {
     expect(preflightOf({ status: 409, body: { code: 'HOST_NOT_RUNNING', error: 'The Astera Host is not running' } })).toEqual({ kind: 'failed', message: 'The Astera Host is not running' })
     expect(preflightOf({ status: 500, body: null })).toEqual({ kind: 'failed', message: 'the Host answered 500' })
   })
+
+  // G7a final review M7: a Host from before this app (it outlives an update) does not know the command
+  it('reads a Host that does not know the check as older than this app, and holds Create', () => {
+    expect(preflightOf({ status: 501, body: { error: 'unknown command: github-preflight' } })).toEqual({ kind: 'outdated' })
+    expect(render({ checked: true, preflight: { kind: 'outdated' } })).toContain('jobs.new.githubHostOld')
+    expect(lifecycleBlocksCreate(true, { kind: 'outdated' })).toBe(true)
+  })
 })
 
 describe('the folder check against the folder now', () => {
@@ -60,6 +67,14 @@ describe('the folder check against the folder now', () => {
     expect(currentPreflight('D:/a', null)).toEqual({ kind: 'checking' })
   })
 
+  // G7a final review M1: turned off and on again, the folder is asked afresh; the answer from before is not shown
+  it('forgets the answer when the lifecycle is turned off', () => {
+    const held = { key: 'D:/a', view: { kind: 'ok' as const, repo: 'o/a' } }
+    expect(heldWhile(null, held)).toBe(null)
+    expect(heldWhile('D:/a', held)).toBe(held)
+    expect(currentPreflight('D:/a', heldWhile(null, held))).toEqual({ kind: 'checking' })
+  })
+
   it('holds Create while the lifecycle is on and the folder is not known to carry it', () => {
     expect(lifecycleBlocksCreate(false, null)).toBe(false)
     expect(lifecycleBlocksCreate(true, { kind: 'ok', repo: 'o/r' })).toBe(false)
@@ -70,7 +85,7 @@ describe('the folder check against the folder now', () => {
 
 describe('its words', () => {
   it('are in every language', () => {
-    const keys = ['github', 'githubHint', 'githubChecking', 'githubOk', 'githubRefused', 'githubFailed', 'githubDefaults', 'githubDefaultsNoRerun', 'githubDefaultsRuntime']
+    const keys = ['github', 'githubHint', 'githubChecking', 'githubOk', 'githubRefused', 'githubFailed', 'githubHostOld', 'githubDefaults', 'githubDefaultsNoRerun', 'githubDefaultsRuntime']
     for (const key of keys) for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[`jobs.new.${key}`], `${lang} ${key}`).toBeTruthy()
   })
 })

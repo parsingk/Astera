@@ -1504,6 +1504,7 @@ export const es: Catalog = {
   'jobs.new.githubOk': 'GitHub: {repo}',
   'jobs.new.githubRefused': 'Esta carpeta no puede llevarlo: {reason}',
   'jobs.new.githubFailed': 'No se pudo comprobar: {message}',
+  'jobs.new.githubHostOld': 'El Astera Host en ejecución es anterior a esta app y no puede comprobarlo. Reinicia el Host.',
   'jobs.new.githubDefaults': 'Repite la CI que falló por causas ajenas al código (como máximo {reruns}) y espera la CI hasta {minutes} minutos — Configuración › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'No repite la CI por su cuenta y la espera hasta {minutes} minutos — Configuración › GitHub',
   'jobs.new.githubDefaultsRuntime': 'Se aplican los valores de Configuración › GitHub de ese Runtime.',

@@ -1484,6 +1484,7 @@ export const ja: Catalog = {
   'jobs.new.githubOk': 'GitHub: {repo}',
   'jobs.new.githubRefused': 'このフォルダーでは使えません: {reason}',
   'jobs.new.githubFailed': '確認できませんでした: {message}',
+  'jobs.new.githubHostOld': '実行中の Astera Host がこのアプリより古いため確認できません。Host を再起動してください。',
   'jobs.new.githubDefaults': 'コード以外の理由で失敗した CI を最大 {reruns} 回まで再実行し、CI を最大 {minutes} 分待ちます — 設定 › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'CI を自動では再実行せず、最大 {minutes} 分待ちます — 設定 › GitHub',
   'jobs.new.githubDefaultsRuntime': 'その Runtime の 設定 › GitHub の既定値が使われます。',

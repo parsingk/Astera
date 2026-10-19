@@ -1707,6 +1707,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.githubOk': 'GitHub: {repo}',
   'jobs.new.githubRefused': 'This folder cannot carry it: {reason}',
   'jobs.new.githubFailed': 'The check could not be made: {message}',
+  'jobs.new.githubHostOld': 'The running Astera Host is older than this app and cannot check this. Restart the Host.',
   'jobs.new.githubDefaults': 'Reruns CI that failed outside the code (at most {reruns}) and waits up to {minutes} minutes for CI — Settings › GitHub',
   'jobs.new.githubDefaultsNoRerun': 'Does not rerun CI by itself, and waits up to {minutes} minutes for it — Settings › GitHub',
   'jobs.new.githubDefaultsRuntime': 'The Runtime\'s own Settings › GitHub defaults apply.',
