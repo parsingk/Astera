@@ -106,7 +106,8 @@ describe('prByNumber', () => {
       return { ok: true, stdout: JSON.stringify(row({ number: 12, state: 'CLOSED', headRefName: 'u/a' })), stderr: '' }
     }
     expect(await prByNumber(run, 'D:/wt', repo, 12)).toMatchObject({ ok: true, pr: { number: 12, state: 'closed' } })
-    expect(seen).toEqual([{ args: ['pr', 'view', '12', '--repo', 'o/r', '--json', PR_LIST_ARGS.at(-1)], cwd: 'D:/wt' }])
+    // G6 final review M1: the base comes with it, so runs reconverge binds the base the PR has now
+    expect(seen).toEqual([{ args: ['pr', 'view', '12', '--repo', 'o/r', '--json', `${PR_LIST_ARGS.at(-1)},baseRefName`], cwd: 'D:/wt' }])
   })
 
   it('a gh failure maps to a sentence; output that is not one PR is other', async () => {

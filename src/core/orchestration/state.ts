@@ -554,7 +554,7 @@ export function recordRunGitHub(s: OrchState, runId: string, patch: RunGitHubPat
  *  Refused: an unknown Run (missing); a Job without lifecycle; a Run without a branch of its own; a Run never carried,
  *  or whose latest lifecycle Task still works; a bound pull request merged or closed — by the Host's live read when it
  *  gives one (`live.prState`), else by the record. */
-export function reconvergeRun(s: OrchState, runId: string, now: string, live: { prState?: 'open' | 'closed' | 'merged' } = {}): Res<Task> {
+export function reconvergeRun(s: OrchState, runId: string, now: string, live: { prState?: 'open' | 'closed' | 'merged'; baseBranch?: string } = {}): Res<Task> {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return gone(`unknown run: ${runId}`)
   if (!s.jobs.find((j) => j.id === run.jobId)?.github) return err('This Run’s Job is not carried through GitHub')
@@ -574,7 +574,9 @@ export function reconvergeRun(s: OrchState, runId: string, now: string, live: { 
   let next: OrchState = { ...s, tasks: recomputeReady([...s.tasks, task]) }
   // A pull request retargeted to another base is carried against that base from now on (G6, spec §30)
   const gs = run.githubState
-  const retargeted = gs?.binding && gs.pr && gs.pr.baseBranch !== gs.binding.baseBranch ? gs.pr.baseBranch : undefined
+  // The base the Host just read wins over the record's, which can be a read behind (G6 final review M1)
+  const baseNow = live.baseBranch ?? gs?.pr?.baseBranch
+  const retargeted = gs?.binding && baseNow !== undefined && baseNow !== gs.binding.baseBranch ? baseNow : undefined
   if (gs?.mergeReady || gs?.invalidated || retargeted) {
     const cleared = recordRunGitHub(
       next,

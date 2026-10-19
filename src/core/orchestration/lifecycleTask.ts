@@ -129,7 +129,13 @@ export function mergeReadyOf(
   const head = gs.lastPushedSha
   if (head === undefined || gs.headSha !== head) return { reason: 'head-not-pushed' }
   if (review.reviewHead !== head) return { reason: 'review-of-another-head' }
+  // After runs reconverge bound a retargeted base, only CI that started after the re-bind was judged against it: a retarget
+  // does not run CI again (G6 final review I2; spec §30, existing green CI is not trusted as it is)
+  const reboundAt = gs.baseReboundAt
+  const started = (gs.ci?.checks ?? []).filter((c) => c.startedAt !== undefined)
+  const freshForBase = reboundAt === undefined || (started.length > 0 && started.every((c) => c.startedAt! >= reboundAt))
   const ciPassed = gs.ci?.sha === head && gs.ci.verdict === 'passed'
+  if (ciPassed && !freshForBase) return { reason: 'base-changed' }
   // A person's go-on-without-CI was for a head with no check at all (S10): CI that ran on it since decides
   const noCi = gs.ciOverride?.sha === head && !(gs.ci?.sha === head && gs.ci.verdict !== 'none')
   if (!ciPassed && !noCi) return { reason: 'ci-not-passed' }

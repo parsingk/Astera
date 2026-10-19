@@ -125,8 +125,9 @@ export async function prByNumber(
   cwd: string,
   repo: GitHubRepo,
   n: number
-): Promise<{ ok: true; pr: PrInfo | null } | GhFailed> {
-  const fields = PR_LIST_ARGS[PR_LIST_ARGS.length - 1]
+): Promise<{ ok: true; pr: PrInfo | null; base?: string } | GhFailed> {
+  // The base too: runs reconverge binds the base the pull request has now (G6 final review M1)
+  const fields = `${PR_LIST_ARGS[PR_LIST_ARGS.length - 1]},baseRefName`
   const r = await run(['pr', 'view', String(n), '--repo', ghRepoArg(repo), '--json', fields], cwd)
   if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
   let one: unknown
@@ -137,7 +138,8 @@ export async function prByNumber(
   }
   const rows = parsePrList(JSON.stringify([one]))
   const pr = rows ? Object.values(rows)[0] : undefined
-  return pr ? { ok: true, pr } : { ok: false, kind: 'other', message: `gh pr view ${n} answered with something that is not a pull request` }
+  const base = typeof one === 'object' && one !== null && typeof (one as { baseRefName?: unknown }).baseRefName === 'string' ? (one as { baseRefName: string }).baseRefName : undefined
+  return pr ? { ok: true, pr, ...(base !== undefined ? { base } : {}) } : { ok: false, kind: 'other', message: `gh pr view ${n} answered with something that is not a pull request` }
 }
 
 /** The PR of one head branch, by the same fold as the coordinator's list: an open PR wins, else the

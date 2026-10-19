@@ -31,7 +31,8 @@ export interface RunGitHubPatch {
   /** A person chose to go on without CI for this head (G3b2). */
   noCi?: { sha: string }
   /** The base the pull request was retargeted to, bound by `runs reconverge` (G6, spec §30): the binding is made once,
-   *  and this is the one part of it that moves. Not on the wire: only the state function writes it. */
+   *  and this is the one part of it that moves, noted in `baseReboundAt`. Not on the wire: parseRunGitHubPatch drops it,
+   *  and only the state function writes it. */
   rebase?: { baseBranch: string }
   /** A CI run's failed jobs were rerun (G4). */
   rerun?: Omit<GitHubRerun, 'at'>
@@ -65,8 +66,10 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     delete next.prCandidates
     entries.push({ kind: patch.binding.createdByAstera ? 'pr-created' : 'pr-bound', pr: patch.binding.number })
   }
-  if (patch.rebase && next.binding && next.binding.baseBranch !== patch.rebase.baseBranch)
+  if (patch.rebase && next.binding && next.binding.baseBranch !== patch.rebase.baseBranch) {
     next.binding = { ...next.binding, baseBranch: patch.rebase.baseBranch }
+    next.baseReboundAt = now
+  }
   if (patch.prCandidates !== undefined && !next.binding) {
     if (patch.prCandidates === null || patch.prCandidates.length === 0) delete next.prCandidates
     else next.prCandidates = [...patch.prCandidates]
@@ -230,5 +233,7 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
   if (v.rerun !== undefined && !rerunOk(v.rerun)) return 'rerun is malformed'
   if (v.mergeReady !== undefined && v.mergeReady !== null && !mergeReadyOk(v.mergeReady)) return 'mergeReady is malformed'
   if (v.invalidated !== undefined && !(isObj(v.invalidated) && isStr(v.invalidated.reason))) return 'invalidated is malformed'
-  return v as RunGitHubPatch
+  // The re-bind is reconvergeRun's own (G6): never taken off the wire (G6 final review M8)
+  const { rebase: _rebase, ...wire } = v
+  return wire as RunGitHubPatch
 }
