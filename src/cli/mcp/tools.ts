@@ -752,7 +752,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get a work record',
     readOnly: true,
     cmd: 'understanding-get',
-    description: `One How It Works record in full: request, source, changed files, git heads and commits, verification (validation on older records), Job tasks, status, reason, and the explanation (overview, user-visible changes, flow, decisions, implementation and evidence). ${WORK_RECORDS}`,
+    description: `One How It Works record in full: request, source, changed files, git heads and commits, verification (validation on older records), Job tasks, a GitHub lifecycle Run's GitHub evidence (\`github\`: its issue, pull request, local checks, GitHub CI at the head, Astera's review, and whether it was merge-ready when the Run finished), status, reason, and the explanation (overview, user-visible changes, flow, decisions, implementation and evidence). ${WORK_RECORDS}`,
     inputSchema: { projectId: id, recordId: id.describe('A record id from list_work_records.') },
     args: (i) => ({ project: i.projectId, id: i.recordId })
   },

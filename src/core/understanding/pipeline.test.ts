@@ -324,6 +324,33 @@ describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
     expect(r.validation).toBeUndefined() // nothing new writes the old field any more
   })
 
+  // GitHub lifecycle G8 (spec §40, Phase 10): the evidence is stored as the Run left it, and the write-up's material has it
+  it('a lifecycle Run’s GitHub evidence is stored on the record and given to the write-up', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    const github = {
+      source: { label: 'GitHub #12', url: 'https://github.com/o/r/issues/12' },
+      pr: { number: 34, url: 'https://github.com/o/r/pull/34' },
+      local: 'passed' as const,
+      ci: { status: 'passed' as const, sha: 'c'.repeat(40) },
+      review: 'passed' as const,
+      mergeReady: true
+    }
+    await pipeline.onRunFinished(projectRoot, runInput({ github }))
+    expect(store.get(projectRoot)!.records[0].github).toEqual(github)
+    expect(agentReply.lastPrompt).toContain('GitHub #12')
+    expect(agentReply.lastPrompt).toContain('#34')
+    expect(agentReply.lastPrompt).toContain(`GitHub CI: passed at ${'c'.repeat(40)}`)
+  })
+
+  it('a Run without the lifecycle has no GitHub evidence and no GitHub section', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onRunFinished(projectRoot, runInput())
+    expect(store.get(projectRoot)!.records[0]).not.toHaveProperty('github')
+    expect(agentReply.lastPrompt).not.toContain('GitHub CI')
+  })
+
   it('changedFiles 는 입력 그대로 실린다 — Job 의 각 task 가 이미 무엇을 건드렸는지 보고한다', async () => {
     const { store, pipeline } = await make()
     agentReply.value = explanation()

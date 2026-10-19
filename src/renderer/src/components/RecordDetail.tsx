@@ -6,6 +6,7 @@ import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { FlowDiagram } from './FlowDiagram'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR, RECORD_STATUS_KEY, StatusGlyph } from './UnderstandingIcons'
+import { RecordGitHub } from './RecordGitHub'
 
 /** 참조 단이 접히는 폭. 이 아래에서는 왼쪽 본문이 40자 밑으로 내려가 흐름도가 잘린다. */
 const NARROW_PANE = 720
@@ -69,6 +70,8 @@ export function RecordDetail({
   const { t } = useI18n()
   const explanation = record.explanation
   const verification = verificationOf(record)
+  // A lifecycle Run's evidence is the Run's, not the write-up's: shown with or without one (G8)
+  const github = record.github && <RecordGitHub github={record.github} onOpen={(url) => void window.api.system.openExternal(url)} />
 
   if (!explanation) {
     // No write-up yet (still generating, or the last attempt failed) — there is no title to fall
@@ -77,6 +80,7 @@ export function RecordDetail({
       <div className="hiw-pane hiw-pane-empty">
         <h4 title={record.request}>{record.request}</h4>
         {t('hiw.pane.noExplanation')}
+        {github}
       </div>
     )
   }
@@ -204,6 +208,7 @@ export function RecordDetail({
           {record.source.kind === 'session' && <p className="hiw-fine">{t('hiw.verify.reported')}</p>}
         </div>
       )}
+      {github}
 
       <div className="hiw-split">
         <div className="hiw-main">

@@ -2659,6 +2659,17 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-verify { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-verify .hiw-p { margin: 0; }
 .hiw-verify .hiw-fine { margin: 3px 0 0; }
+.hiw-github { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); color: var(--text); }
+.hiw-pane-empty .hiw-github { border-bottom: 0; }
+.hiw-github-line { margin: 0 0 2px; font-size: 12px; }
+.hiw-github-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.hiw-github-link:hover { text-decoration: underline; background: none; }
+.hiw-github-checks { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; }
+.hiw-github-mark { width: 1.2em; display: inline-block; text-align: center; }
+.hiw-github-mark.passed { color: var(--ok); }
+.hiw-github-mark.failed { color: var(--danger); }
+.hiw-github-mark.skipped { color: var(--text-faint); }
+.hiw-github .hiw-fine { margin: 3px 0 0; }
 
 .hiw-split { position: relative; flex: 1; display: flex; min-height: 0; }
 .hiw-main { flex: 1.62; min-width: 0; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; overflow-y: auto; }
