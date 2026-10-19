@@ -81,7 +81,10 @@ describe('repairTargetFor — the lifecycle Task', () => {
       const opened = unwrap<{ id: string }>(openDispatch(t.state, { taskId: t.value.id, specPath: 'C:/specs/x.md', ...d }, at) as never)
       s = unwrap(applyWorkerDone(opened.state, { taskId: t.value.id, dispatchId: opened.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, at) as never).state
     }
-    if (o.rootWork) done('I', { provider: 'claude', accountId: 'accI', sessionId: 'sessI', cwd: 'D:\\wt\\run' }, NOW)
+    // The Run root spelled another way, as a Windows session reports it: backslashes are separators on win32 only, and
+    // a POSIX session reports the root as the Run records it (develop CI on macOS and Linux, 2026-10-19)
+    const root = process.platform === 'win32' ? 'D:\\wt\\run' : 'D:/wt/run'
+    if (o.rootWork) done('I', { provider: 'claude', accountId: 'accI', sessionId: 'sessI', cwd: root }, NOW)
     done('A', { provider: 'codex', accountId: 'accX', sessionId: 'sessA', cwd: 'D:/wt/a' }, LATER, o.accounts === false ? undefined : ['accX', 'accY'])
     return { s, lifecycleId: s.tasks.find((t) => t.kind === 'lifecycle')!.id }
   }

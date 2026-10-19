@@ -586,6 +586,10 @@ describe('createHostWorktrees — the loop’s members', () => {
   // G5c final review C1: the dispatch loop's integrate skips a dependency folder already merged and reaped
   it('integrate skips a dependency worktree whose folder is gone, and nothing left is merged', async () => {
     const h = rig()
+    // Its parent is there, as the Run's own worktree beside it keeps it: on POSIX a folder is `missing` only while its
+    // parent answers (worktrees/presence.ts), and with the parent gone too it is `unreachable` and kept (develop CI on
+    // macOS and Linux, 2026-10-19)
+    await fs.mkdir(path.join(home, 'wt'), { recursive: true })
     const gone = path.join(home, 'wt', 'merged-and-reaped')
     expect(await h.wt.integrate(repo, [gone])).toEqual({ kind: 'merged', uncommitted: 0 })
   })
