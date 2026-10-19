@@ -71,6 +71,11 @@ export type RegistrySpawn = (file: string, args: string[] | string, opts: PtyOpe
  *  2,500 lines of 100 characters. */
 export const SCROLLBACK_CHARS = 256_000
 
+/** How long `redraw` holds the other size before it gives the size back (issue #8). Node reads the size once per
+ *  SIGWINCH and acts only on a change, so a resize undone at once finds the old size; Claude Code holds 30 ms for its
+ *  own repaint. */
+export const REDRAW_HOLD_MS = 40
+
 /** How many ended entries that are not agent sessions are kept (M4). */
 export const DEAD_ENTRIES_KEPT = 64
 /** How many ended agent sessions keep their whole entry (performance audit H5): `list`, `pty-listed` and the spawner's
@@ -194,6 +199,8 @@ export class PtyRegistry {
   readonly bootId: string
   /** The exited sweep's timer, only while an exited pty is held (none on a Host with nothing exited). */
   private sweeper: ReturnType<typeof setInterval> | null = null
+  /** Each pty's redraw waiting to give its size back (`redraw`). */
+  private readonly redraws = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(deps: PtyRegistryDeps) {
     this.deps = deps
@@ -547,6 +554,24 @@ export class PtyRegistry {
   /** When a write marked `person` last reached this pty, or null for none or one never here. */
   lastPersonWrite(id: string): number | null {
     return this.entries.get(id)?.lastPersonWriteAt ?? null
+  }
+
+  /** Makes the program in a live pty draw its screen again (issue #8): a column narrower (wider when it is two or less),
+   *  and its size back REDRAW_HOLD_MS later. POSIX sends SIGWINCH only when the size changes, and a reattached tab asks
+   *  for the size the pty already has, so a program that draws on SIGWINCH (Claude Code) left the tab blank until a
+   *  person resized the window. The size ends where it was, so nothing is recorded or told; a resize in the meantime
+   *  wins, and attaches during the hold make one redraw. */
+  redraw(id: string): void {
+    const e = this.live(id)
+    if (!e || this.redraws.has(id)) return
+    const { cols, rows } = e
+    e.pty.resize(cols > 2 ? cols - 1 : cols + 1, rows)
+    const timer = setTimeout(() => {
+      this.redraws.delete(id)
+      if (this.live(id) === e && e.cols === cols && e.rows === rows) e.pty.resize(cols, rows)
+    }, REDRAW_HOLD_MS)
+    timer.unref?.()
+    this.redraws.set(id, timer)
   }
 
   resize(id: string, cols: number, rows: number): void {
