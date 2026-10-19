@@ -156,10 +156,13 @@ export interface GitHubCiSnapshot {
 
 /** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found;
  *  `ci-rerun`: a CI run of the head was rerun (G4); `merge-ready` / `invalidated`: the review's verdict made the pull
- *  request ready to merge, or merge-ready was withheld or withdrawn (G5b). */
+ *  request ready to merge, or merge-ready was withheld or withdrawn (G5b); `pushed`: Astera pushed the branch, and
+ *  `ci-started`: a read first saw the head's CI running (G7b, the timeline's lines; no public event or journal row). */
 export type GitHubLogKind =
   | 'pr-bound'
   | 'pr-created'
+  | 'pushed'
+  | 'ci-started'
   | 'head-changed'
   | 'ci-passed'
   | 'ci-failed'
@@ -227,6 +230,8 @@ export interface GitHubLogEntry {
   check?: string
   /** A ci-failed entry's class, when complete evidence was read with the verdict. */
   class?: CiFailureClass
+  /** An invalidated entry's reason (G7b): why merge-ready was withheld or withdrawn. */
+  reason?: GitHubInvalidatedReason
 }
 
 /** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written by the Host's `runs-github-record`
@@ -259,9 +264,26 @@ export interface RunGitHubState {
   baseReboundAt?: string
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
+  /** How many timeline lines (GITHUB_LINE_KINDS) the cap has dropped (G7b final review I3): a Run's event count is what
+   *  runs follow waits on, and it must keep growing with each new line once the log is full. */
+  droppedLines?: number
   /** The last entry's seq. */
   seq: number
 }
+
+/** The log kinds that are timeline lines (G7b, design §5.5): all but head-changed, which Astera's own push makes too. */
+export const GITHUB_LINE_KINDS: ReadonlySet<GitHubLogKind> = new Set<GitHubLogKind>([
+  'pr-bound',
+  'pr-created',
+  'pushed',
+  'ci-started',
+  'ci-failed',
+  'ci-rerun',
+  'ci-passed',
+  'merge-ready',
+  'invalidated',
+  'source-changed'
+])
 
 export const CI_CHECKS_MAX = 50
 export const GITHUB_LOG_MAX = 100

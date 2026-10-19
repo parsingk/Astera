@@ -3,6 +3,7 @@
 // is written. Pure.
 import {
   CI_CHECKS_MAX,
+  GITHUB_LINE_KINDS,
   GITHUB_LOG_MAX,
   RERUNS_MAX,
   type GitHubBinding,
@@ -61,6 +62,8 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   const base: RunGitHubState = prev ?? { log: [], seq: 0 }
   const next: RunGitHubState = { ...base }
   const entries: NewEntry[] = []
+  // The push first: it comes before the pull request it opens, and before what a read of it finds (final review M4)
+  if (patch.pushed && base.lastPushedSha !== patch.pushed.sha) entries.push({ kind: 'pushed', sha: patch.pushed.sha })
   if (patch.binding && !base.binding) {
     next.binding = patch.binding
     delete next.prCandidates
@@ -84,6 +87,10 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     // A verdict is news about the PR only for its head: a read can catch GitHub between a push and the PR's own move,
     // with the checks of the commit before (final review I1). That verdict is kept, never announced.
     const ofHead = r.ci.sha === r.headSha
+    // CI starts on the timeline when a read first sees the head's checks running (G7b). One already finished at the
+    // first read is said by its verdict alone; a run started again after a verdict starts again.
+    const running = (c: Omit<GitHubCiSnapshot, 'changedAt'> | undefined): boolean => c !== undefined && c.verdict === 'pending' && c.checks.length > 0
+    if (ofHead && running(r.ci) && !(prevCi?.sha === r.ci.sha && running(prevCi))) entries.push({ kind: 'ci-started', sha: r.ci.sha })
     const moved = ofHead && (!prevCi || prevCi.sha !== r.ci.sha || prevCi.verdict !== r.ci.verdict)
     if (moved && r.ci.verdict === 'passed') entries.push({ kind: 'ci-passed', sha: r.ci.sha })
     if (moved && r.ci.verdict === 'failed')
@@ -125,11 +132,16 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   // can be older than a reconverge that already cleared the evidence (G5c final review M2)
   if (patch.invalidated && !next.invalidated && (patch.mergeReady !== undefined || next.mergeReady !== undefined)) {
     next.invalidated = { reason: patch.invalidated.reason, at: now }
-    entries.push({ kind: 'invalidated' })
+    entries.push({ kind: 'invalidated', reason: patch.invalidated.reason })
   }
   if (entries.length > 0) {
     let seq = base.seq
-    next.log = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))].slice(-GITHUB_LOG_MAX)
+    const all = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))]
+    const cut = all.length - GITHUB_LOG_MAX
+    // The lines the cap drops are counted, so the Run's event count keeps growing (final review I3)
+    const lost = cut > 0 ? all.slice(0, cut).filter((e) => GITHUB_LINE_KINDS.has(e.kind)).length : 0
+    if (lost > 0) next.droppedLines = (base.droppedLines ?? 0) + lost
+    next.log = cut > 0 ? all.slice(cut) : all
     next.seq = seq
   }
   return JSON.stringify(next) === JSON.stringify(base) ? null : next

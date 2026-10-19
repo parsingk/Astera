@@ -10,6 +10,19 @@ const task = (over: Partial<JobTask> = {}): JobTask => ({ id: 't1', title: 't', 
 /** 셋 중 둘째가 막힌 라운드 — 첫 실패 뒤는 not-run 이다(validator) */
 const failing = [check('Typecheck', 'passed'), check('Tests', 'failed'), check('Build', 'not-run')]
 
+// G7b (design §8): the lifecycle Task's node says it waits for GitHub CI while its round does
+describe('nodeMetaOf: the lifecycle Task', () => {
+  it('waits for GitHub CI while its round waits, after a question and a repair', () => {
+    const waiting = task({ status: 'validating', lifecycle: { ciWait: { pr: 12, sha: 'a', since: 'T' } } })
+    expect(nodeMetaOf(waiting)).toEqual({ kind: 'ci-waiting', pr: 12 })
+    expect(nodeMetaOf({ ...waiting, gate: { id: 'g', question: 'q?' } })).toEqual({ kind: 'gate', question: 'q?' })
+    expect(nodeMetaOf({ ...waiting, lifecycle: { ciWait: { since: 'T' } } })).toEqual({ kind: 'ci-waiting' })
+  })
+  it('checks locally before the push, as any Task', () => {
+    expect(nodeMetaOf(task({ status: 'validating', lifecycle: {} }))).toEqual({ kind: 'checking', retrying: null })
+  })
+})
+
 describe('firstBlocked', () => {
   it('첫 failed 나 timed-out 의 이름, 없으면 null', () => {
     expect(firstBlocked({ checks: failing })).toBe('Tests')

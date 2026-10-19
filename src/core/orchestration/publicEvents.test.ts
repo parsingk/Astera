@@ -1,5 +1,6 @@
 // SDK 1d: the public events one commit makes, derived from the state before and after it (SDK spec §6). Pure: what
 // these tests build is all the derivation sees.
+import type { GitHubLogKind } from '../github/lifecycle'
 import { describe, it, expect } from 'vitest'
 import { derivePublicEvents, type EventDraft } from './publicEvents'
 import { emptyState, type OrchState } from './state'
@@ -297,7 +298,7 @@ describe('derivePublicEvents', () => {
 
 describe('github events (GitHub lifecycle G1)', () => {
   const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
-  const entry = (seq: number, kind: 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'ci-rerun' | 'source-changed' | 'merge-ready' | 'invalidated') => ({ seq, at: NOW, kind })
+  const entry = (seq: number, kind: GitHubLogKind) => ({ seq, at: NOW, kind })
   const withLog = (log: ReturnType<typeof entry>[]): OrchState =>
     state({ jobs: [job({ github: policy })], runs: [{ ...run, githubState: { log, seq: log.at(-1)?.seq ?? 0 } }] })
 
@@ -320,6 +321,11 @@ describe('github events (GitHub lifecycle G1)', () => {
       'github.pr_bound', 'github.head_changed', 'github.ci_passed', 'github.ci_failed', 'github.source_changed', 'github.pr_created', 'github.ci_rerun_requested',
       'github.merge_ready', 'github.merge_ready_invalidated'
     ])
+  })
+
+  // G7b: the push and CI starting are timeline lines; design §5.5 names no public event for them
+  it('raises no event for a push or CI starting', () => {
+    expect(types(derivePublicEvents(withLog([]), withLog([entry(1, 'pushed'), entry(2, 'ci-started'), entry(3, 'ci-passed')])))).toEqual(['github.ci_passed'])
   })
 
   it('a record that moved nothing makes no event', () => {

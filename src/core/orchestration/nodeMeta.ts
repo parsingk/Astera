@@ -12,6 +12,8 @@ export type NodeMeta =
   | { kind: 'stopped'; failed: string | null; unavailable?: true }
   | { kind: 'repairing'; repairs: number; max: number; failed: string | null; unavailable?: true }
   | { kind: 'checking'; retrying: string | null }
+  /** The lifecycle Task's round waits for GitHub CI on the head it pushed (G7b) */
+  | { kind: 'ci-waiting'; pr?: number }
   | { kind: 'reviewing'; round: number; max: number }
   /** `unavailable`: the check that stopped it could not be made, and a person failed the Task (plugin Phase 5 C9) */
   | { kind: 'failed'; name: string; unavailable?: true }
@@ -65,6 +67,9 @@ export function nodeMetaOf(task: JobTask): NodeMeta {
   // 검사" 를 지어내지 않고 지난 라운드에 막힌 것을 가리킨다: 그것이 다시 도는 중이라는 뜻이다. retryingCheckOf
   // 를 그대로 쓴다 — ● 로 그릴 칩과 여기 문구가 서로 다른 검사를 가리키면 안 되므로 판정을 두 곳에 따로 적지
   // 않는다(RunDetail 이 같은 함수를 쓴다).
+  // The lifecycle Task's round past its local checks waits for GitHub CI (G7b); before the push it checks as any Task
+  const wait = task.lifecycle?.ciWait
+  if (task.status === 'validating' && wait) return { kind: 'ci-waiting', ...(wait.pr !== undefined ? { pr: wait.pr } : {}) }
   if (task.status === 'validating') return { kind: 'checking', retrying: retryingCheckOf(task)?.name ?? null }
   // reviewRound 는 끝난 라운드 수 — 진행 중인 것은 그다음 번호다. 첫 검토 중에 "0/2" 라고 쓰면 시작도 안 한 것처럼 읽힌다
   if (task.status === 'reviewing' && conv) return { kind: 'reviewing', round: conv.reviewRound + 1, max: conv.maxReviewRounds }

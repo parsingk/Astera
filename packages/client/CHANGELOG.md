@@ -31,6 +31,15 @@ is the guide.
   `github-ci-outside` (CI failed for a reason outside the code, again for one Astera could not classify, or a repair
   fixed nothing) and `github-carry` (the round could not be taken to GitHub). Their `options` are among `wait`, `no-ci`, `continue`, `retry`, `rerun`, `mark-failed` and `pr-<n>`;
   `questions.answer` takes one of them.
+- `GitHubLifecycle.pushedSha` (the commit Astera last pushed), `externalHead` (a head Astera did not push), `base` (the
+  pull request's base as bound, with `reboundAt` after a retarget), `repair` (the lifecycle Task's repair attempt
+  against the Job's budget, and while a repair runs its `subject`: GitHub CI, a local check, or the review's findings)
+  and `noCi` (a person chose to go on without CI for the head).
+- Ten `RunEventKind`s for a GitHub lifecycle Run's steps on its timeline (`runs.follow`): `github-pr-bound`,
+  `github-pr-created`, `github-pushed`, `github-ci-started`, `github-ci-failed`, `github-ci-rerun`, `github-ci-passed`,
+  `github-merge-ready`, `github-invalidated` and `github-source-changed`, each with the commit, check, pull request or
+  reason (`github-invalidated`: the `GitHubInvalidatedReason`) in its `summary`, empty for `github-source-changed`. A
+  script that switches on every `RunEventKind` meets ten more.
 
 ## 0.3.0
 

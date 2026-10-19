@@ -42,6 +42,21 @@ describe('followLine', () => {
     )
   })
 
+  // G7b: a GitHub lifecycle Run's steps, each in words, the commit, check or pull request after it
+  it('says each GitHub step', () => {
+    expect(line({ kind: 'github-pr-created', summary: '#12' })).toBe('pull request opened: #12')
+    expect(line({ kind: 'github-pr-bound', summary: '#12' })).toBe('pull request bound: #12')
+    expect(line({ kind: 'github-pushed', summary: 'aaaaaaa' })).toBe('pushed: aaaaaaa')
+    expect(line({ kind: 'github-ci-started', summary: 'aaaaaaa' })).toBe('GitHub CI started: aaaaaaa')
+    expect(line({ kind: 'github-ci-failed', summary: 'build' })).toBe('GitHub CI failed: build')
+    expect(line({ kind: 'github-ci-rerun', summary: 'build' })).toBe('GitHub CI rerun: build')
+    expect(line({ kind: 'github-ci-passed', summary: 'aaaaaaa' })).toBe('GitHub CI passed: aaaaaaa')
+    expect(line({ kind: 'github-merge-ready', summary: '#12' })).toBe('merge-ready: #12')
+    // Final review M5: withheld by the verdict or withdrawn since, it is not merge-ready
+    expect(line({ kind: 'github-invalidated', summary: 'head-changed' })).toBe('not merge-ready: head-changed')
+    expect(line({ kind: 'github-source-changed', summary: '' })).toBe('source issue changed')
+  })
+
   it('a message is its subject, with the task after it', () => {
     expect(line({ messageType: 'status', summary: 'validation failed', taskId: 'task_1' })).toBe('validation failed (task_1)')
     expect(line({ messageType: 'status', summary: 'coordinator note' })).toBe('coordinator note')

@@ -119,7 +119,9 @@ describe('githubLifecycleOf', () => {
       pr: { number: 12, url: 'https://github.com/o/r/pull/12', isDraft: true, state: 'open', mergeStateStatus: 'BLOCKED' },
       headSha: A,
       ci: { sha: A, basis: 'all-reported', verdict: 'failed', checks: [{ name: 'build', status: 'completed', conclusion: 'failure', required: false }] },
-      failing: { check: 'build', detailsUrl: 'https://x/1' }
+      failing: { check: 'build', detailsUrl: 'https://x/1' },
+      // G7b: the base as bound
+      base: { branch: 'develop' }
     })
   })
 
@@ -143,6 +145,43 @@ describe('githubLifecycleOf', () => {
   it('takes the failing link from the verdict only', () => {
     const noUrl = { ...ci('failed', 'build')!, failingUrl: undefined }
     expect(githubLifecycleOf(POLICY, bound({ ci: noUrl }))?.failing).toEqual({ check: 'build' })
+  })
+
+  // G7b (design §8): what the Run detail's GitHub block shows besides the PR and its checks
+  it('says what Astera pushed, an outside head, the base and a rebound, and going on without CI', () => {
+    const gs = bound({
+      headSha: B,
+      lastPushedSha: A,
+      externalHeadChange: { sha: B, at: 'T2' },
+      baseReboundAt: 'T3',
+      ciOverride: { sha: B, at: 'T4' }
+    })
+    expect(githubLifecycleOf(POLICY, gs)).toMatchObject({ pushedSha: A, externalHead: { sha: B, at: 'T2' }, base: { branch: 'develop', reboundAt: 'T3' }, noCi: true })
+    const plain = githubLifecycleOf(POLICY, bound({ headSha: A }))!
+    expect(plain.base).toEqual({ branch: 'develop' })
+    for (const k of ['pushedSha', 'externalHead', 'noCi', 'repair']) expect(plain, k).not.toHaveProperty(k)
+    // Going on without CI holds for the head it was chosen on only
+    expect(githubLifecycleOf(POLICY, bound({ headSha: A, ciOverride: { sha: B, at: 'T4' } }))).not.toHaveProperty('noCi')
+  })
+
+  it('says the lifecycle Task’s repair attempt against its budget, once it has repaired', () => {
+    const task = { id: 'tsk_l', status: 'dispatched', kind: 'lifecycle' } as unknown as Task
+    expect(githubLifecycleOf(POLICY, bound(), { task, repairs: { done: 2, max: 3 } })?.repair).toEqual({ attempt: 2, max: 3 })
+    expect(githubLifecycleOf(POLICY, bound(), { task, repairs: { done: 0, max: 3 } })).not.toHaveProperty('repair')
+  })
+
+  // Final review I1: a repair names what it repairs — the CI check, a local check the last round failed, or the review
+  it('names what a repair repairs: GitHub CI, a local check or the review', () => {
+    const dispatched = { id: 'tsk_l', status: 'dispatched', kind: 'lifecycle' } as unknown as Task
+    const gs = bound({ ci: ci('failed', 'build') })
+    const of = (facts: Partial<LifecycleTaskFacts>) => githubLifecycleOf(POLICY, gs, { task: dispatched, repairs: { done: 2, max: 3 }, ...facts })?.repair
+    expect(of({ blocked: { configId: 'github:ci', name: 'GitHub CI' } })).toEqual({ attempt: 2, max: 3, subject: { kind: 'ci', check: 'build' } })
+    expect(of({ blocked: { configId: 'cfg_lint', name: 'Lint' } })).toEqual({ attempt: 2, max: 3, subject: { kind: 'local', check: 'Lint' } })
+    expect(of({ repairing: 'review-failure' })).toEqual({ attempt: 2, max: 3, subject: { kind: 'review' } })
+    expect(of({})).toEqual({ attempt: 2, max: 3 })
+    // Not repairing now: the count, and nothing about a repair under way
+    const validating = { ...dispatched, status: 'validating' } as Task
+    expect(githubLifecycleOf(POLICY, gs, { task: validating, repairs: { done: 2, max: 3 }, blocked: { configId: 'cfg_lint', name: 'Lint' } })?.repair).toEqual({ attempt: 2, max: 3 })
   })
 
   it('names PR candidates and a changed source', () => {

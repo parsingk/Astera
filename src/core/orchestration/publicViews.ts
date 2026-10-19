@@ -6,8 +6,8 @@ import type { RunOutcome } from '../types'
 import type { OrchState } from './state'
 import type { Job, JobRun, Task } from './types'
 import { outcomeOf, progressOf } from './view'
-import { githubLifecycleOf, type LifecycleTaskFacts } from '../github/view'
-import { latestLifecycleTaskOf } from './lifecycleTask'
+import { githubLifecycleOf } from '../github/view'
+import { lifecycleFactsOf } from './lifecycleTask'
 
 /**
  * 계획과 회차에 붙는 파생값 — 공개 읽기 표면이 상태를 말하는 방식(공개 CLI 설계 §6).
@@ -66,15 +66,6 @@ export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => {
     ...(run.paused === true ? { outcome: 'paused' satisfies RunOutcomePublic } : {}),
     ...(github !== undefined ? { github } : {})
   }
-}
-
-/** The Run's latest lifecycle Task with the question open on it (GitHub lifecycle G3c2): what the Run's `github.state`
- *  reads while that Task works. Read for a lifecycle Job's Run only. */
-function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | undefined {
-  const task = latestLifecycleTaskOf(s, runId)
-  if (!task) return undefined
-  const openGate = s.gates.find((g) => g.taskId === task.id && g.status === 'open')
-  return { task, ...(openGate ? { openGate } : {}) }
 }
 
 /** A spec longer than this is cut in a brief Task (`tasks list --brief`, and every Task an event carries). */

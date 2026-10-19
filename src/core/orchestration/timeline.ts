@@ -8,6 +8,8 @@
 // view.ts 와 달리 node: 모듈을 끌고 오지 않지만, 그래도 tsconfig.web.json 에 넣지 않는다 —
 // 렌더러는 이미 접힌 값(JobEvent[])만 IPC 로 받는다.
 import type { JobEvent, JobEventKind } from '../types'
+import type { GitHubLogKind } from '../github/lifecycle'
+import { isLifecycleTask } from './lifecycleTask'
 import { jobOf, type OrchState } from './state'
 import type { Dispatch, MessageType } from './types'
 
@@ -24,7 +26,36 @@ const KIND_RANK: Record<JobEventKind, number> = {
   'limit-hit': 6,
   resumed: 7,
   'runtime-lost': 8,
-  recovery: 9
+  recovery: 9,
+  // The GitHub steps share one rank: one write can record several, and their log order (the padded seq in sourceId)
+  // is the order they happened in
+  'github-pr-bound': 10,
+  'github-pr-created': 10,
+  'github-pushed': 10,
+  'github-ci-started': 10,
+  'github-ci-failed': 10,
+  'github-ci-rerun': 10,
+  'github-ci-passed': 10,
+  'github-merge-ready': 10,
+  'github-invalidated': 10,
+  'github-source-changed': 10
+}
+
+/** A GitHub log entry's timeline line (G7b, design §5.5), or null for none. `head-changed` is not a line: Astera's own
+ *  push moves the head too, and a commit Astera did not push is asked about (github-external-head) and shown in the
+ *  Run's GitHub block. */
+const GITHUB_LINE: Record<GitHubLogKind, JobEventKind | null> = {
+  'pr-bound': 'github-pr-bound',
+  'pr-created': 'github-pr-created',
+  pushed: 'github-pushed',
+  'ci-started': 'github-ci-started',
+  'ci-failed': 'github-ci-failed',
+  'ci-rerun': 'github-ci-rerun',
+  'ci-passed': 'github-ci-passed',
+  'merge-ready': 'github-merge-ready',
+  invalidated: 'github-invalidated',
+  'source-changed': 'github-source-changed',
+  'head-changed': null
 }
 
 /** 타임라인에서 빼는 메시지 종류.
@@ -153,6 +184,29 @@ function collect(
       })
     }
   }
+  // The GitHub steps, each with the lifecycle Task of its round: the latest one made at or before it (final review M9),
+  // so the rounds before a reconverge stay with their own Task; none before the first (a pull request found earlier)
+  const rounds = tasks.filter(isLifecycleTask).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  for (const e of run.githubState?.log ?? []) {
+    const kind = GITHUB_LINE[e.kind]
+    if (kind === null) continue
+    const lifecycle = rounds.filter((r) => r.createdAt <= e.at).at(-1)
+    const facts = {
+      ...(e.sha !== undefined ? { sha: e.sha } : {}),
+      ...(e.check !== undefined ? { check: e.check } : {}),
+      ...(e.class !== undefined ? { class: e.class } : {}),
+      ...(e.pr !== undefined ? { pr: e.pr } : {}),
+      ...(e.reason !== undefined ? { reason: e.reason } : {})
+    }
+    events.push({
+      at: e.at,
+      kind,
+      sourceId: `${run.id}:github:${String(e.seq).padStart(6, '0')}`,
+      ...(lifecycle ? { taskId: lifecycle.id, taskTitle: lifecycle.title } : {}),
+      summary: e.check ?? (e.pr !== undefined ? `#${e.pr}` : (e.reason ?? (e.sha ? e.sha.slice(0, 7) : ''))),
+      ...(Object.keys(facts).length > 0 ? { github: facts } : {})
+    })
+  }
   return events
 }
 
@@ -193,9 +247,10 @@ export function eventCountFor(state: OrchState, runId: string): number {
  *  row on every commit, and `collect` per Run walked every list once per row.
  *
  *  **This is the second copy of collect's selection rule**, which the comment above warns about; a test holds the two
- *  together (timeline.test.ts, `eventCountsOf`: every Run's count is its timeline's length). A change to what collect
- *  emits changes this too: one run-created per Run, one per Task of the Run, per Dispatch of those Tasks one plus one
- *  per stop and one per resume, one per message of the Run that is not in SKIP, per Gate one plus one if resolved. */
+ *  together (timeline.test.ts, `eventCountsOf`: every Run's count is its timeline's length, plus the GitHub lines its
+ *  full log dropped). A change to what collect emits changes this too: one run-created per Run, one per Task of the Run,
+ *  per Dispatch of those Tasks one plus one per stop and one per resume, one per message of the Run that is not in SKIP,
+ *  per Gate one plus one if resolved, one per GitHub log entry that is a line, and the lines the full log dropped (G7b). */
 export function eventCountsOf(state: OrchState): Map<string, number> {
   const counts = new Map<string, number>()
   for (const r of state.runs) counts.set(r.id, 1)
@@ -221,5 +276,9 @@ export function eventCountsOf(state: OrchState): Map<string, number> {
   }
   for (const m of state.messages) if (!SKIP.has(m.type)) add(m.runId, 1)
   for (const g of state.gates) add(g.runId, g.resolvedAt ? 2 : 1)
+  // One per GitHub log entry that is a timeline line (G7b), and the lines the full log dropped (final review I3): runs
+  // follow waits for this count to pass what it printed, so it never falls back
+  for (const r of state.runs)
+    if (r.githubState) add(r.id, r.githubState.log.filter((e) => GITHUB_LINE[e.kind] !== null).length + (r.githubState.droppedLines ?? 0))
   return counts
 }

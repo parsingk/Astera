@@ -658,6 +658,58 @@ describe('sameSnapshot', () => {
   })
 })
 
+// G7b (design §8): a lifecycle Run's row carries its GitHub view, and its lifecycle Task what it waits on, for the
+// Run detail's GitHub block, the node and the Jobs card
+describe('snapshotFor: the GitHub side', () => {
+  const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lifecycle = (over: Partial<Task> = {}): Task => ({ ...task('tsk_l', 'r1', 'validating'), title: 'GitHub 전달', kind: 'lifecycle', ...over }) as Task
+  const withGithub = (lt: Task, gs?: OrchState['runs'][number]['githubState']): OrchState => {
+    const s = withRuns([run('r1', absPath('p'))], [lt])
+    return {
+      ...s,
+      jobs: s.jobs.map((j) => ({ ...j, github: POLICY })),
+      runs: s.runs.map((r) => (gs ? { ...r, githubState: gs } : r))
+    }
+  }
+  const bound = { binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: true, boundAt: 'T' }, log: [], seq: 0 }
+
+  it('a lifecycle Run’s row has its GitHub view, and its lifecycle Task what it waits on', () => {
+    const lt = lifecycle({ ciWait: { since: 'T1', done: [], pr: 12, sha: 'a'.repeat(40), waitingSince: 'T2' } })
+    const row = snapshotFor(withGithub(lt, bound), absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]
+    expect(row.github).toMatchObject({ state: 'ci-pending', pr: { number: 12 }, base: { branch: 'develop' } })
+    expect(row.tasks[0].lifecycle).toEqual({ ciWait: { pr: 12, sha: 'a'.repeat(40), since: 'T2' } })
+  })
+
+  // Design §7.2 S16: every repair would go to GitHub CI unchecked locally
+  it('marks a lifecycle Run whose ordinary Tasks name no local check, once it has one', () => {
+    const s = withGithub(lifecycle())
+    const none = { ...s, tasks: [...s.tasks, task('t1', 'r1', 'completed')] }
+    expect(snapshotFor(none, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].githubNoLocalCheck).toBe(true)
+    const checked = { ...s, tasks: [...s.tasks, { ...task('t1', 'r1', 'completed'), validateConfigIds: ['cfg_test'] }] }
+    expect(snapshotFor(checked, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]).not.toHaveProperty('githubNoLocalCheck')
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]).not.toHaveProperty('githubNoLocalCheck')
+  })
+
+  // Final review M8: the app's snapshot push compares the folds; a GitHub record that moved changes the fold, so the
+  // window learns of it without a Task or an event moving
+  it('a GitHub record that moved changes the snapshot', () => {
+    const fold = (s: OrchState) => snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
+    const before = withGithub(lifecycle({ ciWait: { since: 'T1', done: [], pr: 12 } }), bound)
+    const after = { ...before, runs: before.runs.map((r) => ({ ...r, githubState: { ...bound, pr: { state: 'open' as const, isDraft: false, baseBranch: 'develop', mergeStateStatus: 'BLOCKED' } } })) }
+    expect(sameSnapshot(fold(before), fold(after))).toBe(false)
+    expect(sameSnapshot(fold(before), fold(before))).toBe(true)
+  })
+
+  it('a lifecycle Task not waiting is marked without a wait; a Run of a Job without the lifecycle has no GitHub side', () => {
+    const row = snapshotFor(withGithub(lifecycle({ status: 'dispatched' })), absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]
+    expect(row.github?.state).toBe('repairing')
+    expect(row.tasks[0].lifecycle).toEqual({})
+    const plain = snapshotFor(withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'pending')]), absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]
+    expect(plain).not.toHaveProperty('github')
+    expect(plain.tasks[0]).not.toHaveProperty('lifecycle')
+  })
+})
+
 const scheduled = (id: string, cwd: string): LegacyRun => ({
   ...run(id, cwd),
   schedule: { kind: 'daily', time: '09:00' }

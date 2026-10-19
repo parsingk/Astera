@@ -2,6 +2,7 @@
 // the Host last recorded, never stored. `runs get`, `jobs get`, MCP get_run, the SDK's runs.get and the run and github
 // events carry it. Node-free.
 import {
+  GITHUB_CI_CHECK,
   roundReruns,
   type CiBasis,
   type CiFailureClass,
@@ -11,7 +12,7 @@ import {
   type GitHubLifecyclePolicy,
   type RunGitHubState
 } from './lifecycle'
-import type { Gate, Task } from '../orchestration/types'
+import type { Gate, RepairReason, Task } from '../orchestration/types'
 
 /** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open, with
  *  `ci-infrastructure-failure` (G4) while a CI rerun is in flight or asked about, and `merge-ready` (G5b) once its review
@@ -38,6 +39,12 @@ export type GitHubLifecycleState =
 export interface LifecycleTaskFacts {
   task: Task
   openGate?: Gate
+  /** Its repairs so far against the Job's budget (G7b): the numbers the node's "Fix N/M" shows. */
+  repairs?: { done: number; max: number }
+  /** Why its open repair Dispatch runs, while one does (final review I1). */
+  repairing?: RepairReason
+  /** The first check its last round failed (`github:ci` for GitHub CI): what a check repair repairs (final review I1). */
+  blocked?: { configId: string; name: string }
 }
 
 /** The lifecycle Task's state while it works (design §5.3), or undefined to let the read speak: a question open on it,
@@ -63,6 +70,19 @@ function lifecycleStateOf(l: LifecycleTaskFacts, gs: RunGitHubState | undefined)
   return gs?.lastPushedSha ? 'awaiting-push' : 'pr-ready'
 }
 
+/** What a lifecycle repair repairs (G7b final review I1). */
+export type RepairSubject = { kind: 'ci'; check?: string } | { kind: 'local'; check: string } | { kind: 'review' }
+
+/** A repair under way names its subject: the review's findings, else the round's first failed check — GitHub CI's
+ *  failing check when that is `github:ci`, else the local check. Nothing while no repair runs. */
+function repairSubjectOf(l: LifecycleTaskFacts, gs: RunGitHubState | undefined): RepairSubject | undefined {
+  if (l.task.status !== 'dispatched') return undefined
+  if (l.repairing === 'review-failure') return { kind: 'review' }
+  if (l.blocked?.configId === GITHUB_CI_CHECK) return { kind: 'ci', ...(gs?.ci?.failing ? { check: gs.ci.failing } : {}) }
+  if (l.blocked) return { kind: 'local', check: l.blocked.name }
+  return undefined
+}
+
 export interface GitHubLifecycleView {
   state: GitHubLifecycleState
   pr?: { number: number; url: string; isDraft: boolean; state: 'open' | 'closed' | 'merged'; mergeStateStatus?: string; reviewDecision?: string }
@@ -79,6 +99,18 @@ export interface GitHubLifecycleView {
   mergeReady?: { headSha: string; evaluatedAt: string; ciOverride?: 'no-ci' }
   /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
   invalidated?: { reason: GitHubInvalidatedReason; at: string }
+  /** The commit Astera last pushed (G7b). */
+  pushedSha?: string
+  /** A head on GitHub Astera did not push, until Astera pushes again (G3b2; G7b shows it). */
+  externalHead?: { sha?: string; at: string }
+  /** The pull request's base as bound, and when a reconverge bound it again after a retarget (G6). */
+  base?: { branch: string; reboundAt?: string }
+  /** The lifecycle Task's repair attempt against the Job's budget, once it has repaired (G7b), and while a repair runs
+   *  what it repairs: GitHub CI (the head's failing check), a local check the last round failed, or the review's findings
+   *  (final review I1). */
+  repair?: { attempt: number; max: number; subject?: RepairSubject }
+  /** A person chose to go on without CI for the head (G3b2). */
+  noCi?: true
 }
 
 /** Merge-ready holds while its evidence's head is the PR's head, the PR is open and nothing withdrew it (§5.4). */
@@ -146,5 +178,14 @@ export function githubLifecycleOf(
   if (gs?.mergeReady && mergeReadyHolds(gs))
     view.mergeReady = { headSha: gs.mergeReady.headSha, evaluatedAt: gs.mergeReady.evaluatedAt, ...(gs.mergeReady.ciOverride ? { ciOverride: gs.mergeReady.ciOverride } : {}) }
   if (gs?.invalidated) view.invalidated = { reason: gs.invalidated.reason, at: gs.invalidated.at }
+  if (gs?.lastPushedSha) view.pushedSha = gs.lastPushedSha
+  if (gs?.externalHeadChange)
+    view.externalHead = { ...(gs.externalHeadChange.sha !== undefined ? { sha: gs.externalHeadChange.sha } : {}), at: gs.externalHeadChange.at }
+  if (gs?.binding) view.base = { branch: gs.binding.baseBranch, ...(gs.baseReboundAt ? { reboundAt: gs.baseReboundAt } : {}) }
+  if (lifecycle?.repairs && lifecycle.repairs.done > 0) {
+    const subject = repairSubjectOf(lifecycle, gs)
+    view.repair = { attempt: Math.min(lifecycle.repairs.done, lifecycle.repairs.max), max: lifecycle.repairs.max, ...(subject ? { subject } : {}) }
+  }
+  if (gs?.ciOverride && gs.ciOverride.sha === gs.headSha) view.noCi = true
   return view
 }
