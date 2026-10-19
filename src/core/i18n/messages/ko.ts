@@ -1856,6 +1856,9 @@ export const ko = {
   // 지어내지 않고 지난 라운드에 막힌 검사를 가리킨다(UI 설계 U12)
   'jobs.convergence.node.rechecking': '다시 검사 중 · {name}',
   'jobs.convergence.node.checking': '검사 중',
+  'jobs.convergence.node.ciWaiting': 'GitHub CI 기다리는 중 · #{pr}',
+  'jobs.convergence.node.ciWaitingNoPr': 'GitHub CI 기다리는 중',
+  'jobs.lifecycle.title': 'GitHub 전달',
   'jobs.convergence.node.reviewing': '검토 라운드 {round}/{max}',
   'jobs.convergence.node.failed': '{name} 실패',
   'jobs.convergence.node.unavailable': '{name} 검사 불가',

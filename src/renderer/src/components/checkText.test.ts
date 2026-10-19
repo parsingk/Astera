@@ -2,7 +2,7 @@
 // block, in all four languages.
 import { describe, it, expect } from 'vitest'
 import { CATALOGS, LANGS } from '../../../core/i18n'
-import { GLYPH, checkChoicesOf, checkTooltip, checkVerdict, nodeMetaText } from './checkText'
+import { GLYPH, checkChoicesOf, checkTooltip, checkVerdict, nodeMetaText, taskTitleOf } from './checkText'
 
 const t = (key: string, p?: Record<string, string | number>): string => (p ? `${key} ${JSON.stringify(p)}` : key)
 
@@ -25,6 +25,22 @@ describe('checkVerdict', () => {
 })
 
 // 5c final review M1: the node line in words, a check that could not be made said so wherever a line names it
+// G7b: the lifecycle Task's node while its round waits for GitHub CI, and its title in the app's language
+describe('the lifecycle Task', () => {
+  it('says it waits for GitHub CI, with the pull request when it has one', () => {
+    expect(nodeMetaText({ kind: 'ci-waiting', pr: 12 }, t)).toBe('jobs.convergence.node.ciWaiting {"pr":12}')
+    expect(nodeMetaText({ kind: 'ci-waiting' }, t)).toBe('jobs.convergence.node.ciWaitingNoPr')
+  })
+  it('its title is translated; any other Task’s is its own', () => {
+    expect(taskTitleOf({ title: 'GitHub 전달', lifecycle: {} }, t)).toBe('jobs.lifecycle.title')
+    expect(taskTitleOf({ title: 'Fix the login' }, t)).toBe('Fix the login')
+  })
+  it('its words are in every language', () => {
+    for (const k of ['jobs.convergence.node.ciWaiting', 'jobs.convergence.node.ciWaitingNoPr', 'jobs.lifecycle.title'])
+      for (const lang of LANGS) expect((CATALOGS[lang].messages as Record<string, string>)[k], `${lang} ${k}`).toBeTruthy()
+  })
+})
+
 describe('nodeMetaText', () => {
   it('says a check could not run on the failed and stopped lines, and drops its name from a repair’s', () => {
     expect(nodeMetaText({ kind: 'failed', name: 'D', unavailable: true }, t)).toBe('jobs.convergence.node.unavailable {"name":"D"}')

@@ -1,3 +1,4 @@
+import { taskTitleOf } from './checkText'
 import { memo, useCallback, useEffect, useState } from 'react'
 import { clockFor } from '../lib/runClock'
 import type { JobRow, JobTask, OrchHostGate, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
@@ -276,7 +277,7 @@ function RunCardImpl({
             key={task.id}
             className="jobs-seg"
             style={{ background: segColor(task) }}
-            title={task.title}
+            title={taskTitleOf(task, t as never)}
           />
         ))}
       </div>
@@ -296,8 +297,8 @@ function RunCardImpl({
               >
                 <span className="jobs-av">{PROVIDER_ABBR[task.provider]}</span>
                 <span className="jobs-task-body">
-                  <span className="jobs-task-title" title={task.title}>
-                    {task.title}
+                  <span className="jobs-task-title" title={taskTitleOf(task, t as never)}>
+                    {taskTitleOf(task, t as never)}
                   </span>
                   <span className="jobs-task-meta" title={`${task.provider} · ${taskMeta(task, nowMs, t)}`}>
                     {task.provider} · {taskMeta(task, nowMs, t)}

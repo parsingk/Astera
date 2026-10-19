@@ -26,7 +26,7 @@ import { confirmModal } from '../lib/confirm'
 import { ChangedFilesBlock } from './ChangedFilesBlock'
 import { CompletionBlock } from './CompletionBlock'
 import { GateAnswer } from './GateAnswer'
-import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, type GlyphKind } from './checkText'
+import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, taskTitleOf, type GlyphKind } from './checkText'
 import { toast } from '../lib/toast'
 import { errText } from '../hooks/useFileOps'
 import {
@@ -724,6 +724,9 @@ export function RunDetail({
    *  다시 하지 않는다.
    *
    *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다. */
+  /** A timeline line's Task title as the app shows it: the lifecycle Task's in the app's language (G7b). */
+  const eventTaskTitle = (e: JobEvent): string =>
+    taskTitleOf({ title: e.taskTitle ?? '', lifecycle: run?.tasks.find((x) => x.id === e.taskId)?.lifecycle }, t as never)
   /** `github`: a GitHub question, whose answer goes to the Host; its refusal is said in its words (G7a final review I1). */
   const resolveGate = async (gateId: string, resolution: string, github = false): Promise<void> => {
     const taskId = answering
@@ -979,7 +982,7 @@ export function RunDetail({
                 {selectedTask && (
                   <div className="detail-filter">
                     <TaskGlyph task={selectedTask} />
-                    <b>{selectedTask.title}</b>
+                    <b>{taskTitleOf(selectedTask, t as never)}</b>
                     {/* 지정된 계정. **지정이 있을 때만 그린다** — 없는 것이 보통이라 "기본 계정"을
                         늘 적으면 이 줄이 그 낱말로 채워지고, 정작 지정된 Task 가 눈에 안 띈다.
                         그래서 이 칩이 있다는 것 자체가 "이 Task 는 계정이 못박혀 있다"는 뜻이다.
@@ -1096,8 +1099,8 @@ export function RunDetail({
                               {/* 어느 Task 의 일인가. 걸러 놓은 동안에는 위의 필터 줄이 이미 같은
                                   말을 하고 있어서 적지 않는다 */}
                               {!selectedTask && e.taskTitle && (
-                                <span className="detail-ev-task" title={e.taskTitle}>
-                                  {e.taskTitle}
+                                <span className="detail-ev-task" title={eventTaskTitle(e)}>
+                                  {eventTaskTitle(e)}
                                 </span>
                               )}
                               {sessionId && (
@@ -1269,14 +1272,14 @@ function Graph({
           ...(pos ? { left: pos.x, top: pos.y } : {})
         }}
         onClick={() => onSelect(task.id)}
-        title={task.title}
+        title={taskTitleOf(task, t as never)}
       >
         {/* 글리프는 왼쪽 칸에서 두 줄에 걸쳐 선다 — 제목 줄에만 붙이면 부제가 있는 카드에서
             글리프가 위로 딸려 올라가 카드마다 다른 높이에 놓인다(styles.css 의 grid-row: 1 / -1) */}
         <span className="detail-node-sig">
           <TaskGlyph task={task} />
         </span>
-        <span className="detail-node-title">{task.title}</span>
+        <span className="detail-node-title">{taskTitleOf(task, t as never)}</span>
         {meta !== undefined && <span className="detail-node-meta">{meta}</span>}
         {/* 검사 칩 한 줄 — 검사가 걸린 Task 만(없으면 요소도 없다: NODE_H 안에서 제목·meta 두 줄이 가운데 서는
             지금 모양을 그대로 두려면 빈 줄을 세우면 안 된다). meta 줄과 따로인 이유는 Gate 질문이 meta 를 차지해도
