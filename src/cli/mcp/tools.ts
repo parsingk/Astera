@@ -649,6 +649,15 @@ const LISTED_TOOLS: ToolDef[] = [
     args: (i) => (i.runId !== undefined ? { run: i.runId, runId: i.ciRunId } : { project: i.projectId, runId: i.ciRunId })
   },
   {
+    name: 'reconverge_run',
+    title: 'Carry a Run through GitHub again',
+    readOnly: false,
+    cmd: 'runs-reconverge',
+    description: `Carry a finished GitHub lifecycle Run through GitHub again (runId): once its latest lifecycle Task completed or failed, a new one joins the Run with a fresh repair and rerun budget, and the old merge-ready evidence goes. The Run reads as running until the new Task ends. Returns runId and the new taskId. Refused with CONFLICT for a Run whose Job is not carried through GitHub, a Run with no branch of its own or whose branch was removed, a Run not carried through GitHub yet, a Run whose lifecycle Task still works, and a pull request that is merged or closed (read from GitHub first). ${GITHUB_WRITE}`,
+    inputSchema: { runId: id.describe('A Run of a GitHub lifecycle Job, from list_runs.'), requestId },
+    args: (i) => ({ id: i.runId })
+  },
+  {
     name: 'create_job_from_issue',
     title: 'Create a Job from an issue',
     readOnly: false,

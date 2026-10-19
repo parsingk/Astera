@@ -252,6 +252,14 @@ describe('lifecycleToStart', () => {
     expect(lifecycleToStart(state({ runs: [run({ autoDispatch: false })], tasks: [done, lifecycle()] }))).toEqual([{ runId: 'run_1', taskId: 'tsk_l' }])
   })
 
+  // G5c final review M5: a lifecycle Task `runs reconverge` superseded, put back to ready by hand, does not run beside the
+  // new one in the same Run root
+  it('names only the Run’s latest lifecycle Task', () => {
+    const old = lifecycle({ id: 'tsk_l0', createdAt: '2026-08-18T00:00:00.000Z' })
+    const latest = lifecycle({ id: 'tsk_l1', createdAt: '2026-08-19T00:00:00.000Z' })
+    expect(lifecycleToStart(state({ tasks: [done, old, latest] }))).toEqual([{ runId: 'run_1', taskId: 'tsk_l1' }])
+  })
+
   it('names none that is not ready, has an open Dispatch, hit the failure limit, or whose Run is paused', () => {
     expect(lifecycleToStart(state({ tasks: [done, lifecycle({ status: 'validating' })] }))).toEqual([])
     expect(lifecycleToStart(state({ tasks: [done, lifecycle({ consecutiveFailures: 3 })] }))).toEqual([])

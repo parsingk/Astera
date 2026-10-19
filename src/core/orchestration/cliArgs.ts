@@ -122,7 +122,7 @@ export const NOUNS = {
   // task-create 를 부른다(command.ts). 코디네이터가 쓰는 두 이름은 그대로 남는다.
   // `create-from-source` (plugin Phase 4 J21) is answered before handleCommand's switch, with the `sources` commands.
   jobs: ['list', 'get', 'wait', 'run', 'create', 'create-from-source'],
-  runs: ['list', 'get', 'wait', 'follow', 'stop', 'resume', 'checks'],
+  runs: ['list', 'get', 'wait', 'follow', 'stop', 'resume', 'checks', 'reconverge'],
   tasks: ['list', 'add', 'dispatch'],
   questions: ['list', 'get', 'answer'],
   // `jobs create --coordinator-account` 와 `tasks add --account` 에 넣을 id 가 여기서 나온다.

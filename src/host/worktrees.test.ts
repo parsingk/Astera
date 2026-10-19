@@ -583,6 +583,12 @@ describe('createHostWorktrees — the loop’s members', () => {
     expect(h.wt.infoOf(other)).toEqual(info)
     expect(h.wt.infoOf(path.join(home, 'wt', 'nowhere'))).toBeNull()
   })
+  // G5c final review C1: the dispatch loop's integrate skips a dependency folder already merged and reaped
+  it('integrate skips a dependency worktree whose folder is gone, and nothing left is merged', async () => {
+    const h = rig()
+    const gone = path.join(home, 'wt', 'merged-and-reaped')
+    expect(await h.wt.integrate(repo, [gone])).toEqual({ kind: 'merged', uncommitted: 0 })
+  })
   it('integrate sends the same git-op pair mergeWorktrees does, around a real merge', async () => {
     const sent: HostMessage[] = []
     const h = rig({ broadcast: (m) => sent.push(m) })

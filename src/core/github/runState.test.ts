@@ -164,6 +164,15 @@ describe('nextGitHubState', () => {
       expect(nextGitHubState(withdrawn, { invalidated: { reason: 'closed' } }, T2)).toBeNull()
     })
 
+    // G5c final review M2: a watch read taken before `runs reconverge` withdraws evidence the reconverge already cleared;
+    // nothing stands to withdraw, so no withdrawal comes back while the new lifecycle Task works
+    it('a withdrawal with no merge-ready standing changes nothing', () => {
+      expect(nextGitHubState(bound(), { invalidated: { reason: 'head-changed' } }, T2)).toBeNull()
+      const ready = nextGitHubState(bound(), { mergeReady: evidence }, T2)!
+      const cleared = nextGitHubState(ready, { mergeReady: null }, T2)!
+      expect(nextGitHubState(cleared, { invalidated: { reason: 'head-changed' } }, T2)).toBeNull()
+    })
+
     it('a fresh verdict replaces both: merge-ready again clears the withdrawal, and a failed one replaces the reason', () => {
       const ready = nextGitHubState(bound(), { mergeReady: evidence }, T2)!
       const withdrawn = nextGitHubState(ready, { invalidated: { reason: 'head-changed' } }, T2)!

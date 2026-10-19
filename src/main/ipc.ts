@@ -201,6 +201,7 @@ import {
 } from '../core/orchestration/exec/workerStart'
 import {
   forkWorktree,
+  integrateLive,
   integrateWorktrees,
   reapWorktree as reapWorktreeIn,
   worktreeDeps,
@@ -3137,7 +3138,8 @@ export function registerIpc(
       lang: () => core.lang,
       forkRunWorktree: (a) =>
         forkWorktree({ repoPath: a.repoPath, name: a.name }, { registry: core.worktrees, log: orchLog }),
-      integrate: (runRoot, merges) => integrateWorktrees(runRoot, merges, {}, gitCtx),
+      // A dependency folder already merged and reaped is skipped (integrateLive, G5c final review C1)
+      integrate: (runRoot, merges) => integrateLive(runRoot, merges, (into, paths) => integrateWorktrees(into, paths, {}, gitCtx), { log: orchLog }),
       reap: (p) => reapWorktree(p),
       isRegisteredWorktree: (p) => core.worktrees.list().some((w) => isSamePath(w.path, p)),
       // Chats too (2026-10-13, spec E5): a Run's external coordinator can be a chat session. Every other caller asks

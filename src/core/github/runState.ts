@@ -35,7 +35,8 @@ export interface RunGitHubPatch {
   /** The review's verdict (G5b): the evidence of merge-ready, or null for a fresh verdict that is not (it clears both
    *  the evidence and an earlier withdrawal, so the `invalidated` beside it is this verdict's). */
   mergeReady?: Omit<MergeReadyEvidence, 'evaluatedAt'> | null
-  /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. */
+  /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. A withdrawal with no
+   *  merge-ready standing and no verdict beside it is dropped (G5c). */
   invalidated?: { reason: GitHubInvalidatedReason }
 }
 
@@ -112,7 +113,9 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
       entries.push({ kind: 'merge-ready', sha: patch.mergeReady.headSha, pr: patch.mergeReady.pullRequestNumber })
     }
   }
-  if (patch.invalidated && !next.invalidated) {
+  // A withdrawal needs merge-ready standing: a verdict brings its own (`mergeReady: null` beside it), and the watch's read
+  // can be older than a reconverge that already cleared the evidence (G5c final review M2)
+  if (patch.invalidated && !next.invalidated && (patch.mergeReady !== undefined || next.mergeReady !== undefined)) {
     next.invalidated = { reason: patch.invalidated.reason, at: now }
     entries.push({ kind: 'invalidated' })
   }

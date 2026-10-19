@@ -233,7 +233,9 @@ describe('handleCommand — 역할 인가', () => {
       ['jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }],
       ['jobs-create-from-source', { source: 'github', item: '3', project: 'p', githubLifecycle: true }],
       // Final review M4: the same Job as jobs-create-from-issue, refused the same way and as early
-      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p' }]
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p' }],
+      // G5c: carrying a Run through GitHub again is a GitHub write too
+      ['runs-reconverge', { id: 'run_x' }]
     ]
     for (const [cmd, args] of cases) {
       const r = await call(deps, cmd, args, 'sess1')
@@ -1323,6 +1325,116 @@ describe('handleCommand — task-create on a Run carried through GitHub', () => 
 })
 
 // GitHub lifecycle G3a (design §3.3): the dispatch loop starts the lifecycle Task's checks in the Run root, no worker
+// GitHub lifecycle G5c (design §3.5): a finished lifecycle Run is carried through GitHub again on request
+describe('handleCommand — runs-reconverge', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (o: { lifecycle?: Task['status']; pr?: 'open' | 'closed' | 'merged' } = {}) =>
+    makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{
+        id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run',
+        ...(o.pr ? { githubState: { log: [], seq: 0, pr: { state: o.pr, isDraft: true, baseBranch: 'main' } } } : {})
+      }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: o.lifecycle ?? 'completed', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+
+  it('adds a ready lifecycle Task to the Run and names it', async () => {
+    const deps = seeded()
+    const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+    expect(r.status).toBe(200)
+    const { runId, taskId } = r.body as { runId: string; taskId: string }
+    expect(runId).toBe('run_1')
+    expect(deps.getState().tasks.find((t) => t.id === taskId)).toMatchObject({ kind: 'lifecycle', status: 'ready', deps: ['tsk_a'] })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')?.status).toBe('completed')
+  })
+
+  it('answers --id missing with 400, an unknown Run with 404, and a Run it cannot carry again with 409, writing nothing', async () => {
+    expect((await call(seeded(), 'runs-reconverge', {})).status).toBe(400)
+    expect((await call(seeded(), 'runs-reconverge', { id: 'run_x' })).status).toBe(404)
+    for (const o of [{ lifecycle: 'validating' as const }, { pr: 'merged' as const }, { pr: 'closed' as const }]) {
+      const deps = seeded(o)
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status, JSON.stringify(o)).toBe(409)
+      expect(deps.getState()).toBe(before)
+    }
+  })
+
+  // G5c final review M9: the other three refusals, through the command
+  it('refuses with 409 a Run never carried, a Job without lifecycle and a Run without a branch', async () => {
+    type S = ReturnType<ReturnType<typeof seeded>['getState']>
+    const variant = async (f: (s: S) => S) => { const d = seeded(); await d.setState(f(d.getState())); return d }
+    const never = await variant((s) => ({ ...s, tasks: s.tasks.filter((t) => t.kind !== 'lifecycle') }))
+    const plain = await variant((s) => ({ ...s, jobs: s.jobs.map(({ github: _g, ...j }) => j) }))
+    const branchless = await variant((s) => ({ ...s, runs: s.runs.map(({ worktree: _w, ...r }) => r) }))
+    for (const deps of [never, plain, branchless]) {
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(409)
+      expect(deps.getState()).toBe(before)
+    }
+  })
+
+  // G5c final review M3, M11: what the record may not know, asked where the Host can — the bound pull request now, and
+  // whether the Run's branch is still there
+  describe('on the Host, with gh', () => {
+    const WT = 'D:/wt/run'
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup'
+    const prJson = (state: string) => JSON.stringify({ number: 12, title: 'x', state, isDraft: false, url: binding.url, headRefName: 'u/a', statusCheckRollup: [] })
+    const onHost = (o: { view?: { ok: boolean; stdout?: string; stderr?: string }; branch?: boolean } = {}) => {
+      const deps = seeded()
+      const s = deps.getState()
+      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState: { log: [], seq: 0, binding, pr: { state: 'open' as const, isDraft: true, baseBranch: 'main' } } })) })
+      const calls: string[] = []
+      deps.github = {
+        run: async (args: string[]) => {
+          calls.push(args.join(' '))
+          const v = o.view ?? { ok: true, stdout: prJson('OPEN') }
+          return args.join(' ') === VIEW ? { stdout: '', stderr: '', ...v } : { ok: false, stdout: '', stderr: 'unexpected', exitCode: 1 }
+        },
+        worktreeOf: (p: string) => (o.branch === false || p !== WT ? null : ({ path: WT, repoPath: 'D:/p', branch: 'u/a', baseRef: 'main' } as never)),
+        createPr: async () => { throw new Error('no') },
+        readCommits: async () => { throw new Error('no') },
+        isClean: async () => { throw new Error('no') }
+      } as never
+      return { deps, calls }
+    }
+
+    it('reads the bound pull request now and carries the Run again while it is open', async () => {
+      const { deps, calls } = onHost()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
+      expect(calls).toEqual([VIEW])
+    })
+
+    it('refuses a pull request merged since the record was written, writing nothing', async () => {
+      const { deps } = onHost({ view: { ok: true, stdout: prJson('MERGED') } })
+      const before = deps.getState()
+      const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+      expect(r.status).toBe(409)
+      expect(JSON.stringify(r.body)).toContain('merged')
+      expect(deps.getState()).toBe(before)
+    })
+
+    it('refuses when gh cannot read the pull request, writing nothing', async () => {
+      const { deps } = onHost({ view: { ok: false, stderr: 'HTTP 502' } })
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBeGreaterThanOrEqual(400)
+      expect(deps.getState()).toBe(before)
+    })
+
+    it('refuses a Run whose branch is gone (its worktree was removed), writing nothing', async () => {
+      const { deps } = onHost({ branch: false })
+      const before = deps.getState()
+      const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+      expect(r.status).toBe(409)
+      expect(deps.getState()).toBe(before)
+    })
+  })
+})
+
 describe('handleCommand — lifecycle-start', () => {
   const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
   const seeded = (o: { lifecycle?: Task['status']; worktree?: string | null } = {}) => {
@@ -8008,6 +8120,37 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
     expect(r.status).toBe(200)
     expect(deps.startCoordinator).not.toHaveBeenCalled()
     expect(deps.getState().runs.find((x) => x.id === first.id)).not.toHaveProperty('coordinatorSessionId')
+  })
+})
+
+// G5c final review I1: a lifecycle Task is never a coordinator's to start (worker-start refuses it), and one superseded
+// by `runs reconverge` is not part of the Run's work any more. Counting either kept a finished coordinator Run moving.
+describe('a Run with lifecycle Tasks: what counts as moving', () => {
+  const life = (id: string, status: Task['status'], createdAt: string): Task => ({
+    id, runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status, validateConfigIds: ['github:ci'],
+    reviewRequested: true, consecutiveFailures: 0, createdAt, updatedAt: createdAt
+  })
+  const seeded = (lifecycle: Task[]) =>
+    Object.assign(
+      makeDeps({
+        ...emptyState(),
+        jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
+        runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, coordinatorSessionId: 'coord' }],
+        tasks: [{ id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }, ...lifecycle]
+      }),
+      { listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }] }
+    )
+  const running = async (deps: ReturnType<typeof seeded>): Promise<boolean> => {
+    const r = await call(deps, 'jobs-run', { id: 'job_1' })
+    return r.status === 409 && JSON.stringify(r.body).includes('run_1')
+  }
+
+  it('a reconverged Run whose new lifecycle Task completed is not running, beside a superseded failed one', async () => {
+    expect(await running(seeded([life('tsk_l1', 'failed', '2026-08-04T01:00:00.000Z'), life('tsk_l2', 'completed', '2026-08-04T02:00:00.000Z')]))).toBe(false)
+  })
+
+  it('a failed lifecycle Task under the failure limit is not something its coordinator can start', async () => {
+    expect(await running(seeded([life('tsk_l1', 'failed', '2026-08-04T01:00:00.000Z')]))).toBe(false)
   })
 })
 

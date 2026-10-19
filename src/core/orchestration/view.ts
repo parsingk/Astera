@@ -16,7 +16,7 @@ import type { JobRow, JobTask, OrchSnapshot, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import { coordinatorStarting, type OrchState } from './state'
 import { eventCountsOf } from './timeline'
-import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy } from './running'
+import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy, withoutSupersededLifecycle } from './running'
 import { policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
 import type { Dispatch, Gate, Job, JobRun, Task } from './types'
 
@@ -77,7 +77,9 @@ export function progressOf(state: OrchState, runId: string): { done: number; tot
   return progressOfTasks(tasksOwnedBy(state, runId))
 }
 
-const progressOfTasks = (tasks: readonly Task[]): { done: number; total: number } => {
+const progressOfTasks = (all: readonly Task[]): { done: number; total: number } => {
+  // A lifecycle Task `runs reconverge` superseded is not part of the Run's work any more (G5c final review M1)
+  const tasks = withoutSupersededLifecycle(all)
   return { done: tasks.filter((t) => t.status === 'completed').length, total: tasks.length }
 }
 

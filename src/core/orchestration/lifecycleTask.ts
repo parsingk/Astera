@@ -11,9 +11,19 @@ const LIFECYCLE_TASK_SPEC = 'Astera가 이 Run의 브랜치를 GitHub으로 가�
 
 export const isLifecycleTask = (t: Task): boolean => t.kind === 'lifecycle'
 
-/** The Run's lifecycle Task while it still works: neither completed nor terminally failed. */
+/** The Run's latest lifecycle Task: the one `runs reconverge` added last (G5c), or the only one. On a tie in `createdAt`
+ *  the later in the list wins, being the one added later. */
+export function latestLifecycleTaskOf(s: OrchState, runId: string): Task | undefined {
+  let latest: Task | undefined
+  for (const t of s.tasks) if (t.runId === runId && isLifecycleTask(t) && (!latest || t.createdAt >= latest.createdAt)) latest = t
+  return latest
+}
+
+/** The Run's lifecycle Task while it still works: the latest one, neither completed nor terminally failed. Only the
+ *  latest: a failed one under the failure limit is not terminal, and after a reconverge it is superseded (G5c). */
 export function openLifecycleTaskOf(s: OrchState, runId: string): Task | undefined {
-  return s.tasks.find((t) => t.runId === runId && isLifecycleTask(t) && !isTerminal(t))
+  const latest = latestLifecycleTaskOf(s, runId)
+  return latest && !isTerminal(latest) ? latest : undefined
 }
 
 /** The Run's most recently completed ordinary Task that a worker did, with that worker's Dispatch (GitHub lifecycle
@@ -154,19 +164,24 @@ export function withLifecycleTask(s: OrchState, runId: string | undefined, now: 
   if (own.some(isLifecycleTask)) return s
   if (own.length === 0 || !own.every((t) => t.status === 'completed')) return s
   const checks = [...new Set(own.flatMap((t) => checkConfigIdsOf(t)))]
-  const task: Task = {
+  return { ...s, tasks: recomputeReady([...s.tasks, lifecycleTaskFor(runId, own.map((t) => t.id), [...checks, GITHUB_CI_CHECK], now)]) }
+}
+
+/** A new lifecycle Task, pending until recomputeReady sees its deps completed: the first one (withLifecycleTask) and each
+ *  one `runs reconverge` adds (G5c). */
+export function lifecycleTaskFor(runId: string, deps: string[], validateConfigIds: string[], now: string): Task {
+  return {
     id: newId('tsk'),
     runId,
     kind: 'lifecycle',
     title: LIFECYCLE_TASK_TITLE,
     spec: LIFECYCLE_TASK_SPEC,
-    deps: own.map((t) => t.id),
-    validateConfigIds: [...checks, GITHUB_CI_CHECK],
+    deps,
+    validateConfigIds,
     reviewRequested: true,
     status: 'pending',
     consecutiveFailures: 0,
     createdAt: now,
     updatedAt: now
   }
-  return { ...s, tasks: recomputeReady([...s.tasks, task]) }
 }

@@ -4,7 +4,7 @@
 // is asked (see its comment in view.ts) — so "this Run is finished" is true on every round after the
 // last task lands. Recording on the state would write the same record forever; recording on the edge
 // writes it once.
-import { outcomeOf, outcomeOfTasks } from './running'
+import { outcomeOf, outcomeOfTasks, withoutSupersededLifecycle } from './running'
 import { jobOf, type OrchState } from './state'
 import type { Job, JobRun, Task } from './types'
 import { runRootOf } from './integrate'
@@ -58,7 +58,8 @@ export function runRecordInputOf(state: OrchState, runId: string): (RunRecordInp
   if (!run) return null
   const job = jobOf(state, run)
   if (!job) return null
-  const tasks = state.tasks.filter((t) => t.runId === runId)
+  // A lifecycle Task `runs reconverge` superseded is not part of the Run's work any more (G5c final review M10)
+  const tasks = [...withoutSupersededLifecycle(state.tasks.filter((t) => t.runId === runId))]
   // Where the Run's changes are until someone merges them (RunRecordInput.workDir): workFolderOf.
   const root = workFolderOf(state, run, job, tasks)
   return {

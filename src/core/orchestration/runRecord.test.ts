@@ -76,6 +76,29 @@ describe('justFinished', () => {
 })
 
 describe('runRecordInputOf', () => {
+  // G5c final review M10: a reconverged Run that ends again is written up again, as the second carry it is; the lifecycle
+  // Task `runs reconverge` superseded is not part of it
+  it('leaves out a lifecycle Task that runs reconverge superseded', () => {
+    const T = '2026-10-19T00:00:00.000Z'
+    const life = (id: string, status: 'failed' | 'completed', createdAt: string) => ({
+      id, runId: 'run_1', kind: 'lifecycle' as const, title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status, consecutiveFailures: 0, createdAt, updatedAt: createdAt
+    })
+    const s: OrchState = {
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: T, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: T }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: T, updatedAt: T },
+        life('tsk_l1', 'failed', '2026-10-19T01:00:00.000Z'),
+        life('tsk_l2', 'completed', '2026-10-19T02:00:00.000Z')
+      ]
+    }
+    const r = runRecordInputOf(s, 'run_1')!
+    expect(r.taskIds).toEqual(['tsk_a', 'tsk_l2'])
+    expect(r.tasks.map((t) => t.outcome)).toEqual(['completed', 'completed'])
+    expect(r.validation).toEqual({ status: 'passed' })
+  })
+
   const finished = (): { s: OrchState; runId: string } => {
     const job = createJob(emptyState(), { objective: 'x'.repeat(70), cwd: 'D:/p' }, '2026-10-02T10:00:00.000Z')
     if (!job.ok) throw new Error(job.error)

@@ -720,6 +720,7 @@ astera runs    follow --id <runId>  [--timeout-ms <n>]
 astera runs    stop   --id <runId>
 astera runs    resume --id <runId>
 astera runs    checks --id <runId>
+astera runs    reconverge --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
 astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
@@ -849,6 +850,14 @@ one (its body ending `Refs #N` for an issue of the same repository), and waits f
 takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person,
 with a question of kind `github-*` where the answer acts on the wait (above).
 
+**`runs reconverge --id <runId>` carries a finished lifecycle run through GitHub again.** Once the run's latest
+lifecycle Task completed or failed, it adds a new one to the same run, with a fresh repair and rerun budget, and drops
+the old merge-ready evidence; the run then reads as running until the new Task ends, and its outcome follows the new
+Task alone. It answers with `runId` and the new `taskId`. It is refused with a 6 for a run whose Job is not a
+`--github-lifecycle` Job, a run with no branch of its own or whose branch was removed, a run not carried through GitHub
+yet (its lifecycle Task comes once its Tasks complete), a run whose lifecycle Task still works, and a pull request that is
+merged or closed; the Host reads the pull request from GitHub first, so a merge it has not seen yet still counts.
+
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
 list`. A `--project` after the command belongs to that command and wins over the global one. Every
@@ -907,7 +916,7 @@ the Job, the Astera Host checks that the folder's `origin` is a GitHub repositor
 turns `--convergence` on. `--github-checks build,test` makes those checks decide; without it, the branch
 rules' required checks decide, or every reported check when the rules name none. The Job carries the
 policy as `github`. A worker session Astera started is refused the flag with a 5, as it is
-`jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create` and `github-ci-rerun`: those
+`jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create`, `github-ci-rerun` and `runs reconverge`: those
 writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off
 Astera's GitHub commands and is not a sandbox.
 
@@ -1026,13 +1035,13 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-forty tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
 sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
 allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project
 and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
 Settings (CLI tab). The six Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
-`resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the three
-GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`), `create_job_from_source` and
+`resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the four
+GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`), `create_job_from_source` and
 `regenerate_work_record`. See [MCP](mcp.md).
 
 **`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints

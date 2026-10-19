@@ -50,6 +50,9 @@ export const CONTROLLER_CONTROL_COMMANDS = [
   'jobs-run',
   'runs-stop',
   'runs-resume',
+  // GitHub lifecycle §6.4 (G5c): a finished lifecycle Run carried through GitHub again, on the Runtime's own gh; the raw
+  // GitHub writes stay off this list
+  'runs-reconverge',
   'run-pause',
   'run-resume',
   'run-create',

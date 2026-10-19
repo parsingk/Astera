@@ -141,6 +141,9 @@ interface Round {
   noCi?: true
   /** How many CI failures of this lifecycle Task Astera could not classify (G3c1). */
   unknowns: number
+  /** When this lifecycle Task was added: the Host's reruns from then on are its budget (G5c — a reconverge adds a new
+   *  one, with a budget of its own). */
+  taskSince: string
 }
 
 /** A rerun asked in this round that a read has not shown yet: the read is of the attempt that failed, or of none of its
@@ -233,7 +236,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
               sha: wait.sha,
               waitingSince: wait.waitingSince ?? wait.since,
               ...(wait.noCi ? { noCi: true as const } : {}),
-              unknowns: open.ciUnknowns ?? 0
+              unknowns: open.ciUnknowns ?? 0,
+              taskSince: open.createdAt
             }
           : undefined
       // A closed PR is read no more, unless a round waits on it: a person is asked (G3b2)
@@ -523,7 +527,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
   }
 
   /** L9 (design §4.6): reruns the failed jobs of the failing check's Actions run while the Job reruns by itself and the
-   *  Host's own reruns of this Run are under the budget, and records the attempt it reran so the next reads wait for a
+   *  Host's own reruns for this lifecycle Task are under the budget, and records the attempt it reran so the next reads wait for a
    *  later one. A person's reruns are not counted. Past the budget, with reruns off, or a rerun GitHub refuses, it asks:
    *  rerun, wait (the person reruns it on GitHub) or mark failed. gh saying the run already goes again is the attempt
    *  having moved (L16): it waits. A rerun the network lost is tried again on the next read. */
@@ -532,7 +536,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const facts = { class: failure.class, summary: failure.summary }
     if (!(t.policy.autoRerunInfrastructureFailures ?? GITHUB_LIFECYCLE_DEFAULTS.autoRerunInfrastructureFailures))
       return ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunOff', facts), options)
-    const own = (t.state?.reruns ?? []).filter((r) => r.by === 'astera').length
+    // This lifecycle Task's own: a reconverged one starts afresh, the Run's earlier reruns staying on record (G5c)
+    const own = (t.state?.reruns ?? []).filter((r) => r.by === 'astera' && r.at >= round.taskSince).length
     if (own >= (t.policy.maxInfrastructureReruns ?? GITHUB_LIFECYCLE_DEFAULTS.maxInfrastructureReruns))
       return ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunSpent', { ...facts, reruns: own }), options)
     const r = await d.rerunCi!(t.cwd, repo, ciRunId)

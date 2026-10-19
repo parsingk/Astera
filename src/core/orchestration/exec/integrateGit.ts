@@ -537,6 +537,26 @@ export async function reapWorktree(worktreePath: string, ctx: ReapContext): Prom
 }
 
 /** The two OrchServerDeps bodies that merge and remove a Run's worktrees, over one context. */
+/** The dispatch loop's integrate (integrateBefore, both the Host's and the app's): the dependency worktrees whose folder
+ *  is still there go to `integrate`, and one whose folder is gone is skipped, as mergeWorktrees skips it. A folder goes
+ *  once a merge into the Run root has reaped it — the first lifecycle Task's start does that, and a reconverged one
+ *  (GitHub lifecycle G5c) starts with the same deps, whose Dispatches keep their `cwd`. Handing such a path on made an
+ *  agent integration Task that could never merge it (G5c final review C1). Only `missing` is gone: a folder that could
+ *  not be reached is kept, so integrateWorktrees decides on it as before. */
+export async function integrateLive(
+  into: string,
+  paths: string[],
+  integrate: (into: string, paths: string[]) => Promise<Integration>,
+  ctx: { log(m: string): void; presence?: PresenceCheck }
+): Promise<Integration> {
+  const answers = await Promise.all(paths.map((p) => askUntilAnswered(ctx.presence ?? defaultActionPresenceCheck, p)))
+  const gone = paths.filter((_, i) => answers[i] === 'missing')
+  if (gone.length === 0) return integrate(into, paths)
+  ctx.log(`integrate: skipping ${gone.length} removed worktree(s), merged before: ${gone.join(', ')}`)
+  const left = paths.filter((_, i) => answers[i] !== 'missing')
+  return left.length === 0 ? { kind: 'merged', uncommitted: 0 } : integrate(into, left)
+}
+
 export function worktreeDeps(ctx: {
   integrate(into: string, paths: string[], opts: { reap?: boolean }): Promise<Integration>
   reap(p: string): Promise<boolean>

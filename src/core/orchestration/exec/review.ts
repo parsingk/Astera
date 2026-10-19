@@ -84,12 +84,15 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       // 구현 Dispatch — 그 provider 를 피해야 하고, cwd 도 여기서 얻는다(그래서 이 함수는 taskId
       // 하나만 받는다: 호출자가 cwd 를 따로 구하면 두 경로가 갈라진다)
       // A lifecycle Task is reviewed in the Run root, the branch Astera pushed, over its pull request's diff; the
-      // implementer to avoid is its latest repair, else the Run's latest ordinary work (GitHub lifecycle G3c1, §3.4 S7)
+      // implementer to avoid is the latest repair of any of the Run's lifecycle Tasks — after a reconverge the earlier
+      // one's repairs made the branch's latest changes (G5c final review M4) — else the Run's latest ordinary work
+      // (GitHub lifecycle G3c1, §3.4 S7)
       const lifecycle = isLifecycleTask(task)
       const run = st.runs.find((r) => r.id === task.runId)
+      const carriers = lifecycle ? new Set(st.tasks.filter((t) => t.runId === task.runId && isLifecycleTask(t)).map((t) => t.id)) : new Set([taskId])
       const impl =
         st.dispatches
-          .filter((d) => d.taskId === taskId && !d.review)
+          .filter((d) => carriers.has(d.taskId) && !d.review)
           .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
           .at(-1) ?? (lifecycle && task.runId !== undefined ? latestOrdinaryWork(st, task.runId)?.dispatch : undefined)
       if (!impl) return void (await gate(`no implementation dispatch for task ${taskId}`))
