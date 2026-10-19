@@ -63,3 +63,10 @@ export function detailRunGone(a: { remote: boolean; found: boolean; seen: boolea
   if (a.found) return false
   return a.remote ? a.seen : true
 }
+
+/** Whether an open detail closes because the Jobs view left the screen (G8 demo): another sidebar view opened, or the
+ *  sidebar collapsed. The view's snapshot is cleared then (App's subscription effect), so a detail left open would draw a
+ *  Run it cannot find — no title, graph or GitHub block. */
+export function detailOffScreen(a: { jobsOpen: boolean; sidebarOpen: boolean }): boolean {
+  return !a.jobsOpen || !a.sidebarOpen
+}

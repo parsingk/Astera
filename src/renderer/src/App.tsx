@@ -49,7 +49,7 @@ import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { PluginsSettings } from './components/PluginsSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
-import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
+import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { pollWhileVisible } from './lib/visiblePoll'
 import { dropKeys } from './lib/dropKeys'
@@ -2905,6 +2905,11 @@ export default function App(): React.JSX.Element {
   }, [openRun?.runId, openRun?.runtimeId])
   useEffect(() => {
     if (!openRun) return
+    // The Jobs view left the screen and its snapshot with it: a null snapshot below would keep the detail open on nothing
+    if (detailOffScreen({ jobsOpen, sidebarOpen })) {
+      setOpenRun(null)
+      return
+    }
     const snap = openRun.runtimeId ? remoteSnapshot : orchSnapshot
     if ((!openRun.runtimeId && openRun.projectPath !== currentProject) || snap === null) return
     // 위와 같은 이유로 findRun 이다 — `runs.some` 이면 회차의 상세 창이 열린 다음 프레임에 닫힌다.
@@ -2912,7 +2917,7 @@ export default function App(): React.JSX.Element {
     if (found) openRunSeen.current = true
     // A paired Runtime's Run just made there is not in the list until the next read: not closed for that.
     if (detailRunGone({ remote: !!openRun.runtimeId, found, seen: openRunSeen.current })) setOpenRun(null)
-  }, [openRun, currentProject, orchSnapshot, remoteSnapshot])
+  }, [openRun, currentProject, orchSnapshot, remoteSnapshot, jobsOpen, sidebarOpen])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. The dialog is pinned to the project (and context) it was opened

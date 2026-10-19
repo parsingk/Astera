@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, projectOptions, remoteDetailKey, remoteNewJobFolder, remotePollReady, runtimeOptions } from './remoteJobs'
+import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, projectOptions, remoteDetailKey, remoteNewJobFolder, remotePollReady, runtimeOptions } from './remoteJobs'
 import type { OrchSnapshot } from '../../../core/types'
 
 const t = (key: string, params?: Record<string, unknown>): string => `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
@@ -86,5 +86,15 @@ describe('closing a detail whose Run is gone', () => {
     expect(detailRunGone({ remote: true, found: true, seen: true })).toBe(false)
     expect(detailRunGone({ remote: false, found: false, seen: false })).toBe(true)
     expect(detailRunGone({ remote: false, found: true, seen: false })).toBe(false)
+  })
+})
+
+// G8 demo: leaving the Jobs view clears its snapshot, so a detail left open there had no Run to draw — no title, graph
+// or GitHub block. It closes instead.
+describe('closing a detail when the Jobs view leaves the screen', () => {
+  it('closes when Jobs is not the open view or the sidebar is collapsed, and only then', () => {
+    expect(detailOffScreen({ jobsOpen: true, sidebarOpen: true })).toBe(false)
+    expect(detailOffScreen({ jobsOpen: false, sidebarOpen: true })).toBe(true)
+    expect(detailOffScreen({ jobsOpen: true, sidebarOpen: false })).toBe(true)
   })
 })
