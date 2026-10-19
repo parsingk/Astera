@@ -854,8 +854,9 @@ with a question of kind `github-*` where the answer acts on the wait (above).
 lifecycle Task completed or failed, it adds a new one to the same run, with a fresh repair and rerun budget, and drops
 the old merge-ready evidence; the run then reads as running until the new Task ends, and its outcome follows the new
 Task alone. It answers with `runId` and the new `taskId`. It is refused with a 6 for a run whose Job is not a
-`--github-lifecycle` Job, a run with no branch of its own, a run whose lifecycle Task still works, and a pull request
-that is merged or closed.
+`--github-lifecycle` Job, a run with no branch of its own or whose branch was removed, a run not carried through GitHub
+yet (its lifecycle Task comes once its Tasks complete), a run whose lifecycle Task still works, and a pull request that is
+merged or closed; the Host reads the pull request from GitHub first, so a merge it has not seen yet still counts.
 
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions

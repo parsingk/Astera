@@ -381,7 +381,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runs-reconverge': {
     summary: 'carry a finished GitHub lifecycle run through GitHub again',
     detail:
-      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own, a run whose lifecycle task still works, and a pull request that is merged or closed. A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting.',
+      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting.',
     flags: [ID('<runId>', 'the run to carry again')]
   },
   'runs-checks': {
