@@ -24,6 +24,7 @@ import type { OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
 import {
   forkWorktree,
+  integrateLive,
   integrateWorktrees,
   reapWorktree,
   worktreeDeps,
@@ -396,7 +397,7 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     // app's own (`integrateWorktrees(runRoot, merges, {}, gitCtx)` in ipc.ts).
     integrate: async (runRoot, merges) => {
       await checkGit()
-      return integrateInto(runRoot, merges, {})
+      return integrateLive(runRoot, merges, (into, paths) => integrateInto(into, paths, {}), { log: d.log })
     },
     // A merge into the Run root like any other: the sessions' work units do not read it as someone else's change, and
     // the Run's git range takes the head it leaves
