@@ -17,6 +17,17 @@ describe('the GitHub lifecycle catalog', () => {
     }
   })
 
+  // G8 final review M3: How It Works says what the Run's GitHub block says, in the same words
+  it('has How It Works’ GitHub lines in the Run’s GitHub block terms', () => {
+    for (const lang of LANGS) {
+      const m = CATALOGS[lang].messages as Record<string, string>
+      expect(m['hiw.github.ci.passed'], lang).toContain(m['jobs.github.state.ci-passed'])
+      expect(m['hiw.github.ci.failed'], lang).toContain(m['jobs.github.state.ci-failed'])
+      expect(m['hiw.github.mergeReady'], lang).toContain(m['jobs.github.state.merge-ready'])
+      expect(m['jobs.github.state.pr-bound'], lang).toContain(m['hiw.github.pr'])
+    }
+  })
+
   // How It Works' GitHub block builds its keys from the record's statuses (G8): a Record over the union, so a new status
   // does not compile without being checked here
   it('has How It Works’ GitHub words for every status of every line', () => {
