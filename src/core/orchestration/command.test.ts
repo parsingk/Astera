@@ -9810,6 +9810,30 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5 })
   })
 
+  // G7a: Settings › GitHub's defaults, read by the Host when the Job is made and copied into it (design §5.1)
+  it('takes the rerun and CI-wait policy from the defaults the Host reads, and the checks from the call', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => ({ autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 5, ciWaitMinutes: 30 })
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build' })
+    expect(deps.getState().jobs[0].github).toEqual({
+      ci: { mode: 'selected', selectedChecks: ['build'] },
+      autoRerunInfrastructureFailures: false,
+      maxInfrastructureReruns: 5,
+      ciWaitMinutes: 30
+    })
+  })
+
+  it('refuses when the defaults cannot be read, rather than guess what the person set, and makes no Job', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => {
+      throw new Error('app-settings.json could not be read')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toBe('the GitHub lifecycle defaults in Settings could not be read: app-settings.json could not be read')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
   it('selects checks by name, from a comma list or a list, once each', async () => {
     const a = withGithub()
     await call(a.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build, test,build' })

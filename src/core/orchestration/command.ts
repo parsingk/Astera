@@ -130,6 +130,7 @@ import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { lifecyclePreflight } from '../github/preflight'
+import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
@@ -663,6 +664,9 @@ export interface OrchServerDeps {
     /** The Run root brought up to `origin/<branch>`, fast-forward only: "continue" on a GitHub external-head question
      *  (GitHub lifecycle G3b2). */
     fastForward?(cwd: string, branch: string): Promise<{ ok: true } | { ok: false; message: string }>
+    /** Settings › GitHub's policy defaults a new lifecycle Job takes (G7a, design §5.1): app-settings.json read when the
+     *  Job is made. Rejects when the file cannot be read. Absent, the built-in defaults. */
+    lifecycleDefaults?(): Promise<GitHubLifecycleDefaults>
   }
   /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
@@ -1892,6 +1896,17 @@ export async function handleCommand(
         if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
         const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
         if (!pre.ok) return conflict(`the GitHub lifecycle cannot be turned on here: ${pre.reason}`)
+        // Settings › GitHub's defaults, copied into the Job now and never read for it again (design §5.1). A file that
+        // cannot be read refuses: it may have turned the reruns off, and a guess would rerun what the person did not want.
+        if (deps.github.lifecycleDefaults) {
+          let defaults: GitHubLifecycleDefaults
+          try {
+            defaults = await deps.github.lifecycleDefaults()
+          } catch (e) {
+            return conflict(`the GitHub lifecycle defaults in Settings could not be read: ${e instanceof Error ? e.message : String(e)}`)
+          }
+          github = { ...github, ...defaults }
+        }
       }
       const latest = deps.getState()
       // **등록되어 있으면 그 프로젝트에 매단다.** 등록은 여기서 하지 않는다 — 프로젝트 목록을

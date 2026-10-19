@@ -67,6 +67,7 @@ import { createPluginsRoute } from './host/pluginsRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
+import { exactGithubLifecycleDefaults } from '../core/github/lifecycleDefaults'
 import { createAppCompletionChecks } from './host/pluginChecksRoute'
 import { createHostGitOps } from '../core/workUnit/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
@@ -6030,6 +6031,14 @@ export function registerIpc(
   // Whether an MCP client may act on GitHub (MCP P2-B design). The Host reads the file on every MCP
   // call (readMcpGithubWrite), so saving it is the whole effect.
   ipcMain.handle('settings.getMcpGithubWrite', () => core.appSettings.getMcpGithubWrite())
+  // The GitHub lifecycle's defaults (G7a, design §5.1): the Host reads the file when a lifecycle Job is made, so saving
+  // it is the whole effect. A value is taken whole or not at all, as the pane's bounds say.
+  ipcMain.handle('settings.getGithubLifecycle', () => core.appSettings.getGithubLifecycle())
+  ipcMain.handle('settings.setGithubLifecycle', async (_e, v: unknown) => {
+    const exact = exactGithubLifecycleDefaults(v)
+    if (!exact) throw new Error(`INVALID_GITHUB_LIFECYCLE: ${JSON.stringify(v)}`)
+    await core.appSettings.setGithubLifecycle(exact)
+  })
   ipcMain.handle('settings.setMcpGithubWrite', async (_e, v: unknown) => {
     if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_GITHUB_WRITE: ${String(v)}`)
     await core.appSettings.setMcpGithubWrite(v)
