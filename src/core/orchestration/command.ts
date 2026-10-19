@@ -4845,6 +4845,10 @@ export async function handleCommand(
       if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
       const cwd = str(args.cwd)
       if (!cwd) return bad('--cwd is required')
+      // A paired device asks about the Runtime's own projects only (final review M2): any folder would tell it whose
+      // origin and what push permission sit anywhere on this machine, and run git there
+      if (caller.role === 'controller' && !findProjectContaining(s, cwd))
+        return denied('github-preflight answers a controller only for a folder inside a project this Host knows')
       const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
       return okBody(pre.ok ? { ok: true, repo: ghRepoArg(pre.repo) } : { ok: false, reason: pre.reason })
     }

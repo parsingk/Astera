@@ -9865,6 +9865,20 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(ok.deps.getState().jobs).toEqual([])
   })
 
+  // G7a final review M2: a paired device asks only about the Runtime's own projects; any folder would tell it whose
+  // origin and what push permission sit anywhere on the Runtime, and run git there
+  it('github-preflight from a controller answers only for a folder inside a registered project', async () => {
+    const proj = absPath('proj')
+    const { deps } = withGithub({ initial: ensureProject(emptyState(), { path: proj, now: NOW }).state })
+    const controller = { sessionId: '', role: 'controller' as const }
+    const outside = await handleCommand(deps, controller, 'github-preflight', { cwd: absPath('elsewhere') })
+    expect(outside.status).toBe(403)
+    expect((outside.body as { error: string }).error).toBe('github-preflight answers a controller only for a folder inside a project this Host knows')
+    expect(await handleCommand(deps, controller, 'github-preflight', { cwd: path.join(proj, 'sub') })).toEqual({ status: 200, body: { ok: true, repo: 'o/r' } })
+    // The app on this computer asks about the folder its window shows
+    expect((await handleCommand(deps, { sessionId: '', role: 'app' }, 'github-preflight', { cwd: absPath('elsewhere') })).status).toBe(200)
+  })
+
   // G7a: a Run keeps at most 50 checks of a read, and a name is a check's name, not a document
   it('refuses more than 20 check names, or a name over 100 characters, and makes no Job', async () => {
     const { deps } = withGithub()
