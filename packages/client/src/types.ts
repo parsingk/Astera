@@ -100,11 +100,38 @@ export type GitHubLifecycleState =
   | 'waiting-for-user'
   | 'exhausted'
   | 'ci-infrastructure-failure'
+  | 'merge-ready'
+
+/** Why merge-ready was withheld by the review's verdict or withdrawn by a later read (Astera 1.4.15 and later). */
+export type GitHubInvalidatedReason =
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+  | 'closed'
+  | 'merged'
+  | 'head-changed'
+  | 'base-changed'
+  | 'ci-failed'
+  | 'checks-changed'
 
 /** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
 export interface GitHubLifecycle {
   readonly state: GitHubLifecycleState
-  readonly pr?: { readonly number: number; readonly url: string; readonly isDraft: boolean; readonly state: 'open' | 'closed' | 'merged'; readonly mergeStateStatus?: string }
+  readonly pr?: {
+    readonly number: number
+    readonly url: string
+    readonly isDraft: boolean
+    readonly state: 'open' | 'closed' | 'merged'
+    readonly mergeStateStatus?: string
+    /** GitHub's own review decision (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED); shown, never Astera's verdict. */
+    readonly reviewDecision?: string
+  }
   /** The PR's head commit. */
   readonly headSha?: string
   readonly ci?: {
@@ -120,6 +147,11 @@ export interface GitHubLifecycle {
   readonly failing?: { readonly check: string; readonly class?: string; readonly summary?: string; readonly detailsUrl?: string }
   readonly candidates?: readonly number[]
   readonly sourceChanged?: true
+  /** Merge-ready while it holds: the head Astera's review found ready, when, and `ciOverride: 'no-ci'` when a person chose
+   *  to go on without CI. */
+  readonly mergeReady?: { readonly headSha: string; readonly evaluatedAt: string; readonly ciOverride?: 'no-ci' }
+  /** Why merge-ready was withheld by the review's verdict or withdrawn since (`GitHubInvalidatedReason`). */
+  readonly invalidated?: { readonly reason: GitHubInvalidatedReason; readonly at: string }
 }
 
 export interface Job {
@@ -432,6 +464,8 @@ export type EventType =
   | 'github.ci_failed'
   | 'github.ci_rerun_requested'
   | 'github.source_changed'
+  | 'github.merge_ready'
+  | 'github.merge_ready_invalidated'
 
 /** The session a session event is about: five of the fields `astera sessions list` shows for it. `title`, `provider`
  *  and `cwd` are absent when the Host does not know them. */
@@ -494,6 +528,8 @@ export interface EventPayloads {
   readonly 'github.ci_failed': Run
   readonly 'github.ci_rerun_requested': Run
   readonly 'github.source_changed': Run
+  readonly 'github.merge_ready': Run
+  readonly 'github.merge_ready_invalidated': Run
 }
 
 /** One event. A notification, not the source of truth: read the object again when it matters. Delivered at least

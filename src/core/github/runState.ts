@@ -9,7 +9,9 @@ import {
   type GitHubCiSnapshot,
   type GitHubLogEntry,
   type GitHubPrFacts,
+  type GitHubInvalidatedReason,
   type GitHubRerun,
+  type MergeReadyEvidence,
   type RunGitHubState
 } from './lifecycle'
 
@@ -30,6 +32,11 @@ export interface RunGitHubPatch {
   noCi?: { sha: string }
   /** A CI run's failed jobs were rerun (G4). */
   rerun?: Omit<GitHubRerun, 'at'>
+  /** The review's verdict (G5b): the evidence of merge-ready, or null for a fresh verdict that is not (it clears both
+   *  the evidence and an earlier withdrawal, so the `invalidated` beside it is this verdict's). */
+  mergeReady?: Omit<MergeReadyEvidence, 'evaluatedAt'> | null
+  /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. */
+  invalidated?: { reason: GitHubInvalidatedReason }
 }
 
 type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
@@ -41,6 +48,7 @@ const sameCi = (a: GitHubCiSnapshot | undefined, b: Omit<GitHubCiSnapshot, 'chan
   a.verdict === b.verdict &&
   a.failing === b.failing &&
   a.failingUrl === b.failingUrl &&
+  JSON.stringify(a.targetNames) === JSON.stringify(b.targetNames) &&
   JSON.stringify(a.failure) === JSON.stringify(b.failure) &&
   JSON.stringify(a.checks) === JSON.stringify(b.checks.slice(0, CI_CHECKS_MAX))
 
@@ -95,6 +103,18 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
   if (patch.rerun) {
     next.reruns = [...(base.reruns ?? []), { ...patch.rerun, at: now }].slice(-RERUNS_MAX)
     entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
+  }
+  if (patch.mergeReady !== undefined) {
+    delete next.invalidated
+    if (patch.mergeReady === null) delete next.mergeReady
+    else {
+      next.mergeReady = { ...patch.mergeReady, evaluatedAt: now }
+      entries.push({ kind: 'merge-ready', sha: patch.mergeReady.headSha, pr: patch.mergeReady.pullRequestNumber })
+    }
+  }
+  if (patch.invalidated && !next.invalidated) {
+    next.invalidated = { reason: patch.invalidated.reason, at: now }
+    entries.push({ kind: 'invalidated' })
   }
   if (entries.length > 0) {
     let seq = base.seq
@@ -151,8 +171,24 @@ function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
     (ci.failing === undefined || isStr(ci.failing)) &&
     (ci.failingUrl === undefined || isStr(ci.failingUrl)) &&
     (ci.failure === undefined || failureOk(ci.failure)) &&
+    (ci.targetNames === undefined || (Array.isArray(ci.targetNames) && ci.targetNames.every(isStr))) &&
     Array.isArray(ci.checks) &&
     ci.checks.every((c) => isObj(c) && isStr(c.externalId) && isStr(c.name) && isStr(c.status) && typeof c.required === 'boolean')
+  )
+}
+
+function mergeReadyOk(m: unknown): boolean {
+  return (
+    isObj(m) &&
+    typeof m.pullRequestNumber === 'number' &&
+    isStr(m.headSha) &&
+    typeof m.localChecksPassed === 'boolean' &&
+    typeof m.requiredCiPassed === 'boolean' &&
+    (m.ciOverride === undefined || m.ciOverride === 'no-ci') &&
+    typeof m.reviewPassed === 'boolean' &&
+    typeof m.unresolvedQuestions === 'number' &&
+    Array.isArray(m.ciChecks) &&
+    m.ciChecks.every(isStr)
   )
 }
 
@@ -184,5 +220,7 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
     return 'externalHead is malformed'
   if (v.noCi !== undefined && !(isObj(v.noCi) && isStr(v.noCi.sha))) return 'noCi is malformed'
   if (v.rerun !== undefined && !rerunOk(v.rerun)) return 'rerun is malformed'
+  if (v.mergeReady !== undefined && v.mergeReady !== null && !mergeReadyOk(v.mergeReady)) return 'mergeReady is malformed'
+  if (v.invalidated !== undefined && !(isObj(v.invalidated) && isStr(v.invalidated.reason))) return 'invalidated is malformed'
   return v as RunGitHubPatch
 }

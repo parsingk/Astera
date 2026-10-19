@@ -45,7 +45,7 @@ import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
 import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
-import { isLifecycleTask, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, mergeReadyOf, withLifecycleTask } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -1482,6 +1482,9 @@ export function openReviewDispatch(
     workerState: 'ready',
     retained: false
   }
+  // A lifecycle review reads the head Astera pushed (G5b): the verdict's merge-ready needs to know which
+  const reviewHead = isLifecycleTask(task) ? s.runs.find((r) => r.id === task.runId)?.githubState?.lastPushedSha : undefined
+  if (reviewHead !== undefined) dispatch.reviewHead = reviewHead
   return ok({ ...s, dispatches: [...s.dispatches, dispatch] }, dispatch)
 }
 
@@ -1607,6 +1610,13 @@ export function applyReviewResult(
       },
       now
     ).state
+    // A lifecycle Task's passing review decides merge-ready from state, in this same write (GitHub lifecycle G5b, §3.5):
+    // the evidence, or why it is withheld
+    if (isLifecycleTask(task) && task.runId !== undefined) {
+      const v = mergeReadyOf(state, next, dispatch)
+      const recorded = recordRunGitHub(state, task.runId, 'evidence' in v ? { mergeReady: v.evidence } : { mergeReady: null, invalidated: { reason: v.reason } }, now)
+      if (recorded.ok) state = recorded.state
+    }
     return ok(state, 'accepted')
   }
   const failed: Task = { ...recorded, consecutiveFailures: task.consecutiveFailures + 1, result: a.body }

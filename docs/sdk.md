@@ -172,7 +172,15 @@ checks run before the first push), `awaiting-push` (they run again after an earl
 person started again), `ci-pending` (CI is awaited), `repairing`, `reviewing`, `waiting-for-user` (a question is open on
 it), `ci-infrastructure-failure` (CI failed for a reason a rerun can cure: a rerun of the head's CI is in flight, or a
 question about rerunning it is open) or `exhausted` (its repair budget ran out, or it failed; once its pull request is
-merged or closed, `pr-merged` or `pr-closed` instead). It is derived on every read, so `runs.get` always shows what Astera last read.
+merged or closed, `pr-merged` or `pr-closed` instead). Once its review passed, `merge-ready` says the pull request is
+ready to merge: open, its head the one Astera pushed and reviewed, CI passed on it (or a person chose to go on without
+CI, `mergeReady.ciOverride: 'no-ci'`), no question open; `mergeReady` holds that head and when, while it holds. When the
+review's verdict withheld it, or the pull request moved since (a new head, another base, a check failing or changed,
+closed or merged), `invalidated.reason` says why and `state` reads the record again: the verdict's `not-bound`,
+`external-state-unavailable`, `pr-not-open`, `head-not-pushed`, `review-of-another-head`, `ci-not-passed`,
+`question-open`, `local-check-failed` or `local-check-skipped`, a later read's `closed`, `merged`, `head-changed`,
+`base-changed`, `ci-failed` or `checks-changed`. Astera never merges; GitHub's own
+review decision is `pr.reviewDecision`. It is derived on every read, so `runs.get` always shows what Astera last read.
 
 ### Jobs and Runs
 
@@ -343,6 +351,8 @@ outlives a Host restart, and `events` reads it. An event:
 | `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
 | `github.ci_rerun_requested` | a CI run of the head was rerun through Astera: by Astera itself (a failure outside the code) or by a person's answer or `github-ci-rerun --run` (a rerun made on GitHub's own page is not seen) | `Run` |
 | `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
+| `github.merge_ready` | the review passed and the pull request is ready to merge: `run.github.mergeReady` holds the evidence | `Run` |
+| `github.merge_ready_invalidated` | the review's verdict withheld merge-ready, or the pull request moved since (a new head, another base, a check failing or changed, closed or merged): `run.github.invalidated.reason` says which | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its
 checks carry no output; a plugin check, in a Task or a `TaskCompletion`, carries how many findings it has

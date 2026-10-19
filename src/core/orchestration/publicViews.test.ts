@@ -72,6 +72,24 @@ describe('runView — GitHub lifecycle (G1)', () => {
     })
   })
 
+  // GitHub lifecycle G5b: a completed lifecycle Task lets the record speak, merge-ready included
+  it('carries merge-ready once the lifecycle Task completed', () => {
+    const H = 'e'.repeat(40)
+    const gs = {
+      binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: true, boundAt: 'T' },
+      headSha: H,
+      pr: { state: 'open' as const, isDraft: true, baseBranch: 'develop' },
+      ci: { sha: H, basis: 'all-reported' as const, verdict: 'passed' as const, changedAt: 'T', checks: [] },
+      mergeReady: { pullRequestNumber: 12, headSha: H, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: [], evaluatedAt: 'T' },
+      log: [],
+      seq: 0
+    }
+    const run = { ...runOf, githubState: gs }
+    const done: Task = { id: 'tsk_l', runId: runOf.id, kind: 'lifecycle', title: 'GitHub', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: 'T', updatedAt: 'T' }
+    const s = { ...emptyState(), jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', github: policy }], runs: [run], tasks: [done] }
+    expect(runView(s, run).github).toMatchObject({ state: 'merge-ready', mergeReady: { headSha: H, evaluatedAt: 'T' } })
+  })
+
   it('carries github for a lifecycle Job’s Run, and nothing for any other', () => {
     const lifecycle = { ...emptyState(), jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', github: policy }], runs: [runOf] }
     expect(runView(lifecycle, runOf).github).toEqual({ state: 'unbound' })

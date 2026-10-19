@@ -1,12 +1,21 @@
 // The public face of a lifecycle Run's GitHub side (GitHub lifecycle design §5.3, §8): derived on every read from what
 // the Host last recorded, never stored. `runs get`, `jobs get`, MCP get_run, the SDK's runs.get and the run and github
 // events carry it. Node-free.
-import { roundReruns, type CiBasis, type CiFailureClass, type CiVerdict, type GitHubCiCheck, type GitHubLifecyclePolicy, type RunGitHubState } from './lifecycle'
+import {
+  roundReruns,
+  type CiBasis,
+  type CiFailureClass,
+  type CiVerdict,
+  type GitHubCiCheck,
+  type GitHubInvalidatedReason,
+  type GitHubLifecyclePolicy,
+  type RunGitHubState
+} from './lifecycle'
 import type { Gate, Task } from '../orchestration/types'
 
 /** G1's states, read from the Host's record, and the lifecycle Task's (G3c2): where it stands while it is open, with
- *  `ci-infrastructure-failure` (G4) while a CI rerun is in flight or asked about. Later slices add merge-ready and
- *  invalidated (G5). */
+ *  `ci-infrastructure-failure` (G4) while a CI rerun is in flight or asked about, and `merge-ready` (G5b) once its review
+ *  found the pull request ready and while that holds. */
 export type GitHubLifecycleState =
   | 'unbound'
   | 'pr-bound'
@@ -23,6 +32,7 @@ export type GitHubLifecycleState =
   | 'waiting-for-user'
   | 'exhausted'
   | 'ci-infrastructure-failure'
+  | 'merge-ready'
 
 /** The Run's latest lifecycle Task and the question open on it (G3c2). */
 export interface LifecycleTaskFacts {
@@ -55,7 +65,7 @@ function lifecycleStateOf(l: LifecycleTaskFacts, gs: RunGitHubState | undefined)
 
 export interface GitHubLifecycleView {
   state: GitHubLifecycleState
-  pr?: { number: number; url: string; isDraft: boolean; state: 'open' | 'closed' | 'merged'; mergeStateStatus?: string }
+  pr?: { number: number; url: string; isDraft: boolean; state: 'open' | 'closed' | 'merged'; mergeStateStatus?: string; reviewDecision?: string }
   headSha?: string
   ci?: { sha: string; basis: CiBasis; verdict: CiVerdict; checks: Pick<GitHubCiCheck, 'name' | 'status' | 'conclusion' | 'required'>[] }
   /** The check that failed first; `class` and `summary` say why, as Astera classified it (G2). */
@@ -64,13 +74,23 @@ export interface GitHubLifecycleView {
   candidates?: number[]
   /** The source issue changed after the Job was made (§6); the objective did not. */
   sourceChanged?: true
+  /** Merge-ready while it holds (G5b, design §8): the head the review's verdict found ready, when, and a person's choice to
+   *  go on without CI if that is why CI did not decide. */
+  mergeReady?: { headSha: string; evaluatedAt: string; ciOverride?: 'no-ci' }
+  /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
+  invalidated?: { reason: GitHubInvalidatedReason; at: string }
 }
+
+/** Merge-ready holds while its evidence's head is the PR's head, the PR is open and nothing withdrew it (§5.4). */
+const mergeReadyHolds = (gs: RunGitHubState | undefined): boolean =>
+  gs?.mergeReady !== undefined && !gs.invalidated && gs.mergeReady.headSha === gs.headSha && gs.pr?.state === 'open'
 
 function stateOf(gs: RunGitHubState | undefined): GitHubLifecycleState {
   if (gs?.lastReadError) return 'external-state-unavailable'
   if (!gs?.binding) return 'unbound'
   if (gs.pr?.state === 'merged') return 'pr-merged'
   if (gs.pr?.state === 'closed') return 'pr-closed'
+  if (mergeReadyHolds(gs)) return 'merge-ready'
   // A verdict for a commit that is not the PR's head yet (GitHub between a push and the PR's own move) says nothing
   // about the head (final review I1).
   if (gs.ci && gs.headSha !== undefined && gs.ci.sha !== gs.headSha) return 'ci-pending'
@@ -100,7 +120,8 @@ export function githubLifecycleOf(
       url: gs.binding.url,
       isDraft: gs.pr?.isDraft ?? false,
       state: gs.pr?.state ?? 'open',
-      ...(gs.pr?.mergeStateStatus ? { mergeStateStatus: gs.pr.mergeStateStatus } : {})
+      ...(gs.pr?.mergeStateStatus ? { mergeStateStatus: gs.pr.mergeStateStatus } : {}),
+      ...(gs.pr?.reviewDecision ? { reviewDecision: gs.pr.reviewDecision } : {})
     }
   if (gs?.headSha) view.headSha = gs.headSha
   const ci = gs?.ci
@@ -122,5 +143,8 @@ export function githubLifecycleOf(
   }
   if (gs?.prCandidates?.length) view.candidates = [...gs.prCandidates]
   if (gs?.sourceChanged) view.sourceChanged = true
+  if (gs?.mergeReady && mergeReadyHolds(gs))
+    view.mergeReady = { headSha: gs.mergeReady.headSha, evaluatedAt: gs.mergeReady.evaluatedAt, ...(gs.mergeReady.ciOverride ? { ciOverride: gs.mergeReady.ciOverride } : {}) }
+  if (gs?.invalidated) view.invalidated = { reason: gs.invalidated.reason, at: gs.invalidated.at }
   return view
 }

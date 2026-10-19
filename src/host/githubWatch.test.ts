@@ -1,7 +1,7 @@
 // The Host's read-only watch over lifecycle Runs' pull requests (GitHub lifecycle design §6.2, G1): what it binds, how
 // often it reads, and what makes it stop.
 import { describe, it, expect } from 'vitest'
-import { createGithubWatch, ERROR_BACKOFF_MS, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, NO_CI_GRACE_MS, PENDING_MS, RATE_HOLD_MS, RERUN_SHOW_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
+import { createGithubWatch, ERROR_BACKOFF_MS, ISSUE_MS, LOW_BUDGET_MS, NEW_HEAD_MS, NO_CI_GRACE_MS, PENDING_MS, RATE_HOLD_MS, RERUN_SHOW_MS, REVIEWING_MS, SETTLED_MS, UNBOUND_MAX_AGE_MS, UNBOUND_MS, type GithubWatchDeps } from './githubWatch'
 import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, Job, JobRun } from '../core/orchestration/types'
@@ -534,6 +534,69 @@ describe('githubWatch', () => {
     expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
     await r.at(1)
     expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(3)
+  })
+
+  // GitHub lifecycle G5b (design §5.4, §6.2): merge-ready is withdrawn when the pull request moves
+  describe('merge-ready (G5b)', () => {
+    const A = 'a'.repeat(40)
+    const B = 'b'.repeat(40)
+    const READY: RunGitHubState = {
+      ...BOUND,
+      headSha: A,
+      lastPushedSha: A,
+      pr: { state: 'open', isDraft: true, baseBranch: 'develop' },
+      mergeReady: { pullRequestNumber: 12, headSha: A, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: ['build'], evaluatedAt: ISO0 }
+    }
+    const withdrawal = (r: ReturnType<typeof rig>): string[] => r.records.flatMap((x) => (x.patch.invalidated ? [x.patch.invalidated.reason] : []))
+    const readOf = async (read: PrStateRead, gs: RunGitHubState = READY): Promise<string[]> => {
+      const r = rig({ read })
+      r.watch.onState(stateOf({ run: { githubState: gs } }))
+      await r.at(0)
+      return withdrawal(r)
+    }
+    const fail = { externalId: 'run:1', name: 'build', status: 'completed' as const, conclusion: 'failure' as const, required: false, jobId: 1 }
+    const e2e = { externalId: 'run:2', name: 'e2e', status: 'completed' as const, conclusion: 'success' as const, required: false, jobId: 2 }
+
+    it('a read with the same head and checks withdraws nothing', async () => {
+      expect(await readOf(prRead())).toEqual([])
+    })
+
+    it.each([
+      ['head-changed', prRead({ headSha: B, commitSha: B })],
+      ['base-changed', prRead({ baseBranch: 'main' })],
+      ['closed', prRead({ state: 'closed' })],
+      ['merged', prRead({ state: 'merged' })],
+      ['ci-failed', prRead({ checks: [fail] })],
+      ['checks-changed', prRead({ checks: [...prRead().checks, e2e] })]
+    ] as const)('withdraws it once the pull request moves: %s', async (reason, read) => {
+      expect(await readOf(read)).toEqual([reason])
+    })
+
+    it('a review asking for changes on GitHub is shown, never a withdrawal; one withdrawn already is not withdrawn again', async () => {
+      expect(await readOf(prRead({ reviewDecision: 'CHANGES_REQUESTED' }))).toEqual([])
+      expect(await readOf(prRead({ headSha: B, commitSha: B }), { ...READY, invalidated: { reason: 'head-changed', at: ISO0 } })).toEqual([])
+    })
+
+    it('reads a Run whose lifecycle Task is in review every 30 seconds', async () => {
+      const r = rig()
+      const s = stateOf()
+      r.watch.onState({
+        ...s,
+        tasks: [{ id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: [], status: 'reviewing', consecutiveFailures: 0, createdAt: ISO0, updatedAt: ISO0 }]
+      })
+      await r.at(0)
+      await r.at(REVIEWING_MS)
+      expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
+    })
+
+    it('reads a Run at once when it becomes merge-ready', async () => {
+      const r = rig()
+      r.watch.onState(stateOf({ run: { githubState: { ...READY, mergeReady: undefined } } }))
+      await r.at(0)
+      r.watch.onState(stateOf({ run: { githubState: { ...READY, mergeReady: { ...READY.mergeReady!, evaluatedAt: '2026-10-18T00:00:05.000Z' } } } }))
+      await r.at(10_000)
+      expect(r.calls.filter((c) => c === 'read 12')).toHaveLength(2)
+    })
   })
 
   // GitHub lifecycle G3b1 (design §4.4, §4.6): CI on the pushed head settles the handed-over round, once

@@ -142,13 +142,61 @@ export interface GitHubCiSnapshot {
   failure?: GitHubCiFailure
   /** At most CI_CHECKS_MAX. */
   checks: GitHubCiCheck[]
+  /** The names CI was judged on, from the whole read (`ciTargets`): kept whole, though `checks` keeps CI_CHECKS_MAX, so
+   *  merge-ready's evidence and the watch's later comparison see the same set (G5b final review I1). */
+  targetNames?: string[]
   /** When this snapshot last changed, not when it was last read: a read that finds nothing new writes nothing. */
   changedAt: string
 }
 
 /** `pr-created`: the pull request the Run is bound to is one Astera opened (G3b1); `pr-bound`: one it found;
- *  `ci-rerun`: a CI run of the head was rerun (G4). */
-export type GitHubLogKind = 'pr-bound' | 'pr-created' | 'head-changed' | 'ci-passed' | 'ci-failed' | 'ci-rerun' | 'source-changed'
+ *  `ci-rerun`: a CI run of the head was rerun (G4); `merge-ready` / `invalidated`: the review's verdict made the pull
+ *  request ready to merge, or merge-ready was withheld or withdrawn (G5b). */
+export type GitHubLogKind =
+  | 'pr-bound'
+  | 'pr-created'
+  | 'head-changed'
+  | 'ci-passed'
+  | 'ci-failed'
+  | 'ci-rerun'
+  | 'source-changed'
+  | 'merge-ready'
+  | 'invalidated'
+
+/** Why merge-ready was withheld by the review's verdict (the first seven, and external-state-unavailable while GitHub
+ *  cannot be read) or withdrawn by a later read (the last six) (G5b, design §5.4): a code a script switches on. */
+export type GitHubInvalidatedReason =
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+  | 'closed'
+  | 'merged'
+  | 'head-changed'
+  | 'base-changed'
+  | 'ci-failed'
+  | 'checks-changed'
+
+/** Why the pull request is ready to merge, decided from Astera's state when the lifecycle review passed (G5b, design
+ *  §5.2, §5.4): its head is the one Astera pushed, CI passed on it (or a person chose to go on without CI), the review
+ *  read that head, and no question was open. `ciChecks`: the checks CI was judged on, by the record's basis; a read of
+ *  the same head that judges on others withdraws it. */
+export interface MergeReadyEvidence {
+  pullRequestNumber: number
+  headSha: string
+  localChecksPassed: boolean
+  requiredCiPassed: boolean
+  ciOverride?: 'no-ci'
+  reviewPassed: boolean
+  unresolvedQuestions: number
+  ciChecks: string[]
+  evaluatedAt: string
+}
 
 /** One rerun of a CI run's failed jobs (G4, design §4.6, §5.2). `attempt` is the attempt that failed and was rerun, so
  *  the rerun has shown once a read gives that run a later one; `sha` is the head it was asked on. `by: 'astera'` is the
@@ -176,7 +224,8 @@ export interface GitHubLogEntry {
   class?: CiFailureClass
 }
 
-/** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written only by `runs-github-record`. */
+/** `JobRun.githubState`: what the Host last read of the Run's GitHub side. Written by the Host's `runs-github-record`
+ *  and, for merge-ready, by the lifecycle review's verdict in its own write (G5b). */
 export interface RunGitHubState {
   binding?: GitHubBinding
   /** More than one open PR matched the Run's branch and base; none was bound (§7). */
@@ -195,6 +244,11 @@ export interface RunGitHubState {
   sourceChanged?: { at: string }
   /** At most RERUNS_MAX, oldest dropped (G4). */
   reruns?: GitHubRerun[]
+  /** The pull request is ready to merge, as the review's verdict decided (G5b); shown while its head is the PR's head
+   *  and nothing withdrew it. */
+  mergeReady?: MergeReadyEvidence
+  /** Why merge-ready was withheld by the verdict or withdrawn since (G5b, design §5.4). */
+  invalidated?: { reason: GitHubInvalidatedReason; at: string }
   /** At most GITHUB_LOG_MAX, oldest dropped: the timeline's source. */
   log: GitHubLogEntry[]
   /** The last entry's seq. */
@@ -204,6 +258,22 @@ export interface RunGitHubState {
 export const CI_CHECKS_MAX = 50
 export const GITHUB_LOG_MAX = 100
 export const RERUNS_MAX = 20
+
+/** The names of the checks CI is judged on by `basis`, sorted, once (GitHub lifecycle G5b): the required ones present,
+ *  the selected ones present, or every reported one but those settled skipped or neutral (evaluateCi's all-reported
+ *  targets). Kept with merge-ready; a later read of the same head that judges on other names withdraws it. Here, not in
+ *  ciVerdict, because the renderer's build reaches it through lifecycleTask and ciVerdict reaches gh. */
+export function ciTargetNames(checks: readonly GitHubCiCheck[], basis: CiBasis, selected: readonly string[] = []): string[] {
+  const nothingChecked = (c: GitHubCiCheck): boolean =>
+    c.status === 'completed' && (c.conclusion === 'skipped' || c.conclusion === 'neutral')
+  const targets =
+    basis === 'required'
+      ? checks.filter((c) => c.required)
+      : basis === 'selected'
+        ? checks.filter((c) => selected.includes(c.name))
+        : checks.filter((c) => !nothingChecked(c))
+  return [...new Set(targets.map((c) => c.name))].sort()
+}
 
 /** The reruns asked in the round `since` names, on its head `sha` (G4 final review I1, M5): a rerun of an earlier round
  *  of the same head is that round's, not this one's. */
