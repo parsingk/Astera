@@ -158,8 +158,13 @@ export interface GitHubLifecycle {
   readonly externalHead?: { readonly sha?: string; readonly at: string }
   /** The pull request's base as bound, and when it was bound again after the pull request was retargeted. */
   readonly base?: { readonly branch: string; readonly reboundAt?: string }
-  /** The lifecycle Task's repair attempt against the Job's budget, once it has repaired. */
-  readonly repair?: { readonly attempt: number; readonly max: number }
+  /** The lifecycle Task's repair attempt against the Job's budget, once it has repaired, and while a repair runs what it
+   *  repairs: GitHub CI (its failing check), a local check the last round failed, or the review's findings. */
+  readonly repair?: {
+    readonly attempt: number
+    readonly max: number
+    readonly subject?: { readonly kind: 'ci'; readonly check?: string } | { readonly kind: 'local'; readonly check: string } | { readonly kind: 'review' }
+  }
   /** A person chose to go on without CI for the head. */
   readonly noCi?: true
 }

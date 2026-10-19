@@ -33,8 +33,9 @@ export function githubChipOf(row: Pick<JobRow, 'github'>): MessageKey | null {
     case 'ci-pending':
     case 'ci-infrastructure-failure':
       return 'jobs.github.chip.ci'
+    // Repairing CI only when the repair is of CI (final review I1); a local or review repair is the node's to say
     case 'repairing':
-      return 'jobs.github.chip.repairing'
+      return row.github?.repair?.subject?.kind === 'ci' ? 'jobs.github.chip.repairing' : null
     default:
       return null
   }

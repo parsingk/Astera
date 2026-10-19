@@ -40,10 +40,15 @@ describe('GitHubBlock', () => {
     expect(html).toContain('jobs.github.required')
   })
 
-  it('a repair says which check and the attempt against the budget', () => {
-    const html = render({ state: 'repairing', pr: PR, failing: { check: 'build', class: 'test' }, repair: { attempt: 2, max: 3 } })
+  it('a repair says what it repairs and the attempt against the budget', () => {
+    const html = render({ state: 'repairing', pr: PR, failing: { check: 'build', class: 'test' }, repair: { attempt: 2, max: 3, subject: { kind: 'ci', check: 'build' } } })
     expect(html).toContain('jobs.github.repairingCheck {"check":"build","attempt":2,"max":3}')
     expect(html).toContain('jobs.github.failingClass {"check":"build","class":"test"}')
+    // Final review I1: a local check, the review, or nothing known — never the CI check by default
+    expect(render({ state: 'repairing', pr: PR, failing: { check: 'build' }, repair: { attempt: 2, max: 3, subject: { kind: 'local', check: 'Lint' } } })).toContain('jobs.github.repairingLocal {"check":"Lint","attempt":2,"max":3}')
+    expect(render({ state: 'repairing', pr: PR, repair: { attempt: 1, max: 3, subject: { kind: 'review' } } })).toContain('jobs.github.repairingReview {"attempt":1,"max":3}')
+    expect(render({ state: 'repairing', pr: PR, repair: { attempt: 1, max: 3 } })).toContain('jobs.github.repairingAttempt {"attempt":1,"max":3}')
+    expect(render({ state: 'repairing', pr: PR, repair: { attempt: 1, max: 3, subject: { kind: 'ci' } } })).toContain('jobs.github.repairingCi {"attempt":1,"max":3}')
   })
 
   // Review Focus 3: Astera's verdict and GitHub's own state, side by side

@@ -170,6 +170,20 @@ describe('githubLifecycleOf', () => {
     expect(githubLifecycleOf(POLICY, bound(), { task, repairs: { done: 0, max: 3 } })).not.toHaveProperty('repair')
   })
 
+  // Final review I1: a repair names what it repairs — the CI check, a local check the last round failed, or the review
+  it('names what a repair repairs: GitHub CI, a local check or the review', () => {
+    const dispatched = { id: 'tsk_l', status: 'dispatched', kind: 'lifecycle' } as unknown as Task
+    const gs = bound({ ci: ci('failed', 'build') })
+    const of = (facts: Partial<LifecycleTaskFacts>) => githubLifecycleOf(POLICY, gs, { task: dispatched, repairs: { done: 2, max: 3 }, ...facts })?.repair
+    expect(of({ blocked: { configId: 'github:ci', name: 'GitHub CI' } })).toEqual({ attempt: 2, max: 3, subject: { kind: 'ci', check: 'build' } })
+    expect(of({ blocked: { configId: 'cfg_lint', name: 'Lint' } })).toEqual({ attempt: 2, max: 3, subject: { kind: 'local', check: 'Lint' } })
+    expect(of({ repairing: 'review-failure' })).toEqual({ attempt: 2, max: 3, subject: { kind: 'review' } })
+    expect(of({})).toEqual({ attempt: 2, max: 3 })
+    // Not repairing now: the count, and nothing about a repair under way
+    const validating = { ...dispatched, status: 'validating' } as Task
+    expect(githubLifecycleOf(POLICY, gs, { task: validating, repairs: { done: 2, max: 3 }, blocked: { configId: 'cfg_lint', name: 'Lint' } })?.repair).toEqual({ attempt: 2, max: 3 })
+  })
+
   it('names PR candidates and a changed source', () => {
     expect(githubLifecycleOf(POLICY, { log: [], seq: 1, prCandidates: [12, 13], sourceChanged: { at: 'T' } })).toEqual({
       state: 'unbound', candidates: [12, 13], sourceChanged: true

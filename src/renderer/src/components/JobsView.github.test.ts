@@ -38,7 +38,10 @@ describe('githubChipOf', () => {
     expect(of('merge-ready')).toBe('jobs.github.chip.ready')
     expect(of('ci-pending')).toBe('jobs.github.chip.ci')
     expect(of('ci-infrastructure-failure')).toBe('jobs.github.chip.ci')
-    expect(of('repairing')).toBe('jobs.github.chip.repairing')
+    // Final review I1: "Repairing CI" only for a repair of CI
+    expect(githubChipOf(row({ github: { state: 'repairing', repair: { attempt: 1, max: 3, subject: { kind: 'ci', check: 'build' } } } }))).toBe('jobs.github.chip.repairing')
+    expect(githubChipOf(row({ github: { state: 'repairing', repair: { attempt: 1, max: 3, subject: { kind: 'local', check: 'Lint' } } } }))).toBe(null)
+    expect(of('repairing')).toBe(null)
     for (const s of ['unbound', 'pr-bound', 'waiting-for-user', 'exhausted', 'pr-merged'] as const) expect(of(s), s).toBe(null)
     expect(githubChipOf(row({}))).toBe(null)
   })

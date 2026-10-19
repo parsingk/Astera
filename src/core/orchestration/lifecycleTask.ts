@@ -1,11 +1,11 @@
 // The Run-level lifecycle Task (GitHub lifecycle design L1, §3.2): added by Astera in the same write that completes a
 // lifecycle Run's last ordinary Task, so no outcome reader ever sees the Run all-terminal in between. Pure.
 import { GITHUB_CI_CHECK, ciTargetNames, type GitHubInvalidatedReason, type MergeReadyEvidence } from '../github/lifecycle'
-import { checkConfigIdsOf, latestImplDispatch, policyOf, repairCountOf } from './convergence'
+import { checkConfigIdsOf, latestImplDispatch, policyOf, repairCountIn } from './convergence'
 import type { LifecycleTaskFacts } from '../github/view'
 import { isTerminal, tasksOwnedBy } from './running'
 import type { OrchState } from './state'
-import { newId, recomputeReady, type Dispatch, type Task } from './types'
+import { newId, recomputeReady, type Dispatch, type Gate, type Task } from './types'
 
 export const LIFECYCLE_TASK_TITLE = 'GitHub 전달'
 const LIFECYCLE_TASK_SPEC = 'Astera가 이 Run의 브랜치를 GitHub으로 가져갑니다: push, draft PR, CI, 수리, 리뷰. 워커가 없는 Task입니다.'
@@ -20,16 +20,43 @@ export function latestLifecycleTaskOf(s: OrchState, runId: string): Task | undef
   return latest
 }
 
-/** The Run's latest lifecycle Task with the question open on it (GitHub lifecycle G3c2): what the Run's `github.state`
- *  reads while that Task works. Read for a lifecycle Job's Run only: by runView and by the Jobs rows (G7b). */
-export function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | undefined {
-  const task = latestLifecycleTaskOf(s, runId)
+/** The Run's latest lifecycle Task with the question open on it (GitHub lifecycle G3c2), its repair count against the
+ *  Job's budget, the reason of the repair under way and the first check its last round failed (G7b): what the Run's
+ *  `github` reads while that Task works. From the Run's Tasks and lookups the caller has, so the Jobs fold uses its index
+ *  and scans nothing per row (final review M1); runView builds them from the state (lifecycleFactsOf). */
+export function lifecycleFactsIn(
+  tasks: readonly Task[],
+  openGateOf: (taskId: string) => Gate | undefined,
+  dispatchesOf: (taskId: string) => readonly Dispatch[],
+  maxFixAttempts: number | undefined
+): LifecycleTaskFacts | undefined {
+  let task: Task | undefined
+  // The latest, ties to the later in the list, as latestLifecycleTaskOf reads it
+  for (const t of tasks) if (isLifecycleTask(t) && (!task || t.createdAt >= task.createdAt)) task = t
   if (!task) return undefined
-  const openGate = s.gates.find((g) => g.taskId === task.id && g.status === 'open')
-  // The node's "Fix N/M" numbers (view.ts jobTaskOf), for the Run's GitHub block (G7b)
-  const policy = policyOf(s, task)
-  const repairs = policy ? { done: repairCountOf(s, task.id), max: policy.maxFixAttempts } : undefined
-  return { task, ...(openGate ? { openGate } : {}), ...(repairs ? { repairs } : {}) }
+  const openGate = openGateOf(task.id)
+  const ds = dispatchesOf(task.id)
+  const repairing = ds.find((d) => d.repair !== undefined && d.outcome === undefined && d.endedAt === undefined)?.repair
+  const blocked = task.checks?.find((c) => c.status === 'failed' || c.status === 'timed-out' || c.status === 'error')
+  return {
+    task,
+    ...(openGate ? { openGate } : {}),
+    ...(maxFixAttempts !== undefined ? { repairs: { done: repairCountIn(ds), max: maxFixAttempts } } : {}),
+    ...(repairing ? { repairing } : {}),
+    ...(blocked ? { blocked: { configId: blocked.configId, name: blocked.name } } : {})
+  }
+}
+
+/** lifecycleFactsIn over the state, for one Run (runView). */
+export function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | undefined {
+  const latest = latestLifecycleTaskOf(s, runId)
+  if (!latest) return undefined
+  return lifecycleFactsIn(
+    s.tasks.filter((t) => t.runId === runId),
+    (id) => s.gates.find((g) => g.taskId === id && g.status === 'open'),
+    (id) => s.dispatches.filter((d) => d.taskId === id),
+    policyOf(s, latest)?.maxFixAttempts
+  )
 }
 
 /** The Run's lifecycle Task while it still works: the latest one, neither completed nor terminally failed. Only the

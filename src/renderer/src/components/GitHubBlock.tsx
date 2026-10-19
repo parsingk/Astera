@@ -33,6 +33,10 @@ export const GITHUB_BLOCK_KEYS: readonly string[] = [
   'jobs.github.title',
   'jobs.github.head',
   'jobs.github.repairingCheck',
+  'jobs.github.repairingCi',
+  'jobs.github.repairingLocal',
+  'jobs.github.repairingReview',
+  'jobs.github.repairingAttempt',
   'jobs.github.failing',
   'jobs.github.failingClass',
   'jobs.github.mergeReady',
@@ -50,6 +54,21 @@ export const GITHUB_BLOCK_KEYS: readonly string[] = [
 ]
 
 const short = (sha: string): string => sha.slice(0, 7)
+
+/** A repair under way, by what it repairs, with the attempt against the budget (final review I1). */
+function repairLine(r: NonNullable<GitHubLifecycleView['repair']>, t: (key: MessageKey, p?: Record<string, string | number>) => string): string {
+  const n = { attempt: r.attempt, max: r.max }
+  switch (r.subject?.kind) {
+    case 'ci':
+      return r.subject.check !== undefined ? t('jobs.github.repairingCheck', { check: r.subject.check, ...n }) : t('jobs.github.repairingCi', n)
+    case 'local':
+      return t('jobs.github.repairingLocal', { check: r.subject.check, ...n })
+    case 'review':
+      return t('jobs.github.repairingReview', n)
+    default:
+      return t('jobs.github.repairingAttempt', n)
+  }
+}
 
 /** A check's mark: ✓ passed, ✗ failed, ● still going, · anything else (skipped, neutral). */
 const markOf = (c: { status: string; conclusion?: string }): string =>
@@ -85,9 +104,7 @@ export function GitHubBlock(p: {
         {g.headSha && <span className="detail-github-sha">{t('jobs.github.head', { sha: short(g.headSha) })}</span>}
       </div>
       <p className="detail-github-state">
-        {g.state === 'repairing' && g.failing && g.repair
-          ? t('jobs.github.repairingCheck', { check: g.failing.check, attempt: g.repair.attempt, max: g.repair.max })
-          : t(stateKey(g.state))}
+        {g.state === 'repairing' && g.repair ? repairLine(g.repair, t) : t(stateKey(g.state))}
       </p>
       {g.failing && (
         <p className="detail-github-line">

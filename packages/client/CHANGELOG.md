@@ -33,7 +33,7 @@ is the guide.
   `questions.answer` takes one of them.
 - `GitHubLifecycle.pushedSha` (the commit Astera last pushed), `externalHead` (a head Astera did not push), `base` (the
   pull request's base as bound, with `reboundAt` after a retarget), `repair` (the lifecycle Task's repair attempt
-  against the Job's budget) and `noCi` (a person chose to go on without CI for the head).
+  against the Job's budget, and while a repair runs its `subject`: GitHub CI, a local check, or the review's findings) and `noCi` (a person chose to go on without CI for the head).
 - Ten `RunEventKind`s for a GitHub lifecycle Run's steps on its timeline (`runs.follow`): `github-pr-bound`,
   `github-pr-created`, `github-pushed`, `github-ci-started`, `github-ci-failed`, `github-ci-rerun`, `github-ci-passed`,
   `github-merge-ready`, `github-invalidated` and `github-source-changed`, each with the commit, check or pull request in

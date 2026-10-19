@@ -19,7 +19,7 @@ import { eventCountsOf } from './timeline'
 import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy, withoutSupersededLifecycle } from './running'
 import { checkConfigIdsOf, policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
 import { githubLifecycleOf } from '../github/view'
-import { isLifecycleTask, lifecycleFactsOf } from './lifecycleTask'
+import { isLifecycleTask, lifecycleFactsIn } from './lifecycleTask'
 import type { Dispatch, Gate, Job, JobRun, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
@@ -434,7 +434,21 @@ export function snapshotFor(
       // Where the Job came from (plugin Phase 4 J18), on every row of the Job: the chip opens the ticket
       ...(job.source ? { source: job.source } : {}),
       // A lifecycle Run's GitHub side, as runs get derives it (G7b)
-      ...(run !== undefined && job.github ? { github: githubLifecycleOf(job.github, run.githubState, lifecycleFactsOf(state, run.id)) } : {}),
+      // From the fold's index, scanning nothing per row (final review M1)
+      ...(run !== undefined && job.github
+        ? {
+            github: githubLifecycleOf(
+              job.github,
+              run.githubState,
+              lifecycleFactsIn(
+                ix.tasksByRun.get(run.id) ?? [],
+                (id) => ix.openGatesByTask.get(id)?.[0],
+                (id) => ix.dispatchesByTask.get(id) ?? [],
+                policyOfJob(job)?.maxFixAttempts
+              )
+            )
+          }
+        : {}),
       ...(run !== undefined && job.github && noLocalCheck(ix.tasksByRun.get(run.id) ?? []) ? { githubNoLocalCheck: true } : {}),
       ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
         ? { nextFireAt: nextFireOf(job.id) as number }
