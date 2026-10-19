@@ -564,7 +564,10 @@ export function reconvergeRun(s: OrchState, runId: string, now: string): Res<Tas
     return err(`This Run’s lifecycle Task is still ${latest.status}: it is carried through GitHub already`)
   const pr = run.githubState?.pr
   if (pr && pr.state !== 'open') return err(`This Run’s pull request is ${pr.state}, so there is nothing left to carry`)
-  const task = lifecycleTaskFor(runId, latest.deps, latest.validateConfigIds ?? [GITHUB_CI_CHECK], now)
+  // "Latest" is read by createdAt, so the new Task is stamped after the earlier one even if the clock went back between
+  // the two (G5c final review M6)
+  const at = now > latest.createdAt ? now : new Date(Date.parse(latest.createdAt) + 1).toISOString()
+  const task = lifecycleTaskFor(runId, latest.deps, latest.validateConfigIds ?? [GITHUB_CI_CHECK], at)
   let next: OrchState = { ...s, tasks: recomputeReady([...s.tasks, task]) }
   if (run.githubState?.mergeReady || run.githubState?.invalidated) {
     const cleared = recordRunGitHub(next, runId, { mergeReady: null }, now)

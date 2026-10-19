@@ -1,6 +1,6 @@
 import { DEFAULT_CONCURRENCY, FAILURE_LIMIT, type JobRun, type Task } from './types'
 import { jobOf, placedByApp, type OrchState } from './state'
-import { isLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, latestLifecycleTaskOf } from './lifecycleTask'
 
 /** 지금 워커를 띄워야 할 자리 하나.
  *
@@ -148,8 +148,11 @@ export function lifecycleToStart(s: OrchState): { runId: string; taskId: string 
   const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)
   for (const run of s.runs) {
     if (!mayCarry(s, run)) continue
-    for (const t of s.tasks) {
-      if (t.runId !== run.id || !isLifecycleTask(t) || t.status !== 'ready') continue
+    // Only the latest: one `runs reconverge` superseded, put back to ready by hand, must not run beside it in the same
+    // Run root (G5c final review M5)
+    const latest = latestLifecycleTaskOf(s, run.id)
+    for (const t of latest ? [latest] : []) {
+      if (t.status !== 'ready') continue
       if (t.consecutiveFailures >= FAILURE_LIMIT) continue
       if (open.some((d) => d.taskId === t.id)) continue
       out.push({ runId: run.id, taskId: t.id })

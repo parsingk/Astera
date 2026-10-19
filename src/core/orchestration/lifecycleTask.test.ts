@@ -120,6 +120,18 @@ describe('reconvergeRun', () => {
     expect(r.ok && openLifecycleTaskOf(r.state, 'run_1')?.id).toBe(r.ok && r.value.id)
   })
 
+  // G5c final review M6: "latest" is read by createdAt; a clock stepped back between the first carry and the reconverge
+  // must not make the old Task the latest
+  it('stamps the new Task after the earlier one even when the clock went back', () => {
+    const s = finished('completed')
+    const earlier = s.tasks.find(isLifecycleTask)!
+    const r = reconvergeRun(s, 'run_1', '2026-10-17T00:00:00.000Z')
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.createdAt > earlier.createdAt).toBe(true)
+    expect(latestLifecycleTaskOf(r.state, 'run_1')?.id).toBe(r.value.id)
+  })
+
   it('answers an unknown Run as missing', () => {
     const r = reconvergeRun(finished('completed'), 'run_nope', LATER)
     expect(r.ok).toBe(false)
