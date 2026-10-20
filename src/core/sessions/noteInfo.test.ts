@@ -27,3 +27,18 @@ describe('chatInfoFromNote', () => {
     expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { cwd: 'D:/p', title: 't' } })).toBeNull()
   })
 })
+
+// An agent-started session's tab closes when it ends (2026-10-20): the mark rides the note, so a session the Host hands
+// back after a restart, or carries on for an app, still says who started it
+describe('who started a session, read from its note', () => {
+  const base = { accountId: 'a1', cwd: 'D:/p', title: 't' }
+  it('keeps startedBy agent for a terminal and a chat note', () => {
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, startedBy: 'agent' } })?.startedBy).toBe('agent')
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, startedBy: 'agent' } })?.startedBy).toBe('agent')
+  })
+  it('leaves a note without it, or with any other value, as a person’s', () => {
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: base })).not.toHaveProperty('startedBy')
+    expect(sessionInfoFromNote({ kind: 'session', id: 's1', restore: { ...base, startedBy: 'person' } })).not.toHaveProperty('startedBy')
+    expect(chatInfoFromNote({ kind: 'chat', id: 'c1', restore: { ...base, startedBy: true } })).not.toHaveProperty('startedBy')
+  })
+})

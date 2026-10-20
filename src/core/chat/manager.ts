@@ -242,6 +242,9 @@ export class ChatSessionManager {
     /** plan ruling P5: the Host spawned this proc and is its writer until its handshake and carry-on
      *  settle. Written into the note as `hostStarting: true`; the Host clears it. */
     hostStarting?: boolean
+    /** `'agent'`: an agent or Astera started this session, not a person (SessionInfo.startedBy). Written into the info
+     *  and the note; its tab closes when it ends. */
+    startedBy?: 'agent'
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -306,6 +309,7 @@ export class ChatSessionManager {
         ...(slackNotify === undefined ? {} : { slackNotify }),
         ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
         ...(rollPrompt === undefined ? {} : { rollPrompt }),
+        ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -342,7 +346,8 @@ export class ChatSessionManager {
       ...(schedule === undefined ? {} : { schedule }),
       ...(slackNotify === undefined ? {} : { slackNotify }),
       ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
-      ...(rollPrompt === undefined ? {} : { rollPrompt })
+      ...(rollPrompt === undefined ? {} : { rollPrompt }),
+      ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)
