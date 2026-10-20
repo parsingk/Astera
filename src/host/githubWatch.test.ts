@@ -175,12 +175,30 @@ describe('githubWatch', () => {
     expect(r.calls.filter((c) => c === 'rules')).toHaveLength(1)
   })
 
-  it('does not read the branch rules in selected mode', async () => {
-    const r = rig()
-    r.watch.onState(stateOf({ job: { github: { ...POLICY, ci: { mode: 'selected', selectedChecks: ['build'] } } }, run: { githubState: BOUND } }))
-    await r.at(0)
-    expect(r.calls).toEqual(['read 12'])
-    expect(r.records[0].patch.read?.ci.basis).toBe('selected')
+  // Acceptance fixes final review C1 (spec §9): the selected checks decide beside the ones the repository requires, so
+  // selected mode reads the branch rules too — a required check that has not reported is waited for, and rules that
+  // cannot be read hold the verdict exactly as required mode does; a selected check seen failing still fails
+  describe('selected mode reads the branch rules too', () => {
+    const SELECTED = { job: { github: { ...POLICY, ci: { mode: 'selected' as const, selectedChecks: ['build'] } } }, run: { githubState: BOUND } }
+    it('waits for a check the rules require that has not reported', async () => {
+      const r = rig({ rules: { ok: true, names: ['e2e'] } })
+      r.watch.onState(stateOf(SELECTED))
+      await r.at(0)
+      expect(r.calls).toEqual(['read 12', 'rules'])
+      expect(r.records[0].patch.read?.ci).toMatchObject({ basis: 'selected', verdict: 'pending' })
+    })
+    it('holds the verdict while the rules cannot be read', async () => {
+      const r = rig({ rules: { ok: false, kind: 'network' } })
+      r.watch.onState(stateOf(SELECTED))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.verdict).toBe('pending')
+    })
+    it('still fails on a selected check seen failing while the rules cannot be read', async () => {
+      const r = rig({ rules: { ok: false, kind: 'network' }, read: prRead({ checks: [{ externalId: 'run:1', name: 'build', status: 'completed', conclusion: 'failure', required: false, jobId: 1 }] }) })
+      r.watch.onState(stateOf(SELECTED))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci).toMatchObject({ verdict: 'failed', failing: 'build' })
+    })
   })
 
   it('leaves a merged PR alone, and a closed one once the Run is not carried any more', async () => {

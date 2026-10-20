@@ -423,7 +423,8 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const read = r.read
     if (read.rateLimit && read.rateLimit.remaining < read.rateLimit.limit * LOW_BUDGET_SHARE)
       lowUntil = Date.parse(read.rateLimit.resetAt) || now() + LOW_BUDGET_MS
-    const names = t.policy.ci.mode === 'required' ? await ruleNamesFor(t, repo, read.baseBranch) : []
+    // Both modes: the selected checks decide beside the ones the repository requires (acceptance fixes final review C1)
+    const names = await ruleNamesFor(t, repo, read.baseBranch)
     const ev = evaluateCi(read, t.policy.ci, names)
     // What CI is judged on, from the whole read, kept with the snapshot (G5b final review I1)
     const judged = ciTargets(read, t.policy.ci, names)
