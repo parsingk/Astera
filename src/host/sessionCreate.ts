@@ -119,7 +119,9 @@ export function createHostSessionStarter(d: {
       ...(o.title !== undefined ? { title: o.title } : {}),
       ...(o.prompt !== undefined ? { initialPrompt: o.prompt } : {}),
       ...(o.rollAccountIds.length > 0 ? { rollAccountIds: o.rollAccountIds } : {}),
-      unattendedPermission: o.unattended ?? 'hold'
+      unattendedPermission: o.unattended ?? 'hold',
+      // An agent made it (`sessions create`, MCP): its tab closes when it ends (2026-10-20)
+      startedBy: 'agent'
     })
     // The handshake and the first prompt settle before anyone else may take the session.
     if (!(await chats.started(info.id)))

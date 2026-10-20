@@ -62,6 +62,12 @@ describe('createHostSessionStarter — sessions create, by the spawn paths the H
     expect(r).toMatchObject({ id: 'chat_1', kind: 'chat' })
   })
 
+  // 2026-10-20: a chat session an agent made is an agent's too, and its tab closes when it ends
+  it('marks a chat session it creates as started by an agent', async () => {
+    const h = rig()
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [] })
+    expect(h.chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ startedBy: 'agent' }))
+  })
   it('a chat session with no chain registers none', async () => {
     const h = rig()
     await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [], unattended: 'hold' })

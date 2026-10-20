@@ -448,6 +448,13 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     // Task 5 review hard carry: a chat chain never opens a pty.
     expect(h.spawned).toHaveLength(0)
   })
+  // An agent-started session's tab closes when it ends (2026-10-20): the Host's chat roll keeps who started the chain
+  it('carries who started a chat chain into its respawn', () => {
+    const chats = fakeChats()
+    const h = harness({ chats, chatMayAct: () => true })
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', startedBy: 'agent', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ startedBy: 'agent' }))
+  })
   it('does not announce a chat roll whose new proc ended before it started (review M2)', async () => {
     const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', procOf: (id: string) => (id === 'c2' ? null : 'p1') }
     const h = harness({ chats, chatMayAct: () => true })

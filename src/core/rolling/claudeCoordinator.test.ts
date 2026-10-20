@@ -531,6 +531,23 @@ describe('RollingCoordinator', () => {
     expect(h.spawned[0].bypassPermissions).toBe(true)
   })
 
+  // An agent-started session's tab closes when it ends (2026-10-20): a roll is the same work on another account, so
+  // the respawned session is the agent's too, and a person's stays a person's
+  it('a roll keeps who started the chain', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, startedBy: 'agent' })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawnedOpts[0].startedBy).toBe('agent')
+    const p = harness()
+    p.payloads.set('s1', payload(97))
+    p.coord.register(p.info1)
+    p.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(p.spawnedOpts[0]).not.toHaveProperty('startedBy')
+  })
+
   it('활성 체인의 claude 세션 ID로 live 세션을 찾는다 (resume 가드)', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))

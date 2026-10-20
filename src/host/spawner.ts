@@ -491,7 +491,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       rollProviders,
       orchEnv: { cliPath, skillsPath: cli.skills, profileDir },
       // R6: a session this Host started is the Host's own, whichever process later holds its tab.
-      restoreExtra: { rolledBy: 'host' }
+      restoreExtra: { rolledBy: 'host' },
+      // Every session this Host starts is an agent's: a Job's worker or coordinator, or one an agent made with
+      // `astera sessions create` or MCP. Its tab closes when it ends (2026-10-20).
+      startedBy: 'agent'
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -548,7 +551,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       resumePrompt: o.resumePrompt,
       slackNotify: o.slackNotify,
       orchEnv: { cliPath: preparedShuttle, skillsPath: cli.skills, profileDir },
-      restoreExtra: o.restoreExtra
+      restoreExtra: o.restoreExtra,
+      ...(o.startedBy ? { startedBy: o.startedBy } : {})
     })
   }
 
