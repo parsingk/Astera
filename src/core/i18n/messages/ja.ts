@@ -1404,6 +1404,8 @@ export const ja: Catalog = {
   'jobs.github.sourceChanged': 'Job の作成後に元の issue が変更されました',
   'jobs.github.noLocalCheck': 'ローカルのチェックを指定した Task がないため、すべての修正はローカルで確かめずに GitHub CI に送られます。',
   'jobs.github.required': '必須',
+  'jobs.github.repairsDone': '修正 {attempt}/{max} 回',
+  'jobs.github.evaluatedAgo': '{ago}前に判定',
   'jobs.github.review.passed': 'Astera のレビューに合格',
   'jobs.github.review.foundIssues': 'Astera のレビューでブロックする指摘 {count} 件',
   'jobs.github.githubReview.approved': 'GitHub のレビュー: 承認済み',

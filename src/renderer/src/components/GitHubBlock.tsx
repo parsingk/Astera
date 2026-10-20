@@ -6,6 +6,7 @@ import type { GitHubLifecycleState, GitHubLifecycleView } from '../../../core/gi
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { invalidatedReasonKey } from './githubText'
+import { coarseDuration } from '../../../core/usage/relativeTime'
 
 /** Every state, as a Record over the union so a new state does not compile without its words (final review M7). */
 const STATE_WORDS: Record<GitHubLifecycleState, true> = {
@@ -62,6 +63,8 @@ export const GITHUB_BLOCK_KEYS: readonly string[] = [
   'jobs.github.rebound',
   'jobs.github.noCi',
   'jobs.github.review.passed',
+  'jobs.github.repairsDone',
+  'jobs.github.evaluatedAgo',
   'jobs.github.review.foundIssues',
   ...Object.values(GITHUB_REVIEW_KEY).filter((k): k is MessageKey => k !== undefined),
   'jobs.github.sourceChanged',
@@ -111,7 +114,7 @@ export function GitHubBlock(p: {
   noLocalCheck: boolean
   onOpen(url: string): void
 }): React.JSX.Element {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const g = p.github
   // GitHub's own state beside Astera's merge-ready, when they disagree (§8): a draft, or a merge state that is not clean
   const githubSays =
@@ -138,6 +141,9 @@ export function GitHubBlock(p: {
       <p className="detail-github-state">
         {g.state === 'repairing' && g.repair ? repairLine(g.repair, t) : t(stateKey(g.state))}
       </p>
+      {/* The repairs made stay counted once none runs: while CI waits on a repair's push, in the review, on a finished Run
+          (acceptance fixes Task 4) */}
+      {g.repair && g.state !== 'repairing' && <p className="detail-github-line">{t('jobs.github.repairsDone', { attempt: g.repair.attempt, max: g.repair.max })}</p>}
       {g.failing && (
         <p className="detail-github-line">
           {g.failing.class ? t('jobs.github.failingClass', { check: g.failing.check, class: g.failing.class }) : t('jobs.github.failing', { check: g.failing.check })}
@@ -151,6 +157,9 @@ export function GitHubBlock(p: {
       {g.mergeReady && (
         <p className="detail-github-line detail-github-ready">
           {t('jobs.github.mergeReady', { sha: short(g.mergeReady.headSha) })}
+          {/* When it was decided: a withdrawal needs a Host reading GitHub, and with none the line would otherwise look
+              current however old it is (acceptance fixes Task 4) */}
+          <span className="modal-hint"> · {t('jobs.github.evaluatedAgo', { ago: coarseDuration(Date.now() - Date.parse(g.mergeReady.evaluatedAt), lang) })}</span>
           {githubSays && <span className="detail-github-warn"> · {githubSays}</span>}
         </p>
       )}

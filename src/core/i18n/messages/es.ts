@@ -1422,6 +1422,8 @@ export const es: Catalog = {
   'jobs.github.sourceChanged': 'El issue de origen cambió después de crear el Job',
   'jobs.github.noLocalCheck': 'Ninguna tarea indica una comprobación local, así que cada reparación va a GitHub CI sin comprobarse en local.',
   'jobs.github.required': 'obligatoria',
+  'jobs.github.repairsDone': 'Reparaciones {attempt}/{max}',
+  'jobs.github.evaluatedAgo': 'decidido hace {ago}',
   'jobs.github.review.passed': 'Revisión de Astera superada',
   'jobs.github.review.foundIssues': 'La revisión de Astera encontró {count} problema(s) bloqueante(s)',
   'jobs.github.githubReview.approved': 'Revisión en GitHub: aprobada',

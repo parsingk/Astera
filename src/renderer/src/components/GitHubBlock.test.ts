@@ -110,6 +110,16 @@ describe('GitHubBlock', () => {
     expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'SOMETHING_NEW' } })).not.toContain('jobs.github.githubReview')
   })
 
+  // Acceptance fixes Task 4: the repairs made stay counted after the repair, and merge-ready says when it was decided
+  it('counts the repairs made once no repair runs, and says when merge-ready was decided', () => {
+    const counted = render({ state: 'ci-pending', pr: PR, repair: { attempt: 2, max: 3 } })
+    expect(counted).toContain('jobs.github.repairsDone {"attempt":2,"max":3}')
+    const repairing = render({ state: 'repairing', pr: PR, repair: { attempt: 2, max: 3, subject: { kind: 'review' } } })
+    expect(repairing).not.toContain('jobs.github.repairsDone')
+    const ready = render({ state: 'merge-ready', pr: PR, mergeReady: { headSha: A, evaluatedAt: new Date(Date.now() - 5 * 60_000).toISOString() } })
+    expect(ready).toContain('jobs.github.evaluatedAgo')
+  })
+
   // Design §7.2 S16
   it('warns when no Task names a local check, and only then', () => {
     expect(render({ state: 'pr-bound', pr: PR }, true)).toContain('jobs.github.noLocalCheck')

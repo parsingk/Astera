@@ -1588,6 +1588,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.github.sourceChanged': 'The source issue changed after the Job was made',
   'jobs.github.noLocalCheck': 'No Task names a local check, so every repair goes to GitHub CI unchecked locally.',
   'jobs.github.required': 'required',
+  'jobs.github.repairsDone': 'Repairs {attempt}/{max}',
+  'jobs.github.evaluatedAgo': 'decided {ago} ago',
   'jobs.github.review.passed': 'Astera review passed',
   'jobs.github.review.foundIssues': 'Astera review found {count} blocking issue(s)',
   'jobs.github.githubReview.approved': 'GitHub review: approved',
