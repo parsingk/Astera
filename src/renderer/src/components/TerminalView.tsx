@@ -13,6 +13,7 @@ import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
 import { copyTextFor } from '../../../core/terminal/copy'
 import { SessionStateBanners } from './SessionStateBanners'
+import { activationFocusHeld } from '../lib/focusHold'
 
 export function TerminalView({
   session,
@@ -288,7 +289,7 @@ export function TerminalView({
 
   // When this tab becomes active (including keyboard switching and a tab click), focus the terminal so typing works right away
   useEffect(() => {
-    if (active && session.status !== 'exited') termRef.current?.focus()
+    if (active && session.status !== 'exited' && !activationFocusHeld()) termRef.current?.focus()
   }, [active, session.status])
 
   return (

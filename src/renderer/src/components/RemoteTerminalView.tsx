@@ -15,6 +15,7 @@ import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { copyTextFor } from '../../../core/terminal/copy'
 import { goneOutcome, InputCoalescer, remoteCall, type RemoteSessionRef } from '../lib/remoteSessions'
+import { activationFocusHeld } from '../lib/focusHold'
 
 const RETRY_MS = 5_000
 
@@ -240,7 +241,7 @@ export function RemoteTerminalView({
   }, [theme])
 
   useEffect(() => {
-    if (active) termRef.current?.focus()
+    if (active && !activationFocusHeld()) termRef.current?.focus()
   }, [active])
 
   return (

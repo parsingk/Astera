@@ -10,8 +10,17 @@ import { PTY_LOST_SIGHT_EXIT_CODE } from './pty'
  *  looked at again a moment later, a rolled-away session is no longer the app's, and one handed back runs again. */
 export const AGENT_TAB_CLOSE_DELAY_MS = 1000
 
+/** How long a lost-sight exit waits for the Host to hand the session back before it counts as an end (review M5): a
+ *  session that really ended while the app could not see the Host stays exited with that code, and a reconnect that does
+ *  not hand it back says nothing more. */
+export const AGENT_TAB_LOST_SIGHT_CLOSE_MS = 60_000
+
 /** Whether this session's tab closes because it ended: an agent's session that exited, except an exit that only says
- *  the app lost sight of a Host session still running there. Unknown (closed, or rolled away) is false. */
-export function closesWhenEnded(s: Pick<SessionInfo, 'status' | 'exitCode' | 'startedBy'> | undefined): boolean {
-  return s !== undefined && s.status === 'exited' && s.startedBy === 'agent' && s.exitCode !== PTY_LOST_SIGHT_EXIT_CODE
+ *  the app lost sight of a Host session still running there — unless `afterLostSight`, once the longer wait has passed
+ *  with no hand-back. Unknown (closed, or rolled away) is false. */
+export function closesWhenEnded(
+  s: Pick<SessionInfo, 'status' | 'exitCode' | 'startedBy'> | undefined,
+  o: { afterLostSight?: boolean } = {}
+): boolean {
+  return s !== undefined && s.status === 'exited' && s.startedBy === 'agent' && (o.afterLostSight === true || s.exitCode !== PTY_LOST_SIGHT_EXIT_CODE)
 }
