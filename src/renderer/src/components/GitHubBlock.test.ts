@@ -119,8 +119,8 @@ describe('GitHubBlock', () => {
     expect(counted).toContain('jobs.github.repairsDone {"attempt":2,"max":3}')
     const repairing = render({ state: 'repairing', pr: PR, repair: { attempt: 2, max: 3, subject: { kind: 'review' } } })
     expect(repairing).not.toContain('jobs.github.repairsDone')
-    const ready = render({ state: 'merge-ready', pr: PR, mergeReady: { headSha: A, evaluatedAt: new Date(Date.now() - 5 * 60_000).toISOString() } })
-    expect(ready).toContain('jobs.github.evaluatedAgo {"ago":"6m"}') // rounded up: a stale figure never reads fresher
+    const ready = render({ state: 'merge-ready', pr: PR, mergeReady: { headSha: A, evaluatedAt: new Date(Date.now() - 5.5 * 60_000).toISOString() } })
+    expect(ready).toContain('jobs.github.evaluatedAgo {"ago":"6m"}') // 5.5 minutes rounds up to 6 however fast the render: a stale figure never reads fresher
   })
 
   // Final review M3: with no Host there is no state broadcast to re-render the block, so the age keeps a clock of its own
