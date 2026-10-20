@@ -124,6 +124,11 @@ export interface SessionInfo {
   kind?: SessionKind
   /** Chat only: the protocol's own thread id once known (Codex threadId). What resume needs. */
   threadId?: string
+  /** `'agent'`: an agent or Astera itself started this session — a Job's worker, reviewer or coordinator, or a session
+   *  an agent made with `astera sessions create` or MCP — not a person from the new-session dialog. Its tab closes when
+   *  the session ends (2026-10-20). Written into the pty's note at spawn, so it survives a Host handing the session back;
+   *  absent on every session a person started and on every note written before it. */
+  startedBy?: 'agent'
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.

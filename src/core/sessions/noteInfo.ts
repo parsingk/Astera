@@ -33,7 +33,8 @@ export function sessionInfoFromNote(a: { kind: string; id: string; restore: Reco
       : {}),
     ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
     ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
-    ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {})
+    ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {}),
+    ...startedByOf(r)
   }
 }
 
@@ -70,6 +71,12 @@ export function chatInfoFromNote(a: { kind: string; id: string; restore: Record<
     ...(Array.isArray(r.rollAccountIds) && r.rollAccountIds.every((x) => typeof x === 'string')
       ? { rollAccountIds: [...(r.rollAccountIds as string[])] }
       : {}),
-    ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {})
+    ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {}),
+    ...startedByOf(r)
   }
+}
+
+/** Who started the session, as its note says (SessionInfo.startedBy): only the one value means anything. */
+function startedByOf(r: Record<string, unknown>): Pick<SessionInfo, 'startedBy'> {
+  return r.startedBy === 'agent' ? { startedBy: 'agent' } : {}
 }

@@ -2010,6 +2010,18 @@ describe('chat chains', () => {
     h.coord.stop()
   })
 
+  // An agent-started session's tab closes when it ends (2026-10-20): the respawned session is the agent's too
+  it('a roll keeps who started the chain', async () => {
+    const h = harness()
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-agent', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register({ ...chatInfo(h.info1), startedBy: 'agent' })
+    h.coord.attachChat('s1', 'cx-chat-agent', file)
+    await appendLimitError(file)
+    await advance(15_000)
+    expect(h.spawnedOpts[0]).toMatchObject({ kind: 'chat', startedBy: 'agent' })
+    h.coord.stop()
+  })
+
   it('does not invent the bypass for a chain that was never granted it', async () => {
     const h = harness({ bypassedOf: () => false })
     const file = await writeRollout({ accountId: 'c1', uuid: 'cx-chat-nobp', cwd: h.info1.cwd, primary: 95 })

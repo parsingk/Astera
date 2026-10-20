@@ -27,6 +27,8 @@ export interface ChatRollSpawn {
   model?: string | null
   startWithBypass?: boolean
   restoreExtra?: RollSpawnExtra
+  /** Who started the chain (SessionInfo.startedBy), kept by the roll. */
+  startedBy?: 'agent'
   /** The session's own policy, when the request names one: a fresh session (`sessions create --kind
    *  chat --unattended`) has no old session to ask. Absent, the policy is asked of the old session. */
   unattendedPermission?: UnattendedPermission
@@ -53,6 +55,7 @@ export function chatSpawnOptsOf(
     ...(o.model !== undefined ? { model: o.model } : {}),
     ...(o.startWithBypass !== undefined ? { startWithBypass: o.startWithBypass } : {}),
     ...(o.restoreExtra !== undefined ? { restoreExtra: o.restoreExtra } : {}),
+    ...(o.startedBy ? { startedBy: o.startedBy } : {}),
     bypassSignal: d.bypassSignal,
     unattendedPermission: o.unattendedPermission ?? d.unattendedOf(o.restoreExtra?.rolledFrom),
     ...(d.hostStarting ? { hostStarting: true } : {})

@@ -12,6 +12,12 @@ describe('chatSpawnOptsOf', () => {
     )
     expect(o).toMatchObject({ account, cwd: 'D:/p', resumeThreadId: 't1', initialPrompt: 'go on', rollAccountIds: ['a1', 'a2'], model: 'opus', unattendedPermission: 'deny-after-60s', hostStarting: true, restoreExtra: { rolledFrom: 'old' } })
   })
+  // An agent-started session's tab closes when it ends (2026-10-20): a chat roll keeps who started the chain
+  it('carries who started the chain, and nothing for a person’s', () => {
+    const d = { unattendedOf: () => 'hold' as const, bypassSignal: null }
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p', startedBy: 'agent' }, d).startedBy).toBe('agent')
+    expect(chatSpawnOptsOf({ account, cwd: 'D:/p' }, d)).not.toHaveProperty('startedBy')
+  })
   it('asks the policy of undefined when the respawn names no old session', () => {
     const seen: Array<string | undefined> = []
     chatSpawnOptsOf({ account, cwd: 'D:/p' }, { unattendedOf: (id) => { seen.push(id); return 'hold' }, bypassSignal: null })

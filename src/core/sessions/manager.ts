@@ -230,6 +230,9 @@ export class SessionManager {
      *  those always win (S6 R6). A rolling respawn carries `rolledFrom` and its chain's snapshot here, so
      *  a process that takes the session over before the rekey commits still knows what it is. */
     restoreExtra?: RollSpawnExtra
+    /** `'agent'`: an agent or Astera started this session, not a person (SessionInfo.startedBy). Written into the info
+     *  and the note; its tab closes when it ends. */
+    startedBy?: 'agent'
   }): SessionInfo {
     // The folder `prepare` just confirmed is not looked at again. The sync check is left only for a
     // caller that did not prepare (tests, and anything added later without it): it is the one that can
@@ -369,7 +372,8 @@ export class SessionManager {
           ...(opts.rollAccountIds ? { rollAccountIds: opts.rollAccountIds } : {}),
           ...(opts.rollPrompt ? { rollPrompt: opts.rollPrompt } : {}),
           ...(opts.slackNotify !== undefined ? { slackNotify: opts.slackNotify } : {}),
-          ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {})
+          ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {}),
+          ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
         }
       }
     })
@@ -387,7 +391,8 @@ export class SessionManager {
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
-      schedule: opts.schedule
+      schedule: opts.schedule,
+      ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
     }
     return this.track(info, pty)
   }

@@ -959,6 +959,18 @@ describe('SessionManager', () => {
     expect(restore.accountId).toBe(account.id) // the manager's own keys win
   })
 
+  // An agent-started session's tab closes when it ends (2026-10-20): the mark is in its info and its note, and a
+  // session a person started carries neither
+  it('writes startedBy agent into the info and the note, and nothing for a person’s session', () => {
+    const { manager, spawned } = setup()
+    const agent = manager.spawn({ account, cwd: process.cwd(), startedBy: 'agent' })
+    expect(agent.startedBy).toBe('agent')
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ startedBy: 'agent' })
+    const person = manager.spawn({ account, cwd: process.cwd() })
+    expect(person).not.toHaveProperty('startedBy')
+    expect(spawned[1].opts.meta?.restore).not.toHaveProperty('startedBy')
+  })
+
   describe('adopt', () => {
     // After a restart the process is already running; adopt rebuilds only the app's own record of it.
     it('adopts a running pty and puts the session back in the list', () => {

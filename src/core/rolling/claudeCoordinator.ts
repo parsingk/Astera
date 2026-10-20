@@ -125,6 +125,9 @@ export interface RollingDeps {
      *  straight off `core.bypassSignalFor`, since it already has the target account in hand and that
      *  fact is about this machine's PATH, not about the chain. */
     startWithBypass?: boolean
+    /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
+     *  agent's stays an agent's and its tab still closes when it ends. */
+    startedBy?: 'agent'
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
@@ -1746,6 +1749,7 @@ export class RollingCoordinator {
         // as its own choice, so the roll after this one reads it back the same way.
         model: chosenModel,
         startWithBypass: wasBypassed,
+        ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the
         // rekey commits: where it came from, and the chain on its new account awaiting its prompt.
         restoreExtra: {

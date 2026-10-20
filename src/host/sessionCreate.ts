@@ -87,7 +87,8 @@ export function createHostSessionStarter(d: {
       cwd: o.cwd,
       ...(o.title !== undefined ? { title: o.title } : {}),
       ...(o.prompt !== undefined ? { initialPrompt: o.prompt } : {}),
-      rollAccountIds: o.rollAccountIds
+      rollAccountIds: o.rollAccountIds,
+      ...(o.startedBy ? { startedBy: o.startedBy } : {})
     })
     d.log(`sessions create: terminal session ${info.id} on ${o.accountId} in ${o.cwd}`)
     return rowOf(info, 'terminal')
@@ -119,7 +120,9 @@ export function createHostSessionStarter(d: {
       ...(o.title !== undefined ? { title: o.title } : {}),
       ...(o.prompt !== undefined ? { initialPrompt: o.prompt } : {}),
       ...(o.rollAccountIds.length > 0 ? { rollAccountIds: o.rollAccountIds } : {}),
-      unattendedPermission: o.unattended ?? 'hold'
+      unattendedPermission: o.unattended ?? 'hold',
+      // Who started it, as the command decided (SessionCreate.startedBy): an agent's tab closes when it ends
+      ...(o.startedBy ? { startedBy: o.startedBy } : {})
     })
     // The handshake and the first prompt settle before anyone else may take the session.
     if (!(await chats.started(info.id)))

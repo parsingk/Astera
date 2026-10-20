@@ -99,6 +99,9 @@ export interface CodexRollingDeps {
      *  here either, for the same reason claudeCoordinator.ts's own comment gives: the wiring's `spawn` callback
      *  computes it itself from `core.bypassSignalFor`. */
     startWithBypass?: boolean
+    /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
+     *  agent's stays an agent's and its tab still closes when it ends. */
+    startedBy?: 'agent'
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
@@ -1766,6 +1769,7 @@ export class CodexRollingCoordinator {
         orchEnv: this.deps.orchEnv?.(),
         rollPrompt: chain.liveInfo.rollPrompt,
         startWithBypass: wasBypassed,
+        ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the rekey
         // commits — the claude side's field, same contract. awaitingPrompt is false: the carry-on
         // prompt rides this spawn (argv or first chat turn), so nothing is left to type. The tail starts

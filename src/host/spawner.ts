@@ -151,7 +151,7 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  and the bypass read from the settings at this spawn. Announced with `pty-opened`, so an attached app
    *  takes it back as a tab, and heard by `onSpawned`, so the rolling registers its chain. A missing
    *  folder or an unknown account starts nothing and is tagged `refusedBeforeActing`. */
-  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[] }): Promise<SessionInfo>
+  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[]; startedBy?: 'agent' }): Promise<SessionInfo>
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -449,7 +449,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
 
   /** The coordinator's spawn adapter: field for field what the app's coordinator adapter hands its
    *  spawnSession, and what that hands core.sessions.spawn. */
-  const spawnSession = async (o: SpawnOpts, accounts: Account[], trace?: StartTrace): Promise<{ id: string }> => {
+  const spawnSession = async (o: SpawnOpts & { startedBy?: 'agent' }, accounts: Account[], trace?: StartTrace): Promise<{ id: string }> => {
     const account = accountIn(accounts, o.accountId)
     await preTrustWorkspace({ account, cwd: o.cwd, homeDir, descriptors, log })
     await ensured()
@@ -491,7 +491,10 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       rollProviders,
       orchEnv: { cliPath, skillsPath: cli.skills, profileDir },
       // R6: a session this Host started is the Host's own, whichever process later holds its tab.
-      restoreExtra: { rolledBy: 'host' }
+      restoreExtra: { rolledBy: 'host' },
+      // A Job's worker or coordinator is an agent's, and so is a session the CLI, MCP or a plugin made; one a person opened
+      // from a remote controller is not (review M1). An agent's tab closes when it ends (2026-10-20).
+      ...(o.startedBy ? { startedBy: o.startedBy } : {})
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -548,13 +551,14 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       resumePrompt: o.resumePrompt,
       slackNotify: o.slackNotify,
       orchEnv: { cliPath: preparedShuttle, skillsPath: cli.skills, profileDir },
-      restoreExtra: o.restoreExtra
+      restoreExtra: o.restoreExtra,
+      ...(o.startedBy ? { startedBy: o.startedBy } : {})
     })
   }
 
   const coordinatorFor = (accounts: Account[], trace?: StartTrace): OrchCoordinator =>
     new OrchCoordinator({
-      spawnSession: (o) => spawnSession(o, accounts, trace),
+      spawnSession: (o) => spawnSession({ ...o, startedBy: 'agent' }, accounts, trace),
       writeToSession: (sid, data) => {
         const p = registry.sessionPty(sid)
         if (p) registry.write(p, data)
@@ -730,7 +734,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
             cwd: o.cwd,
             title: o.title ?? defaultSessionTitle(o.cwd),
             ...(o.initialPrompt !== undefined ? { initialPrompt: o.initialPrompt } : {}),
-            rollAccountIds: o.rollAccountIds
+            rollAccountIds: o.rollAccountIds,
+            ...(o.startedBy ? { startedBy: o.startedBy } : {})
           },
           accounts,
           trace
@@ -753,7 +758,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
             preTrust: async (accountId, cwd) =>
               preTrustWorkspace({ account: accountIn(accounts, accountId), cwd, homeDir, descriptors, log }),
             bypassPermissions: bypassFromSettings,
-            spawn: (o) => spawnSession(o, accounts, trace),
+            spawn: (o) => spawnSession({ ...o, startedBy: 'agent' }, accounts, trace),
             log
           },
           a
