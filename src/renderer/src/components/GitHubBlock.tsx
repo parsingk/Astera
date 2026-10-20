@@ -2,11 +2,13 @@
 // badge and GitHub's merge state, the head, the checks of that head, and where Astera stands. Merge-ready is shown with
 // what GitHub itself says when the two disagree (draft, blocked). The source issue is the head's SourceChip; this
 // block says when it changed. Presentational: RunDetail hands it the Run's `github` view.
+import { useEffect, useState } from 'react'
 import type { GitHubLifecycleState, GitHubLifecycleView } from '../../../core/github/view'
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { invalidatedReasonKey } from './githubText'
 import { coarseDuration } from '../../../core/usage/relativeTime'
+import { pollWhileVisible } from '../lib/visiblePoll'
 
 /** Every state, as a Record over the union so a new state does not compile without its words (final review M7). */
 const STATE_WORDS: Record<GitHubLifecycleState, true> = {
@@ -30,7 +32,6 @@ const STATE_WORDS: Record<GitHubLifecycleState, true> = {
 const STATES = Object.keys(STATE_WORDS) as GitHubLifecycleState[]
 const stateKey = (s: GitHubLifecycleState): MessageKey => `jobs.github.state.${s}` as MessageKey
 
-/** Every key the block says, for the all-languages test. */
 /** GitHub's own review decision on the pull request, in words (acceptance fixes Task 3); a decision GitHub adds later says
  *  nothing. Shown beside Astera's review, never instead of it. */
 const GITHUB_REVIEW_KEY: Partial<Record<string, MessageKey>> = {
@@ -39,6 +40,7 @@ const GITHUB_REVIEW_KEY: Partial<Record<string, MessageKey>> = {
   REVIEW_REQUIRED: 'jobs.github.githubReview.reviewRequired'
 }
 
+/** Every key the block says, for the all-languages test. */
 export const GITHUB_BLOCK_KEYS: readonly string[] = [
   ...STATES.map(stateKey),
   'jobs.github.title',
@@ -108,13 +110,23 @@ const MERGE_STATE_KEY: Partial<Record<string, MessageKey>> = {
   UNSTABLE: 'jobs.github.mergeState.unstable'
 }
 
+/** When merge-ready was decided, from a clock of its own read every minute while the window shows (final review M3): with
+ *  no Host there is no state broadcast to draw the block again, and a detail left open would say "1 minute ago" for
+ *  hours. A withdrawal needs a Host reading GitHub, so the age is what tells an old merge-ready (acceptance fixes Task 4). */
+function EvaluatedAgo(p: { at: string }): React.JSX.Element {
+  const { t, lang } = useI18n()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => pollWhileVisible(() => setNow(Date.now()), 60_000), [])
+  return <span className="modal-hint"> · {t('jobs.github.evaluatedAgo', { ago: coarseDuration(now - Date.parse(p.at), lang) })}</span>
+}
+
 export function GitHubBlock(p: {
   github: GitHubLifecycleView
   /** No ordinary Task of the Run names a local check (design §7.2 S16). */
   noLocalCheck: boolean
   onOpen(url: string): void
 }): React.JSX.Element {
-  const { t, lang } = useI18n()
+  const { t } = useI18n()
   const g = p.github
   // GitHub's own state beside Astera's merge-ready, when they disagree (§8): a draft, or a merge state that is not clean
   const githubSays =
@@ -157,9 +169,7 @@ export function GitHubBlock(p: {
       {g.mergeReady && (
         <p className="detail-github-line detail-github-ready">
           {t('jobs.github.mergeReady', { sha: short(g.mergeReady.headSha) })}
-          {/* When it was decided: a withdrawal needs a Host reading GitHub, and with none the line would otherwise look
-              current however old it is (acceptance fixes Task 4) */}
-          <span className="modal-hint"> · {t('jobs.github.evaluatedAgo', { ago: coarseDuration(Date.now() - Date.parse(g.mergeReady.evaluatedAt), lang) })}</span>
+          <EvaluatedAgo at={g.mergeReady.evaluatedAt} />
           {githubSays && <span className="detail-github-warn"> · {githubSays}</span>}
         </p>
       )}

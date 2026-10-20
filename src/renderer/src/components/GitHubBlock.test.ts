@@ -3,6 +3,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { CATALOGS, LANGS } from '../../../core/i18n'
 import type { GitHubLifecycleView } from '../../../core/github/view'
 
@@ -117,7 +120,17 @@ describe('GitHubBlock', () => {
     const repairing = render({ state: 'repairing', pr: PR, repair: { attempt: 2, max: 3, subject: { kind: 'review' } } })
     expect(repairing).not.toContain('jobs.github.repairsDone')
     const ready = render({ state: 'merge-ready', pr: PR, mergeReady: { headSha: A, evaluatedAt: new Date(Date.now() - 5 * 60_000).toISOString() } })
-    expect(ready).toContain('jobs.github.evaluatedAgo')
+    expect(ready).toContain('jobs.github.evaluatedAgo {"ago":"6m"}') // rounded up: a stale figure never reads fresher
+  })
+
+  // Final review M3: with no Host there is no state broadcast to re-render the block, so the age keeps a clock of its own
+  // — else a detail left open says "1 minute ago" for hours. Read from the source: the renderer tests have no DOM to tick.
+  it('draws merge-ready’s age from a clock of its own, read again every minute while the window shows', () => {
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'GitHubBlock.tsx'), 'utf8')
+    const ago = source.slice(source.indexOf('function EvaluatedAgo('))
+    expect(ago).toMatch(/pollWhileVisible\(\(\) => setNow\(Date\.now\(\)\), 60_000\)/)
+    expect(source).toContain('<EvaluatedAgo at={g.mergeReady.evaluatedAt} />')
+    expect(source).not.toMatch(/coarseDuration\(Date\.now\(\)/)
   })
 
   // Design §7.2 S16
