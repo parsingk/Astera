@@ -799,11 +799,15 @@ describe('createHostSpawner — createSession', () => {
   })
 
   // 2026-10-20: a session made with `astera sessions create` or MCP is an agent's, and its tab closes when it ends
-  it('marks a session it creates as started by an agent', async () => {
+  it('marks a session it creates as the command says who started it', async () => {
     const h = rig()
-    const info = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+    const info = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], startedBy: 'agent' })
     expect(info.startedBy).toBe('agent')
     expect(h.registry.list()[0].meta!.restore).toMatchObject({ startedBy: 'agent' })
+    // Review M1: a person's, from a remote controller's dialog, carries nothing and keeps its tab
+    const person = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+    expect(person).not.toHaveProperty('startedBy')
+    expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('startedBy')
   })
 
   it('reads the permission setting as a worker start does: manual means prompts on', async () => {

@@ -720,6 +720,9 @@ export interface SessionCreate {
   prompt?: string
   rollAccountIds: string[]
   unattended?: 'hold' | 'deny-after-60s'
+  /** `'agent'` when the CLI, MCP or a plugin asked for it (SessionInfo.startedBy): its tab closes when it ends. Absent
+   *  for a person's, from a remote controller's new-session dialog or the app. */
+  startedBy?: 'agent'
 }
 
 type Reply = { status: number; body: unknown }
@@ -4780,7 +4783,10 @@ export async function handleCommand(
             ...(args.title !== undefined ? { title: str(args.title)! } : {}),
             ...(args.prompt !== undefined ? { prompt: str(args.prompt)! } : {}),
             rollAccountIds: chain,
-            ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {})
+            ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {}),
+            // Who started it, by who asked (2026-10-20, review M1): a remote controller's new-session dialog and the app
+            // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends
+            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const })
           })
         )
       } catch (e) {

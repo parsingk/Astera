@@ -57,7 +57,8 @@ describe('sessions create — what reaches the Host starter', () => {
       cwd: 'D:/p',
       title: 'fix',
       prompt: 'run the tests',
-      rollAccountIds: []
+      rollAccountIds: [],
+      startedBy: 'agent'
     })
   })
 
@@ -75,6 +76,29 @@ describe('sessions create — what reaches the Host starter', () => {
     expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'chat', unattended: 'hold' }))
     await call(makeDeps({ createSession }), { account: 'acc_c', cwd: 'D:/p', kind: 'chat', unattended: 'deny-after-60s' })
     expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ unattended: 'deny-after-60s' }))
+  })
+})
+
+// Agent tabs close on exit (2026-10-20), review M1: a session the CLI, MCP or a plugin makes is an agent's; one a
+// person opens from a remote controller's new-session dialog, or the app asks for, is the person's and keeps its tab
+describe('sessions create — who started the session', () => {
+  const startedBy = async (caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }): Promise<unknown> => {
+    const createSession = vi.fn(async () => row())
+    const deps = makeDeps({ createSession })
+    await deps.setState({ ...deps.getState(), projects: [{ id: 'prj_p', path: 'D:/p', name: 'p', addedAt: NOW }] })
+    const r = await handleCommand(deps, caller, 'sessions-create', { account: 'acc_c', cwd: 'D:/p' })
+    expect(r.status, JSON.stringify(caller)).toBe(200)
+    return (createSession.mock.calls[0] as unknown as [Record<string, unknown>])[0].startedBy
+  }
+  it('an agent’s for the CLI, inside a session or not, for MCP and for a plugin', async () => {
+    expect(await startedBy({ sessionId: 'sess_agent', role: 'cli' })).toBe('agent')
+    expect(await startedBy({ sessionId: '' })).toBe('agent')
+    expect(await startedBy({ sessionId: '', role: 'mcp' })).toBe('agent')
+    expect(await startedBy({ sessionId: '', role: 'plugin' })).toBe('agent')
+  })
+  it('the person’s for a remote controller and for the app', async () => {
+    expect(await startedBy({ sessionId: '', role: 'controller' })).toBeUndefined()
+    expect(await startedBy({ sessionId: '', role: 'app' })).toBeUndefined()
   })
 })
 
