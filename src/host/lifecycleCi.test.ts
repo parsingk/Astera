@@ -64,6 +64,7 @@ function rig(o: {
   const lookupFails = [...(o.lookupFails ?? [])]
   const pushes = [...(o.pushes ?? [])]
   const scheduled: { ms: number; run: () => void }[] = []
+  const logs: string[] = []
   const deps: LifecycleCiDeps = {
     worktreeOf: (p) => (o.worktree !== false && p === '/wt-run' ? { repoPath: '/repo', branch: 'u/a', baseRef: 'origin/main' } : null),
     originOf: async () => (o.origin === undefined ? 'git@github.com:parsingk/astera-lifecycle-sandbox.git' : o.origin),
@@ -85,14 +86,14 @@ function rig(o: {
     settle: async (a) => void (calls.push('settle'), settled.push(a)),
     openGitHubGate: async (a) => (calls.push('openGitHubGate'), githubGates.push(a), { status: o.gateStatus ?? 200, body: {} }),
     lang: () => o.lang ?? 'ko',
-    log: () => {},
+    log: (m) => void logs.push(m),
     now: () => clock.now,
     ...(o.live ? { readPr: async () => (calls.push('readPr'), lives.length > 1 ? lives.shift()! : lives[0]) } : {}),
     schedule: (ms, run) => void scheduled.push({ ms, run })
   }
   const ci = createLifecycleCi(deps)
   return {
-    ci, calls, settled, githubGates, records, waits, created, clock, scheduled,
+    ci, calls, settled, githubGates, records, waits, created, clock, scheduled, logs,
     /** Lets the cooling pass and runs what the carrier scheduled, then waits for it. */
     async retry() {
       const due = scheduled.splice(0)
@@ -279,6 +280,23 @@ describe('createLifecycleCi', () => {
     await refused.ci.drain()
     expect(refused.gates[0].question).toContain('Permission denied (publickey).')
     expect(refused.calls).not.toContain('findOpenPrs')
+  })
+
+  // Acceptance fixes Task 2 (spec: secrets redacted from logs, evidence and the Journal): git and gh print what they were
+  // given, a token in a remote URL among it, and that text becomes a question every surface carries
+  it('a token git or gh printed reaches no question and no log line', async () => {
+    const TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const refused = rig({ push: { ok: false, kind: 'auth', detail: `fatal: unable to access 'https://x-access-token:${TOKEN}@github.com/o/r.git/': 403` } })
+    refused.ci.onState(stateWith())
+    await refused.ci.drain()
+    expect(refused.gates).toHaveLength(1)
+    expect(refused.gates[0].question).not.toContain(TOKEN)
+    expect(refused.gates[0].question).toContain('[REDACTED]')
+    const net = rig({ pushes: [{ ok: false, kind: 'network', detail: `Could not resolve host for token=${TOKEN}` }] })
+    net.ci.onState(stateWith())
+    await net.ci.drain()
+    expect(net.logs.length).toBeGreaterThan(0)
+    expect(net.logs.join('\n')).not.toContain(TOKEN)
   })
 
   // G6 (spec §30, facts 21-22): a pull request merged or closed while the lifecycle Task repaired, or while the Host was

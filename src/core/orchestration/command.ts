@@ -2902,7 +2902,10 @@ export async function handleCommand(
       if (!question || question.trim() === '') return bad('--question is required')
       if (!Array.isArray(options) || options.length === 0 || !options.every((o) => typeof o === 'string' && o !== ''))
         return bad('--options must name the answers')
-      const r = openGitHubGate(deps.getState(), { taskId, since, kind, question, options }, now)
+      // Redacted once, here, where every GitHub question passes: git's and gh's own words ride in it (a token in a remote
+      // URL among them), and the question goes on to the timeline, the journal and the public event (acceptance fixes
+      // Task 2)
+      const r = openGitHubGate(deps.getState(), { taskId, since, kind, question: sanitize(question), options }, now)
       if (!r.ok) return refused(r)
       await deps.setState(r.state)
       return okBody(r.value)

@@ -1595,6 +1595,19 @@ describe('handleCommand — GitHub Gates', () => {
     expect(taskOf(deps)).toMatchObject({ status: 'blocked', ciWait: { sha: SHA } })
   })
 
+  // Acceptance fixes Task 2: every GitHub question passes here, and its text is carried to the timeline, the journal and
+  // the public event, so a secret in it is redacted here once
+  it('lifecycle-gate redacts a secret in the question', async () => {
+    const deps = seeded()
+    const r = await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-gate', {
+      task: 'tsk_l', since: NOW, kind: 'github-carry', question: 'push refused: ghp_abcdefghijklmnopqrstuvwxyz0123456789', options: ['retry', 'mark-failed']
+    })
+    expect(r.status).toBe(200)
+    const gate = deps.getState().gates.find((g) => g.id === (r.body as { id: string }).id)!
+    expect(gate.question).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(gate.question).toContain('[REDACTED]')
+  })
+
   it('lifecycle-gate refuses a missing round, a kind that is not GitHub’s and malformed answers', async () => {
     const host = { sessionId: HOST_CALLER }
     const base = { task: 'tsk_l', since: NOW, kind: 'github-no-ci', question: 'q', options: ['wait'] }

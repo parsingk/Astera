@@ -35,6 +35,7 @@ import type { OpenPr } from '../core/github/prBinding'
 import type { PrStateRead } from '../core/github/prState'
 import { parseGitHubRemote, repoSlug, type GitHubRepo } from '../core/github/remote'
 import type { RunGitHubPatch } from '../core/github/runState'
+import { sanitize } from '../core/orchestration/checkpoint'
 
 export const TICK_MS = 5_000
 export const PENDING_MS = 20_000
@@ -188,6 +189,8 @@ const short = (sha: string): string => sha.slice(0, 7)
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
+  // gh's own words ride in what is logged, and can carry a token: every line is redacted on its way (acceptance fixes Task 2)
+  const log = (m: string): void => d.log(sanitize(m))
   const now = d.now ?? Date.now
   const random = d.random ?? Math.random
   let latest: OrchState | null = null
@@ -260,9 +263,9 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     try {
       const r = await d.record({ runId, patch })
       if (r.status === 404) gone.add(runId)
-      else if (r.status >= 300) d.log(`github watch: recording run ${runId} answered ${r.status}: ${JSON.stringify(r.body)}`)
+      else if (r.status >= 300) log(`github watch: recording run ${runId} answered ${r.status}: ${JSON.stringify(r.body)}`)
     } catch (e) {
-      d.log(`github watch: recording run ${runId} failed: ${message(e)}`)
+      log(`github watch: recording run ${runId} failed: ${message(e)}`)
     }
   }
 
@@ -286,7 +289,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     failures.set(t.runId, n + 1)
     nextAt.set(t.runId, now() + jittered(ERROR_BACKOFF_MS[Math.min(n, ERROR_BACKOFF_MS.length - 1)]))
     // Once per kind: the Run carries the kind it last failed with, and the same failure again says nothing new.
-    if (t.state?.lastReadError?.kind !== f.kind) d.log(`github watch: run ${t.runId}: ${f.message}`)
+    if (t.state?.lastReadError?.kind !== f.kind) log(`github watch: run ${t.runId}: ${f.message}`)
     // An issue change seen earlier in this pass is kept: the next look is ISSUE_MS away (final review M8).
     await record(t.runId, { lastReadError: { kind: f.kind }, ...(changed ? { sourceChanged: true as const } : {}) })
     // GitHub refusing this account's reads will not pass by waiting: a waiting round asks at once (design §6.2)
@@ -303,11 +306,11 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     try {
       const r = await d.openGitHubGate?.({ taskId: round.taskId, since: round.since, kind, question, options })
       if (r && r.status >= 400) {
-        d.log(`github watch: run ${runId}: the ${kind} question could not be opened: ${JSON.stringify(r.body)}`)
+        log(`github watch: run ${runId}: the ${kind} question could not be opened: ${JSON.stringify(r.body)}`)
         if (r.status >= 500) decided.delete(runId)
       }
     } catch (e) {
-      d.log(`github watch: run ${runId}: the ${kind} question could not be opened: ${message(e)}`)
+      log(`github watch: run ${runId}: the ${kind} question could not be opened: ${message(e)}`)
       decided.delete(runId)
     }
   }
@@ -324,20 +327,20 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (known && (!known.incomplete || (known.incomplete.reason === 'run-in-progress' ? runGoing : known.incomplete.tries >= EVIDENCE_TRIES)))
       return known
     if (check.jobId === undefined) return ciFailureEvidence({ check })
-    const [log, annotations] = await Promise.all([
+    const [jobLog, annotations] = await Promise.all([
       check.ciRunId !== undefined && !runGoing ? d.readJobLog(t.cwd, repo, check.jobId) : undefined,
       d.readAnnotations(t.cwd, repo, check.jobId)
     ])
     let reason: 'run-in-progress' | 'read-failed' | undefined = runGoing ? 'run-in-progress' : undefined
-    for (const r of [log, annotations])
+    for (const r of [jobLog, annotations])
       if (r && !r.ok) {
         noteRateLimit(r.kind)
         if (STILL_RUNNING.test(r.message)) reason ??= 'run-in-progress'
         else if (r.kind !== 'not-found') reason = 'read-failed'
         // A run still going is not a failed read, and is not logged as one.
-        if (!STILL_RUNNING.test(r.message)) d.log(`github watch: run ${t.runId}: the evidence of ${check.name} could not be read: ${r.message}`)
+        if (!STILL_RUNNING.test(r.message)) log(`github watch: run ${t.runId}: the evidence of ${check.name} could not be read: ${r.message}`)
       }
-    const evidence = ciFailureEvidence({ check, ...(log?.ok ? { log: log.log } : {}), ...(annotations.ok ? { annotations: annotations.annotations } : {}) })
+    const evidence = ciFailureEvidence({ check, ...(jobLog?.ok ? { log: jobLog.log } : {}), ...(annotations.ok ? { annotations: annotations.annotations } : {}) })
     if (!reason) return evidence
     const tries = (known?.incomplete?.tries ?? 0) + (reason === 'read-failed' ? 1 : 0)
     return { ...evidence, incomplete: { reason, tries } }
@@ -353,7 +356,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const r = await d.ruleCheckNames(t.cwd, repo, base)
     if (!r.ok && r.kind !== 'not-found') {
       noteRateLimit(r.kind)
-      d.log(`github watch: the branch rules of ${repoSlug(repo)} ${base} could not be read: ${r.message}`)
+      log(`github watch: the branch rules of ${repoSlug(repo)} ${base} could not be read: ${r.message}`)
       return null
     }
     const names = r.ok ? r.names : []
@@ -376,7 +379,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     const r = await d.readIssue(t.cwd, Number(src.itemId))
     if (!r.ok) {
       noteRateLimit(r.kind)
-      d.log(`github watch: run ${t.runId}: the source issue could not be read: ${r.message}`)
+      log(`github watch: run ${t.runId}: the source issue could not be read: ${r.message}`)
       return undefined
     }
     if (r.issue.updatedAt === src.capturedUpdatedAt) return undefined
@@ -556,7 +559,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     noteRateLimit(r.kind)
     if (TRANSIENT_FAILURES.has(r.kind)) {
       if (r.kind !== 'rate-limit') nextAt.set(t.runId, now() + spaced(PENDING_MS))
-      d.log(`github watch: run ${t.runId}: the rerun of CI run ${ciRunId} failed, tried again on the next read: ${r.message}`)
+      log(`github watch: run ${t.runId}: the rerun of CI run ${ciRunId} failed, tried again on the next read: ${r.message}`)
       return
     }
     await ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunFailed', { ...facts, reason: r.message }), options)
@@ -578,7 +581,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     }
     // A settle that could not be written is tried again on the next read
     await d.settle?.({ taskId: round.taskId, result, since: round.since }).catch((e: unknown) => {
-      d.log(`github watch: run ${t.runId}: going on without CI could not be recorded: ${message(e)}`)
+      log(`github watch: run ${t.runId}: going on without CI could not be recorded: ${message(e)}`)
       decided.delete(t.runId)
     })
   }
@@ -637,7 +640,7 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
           // faster than the Run is read
           await capOf(t)
         } catch (e) {
-          d.log(`github watch: run ${t.runId}: ${message(e)}`)
+          log(`github watch: run ${t.runId}: ${message(e)}`)
           nextAt.set(t.runId, now() + jittered(SETTLED_MS))
         } finally {
           inFlight.delete(t.runId)

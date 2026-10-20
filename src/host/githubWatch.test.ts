@@ -38,7 +38,7 @@ function rig(
     prs?: { number: number; url: string }[]
     read?: PrStateRead
     origin?: string | null
-    fail?: { at: 'find' | 'read'; kind: string }
+    fail?: { at: 'find' | 'read'; kind: string; message?: string }
     issue?: { body: string; updatedAt: string }
     rules?: { ok: true; names: string[] } | { ok: false; kind: string }
     log?: string
@@ -65,7 +65,7 @@ function rig(
   const gates: { taskId: string; since: string; kind: string; question: string; options: string[] }[] = []
   const status = { record: 200 }
   const fails = { settle: o.settleFails ?? 0 }
-  const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: `failed: ${kind}` })
+  const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: o.fail?.message ?? `failed: ${kind}` })
   const deps: GithubWatchDeps = {
     now: () => clock.now,
     random: () => 0.5, // no jitter: (0.5 * 2 - 1) = 0
@@ -271,6 +271,16 @@ describe('githubWatch', () => {
     expect(r.records).toHaveLength(1)
     await r.at(20_000)
     expect(r.records).toHaveLength(2)
+  })
+
+  // Acceptance fixes Task 2: gh's words go to the Host log, and they can carry a token
+  it('logs gh’s failure with any secret in it redacted', async () => {
+    const TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const r = rig({ fail: { at: 'read', kind: 'network', message: `fatal: https://x-access-token:${TOKEN}@github.com/o/r.git` } })
+    r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+    await r.at(0)
+    expect(r.logs.length).toBeGreaterThan(0)
+    expect(r.logs.join('\n')).not.toContain(TOKEN)
   })
 
   it('logs a failure kind once while the Run already carries it', async () => {
