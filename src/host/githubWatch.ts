@@ -259,13 +259,16 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     return out
   }
 
-  const record = async (runId: string, patch: RunGitHubPatch): Promise<void> => {
+  /** Whether the patch was written: a rerun is asked only once its pending is (acceptance fixes final review M1). */
+  const record = async (runId: string, patch: RunGitHubPatch): Promise<boolean> => {
     try {
       const r = await d.record({ runId, patch })
       if (r.status === 404) gone.add(runId)
       else if (r.status >= 300) log(`github watch: recording run ${runId} answered ${r.status}: ${JSON.stringify(r.body)}`)
+      return r.status < 300
     } catch (e) {
       log(`github watch: recording run ${runId} failed: ${message(e)}`)
+      return false
     }
   }
 
@@ -551,16 +554,21 @@ export function createGithubWatch(d: GithubWatchDeps): GithubWatch {
     if (own >= (t.policy.maxInfrastructureReruns ?? GITHUB_LIFECYCLE_DEFAULTS.maxInfrastructureReruns))
       return ask(t.runId, round, 'github-ci-outside', say('jobs.gate.github.q.infraRerunSpent', { ...facts, reruns: own }), options)
     // Written down before gh is asked, so a Host that dies between asking and recording still counts it (acceptance fixes
-    // Task 5); the rerun's own record clears it, and so does anything else gh answers
+    // Task 5), and gh is asked only once it is written: the next read tries again (final review M1). The rerun's own
+    // record clears it, and so does an answer that says nothing ran; one lost on the network keeps it, since the rerun may
+    // have run, and the next ask keeps it as unconfirmed (final review I1)
     const asked = { ciRunId, attempt: failing.ciRunAttempt ?? 1, sha: round.sha!, check: failing.name, externalId: failing.externalId, by: 'astera' as const }
-    await record(t.runId, { rerunPending: asked })
+    if (!(await record(t.runId, { rerunPending: asked }))) {
+      nextAt.set(t.runId, now() + spaced(PENDING_MS))
+      return
+    }
     const r = await d.rerunCi!(t.cwd, repo, ciRunId)
     if (r.ok) {
       nextAt.set(t.runId, now() + spaced(PENDING_MS))
       await record(t.runId, { rerun: asked, rerunPending: null })
       return
     }
-    await record(t.runId, { rerunPending: null })
+    if (r.kind !== 'network') await record(t.runId, { rerunPending: null })
     if (r.running) {
       // Someone reran it first: its new attempt is going, and is read soon (G4 final review M1)
       nextAt.set(t.runId, now() + spaced(PENDING_MS))

@@ -6,7 +6,7 @@ import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, Job, JobRun } from '../core/orchestration/types'
 import type { PrStateRead } from '../core/github/prState'
-import type { RunGitHubPatch } from '../core/github/runState'
+import { nextGitHubState, type RunGitHubPatch } from '../core/github/runState'
 import { EVIDENCE_TRIES, type GitHubCiCheck, type GitHubCiFailure, type GitHubRerun, type RunGitHubState } from '../core/github/lifecycle'
 import type { RawAnnotation } from '../core/github/evidence'
 
@@ -851,6 +851,39 @@ describe('githubWatch', () => {
         await r.at(0)
         expect(reruns(r)).toEqual([])
         expect(r.gates[0]?.question).toContain('Astera already reran it as many times as this Job allows (2)')
+      })
+      // Acceptance fixes final review I1: the dead Host's pending is still counted after the next rerun is recorded, so two
+      // more failures do not get three reruns out of a budget of two
+      it('counts a dead Host’s pending after the next rerun too: the budget never overruns', async () => {
+        const left = { ...BOUND, rerunPending: rerun(1) } as RunGitHubState
+        const first = rig({ read: INFRA(2) })
+        first.watch.onState(withRound(undefined, { githubState: left }))
+        await first.at(0)
+        expect(reruns(first)).toHaveLength(1)
+        let gs = left
+        for (const x of first.records) gs = nextGitHubState(gs, x.patch, ISO0)!
+        const second = rig({ read: INFRA(3) })
+        second.watch.onState(withRound(undefined, { githubState: gs }))
+        await second.at(0)
+        expect(reruns(second)).toEqual([])
+        expect(second.gates[0]?.question).toContain('Astera already reran it as many times as this Job allows (2)')
+      })
+      it('keeps the pending when gh’s answer was lost on the network: the rerun may have run', async () => {
+        const r = rig({ read: INFRA(), rerun: [{ ok: false, kind: 'network', message: 'connection reset' }] })
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(r.records.map((x) => x.patch).filter((p) => 'rerunPending' in p).map((p) => p.rerunPending === null)).toEqual([false])
+      })
+      // Final review M1: a rerun is asked only once its pending is written, so none goes uncounted
+      it('asks gh for no rerun while the pending cannot be written, and asks once it can', async () => {
+        const r = rig({ read: INFRA() })
+        r.status.record = 500
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(reruns(r)).toEqual([])
+        r.status.record = 200
+        await r.at(PENDING_MS)
+        expect(reruns(r)).toHaveLength(1)
       })
 
       it('counts only its own reruns against the budget', async () => {

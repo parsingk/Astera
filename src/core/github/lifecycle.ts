@@ -218,6 +218,9 @@ export interface GitHubRerun {
   externalId?: string
   by: 'astera' | 'person'
   at: string
+  /** A rerun written down as pending that nothing confirmed — the Host died after asking gh, or gh's answer was lost —
+   *  kept once the next rerun was asked, since it may have run (acceptance fixes final review I1). The budget counts it. */
+  unconfirmed?: true
 }
 
 export interface GitHubLogEntry {

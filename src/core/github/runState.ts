@@ -119,10 +119,12 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     delete next.externalHeadChange
   }
   if (patch.noCi && base.ciOverride?.sha !== patch.noCi.sha) next.ciOverride = { sha: patch.noCi.sha, at: now }
-  if (patch.rerun) {
-    next.reruns = [...(base.reruns ?? []), { ...patch.rerun, at: now }].slice(-RERUNS_MAX)
-    entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
-  }
+  // A pending still there when the next rerun is asked was never confirmed, and may have run: it is kept, unconfirmed and
+  // with no log line, so the budget goes on counting it (acceptance fixes final review I1)
+  const unconfirmed = patch.rerunPending && base.rerunPending ? [{ ...base.rerunPending, unconfirmed: true as const }] : []
+  if (patch.rerun || unconfirmed.length > 0)
+    next.reruns = [...(base.reruns ?? []), ...unconfirmed, ...(patch.rerun ? [{ ...patch.rerun, at: now }] : [])].slice(-RERUNS_MAX)
+  if (patch.rerun) entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
   if (patch.rerunPending === null) delete next.rerunPending
   else if (patch.rerunPending) next.rerunPending = { ...patch.rerunPending, at: now }
   if (patch.mergeReady !== undefined) {
@@ -228,7 +230,8 @@ function rerunOk(r: unknown): boolean {
     isStr(r.sha) &&
     (r.check === undefined || isStr(r.check)) &&
     (r.externalId === undefined || isStr(r.externalId)) &&
-    (r.by === 'astera' || r.by === 'person')
+    (r.by === 'astera' || r.by === 'person') &&
+    (r.unconfirmed === undefined || r.unconfirmed === true)
   )
 }
 
