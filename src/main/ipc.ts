@@ -2960,27 +2960,32 @@ export function registerIpc(
         // spawnSession is a separate job that involves typing the user path's 15 fields alongside it, so
         // it is out of scope, and this one line closes the hole on the spot.
         const info = await spawnSession({
-          accountId: o.accountId,
-          cwd: o.cwd,
-          // **워커의 권한 태도는 전역 설정이 정한다**(AgentPermissionMode). `??` 인 이유는 이
-          // 클로저가 값을 **만드는 자리가 아니라 메꾸는 자리**이기 때문이다 — 지금은 coordinator.ts
-          // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
-          // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
-          bypassPermissions:
-            o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
-          initialPrompt: o.initialPrompt,
-          title: o.title, // the worker tab title is task.title
-          // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
-          // (Task.accountIds 에서 온다; startWorkerWithChain 이 rollChainFor 로 만든다). 지정이 없는
-          // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
-          rollAccountIds: o.rollAccountIds,
-          rollPrompt: o.rollPrompt, // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
-          // Recovery's provider-native resume (OrchCoordinator.startWorker's `resume` option) — both
-          // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
-          // forward them instead of dropping them on the floor.
-          resumeSessionId: o.resumeSessionId,
-          resumePrompt: o.resumePrompt
-        } satisfies typeof o)
+          // A Job's worker, reviewer or repair worker is an agent's session: its tab closes when it ends (2026-10-20).
+          // Outside the satisfies below, whose shape is the coordinator's options and has no such field.
+          startedBy: 'agent',
+          ...({
+            accountId: o.accountId,
+            cwd: o.cwd,
+            // **워커의 권한 태도는 전역 설정이 정한다**(AgentPermissionMode). `??` 인 이유는 이
+            // 클로저가 값을 **만드는 자리가 아니라 메꾸는 자리**이기 때문이다 — 지금은 coordinator.ts
+            // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
+            // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
+            bypassPermissions:
+              o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
+            initialPrompt: o.initialPrompt,
+            title: o.title, // the worker tab title is task.title
+            // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
+            // (Task.accountIds 에서 온다; startWorkerWithChain 이 rollChainFor 로 만든다). 지정이 없는
+            // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
+            rollAccountIds: o.rollAccountIds,
+            rollPrompt: o.rollPrompt, // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
+            // Recovery's provider-native resume (OrchCoordinator.startWorker's `resume` option) — both
+            // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
+            // forward them instead of dropping them on the floor.
+            resumeSessionId: o.resumeSessionId,
+            resumePrompt: o.resumePrompt
+          } satisfies typeof o)
+        })
         try {
           send('session:created', info)
         } catch (err) {
@@ -3264,7 +3269,8 @@ export function registerIpc(
             preTrust: preTrustWorkspace,
             bypassPermissions: async () => core.appSettings.getAgentPermissionMode() === 'yolo',
             spawn: async (o) => {
-              const info = await spawnSession(o)
+              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20)
+              const info = await spawnSession({ ...o, startedBy: 'agent' })
               // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
               // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
               // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
