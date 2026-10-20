@@ -24,12 +24,12 @@ import {
 } from './state'
 import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
-import { FAILURE_LIMIT, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
+import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
 import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
-import { checkConfigIdsOf } from './convergence'
+import { DEFAULT_BLOCKING_SEVERITY, checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
 import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
@@ -9814,14 +9814,22 @@ describe('run-create — the GitHub lifecycle (G1)', () => {
     expect(r.status).toBe(200)
     const job = deps.getState().jobs[0]
     expect(job.github).toEqual(POLICY)
-    expect(job.convergence).toEqual({})
+    // Acceptance fixes Task 6 (spec: policy snapshot durable): the repair budget is written into the Job as numbers, so an
+    // app update that changes a default does not change a running Job's budget
+    expect(job.convergence).toEqual({ maxFixAttempts: FAILURE_LIMIT, maxReviewRounds: MAX_REVIEW_ROUNDS, blockingSeverity: DEFAULT_BLOCKING_SEVERITY })
     expect(calls).toEqual([VIEW])
   })
 
-  it('keeps the convergence policy the caller gave', async () => {
+  it('keeps the convergence policy the caller gave, the rest written as numbers', async () => {
     const { deps } = withGithub()
-    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, convergence: true, maxFixAttempts: 5 })
-    expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5 })
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, convergence: true, maxFixAttempts: 5, maxTotalMinutes: 30 })
+    expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5, maxReviewRounds: MAX_REVIEW_ROUNDS, blockingSeverity: DEFAULT_BLOCKING_SEVERITY, maxTotalMinutes: 30 })
+  })
+
+  it('leaves a Job without the lifecycle as it was made', async () => {
+    const { deps } = withGithub()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    expect(deps.getState().jobs[0].convergence).toEqual({})
   })
 
   // G7a: Settings › GitHub's defaults, read by the Host when the Job is made and copied into it (design §5.1)

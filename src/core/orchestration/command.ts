@@ -140,7 +140,7 @@ import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
-import { isOverrideCompletion, policyOf } from './convergence'
+import { isOverrideCompletion, policyOf, resolvedConvergence } from './convergence'
 import { leftNothingBehind } from '../host/orchProtocol'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
@@ -1817,7 +1817,8 @@ export async function handleCommand(
           ci: checks.length > 0 ? { mode: 'selected', selectedChecks: checks } : { mode: 'required' },
           ...GITHUB_LIFECYCLE_DEFAULTS
         }
-        convergence ??= {}
+        // Its repair budget written in as numbers, a snapshot like the rest of its policy (acceptance fixes Task 6)
+        convergence = resolvedConvergence(convergence ?? {})
       }
       // 이 Run 을 관리할 코디네이터 세션의 계정. **하나다** — 목록이 아닌 이유는 Run.coordinatorAccountId
       // 의 주석에 있다(갈아타는 대신 같은 세션에서 기다린다). 없으면 코디네이터를 띄우지 않는다:
