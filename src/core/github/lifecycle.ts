@@ -254,6 +254,10 @@ export interface RunGitHubState {
   sourceChanged?: { at: string }
   /** At most RERUNS_MAX, oldest dropped (G4). */
   reruns?: GitHubRerun[]
+  /** A rerun written down before gh was asked for it, until the rerun's own record clears it, or its refusal does
+   *  (acceptance fixes Task 5): a Host that died between asking and recording leaves it here, and the budget counts it,
+   *  so the budget never overruns. It holds no verdict. */
+  rerunPending?: GitHubRerun
   /** The pull request is ready to merge, as the review's verdict decided (G5b); shown while its head is the PR's head
    *  and nothing withdrew it. */
   mergeReady?: MergeReadyEvidence

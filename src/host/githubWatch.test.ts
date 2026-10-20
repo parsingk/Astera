@@ -808,6 +808,33 @@ describe('githubWatch', () => {
         ])
       })
 
+      // Acceptance fixes Task 5: written down before gh is asked, recorded and cleared after; a rerun that did not happen
+      // clears it, and one a dead Host left pending counts against the budget, so the budget never overruns
+      it('writes a rerun down as pending before asking gh, then records it and clears the pending', async () => {
+        const r = rig({ read: INFRA() })
+        r.watch.onState(withRound())
+        await r.at(0)
+        const patches = r.records.map((x) => x.patch)
+        const pendingAt = patches.findIndex((p) => p.rerunPending)
+        const recordedAt = patches.findIndex((p) => p.rerun)
+        expect(pendingAt).toBeGreaterThanOrEqual(0)
+        expect(recordedAt).toBeGreaterThan(pendingAt)
+        expect(patches[recordedAt]).toMatchObject({ rerun: { attempt: 1, by: 'astera' }, rerunPending: null })
+      })
+      it('a rerun gh refused clears its pending', async () => {
+        const r = rig({ read: INFRA(), rerun: [{ ok: false, kind: 'other', message: 'no' }] })
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(r.records.map((x) => x.patch).filter((p) => 'rerunPending' in p).map((p) => p.rerunPending === null)).toEqual([false, true])
+      })
+      it('counts a rerun a dead Host left pending against the budget', async () => {
+        const r = rig({ read: INFRA(2) })
+        r.watch.onState(withRound(undefined, { githubState: { ...BOUND, reruns: [rerun(1)], rerunPending: rerun(2) } as never }))
+        await r.at(0)
+        expect(reruns(r)).toEqual([])
+        expect(r.gates[0]?.question).toContain('Astera already reran it as many times as this Job allows (2)')
+      })
+
       it('counts only its own reruns against the budget', async () => {
         const r = rig({ read: INFRA(3) })
         r.watch.onState(withRound(undefined, reran(rerun(1, 'person'), rerun(2, 'person'))))
