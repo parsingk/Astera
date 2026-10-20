@@ -142,6 +142,7 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { sessionKindOf } from '../../core/sessions/kind'
+import { AGENT_TAB_CLOSE_DELAY_MS, closesWhenEnded } from '../../core/sessions/agentTab'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
@@ -1143,7 +1144,9 @@ export default function App(): React.JSX.Element {
         .catch(() => {})
     }
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
-    void window.api.sessions.list().then((list) => {
+    void window.api.sessions.list().then((all) => {
+      // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back
+      const list = all.filter((s) => !closesWhenEnded(s))
       setSessions(list)
       for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
       if (list.length === 0) return
@@ -1171,11 +1174,21 @@ export default function App(): React.JSX.Element {
     const offNotifyActivate = window.api.on('notify:activate', ({ sessionId }) => {
       selectWorkbenchTabRef.current?.(sessionTab(sessionId))
     })
+    // The looks the exit handler below has pending, cleared with the listeners
+    const endedTimers = new Set<ReturnType<typeof setTimeout>>()
     const offExit = window.api.on('session:exit', ({ sessionId, exitCode }) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
       )
       closeAgentTabRef.current(sessionId) // the owner is gone; the tab has nothing to report to
+      // An agent's session closes its tab once it ended (core/sessions/agentTab.ts), through the close a person's ✕
+      // takes. Looked at again a moment later: a roll hands the tab to the new session, and a Host the app lost sight
+      // of hands the session back, and either way it is no longer an ended agent's session by then.
+      const timer = setTimeout(() => {
+        endedTimers.delete(timer)
+        if (closesWhenEnded(sessionsRef.current.find((s) => s.id === sessionId))) closeWorkbenchTabRef.current(sessionTab(sessionId))
+      }, AGENT_TAB_CLOSE_DELAY_MS)
+      endedTimers.add(timer)
     })
     // Receives sessions main created on its own (orchestration workers) as tabs. The user path builds a
     // tab from the return value of sessions.spawn, but the coordinator path creates the session inside
@@ -1260,6 +1273,7 @@ export default function App(): React.JSX.Element {
       offGhosts()
       offNotifyActivate()
       offExit()
+      for (const timer of endedTimers) clearTimeout(timer)
       offCreated()
       offUpdate()
       offCampaign()

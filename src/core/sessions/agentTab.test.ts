@@ -1,0 +1,25 @@
+import { describe, it, expect } from 'vitest'
+import { closesWhenEnded } from './agentTab'
+import { PTY_LOST_SIGHT_EXIT_CODE } from './pty'
+
+// 2026-10-20: a session an agent started closes its tab when it ends; a person's tab stays
+describe('closesWhenEnded', () => {
+  const agent = { status: 'exited' as const, exitCode: 0, startedBy: 'agent' as const }
+
+  it('is true for an agent’s session that ended, whatever its code', () => {
+    expect(closesWhenEnded(agent)).toBe(true)
+    expect(closesWhenEnded({ ...agent, exitCode: 1 })).toBe(true)
+    expect(closesWhenEnded({ ...agent, exitCode: undefined })).toBe(true)
+  })
+
+  it('is false while it runs, for a person’s session, and for a session no longer known', () => {
+    expect(closesWhenEnded({ ...agent, status: 'running' })).toBe(false)
+    expect(closesWhenEnded({ status: 'exited', exitCode: 0 })).toBe(false)
+    expect(closesWhenEnded(undefined)).toBe(false)
+  })
+
+  // The app lost sight of the Host: the session still runs there, and the reconnect brings it back under its id
+  it('is false for an exit that only says the app lost sight of a Host session', () => {
+    expect(closesWhenEnded({ ...agent, exitCode: PTY_LOST_SIGHT_EXIT_CODE })).toBe(false)
+  })
+})
