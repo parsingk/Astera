@@ -8,6 +8,7 @@ import {
   HISTORY_MAX,
   MAX_REVIEW_ROUNDS,
   type CheckResult,
+  type ConvergencePolicy,
   type Dispatch,
   type Job,
   type ReviewSeverity,
@@ -41,6 +42,18 @@ export function checkConfigIdsOf(task: Pick<Task, 'validateConfigIds' | 'validat
  *  도는 일은 없다. */
 export function policyOf(s: OrchState, task: Pick<Task, 'runId'>): ResolvedPolicy | null {
   return policyOfJob(task.runId === undefined ? undefined : jobOfRunId(s, task.runId))
+}
+
+/** A convergence policy with every number the app would fill written in (acceptance fixes Task 6): a GitHub lifecycle Job
+ *  keeps the budget it was made with, where `{}` would take whatever the app's defaults are when it is read — an update
+ *  could change a running Job's repairs. The time budget stays absent unless given, as policyOfJob leaves it. */
+export function resolvedConvergence(c: ConvergencePolicy): ConvergencePolicy {
+  return {
+    maxFixAttempts: c.maxFixAttempts ?? FAILURE_LIMIT,
+    maxReviewRounds: c.maxReviewRounds ?? MAX_REVIEW_ROUNDS,
+    blockingSeverity: c.blockingSeverity ?? DEFAULT_BLOCKING_SEVERITY,
+    ...(c.maxTotalMinutes !== undefined ? { maxTotalMinutes: c.maxTotalMinutes } : {})
+  }
 }
 
 /** policyOf for a Job already found (the Jobs sidebar fold indexes Runs and Jobs once, performance audit M1) */

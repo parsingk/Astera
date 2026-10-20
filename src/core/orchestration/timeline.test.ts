@@ -283,7 +283,8 @@ describe('the GitHub lines', () => {
     ])
     expect(evts[0]).toMatchObject({ sourceId: 'r1:github:000001', taskId: 'tsk_l', taskTitle: 'GitHub 전달', summary: '#12', github: { pr: 12 } })
     expect(evts[1]).toMatchObject({ summary: 'aaaaaaa', github: { sha: A } })
-    expect(evts[3]).toMatchObject({ summary: 'build', github: { sha: A, check: 'build', class: 'test' } })
+    // Acceptance fixes Task 4: a CI failure's line names its class beside the check
+    expect(evts[3]).toMatchObject({ summary: 'build (test)', github: { sha: A, check: 'build', class: 'test' } })
     expect(evts[7]).toMatchObject({ summary: 'head-changed', github: { reason: 'head-changed' } })
   })
 

@@ -203,7 +203,15 @@ function collect(
       kind,
       sourceId: `${run.id}:github:${String(e.seq).padStart(6, '0')}`,
       ...(lifecycle ? { taskId: lifecycle.id, taskTitle: lifecycle.title } : {}),
-      summary: e.check ?? (e.pr !== undefined ? `#${e.pr}` : (e.reason ?? (e.sha ? e.sha.slice(0, 7) : ''))),
+      // A CI failure's check with its class beside it, as the GitHub block names it (acceptance fixes Task 4)
+      summary:
+        e.check !== undefined
+          ? e.class !== undefined
+            ? `${e.check} (${e.class})`
+            : e.check
+          : e.pr !== undefined
+            ? `#${e.pr}`
+            : (e.reason ?? (e.sha ? e.sha.slice(0, 7) : '')),
       ...(Object.keys(facts).length > 0 ? { github: facts } : {})
     })
   }

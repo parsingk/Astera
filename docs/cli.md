@@ -913,8 +913,9 @@ does (see "Jobs run with Astera closed").
 each run's branch and watches its CI, and `runs get` shows where it stands as `github`. Before it makes
 the Job, the Astera Host checks that the folder's `origin` is a GitHub repository you can push to
 (WRITE, MAINTAIN or ADMIN through your `gh` login) and refuses with a 6 that says why otherwise. The flag
-turns `--convergence` on. `--github-checks build,test` makes those checks decide; without it, the branch
-rules' required checks decide, or every reported check when the rules name none. The Job carries the
+turns `--convergence` on. `--github-checks build,test` makes those checks decide beside the ones the
+repository requires; without it, the branch rules' required checks decide, or every reported check when the
+rules name none. The Job carries the
 policy as `github`. A worker session Astera started is refused the flag with a 5, as it is
 `jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create`, `github-ci-rerun` and `runs reconverge`: those
 writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off

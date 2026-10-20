@@ -167,6 +167,8 @@ export interface GitHubLifecycle {
   }
   /** A person chose to go on without CI for the head. */
   readonly noCi?: true
+  /** Where Astera's review of the lifecycle Task stands: running, passed, or the blocking issues the last review found. */
+  readonly review?: { readonly state: 'running' } | { readonly state: 'passed' } | { readonly state: 'found-issues'; readonly blocking: number }
 }
 
 export interface Job {

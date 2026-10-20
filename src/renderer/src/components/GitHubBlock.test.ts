@@ -3,6 +3,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { CATALOGS, LANGS } from '../../../core/i18n'
 import type { GitHubLifecycleView } from '../../../core/github/view'
 
@@ -95,6 +98,39 @@ describe('GitHubBlock', () => {
     expect(checkMarkOf({ status: 'completed', conclusion: 'stale' })).toBe('●')
     expect(checkMarkOf({ status: 'in-progress' })).toBe('●')
     expect(checkMarkOf({ status: 'queued' })).toBe('●')
+  })
+
+  // Acceptance fixes Task 3 (spec Product: "Review state"): the block says the review passed or what it found, and what
+  // GitHub's own review says
+  it('says Astera’s review passed or the blocking issues it found, and GitHub’s review decision', () => {
+    expect(render({ state: 'ci-passed', pr: PR, review: { state: 'passed' } })).toContain('jobs.github.review.passed')
+    expect(render({ state: 'awaiting-push', pr: PR, review: { state: 'found-issues', blocking: 2 } })).toContain('jobs.github.review.foundIssues {"count":2}')
+    // While it runs, the state line already says so
+    expect(render({ state: 'reviewing', pr: PR, review: { state: 'running' } })).not.toContain('jobs.github.review.')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'CHANGES_REQUESTED' } })).toContain('jobs.github.githubReview.changesRequested')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'APPROVED' } })).toContain('jobs.github.githubReview.approved')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'REVIEW_REQUIRED' } })).toContain('jobs.github.githubReview.reviewRequired')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'SOMETHING_NEW' } })).not.toContain('jobs.github.githubReview')
+  })
+
+  // Acceptance fixes Task 4: the repairs made stay counted after the repair, and merge-ready says when it was decided
+  it('counts the repairs made once no repair runs, and says when merge-ready was decided', () => {
+    const counted = render({ state: 'ci-pending', pr: PR, repair: { attempt: 2, max: 3 } })
+    expect(counted).toContain('jobs.github.repairsDone {"attempt":2,"max":3}')
+    const repairing = render({ state: 'repairing', pr: PR, repair: { attempt: 2, max: 3, subject: { kind: 'review' } } })
+    expect(repairing).not.toContain('jobs.github.repairsDone')
+    const ready = render({ state: 'merge-ready', pr: PR, mergeReady: { headSha: A, evaluatedAt: new Date(Date.now() - 5 * 60_000).toISOString() } })
+    expect(ready).toContain('jobs.github.evaluatedAgo {"ago":"6m"}') // rounded up: a stale figure never reads fresher
+  })
+
+  // Final review M3: with no Host there is no state broadcast to re-render the block, so the age keeps a clock of its own
+  // — else a detail left open says "1 minute ago" for hours. Read from the source: the renderer tests have no DOM to tick.
+  it('draws merge-ready’s age from a clock of its own, read again every minute while the window shows', () => {
+    const source = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'GitHubBlock.tsx'), 'utf8')
+    const ago = source.slice(source.indexOf('function EvaluatedAgo('))
+    expect(ago).toMatch(/pollWhileVisible\(\(\) => setNow\(Date\.now\(\)\), 60_000\)/)
+    expect(source).toContain('<EvaluatedAgo at={g.mergeReady.evaluatedAt} />')
+    expect(source).not.toMatch(/coarseDuration\(Date\.now\(\)/)
   })
 
   // Design §7.2 S16

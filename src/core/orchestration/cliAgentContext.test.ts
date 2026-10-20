@@ -49,6 +49,13 @@ describe('agent-context — 무엇이 실리는가', () => {
     expect(create.flags.find((f) => f.name === 'convergence')?.takesValue).toBe(false)
   })
 
+  // 수용 기준 수정 최종 리뷰 C1: 고른 검사는 저장소가 요구하는 검사와 함께 판정한다 — 세션의 run-create 도 공개 명령과 같은 말을 한다
+  it('run-create 의 --github-checks 는 공개 jobs-create 와 같은 설명이다', () => {
+    const create = ctx.commands.find((c) => c.name === 'run-create')!
+    const pub = USAGE['jobs-create'].flags?.find((f) => f.name === 'github-checks')!
+    expect(create.flags.find((f) => f.name === 'github-checks')?.about).toBe(pub.about)
+  })
+
   it('종료 코드 표가 통째로 실리고, 숫자는 한 표에서 온다', () => {
     expect(ctx.exitCodes.map((e) => e.code)).toEqual([...CLI_ERROR_CODES])
     for (const e of ctx.exitCodes) {

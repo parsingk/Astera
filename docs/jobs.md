@@ -271,8 +271,9 @@ Job을 만들 때 `GitHub 까지 진행`을 켜면, Astera가 각 Run의 일을 
   수정`도 함께 켜집니다.
 - CLI는 `astera jobs create --github-lifecycle`, MCP는 `create_job`의 `githubLifecycle`입니다. MCP는 설정
   › CLI의 MCP 접근이 `읽기와 제어`이고 `MCP 클라이언트가 GitHub 에서 작업하게 하기`가 켜져 있어야 합니다.
-- 기다릴 검사를 이름으로 고르는 것(`--github-checks build,test`)은 CLI와 MCP에서만 합니다. 고르지 않으면
-  브랜치 규칙의 필수 검사가, 필수 검사가 없으면 보고된 검사 전부가 판정합니다.
+- 기다릴 검사를 이름으로 고르는 것(`--github-checks build,test`)은 CLI와 MCP에서만 합니다. 고른 검사는
+  저장소가 필수로 정한 검사와 함께 판정합니다. 고르지 않으면 브랜치 규칙의 필수 검사가, 필수 검사가
+  없으면 보고된 검사 전부가 판정합니다.
 
 ### 설정 › GitHub의 기본값
 

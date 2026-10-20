@@ -44,17 +44,21 @@ describe('ciTargets', () => {
     expect(ciTargets(read, { mode: 'required' }, [])).toMatchObject({ basis: 'all-reported', names: ['build', 'docs', 'lint'] })
     expect(ciTargets({ ...read, requiredUnknown: true }, { mode: 'required' }, ['build']).unknowable).toBe(true)
     expect(ciTargets(read, { mode: 'required' }, null).unknowable).toBe(true)
-    expect(ciTargets(read, { mode: 'selected', selectedChecks: ['lint'] }, null)).toMatchObject({ basis: 'selected', names: ['lint'], unknowable: false })
+    // Acceptance fixes Task 1 (spec §9): selected checks decide beside the ones the repository requires, known as required
+    // mode knows them
+    expect(ciTargets(read, { mode: 'selected', selectedChecks: ['lint'] }, ['build'])).toMatchObject({ basis: 'selected', names: ['build', 'lint'], unknowable: false })
+    expect(ciTargets(read, { mode: 'selected', selectedChecks: ['lint'] }, [])).toMatchObject({ basis: 'selected', names: ['lint'], unknowable: false })
+    expect(ciTargets(read, { mode: 'selected', selectedChecks: ['lint'] }, null).unknowable).toBe(true)
   })
 })
 
 // GitHub lifecycle G5b (design §5.4): the checks CI was judged on, kept with merge-ready and compared on later reads
 describe('ciTargetNames', () => {
   const c = (name: string, over: Partial<GitHubCiCheck> = {}): GitHubCiCheck => ({ externalId: `run:${name}`, name, status: 'completed', conclusion: 'success', required: false, ...over })
-  it('names the required checks, the selected ones present, or every reported one but skipped and neutral, sorted, once', () => {
+  it('names the required checks, the selected ones present beside them, or every reported one but skipped and neutral, sorted, once', () => {
     const checks = [c('lint', { required: true }), c('build', { required: true }), c('docs', { conclusion: 'skipped' }), c('e2e'), c('build', { required: true, externalId: 'run:b2' })]
     expect(ciTargetNames(checks, 'required')).toEqual(['build', 'lint'])
-    expect(ciTargetNames(checks, 'selected', ['e2e', 'missing'])).toEqual(['e2e'])
+    expect(ciTargetNames(checks, 'selected', ['e2e', 'missing'])).toEqual(['build', 'e2e', 'lint'])
     expect(ciTargetNames(checks, 'all-reported')).toEqual(['build', 'e2e', 'lint'])
   })
 })
@@ -106,8 +110,15 @@ describe('evaluateCi — all reported (no required checks)', () => {
 
 describe('evaluateCi — selected', () => {
   const SELECTED = { mode: 'selected' as const, selectedChecks: ['build'] }
-  it('decides by the selected names only', () => {
-    expect(evaluateCi({ checks: [check('build'), check('docs', { conclusion: 'failure' })], suites: done }, SELECTED, ['e2e'])).toEqual({ basis: 'selected', verdict: 'passed' })
+  it('decides by the selected names, ignoring an optional failure', () => {
+    expect(evaluateCi({ checks: [check('build'), check('docs', { conclusion: 'failure' })], suites: done }, SELECTED, [])).toEqual({ basis: 'selected', verdict: 'passed' })
+  })
+  // Acceptance fixes Task 1 (spec §9: branch protection first): a check the repository requires decides too
+  it('a required check that fails fails it, and one from the rules that has not reported waits', () => {
+    const failing = evaluateCi({ checks: [check('build'), check('test', { required: true, conclusion: 'failure' })], suites: done }, SELECTED, [])
+    expect(failing).toMatchObject({ basis: 'selected', verdict: 'failed' })
+    expect(failing.failing?.name).toBe('test')
+    expect(evaluateCi({ checks: [check('build')], suites: done }, SELECTED, ['e2e']).verdict).toBe('pending')
   })
   it('waits for a selected name that has not reported', () => {
     expect(evaluateCi({ checks: [check('docs')], suites: done }, SELECTED, []).verdict).toBe('pending')
@@ -123,9 +134,12 @@ describe('evaluateCi — what it cannot know never passes (final review C1, I2, 
   it('required mode with required-ness unknown for some check: pending', () => {
     expect(evaluateCi({ ...green, requiredUnknown: true }, REQUIRED, []).verdict).toBe('pending')
   })
-  it('selected mode does not care whether required-ness or the rules are known', () => {
+  // Acceptance fixes Task 1: selected mode counts the required checks now, so what required mode cannot know, it cannot
+  it('selected mode with rules that could not be read, or required-ness unknown: pending, as required mode', () => {
     const SELECTED = { mode: 'selected' as const, selectedChecks: ['build'] }
-    expect(evaluateCi({ ...green, requiredUnknown: true }, SELECTED, null).verdict).toBe('passed')
+    expect(evaluateCi(green, SELECTED, null).verdict).toBe('pending')
+    expect(evaluateCi({ ...green, requiredUnknown: true }, SELECTED, []).verdict).toBe('pending')
+    expect(evaluateCi({ checks: [check('build', { conclusion: 'failure' })], suites: done }, SELECTED, null).verdict).toBe('failed')
   })
   it('a read that ran past its page cannot pass in any mode', () => {
     expect(evaluateCi({ ...green, truncated: true }, REQUIRED, []).verdict).toBe('pending')

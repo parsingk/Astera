@@ -6,7 +6,7 @@ import { issueBodyHash } from '../core/github/issue'
 import { emptyState, type OrchState } from '../core/orchestration/state'
 import type { CheckResult, Job, JobRun } from '../core/orchestration/types'
 import type { PrStateRead } from '../core/github/prState'
-import type { RunGitHubPatch } from '../core/github/runState'
+import { nextGitHubState, type RunGitHubPatch } from '../core/github/runState'
 import { EVIDENCE_TRIES, type GitHubCiCheck, type GitHubCiFailure, type GitHubRerun, type RunGitHubState } from '../core/github/lifecycle'
 import type { RawAnnotation } from '../core/github/evidence'
 
@@ -38,7 +38,7 @@ function rig(
     prs?: { number: number; url: string }[]
     read?: PrStateRead
     origin?: string | null
-    fail?: { at: 'find' | 'read'; kind: string }
+    fail?: { at: 'find' | 'read'; kind: string; message?: string }
     issue?: { body: string; updatedAt: string }
     rules?: { ok: true; names: string[] } | { ok: false; kind: string }
     log?: string
@@ -65,7 +65,7 @@ function rig(
   const gates: { taskId: string; since: string; kind: string; question: string; options: string[] }[] = []
   const status = { record: 200 }
   const fails = { settle: o.settleFails ?? 0 }
-  const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: `failed: ${kind}` })
+  const failure = (kind: string) => ({ ok: false as const, kind: kind as never, message: o.fail?.message ?? `failed: ${kind}` })
   const deps: GithubWatchDeps = {
     now: () => clock.now,
     random: () => 0.5, // no jitter: (0.5 * 2 - 1) = 0
@@ -175,12 +175,30 @@ describe('githubWatch', () => {
     expect(r.calls.filter((c) => c === 'rules')).toHaveLength(1)
   })
 
-  it('does not read the branch rules in selected mode', async () => {
-    const r = rig()
-    r.watch.onState(stateOf({ job: { github: { ...POLICY, ci: { mode: 'selected', selectedChecks: ['build'] } } }, run: { githubState: BOUND } }))
-    await r.at(0)
-    expect(r.calls).toEqual(['read 12'])
-    expect(r.records[0].patch.read?.ci.basis).toBe('selected')
+  // Acceptance fixes final review C1 (spec §9): the selected checks decide beside the ones the repository requires, so
+  // selected mode reads the branch rules too — a required check that has not reported is waited for, and rules that
+  // cannot be read hold the verdict exactly as required mode does; a selected check seen failing still fails
+  describe('selected mode reads the branch rules too', () => {
+    const SELECTED = { job: { github: { ...POLICY, ci: { mode: 'selected' as const, selectedChecks: ['build'] } } }, run: { githubState: BOUND } }
+    it('waits for a check the rules require that has not reported', async () => {
+      const r = rig({ rules: { ok: true, names: ['e2e'] } })
+      r.watch.onState(stateOf(SELECTED))
+      await r.at(0)
+      expect(r.calls).toEqual(['read 12', 'rules'])
+      expect(r.records[0].patch.read?.ci).toMatchObject({ basis: 'selected', verdict: 'pending' })
+    })
+    it('holds the verdict while the rules cannot be read', async () => {
+      const r = rig({ rules: { ok: false, kind: 'network' } })
+      r.watch.onState(stateOf(SELECTED))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci.verdict).toBe('pending')
+    })
+    it('still fails on a selected check seen failing while the rules cannot be read', async () => {
+      const r = rig({ rules: { ok: false, kind: 'network' }, read: prRead({ checks: [{ externalId: 'run:1', name: 'build', status: 'completed', conclusion: 'failure', required: false, jobId: 1 }] }) })
+      r.watch.onState(stateOf(SELECTED))
+      await r.at(0)
+      expect(r.records[0].patch.read?.ci).toMatchObject({ verdict: 'failed', failing: 'build' })
+    })
   })
 
   it('leaves a merged PR alone, and a closed one once the Run is not carried any more', async () => {
@@ -271,6 +289,16 @@ describe('githubWatch', () => {
     expect(r.records).toHaveLength(1)
     await r.at(20_000)
     expect(r.records).toHaveLength(2)
+  })
+
+  // Acceptance fixes Task 2: gh's words go to the Host log, and they can carry a token
+  it('logs gh’s failure with any secret in it redacted', async () => {
+    const TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const r = rig({ fail: { at: 'read', kind: 'network', message: `fatal: https://x-access-token:${TOKEN}@github.com/o/r.git` } })
+    r.watch.onState(stateOf({ run: { githubState: BOUND } }))
+    await r.at(0)
+    expect(r.logs.length).toBeGreaterThan(0)
+    expect(r.logs.join('\n')).not.toContain(TOKEN)
   })
 
   it('logs a failure kind once while the Run already carries it', async () => {
@@ -796,6 +824,66 @@ describe('githubWatch', () => {
         expect(spent.gates).toEqual([
           { taskId: 'tsk_l', since: ISO0, kind: 'github-ci-outside', question: expect.stringContaining('Astera already reran it as many times as this Job allows (2)'), options: OPTIONS }
         ])
+      })
+
+      // Acceptance fixes Task 5: written down before gh is asked, recorded and cleared after; a rerun that did not happen
+      // clears it, and one a dead Host left pending counts against the budget, so the budget never overruns
+      it('writes a rerun down as pending before asking gh, then records it and clears the pending', async () => {
+        const r = rig({ read: INFRA() })
+        r.watch.onState(withRound())
+        await r.at(0)
+        const patches = r.records.map((x) => x.patch)
+        const pendingAt = patches.findIndex((p) => p.rerunPending)
+        const recordedAt = patches.findIndex((p) => p.rerun)
+        expect(pendingAt).toBeGreaterThanOrEqual(0)
+        expect(recordedAt).toBeGreaterThan(pendingAt)
+        expect(patches[recordedAt]).toMatchObject({ rerun: { attempt: 1, by: 'astera' }, rerunPending: null })
+      })
+      it('a rerun gh refused clears its pending', async () => {
+        const r = rig({ read: INFRA(), rerun: [{ ok: false, kind: 'other', message: 'no' }] })
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(r.records.map((x) => x.patch).filter((p) => 'rerunPending' in p).map((p) => p.rerunPending === null)).toEqual([false, true])
+      })
+      it('counts a rerun a dead Host left pending against the budget', async () => {
+        const r = rig({ read: INFRA(2) })
+        r.watch.onState(withRound(undefined, { githubState: { ...BOUND, reruns: [rerun(1)], rerunPending: rerun(2) } as never }))
+        await r.at(0)
+        expect(reruns(r)).toEqual([])
+        expect(r.gates[0]?.question).toContain('Astera already reran it as many times as this Job allows (2)')
+      })
+      // Acceptance fixes final review I1: the dead Host's pending is still counted after the next rerun is recorded, so two
+      // more failures do not get three reruns out of a budget of two
+      it('counts a dead Host’s pending after the next rerun too: the budget never overruns', async () => {
+        const left = { ...BOUND, rerunPending: rerun(1) } as RunGitHubState
+        const first = rig({ read: INFRA(2) })
+        first.watch.onState(withRound(undefined, { githubState: left }))
+        await first.at(0)
+        expect(reruns(first)).toHaveLength(1)
+        let gs = left
+        for (const x of first.records) gs = nextGitHubState(gs, x.patch, ISO0)!
+        const second = rig({ read: INFRA(3) })
+        second.watch.onState(withRound(undefined, { githubState: gs }))
+        await second.at(0)
+        expect(reruns(second)).toEqual([])
+        expect(second.gates[0]?.question).toContain('Astera already reran it as many times as this Job allows (2)')
+      })
+      it('keeps the pending when gh’s answer was lost on the network: the rerun may have run', async () => {
+        const r = rig({ read: INFRA(), rerun: [{ ok: false, kind: 'network', message: 'connection reset' }] })
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(r.records.map((x) => x.patch).filter((p) => 'rerunPending' in p).map((p) => p.rerunPending === null)).toEqual([false])
+      })
+      // Final review M1: a rerun is asked only once its pending is written, so none goes uncounted
+      it('asks gh for no rerun while the pending cannot be written, and asks once it can', async () => {
+        const r = rig({ read: INFRA() })
+        r.status.record = 500
+        r.watch.onState(withRound())
+        await r.at(0)
+        expect(reruns(r)).toEqual([])
+        r.status.record = 200
+        await r.at(PENDING_MS)
+        expect(reruns(r)).toHaveLength(1)
       })
 
       it('counts only its own reruns against the budget', async () => {

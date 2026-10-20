@@ -184,8 +184,9 @@ review decision is `pr.reviewDecision`. It also carries `pushedSha` (the commit 
 head on GitHub Astera did not push, until it pushes again), `base` (the pull request's base as bound, with `reboundAt`
 once `runs reconverge` bound it again after a retarget), `repair` (`attempt` of `max` once the lifecycle Task has
 repaired, and while a repair runs its `subject`: `ci` with the failing `check`, `local` with the check, or `review`)
-and `noCi` (a person chose to go on without CI for the head). It is derived on every read, so `runs.get` always shows
-what Astera last read.
+`noCi` (a person chose to go on without CI for the head) and `review` (Astera's review of the lifecycle Task: `running`,
+`passed`, or `found-issues` with the count of `blocking` issues the last review found). It is derived on every read, so
+`runs.get` always shows what Astera last read.
 
 ### Jobs and Runs
 

@@ -37,6 +37,9 @@ export interface RunGitHubPatch {
   rebase?: { baseBranch: string }
   /** A CI run's failed jobs were rerun (G4). */
   rerun?: Omit<GitHubRerun, 'at'>
+  /** A rerun about to be asked of gh, written down first (acceptance fixes Task 5); null clears it, after the rerun is
+   *  recorded or refused. */
+  rerunPending?: Omit<GitHubRerun, 'at'> | null
   /** The review's verdict (G5b): the evidence of merge-ready, or null for a fresh verdict that is not (it clears both
    *  the evidence and an earlier withdrawal, so the `invalidated` beside it is this verdict's). */
   mergeReady?: Omit<MergeReadyEvidence, 'evaluatedAt'> | null
@@ -116,10 +119,14 @@ export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitH
     delete next.externalHeadChange
   }
   if (patch.noCi && base.ciOverride?.sha !== patch.noCi.sha) next.ciOverride = { sha: patch.noCi.sha, at: now }
-  if (patch.rerun) {
-    next.reruns = [...(base.reruns ?? []), { ...patch.rerun, at: now }].slice(-RERUNS_MAX)
-    entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
-  }
+  // A pending still there when the next rerun is asked was never confirmed, and may have run: it is kept, unconfirmed and
+  // with no log line, so the budget goes on counting it (acceptance fixes final review I1)
+  const unconfirmed = patch.rerunPending && base.rerunPending ? [{ ...base.rerunPending, unconfirmed: true as const }] : []
+  if (patch.rerun || unconfirmed.length > 0)
+    next.reruns = [...(base.reruns ?? []), ...unconfirmed, ...(patch.rerun ? [{ ...patch.rerun, at: now }] : [])].slice(-RERUNS_MAX)
+  if (patch.rerun) entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
+  if (patch.rerunPending === null) delete next.rerunPending
+  else if (patch.rerunPending) next.rerunPending = { ...patch.rerunPending, at: now }
   if (patch.mergeReady !== undefined) {
     delete next.invalidated
     if (patch.mergeReady === null) delete next.mergeReady
@@ -223,7 +230,8 @@ function rerunOk(r: unknown): boolean {
     isStr(r.sha) &&
     (r.check === undefined || isStr(r.check)) &&
     (r.externalId === undefined || isStr(r.externalId)) &&
-    (r.by === 'astera' || r.by === 'person')
+    (r.by === 'astera' || r.by === 'person') &&
+    (r.unconfirmed === undefined || r.unconfirmed === true)
   )
 }
 
@@ -243,6 +251,7 @@ export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
     return 'externalHead is malformed'
   if (v.noCi !== undefined && !(isObj(v.noCi) && isStr(v.noCi.sha))) return 'noCi is malformed'
   if (v.rerun !== undefined && !rerunOk(v.rerun)) return 'rerun is malformed'
+  if (v.rerunPending !== undefined && v.rerunPending !== null && !rerunOk(v.rerunPending)) return 'rerunPending is malformed'
   if (v.mergeReady !== undefined && v.mergeReady !== null && !mergeReadyOk(v.mergeReady)) return 'mergeReady is malformed'
   if (v.invalidated !== undefined && !(isObj(v.invalidated) && isStr(v.invalidated.reason))) return 'invalidated is malformed'
   // The re-bind is reconvergeRun's own (G6): never taken off the wire (G6 final review M8)

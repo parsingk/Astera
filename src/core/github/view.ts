@@ -111,6 +111,10 @@ export interface GitHubLifecycleView {
   repair?: { attempt: number; max: number; subject?: RepairSubject }
   /** A person chose to go on without CI for the head (G3b2). */
   noCi?: true
+  /** Where Astera's review of the lifecycle Task stands (acceptance fixes Task 3): running, passed (the review completed
+   *  the Task; a person's completion past the policy is no review), or the blocking issues the last review found on a
+   *  Task not completed. Absent before any review. */
+  review?: { state: 'running' } | { state: 'passed' } | { state: 'found-issues'; blocking: number }
 }
 
 /** Merge-ready holds while its evidence's head is the PR's head, the PR is open and nothing withdrew it (§5.4). */
@@ -187,5 +191,15 @@ export function githubLifecycleOf(
     view.repair = { attempt: Math.min(lifecycle.repairs.done, lifecycle.repairs.max), max: lifecycle.repairs.max, ...(subject ? { subject } : {}) }
   }
   if (gs?.ciOverride && gs.ciOverride.sha === gs.headSha) view.noCi = true
+  const review = lifecycle ? reviewOf(lifecycle.task) : undefined
+  if (review) view.review = review
   return view
+}
+
+/** Where Astera's review of the lifecycle Task stands (GitHubLifecycleView.review). */
+function reviewOf(task: Task): GitHubLifecycleView['review'] {
+  if (task.status === 'reviewing') return { state: 'running' }
+  if (task.status === 'completed') return task.completionOverride === undefined ? { state: 'passed' } : undefined
+  const blocking = (task.reviewIssues ?? []).filter((i) => i.blocking).length
+  return blocking > 0 ? { state: 'found-issues', blocking } : undefined
 }

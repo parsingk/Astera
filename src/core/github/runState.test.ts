@@ -191,6 +191,38 @@ describe('nextGitHubState', () => {
     expect(s.reruns?.[0].attempt).toBe(7)
   })
 
+  // Acceptance fixes Task 5: a rerun is written down before gh is asked, so a Host that dies between the two still counts
+  // it; the rerun's own record clears it, and so does a rerun that did not happen
+  it('keeps a pending rerun until its rerun is recorded or it is cleared, and logs nothing for it', () => {
+    const rerun = { ciRunId: 9, attempt: 1, sha: A, check: 'npm-network', by: 'astera' as const }
+    const base = nextGitHubState(undefined, { binding: BINDING }, T1)!
+    const pending = nextGitHubState(base, { rerunPending: rerun }, T2)!
+    expect(pending.rerunPending).toEqual({ ...rerun, at: T2 })
+    expect(pending.log).toEqual(base.log)
+    const done = nextGitHubState(pending, { rerun, rerunPending: null }, T2)!
+    expect(done).not.toHaveProperty('rerunPending')
+    expect(done.reruns).toEqual([{ ...rerun, at: T2 }])
+    expect(nextGitHubState(pending, { rerunPending: null }, T2)).not.toHaveProperty('rerunPending')
+    expect(parseRunGitHubPatch({ rerunPending: rerun })).toEqual({ rerunPending: rerun })
+    expect(parseRunGitHubPatch({ rerunPending: null })).toEqual({ rerunPending: null })
+    expect(parseRunGitHubPatch({ rerunPending: { ciRunId: 'x' } })).toBe('rerunPending is malformed')
+  })
+
+  // Acceptance fixes final review I1: a pending still there when the next rerun is asked was never confirmed — a Host died
+  // after asking, or gh's answer was lost — and it may have run, so it is kept as an unconfirmed rerun the budget counts
+  it('keeps a pending the next ask finds as an unconfirmed rerun, and logs nothing for it', () => {
+    const p1 = { ciRunId: 9, attempt: 1, sha: A, check: 'npm-network', by: 'astera' as const }
+    const p2 = { ...p1, attempt: 2 }
+    const left = nextGitHubState(nextGitHubState(undefined, { binding: BINDING }, T1)!, { rerunPending: p1 }, T1)!
+    const next = nextGitHubState(left, { rerunPending: p2 }, T2)!
+    expect(next.reruns).toEqual([{ ...p1, at: T1, unconfirmed: true }])
+    expect(next.rerunPending).toEqual({ ...p2, at: T2 })
+    expect(next.log).toEqual(left.log)
+    // The rerun's own record confirms its pending: nothing is kept twice
+    const done = nextGitHubState(next, { rerun: p2, rerunPending: null }, T2)!
+    expect(done.reruns).toEqual([{ ...p1, at: T1, unconfirmed: true }, { ...p2, at: T2 }])
+  })
+
   // GitHub lifecycle G5b (design §5.2, §5.4): merge-ready with its evidence, and why it was withdrawn
   describe('merge-ready', () => {
     const evidence = { pullRequestNumber: 12, headSha: A, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: ['build'] }

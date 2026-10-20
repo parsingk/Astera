@@ -14,6 +14,7 @@ import type { OpenPr } from '../core/github/prBinding'
 import { parseGitHubRemote, repoOfBinding, repoSlug, type GitHubRepo } from '../core/github/remote'
 import type { RunGitHubPatch } from '../core/github/runState'
 import { isLifecycleTask } from '../core/orchestration/lifecycleTask'
+import { sanitize } from '../core/orchestration/checkpoint'
 import type { OrchState } from '../core/orchestration/state'
 import type { CheckResult, GitHubGateKind, Task } from '../core/orchestration/types'
 import { t as translate, type Lang, type MessageKey, type MessageParams } from '../core/i18n'
@@ -91,12 +92,17 @@ const transientKind = (kind: string): boolean => kind === 'network' || kind === 
 const awaitingPush = (t: Task): boolean => isLifecycleTask(t) && t.status === 'validating' && t.ciWait !== undefined && t.ciWait.sha === undefined
 
 export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
+  // git's and gh's own words ride in what is logged, and can carry a token: every line is redacted on its way
+  const log = (m: string): void => d.log(sanitize(m))
   const now = (): number => (d.now ? d.now() : Date.now())
   const say = (key: MessageKey, params?: MessageParams): string => translate(d.lang?.() ?? 'en', key, params)
   /** A GitHub question about the round the Task hands over now (G3b2). */
-  const askAbout = async (task: Task, kind: GitHubGateKind, question: string, options: string[]): Promise<void> => {
+  /** A question carries git's and gh's own words, which can hold a token (a remote URL's): redacted before it leaves for
+   *  the gate or the log (acceptance fixes Task 2), as the gate command redacts it again. */
+  const askAbout = async (task: Task, kind: GitHubGateKind, asked: string, options: string[]): Promise<void> => {
+    const question = sanitize(asked)
     const r = await d.openGitHubGate({ taskId: task.id, since: task.ciWait!.since, kind, question, options })
-    if (r.status >= 400) d.log(`lifecycle ci: task ${task.id}: the ${kind} question could not be opened: ${JSON.stringify(r.body)} — ${question}`)
+    if (r.status >= 400) log(`lifecycle ci: task ${task.id}: the ${kind} question could not be opened: ${JSON.stringify(r.body)} — ${question}`)
   }
   const inFlight = new Map<string, Promise<void>>()
   /** Each round last carried (`taskId` → the wait it carried, `waitKey`) and when it may be taken again. */
@@ -125,7 +131,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
       transient.set(tries, n)
       // A rate limit holds every read of the watch for RATE_HOLD_MS; the carrier waits as long (G6 final review M4)
       const wait = kind === 'rate-limit' ? RATE_HOLD_MS : RETRY_MS + 1_000
-      d.log(`lifecycle ci: task ${task.id}: ${kind} failure ${n} of ${TRANSIENT_TRIES}, tried again in ${Math.round(wait / 1000)} s — ${question}`)
+      log(`lifecycle ci: task ${task.id}: ${kind} failure ${n} of ${TRANSIENT_TRIES}, tried again in ${Math.round(wait / 1000)} s — ${question}`)
       schedule(wait, () => {
         if (latest && !stopped) api.onState(latest)
       })
@@ -180,7 +186,7 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
       // design §4.2: GitHub has commits on the branch Astera does not know; "continue" brings them in (G3b2)
       if (pushed.kind === 'rejected') {
         const noted = await d.record({ runId: run.id, patch: { externalHead: {} } })
-        if (noted.status >= 300) d.log(`lifecycle ci: run ${run.id}: the refused push could not be recorded: ${JSON.stringify(noted.body)}`)
+        if (noted.status >= 300) log(`lifecycle ci: run ${run.id}: the refused push could not be recorded: ${JSON.stringify(noted.body)}`)
         return askGitHub('github-external-head', say('jobs.gate.github.q.externalHeadPush', { branch: info.branch, detail: pushed.detail }), ['continue', 'mark-failed'])
       }
       return askUnlessTransient(pushed.kind, say('jobs.gate.github.carry.pushFailed', { why: say(PUSH_WORDS[pushed.kind]), detail: pushed.detail }))
@@ -256,10 +262,10 @@ export function createLifecycleCi(d: LifecycleCiDeps): LifecycleCi {
           })
           .catch(async (e) => {
             transient.delete(tries)
-            d.log(`lifecycle ci: task ${task.id}: ${String(e)}`)
+            log(`lifecycle ci: task ${task.id}: ${String(e)}`)
             await askAbout(task, 'github-carry', say('jobs.gate.github.carry.threw', { error: String(e) }), ['retry', 'mark-failed'])
           })
-          .catch((e) => d.log(`lifecycle ci: task ${task.id}: ${String(e)}`))
+          .catch((e) => log(`lifecycle ci: task ${task.id}: ${String(e)}`))
           .finally(() => {
             inFlight.delete(task.id)
             cooling.set(task.id, { wait: waitKey(task), until: now() + RETRY_MS })

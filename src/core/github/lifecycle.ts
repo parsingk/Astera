@@ -218,6 +218,9 @@ export interface GitHubRerun {
   externalId?: string
   by: 'astera' | 'person'
   at: string
+  /** A rerun written down as pending that nothing confirmed — the Host died after asking gh, or gh's answer was lost —
+   *  kept once the next rerun was asked, since it may have run (acceptance fixes final review I1). The budget counts it. */
+  unconfirmed?: true
 }
 
 export interface GitHubLogEntry {
@@ -254,6 +257,10 @@ export interface RunGitHubState {
   sourceChanged?: { at: string }
   /** At most RERUNS_MAX, oldest dropped (G4). */
   reruns?: GitHubRerun[]
+  /** A rerun written down before gh was asked for it, until the rerun's own record clears it, or its refusal does
+   *  (acceptance fixes Task 5): a Host that died between asking and recording leaves it here, and the budget counts it,
+   *  so the budget never overruns. It holds no verdict. */
+  rerunPending?: GitHubRerun
   /** The pull request is ready to merge, as the review's verdict decided (G5b); shown while its head is the PR's head
    *  and nothing withdrew it. */
   mergeReady?: MergeReadyEvidence
@@ -290,8 +297,8 @@ export const GITHUB_LOG_MAX = 100
 export const RERUNS_MAX = 20
 
 /** The names of the checks CI is judged on by `basis`, sorted, once (GitHub lifecycle G5b): the required ones present,
- *  the selected ones present, or every reported one but those settled skipped or neutral (evaluateCi's all-reported
- *  targets). Kept with merge-ready; a later read of the same head that judges on other names withdraws it. Here, not in
+ *  the selected ones present beside the required ones (acceptance fixes Task 1), or every reported one but those settled
+ *  skipped or neutral (evaluateCi's all-reported targets). Kept with merge-ready; a later read of the same head that judges on other names withdraws it. Here, not in
  *  ciVerdict, because the renderer's build reaches it through lifecycleTask and ciVerdict reaches gh. */
 export function ciTargetNames(checks: readonly GitHubCiCheck[], basis: CiBasis, selected: readonly string[] = []): string[] {
   const nothingChecked = (c: GitHubCiCheck): boolean =>
@@ -300,7 +307,7 @@ export function ciTargetNames(checks: readonly GitHubCiCheck[], basis: CiBasis, 
     basis === 'required'
       ? checks.filter((c) => c.required)
       : basis === 'selected'
-        ? checks.filter((c) => selected.includes(c.name))
+        ? checks.filter((c) => c.required || selected.includes(c.name))
         : checks.filter((c) => !nothingChecked(c))
   return [...new Set(targets.map((c) => c.name))].sort()
 }
