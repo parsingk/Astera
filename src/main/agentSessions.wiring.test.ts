@@ -26,7 +26,9 @@ describe('ipc.ts marks the sessions an agent starts', () => {
     expect(coordinator).toMatch(/spawnSession\(\{ \.\.\.o, startedBy: 'agent' \}\)/)
   })
 
-  it('never the person’s own new session', () => {
+  // Review M2: the shared body both paths go through, not only the handler's line
+  it('never the person’s own new session, nor the body both paths share', () => {
+    expect(between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")).not.toMatch(/startedBy/)
     expect(between("ipcMain.handle('sessions.spawn'", '\n')).not.toMatch(/startedBy/)
   })
 })
