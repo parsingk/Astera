@@ -30,6 +30,14 @@ const STATES = Object.keys(STATE_WORDS) as GitHubLifecycleState[]
 const stateKey = (s: GitHubLifecycleState): MessageKey => `jobs.github.state.${s}` as MessageKey
 
 /** Every key the block says, for the all-languages test. */
+/** GitHub's own review decision on the pull request, in words (acceptance fixes Task 3); a decision GitHub adds later says
+ *  nothing. Shown beside Astera's review, never instead of it. */
+const GITHUB_REVIEW_KEY: Partial<Record<string, MessageKey>> = {
+  APPROVED: 'jobs.github.githubReview.approved',
+  CHANGES_REQUESTED: 'jobs.github.githubReview.changesRequested',
+  REVIEW_REQUIRED: 'jobs.github.githubReview.reviewRequired'
+}
+
 export const GITHUB_BLOCK_KEYS: readonly string[] = [
   ...STATES.map(stateKey),
   'jobs.github.title',
@@ -53,6 +61,9 @@ export const GITHUB_BLOCK_KEYS: readonly string[] = [
   'jobs.github.externalHeadNoSha',
   'jobs.github.rebound',
   'jobs.github.noCi',
+  'jobs.github.review.passed',
+  'jobs.github.review.foundIssues',
+  ...Object.values(GITHUB_REVIEW_KEY).filter((k): k is MessageKey => k !== undefined),
   'jobs.github.sourceChanged',
   'jobs.github.noLocalCheck',
   'jobs.github.required',
@@ -111,6 +122,7 @@ export function GitHubBlock(p: {
           ? t(MERGE_STATE_KEY[g.pr.mergeStateStatus]!)
           : null
       : null
+  const githubReview = g.pr?.reviewDecision ? GITHUB_REVIEW_KEY[g.pr.reviewDecision] : undefined
   return (
     <div className="detail-completion detail-github">
       <div className="detail-github-head">
@@ -132,6 +144,10 @@ export function GitHubBlock(p: {
           {g.failing.summary && <span className="detail-github-summary"> — {g.failing.summary.split('\n')[0]}</span>}
         </p>
       )}
+      {/* Where Astera's review stands once it has spoken; while it runs, the state line says so (acceptance fixes Task 3) */}
+      {g.review?.state === 'passed' && <p className="detail-github-line detail-github-ready">{t('jobs.github.review.passed')}</p>}
+      {g.review?.state === 'found-issues' && <p className="detail-github-line warn-text">{t('jobs.github.review.foundIssues', { count: g.review.blocking })}</p>}
+      {githubReview && <p className={`detail-github-line${g.pr?.reviewDecision === 'CHANGES_REQUESTED' ? ' warn-text' : ''}`}>{t(githubReview)}</p>}
       {g.mergeReady && (
         <p className="detail-github-line detail-github-ready">
           {t('jobs.github.mergeReady', { sha: short(g.mergeReady.headSha) })}

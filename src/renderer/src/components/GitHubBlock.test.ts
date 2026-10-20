@@ -97,6 +97,19 @@ describe('GitHubBlock', () => {
     expect(checkMarkOf({ status: 'queued' })).toBe('●')
   })
 
+  // Acceptance fixes Task 3 (spec Product: "Review state"): the block says the review passed or what it found, and what
+  // GitHub's own review says
+  it('says Astera’s review passed or the blocking issues it found, and GitHub’s review decision', () => {
+    expect(render({ state: 'ci-passed', pr: PR, review: { state: 'passed' } })).toContain('jobs.github.review.passed')
+    expect(render({ state: 'awaiting-push', pr: PR, review: { state: 'found-issues', blocking: 2 } })).toContain('jobs.github.review.foundIssues {"count":2}')
+    // While it runs, the state line already says so
+    expect(render({ state: 'reviewing', pr: PR, review: { state: 'running' } })).not.toContain('jobs.github.review.')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'CHANGES_REQUESTED' } })).toContain('jobs.github.githubReview.changesRequested')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'APPROVED' } })).toContain('jobs.github.githubReview.approved')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'REVIEW_REQUIRED' } })).toContain('jobs.github.githubReview.reviewRequired')
+    expect(render({ state: 'ci-passed', pr: { ...PR, reviewDecision: 'SOMETHING_NEW' } })).not.toContain('jobs.github.githubReview')
+  })
+
   // Design §7.2 S16
   it('warns when no Task names a local check, and only then', () => {
     expect(render({ state: 'pr-bound', pr: PR }, true)).toContain('jobs.github.noLocalCheck')

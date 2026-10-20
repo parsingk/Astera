@@ -184,6 +184,21 @@ describe('githubLifecycleOf', () => {
     expect(githubLifecycleOf(POLICY, gs, { task: validating, repairs: { done: 2, max: 3 }, blocked: { configId: 'cfg_lint', name: 'Lint' } })?.repair).toEqual({ attempt: 2, max: 3 })
   })
 
+  // Acceptance fixes Task 3 (spec Product: "Review state"): where Astera's review of the lifecycle Task stands
+  it('says where Astera’s review stands: running, passed, or the blocking issues it found', () => {
+    const task = (over: Partial<Task>): Task => ({ id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub', spec: 's', deps: [], status: 'validating', consecutiveFailures: 0, createdAt: 'T', updatedAt: 'T', ...over })
+    const review = (over: Partial<Task>) => githubLifecycleOf(POLICY, bound(), { task: task(over) })?.review
+    expect(review({ status: 'reviewing' })).toEqual({ state: 'running' })
+    expect(review({ status: 'completed' })).toEqual({ state: 'passed' })
+    const issues = [{ severity: 'high', title: 'a', blocking: true }, { severity: 'low', title: 'b', blocking: false }, { severity: 'high', title: 'c', blocking: true }] as Task['reviewIssues']
+    expect(review({ status: 'dispatched', reviewIssues: issues })).toEqual({ state: 'found-issues', blocking: 2 })
+    // Not reviewed yet, a person's completion past the policy, and a review with only notes say nothing
+    expect(review({ status: 'validating' })).toBeUndefined()
+    expect(review({ status: 'completed', completionOverride: { reason: 'r', at: 'T' } })).toBeUndefined()
+    expect(review({ status: 'validating', reviewIssues: [{ severity: 'low', title: 'b', blocking: false }] as Task['reviewIssues'] })).toBeUndefined()
+    expect(githubLifecycleOf(POLICY, bound())).not.toHaveProperty('review')
+  })
+
   it('names PR candidates and a changed source', () => {
     expect(githubLifecycleOf(POLICY, { log: [], seq: 1, prCandidates: [12, 13], sourceChanged: { at: 'T' } })).toEqual({
       state: 'unbound', candidates: [12, 13], sourceChanged: true
