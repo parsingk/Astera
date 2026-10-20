@@ -7,6 +7,7 @@ import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { attachConsoleLinks } from '../terminalLinks'
+import { activationFocusHeld } from '../lib/focusHold'
 
 /**
  * Project terminal body. Subscribes to terminal:data, and input goes to the PTY via terminal.write.
@@ -143,7 +144,7 @@ export function TerminalBody({
   // Focus when this tab becomes active (a tab click) — the same shape as TerminalView's active effect.
   // Unlike a session, a terminal has no state such as 'exited', so active is all that has to be checked
   useEffect(() => {
-    if (active) termRef.current?.focus()
+    if (active && !activationFocusHeld()) termRef.current?.focus()
   }, [active])
 
   // Clear — does nothing on the initial render (nonce 0)

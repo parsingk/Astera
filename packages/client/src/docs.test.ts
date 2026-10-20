@@ -42,6 +42,21 @@ const hostConstant = (file: string, name: string): number => {
   if (!m) throw new Error(`${file} has no ${name}`)
   return m[1].split('*').reduce((n, f) => n * Number(f.trim().replace(/_/g, '')), 1)
 }
+/** The members of a string-literal union of the Host's source or this package's, `export type NAME =\n  | 'a'\n  | 'b'`,
+ *  read as text for the same reason. */
+/** A string union's members, read from its source: one `  | 'member'` per line, doc comments between them stepped over. */
+const unionOf = (file: string, name: string): string[] => {
+  const lines = read(file).split(/\r?\n/)
+  const at = lines.findIndex((l) => l.startsWith(`export type ${name} =`))
+  if (at < 0) throw new Error(`${file} has no ${name}`)
+  const out: string[] = []
+  for (const l of lines.slice(at + 1)) {
+    const member = /^ {2}\| '([\w-]+)'$/.exec(l)
+    if (member) out.push(member[1])
+    else if (!/^ {2}(\/\*\*|\/\/)/.test(l)) break
+  }
+  return out
+}
 const RECEIPT_TTL_MS = hostConstant('src/host/orch.ts', 'RECEIPT_TTL_MS')
 const RECEIPTS_PER_CALLER = hostConstant('src/host/orch.ts', 'RECEIPTS_PER_CALLER')
 const SEGMENT_EVENTS = hostConstant('src/host/eventLog.ts', 'EVENT_SEGMENT_EVENTS')
@@ -64,6 +79,36 @@ describe('docs/sdk.md', () => {
     const known = new Set<string>([...methods, ...EVENT_TYPES, 'runs.cancel'])
     expect(named.length).toBeGreaterThan(20)
     expect(named.filter((n) => !known.has(n))).toEqual([])
+  })
+
+  // GitHub lifecycle G3c2: GitHubLifecycle.state is a union typed twice, in the Host and here; a state the Host derives
+  // and the package does not name leaves a script's switch with a case it cannot write
+  it('types every GitHub lifecycle state the Host derives, and names each', () => {
+    const states = unionOf('src/core/github/view.ts', 'GitHubLifecycleState')
+    expect(states).toContain('waiting-for-user')
+    expect(unionOf('packages/client/src/types.ts', 'GitHubLifecycleState')).toEqual(states)
+    for (const s of states) expect(section(guide, '## What you can do'), s).toContain(`\`${s}\``)
+  })
+
+  // GitHub lifecycle G5b final review M9: why merge-ready was withheld or withdrawn is a code a script switches on
+  it('types every reason merge-ready is withheld or withdrawn for, as the Host does, and names each', () => {
+    const reasons = unionOf('src/core/github/lifecycle.ts', 'GitHubInvalidatedReason')
+    expect(reasons).toContain('checks-changed')
+    expect(unionOf('packages/client/src/types.ts', 'GitHubInvalidatedReason')).toEqual(reasons)
+    for (const r of reasons) expect(section(guide, '## What you can do'), r).toContain(`\`${r}\``)
+  })
+
+  // GitHub lifecycle G7c: RunEventKind is typed twice too; a kind the Host's timeline makes and the package does not
+  // name, or the guide does not, is a line a script cannot switch on
+  it('types every timeline kind the Host makes, as the Host does, and names each', () => {
+    const kinds = unionOf('src/core/types.ts', 'JobEventKind')
+    expect(kinds).toContain('github-merge-ready')
+    expect(unionOf('packages/client/src/types.ts', 'RunEventKind')).toEqual(kinds)
+    // In the paragraph that lists them, where a missing one shows (final review M6)
+    const at = guide.indexOf("An event's `kind` is one of")
+    const paragraph = guide.slice(at, guide.indexOf('\n\n', at))
+    expect(at).toBeGreaterThan(0)
+    for (const k of kinds) expect(paragraph, k).toContain(`\`${k}\``)
   })
 
   it('names every event type in its Events section, and the README does too', () => {

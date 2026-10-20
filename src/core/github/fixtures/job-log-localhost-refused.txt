@@ -1,0 +1,36 @@
+localhost-refused	Run npm test	﻿2026-10-18T05:10:55.7887887Z ##[group]Run npm test
+localhost-refused	Run npm test	2026-10-18T05:10:55.7889231Z ^[[36;1mnpm test^[[0m
+localhost-refused	Run npm test	2026-10-18T05:10:55.8216583Z shell: /usr/bin/bash -e {0}
+localhost-refused	Run npm test	2026-10-18T05:10:55.8217655Z ##[endgroup]
+localhost-refused	Run npm test	2026-10-18T05:10:55.9617406Z 
+localhost-refused	Run npm test	2026-10-18T05:10:55.9626466Z > test
+localhost-refused	Run npm test	2026-10-18T05:10:55.9628359Z > node --test
+localhost-refused	Run npm test	2026-10-18T05:10:55.9629771Z 
+localhost-refused	Run npm test	2026-10-18T05:10:56.0225008Z TAP version 13
+localhost-refused	Run npm test	2026-10-18T05:10:56.1060226Z # Subtest: the api answers
+localhost-refused	Run npm test	2026-10-18T05:10:56.1094601Z not ok 1 - the api answers
+localhost-refused	Run npm test	2026-10-18T05:10:56.1111036Z   ---
+localhost-refused	Run npm test	2026-10-18T05:10:56.1116101Z   duration_ms: 46.314077
+localhost-refused	Run npm test	2026-10-18T05:10:56.1118685Z   type: 'test'
+localhost-refused	Run npm test	2026-10-18T05:10:56.1122325Z   location: '/home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/fixtures/localhost/api.test.js:4:1'
+localhost-refused	Run npm test	2026-10-18T05:10:56.1127724Z   failureType: 'testCodeFailure'
+localhost-refused	Run npm test	2026-10-18T05:10:56.1130868Z   error: 'fetch failed'
+localhost-refused	Run npm test	2026-10-18T05:10:56.1132457Z   code: 'ERR_TEST_FAILURE'
+localhost-refused	Run npm test	2026-10-18T05:10:56.1136326Z   name: 'TypeError'
+localhost-refused	Run npm test	2026-10-18T05:10:56.1137693Z   stack: |-
+localhost-refused	Run npm test	2026-10-18T05:10:56.1143417Z     node:internal/deps/undici/undici:15270:13
+localhost-refused	Run npm test	2026-10-18T05:10:56.1146181Z     process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+localhost-refused	Run npm test	2026-10-18T05:10:56.1151044Z     async TestContext.<anonymous> (file:///home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/fixtures/localhost/api.test.js:5:13)
+localhost-refused	Run npm test	2026-10-18T05:10:56.1155765Z     async Test.run (node:internal/test_runner/test:1054:7)
+localhost-refused	Run npm test	2026-10-18T05:10:56.1159260Z     async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+localhost-refused	Run npm test	2026-10-18T05:10:56.1162106Z   ...
+localhost-refused	Run npm test	2026-10-18T05:10:56.1226133Z 1..1
+localhost-refused	Run npm test	2026-10-18T05:10:56.1228054Z # tests 1
+localhost-refused	Run npm test	2026-10-18T05:10:56.1233570Z # suites 0
+localhost-refused	Run npm test	2026-10-18T05:10:56.1235359Z # pass 0
+localhost-refused	Run npm test	2026-10-18T05:10:56.1238181Z # fail 1
+localhost-refused	Run npm test	2026-10-18T05:10:56.1240353Z # cancelled 0
+localhost-refused	Run npm test	2026-10-18T05:10:56.1265169Z # skipped 0
+localhost-refused	Run npm test	2026-10-18T05:10:56.1266775Z # todo 0
+localhost-refused	Run npm test	2026-10-18T05:10:56.1268185Z # duration_ms 121.277724
+localhost-refused	Run npm test	2026-10-18T05:10:56.1482190Z ##[error]Process completed with exit code 1.

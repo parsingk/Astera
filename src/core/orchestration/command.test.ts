@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +7,7 @@ import { handleCommand, handleExit, PENDING_START_WINDOW_MS, type HostSession, t
 import { SPAWN_DEADLINE_MS } from '../host/unresponsive'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { ensureProject } from './projects'
+import { RepairNeeded } from '../settings/repairNeeded'
 import { absPath } from '../testPaths'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { DEFAULT_IDLE_WAIT_TIMEOUT_MS, OrchCoordinator, type CoordinatorDeps } from './exec/coordinator'
@@ -22,17 +24,18 @@ import {
 } from './state'
 import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
-import { FAILURE_LIMIT, type CheckResult, type JobRun, type Project, type Task } from './types'
+import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
 import { stateWord } from './cliHuman'
-import { runningRunCount } from './running'
+import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
-import { checkConfigIdsOf } from './convergence'
+import { DEFAULT_BLOCKING_SEVERITY, checkConfigIdsOf } from './convergence'
 import { createCheckWaits } from './checkWaits'
 import { coordinatorReleaseOf } from './exec/releaseDefer'
 import type { ChatAnswerResult, ChatPrompt, ChatPromptList } from '../sessions/chatRead'
 import type { GhResult } from '../github/gh'
 import type { CommitSummary } from '../github/fill'
+import type { RunGitHubState } from '../github/lifecycle'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { parseIssue } from '../github/issue'
 import { issueContext } from '../github/issueSource'
@@ -219,6 +222,36 @@ describe('handleCommand — 역할 인가', () => {
       expect((await call(deps, cmd, {}, 'sess1')).status).toBe(403)
     }
   })
+  // GitHub lifecycle G3c2 (design §7.1): a worker session does not write to GitHub through Astera
+  it('a worker session cannot write to GitHub through Astera, before any gh call', async () => {
+    const deps = await seedWorker()
+    const gh = vi.fn(async () => ({ ok: true, stdout: '', stderr: '' }))
+    deps.github = { run: gh } as never
+    const cases: [string, Record<string, unknown>][] = [
+      ['github-pr-create', { run: 'run_x' }],
+      ['github-ci-rerun', { project: 'p', runId: 1 }],
+      ['jobs-create-from-issue', { project: 'p', issue: 3 }],
+      ['jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }],
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p', githubLifecycle: true }],
+      // Final review M4: the same Job as jobs-create-from-issue, refused the same way and as early
+      ['jobs-create-from-source', { source: 'github', item: '3', project: 'p' }],
+      // G5c: carrying a Run through GitHub again is a GitHub write too
+      ['runs-reconverge', { id: 'run_x' }]
+    ]
+    for (const [cmd, args] of cases) {
+      const r = await call(deps, cmd, args, 'sess1')
+      expect(r.status, cmd).toBe(403)
+      expect((r.body as { error: string }).error, cmd).toBe(`worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`)
+    }
+    expect(gh).not.toHaveBeenCalled()
+  })
+
+  it('the coordinator, the app and a shell are not refused GitHub writes by that check', async () => {
+    const deps = await seedWorker()
+    for (const sessionId of ['coordinator', APP_CALLER, ''])
+      expect((await call(deps, 'github-ci-rerun', { project: 'p', runId: 1 }, sessionId)).body).not.toMatchObject({ error: expect.stringContaining('worker sessions cannot write to GitHub') })
+  })
+
   it('워커 세션은 자기 send·ask를 부를 수 있다', async () => {
     const deps = await seedWorker()
     const d = deps.getState().dispatches[0]
@@ -1219,6 +1252,507 @@ describe('handleCommand — retained dispatch', () => {
 // task-13a: COORDINATOR_ONLY에는 'task-update'가 있었는데 handleCommand의 switch에 케이스가
 // 없어 인가는 통과하고 라우팅에서 404로 죽던 공백. task-update는 canTransition을 우회해
 // 코디네이터가 좌초한 Task를 수동으로 정정하는 유일한 경로다.
+// GitHub lifecycle G3a (design §3.2): task-update is the one path to completed outside the pure layer
+describe('handleCommand — task-update completes a lifecycle Run’s last Task', () => {
+  it('adds the lifecycle Task in the same write', async () => {
+    const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [{ id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'blocked', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }]
+    })
+    const r = await call(deps, 'task-update', { id: 'tsk_a', status: 'completed', reason: 'done by hand' }, '')
+    expect(r.status).toBe(200)
+    const tasks = deps.getState().tasks
+    expect(tasks.filter((t) => t.kind === 'lifecycle').map((t) => [t.runId, t.status, t.deps])).toEqual([['run_1', 'ready', ['tsk_a']]])
+    expect(outcomeOf(deps.getState(), 'run_1')).toBe('running')
+  })
+})
+
+// GitHub lifecycle G3a (design L20, §3.2): while the lifecycle Task is open only Astera's integration Task for it is added
+describe('handleCommand — task-create on a Run carried through GitHub', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (lifecycle: Task['status']) =>
+    makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: lifecycle, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+  const create = (deps: OrchServerDeps, extra: Record<string, unknown> = {}) => call(deps, 'task-create', { runId: 'run_1', spec: 'more', account: 'acc1', ...extra })
+
+  it('refuses a new Task while the lifecycle Task is open', async () => {
+    expect(await create(seeded('validating'))).toEqual({
+      status: 409,
+      body: { error: 'This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends' }
+    })
+    expect((await create(seeded('validating'), { parent: 'tsk_a' })).status).toBe(409)
+  })
+
+  it('takes the integration Task the dispatch loop makes for the lifecycle Task, and any Task once the lifecycle Task ended', async () => {
+    const loop = (deps: OrchServerDeps) => call(deps, 'task-create', { runId: 'run_1', spec: 'merge', account: 'acc1', parent: 'tsk_l', deps: ['tsk_a'] }, APP_CALLER)
+    expect((await loop(seeded('ready'))).status).toBe(200)
+    expect((await create(seeded('completed'))).status).toBe(200)
+  })
+
+  // G3a final review M4: the exemption is the dispatch loop's, not a door for a coordinator
+  it('a coordinator naming the lifecycle Task as parent is refused like any other Task', async () => {
+    expect((await create(seeded('ready'), { parent: 'tsk_l', deps: ['tsk_a'] })).status).toBe(409)
+  })
+
+  // G3a final review M5: tasks add checks run configurations first; the reserved id is refused before that
+  it('tasks add keeps github:ci for the lifecycle Task too', async () => {
+    const r = await call(seeded('completed'), 'tasks-add', { run: 'run_1', spec: 's', account: 'acc1', validate: 'github:ci' })
+    expect(r).toEqual({ status: 400, body: { error: "github:ci is the GitHub lifecycle's own check; Astera adds it" } })
+  })
+
+  // G3a final review M6, and a worker on it: the lifecycle Task has no worker
+  it('no worker is started on the lifecycle Task, by worker-start or tasks dispatch', async () => {
+    const said = 'Astera carries this Task through GitHub itself; it has no worker'
+    expect(await call(seeded('ready'), 'worker-start', { task: 'tsk_l', agent: 'claude', account: 'acc1' })).toEqual({ status: 409, body: { error: said } })
+    expect(await call(seeded('ready'), 'tasks-dispatch', { id: 'tsk_l' }, '')).toEqual({ status: 409, body: { error: said } })
+  })
+
+  it('keeps github:ci for the lifecycle Task', async () => {
+    const plain = makeDeps()
+    const run = await call(plain, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const r = await call(plain, 'task-create', { runId: (run.body as { id: string }).id, spec: 's', account: 'acc1', validate: 'lint,github:ci' })
+    expect(r).toEqual({ status: 400, body: { error: "github:ci is the GitHub lifecycle's own check; Astera adds it" } })
+  })
+})
+
+// GitHub lifecycle G3a (design §3.3): the dispatch loop starts the lifecycle Task's checks in the Run root, no worker
+// GitHub lifecycle G5c (design §3.5): a finished lifecycle Run is carried through GitHub again on request
+describe('handleCommand — runs-reconverge', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (o: { lifecycle?: Task['status']; pr?: 'open' | 'closed' | 'merged' } = {}) =>
+    makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{
+        id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run',
+        ...(o.pr ? { githubState: { log: [], seq: 0, pr: { state: o.pr, isDraft: true, baseBranch: 'main' } } } : {})
+      }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: o.lifecycle ?? 'completed', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+
+  it('adds a ready lifecycle Task to the Run and names it', async () => {
+    const deps = seeded()
+    const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+    expect(r.status).toBe(200)
+    const { runId, taskId } = r.body as { runId: string; taskId: string }
+    expect(runId).toBe('run_1')
+    expect(deps.getState().tasks.find((t) => t.id === taskId)).toMatchObject({ kind: 'lifecycle', status: 'ready', deps: ['tsk_a'] })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')?.status).toBe('completed')
+  })
+
+  it('answers --id missing with 400, an unknown Run with 404, and a Run it cannot carry again with 409, writing nothing', async () => {
+    expect((await call(seeded(), 'runs-reconverge', {})).status).toBe(400)
+    expect((await call(seeded(), 'runs-reconverge', { id: 'run_x' })).status).toBe(404)
+    for (const o of [{ lifecycle: 'validating' as const }, { pr: 'merged' as const }, { pr: 'closed' as const }]) {
+      const deps = seeded(o)
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status, JSON.stringify(o)).toBe(409)
+      expect(deps.getState()).toBe(before)
+    }
+  })
+
+  // G5c final review M9: the other three refusals, through the command
+  it('refuses with 409 a Run never carried, a Job without lifecycle and a Run without a branch', async () => {
+    type S = ReturnType<ReturnType<typeof seeded>['getState']>
+    const variant = async (f: (s: S) => S) => { const d = seeded(); await d.setState(f(d.getState())); return d }
+    const never = await variant((s) => ({ ...s, tasks: s.tasks.filter((t) => t.kind !== 'lifecycle') }))
+    const plain = await variant((s) => ({ ...s, jobs: s.jobs.map(({ github: _g, ...j }) => j) }))
+    const branchless = await variant((s) => ({ ...s, runs: s.runs.map(({ worktree: _w, ...r }) => r) }))
+    for (const deps of [never, plain, branchless]) {
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(409)
+      expect(deps.getState()).toBe(before)
+    }
+  })
+
+  // G5c final review M3, M11: what the record may not know, asked where the Host can — the bound pull request now, and
+  // whether the Run's branch is still there
+  describe('on the Host, with gh', () => {
+    const WT = 'D:/wt/run'
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup,baseRefName'
+    const prJson = (state: string, base = 'main') => JSON.stringify({ number: 12, title: 'x', state, isDraft: false, url: binding.url, headRefName: 'u/a', baseRefName: base, statusCheckRollup: [] })
+    const onHost = (o: { view?: { ok: boolean; stdout?: string; stderr?: string }; branch?: boolean; recorded?: 'open' | 'closed' } = {}) => {
+      const deps = seeded()
+      const s = deps.getState()
+      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState: { log: [], seq: 0, binding, pr: { state: o.recorded ?? ('open' as const), isDraft: true, baseBranch: 'main' } } })) })
+      const calls: string[] = []
+      deps.github = {
+        run: async (args: string[]) => {
+          calls.push(args.join(' '))
+          const v = o.view ?? { ok: true, stdout: prJson('OPEN') }
+          return args.join(' ') === VIEW ? { stdout: '', stderr: '', ...v } : { ok: false, stdout: '', stderr: 'unexpected', exitCode: 1 }
+        },
+        worktreeOf: (p: string) => (o.branch === false || p !== WT ? null : ({ path: WT, repoPath: 'D:/p', branch: 'u/a', baseRef: 'main' } as never)),
+        createPr: async () => { throw new Error('no') },
+        readCommits: async () => { throw new Error('no') },
+        isClean: async () => { throw new Error('no') }
+      } as never
+      return { deps, calls }
+    }
+
+    it('reads the bound pull request now and carries the Run again while it is open', async () => {
+      const { deps, calls } = onHost()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
+      expect(calls).toEqual([VIEW])
+    })
+
+    // G6 (spec §30): reopened on GitHub after the Run completed — the record still says closed
+    it('carries again a pull request reopened since the record said closed', async () => {
+      const { deps } = onHost({ recorded: 'closed', view: { ok: true, stdout: prJson('OPEN') } })
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
+    })
+
+    // G6 final review M1: retargeted on GitHub since the watch last read it — the base the PR has now is bound
+    it('binds the base the pull request has now, not the one the record last read', async () => {
+      const { deps } = onHost({ view: { ok: true, stdout: prJson('OPEN', 'release') } })
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBe(200)
+      expect(deps.getState().runs[0].githubState?.binding?.baseBranch).toBe('release')
+    })
+
+    it('refuses a pull request merged since the record was written, writing nothing', async () => {
+      const { deps } = onHost({ view: { ok: true, stdout: prJson('MERGED') } })
+      const before = deps.getState()
+      const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+      expect(r.status).toBe(409)
+      expect(JSON.stringify(r.body)).toContain('merged')
+      expect(deps.getState()).toBe(before)
+    })
+
+    it('refuses when gh cannot read the pull request, writing nothing', async () => {
+      const { deps } = onHost({ view: { ok: false, stderr: 'HTTP 502' } })
+      const before = deps.getState()
+      expect((await call(deps, 'runs-reconverge', { id: 'run_1' })).status).toBeGreaterThanOrEqual(400)
+      expect(deps.getState()).toBe(before)
+    })
+
+    it('refuses a Run whose branch is gone (its worktree was removed), writing nothing', async () => {
+      const { deps } = onHost({ branch: false })
+      const before = deps.getState()
+      const r = await call(deps, 'runs-reconverge', { id: 'run_1' })
+      expect(r.status).toBe(409)
+      expect(deps.getState()).toBe(before)
+    })
+  })
+})
+
+describe('handleCommand — lifecycle-start', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const seeded = (o: { lifecycle?: Task['status']; worktree?: string | null } = {}) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, ...(o.worktree === null ? {} : { worktree: o.worktree ?? 'D:/wt/run' }) }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: o.lifecycle ?? 'ready', validateConfigIds: ['github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+    const started: { taskId: string; cwd: string }[] = []
+    deps.startValidation = (a) => void started.push(a)
+    return { deps, started }
+  }
+
+  it('moves the lifecycle Task to validating, then starts its checks in the Run root', async () => {
+    const { deps, started } = seeded()
+    expect(await call(deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).toEqual({ status: 200, body: { taskId: 'tsk_l', cwd: 'D:/wt/run' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.status).toBe('validating')
+    expect(started).toEqual([{ taskId: 'tsk_l', cwd: 'D:/wt/run' }])
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_l' }, HOST_CALLER)).status).toBe(200)
+  })
+
+  it('refuses an unknown Task, one that is not a ready lifecycle Task, and a Run with no branch of its own', async () => {
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_x' }, APP_CALLER)).status).toBe(404)
+    expect((await call(seeded().deps, 'lifecycle-start', { task: 'tsk_a' }, APP_CALLER)).status).toBe(409)
+    expect((await call(seeded({ lifecycle: 'validating' }).deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).status).toBe(409)
+    const noBranch = seeded({ worktree: null })
+    expect(await call(noBranch.deps, 'lifecycle-start', { task: 'tsk_l' }, APP_CALLER)).toEqual({ status: 409, body: { error: 'This Run has no branch of its own, so it cannot be carried through GitHub' } })
+    expect(noBranch.started).toEqual([])
+  })
+
+  it('is the dispatch loop’s own: a coordinator, a worker or a shell is refused', async () => {
+    for (const sessionId of ['coordinator', '']) {
+      const { deps, started } = seeded()
+      expect((await call(deps, 'lifecycle-start', { task: 'tsk_l' }, sessionId)).status).toBe(403)
+      expect(started).toEqual([])
+    }
+  })
+})
+
+// GitHub lifecycle G3a (design §4, Review Focus 5): the Host keeps a handed-off round, once, for its own validators only
+describe('handleCommand — lifecycle-ci-begin', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lint = { configId: 'lint', name: 'lint', status: 'passed', exitCode: 0 }
+  const seeded = (host = true) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        { id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['lint', 'github:ci'], reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }
+      ]
+    })
+    // The Host's GitHub deps: what tells this command it runs in the Host
+    if (host) deps.github = { run: async () => ({ ok: true, stdout: '', stderr: '' }), originOf: async () => 'git@github.com:o/r.git' } as never
+    return deps
+  }
+  const begin = (deps: OrchServerDeps, caller: { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }, args: Record<string, unknown> = { taskId: 'tsk_l', done: [lint] }) =>
+    handleCommand(deps, caller, 'lifecycle-ci-begin', args)
+
+  it('keeps the round for the Host’s own validator and for the app’s, once', async () => {
+    const deps = seeded()
+    expect(await begin(deps, { sessionId: HOST_CALLER })).toEqual({ status: 200, body: { taskId: 'tsk_l', ciWait: 'begun' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait?.done).toEqual([lint])
+    const before = deps.getState()
+    expect(await begin(deps, { sessionId: '', role: 'app' })).toEqual({ status: 200, body: { taskId: 'tsk_l', ciWait: 'already' } })
+    expect(deps.getState()).toBe(before)
+  })
+
+  it('refuses anyone else, and anywhere but the Host', async () => {
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'cli' as const }, { sessionId: '', role: 'mcp' as const }, { sessionId: '', role: 'controller' as const }, { sessionId: APP_CALLER }])
+      expect((await begin(seeded(), caller)).status).toBe(403)
+    expect(await begin(seeded(false), { sessionId: HOST_CALLER })).toEqual({ status: 409, body: { error: 'GitHub CI is checked by the Astera Host' } })
+  })
+
+  // G3a final review I1: task-update moves past the transition table, and the handed-over round goes all the same
+  it('task-update moving the lifecycle Task out of validating drops its handed-over round', async () => {
+    const deps = seeded()
+    await begin(deps, { sessionId: HOST_CALLER })
+    expect((await call(deps, 'task-update', { id: 'tsk_l', status: 'ready' })).status).toBe(200)
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait).toBeUndefined()
+  })
+
+  // G3b1: the Host records what the round waits on, and only the Host does
+  it('lifecycle-ci-wait records the pull request and pushed head for the Host alone', async () => {
+    const deps = seeded()
+    await begin(deps, { sessionId: HOST_CALLER })
+    const sha = 'c'.repeat(40)
+    const since = deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait!.since
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'app' as const }, { sessionId: APP_CALLER }])
+      expect((await handleCommand(deps, caller, 'lifecycle-ci-wait', { taskId: 'tsk_l', since, pr: 12, sha })).status).toBe(403)
+    expect(await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-ci-wait', { taskId: 'tsk_l', since, pr: 12, sha })).toEqual({ status: 200, body: { taskId: 'tsk_l', wait: 'recorded' } })
+    expect(deps.getState().tasks.find((t) => t.id === 'tsk_l')!.ciWait).toMatchObject({ pr: 12, sha })
+    expect((await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-ci-wait', { taskId: 'tsk_l', since, pr: 'x', sha })).status).toBe(400)
+    expect((await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-ci-wait', { taskId: 'tsk_l', pr: 12, sha })).status).toBe(400)
+  })
+
+  it('refuses a malformed round, an ordinary Task and an unknown one', async () => {
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_l', done: [{ configId: 3 }] })).status).toBe(400)
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_a', done: [] })).status).toBe(400)
+    expect((await begin(seeded(), { sessionId: HOST_CALLER }, { taskId: 'tsk_x', done: [] })).status).toBe(404)
+  })
+})
+
+// GitHub lifecycle G3b2 (design §4.2-4.4): the Host opens GitHub Gates for a round, and answering one acts on that round
+describe('handleCommand — GitHub Gates', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const SHA = 'c'.repeat(40)
+  type FastForward = (cwd: string, branch: string) => Promise<{ ok: true } | { ok: false; message: string }>
+  const seeded = (fastForward?: FastForward) => {
+    const deps = makeDeps({
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, github, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+        {
+          id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+          reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ciWait: { since: NOW, done: [], pr: 12, sha: SHA, waitingSince: NOW }
+        }
+      ]
+    })
+    const worktreeOf = (p: string) => (p === 'D:/wt/run' ? { id: 'w', repoPath: 'D:/p', path: p, name: 'run', branch: 'u/run', baseRef: 'develop', createdAt: NOW } : null)
+    deps.github = { run: async () => ({ ok: true, stdout: '', stderr: '' }), worktreeOf, ...(fastForward ? { fastForward } : {}) } as never
+    return deps
+  }
+  const open = async (deps: OrchServerDeps, kind = 'github-external-head', options = ['continue', 'mark-failed']): Promise<string> => {
+    const r = await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-gate', { task: 'tsk_l', since: NOW, kind, question: 'q', options })
+    expect(r.status).toBe(200)
+    return (r.body as { id: string }).id
+  }
+  const taskOf = (deps: OrchServerDeps) => deps.getState().tasks.find((t) => t.id === 'tsk_l')!
+
+  it('lifecycle-gate opens a GitHub Gate that keeps the round’s wait, for the Host alone', async () => {
+    const deps = seeded()
+    for (const caller of [{ sessionId: 'coordinator' }, { sessionId: '', role: 'app' as const }, { sessionId: APP_CALLER }])
+      expect((await handleCommand(deps, caller, 'lifecycle-gate', { task: 'tsk_l', since: NOW, kind: 'github-no-ci', question: 'q', options: ['wait'] })).status).toBe(403)
+    const id = await open(deps, 'github-no-ci', ['wait', 'no-ci', 'mark-failed'])
+    expect(deps.getState().gates.find((g) => g.id === id)).toMatchObject({ kind: 'github-no-ci', options: ['wait', 'no-ci', 'mark-failed'], status: 'open' })
+    expect(taskOf(deps)).toMatchObject({ status: 'blocked', ciWait: { sha: SHA } })
+  })
+
+  // Acceptance fixes Task 2: every GitHub question passes here, and its text is carried to the timeline, the journal and
+  // the public event, so a secret in it is redacted here once
+  it('lifecycle-gate redacts a secret in the question', async () => {
+    const deps = seeded()
+    const r = await handleCommand(deps, { sessionId: HOST_CALLER }, 'lifecycle-gate', {
+      task: 'tsk_l', since: NOW, kind: 'github-carry', question: 'push refused: ghp_abcdefghijklmnopqrstuvwxyz0123456789', options: ['retry', 'mark-failed']
+    })
+    expect(r.status).toBe(200)
+    const gate = deps.getState().gates.find((g) => g.id === (r.body as { id: string }).id)!
+    expect(gate.question).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789')
+    expect(gate.question).toContain('[REDACTED]')
+  })
+
+  it('lifecycle-gate refuses a missing round, a kind that is not GitHub’s and malformed answers', async () => {
+    const host = { sessionId: HOST_CALLER }
+    const base = { task: 'tsk_l', since: NOW, kind: 'github-no-ci', question: 'q', options: ['wait'] }
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, since: undefined })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, kind: 'convergence-blocked' })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, options: [] })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, options: [3] })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, question: '' })).status).toBe(400)
+    expect((await handleCommand(seeded(), host, 'lifecycle-gate', { ...base, since: 'another' })).status).toBe(400)
+  })
+
+  it('gate-resolve takes only the answers the Gate offers, and wait goes back to the round’s wait', async () => {
+    const deps = seeded()
+    const id = await open(deps, 'github-ci-cap', ['wait', 'mark-failed'])
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(400)
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'wait' })).status).toBe(200)
+    expect(taskOf(deps)).toMatchObject({ status: 'validating', ciWait: { sha: SHA } })
+  })
+
+  it('continue brings the outside commits into the Run root first, then starts a fresh round', async () => {
+    const ran: string[] = []
+    const deps = seeded(async (cwd, branch) => (ran.push(`${cwd} ${branch} ${taskOf(deps).status}`), { ok: true }))
+    const id = await open(deps)
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(200)
+    expect(ran).toEqual(['D:/wt/run u/run blocked'])
+    expect(taskOf(deps).status).toBe('ready')
+    expect(taskOf(deps).ciWait).toBeUndefined()
+  })
+
+  it('continue that cannot fast-forward is refused with git’s reason, and the question stays open', async () => {
+    const deps = seeded(async () => ({ ok: false, message: 'fatal: Not possible to fast-forward, aborting.' }))
+    const id = await open(deps)
+    expect(await call(deps, 'gate-resolve', { id, resolution: 'continue' })).toEqual({
+      status: 409,
+      body: { error: 'The Run’s branch could not be brought up to date with GitHub: fatal: Not possible to fast-forward, aborting.' }
+    })
+    expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+    expect(taskOf(deps).status).toBe('blocked')
+    const nowhere = seeded()
+    const other = await open(nowhere)
+    expect((await call(nowhere, 'gate-resolve', { id: other, resolution: 'continue' })).status).toBe(409)
+    expect((await call(nowhere, 'gate-resolve', { id: other, resolution: 'mark-failed' })).status).toBe(200)
+  })
+
+  // G3b2 final review M1, M5: a refusal says so before anything moves, as a conflict
+  it('an answer while another question holds the Task is a conflict, and continue does not fast-forward first', async () => {
+    const ran: string[] = []
+    const deps = seeded(async () => (ran.push('ff'), { ok: true }))
+    const id = await open(deps)
+    const state = deps.getState()
+    await deps.setState({ ...state, gates: [...state.gates, { id: 'gat_plain', runId: 'run_1', taskId: 'tsk_l', question: 'q', status: 'open' as const, createdAt: NOW }] })
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'continue' })).status).toBe(409)
+    expect(ran).toEqual([])
+    expect((await call(deps, 'gate-resolve', { id, resolution: 'mark-failed' })).status).toBe(409)
+    expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+  })
+
+  // GitHub lifecycle G4 (design §4.6): answering rerun reruns the failed Actions run of the waited head first, and the
+  // record of that rerun is written with the answer
+  describe('rerun (G4)', () => {
+    const BOUND = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'develop', headBranch: 'u/run', createdByAstera: true, boundAt: NOW }
+    const failedCi = {
+      sha: SHA, basis: 'all-reported' as const, verdict: 'failed' as const, failing: 'npm-network', changedAt: NOW,
+      checks: [
+        { externalId: 'run:50', name: 'build', status: 'completed' as const, conclusion: 'success' as const, required: false, jobId: 50, ciRunId: 8, ciRunAttempt: 1 },
+        { externalId: 'run:70', name: 'npm-network', status: 'completed' as const, conclusion: 'startup-failure' as const, required: false, jobId: 70, ciRunId: 9, ciRunAttempt: 2 }
+      ],
+      failure: { check: 'npm-network', externalId: 'run:70', class: 'infrastructure' as const, summary: 'npm-network (infrastructure): startup failure', diagnostics: [] }
+    }
+    const rerunRig = (answer: { ok: boolean; stderr?: string }, githubState: RunGitHubState = { binding: BOUND, headSha: SHA, ci: failedCi, log: [], seq: 0 }) => {
+      const deps = seeded()
+      const ran: { args: string[]; cwd: string }[] = []
+      const s = deps.getState()
+      void deps.setState({ ...s, runs: s.runs.map((r) => ({ ...r, githubState })) })
+      const github = deps.github as unknown as Record<string, unknown>
+      deps.github = { ...github, run: async (args: string[], cwd: string) => (ran.push({ args, cwd }), { ok: answer.ok, stdout: '', stderr: answer.stderr ?? '' }) } as never
+      return { deps, ran }
+    }
+    const OPTIONS = ['rerun', 'wait', 'mark-failed']
+
+    it('reruns the failed Actions run in the Run’s repository, records it by a person, and the round waits again', async () => {
+      const { deps, ran } = rerunRig({ ok: true })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(ran).toEqual([{ args: ['run', 'rerun', '9', '--failed', '--repo', 'o/r'], cwd: 'D:/wt/run' }])
+      expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 9, attempt: 2, sha: SHA, check: 'npm-network', externalId: 'run:70', by: 'person', at: NOW }])
+      expect(deps.getState().runs[0].githubState?.log.at(-1)).toMatchObject({ kind: 'ci-rerun', sha: SHA, check: 'npm-network' })
+      expect(taskOf(deps)).toMatchObject({ status: 'validating', ciWait: { sha: SHA } })
+      expect(deps.getState().gates.find((g) => g.id === id)).toMatchObject({ status: 'resolved', resolution: 'rerun' })
+    })
+
+    // G4 final review M2: the snapshot keeps 50 checks; the failure itself names its run
+    it('reruns the run the failure names when the snapshot no longer holds its check, and never another of the same name', async () => {
+      const beyond = { ...failedCi, checks: [failedCi.checks[0]], failure: { ...failedCi.failure, ciRunId: 9, ciRunAttempt: 2 } }
+      const { deps, ran } = rerunRig({ ok: true }, { binding: BOUND, headSha: SHA, ci: beyond, log: [], seq: 0 })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(ran.map((r) => r.args.join(' '))).toEqual(['run rerun 9 --failed --repo o/r'])
+      const sameName = { ...failedCi, checks: [{ ...failedCi.checks[1], externalId: 'run:99', ciRunId: 77 }] }
+      const other = rerunRig({ ok: true }, { binding: BOUND, headSha: SHA, ci: sameName, log: [], seq: 0 })
+      const otherId = await open(other.deps, 'github-ci-outside', OPTIONS)
+      expect((await call(other.deps, 'gate-resolve', { id: otherId, resolution: 'rerun' })).status).toBe(409)
+      expect(other.ran).toEqual([])
+    })
+
+    it('a run already going again is waited on, with nothing recorded', async () => {
+      const { deps } = rerunRig({ ok: false, stderr: 'run 9 cannot be rerun; This workflow is already running' })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(200)
+      expect(deps.getState().runs[0].githubState?.reruns).toBeUndefined()
+      expect(taskOf(deps).status).toBe('validating')
+    })
+
+    it('a rerun GitHub refuses is refused with its reason, and the question stays open', async () => {
+      const { deps } = rerunRig({ ok: false, stderr: 'run 9 cannot be rerun; This workflow run cannot be retried' })
+      const id = await open(deps, 'github-ci-outside', OPTIONS)
+      const r = await call(deps, 'gate-resolve', { id, resolution: 'rerun' })
+      expect(r.status).toBe(502)
+      expect((r.body as { error: string }).error).toContain('This workflow run cannot be retried')
+      expect(deps.getState().gates.find((g) => g.id === id)!.status).toBe('open')
+      expect(taskOf(deps).status).toBe('blocked')
+    })
+
+    it('nothing to rerun on the waited head is a conflict, before GitHub is asked', async () => {
+      const passed = { ...failedCi, verdict: 'passed' as const, failure: undefined, failing: undefined }
+      for (const githubState of [{ binding: BOUND, headSha: SHA, ci: passed, log: [], seq: 0 }, { binding: BOUND, headSha: SHA, ci: { ...failedCi, sha: 'd'.repeat(40) }, log: [], seq: 0 }, { log: [], seq: 0 }]) {
+        const { deps, ran } = rerunRig({ ok: true }, githubState)
+        const id = await open(deps, 'github-ci-outside', OPTIONS)
+        expect((await call(deps, 'gate-resolve', { id, resolution: 'rerun' })).status).toBe(409)
+        expect(ran).toEqual([])
+      }
+    })
+  })
+
+  // G3b2 (S10): a check-unavailable question answers only what it offers
+  it('check-unavailable refuses skip-check where the question does not offer it', async () => {
+    const deps = seeded()
+    const state = deps.getState()
+    const gate = { id: 'gat_u', runId: 'run_1', taskId: 'tsk_l', question: 'q', options: ['retry', 'mark-failed'], kind: 'check-unavailable' as const, status: 'open' as const, createdAt: NOW }
+    await deps.setState({ ...state, gates: [gate], tasks: state.tasks.map((t) => (t.id === 'tsk_l' ? { ...t, status: 'blocked' as const, ciWait: undefined } : t)) })
+    deps.startValidation = () => {}
+    expect((await call(deps, 'gate-resolve', { id: 'gat_u', resolution: 'skip-check' })).status).toBe(400)
+  })
+})
+
 describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
@@ -4781,8 +5315,10 @@ describe('handleCommand — convergence', () => {
       listAccounts: () => accounts,
       repairTargetFor: () => ({ kind: 'same-session' as const, sessionId: 'sess1', cwd: 'D:/p', provider: 'claude' as const, accountId: 'accA' }),
       startRepair: (a: { dispatchId: string }) => void box.repairs.push(a.dispatchId),
-      repairOnce: async (a: { taskId: string }) => {
+      repairOnce: async (a: { taskId: string; from?: OrchState }) => {
         box.onces.push(a.taskId)
+        // The real repairOnce commits the answered state with its Dispatch (G3c1 final review M4)
+        if (box.onceResult.ok && a.from) await base.setState(a.from)
         return box.onceResult
       },
       readReviewFile: async () => {
@@ -5095,6 +5631,39 @@ describe('handleCommand — convergence', () => {
     expect(deps2.getState().tasks[0].status).toBe('failed')
     expect(deps2.onces).toEqual([])
   })
+  // GitHub lifecycle G3c1 final review M4: the extra repair opens in the same write as the answer, so no loop sees the
+  // Task ready in between (a lifecycle Task would get a fresh round instead of the repair a person asked for)
+  it('gate-resolve retry-once hands the answered state to repairOnce and commits nothing before it', async () => {
+    const deps = convDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const taskId = deps.getState().tasks[0].id
+    const s = deps.getState()
+    const g = createGate({ ...s, tasks: s.tasks.map((t) => ({ ...t, status: 'validating' as const })) }, { taskId, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] }, NOW)
+    if (!g.ok) throw new Error(g.error)
+    await deps.setState(g.state)
+    const seen: { committed: string | undefined; handed: string | undefined }[] = []
+    deps.repairOnce = async (a: { taskId: string; from?: OrchState }) => {
+      seen.push({ committed: deps.getState().gates.find((x) => x.id === g.value.id)?.status, handed: a.from?.gates.find((x) => x.id === g.value.id)?.status })
+      if (a.from) await deps.setState(a.from)
+      return { ok: true }
+    }
+    expect((await call(deps, 'gate-resolve', { id: g.value.id, resolution: 'retry-once' })).status).toBe(200)
+    expect(seen).toEqual([{ committed: 'open', handed: 'resolved' }])
+    // A retry-once that opens nothing still has the answer recorded
+    const deps2 = convDeps()
+    await call(deps2, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    await call(deps2, 'task-create', { spec: 's', account: 'accA', validate: 'c1' })
+    const s2 = deps2.getState()
+    const g2 = createGate({ ...s2, tasks: s2.tasks.map((t) => ({ ...t, status: 'validating' as const })) }, { taskId: s2.tasks[0].id, question: 'q', kind: 'convergence-exhausted', options: ['retry-once', 'mark-failed'] }, NOW)
+    if (!g2.ok) throw new Error(g2.error)
+    await deps2.setState(g2.state)
+    deps2.repairOnce = async () => ({ ok: false, error: 'task is blocked by an open gate' })
+    const r2 = await call(deps2, 'gate-resolve', { id: g2.value.id, resolution: 'retry-once' })
+    expect((r2.body as { retryOnceFailed?: string }).retryOnceFailed).toBe('task is blocked by an open gate')
+    expect(deps2.getState().gates.find((x) => x.id === g2.value.id)?.status).toBe('resolved')
+  })
+
   // 전체 브랜치 리뷰, Finding 5 — 이 Gate 를 retry-once 로 풀어도, 같은 Task 를 막는 두 번째 Gate가
   // 여전히 열려 있으면(resolveGate 의 stillBlocked) repairOnce 의 openDispatch 는 "task is blocked
   // by an open gate" 로 거절된다. 그 답이 조용히 사라지지 않고 200 응답에 남는다.
@@ -7581,6 +8150,37 @@ describe('fix round 1: what counts as running, and one coordinator per Run', () 
   })
 })
 
+// G5c final review I1: a lifecycle Task is never a coordinator's to start (worker-start refuses it), and one superseded
+// by `runs reconverge` is not part of the Run's work any more. Counting either kept a finished coordinator Run moving.
+describe('a Run with lifecycle Tasks: what counts as moving', () => {
+  const life = (id: string, status: Task['status'], createdAt: string): Task => ({
+    id, runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status, validateConfigIds: ['github:ci'],
+    reviewRequested: true, consecutiveFailures: 0, createdAt, updatedAt: createdAt
+  })
+  const seeded = (lifecycle: Task[]) =>
+    Object.assign(
+      makeDeps({
+        ...emptyState(),
+        jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: NOW, convergence: {} }],
+        runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, coordinatorSessionId: 'coord' }],
+        tasks: [{ id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW }, ...lifecycle]
+      }),
+      { listAccounts: () => [{ id: 'accA', label: 'A', provider: 'claude' as const }] }
+    )
+  const running = async (deps: ReturnType<typeof seeded>): Promise<boolean> => {
+    const r = await call(deps, 'jobs-run', { id: 'job_1' })
+    return r.status === 409 && JSON.stringify(r.body).includes('run_1')
+  }
+
+  it('a reconverged Run whose new lifecycle Task completed is not running, beside a superseded failed one', async () => {
+    expect(await running(seeded([life('tsk_l1', 'failed', '2026-08-04T01:00:00.000Z'), life('tsk_l2', 'completed', '2026-08-04T02:00:00.000Z')]))).toBe(false)
+  })
+
+  it('a failed lifecycle Task under the failure limit is not something its coordinator can start', async () => {
+    expect(await running(seeded([life('tsk_l1', 'failed', '2026-08-04T01:00:00.000Z')]))).toBe(false)
+  })
+})
+
 // Task 1 small round 2: the clauses of runMoves each pinned, and a start drops only its own mark.
 describe('fix round 2: each clause of what counts as running', () => {
   const noCoordDeps = () =>
@@ -8359,6 +8959,19 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     expect(gh.calls.map((c) => c.cwd)).toEqual([WT])
   })
 
+  // GitHub lifecycle G3c2 (design §8 Actions): a bound Run's PR is the one it is bound to, not the newest of its branch
+  it('github-pr with a bound run reads the pull request it is bound to, in its repository', async () => {
+    const binding = { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+    const VIEW = 'pr view 12 --repo o/r --json number,title,state,isDraft,url,headRefName,statusCheckRollup,baseRefName'
+    const { deps, gh } = setup({ [VIEW]: { stdout: JSON.stringify(prRow()) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-pr', { run: 'r1' }, '')
+    expect(r).toEqual({
+      status: 200,
+      body: { branch: 'u/a', pr: { number: 12, title: 'Add a', state: 'open', isDraft: true, url: 'https://github.com/o/r/pull/12', checks: null } }
+    })
+    expect(gh.calls.map((c) => c.args.slice(0, 3).join(' '))).toEqual(['pr view 12'])
+  })
+
   it('github-pr with a project and a branch reads in the project root; no PR is pr: null', async () => {
     const { deps, gh, projectId, projectPath } = setup({ [PR_LIST]: { stdout: '[]' } })
     const r = await call(deps, 'github-pr', { project: projectId, branch: 'u/a' }, '')
@@ -8452,6 +9065,51 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
     const r = await call(deps, 'github-ci', { run: 'r1' }, '')
     expect(r).toEqual({ status: 200, body: { pr: 12, checks: [{ ...checkRow, runId: 77 }] } })
     expect(gh.calls.map((c) => c.cwd)).toEqual([WT, WT])
+  })
+
+  // GitHub lifecycle G2 (inventory I-§12.4): a lifecycle Run reads the PR it is bound to, never a branch lookup that can
+  // land on a closed PR of the same branch
+  it('github-ci with a lifecycle Run reads the pull request it is bound to, without looking the branch up', async () => {
+    const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup({ [`${CHECKS(34)} --repo o/r`]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-ci', { run: 'r1' }, '')
+    expect(r).toMatchObject({ status: 200, body: { pr: 34 } })
+    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo o/r`])
+  })
+
+  // design §8 (closes inventory I-§12.4): a bound Run reads the logs of its pull request's checks only
+  it('github-ci refuses a bound Run the log of a CI run that no check of its pull request ran', async () => {
+    const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup({ [`${CHECKS(34)} --repo o/r`]: { stdout: JSON.stringify([checkRow]) } }, { worktree: WT, githubState: { binding, log: [], seq: 0 } })
+    const r = await call(deps, 'github-ci', { run: 'r1', log: 78 }, '')
+    expect(r).toEqual({ status: 409, body: { error: 'CI run 78 ran no check of pull request #34, the one this Run is bound to' } })
+    expect(gh.calls).toHaveLength(1)
+  })
+
+  // G2 final review M10: a checkout with an `upstream` remote makes gh pick another repository's PR of that number
+  it('github-ci reads a bound Run’s checks and log in the bound repository, on any host', async () => {
+    const binding = { repository: 'o/r', host: 'ghe.example', number: 34, url: 'https://ghe.example/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: false, boundAt: NOW }
+    const { deps, gh } = setup(
+      {
+        [`${CHECKS(34)} --repo ghe.example/o/r`]: { stdout: JSON.stringify([checkRow]) },
+        'run view 77 --log-failed --repo ghe.example/o/r': { stdout: 'not ok 1' }
+      },
+      { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+    )
+    const r = await call(deps, 'github-ci', { run: 'r1', log: 77 }, '')
+    expect(r).toMatchObject({ status: 200, body: { pr: 34, log: { runId: 77, text: 'not ok 1' } } })
+    expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${CHECKS(34)} --repo ghe.example/o/r`, 'run view 77 --log-failed --repo ghe.example/o/r'])
+  })
+
+  // G2 Review Focus 2: the log answer is redacted in the Host, whatever surface asked
+  it('github-ci redacts a secret in the failed log it answers', async () => {
+    const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    const { deps, projectId } = setup({
+      [CHECKS(12)]: { stdout: JSON.stringify([checkRow]) },
+      'run view 77 --log-failed': { stdout: `export TOKEN=${token}\nnot ok 1` }
+    })
+    const r = await call(deps, 'github-ci', { project: projectId, pr: 12, log: 77 }, '')
+    expect(JSON.stringify(r.body)).not.toContain(token)
   })
 
   it("github-ci with a run whose branch has no PR is 409, and the checks are not read", async () => {
@@ -8738,12 +9396,78 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(gh.calls).toEqual([{ args: ['run', 'rerun', '77', '--failed'], cwd: projectPath }])
     })
 
-    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or a --run, is 400', async () => {
+    it('github-ci-rerun: a gh failure is ghRefusal; a missing or bad runId, or both targets, is 400', async () => {
       const { deps, gh, projectId } = setup({ 'run rerun 77 --failed': { ok: false, stderr: 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/77/rerun-failed-jobs)' } })
       expect((await call(deps, 'github-ci-rerun', { project: projectId, runId: 77 }, '')).status).toBe(404)
-      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1', runId: 77 }])
+      for (const args of [{ project: projectId }, { project: projectId, runId: 0 }, { run: 'r1' }, { run: 'r1', project: projectId, runId: 77 }])
         expect((await call(deps, 'github-ci-rerun', args, '')).status, JSON.stringify(args)).toBe(400)
       expect(gh.calls).toHaveLength(1)
+    })
+
+    // GitHub lifecycle G4 (design §8 Actions, closes inventory I-§12.4): through a Run, only a CI run of its pull request's
+    // head is rerun, in the bound repository, and the Run keeps the rerun so its wait holds for the new attempt
+    describe('github-ci-rerun --run (G4)', () => {
+      const HEAD = '9ecb7effb52d478506d719037f79892b714e8cbb'
+      const OLD = '1'.repeat(40)
+      const binding = { repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'develop', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }
+      const PR_HEAD = 'pr view 34 --json headRefOid,state'
+      const RUN_HEAD = (id: number) => `run view ${id} --json headSha,attempt,status`
+      const runOn = (sha: string, attempt = 1) => ({ stdout: JSON.stringify({ headSha: sha, attempt, status: 'completed' }) })
+
+      it('reruns a CI run of the bound pull request’s head in the bound repository, and the Run keeps it', async () => {
+        const { deps, gh } = setup(
+          {
+            [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+            [`${RUN_HEAD(77)} --repo o/r`]: runOn(HEAD, 2),
+            'run rerun 77 --failed --repo o/r': {}
+          },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 34 } })
+        expect(gh.calls.map((c) => c.args.join(' '))).toEqual([`${PR_HEAD} --repo o/r`, `${RUN_HEAD(77)} --repo o/r`, 'run rerun 77 --failed --repo o/r'])
+        expect(deps.getState().runs[0].githubState?.reruns).toEqual([{ ciRunId: 77, attempt: 2, sha: HEAD, by: 'person', at: NOW }])
+      })
+
+      // G4 final review M4: a CI run still going is not rerun, and says so as a conflict
+      it('a CI run still going is a conflict before any rerun', async () => {
+        const { deps, gh } = setup(
+          {
+            [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+            [`${RUN_HEAD(77)} --repo o/r`]: { stdout: JSON.stringify({ headSha: HEAD, attempt: 2, status: 'in_progress' }) }
+          },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 409, body: { error: 'CI run 77 is still running: rerun it once it has finished' } })
+        expect(gh.calls.some((c) => c.args[1] === 'rerun')).toBe(false)
+      })
+
+      it('refuses a CI run of another commit before any rerun, naming both', async () => {
+        const { deps, gh } = setup(
+          { [`${PR_HEAD} --repo o/r`]: { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) }, [`${RUN_HEAD(78)} --repo o/r`]: runOn(OLD) },
+          { worktree: WT, githubState: { binding, log: [], seq: 0 } }
+        )
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 78 }, '')).toEqual({
+          status: 409,
+          body: { error: 'CI run 78 ran on 1111111, not on the head of pull request #34 (9ecb7ef)' }
+        })
+        expect(gh.calls.some((c) => c.args[1] === 'rerun')).toBe(false)
+        expect(deps.getState().runs[0].githubState?.reruns).toBeUndefined()
+      })
+
+      it('a Run not bound yet uses its branch’s pull request; a branch with none is a conflict', async () => {
+        const list = (rows: unknown[]) => ({ stdout: JSON.stringify(rows) })
+        const row = { number: 35, title: 't', state: 'OPEN', isDraft: true, url: 'https://github.com/o/r/pull/35', headRefName: 'u/a', statusCheckRollup: [] }
+        const { deps, gh } = setup({
+          [PR_LIST]: list([row]),
+          'pr view 35 --json headRefOid,state': { stdout: JSON.stringify({ headRefOid: HEAD, state: 'OPEN' }) },
+          [RUN_HEAD(77)]: runOn(HEAD),
+          'run rerun 77 --failed': {}
+        })
+        expect(await call(deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).toEqual({ status: 200, body: { runId: 77, rerun: true, pr: 35 } })
+        expect(gh.calls.at(-1)?.args).toEqual(['run', 'rerun', '77', '--failed'])
+        const none = setup({ [PR_LIST]: list([]) })
+        expect((await call(none.deps, 'github-ci-rerun', { run: 'r1', runId: 77 }, '')).status).toBe(409)
+      })
     })
 
     const ISSUE_API = 'api repos/{owner}/{repo}/issues/5'
@@ -8758,10 +9482,26 @@ describe('handleCommand — github-pr, github-ci and github-issue', () => {
       expect(body.issue).toEqual({ number: 5, url: 'https://github.com/o/r/issues/5' })
       const job = deps.getState().jobs.find((j) => j.id === body.id)
       expect(job?.objective).toBe(sourcedObjective(issueContext(parseIssue(JSON.stringify(issueJson))!), 'GitHub'))
-      expect(job?.source).toEqual({ id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', title: 'Broken', url: 'https://github.com/o/r/issues/5' })
+      expect(job?.source).toEqual({
+        id: 'github', itemId: '5', label: 'GitHub issue #5 in o/r', title: 'Broken', url: 'https://github.com/o/r/issues/5',
+        capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex')
+      })
       expect(job?.cwd).toBe(projectPath)
       expect(job?.concurrency).toBe(2)
       expect(body.objective).toBe(job?.objective)
+    })
+
+    // GitHub lifecycle §6: the issue as it was when the Job was made, so a later edit can be noticed
+    it('a Job made from an issue keeps a hash of its body and when it was last updated', async () => {
+      const { deps, projectId } = issueSetup({ updated_at: '2026-10-01T00:00:00Z' })
+      const r = await call(deps, 'jobs-create-from-issue', { project: projectId, number: 5 }, '')
+      expect(r.status).toBe(200)
+      expect(deps.getState().jobs.at(-1)?.source).toMatchObject({
+        id: 'github',
+        itemId: '5',
+        capturedBodyHash: createHash('sha256').update('It breaks', 'utf8').digest('hex'),
+        capturedUpdatedAt: '2026-10-01T00:00:00Z'
+      })
     })
 
     it('jobs-create-from-issue refuses an author outside OWNER, MEMBER and COLLABORATOR (403), and makes no Job', async () => {
@@ -9041,5 +9781,218 @@ describe('the external coordinator: run-create and check record the driving sess
     await call(deps, 'check', { run, ack: first.deliveryId }, 'sess-b')
     expect(deps.getState().deliveries[0].ackedAt).toBeDefined()
     expect(deps.getState().runs[0].externalCoordinatorSessionId).toBe('sess-b')
+  })
+})
+
+describe('run-create — the GitHub lifecycle (G1)', () => {
+  const VIEW = 'repo view o/r --json nameWithOwner,viewerPermission'
+  const POLICY = { ci: { mode: 'required' }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const withGithub = (o: { permission?: string; origin?: string | null; initial?: OrchState } = {}) => {
+    const deps = makeDeps(o.initial)
+    const calls: string[] = []
+    const unexpected = (name: string) => async (): Promise<never> => {
+      throw new Error(`${name} was not expected`)
+    }
+    deps.github = {
+      run: async (args) => {
+        calls.push(args.join(' '))
+        return args.join(' ') === VIEW
+          ? { ok: true, stdout: JSON.stringify({ nameWithOwner: 'o/r', viewerPermission: o.permission ?? 'WRITE' }), stderr: '' }
+          : { ok: false, stdout: '', stderr: `unexpected gh call: ${args.join(' ')}`, exitCode: 1 }
+      },
+      originOf: async () => (o.origin === undefined ? 'git@github.com:o/r.git' : o.origin),
+      createPr: unexpected('createPr'),
+      readCommits: unexpected('readCommits'),
+      isClean: unexpected('isClean')
+    }
+    return { deps, calls }
+  }
+
+  it('stores the policy with its defaults and turns convergence on', async () => {
+    const { deps, calls } = withGithub()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(200)
+    const job = deps.getState().jobs[0]
+    expect(job.github).toEqual(POLICY)
+    // Acceptance fixes Task 6 (spec: policy snapshot durable): the repair budget is written into the Job as numbers, so an
+    // app update that changes a default does not change a running Job's budget
+    expect(job.convergence).toEqual({ maxFixAttempts: FAILURE_LIMIT, maxReviewRounds: MAX_REVIEW_ROUNDS, blockingSeverity: DEFAULT_BLOCKING_SEVERITY })
+    expect(calls).toEqual([VIEW])
+  })
+
+  it('keeps the convergence policy the caller gave, the rest written as numbers', async () => {
+    const { deps } = withGithub()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, convergence: true, maxFixAttempts: 5, maxTotalMinutes: 30 })
+    expect(deps.getState().jobs[0].convergence).toEqual({ maxFixAttempts: 5, maxReviewRounds: MAX_REVIEW_ROUNDS, blockingSeverity: DEFAULT_BLOCKING_SEVERITY, maxTotalMinutes: 30 })
+  })
+
+  it('leaves a Job without the lifecycle as it was made', async () => {
+    const { deps } = withGithub()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', convergence: true })
+    expect(deps.getState().jobs[0].convergence).toEqual({})
+  })
+
+  // G7a: Settings › GitHub's defaults, read by the Host when the Job is made and copied into it (design §5.1)
+  it('takes the rerun and CI-wait policy from the defaults the Host reads, and the checks from the call', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => ({ autoRerunInfrastructureFailures: false, maxInfrastructureReruns: 5, ciWaitMinutes: 30 })
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build' })
+    expect(deps.getState().jobs[0].github).toEqual({
+      ci: { mode: 'selected', selectedChecks: ['build'] },
+      autoRerunInfrastructureFailures: false,
+      maxInfrastructureReruns: 5,
+      ciWaitMinutes: 30
+    })
+  })
+
+  it('refuses when the defaults cannot be read, rather than guess what the person set, and makes no Job', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => {
+      throw new Error('app-settings.json could not be read')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toBe('the GitHub lifecycle defaults in Settings could not be read: app-settings.json could not be read')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  // G7a final review M5: a file only the app repairs is named, as every other such refusal names it, so the CLI offers
+  // no command to run (opening Astera is the step)
+  it('names the settings file to repair when it is the app’s to repair', async () => {
+    const { deps } = withGithub()
+    deps.github!.lifecycleDefaults = async () => {
+      throw new RepairNeeded('app-settings.json cannot be read; open Astera to repair it', 'app-settings.json')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r).toEqual({
+      status: 409,
+      body: { error: 'the GitHub lifecycle defaults in Settings could not be read: app-settings.json cannot be read; open Astera to repair it', repair: 'app-settings.json' }
+    })
+  })
+
+  it('selects checks by name, from a comma list or a list, once each', async () => {
+    const a = withGithub()
+    await call(a.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build, test,build' })
+    expect(a.deps.getState().jobs[0].github?.ci).toEqual({ mode: 'selected', selectedChecks: ['build', 'test'] })
+    const b = withGithub()
+    await call(b.deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: ['lint'] })
+    expect(b.deps.getState().jobs[0].github?.ci).toEqual({ mode: 'selected', selectedChecks: ['lint'] })
+  })
+
+  it('refuses --github-checks without --github-lifecycle, and an empty or missing name', async () => {
+    const { deps } = withGithub()
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubChecks: 'build' })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'build,' })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: true })).status).toBe(400)
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  // G7a: the app's inline check, before a Job is made: the same preflight run-create holds, answered as a result
+  it('github-preflight answers whether this folder can carry a Job through GitHub, and why not', async () => {
+    const ok = withGithub()
+    expect(await call(ok.deps, 'github-preflight', { cwd: 'D:/p' })).toEqual({ status: 200, body: { ok: true, repo: 'o/r' } })
+    const none = withGithub({ origin: null })
+    expect(await call(none.deps, 'github-preflight', { cwd: 'D:/p' })).toEqual({ status: 200, body: { ok: false, reason: 'this folder has no git remote named origin' } })
+    const reader = withGithub({ permission: 'READ' })
+    const r = await call(reader.deps, 'github-preflight', { cwd: 'D:/p' })
+    expect(r.body).toMatchObject({ ok: false, reason: expect.stringContaining('your permission on o/r is READ') })
+    expect((await call(ok.deps, 'github-preflight', {})).status).toBe(400)
+    expect((await call(makeDeps(), 'github-preflight', { cwd: 'D:/p' })).status).toBe(409)
+    expect(ok.deps.getState().jobs).toEqual([])
+  })
+
+  // G7a final review M2: a paired device asks only about the Runtime's own projects; any folder would tell it whose
+  // origin and what push permission sit anywhere on the Runtime, and run git there
+  it('github-preflight from a controller answers only for a folder inside a registered project', async () => {
+    const proj = absPath('proj')
+    const { deps } = withGithub({ initial: ensureProject(emptyState(), { path: proj, now: NOW }).state })
+    const controller = { sessionId: '', role: 'controller' as const }
+    const outside = await handleCommand(deps, controller, 'github-preflight', { cwd: absPath('elsewhere') })
+    expect(outside.status).toBe(403)
+    expect((outside.body as { error: string }).error).toBe('github-preflight answers a controller only for a folder inside a project this Host knows')
+    expect(await handleCommand(deps, controller, 'github-preflight', { cwd: path.join(proj, 'sub') })).toEqual({ status: 200, body: { ok: true, repo: 'o/r' } })
+    // The app on this computer asks about the folder its window shows
+    expect((await handleCommand(deps, { sessionId: '', role: 'app' }, 'github-preflight', { cwd: absPath('elsewhere') })).status).toBe(200)
+  })
+
+  // G7a: a Run keeps at most 50 checks of a read, and a name is a check's name, not a document
+  it('refuses more than 20 check names, or a name over 100 characters, and makes no Job', async () => {
+    const { deps } = withGithub()
+    const many = Array.from({ length: 21 }, (_, i) => `check-${i}`)
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: many })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toBe('--github-checks takes at most 20 check names, each at most 100 characters')
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: 'x'.repeat(101) })).status).toBe(400)
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true, githubChecks: many.slice(0, 20) })).status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(1)
+  })
+
+  it('refuses a permission that cannot push, says why, and makes no Job', async () => {
+    const { deps } = withGithub({ permission: 'READ' })
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('READ')
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('refuses a folder with no origin', async () => {
+    const { deps } = withGithub({ origin: null })
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+    expect((r.body as { error: string }).error).toContain('no git remote named origin')
+  })
+
+  it('is answered by the Host only: without deps.github it is 409', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(409)
+  })
+
+  // Already true before this slice (run-create is COORDINATOR_ONLY); pinned so a later change cannot open it.
+  it('refuses a worker session (design §7.1), through jobs-create too', async () => {
+    const worker: Dispatch = {
+      id: 'd1', taskId: 't1', provider: 'codex', accountId: 'acc1', sessionId: 'w1', cwd: 'D:/p',
+      specPath: 'D:/p/spec.md', startedAt: NOW, workerState: 'ready', retained: false
+    }
+    const { deps } = withGithub({ initial: { ...emptyState(), dispatches: [worker] } })
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }, 'w1')).status).toBe(403)
+    expect((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true }, 'w1')).status).toBe(403)
+    expect(deps.getState().jobs).toEqual([])
+  })
+
+  it('jobs-create passes it through', async () => {
+    const { deps } = withGithub()
+    const r = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', githubLifecycle: true })
+    expect(r.status).toBe(200)
+    expect((r.body as { github?: unknown }).github).toEqual(POLICY)
+  })
+})
+
+describe('runs-github-record (GitHub lifecycle G1)', () => {
+  const seeded = async () => {
+    const deps = makeDeps()
+    const runId = ((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })).body as { id: string }).id
+    return { deps, runId }
+  }
+  const patch = { lastReadError: { kind: 'network' } }
+
+  it('is the Host’s own record: anyone else is refused', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch }, '')).status).toBe(403)
+    expect((await call(deps, 'runs-github-record', { runId, patch }, 'coordinator')).status).toBe(403)
+  })
+
+  it('records on the Run, and a read with nothing new commits nothing', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch }, HOST_CALLER)).status).toBe(200)
+    const after = deps.getState()
+    expect(after.runs.find((r) => r.id === runId)?.githubState?.lastReadError?.kind).toBe('network')
+    await call(deps, 'runs-github-record', { runId, patch }, HOST_CALLER)
+    expect(deps.getState()).toBe(after)
+  })
+
+  it('refuses a malformed patch and an unknown run', async () => {
+    const { deps, runId } = await seeded()
+    expect((await call(deps, 'runs-github-record', { runId, patch: { binding: 1 } }, HOST_CALLER)).status).toBe(400)
+    expect((await call(deps, 'runs-github-record', { runId: 'run_nope', patch }, HOST_CALLER)).status).toBe(404)
   })
 })

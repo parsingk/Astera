@@ -114,6 +114,12 @@ linux:
   # A space-free artifact name, the same rule dmg and nsis follow — it keeps percent-encoding out of
   # release asset URLs.
   artifactName: ${name}-${version}-${arch}.${ext}
+  # The AppStream metainfo. The unpacked app is the AppImage's root, so this lands in its
+  # usr/share/metainfo/, where the AppImage catalog (appimage.github.io) reads Astera's summary,
+  # description and screenshot. The deb carries it under /opt/Astera, where nothing reads it.
+  extraFiles:
+    - from: build/io.github.parsingk.astera.metainfo.xml
+      to: usr/share/metainfo/io.github.parsingk.astera.metainfo.xml
 # The declared Linux floor is Ubuntu 22.04 / Debian 12 (held by the pinned `container: ubuntu:22.04`
 # in linux-package.yml). The
 # pin and the `libc6` bound below are two halves of the same guarantee: the pin stops the artifact

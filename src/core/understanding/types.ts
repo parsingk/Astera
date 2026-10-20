@@ -88,6 +88,25 @@ export type RecordSource =
   | { kind: 'session'; sessionId: string; label: string }
   | { kind: 'job'; runId: string; jobName: string; taskIds: string[] }
 
+/** One verification of a GitHub lifecycle Run: `skipped` is what did not happen, and is never read as passed. */
+export type EvidenceStatus = 'passed' | 'failed' | 'skipped'
+
+/** How a GitHub lifecycle Run's work was carried and verified, as the Run's state stood when it finished (GitHub
+ *  lifecycle G8, spec §40): where the work came from, the pull request it went to, the local checks of the last round,
+ *  GitHub CI on the head Astera pushed, and Astera's review. GitHub may have moved since; the record does not follow it. */
+export interface RecordGitHub {
+  /** The ticket the Job was made from, when it was made from one */
+  source?: { label: string; url?: string }
+  pr?: { number: number; url: string }
+  /** Absent when the Run had no local check to run */
+  local?: EvidenceStatus
+  /** `sha`: the head CI was read on. `noCi`: a person chose to go on without CI there */
+  ci: { status: EvidenceStatus; sha?: string; noCi?: true }
+  review: EvidenceStatus
+  /** The pull request was ready to merge when the Run finished */
+  mergeReady: boolean
+}
+
 /** A record is written the moment the work closes and filled in afterwards, so its state is about
  *  the write-up rather than about the work — the work is already done. */
 export type RecordStatus = 'generating' | 'ready' | 'needs-review' | 'failed'
@@ -117,6 +136,9 @@ export interface WorkRecord {
    *  write-up reads there while the folder exists (pipeline.ts's baseOf); the record itself stays keyed
    *  by the project root. Absent on records written before this field and on every session record. */
   workDir?: string
+  /** A GitHub lifecycle Run's evidence (G8). Absent on records written before this field, on every session record and on
+   *  every Run of a Job without the lifecycle. */
+  github?: RecordGitHub
   status: RecordStatus
   /** Why it needs review, or why the write-up failed. Shown on the row. */
   reason?: string

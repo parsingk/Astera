@@ -31,9 +31,11 @@ import {
 } from './detect'
 import { RollCycle } from './cycle'
 import {
+  blockedUntil,
   laterBlock,
   pickAvailable,
   planRetry,
+  RETRY_FALLBACK_MS,
   type BlockRecord,
   type RetryState
 } from './retry'
@@ -41,12 +43,6 @@ import { BlockRegistry } from './blockRegistry'
 import { copyTranscript } from './transcript'
 import { claudeHistoryStrategy } from '../history/strategies/claude'
 import { parseStatusLinePayload, extractStatusLineSession } from '../usage/statusline'
-import { lastActivityAt, readPendingWorkflowCount } from './activity'
-import {
-  isIdleNotification,
-  isUnknownNotificationType,
-  type NotificationPayload
-} from '../hooks/notification'
 import { t, type Lang } from '../i18n'
 import { ClaudeTranscriptTail } from './claudeSignal'
 import { ROLL_SNAPSHOT_VERSION, MAX_SNAPSHOT_PROMPT_CHARS, snapshotKey, type RollSnapshot, type RollRespawnExtra } from './snapshot'
@@ -67,14 +63,10 @@ const READY_TIMEOUT_MS = 120_000 // the deadline for giving up on the automatic 
 const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → reset the consecutive block count
 const ENTER_DELAY_MS = 150 // the gap between the prompt text and Enter
 const TRUST_ENTER_DELAY_MS = 400 // the gap between detecting the trust prompt and Enter
-// Blind-spot detection: only the retrospective single-account reset-anchor verdict (3-b) remains. The
-// multi-account real-time stall (3-a) was removed once the transcript began recording subagent limit
-// errors directly, which achieved the same purpose — BLIND_PROBE_MIN_MS survives as the file-tree stat
-// throttle for idleNudgeCheck.
-const BLIND_PROBE_MIN_MS = 60_000 // the file-tree stat throttle
-const RESET_GRACE_MS = 5 * 60_000 // how long to wait for the harness to resume itself after a reset — one prompt is harmless even if this misjudges
-const IDLE_STALL_MS = 10 * 60_000 // a stall persisting this long after an (idle) Notification → nudge
-const NUDGE_ECHO_GRACE_MS = 2_000 // the grace period that keeps the echo of a nudge's own prompt from being read as resumed activity
+// "Continue" goes to a session only after a limit Astera detected is lifted (2026-10-19, the person's decision). The
+// two paths that guessed a limit from a block record or a usage figure of 90% or more — the idle-stall nudge and the
+// single-account reset anchor (blind spot 3-b) — are gone: an installed app sent "continue" to a session that was not
+// blocked (weekly 97%, five-hour 17%) every ten minutes for over a day.
 // The window in which a PTY limit phrase is ignored right after a roll. A --resume replays the whole
 // conversation onto the screen, and that conversation contains the limit phrase that caused the roll.
 // The awaitingReady cooldown cannot stop it — that flag is released the moment the automatic prompt is
@@ -133,6 +125,9 @@ export interface RollingDeps {
      *  straight off `core.bypassSignalFor`, since it already has the target account in hand and that
      *  fact is about this machine's PATH, not about the chain. */
     startWithBypass?: boolean
+    /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
+     *  agent's stays an agent's and its tab still closes when it ends. */
+    startedBy?: 'agent'
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
@@ -181,8 +176,6 @@ export interface RollingDeps {
   onNativeSession?: (sessionId: string, nativeSessionId: string) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
   now?: () => number
-  probeActivity?: (transcriptPath: string) => Promise<number | null> // for test injection — defaults to lastActivityAt
-  readPending?: (transcriptPath: string) => Promise<number | null> // for test injection — defaults to readPendingWorkflowCount
   /** Asks the account for its real usage (the highest % across every limit bucket). null when it cannot
    *  be read. The default is "cannot be read" because the real implementation (RateLimitFetcher) uses
    *  the electron net module, and this file has to stay free of electron to be testable under vitest.
@@ -272,7 +265,7 @@ interface Chain {
   // 히스토리에서 대화를 다시 열 때 ipc 가 이미 알던 두 값 — 그 대화의 claude 세션 id 와, 대상 계정
   // 폴더로 복사해 둔 파일 경로. **roll() 의 폴백으로만 쓴다.** claudeSessionId·transcriptPath 가
   // null 인지로 "statusLine 이 아직 안 왔는가" 를 묻는 자리(findLiveByClaudeSession, applyMeta 의
-  // 저장 게이트, settleInPlace 의 건강 판정, idleNudgeCheck 와 blind-spot 프로브)는 이 값을 절대
+  // 저장 게이트, settleInPlace 의 건강 판정)는 이 값을 절대
   // 읽어서는 안 된다 — 그 물음에 미리 답을 채워 넣으면 그 판정 자체가 항상 참이 되어 무의미해진다.
   resumeSeedSessionId: string | null
   resumeSeedTranscriptPath: string | null
@@ -317,22 +310,14 @@ interface Chain {
    *  tick is 15 seconds, so two overlapping rounds could resolve out of order and leave the older
    *  verdict standing. */
   loginRefreshing: boolean
-  lastBlindProbeAt: number // the file-tree stat throttle — used by idleNudgeCheck (it survived the removal of 3-a)
-  resetCheckAt: number | null // the scheduled time (ms) of the single-account reset anchor — prevents rescheduling the same time (3-b)
-  resetTimer: ReturnType<typeof setTimeout> | null
   // The state-publication generation counter, incremented on every pushState. A deferred 'none' (the
-  // 150ms Enter timers in sendPrompt and resetAnchorCheck) captures the generation at scheduling time; on
+  // 150ms Enter timer in sendPrompt) captures the generation at scheduling time; on
   // firing it publishes if the generation is unchanged, and skips as stale if it has already advanced
   // (i.e. a 'waiting' or 'switching' has published something more recent in the meantime).
   stateSeq: number
   // The last lasting rollState payload pushState published — null once it was 'none' (or nothing has
   // published yet). Read back by stateOf for a renderer that mounts after the push already happened.
   lastState: RollStateEvent | null
-  // idle nudge: when the (idle) Notification arrived, when the nudge was sent, and whether the
-  // intervention is over. All three are cleared once activity resumes, so the next stall gets one go again.
-  idleSince: number | null // when the idle Notification arrived — null means this is not a stall candidate
-  idleNudgedAt: number | null // when the nudge was sent in this stall — null means not yet
-  idleHandled: boolean // true once both the one nudge and the one stalled have been used — blocks repeat intervention in the same stall
   // When the last roll finished — the reference point of the PTY replay grace. null on the first session (no grace).
   rolledAt: number | null
   // Throttles the "ignored by replay grace" log to once per roll — the same convention as limitTailReadFailWarned
@@ -352,9 +337,8 @@ interface Chain {
   // list); keying off a failed number search alone would leave this flag permanently on and make the
   // fallback the default path rather than the exception.
   choicePending: boolean
-  // The usage percentage last observed (the higher of session and weekly) — the input of the
-  // limit-evidence gate (limitEvidence). It is null when the snapshot could not be read, and that counts
-  // as no evidence, so nothing intervenes.
+  // The usage percentage last observed (the higher of session and weekly) — the input of the replay
+  // grace (inReplayGrace). It is null when the snapshot could not be read, and then the grace applies.
   lastUsagePct: number | null
   // Transcript limit detection. It is created after the path has been learned, so it starts as null.
   // When the path changes (a roll) it is rebuilt with a new since — so it does not bite on old errors in the copy.
@@ -387,6 +371,12 @@ interface Chain {
   // roll, and an in-place resume — and read only at the tick's chat consumption site, so the pty timer
   // path is untouched. The per-chain half of a health declaration still runs on every clean turn.
   chatValveSpent: boolean
+  // A limit inferred from a usage figure alone (showLimit): its banner is up until this time, and nothing
+  // is typed when it passes. null when none is shown.
+  shownUntil: number | null
+  // Whether this silence has already had its shown limit — cleared by output. The statusline freezes while
+  // a session rests, so without it a banner that ended on time would come straight back off the same figure.
+  shownSpent: boolean
   // The wait armWait armed, for the snapshot (S6 R4): when it fires, the account it aims at and the limit
   // it waits out. null whenever no wait is armed — cleared the moment the timer fires.
   waitPlan: { retryAt: number; target: number; weekly: boolean } | null
@@ -402,7 +392,7 @@ interface Chain {
  *  The recovery array is the chain's own record **merged with what other chains found** — a block on
  *  an account is a fact about the account, so a chain that has not hit it yet should still skip it
  *  (SPEC §11.2/6). laterBlock keeps whichever side justifies the longer block. `chain.recovery` is left
- *  untouched: it still answers the per-chain question limitEvidence asks.
+ *  untouched: it is this chain's own record, the one declareHealthy clears and the snapshot carries.
  *
  *  **This feeds planRetry as well as pickAvailable, and that is the expensive half.** planRetry walks
  *  every index including currentIndex, so a record another chain wrote about the account this chain is
@@ -441,16 +431,12 @@ export class RollingCoordinator {
   private ticker: ReturnType<typeof setInterval> | null = null
   private readonly copy: (src: string, dest: string) => Promise<void>
   private readonly now: () => number
-  private readonly probeActivity: (transcriptPath: string) => Promise<number | null>
-  private readonly readPending: (transcriptPath: string) => Promise<number | null>
   private readonly readUsage: (configDir: string) => Promise<RateLimitPeak | null>
   private readonly resumeStrategy: () => ResumeStrategy
 
   constructor(private deps: RollingDeps) {
     this.copy = deps.copy ?? copyTranscript
     this.now = deps.now ?? Date.now
-    this.probeActivity = deps.probeActivity ?? lastActivityAt
-    this.readPending = deps.readPending ?? readPendingWorkflowCount
     this.readUsage = deps.readUsage ?? ((): Promise<RateLimitPeak | null> => Promise.resolve(null))
     this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
   }
@@ -524,14 +510,8 @@ export class RollingCoordinator {
       recovery: ids.map(() => null),
       loggedOut: new Set(),
       loginRefreshing: false,
-      lastBlindProbeAt: 0,
-      resetCheckAt: null,
-      resetTimer: null,
       stateSeq: 0,
       lastState: null,
-      idleSince: null,
-      idleNudgedAt: null,
-      idleHandled: false,
       rolledAt: null,
       replayGraceWarned: false,
       choiceWatchUntil: null,
@@ -545,6 +525,8 @@ export class RollingCoordinator {
       chatLimitInTurn: false,
       chatPrevStatus: 'idle',
       chatValveSpent: false,
+      shownUntil: null,
+      shownSpent: false,
       waitPlan: null,
       heldTimer: null,
       snapKey: ''
@@ -636,11 +618,6 @@ export class RollingCoordinator {
     return null
   }
 
-  /** Taps hook events. The idle Notification that Claude Code fires after a turn has been left alone for
-   *  60 seconds is used as the stall signal. It is unrelated to statusLine, so it is unaffected by a
-   *  frozen snapshot. Nothing intervenes immediately — only the time is recorded, because a notice raised
-   *  after 60 idle seconds may catch the user just as they start typing. The actual verdict is made by
-   *  idleNudgeCheck on the tick. */
   /** The tab was renamed. Updates the chain's copy so the next roll respawns under the new name.
    *
    *  `liveInfo` is a snapshot from spawn, and the respawn passes `liveInfo.title` — without this the
@@ -651,62 +628,14 @@ export class RollingCoordinator {
     if (chain) chain.liveInfo = { ...chain.liveInfo, title }
   }
 
-  onHookEvent(sessionId: string, payload: unknown): void {
-    const chain = this.chains.get(sessionId)
-    if (!chain || chain.disposed) return
-    if (typeof payload !== 'object' || payload === null) return
-    const p = payload as { hook_event_name?: unknown } & NotificationPayload
-    if (p.hook_event_name !== 'Notification') return
-    // A Notification that is not idle (a permission request and the like) means a choice is on screen —
-    // sending text to that screen would have Enter approve the highlighted item, so nothing intervenes.
-    if (!isIdleNotification(p)) {
-      // An unfamiliar type is logged. If Claude Code renames the idle type, it would be filtered out
-      // silently here and neither the nudge nor 'stalled' would ever fire again — the same failure this
-      // feature already had with a phrase regex, reproduced through a renamed field. This line would be
-      // the only clue when that happens (the same role as 'limit choice not found' in answerLimitChoice).
-      if (isUnknownNotificationType(p))
-        this.deps.log(`unknown notification_type=${String(p.notification_type)} session=${sessionId}`)
-      return
-    }
-    // Once this is already a stall candidate (idleSince !== null) the time is not refreshed; the first
-    // value is pinned. The first gate in idleNudgeCheck is now - idleSince < IDLE_STALL_MS (10 minutes) —
-    // allowing a refresh would restart that 10-minute clock every time the Notification re-fired within
-    // the same stall, and the nudge and the promotion to 'stalled' would never fire.
-    // Measured: "Claude is waiting for your input" fired once at +61s after the turn ended and then went
-    // quiet for 347s — the observation window (408s) was shorter than the 10-minute (600s) threshold, so
-    // re-firing itself was never seen, but there is no guarantee it does not happen. The costs are
-    // asymmetric: pinning is harmless if there is no repeat, while refreshing kills the whole feature
-    // silently if there is. Semantically too, this field has to answer "when did the stall begin", not
-    // "when did the most recent notice arrive", so pinning is correct.
-    if (chain.idleSince === null) chain.idleSince = this.now()
-    // idleNudgedAt and idleHandled are deliberately untouched here — the only thing that closes a stall is
-    // activity resuming (handleData). An idle notice arriving again with no response after a nudge is not a
-    // new stall but a continuation of the same one, so the next verdict has to go to 'stalled' rather than
-    // to another nudge.
-    this.deps.log(`idle notification session=${sessionId}`)
-  }
-
   handleData(e: { sessionId: string; data: string }): void {
     const chain = this.chains.get(e.sessionId)
     if (!chain || chain.disposed) return
     chain.lastOutputAt = this.now()
-    // Output arriving means the stall has broken — the state is cleared so the next stall gets one nudge
-    // again. The user typing also lands here as an echo, so the verdict cannot hold while a human is at
-    // the keyboard.
-    //
-    // A grace period right after a nudge is required: the nudge itself writes a prompt into the PTY, so
-    // its echo comes straight back here. Mistaking that for resumed activity and clearing the state would
-    // break the "once only" rule and repeat the nudge every cycle. Locking it forever after a nudge
-    // instead would miss the next stall even once the session resumes normally. The echo arrives
-    // immediately (within ENTER_DELAY_MS) and Claude's real response later, so the two are separated by time.
-    if (
-      chain.idleSince !== null &&
-      (chain.idleNudgedAt === null || this.now() - chain.idleNudgedAt > NUDGE_ECHO_GRACE_MS)
-    ) {
-      chain.idleSince = null
-      chain.idleNudgedAt = null
-      chain.idleHandled = false
-    }
+    // A session that speaks is not held by a limit nobody detected: a shown limit goes, and the next
+    // silence may show one again.
+    chain.shownSpent = false
+    if (chain.shownUntil !== null) this.clearShown(chain)
     const hit = chain.scanner.push(e.data)
     chain.lastScreen = hit.text
     if (hit.trust && chain.awaitingReady && !chain.trustSeen) {
@@ -819,7 +748,7 @@ export class RollingCoordinator {
    *  **This is where a chat chain's usage arrives** (spec §8.1's utilization clause, Ruling 4c-7). It is
    *  recorded from every status, not just a rejection: the useful readings ride on the 'allowed_warning'
    *  events, and a rejection carries none of its own. It is the statusLine's `usedPercent` counterpart —
-   *  the number `inReplayGrace`, `limitEvidence` and the single-account reset anchor all read — and
+   *  the number `inReplayGrace` reads — and
    *  without it a chat chain's figure is null for its whole life, which makes the replay grace
    *  unconditional for the 60 seconds after a roll. */
   onChatLimit(sessionId: string, info: RateLimitInfo): void {
@@ -890,9 +819,10 @@ export class RollingCoordinator {
    *
    *  오케스트레이션 배선이 부른다. 워커 세션은 `worker_done` 을 보고한 뒤에도 일부러 살아 있고
    *  (가이드 8절: 보고하고 프롬프트에서 대기, 정리는 코디네이터의 나중 판단이다), 체인은 세션이
-   *  죽을 때만 버려졌다. 그 사이 — Dispatch 는 닫혔고 체인은 살아 있는 창 — 에서 이 파일의 두
-   *  경로가 그 세션에 재개 프롬프트를 타이핑할 수 있었다(idleNudgeCheck 와 resetAnchorCheck). 방금
-   *  한도를 태운 워커는 그 게이트(사용률 ≥ GATE_PCT)를 지나기 쉽고, 그렇게 들어간 프롬프트는
+   *  죽을 때만 버려졌다. 그 사이 — Dispatch 는 닫혔고 체인은 살아 있는 창 — 에서 이 파일은 그
+   *  세션에 재개 프롬프트를 타이핑할 수 있다: 그 전에 걸어 둔 대기가 끝나면 resumeInPlace 가 돈다.
+   *  (그런 경로가 둘 더 있었다 — idleNudgeCheck 와 resetAnchorCheck. 방금 한도를 태운 워커는 그 게이트
+   *  (사용률 ≥ GATE_PCT)를 지나기 쉬웠다. 2026-10-19 에 둘 다 없앴다.) 그렇게 들어간 프롬프트는
    *  **아무도 요청하지 않은 작업**이 된다 — 워크트리라면 커밋 의무까지 딸린 작업이다.
    *
    *  그래서 체인의 수명을 일의 수명에 묶는다: Dispatch 가 닫히면 체인도 사라진다. 등록되지 않은
@@ -1106,7 +1036,7 @@ export class RollingCoordinator {
       // Rejection happens only on positive evidence that the account is fine, and it changes no state at
       // all (no recordRecovery, no pushState, no waitTimer) — half the cost of a false positive is not
       // the verdict itself but being stuck in 'waiting' afterwards, where tick() skips the chain and
-      // detection, the fallback trigger and the idle nudge all stop with it.
+      // detection and the fallback trigger both stop with it.
       if (this.now() >= chain.rejectLogUntil) {
         chain.rejectLogUntil = this.now() + REJECT_LOG_MS
         this.deps.log(`limit phrase rejected — account usage ${usage.percent}% session=${chain.liveId}`)
@@ -1233,6 +1163,8 @@ export class RollingCoordinator {
     if (chain.rolling || chain.waitTimer || chain.disposed || chain.awaitingReady) return false
     // Quiet (S6 R1): no verdict, no shared record, no roll or wait. forceRoll and the tick reach here too.
     if (!this.acts(chain)) return false
+    // A detected limit replaces a shown one; the roll or the wait below publishes its own state.
+    chain.shownUntil = null
     if (chain.healthyTimer) {
       clearTimeout(chain.healthyTimer)
       chain.healthyTimer = null
@@ -1350,7 +1282,8 @@ export class RollingCoordinator {
    *  changing — a background Dynamic Workflow is a child of the claude CLI and dies with that kill alone.
    *
    *  It deliberately does not ask "is the session working right now". Once the evidence gate filters out
-   *  the false positives, a wait only ever happens on a genuine limit, and Claude Code does not carry on
+   *  the false positives, a wait only ever happens on a genuine limit (the usage-only fallback shows its
+   *  limit and arms no wait — showLimit), and Claude Code does not carry on
    *  by itself when the limit lifts — so the session at this moment is necessarily halted. An early
    *  design tried to stack that verdict three ways and produced a fresh defect each time (the threshold
    *  collided with the retry floor, the coordinator's own key input was read back as activity, and the
@@ -1400,10 +1333,10 @@ export class RollingCoordinator {
    *       으로 대화를 통째로 이어받았으므로 탭 세션에는 인계할 것이 없다 — Job 워커의 packet
    *       갱신(spec 파일에 최신 Checkpoint 를 다시 적는 부수 효과)만 이 값과 무관하게 그대로
    *       유지된다(F3, 이 dep 이 생기기 전부터의 동작).
-   *   - 'update'(덧붙일 한 줄): `resumeInPlace` · idle nudge · 리셋 앵커. **세션이 살아 있다** —
+   *   - 'update'(덧붙일 한 줄): `resumeInPlace`. **세션이 살아 있다** —
    *     떨어뜨린 것이 없으니 인계할 것도 없고(§11.5), 대화가 온전한 에이전트에게 Task 지시문과
    *     의존성 목록을 다시 읽히는 것은 방금 리셋된 할당량을 이미 아는 것에 쓰는 일이다. 그래서
-   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다. 세 자리 모두 `tabFallback: true` 다 —
+   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다. 이 자리는 `tabFallback: true` 다 —
    *     대체가 아니라 덧붙임이라 사용자 문구를 잃을 위험이 없다(바로 아래 문단).
    *
    *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
@@ -1466,8 +1399,7 @@ export class RollingCoordinator {
     // another chain wrote about it.
     chain.chatValveSpent = false
     // 'nudged' is the right state: this is a reset resume rather than an account switch, the renderer
-    // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. It is the
-    // same sequence resetAnchorCheck uses.
+    // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists.
     this.pushState(chain, 'nudged')
     this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
     const liveId = chain.liveId
@@ -1491,8 +1423,7 @@ export class RollingCoordinator {
         if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
       }
     }, ENTER_DELAY_MS)
-    // On the roll path this timer is scheduled by sendPrompt. Without it recovery[current] stays set,
-    // limitEvidence() latches true (leaving the idle nudge and the reset anchor permanently armed), and
+    // On the roll path this timer is scheduled by sendPrompt. Without it recovery[current] stays set, and
     // with several accounts cycle.streak never resets so the next limit is misread as a whole lap blocked.
     chain.healthyTimer = setTimeout(() => {
       void this.settleInPlace(chain, liveId)
@@ -1504,7 +1435,7 @@ export class RollingCoordinator {
    *  **왜 필요한가.** 이 자리는 예전에 무조건 "건강하다"를 선언했다. 그런데 세션 메타를 못 배운
    *  체인(히스토리에서 다시 연 대화 — 한도에 걸린 claude 는 statusLine 훅을 아예 부르지 않는다)은
    *  그 뒤로 잡아낼 방법이 하나도 없다: limitTail 이 없어 ①이 즉시 반환하고, 페이로드가 없어
-   *  fallback 트리거가 발화할 수 없고, Notification 이 없어 idle nudge 도 뜨지 않는다. 실측하면
+   *  fallback 트리거가 발화할 수 없다. 실측하면
    *  선언 뒤 45분 동안 이벤트·입력·게시가 모두 0이었다(2026-08-27).
    *
    *  **왜 증거가 codex 와 다른가.** codex 의 같은 판정(settleInPlace)은 rollout 의 바이트 증가를
@@ -1594,7 +1525,7 @@ export class RollingCoordinator {
       return
     }
     // 메타가 있다 — 예전 healthyTimer 가 하던 것 그대로. 이것을 하지 않으면 recovery[current] 가
-    // 남아 limitEvidence 가 계속 참이고(idle nudge·리셋 앵커가 영구 무장), 계정이 여럿이면
+    // 남아 스냅숏과 다음 대기 계획에 실리고, 계정이 여럿이면
     // cycle.streak 가 리셋되지 않아 다음 한도가 "한 바퀴 전체 차단"으로 잘못 읽힌다. 이 판정이 본
     // 것은 "60초 동안 한도가 감지되지 않았다"에 "statusLine 이 돌아왔다"가 더해진 것이고, 그래서
     // 공유 기록도 함께 지운다 — declareHealthy 가 그 네 문장을 그대로 들고 있다(Ruling 4d-8: 여기에
@@ -1818,6 +1749,7 @@ export class RollingCoordinator {
         // as its own choice, so the roll after this one reads it back the same way.
         model: chosenModel,
         startWithBypass: wasBypassed,
+        ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the
         // rekey commits: where it came from, and the chain on its new account awaiting its prompt.
         restoreExtra: {
@@ -2124,8 +2056,7 @@ export class RollingCoordinator {
   }
 
   /** The 15-second tick — refreshes session metadata, evaluates the fallback trigger (five_hour or
-   *  seven_day at 100% plus 30 seconds of no output), makes the idle nudge verdict, and runs transcript
-   *  limit detection.
+   *  seven_day at 100% plus 30 seconds of no output), and runs transcript limit detection.
    *
    *  tickChain is thrown fire-and-forget per chain — independence between chains is preserved (one chain's
    *  slow I/O does not delay another's tick). The ordering *within* a chain is enforced by tickChain. */
@@ -2189,7 +2120,7 @@ export class RollingCoordinator {
    *  guard, and ended quietly. The design intent of ① being the primary signal (the one that survives a
    *  frozen snapshot) was never realised.
    *
-   *  await pins the order inside a chain: the idle nudge and the fallback are evaluated only after ① has
+   *  await pins the order inside a chain: the fallback is evaluated only after ① has
    *  completed. Chains remain independent of each other — tick()'s for loop calls each chain's tickChain
    *  fire-and-forget, so one chain's slow I/O does not hold up another's tick. */
   private async tickChain(chain: Chain): Promise<void> {
@@ -2198,7 +2129,7 @@ export class RollingCoordinator {
     await this.limitTailCheck(chain) // independent of statusLine — completes ① before the fallback
     // The across-await state guard — ① may have caught a hit and already started a roll (rolling) or set a
     // wait (waitTimer). onLimit sets those fields synchronously on that path, so if ① fired we skip the
-    // fallback and the idle nudge here — which is precisely the point of this restructuring.
+    // fallback here — which is precisely the point of this restructuring.
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
     // A chat chain's health evidence (spec §14.6), consumed **here** and not lower down. The rule is
     // "after this chain's own limit check found nothing", and ① — the transcript tail — is the only
@@ -2212,7 +2143,7 @@ export class RollingCoordinator {
     // latched here rather than inside declareHealthy so the pty timer path stays exactly what it was —
     // that path arms its timer once per arrival and so is its own latch already.
     //
-    // A quiet chain (S6 R27) skips the health, the nudge and the fallback below, and still reads the
+    // A quiet chain (S6 R27) skips the health and the fallback below, and still reads the
     // statusline for identity and usage, so it wakes knowing what the process that held the pty learned.
     const quiet = !this.acts(chain)
     if (!quiet && chain.kind === 'chat' && chain.chatTurnDone) {
@@ -2220,7 +2151,6 @@ export class RollingCoordinator {
       this.declareHealthy(chain, !chain.chatValveSpent)
       chain.chatValveSpent = true
     }
-    if (!quiet) void this.idleNudgeCheck(chain) // independent of statusLine — does not wait for a payload
     const payload = await this.deps.readStatusPayload(chain.liveId)
     if (chain.disposed) return
     if (!payload) {
@@ -2242,6 +2172,7 @@ export class RollingCoordinator {
       this.snap(chain)
       return
     }
+    if (chain.shownUntil !== null && this.now() >= chain.shownUntil) this.clearShown(chain)
     const five = u?.session?.usedPercent
     const seven = u?.weekly?.usedPercent
     const maxed =
@@ -2260,11 +2191,13 @@ export class RollingCoordinator {
     // Only asked when the snapshot has already failed to justify a roll and the session has gone quiet,
     // so a working session never reaches it; the lookup's own five-minute cache holds the rate down
     // across the 15-second ticks that do.
-    const queried = silent && !maxed ? await this.readAccountUsage(chain) : null
+    // Nothing to ask while a shown limit stands, or once this silence has had one.
+    const showable = chain.shownUntil === null && !chain.shownSpent
+    const queried = silent && !maxed && showable ? await this.readAccountUsage(chain) : null
     // The across-await guard, for the reason the gate gives above — a roll can finish inside the lookup.
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
     const queriedMaxed = queried !== null && queried.percent >= LIMIT_PCT
-    if ((maxed || queriedMaxed) && silent) {
+    if ((maxed || queriedMaxed) && silent && showable) {
       // claudeSession and tail exist to measure ①'s (the transcript's) coverage after the fact.
       // ① (limitTailCheck) was already awaited to completion above, and if ① had caught a hit we would have
       // returned at the guard — so this log surviving now genuinely guarantees that ① did not catch
@@ -2289,9 +2222,49 @@ export class RollingCoordinator {
           `claudeSession=${chain.claudeSessionId ?? 'unknown'} tail=${tailState}`
       )
       this.recordRecovery(chain, payload, undefined, undefined, queried)
-      this.onLimit(chain)
+      this.showLimit(chain)
     }
     this.snap(chain)
+  }
+
+  /** The fallback trigger's verdict: a limit inferred from a usage figure alone — a silent session whose
+   *  statusline, or whose account, reads 100%. **It is shown, never acted on** (2026-10-19, the person's
+   *  decision): the banner and the block record go up, and no roll, no wait and no typing follow. A
+   *  figure is not a refused turn — another session on the account can fill the window, or a per-model
+   *  bucket the session does not use — and "continue" goes to a session only after a limit Astera
+   *  detected is lifted. A refused turn that does arrive (the phrase, the transcript, a chat rejection)
+   *  goes through onLimit and replaces this.
+   *
+   *  The record is still shared: the account is at its limit whoever filled it, so other chains skip it.
+   *  The healthy timer is cleared as onLimit clears it — an in-place resume that meets a full window has
+   *  not settled. The banner comes down at the record's time (the tick), on output (handleData), or when a
+   *  detected limit replaces it (onLimit). */
+  private showLimit(chain: Chain): void {
+    const now = this.now()
+    const i = chain.cycle.currentIndex
+    const record = chain.recovery[i]
+    if (record) this.deps.blocks.record(chain.accountIds[i], record, now)
+    if (chain.healthyTimer) {
+      clearTimeout(chain.healthyTimer)
+      chain.healthyTimer = null
+    }
+    const until = record ? blockedUntil(record) : now + RETRY_FALLBACK_MS
+    chain.shownUntil = until
+    chain.shownSpent = true
+    this.deps.log(
+      `limit shown — usage figure only, nothing will be typed until=${new Date(until).toISOString()} session=${chain.liveId}`
+    )
+    this.pushState(chain, 'waiting', {
+      nextRetryAt: new Date(until).toISOString(),
+      scope: record?.weekly ? 'weekly' : 'session',
+      manual: true
+    })
+  }
+
+  /** Takes a shown limit's banner down. Nothing is typed — the person resumes. */
+  private clearShown(chain: Chain): void {
+    chain.shownUntil = null
+    if (this.acts(chain)) this.pushState(chain, 'none')
   }
 
   /** Transcript limit detection. This is the primary signal, independent of the statusLine snapshot —
@@ -2359,102 +2332,6 @@ export class RollingCoordinator {
     return !(chain.lastUsagePct !== null && chain.lastUsagePct >= GATE_PCT)
   }
 
-  /** Is there ground to believe this chain is blocked by a limit — the shared precondition of the idle
-   *  nudge and the reset anchor.
-   *
-   *  Those two are inference paths: with no direct evidence such as a limit phrase or a transcript error,
-   *  they push a prompt into a live PTY on nothing more than "the halt is continuing". Without a gate, a
-   *  perfectly normal session whose user has stepped away becomes a target for intervention — and that is
-   *  an observed incident, not a hypothetical: in a session with no limit detection on record at all, a
-   *  nudge fired 10 minutes after an idle_prompt Notification (which means the turn ended normally and it
-   *  is the user's turn, core/hooks/notification.ts) and resumed work the user had not asked for.
-   *
-   *  This does not contradict the earlier removal of the usage gate from the detection paths. What was
-   *  removed there guarded a path that has direct evidence (handleData, limitTailCheck), and the harm was
-   *  a snapshot frozen at the moment of blocking rejecting a legitimate phrase. Here there is no direct
-   *  evidence at all, so the snapshot is the only ground available — and the same freezing now works in
-   *  our favour: a blocked session's frozen value is the high one from just before the limit, whereas a
-   *  merely idle session's is low.
-   *
-   *  Either of the two is enough:
-   *
-   *    ① A block record on the current account — a history of actually detecting a limit. The combination
-   *       where the snapshot is frozen at a low value rather than just below the limit does occur in
-   *       practice, so ② alone would block that session entirely. The record is cleared by healthyTimer 60
-   *       seconds after a successful switch — that is, it survives only when the roll or the wait failed
-   *       and the session is left stuck.
-   *    ② The last snapshot's usage >= GATE_PCT — for the blind spot where the detection itself was missed.
-   *       That blind spot (a single account that never caught the limit phrase) is the entire reason
-   *       resetAnchorCheck exists, so requiring ① alone would leave that path unable to do its job. */
-  private limitEvidence(chain: Chain): boolean {
-    if (chain.recovery[chain.cycle.currentIndex]) return true
-    return chain.lastUsagePct !== null && chain.lastUsagePct >= GATE_PCT
-  }
-
-  /** The idle nudge verdict. When there has been neither PTY output nor file activity for IDLE_STALL_MS
-   *  after a Notification, the prompt is re-sent once. If the stall continues after that, it publishes
-   *  'stalled' to call a person and intervenes no further in that stall — the machine does not repeat the
-   *  same attempt.
-   *
-   *  Unlike blind spot 3-a (removed), there is no pendingWorkflowCount gate: that one was about isolating a
-   *  "limit stall" whereas this is an "input-wait stall", and pendingWorkflowCount is a conditional field
-   *  recorded only when a background workflow exists, so in this scenario it is always null. A usage gate
-   *  is a different matter and this path does have one — see limitEvidence for why an input-wait stall
-   *  still has to prove it is a limit before anything is sent. */
-  private async idleNudgeCheck(chain: Chain): Promise<void> {
-    if (chain.idleSince === null || chain.idleHandled) return
-    if (!this.acts(chain)) return // quiet (S6 R1): the process that holds the pty nudges, if anyone does
-    const now = this.now()
-    if (now - chain.idleSince < IDLE_STALL_MS) return
-    if (now - chain.lastOutputAt < IDLE_STALL_MS) return
-    if (!this.limitEvidence(chain)) {
-      // No trace of a limit block — this is a normal session whose user stepped away, so we do not
-      // intervene. Tracking of this stall ends here (idleSince = null) so the log does not repeat every 15
-      // seconds. While halted the statusLine does not refresh, so usage cannot climb later and there is
-      // nothing to re-evaluate — if a limit really does arrive, the direct detection paths (handleData,
-      // limitTailCheck) catch it.
-      chain.idleSince = null
-      this.deps.log(
-        `idle stall but no limit evidence (usage=${chain.lastUsagePct ?? 'unknown'}) — no action session=${chain.liveId}`
-      )
-      return
-    }
-    if (!chain.transcriptPath) return
-    if (now - chain.lastBlindProbeAt < BLIND_PROBE_MIN_MS) return // shares the file-tree stat throttle
-    chain.lastBlindProbeAt = now
-    const probed = await this.probeActivity(chain.transcriptPath)
-    if (probed !== null && now - probed < IDLE_STALL_MS) return // a subagent is active
-    // The across-await state guard — a roll may have started or activity resumed while probing
-    if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
-    if (chain.idleSince === null || chain.idleHandled) return
-    if (!this.acts(chain)) return
-    const nudged = chain.idleNudgedAt !== null
-    if (nudged) {
-      chain.idleHandled = true
-      this.deps.log(`idle stall persists after nudge → stalled session=${chain.liveId}`)
-      this.pushState(chain, 'stalled')
-      return
-    }
-    chain.idleNudgedAt = now
-    chain.idleSince = now // counts another IDLE_STALL_MS until the next verdict
-    this.deps.log(`idle stall → nudge session=${chain.liveId}`)
-    this.pushState(chain, 'nudged')
-    const liveId = chain.liveId
-    const stateSeq = chain.stateSeq // captures the generation at scheduling time
-    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
-    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
-    if (!this.acts(chain)) return
-    this.deps.write(liveId, prompt)
-    setTimeout(() => {
-      if (!chain.disposed && chain.liveId === liveId) {
-        this.deps.write(liveId, '\r')
-        // The same pattern as resetAnchorCheck — 'none' has to be published after Enter for the
-        // scheduler's nudged suppression to lift. If a more recent state was published in between, it is skipped.
-        if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
-      }
-    }, ENTER_DELAY_MS)
-  }
-
   private refreshMeta(chain: Chain): Promise<void> {
     return this.deps.readStatusPayload(chain.liveId).then((payload) => {
       if (payload) this.applyMeta(chain, payload)
@@ -2462,7 +2339,7 @@ export class RollingCoordinator {
   }
 
   /** parsed: if the caller already has a parseStatusLinePayload result, passing it avoids re-parsing.
-   *  Without it (undefined), parsing happens only on the single-account path. */
+   *  Without it (undefined), the payload is parsed here. */
   private applyMeta(chain: Chain, payload: unknown, parsed?: SessionUsage | null): void {
     const meta = extractStatusLineSession(payload)
     if (meta.sessionId) {
@@ -2482,17 +2359,15 @@ export class RollingCoordinator {
       chain.transcriptPath = meta.transcriptPath
     }
     const u = parsed !== undefined ? parsed : parseStatusLinePayload(payload)
-    // Refreshes the observed usage — the input of both the limit-evidence gate and the replay grace.
+    // Refreshes the observed usage — the input of the replay grace.
     // It is updated here rather than on the 15-second tick because the value has to exist right after a
     // roll for the replay grace to answer "is the new account already exhausted", and what fetches that
     // first snapshot is not tick but the ready polling in scheduleAutoPrompt (a few seconds after the
-    // roll). When no window is carried at all it is null — treated as no evidence.
+    // roll). When no window is carried at all it is null, and the grace applies.
     const pcts = [u?.session?.usedPercent, u?.weekly?.usedPercent].filter(
       (p): p is number => typeof p === 'number'
     )
     chain.lastUsagePct = pcts.length ? Math.max(...pcts) : null
-    // The single-account blind spot (3-b): schedules a retrospective verdict at the snapshot's resets_at
-    if (chain.accountIds.length === 1 && u) this.armResetCheck(chain, u)
     this.snap(chain)
   }
 
@@ -2560,81 +2435,6 @@ export class RollingCoordinator {
     }
   }
 
-  /** Schedules the verdict timer at the earliest future resets_at (+GRACE). The same time is not
-   *  rescheduled. After the verdict, resets_at is in the past and nothing is scheduled — it is rescheduled
-   *  when the next window's snapshot arrives. */
-  private armResetCheck(chain: Chain, u: SessionUsage): void {
-    const now = this.now()
-    const cands = [u.session?.resetsAt, u.weekly?.resetsAt]
-      .map((s) => (s ? Date.parse(s) : NaN))
-      .filter((t) => Number.isFinite(t) && t > now)
-    if (!cands.length) return
-    const at = Math.min(...cands)
-    if (chain.resetCheckAt === at) return
-    if (chain.resetTimer) clearTimeout(chain.resetTimer)
-    chain.resetCheckAt = at
-    chain.resetTimer = setTimeout(
-      () => {
-        chain.resetTimer = null
-        void this.resetAnchorCheck(chain, at)
-      },
-      at + RESET_GRACE_MS - now
-    )
-  }
-
-  /** The retrospective reset-anchor verdict: ① activity resumed after the reset → self-recovered, no
-   *  intervention. ② nothing pending → simply idle, no intervention. ③ anything else = a limit stall plus a
-   *  failed self-recovery → send only a prompt to the live PTY (no kill, no resume, no transcript copy — non-destructive). */
-  private async resetAnchorCheck(chain: Chain, resetAt: number): Promise<void> {
-    if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
-    if (!this.acts(chain)) return // quiet (S6 R1)
-    if (!chain.transcriptPath) return
-    if (!this.limitEvidence(chain)) {
-      // This path fires on reaching the reset time and nothing else. With no trace of a limit block that
-      // time means nothing, and all that is left is pushing a prompt into a session whose user stepped
-      // away. The timer is one-shot, so simply returning here is enough — armResetCheck schedules it again
-      // when the next window's snapshot arrives.
-      this.deps.log(
-        `reset-anchor: no limit evidence (usage=${chain.lastUsagePct ?? 'unknown'}) — no action session=${chain.liveId}`
-      )
-      return
-    }
-    const probed = await this.probeActivity(chain.transcriptPath)
-    const lastActivity = Math.max(chain.lastOutputAt, probed ?? 0)
-    if (lastActivity >= resetAt) {
-      this.deps.log(`reset-anchor: activity resumed — no action session=${chain.liveId}`)
-      return
-    }
-    const pending = await this.readPending(chain.transcriptPath)
-    if (!pending || pending < 1) {
-      this.deps.log(`reset-anchor: idle session (pending=${pending}) — no action session=${chain.liveId}`)
-      return
-    }
-    if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return // the across-await state guard
-    if (!this.acts(chain)) return
-    this.deps.log(`reset-anchor: limit stall + no self-recovery → nudge session=${chain.liveId}`)
-    this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
-    const liveId = chain.liveId
-    const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
-    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
-    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
-    if (!this.acts(chain)) return
-    this.deps.write(liveId, prompt)
-    setTimeout(() => {
-      if (!chain.disposed && chain.liveId === liveId) {
-        this.deps.write(liveId, '\r')
-        // The same pattern as sendPrompt — 'none' is published after Enter is sent so that the scheduler's
-        // handleRollState('none') cannot lift its suppression and slip a scheduled command into the same
-        // input line before the prompt is actually submitted. nudged is now suppressed in scheduler.ts as
-        // well, which makes this 'none' the only signal that lifts that suppression — without it the
-        // suppression latches permanently.
-        // As in sendPrompt, if a more recent state ('waiting' or 'switching') was published in between the
-        // generation has advanced — in which case our 'none' is stale and is skipped.
-        if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
-      }
-    }, ENTER_DELAY_MS)
-  }
-
   private pushState(
     chain: Chain,
     state: RollStateEvent['state'],
@@ -2653,7 +2453,7 @@ export class RollingCoordinator {
   private disposeChain(chain: Chain): void {
     if (chain.disposed) return
     chain.disposed = true
-    for (const t of [chain.waitTimer, chain.healthyTimer, chain.promptTimer, chain.trustTimer, chain.resetTimer, chain.heldTimer])
+    for (const t of [chain.waitTimer, chain.healthyTimer, chain.promptTimer, chain.trustTimer, chain.heldTimer])
       if (t) clearTimeout(t)
     this.chains.delete(chain.liveId)
     this.pushState(chain, 'none')

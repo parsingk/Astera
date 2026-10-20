@@ -7,6 +7,7 @@ import type { SourcesApi, SourcesCallAnswer } from '../../core/types'
 import { JOB_SOURCE_TIMEOUT_MS } from '../../host/jobSources'
 import { TIMEOUT_HEADROOM_MS } from '../../core/publicContract'
 import { NO_HOST_CONNECTION, isHostDeadline } from './worktreeRoute'
+import { HOST_GITHUB_DEADLINE_MS } from './hostGitHubRoute'
 
 /** How long the window waits for a source: the Host's own limit and the headroom, so the Host's 504 ("did not answer
  *  within 15 s") is what the person reads rather than the app's own deadline racing it (plan P3). */
@@ -80,8 +81,18 @@ export function createSourcesRoute(d: {
       if (!('id' in p)) return !p.ok && (p.code === 'TIMEOUT' || p.code === 'HOST_LOST') ? { ok: false, code: 'FAILED', message: p.message } : p
       return ask(
         'jobs-create-from-source',
-        { source: a.source, item: a.item, project: p.id, coordinatorAccount: a.coordinatorAccount, ...(a.convergence === true ? { convergence: true } : {}) },
-        SOURCES_DEADLINE_MS
+        {
+          source: a.source,
+          item: a.item,
+          project: p.id,
+          coordinatorAccount: a.coordinatorAccount,
+          ...(a.convergence === true ? { convergence: true } : {}),
+          // G7a: carried through GitHub, as the window turned it on
+          ...(a.githubLifecycle === true ? { githubLifecycle: true } : {})
+        },
+        // The item's read, then the preflight's gh calls (G7a final review M6): a slow gh must not lock the window as
+        // "may have been made" while the Host is still answering
+        a.githubLifecycle === true ? JOB_SOURCE_TIMEOUT_MS + HOST_GITHUB_DEADLINE_MS : SOURCES_DEADLINE_MS
       )
     }
   }

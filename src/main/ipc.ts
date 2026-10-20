@@ -65,6 +65,10 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './host/worktreeRoute'
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
+import { createHostGitHubRoute } from './host/hostGitHubRoute'
+import { needsHostGitHub } from '../core/orchestration/hostGitHub'
+import { ownerMismatchOf } from '../core/orchestration/ownerCheck'
+import { exactGithubLifecycleDefaults } from '../core/github/lifecycleDefaults'
 import { createAppCompletionChecks } from './host/pluginChecksRoute'
 import { createHostGitOps } from '../core/workUnit/hostGitOps'
 import { appPathInUse } from './host/localPathInUse'
@@ -103,7 +107,7 @@ import { answerOrchAct } from './orchestration/answerAct'
 import { appDiscardRunWorktree, appTimerTick, stopRunFromPanel } from './orchestration/yieldDispatch'
 import { HOST_UNRESPONSIVE_MS } from '../core/host/unresponsive'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { readChanges, readFileDiff } from '../core/git/changes'
+import { readChanges, readFileDiff, readRangeDiff } from '../core/git/changes'
 import { readWorkUnitsFile } from '../core/workUnit/store'
 import { HandoffStore } from './handoff/store'
 import { createAppJournal } from './continuity/appJournal'
@@ -122,6 +126,7 @@ import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from '../core/workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles } from '../core/workUnit/gitProbe'
 import { readRange, readRangeFiles, readHeadSteps } from '../core/git/range'
+import { changedNames } from '../core/git/changedNames'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -200,6 +205,7 @@ import {
 } from '../core/orchestration/exec/workerStart'
 import {
   forkWorktree,
+  integrateLive,
   integrateWorktrees,
   reapWorktree as reapWorktreeIn,
   worktreeDeps,
@@ -2916,8 +2922,9 @@ export function registerIpc(
     // 쪽에 떨어진다 — 하루 종일 파일을 고치고 명령을 돌리는 워커다. 읽기 도구는 matcher 밖이라
     // 그쪽 지연은 그대로다.
     //
-    // 그래도 지금 이 조합을 그대로 두는 이유: 롤링의 idle nudge 는 Notification 훅을 정지 신호로
-    // 쓴다(claudeCoordinator.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
+    // 이 조합을 그대로 두던 이유였던 롤링의 idle nudge(Notification 훅을 정지 신호로 썼다)는
+    // 2026-10-19 에 없어졌다 — 롤링은 이제 어떤 훅도 읽지 않는다. 워커가 이 훅에서 아직 얻는 것과,
+    // 롤링 조건을 그대로 둔 사정은 core/sessions/manager.ts 의 wantToolHooks 주석에 있다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     // Folder trust before an orchestration spawn — the reasoning lives on preTrustWorkspace in
     // core/orchestration/exec/workerStart.ts, which the Host will call (Task 9).
@@ -2953,27 +2960,32 @@ export function registerIpc(
         // spawnSession is a separate job that involves typing the user path's 15 fields alongside it, so
         // it is out of scope, and this one line closes the hole on the spot.
         const info = await spawnSession({
-          accountId: o.accountId,
-          cwd: o.cwd,
-          // **워커의 권한 태도는 전역 설정이 정한다**(AgentPermissionMode). `??` 인 이유는 이
-          // 클로저가 값을 **만드는 자리가 아니라 메꾸는 자리**이기 때문이다 — 지금은 coordinator.ts
-          // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
-          // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
-          bypassPermissions:
-            o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
-          initialPrompt: o.initialPrompt,
-          title: o.title, // the worker tab title is task.title
-          // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
-          // (Task.accountIds 에서 온다; startWorkerWithChain 이 rollChainFor 로 만든다). 지정이 없는
-          // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
-          rollAccountIds: o.rollAccountIds,
-          rollPrompt: o.rollPrompt, // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
-          // Recovery's provider-native resume (OrchCoordinator.startWorker's `resume` option) — both
-          // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
-          // forward them instead of dropping them on the floor.
-          resumeSessionId: o.resumeSessionId,
-          resumePrompt: o.resumePrompt
-        } satisfies typeof o)
+          // A Job's worker, reviewer or repair worker is an agent's session: its tab closes when it ends (2026-10-20).
+          // Outside the satisfies below, whose shape is the coordinator's options and has no such field.
+          startedBy: 'agent',
+          ...({
+            accountId: o.accountId,
+            cwd: o.cwd,
+            // **워커의 권한 태도는 전역 설정이 정한다**(AgentPermissionMode). `??` 인 이유는 이
+            // 클로저가 값을 **만드는 자리가 아니라 메꾸는 자리**이기 때문이다 — 지금은 coordinator.ts
+            // 가 이 칸을 채우지 않지만(그쪽은 앱 설정을 볼 수 없다), 언젠가 Task 하나만 다르게
+            // 띄우기로 하면 그 값이 여기서 이겨야 한다. 근거는 startCoordinatorSession 의 주석에 있다.
+            bypassPermissions:
+              o.bypassPermissions ?? core.appSettings.getAgentPermissionMode() === 'yolo',
+            initialPrompt: o.initialPrompt,
+            title: o.title, // the worker tab title is task.title
+            // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
+            // (Task.accountIds 에서 온다; startWorkerWithChain 이 rollChainFor 로 만든다). 지정이 없는
+            // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
+            rollAccountIds: o.rollAccountIds,
+            rollPrompt: o.rollPrompt, // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
+            // Recovery's provider-native resume (OrchCoordinator.startWorker's `resume` option) — both
+            // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
+            // forward them instead of dropping them on the floor.
+            resumeSessionId: o.resumeSessionId,
+            resumePrompt: o.resumePrompt
+          } satisfies typeof o)
+        })
         try {
           send('session:created', info)
         } catch (err) {
@@ -3063,13 +3075,12 @@ export function registerIpc(
       startReview: (a) => startReview(a),
       startRepair: (a) => performRepair(repairDeps, a),
       firstCheckpointHead: (dispatchId) => appJournal.firstCheckpointHead(dispatchId),
-      diffNames: async (cwd, fromHead) => {
-        const r = await git(['diff', '--name-only', fromHead, 'HEAD'], { cwd })
-        return r.ok ? r.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : null
-      },
+      diffNames: (cwd, fromHead) => changedNames((args, o) => git(args, o), cwd, fromHead),
       // Plugins run in the Host: the app asks it (plugin Phase 5 C8). `deps` is defined below and read at the call.
       pluginCheck: (plugin, input) =>
-        deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') })
+        deps.completionChecks?.run(plugin, input) ?? Promise.resolve({ name: plugin, ...unavailable('plugin checks cannot run here') }),
+      // GitHub CI is the Host's (GitHub lifecycle §4): a round this app runs hands it over through the socket
+      lifecycleCiBegin: (args) => orchCall({ cmd: 'lifecycle-ci-begin', args, sessionId: '' })
     })
     orchValidator = validation.validator
 
@@ -3088,7 +3099,8 @@ export function registerIpc(
       assertAllowedPath: (p) => assertAllowedPath(p),
       // `(w)` 는 일부러다 — ipcConvergenceWiring.test.ts 의 남은 가드가 첫 `startWorker: (a) =>` 에 닻을 내린다.
       startWorker: (w) => deps.startWorker(w),
-      specsDir
+      specsDir,
+      rangeDiff: (cwd, base, head) => readRangeDiff(cwd, base, head)
     })
 
     /** What reapWorktree (core/orchestration/exec/integrateGit.ts) may close and ask in the app.
@@ -3135,7 +3147,8 @@ export function registerIpc(
       lang: () => core.lang,
       forkRunWorktree: (a) =>
         forkWorktree({ repoPath: a.repoPath, name: a.name }, { registry: core.worktrees, log: orchLog }),
-      integrate: (runRoot, merges) => integrateWorktrees(runRoot, merges, {}, gitCtx),
+      // A dependency folder already merged and reaped is skipped (integrateLive, G5c final review C1)
+      integrate: (runRoot, merges) => integrateLive(runRoot, merges, (into, paths) => integrateWorktrees(into, paths, {}, gitCtx), { log: orchLog }),
       reap: (p) => reapWorktree(p),
       isRegisteredWorktree: (p) => core.worktrees.list().some((w) => isSamePath(w.path, p)),
       // Chats too (2026-10-13, spec E5): a Run's external coordinator can be a chat session. Every other caller asks
@@ -3256,7 +3269,8 @@ export function registerIpc(
             preTrust: preTrustWorkspace,
             bypassPermissions: async () => core.appSettings.getAgentPermissionMode() === 'yolo',
             spawn: async (o) => {
-              const info = await spawnSession(o)
+              // A coordinator is an agent's session too: its tab closes when it ends (2026-10-20)
+              const info = await spawnSession({ ...o, startedBy: 'agent' })
               // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
               // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
               // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
@@ -3529,7 +3543,8 @@ export function registerIpc(
       // 주석); 여기서 끊으면 그 await 가 곧바로 풀려 응답이 Dispatch 커밋보다 먼저 나가고, 그
       // 창으로 worker-release·worker-start 가 same-session repair 가 노리는 세션에 슬쩍 들어올 수
       // 있다. repairOnce 자신이 실패를 이미 로그하므로(그 함수의 주석) 여기서 또 잡을 것이 없다.
-      repairOnce: ({ taskId }) => repairOnce(repairDeps, { taskId }),
+      // The answered state too, so the Dispatch and the answer are one write (GitHub lifecycle G3c1 final review M4)
+      repairOnce: (a) => repairOnce(repairDeps, a),
       // Gate 문구의 언어. 배선이 앱 언어를 넘긴다 — 이 파일의 다른 모든 lang 자리와 같다.
       lang: () => core.lang,
       log: orchLog,
@@ -4549,96 +4564,9 @@ export function registerIpc(
     if (completionRunId === undefined) return null
     return completionForTaskOf(state.tasks, completionRunId, taskId)
   }
-  // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
-  // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·
-  // run-merge 는 args.run, run-delete 는 args.id, task-update 는
-  // args.id, dispatch-show·gate-create 는 args.task, worker-start 는 args.taskId 를 먼저 보고 없으면
-  // args.task 를 본다(server.ts 의 handleCommand, 'worker-start' 분기), worker-stop 은 Task id 가 아니라 args.dispatch — Dispatch id
-  // 라 그 Dispatch 의 taskId 로 한 번 더 찾아야 Run 에 닿는다. 이 표들이 담는 것은 "id 를 나르는
-  // 모든 명령"이 아니라 지금 렌더러가 실제로 부르는 명령뿐이다 — 여기 없는 명령 중에도 id 를
-  // 나르는 것이 있다(task-list 는 args.run, gate-resolve 는 args.id, worker-show 는 args.dispatch
-  // 등). 새 호출부가 id 를 나르는 명령을 추가로 부르게 되면 그 키를 여기에 넣는다.
-  //
-  // **run-merge 가 이 문을 통과하는 첫 번째 "남의 프로젝트 폴더에서 git merge 를 돌리는 명령" 이다** —
-  // 그래서 run-start·run-delete 와 함께 여기 들어왔다. 그 셋이 없던 동안 orchOwnerMismatch 는 그
-  // args.run/args.id 를 아예 보지 않았고, 그것은 소유 판정이 있는 이유(다른 프로젝트의 Run 을 이
-  // 문으로 건드리지 못한다)가 가장 무거운 명령들에서만 비어 있었다는 뜻이다.
-  const RUN_ID_ARG: Record<string, string> = {
-    'task-create': 'runId',
-    'run-start': 'run',
-    'run-merge': 'run',
-    'run-pause': 'run',
-    'run-resume': 'run',
-    'run-delete': 'id',
-    // Phase 10: the renderer names the Run as `runId`; a file of another project's Run is not read through this door.
-    'runs-changed-files': 'runId',
-    'runs-diff': 'runId'
-  }
-  const TASK_ID_ARG: Record<string, string[]> = {
-    'task-update': ['id'],
-    'dispatch-show': ['task'],
-    'gate-create': ['task'],
-    'worker-start': ['taskId', 'task']
-  }
-  const DISPATCH_ID_ARG: Record<string, string> = { 'worker-stop': 'dispatch' }
-  /** orch.command 가 받은 명령의 args 가 project 가 아닌 다른 프로젝트의 Run·Task·Dispatch 를
-   *  가리키면 그 이유를 문자열로, 아니면 null 을 돌려준다.
-   *
-   *  **소유 판정을 복제하지 않는다** — orch.runDetail 이 이미 쓰는 runsForProject 를 그대로
-   *  부른다(위 orch.runDetail 의 주석과 같은 이유: 규칙을 다시 쓰면 그 규칙이 막는 조합을 이
-   *  door 가 통과시키는 우회로가 된다).
-   *
-   *  이 명령의 args 에 id 가 없거나(위 세 표에 그 명령이 없다), 있어도 그 id 를 가진 Run·Task·
-   *  Dispatch 가 애초에 존재하지 않으면 null 이다 — 그것은 소유 판정이 아니라 '없는 id' 오류이고,
-   *  handleCommand 자신이 이미 그 오류를 안다(예: task-update 의 `unknown task`). 여기서 막는 것은
-   *  존재하는데 다른 프로젝트 것인 경우 하나뿐이다 — 그래서 지금 있는 아홉 호출부(NewTaskModal 의
-   *  task-create, RunDetail 의 run-start·run-merge·worker-start·dispatch-show·worker-stop·
-   *  task-update·gate-create, App 의 run-delete)는 모두 projectPath 와 짝이 맞는 id 를 보내므로 이
-   *  판정을 통과한다. */
-  const orchOwnerMismatch = (
-    state: OrchState,
-    project: string,
-    cmd: string,
-    args: Record<string, unknown>
-  ): string | null => {
-    const strArg = (key: string): string | null => {
-      const v = args[key]
-      return typeof v === 'string' && v.length > 0 ? v : null
-    }
-    const owned = idsOfProject(state, project, core.worktrees.list())
-    const runBelongs = (id: string): boolean => owned.has(id)
-
-    const runKey = RUN_ID_ARG[cmd]
-    const named = runKey ? strArg(runKey) : null
-    // A Job id is read as its latest Run, as the commands read it (Phase 10 review I3): otherwise another project's Job
-    // id would be "no such run" here and pass.
-    const runId = named ? (resolveRunId(state, named) ?? named) : null
-    if (runId) {
-      if (!state.runs.some((r) => r.id === runId)) return null
-      return runBelongs(runId) ? null : `run ${runId} does not belong to ${project}`
-    }
-
-    const taskKeys = TASK_ID_ARG[cmd]
-    const taskId = taskKeys ? taskKeys.map(strArg).find((v) => v !== null) ?? null : null
-    if (taskId) {
-      const task = state.tasks.find((t) => t.id === taskId)
-      if (!task) return null
-      return runBelongs(task.runId ?? task.jobId ?? '') ? null : `task ${taskId} does not belong to ${project}`
-    }
-
-    const dispatchKey = DISPATCH_ID_ARG[cmd]
-    const dispatchId = dispatchKey ? strArg(dispatchKey) : null
-    if (dispatchId) {
-      const dispatch = state.dispatches.find((d) => d.id === dispatchId)
-      const task = dispatch ? state.tasks.find((t) => t.id === dispatch.taskId) : undefined
-      if (!task) return null
-      return runBelongs(task.runId ?? task.jobId ?? '')
-        ? null
-        : `dispatch ${dispatchId} does not belong to ${project}`
-    }
-
-    return null
-  }
+  // The check itself is core's ownerMismatchOf (orchestration/ownerCheck.ts), its tables and their reasons with it
+  const orchOwnerMismatch = (state: OrchState, project: string, cmd: string, args: Record<string, unknown>): string | null =>
+    ownerMismatchOf(state, project, idsOfProject(state, project, core.worktrees.list()), cmd, args)
   // UI 가 상태를 바꾸는 **유일한** 통로. 명령별 IPC(orch.createTask, orch.startWorker, …)를 만들지
   // 않는 이유는 문이 둘이 되기 때문이다 — 전이표·회로 차단·중복 보고 방어·감사 로그가 두 벌이 되고,
   // 한쪽만 고쳐지는 날 어느 쪽이 옳은지 알 방법이 없다. UI 는 CLI 와 같은 문을 쓰는 또 하나의 손님이다.
@@ -4650,6 +4578,9 @@ export function registerIpc(
   // Dispatch id 가 **그 projectPath 의 것인지**는 별개의 질문이고, 여기까지는 그것을 아무도 묻지
   // 않았다. orch.runDetail(위)은 정확히 같은 질문을 runId 에 대해 이미 묻고 있고("소유 판정을
   // 복제하지 않는다"는 그 주석), 그 판정을 orchOwnerMismatch 가 그대로 재사용한다.
+  // The app's GitHub commands go to the Host (GitHub lifecycle G7a, `needsHostGitHub`): this process's copy of the
+  // command layer has no gh, so a lifecycle Job made here or a GitHub question's continue or rerun answered 409.
+  const hostGitHub = createHostGitHubRoute({ call: (m) => orchCall(m) })
   const orchLocalCommand = async (projectPath: string, cmd: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
       await assertAllowedPath(projectPath)
       // The server is not up — a boot that failed, or one still in flight. Not 'orchestration is
@@ -4678,6 +4609,8 @@ export function registerIpc(
         orchLog(`orch.command: rejected ${cmd} — ${mismatch}`)
         return { status: 403, body: { error: mismatch } }
       }
+      // After the ownership check, which holds for the Host's commands as for this process's own
+      if (needsHostGitHub(orch.deps.getState(), cmd, args ?? {})) return hostGitHub(cmd, args ?? {})
       try {
         return await orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
       } catch (err) {
@@ -6021,6 +5954,15 @@ export function registerIpc(
   ipcMain.handle('settings.setMcpGithubWrite', async (_e, v: unknown) => {
     if (typeof v !== 'boolean') throw new Error(`INVALID_MCP_GITHUB_WRITE: ${String(v)}`)
     await core.appSettings.setMcpGithubWrite(v)
+  })
+
+  // The GitHub lifecycle's defaults (G7a, design §5.1): the Host reads the file when a lifecycle Job is made, so saving
+  // it is the whole effect. A value is taken whole or not at all, as the pane's bounds say.
+  ipcMain.handle('settings.getGithubLifecycle', () => core.appSettings.getGithubLifecycle())
+  ipcMain.handle('settings.setGithubLifecycle', async (_e, v: unknown) => {
+    const exact = exactGithubLifecycleDefaults(v)
+    if (!exact) throw new Error(`INVALID_GITHUB_LIFECYCLE: ${JSON.stringify(v)}`)
+    await core.appSettings.setGithubLifecycle(exact)
   })
 
   // MCP over HTTP (MCP HTTP design §4). Saving is followed by `mcp-http-reload`, which makes the Host

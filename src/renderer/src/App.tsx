@@ -49,7 +49,7 @@ import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { PluginsSettings } from './components/PluginsSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
-import { LOCAL, controlReason, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
+import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
 import { startSerialPoll } from './lib/serialPoll'
 import { pollWhileVisible } from './lib/visiblePoll'
 import { dropKeys } from './lib/dropKeys'
@@ -142,6 +142,9 @@ import { openPath } from './lib/openPath'
 import { folderLinkAction, type FolderReveal } from './lib/folderLink'
 import { errText } from './hooks/useFileOps'
 import { sessionKindOf } from '../../core/sessions/kind'
+import { AGENT_TAB_CLOSE_DELAY_MS, AGENT_TAB_LOST_SIGHT_CLOSE_MS, closesWhenEnded } from '../../core/sessions/agentTab'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
+import { holdActivationFocus } from './lib/focusHold'
 import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
@@ -155,6 +158,7 @@ import { backdropProps } from './lib/backdrop'
 import { createTouched } from './lib/touched'
 import { SlackSettings } from './components/SlackSettings'
 import { needsUnderstanding } from './lib/understandingRead'
+import { requestShownOf } from '../../core/understanding/requestShown'
 
 sessionBus.init()
 
@@ -1142,7 +1146,10 @@ export default function App(): React.JSX.Element {
         .catch(() => {})
     }
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
-    void window.api.sessions.list().then((list) => {
+    void window.api.sessions.list().then((all) => {
+      // An agent's session that ended closed its tab (core/sessions/agentTab.ts): a reload does not bring it back. One the
+      // app lost sight of is left out too: if the Host still runs it, its hand-back places a tab again (session:created)
+      const list = all.filter((s) => !closesWhenEnded(s, { afterLostSight: true }))
       setSessions(list)
       for (const s of list) if (s.status === 'running') { seedSchedState(s.id); seedRollState(s.id) }
       if (list.length === 0) return
@@ -1170,11 +1177,28 @@ export default function App(): React.JSX.Element {
     const offNotifyActivate = window.api.on('notify:activate', ({ sessionId }) => {
       selectWorkbenchTabRef.current?.(sessionTab(sessionId))
     })
+    // The looks the exit handler below has pending, cleared with the listeners
+    const endedTimers = new Set<ReturnType<typeof setTimeout>>()
     const offExit = window.api.on('session:exit', ({ sessionId, exitCode }) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
       )
       closeAgentTabRef.current(sessionId) // the owner is gone; the tab has nothing to report to
+      // An agent's session closes its tab once it ended (core/sessions/agentTab.ts), through the close a person's ✕
+      // takes. Looked at again a moment later: a roll hands the tab to the new session, and a Host the app lost sight
+      // of hands the session back, and either way it is no longer an ended agent's session by then. A lost-sight exit
+      // waits longer for that hand-back before it counts as an end (review M5).
+      const timer = setTimeout(() => {
+        endedTimers.delete(timer)
+        if (!closesWhenEnded(sessionsRef.current.find((s) => s.id === sessionId), { afterLostSight: true })) return
+        const tab = sessionTab(sessionId)
+        // The tab a person is looking at: the one beside it becomes active, and must not take the keys they go on
+        // typing (review M4)
+        if (activePaneIdRef.current !== null && layoutRef.current !== null && leafOf(layoutRef.current, activePaneIdRef.current)?.activeTabId === tab)
+          holdActivationFocus()
+        closeWorkbenchTabRef.current(tab)
+      }, exitCode === PTY_LOST_SIGHT_EXIT_CODE ? AGENT_TAB_LOST_SIGHT_CLOSE_MS : AGENT_TAB_CLOSE_DELAY_MS)
+      endedTimers.add(timer)
     })
     // Receives sessions main created on its own (orchestration workers) as tabs. The user path builds a
     // tab from the return value of sessions.spawn, but the coordinator path creates the session inside
@@ -1259,6 +1283,7 @@ export default function App(): React.JSX.Element {
       offGhosts()
       offNotifyActivate()
       offExit()
+      for (const timer of endedTimers) clearTimeout(timer)
       offCreated()
       offUpdate()
       offCampaign()
@@ -1554,6 +1579,16 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     // Rolling: swap the session in place in the same tab, plus the progress banner state
     const offRolled = window.api.on('session:rolled', ({ oldSessionId, info }) => {
+      // The old session's tab already closed: an agent's session whose exit came first, as a Host chat roll's does — it
+      // reports itself once the new process has started (review I1). The new session gets a tab of its own, placed in
+      // the background as session:created places one.
+      if (!sessionsRef.current.some((s) => s.id === oldSessionId)) {
+        if (!sessionsRef.current.some((s) => s.id === info.id)) {
+          setSessions((prev) => [...prev, info])
+          place(layoutRef.current, info.id, null, null, true)
+        }
+        return
+      }
       sessionBus.discard(oldSessionId)
       setSessions((prev) => prev.map((s) => (s.id === oldSessionId ? info : s)))
       // Swaps only the id while keeping the tab's position, order, and active state — the same function as a restart
@@ -2905,6 +2940,11 @@ export default function App(): React.JSX.Element {
   }, [openRun?.runId, openRun?.runtimeId])
   useEffect(() => {
     if (!openRun) return
+    // The Jobs view left the screen and its snapshot with it: a null snapshot below would keep the detail open on nothing
+    if (detailOffScreen({ jobsOpen, sidebarOpen })) {
+      setOpenRun(null)
+      return
+    }
     const snap = openRun.runtimeId ? remoteSnapshot : orchSnapshot
     if ((!openRun.runtimeId && openRun.projectPath !== currentProject) || snap === null) return
     // 위와 같은 이유로 findRun 이다 — `runs.some` 이면 회차의 상세 창이 열린 다음 프레임에 닫힌다.
@@ -2912,7 +2952,7 @@ export default function App(): React.JSX.Element {
     if (found) openRunSeen.current = true
     // A paired Runtime's Run just made there is not in the list until the next read: not closed for that.
     if (detailRunGone({ remote: !!openRun.runtimeId, found, seen: openRunSeen.current })) setOpenRun(null)
-  }, [openRun, currentProject, orchSnapshot, remoteSnapshot])
+  }, [openRun, currentProject, orchSnapshot, remoteSnapshot, jobsOpen, sidebarOpen])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. The dialog is pinned to the project (and context) it was opened
@@ -3062,7 +3102,8 @@ export default function App(): React.JSX.Element {
     // has no root
     if (!currentProject || !record) return
     const id = recordTab(recordId)
-    const tab: RecordTab = { id, recordId, title: record.request, projectRoot: currentProject }
+    // Named as How It Works names it: a Job made from a ticket by the sentence that names the ticket (G8 demo)
+    const tab: RecordTab = { id, recordId, title: requestShownOf(record.request), projectRoot: currentProject }
     // Reopening the same tab id replaces it. `record:<id>` carries no project, so two projects
     // sharing a record id would share one tab — keeping the earlier record would let a tab just
     // opened from B draw A's explanation. The one just pressed wins.

@@ -391,3 +391,14 @@ describe('sanitize — fine-grained GitHub tokens', () => {
     expect(sanitize('a github_pat_ prefix is fine-grained')).toBe('a github_pat_ prefix is fine-grained')
   })
 })
+
+// GitHub lifecycle G2 (final review): CI logs, now kept as evidence, print npm tokens on their own
+describe('sanitize — npm tokens', () => {
+  it('redacts an npm_ token with no key in front of it', () => {
+    expect(sanitize('auth npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 ok')).toBe('auth [REDACTED] ok')
+  })
+
+  it('leaves the npm_ words of npm’s own environment alone', () => {
+    expect(sanitize('set npm_config_registry and npm_package_version')).toBe('set npm_config_registry and npm_package_version')
+  })
+})

@@ -292,7 +292,7 @@ function rig(initial: OrchState = emptyState()) {
   // ipc.ts 는 repairOnce 자신의 Promise 를 그대로 돌려준다 — gate-resolve 가 그것을 기다려 "Dispatch
   // 가 이미 커밋됐다"까지만 기다린다(repair.ts 의 repairOnce 주석). void 로 끊으면 그 await 가 곧바로
   // 풀려 커밋 전에 응답이 나간다.
-  const repairOnceHook: NonNullable<OrchServerDeps['repairOnce']> = ({ taskId }) => repairOnce(repairDeps, { taskId })
+  const repairOnceHook: NonNullable<OrchServerDeps['repairOnce']> = (a) => repairOnce(repairDeps, a)
 
   const deps: OrchServerDeps = {
     getState: () => box.state,

@@ -1,3 +1,4 @@
+import { taskTitleOf } from './checkText'
 import { useState } from 'react'
 import type { Account, JobTask } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
@@ -90,8 +91,12 @@ export function NewTaskModal({
    *  것들은 아래 칩으로 서고 그 자리에서 지운다. */
   const depItems: SelectOption[] = tasks
     .filter((tk) => !deps.includes(tk.id))
-    .map((tk) => ({ value: tk.id, label: tk.title }))
-  const titleOf = (id: string): string => tasks.find((tk) => tk.id === id)?.title ?? id
+    .map((tk) => ({ value: tk.id, label: taskTitleOf(tk, t as never) }))
+  // The lifecycle Task's title in the app's language (G7b final review I2)
+  const titleOf = (id: string): string => {
+    const tk = tasks.find((x) => x.id === id)
+    return tk ? taskTitleOf(tk, t as never) : id
+  }
 
   /** 뒤에 빈 칸을 하나 더 세울지 — **그 칸에서 고를 것이 남았을 때만 세운다.** 이미 고른 계정은 다른
    *  칸의 항목에서 빠지므로(아래 filter), 계정이 하나뿐인 사람이 그것을 고르면 둘째 칸의 목록이 비고

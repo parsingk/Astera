@@ -1,0 +1,237 @@
+// The Run-level lifecycle Task (GitHub lifecycle design L1, §3.2): added by Astera in the same write that completes a
+// lifecycle Run's last ordinary Task, so no outcome reader ever sees the Run all-terminal in between. Pure.
+import { GITHUB_CI_CHECK, ciTargetNames, type GitHubInvalidatedReason, type MergeReadyEvidence } from '../github/lifecycle'
+import { checkConfigIdsOf, latestImplDispatch, policyOf, repairCountIn } from './convergence'
+import type { LifecycleTaskFacts } from '../github/view'
+import { isTerminal, tasksOwnedBy } from './running'
+import type { OrchState } from './state'
+import { newId, recomputeReady, type Dispatch, type Gate, type Task } from './types'
+
+export const LIFECYCLE_TASK_TITLE = 'GitHub 전달'
+const LIFECYCLE_TASK_SPEC = 'Astera가 이 Run의 브랜치를 GitHub으로 가져갑니다: push, draft PR, CI, 수리, 리뷰. 워커가 없는 Task입니다.'
+
+export const isLifecycleTask = (t: Task): boolean => t.kind === 'lifecycle'
+
+/** The Run's latest lifecycle Task: the one `runs reconverge` added last (G5c), or the only one. On a tie in `createdAt`
+ *  the later in the list wins, being the one added later. */
+export function latestLifecycleTaskOf(s: OrchState, runId: string): Task | undefined {
+  let latest: Task | undefined
+  for (const t of s.tasks) if (t.runId === runId && isLifecycleTask(t) && (!latest || t.createdAt >= latest.createdAt)) latest = t
+  return latest
+}
+
+/** The Run's latest lifecycle Task with the question open on it (GitHub lifecycle G3c2), its repair count against the
+ *  Job's budget, the reason of the repair under way and the first check its last round failed (G7b): what the Run's
+ *  `github` reads while that Task works. From the Run's Tasks and lookups the caller has, so the Jobs fold uses its index
+ *  and scans nothing per row (final review M1); runView builds them from the state (lifecycleFactsOf). */
+export function lifecycleFactsIn(
+  tasks: readonly Task[],
+  openGateOf: (taskId: string) => Gate | undefined,
+  dispatchesOf: (taskId: string) => readonly Dispatch[],
+  maxFixAttempts: number | undefined
+): LifecycleTaskFacts | undefined {
+  let task: Task | undefined
+  // The latest, ties to the later in the list, as latestLifecycleTaskOf reads it
+  for (const t of tasks) if (isLifecycleTask(t) && (!task || t.createdAt >= task.createdAt)) task = t
+  if (!task) return undefined
+  const openGate = openGateOf(task.id)
+  const ds = dispatchesOf(task.id)
+  const repairing = ds.find((d) => d.repair !== undefined && d.outcome === undefined && d.endedAt === undefined)?.repair
+  const blocked = task.checks?.find((c) => c.status === 'failed' || c.status === 'timed-out' || c.status === 'error')
+  return {
+    task,
+    ...(openGate ? { openGate } : {}),
+    ...(maxFixAttempts !== undefined ? { repairs: { done: repairCountIn(ds), max: maxFixAttempts } } : {}),
+    ...(repairing ? { repairing } : {}),
+    ...(blocked ? { blocked: { configId: blocked.configId, name: blocked.name } } : {})
+  }
+}
+
+/** lifecycleFactsIn over the state, for one Run (runView). */
+export function lifecycleFactsOf(s: OrchState, runId: string): LifecycleTaskFacts | undefined {
+  const latest = latestLifecycleTaskOf(s, runId)
+  if (!latest) return undefined
+  return lifecycleFactsIn(
+    s.tasks.filter((t) => t.runId === runId),
+    (id) => s.gates.find((g) => g.taskId === id && g.status === 'open'),
+    (id) => s.dispatches.filter((d) => d.taskId === id),
+    policyOf(s, latest)?.maxFixAttempts
+  )
+}
+
+/** The Run's lifecycle Task while it still works: the latest one, neither completed nor terminally failed. Only the
+ *  latest: a failed one under the failure limit is not terminal, and after a reconverge it is superseded (G5c). */
+export function openLifecycleTaskOf(s: OrchState, runId: string): Task | undefined {
+  const latest = latestLifecycleTaskOf(s, runId)
+  return latest && !isTerminal(latest) ? latest : undefined
+}
+
+/** The Run's most recently completed ordinary Task that a worker did, with that worker's Dispatch (GitHub lifecycle
+ *  §3.4, G3c1): whose provider and accounts a lifecycle Task's repair and review take, having none of its own. Read from
+ *  the Run's Tasks, not the lifecycle Task's deps, which a later lifecycle Task (reconverge) would not share. */
+export function latestOrdinaryWork(s: OrchState, runId: string): { task: Task; dispatch: Dispatch } | null {
+  const done = s.tasks.filter((t) => t.runId === runId && !isLifecycleTask(t) && t.status === 'completed').sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  for (const task of done) {
+    const dispatch = latestImplDispatch(s, task.id)
+    if (dispatch) return { task, dispatch }
+  }
+  return null
+}
+
+const BRIEF_TASKS = 20
+
+/** What a lifecycle Task's repair and review are asked to satisfy (G3c1 final review I1): the Run's objective and the
+ *  Tasks folded into its branch, not the lifecycle Task's own placeholder, which describes Astera's carrying. */
+export function lifecycleBriefOf(s: OrchState, task: Task): { title: string; spec: string } {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const job = run && s.jobs.find((j) => j.id === run.jobId)
+  const objective = job?.objective.trim() ?? ''
+  const own = s.tasks.filter((t) => t.runId === task.runId && !isLifecycleTask(t))
+  const shown = own.slice(0, BRIEF_TASKS)
+  const lines = shown.map((t) => `- ${t.title}: ${(t.spec.split('\n').find((l) => l.trim() !== '') ?? '').trim().slice(0, 200)}`)
+  if (own.length > shown.length) lines.push(`- … ${own.length - shown.length} more`)
+  const head = objective.split('\n')[0].slice(0, 80)
+  return {
+    title: head ? `GitHub: ${head}` : LIFECYCLE_TASK_TITLE,
+    spec:
+      `This task carries the whole Run to GitHub. What the Run has to achieve:\n\n${objective || '(no objective was written)'}\n\n` +
+      `The Tasks folded into this branch:\n${lines.length > 0 ? lines.join('\n') : '- (none)'}`
+  }
+}
+
+/** What a lifecycle Task's repair is told about GitHub (GitHub lifecycle G3c1, design §4.8). */
+export interface LifecycleRepairFacts {
+  pr?: { number: number; url: string }
+  /** The head Astera pushed last. */
+  head?: string
+  /** The GitHub check that failed this round, with the class Astera gave it; absent when a local check failed. */
+  failing?: { check: string; class?: string; summary: string }
+  /** CI failures of this lifecycle Task's earlier rounds, oldest first, at most EARLIER_CI_FAILURES. */
+  earlier: { sha?: string; check?: string; class?: string }[]
+}
+
+const EARLIER_CI_FAILURES = 5
+
+/** The facts a lifecycle repair is told, from the Run's GitHub record: its pull request, the head pushed, the failing
+ *  check of this round when it was GitHub CI's, and the CI failures logged since this lifecycle Task began. */
+export function lifecycleRepairFacts(s: OrchState, task: Task): LifecycleRepairFacts {
+  const gs = s.runs.find((r) => r.id === task.runId)?.githubState
+  // This round's GitHub CI result, when it is the one CI gave (the carrier's own failure — uncommitted changes, no commits
+  // — reads nothing from CI; the failure kept from an earlier head is not this round's, G3c1 final review M5)
+  const ciResult = (task.checks ?? []).find((c) => c.configId === GITHUB_CI_CHECK && c.status === 'failed')
+  const failure = ciResult && gs?.ci?.verdict === 'failed' && gs.ci.failure?.summary === ciResult.summary ? gs.ci.failure : undefined
+  const now = failure ? gs?.ci?.sha : undefined
+  const earlier = (gs?.log ?? [])
+    .filter((e) => e.kind === 'ci-failed' && e.at >= task.createdAt && !(now !== undefined && e.sha === now))
+    .slice(-EARLIER_CI_FAILURES)
+    .map((e) => ({ ...(e.sha ? { sha: e.sha } : {}), ...(e.check ? { check: e.check } : {}), ...(e.class ? { class: e.class } : {}) }))
+  return {
+    ...(gs?.binding ? { pr: { number: gs.binding.number, url: gs.binding.url } } : {}),
+    ...(gs?.lastPushedSha ? { head: gs.lastPushedSha } : {}),
+    ...(failure ? { failing: { check: failure.check, class: failure.class, summary: failure.summary } } : {}),
+    earlier
+  }
+}
+
+/** Why a passing lifecycle review is not merge-ready (G5b), as `invalidated.reason`. */
+export type MergeReadyRefusal = Extract<
+  GitHubInvalidatedReason,
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'base-changed'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+>
+
+/** Merge-ready, decided from state alone when a lifecycle Task's review passes (G5b, design §3.5, §5.4, S3): GitHub
+ *  readable, the pull request open on the base Astera bound (G6), its head the one Astera pushed, the review read that head (`reviewHead`), CI passed
+ *  on it — or a person chose to go on without CI there and the head still has none — no question open on the Run, the
+ *  local checks passed (one a person skipped withholds it as skipped). The evidence, with the names CI was judged on as
+ *  the read recorded them, or the first part that failed. */
+export function mergeReadyOf(
+  s: OrchState,
+  task: Task,
+  review: Dispatch
+): { evidence: Omit<MergeReadyEvidence, 'evaluatedAt'> } | { reason: MergeReadyRefusal } {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const gs = run?.githubState
+  if (!run || !gs?.binding) return { reason: 'not-bound' }
+  if (gs.lastReadError) return { reason: 'external-state-unavailable' }
+  if (gs.pr?.state !== 'open') return { reason: 'pr-not-open' }
+  // A pull request retargeted to another base is not ready against the base Astera bound: the next read would withdraw it
+  // (`base-changed`), and runs reconverge binds the new base (G6, spec §30)
+  if (gs.pr.baseBranch !== gs.binding.baseBranch) return { reason: 'base-changed' }
+  const head = gs.lastPushedSha
+  if (head === undefined || gs.headSha !== head) return { reason: 'head-not-pushed' }
+  if (review.reviewHead !== head) return { reason: 'review-of-another-head' }
+  // After runs reconverge bound a retargeted base, only CI that started after the re-bind was judged against it: a retarget
+  // does not run CI again (G6 final review I2; spec §30, existing green CI is not trusted as it is)
+  const reboundAt = gs.baseReboundAt
+  const started = (gs.ci?.checks ?? []).filter((c) => c.startedAt !== undefined)
+  const freshForBase = reboundAt === undefined || (started.length > 0 && started.every((c) => c.startedAt! >= reboundAt))
+  const ciPassed = gs.ci?.sha === head && gs.ci.verdict === 'passed'
+  if (ciPassed && !freshForBase) return { reason: 'base-changed' }
+  // A person's go-on-without-CI was for a head with no check at all (S10): CI that ran on it since decides
+  const noCi = gs.ciOverride?.sha === head && !(gs.ci?.sha === head && gs.ci.verdict !== 'none')
+  if (!ciPassed && !noCi) return { reason: 'ci-not-passed' }
+  if (s.gates.some((g) => g.runId === run.id && g.status === 'open')) return { reason: 'question-open' }
+  const local = (task.checks ?? []).filter((c) => c.configId !== GITHUB_CI_CHECK)
+  if (local.some((c) => c.skipped === true)) return { reason: 'local-check-skipped' }
+  if (local.some((c) => c.status !== 'passed')) return { reason: 'local-check-failed' }
+  const selected = s.jobs.find((j) => j.id === run.jobId)?.github?.ci.selectedChecks
+  return {
+    evidence: {
+      pullRequestNumber: gs.binding.number,
+      headSha: head,
+      localChecksPassed: true,
+      requiredCiPassed: ciPassed,
+      ...(ciPassed ? {} : { ciOverride: 'no-ci' as const }),
+      reviewPassed: true,
+      unresolvedQuestions: 0,
+      // The names as the read judged on them, whole; a record from before G5b's fix computes them from its checks
+      ciChecks: ciPassed && gs.ci ? (gs.ci.targetNames ?? ciTargetNames(gs.ci.checks, gs.ci.basis, selected)) : []
+    }
+  }
+}
+
+/** `s` with the Run's lifecycle Task added when the Run's Job has GitHub lifecycle on, the Run has ordinary Tasks, every
+ *  one of them is completed, and the Run has no lifecycle Task yet; else `s` itself. Called by every transition that
+ *  moves a Task to completed (applyWorkerDone, applyValidationResult, applyReviewResult, task-update): a table test in
+ *  state.test.ts walks each, so a new site without it fails there. A Run that already had one gets the next only from
+ *  `runs reconverge` (design §3.5). */
+
+export function withLifecycleTask(s: OrchState, runId: string | undefined, now: string): OrchState {
+  if (runId === undefined) return s
+  const run = s.runs.find((r) => r.id === runId)
+  const job = run && s.jobs.find((j) => j.id === run.jobId)
+  if (!job?.github) return s
+  const own = tasksOwnedBy(s, runId).filter((t) => t.runId === runId)
+  if (own.some(isLifecycleTask)) return s
+  if (own.length === 0 || !own.every((t) => t.status === 'completed')) return s
+  const checks = [...new Set(own.flatMap((t) => checkConfigIdsOf(t)))]
+  return { ...s, tasks: recomputeReady([...s.tasks, lifecycleTaskFor(runId, own.map((t) => t.id), [...checks, GITHUB_CI_CHECK], now)]) }
+}
+
+/** A new lifecycle Task, pending until recomputeReady sees its deps completed: the first one (withLifecycleTask) and each
+ *  one `runs reconverge` adds (G5c). */
+export function lifecycleTaskFor(runId: string, deps: string[], validateConfigIds: string[], now: string): Task {
+  return {
+    id: newId('tsk'),
+    runId,
+    kind: 'lifecycle',
+    title: LIFECYCLE_TASK_TITLE,
+    spec: LIFECYCLE_TASK_SPEC,
+    deps,
+    validateConfigIds,
+    reviewRequested: true,
+    status: 'pending',
+    consecutiveFailures: 0,
+    createdAt: now,
+    updatedAt: now
+  }
+}

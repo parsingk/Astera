@@ -26,6 +26,13 @@ describe('docs/mcp.md', () => {
     expect(m![1]).toBe(inWords(withRequestId.length))
     expect(named(m![2])).toEqual(withRequestId)
   })
+  // G8 final review M4: a GitHub lifecycle Run's record carries `github`, and the tool that returns it whole says so
+  it('says get_work_record returns a lifecycle Run’s GitHub evidence', () => {
+    const tool = TOOLS.find((t) => t.name === 'get_work_record')!
+    expect(tool.description).toMatch(/GitHub evidence \(`github`/)
+    const row = mcpDoc.split('\n').find((l) => l.startsWith('| `get_work_record` |'))!
+    expect(row).toMatch(/GitHub evidence \(`github`/)
+  })
   it('says which list tools do not take a limit or a cursor of MCP’s own', () => {
     const at = mcpDoc.indexOf('Every list tool takes a `limit`')
     const rules = mcpDoc.slice(at, mcpDoc.indexOf('\nEvery result carries the data twice', at))

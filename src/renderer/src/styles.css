@@ -1178,6 +1178,9 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .settings-gen-input { min-width: 200px; padding: 5px 8px; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 12.5px; }
 .settings-gen-input:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* Settings › GitHub's lifecycle defaults (G7a): a count and minutes, not a line of text */
+.settings-lifecycle-number { min-width: 0; width: 96px; }
+.settings-lifecycle-number:disabled { opacity: 0.5; }
 .settings-gen-refresh { align-self: flex-start; padding: 5px 10px; border: 1px solid var(--line);
   border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; font-size: 12px; }
 .settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }
@@ -2501,6 +2504,17 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detail-completion-name--failed, .detail-completion-name--timed-out { color: var(--git-conflict); }
 .detail-completion-name--not-run { color: var(--text-faint); font-weight: 400; }
 .detail-completion-name--error { color: var(--warn-ink); }
+/* A lifecycle Run's GitHub block (G7b): the completion block's frame, a head line and plain lines under it */
+.detail-github-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.detail-github-pr { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12.5px; cursor: pointer; }
+.detail-github-pr:hover { text-decoration: underline; background: none; }
+.detail-github-sha { color: var(--text-dim); font-family: var(--mono, monospace); font-size: 11.5px; }
+.detail-github-state { margin: 0; font-size: 12.5px; font-weight: 600; }
+.detail-github-line { margin: 0; font-size: 12px; }
+.detail-github-summary { color: var(--text-dim); }
+.detail-github-ready { color: var(--ok, var(--accent)); }
+.detail-github-warn { color: var(--warn-ink); }
+.detail-github-mark { width: 1em; display: inline-block; text-align: center; }
 /* A plugin check's own words and its findings (plugin Phase 5 C13): full width under the check's row; a hundred
    findings scroll here rather than push the graph away */
 .detail-completion-summary { flex: 0 0 100%; margin: 0; max-height: 160px; overflow: auto; color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -2624,7 +2638,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    this it fell through to the browser's bare h4 (bold, 1.33em margins), centred by the grid above
    into something that looked like an error banner rather than this screen's usual small print. */
 .hiw-pane-empty h4 { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--text); }
-.hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-fhead { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
 /* Clamped the same way as the sidebar's .hiw-name — the prompt only *asks* the write-up agent for a
    title under 40 characters, nothing enforces it, and the fallback heading (record.request) is a
    whole paragraph when there is no title at all. */
@@ -2633,7 +2647,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    that h4's `title` tooltip — a touch device or several screen readers cannot reach a tooltip.
    RecordDetail.tsx renders this only when a title is actually standing in for the heading, so the
    same sentence never appears twice. */
-.hiw-req { margin: 2px 0 0; font-size: 11px; color: var(--text-faint); }
+/* A long one scrolls in a box of its own height: taller than the pane, it left the write-up below with no way to reach it
+   (G8 demo findings review M3). Scrolled rather than cut, so the words stay on screen. */
+.hiw-req { margin: 2px 0 0; font-size: 11px; color: var(--text-faint); max-height: 5em; overflow-y: auto; }
+/* A long request wraps in the heading's column, which may shrink; the status and the buttons beside it may not, nor wrap
+   (G8 demo: a ticket Job's objective squeezed them into one-letter columns). The column takes the row's room first and
+   keeps 12em of its own: narrower than that, the buttons wrap below it rather than run past the pane's edge (review
+   M1). A token with no break in it, a path, breaks anywhere rather than run over them (review M2). */
+.hiw-fhead > div { flex: 999 1 12em; min-width: 0; overflow-wrap: anywhere; }
+.hiw-fhead > .hiw-st, .hiw-fhead > button { flex-shrink: 0; white-space: nowrap; }
 /* Colour comes from the same table as .hiw-g and .tab-glyph (RECORD_GLYPH_COLOR) */
 .hiw-st { font-size: 11px; }
 .hiw-sp { flex: 1; }
@@ -2645,6 +2667,17 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-verify { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-verify .hiw-p { margin: 0; }
 .hiw-verify .hiw-fine { margin: 3px 0 0; }
+.hiw-github { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); color: var(--text); }
+.hiw-pane-empty .hiw-github { border-bottom: 0; }
+.hiw-github-line { margin: 0 0 2px; font-size: 12px; }
+.hiw-github-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 12px; cursor: pointer; }
+.hiw-github-link:hover { text-decoration: underline; background: none; }
+.hiw-github-checks { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; }
+.hiw-github-mark { width: 1.2em; display: inline-block; text-align: center; }
+.hiw-github-mark.passed { color: var(--ok); }
+.hiw-github-mark.failed { color: var(--danger); }
+.hiw-github-mark.skipped { color: var(--text-faint); }
+.hiw-github .hiw-fine { margin: 3px 0 0; }
 
 .hiw-split { position: relative; flex: 1; display: flex; min-height: 0; }
 .hiw-main { flex: 1.62; min-width: 0; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; overflow-y: auto; }

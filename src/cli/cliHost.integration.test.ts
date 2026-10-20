@@ -16,6 +16,7 @@
 // **Portable and loaded-runner safe:** every path is `os.tmpdir()`/`path.join`, every profile is its
 // own (so every address is its own), every wait is a bounded `vi.waitFor`, and the budgets are wide.
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { promises as fs, existsSync } from 'node:fs'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -1507,7 +1508,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   const cliBuilt = existsSync(cliBundle)
   if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
   it.runIf(cliBuilt)(
-    'over HTTP: the Host runs the entrance, a client with the token lists 38 tools and acts, the journal names its address, and off stops it',
+    'over HTTP: the Host runs the entrance, a client with the token lists 39 tools and acts, the journal names its address, and off stops it',
     async () => {
       const cli: HostCliPaths = {
         exec: createRequire(import.meta.url)('electron') as string,
@@ -1534,7 +1535,9 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       const client = new Client({ name: 'it-http', version: '1' })
       await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
       cleanups.push(() => client.close())
-      expect((await client.listTools()).tools).toHaveLength(38)
+      // 39 since G5c's reconverge_run (44371e05): this test runs only where out/main/cli.js is built, so a stale build
+      // kept the old count passing (found in G7a)
+      expect((await client.listTools()).tools).toHaveLength(39)
       const projects = (await client.callTool({ name: 'list_projects', arguments: {} })) as ToolResult
       expect(projects.isError).toBeFalsy()
       expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })
@@ -1837,7 +1840,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   it('astera mcp status is 0 with a Host that speaks mcp and 3 without one', async () => {
     const h = await hostRig({ repo: false })
     const up = okData(await astera(['mcp', 'status'], h.env), 'mcp status')
-    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 40 })
+    expect(up).toMatchObject({ transport: 'stdio', host: { running: true, version: '9.9.9', protocol: HOST_PROTOCOL, mcp: true }, access: 'control', tools: 41 })
     await h.stop()
     const down = await astera(['mcp', 'status'], h.env)
     expect(down.code).toBe(3)
@@ -2107,7 +2110,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     await setMcpSettings(h, { mcpGithubWrite: true })
     const made = await mcp.call('create_job_from_source', { source: 'github', itemId: '31', projectId, coordinatorAccountId: h.accountId, requestId: 's-2' })
     expect(made.isError, made.content[0]?.text).toBeFalsy()
-    expect(h.state().jobs[0].source).toEqual({ id: 'github', itemId: '31', label: 'GitHub issue #31 in o/r', title: 'Typo in the README', url: 'https://github.com/o/r/issues/31' })
+    expect(h.state().jobs[0].source).toEqual({
+      id: 'github', itemId: '31', label: 'GitHub issue #31 in o/r', title: 'Typo in the README', url: 'https://github.com/o/r/issues/31',
+      // GitHub lifecycle §6: the body as it was, as a hash
+      capturedBodyHash: createHash('sha256').update('Line 3.', 'utf8').digest('hex')
+    })
   })
 
   it('GitHub issues through the Host: get_issue reads with the write setting off; create_job_from_issue needs it, and takes only a trusted author', async () => {
@@ -2194,7 +2201,11 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
     expect(lines).toContain(' SOURCE>>>')
     expect(lines.at(-1)).toBe(close)
     // Plugin Phase 4 J13: the Job keeps the issue it was made from
-    expect(jobs[0].source).toEqual({ id: 'github', itemId: '11', label: expect.stringMatching(/^GitHub issue #11 in /), title: 'Login breaks', url: expect.any(String) })
+    expect(jobs[0].source).toEqual({
+      id: 'github', itemId: '11', label: expect.stringMatching(/^GitHub issue #11 in /), title: 'Login breaks', url: expect.any(String),
+      // GitHub lifecycle §6: the body as it was, as a hash
+      capturedBodyHash: expect.stringMatching(/^[0-9a-f]{64}$/)
+    })
     expect((made.structuredContent as { id: string }).id).toBe(jobs[0].id)
 
     // A CONTRIBUTOR's issue is refused with the setting on, and makes nothing.

@@ -38,7 +38,9 @@ export function journalEntryOf(e: HostRollEvent): EntryBody | null {
         kind: 'state',
         sessionId: ev.sessionId,
         state: 'waiting',
-        ...(ev.nextRetryAt !== undefined ? { nextRetryAt: ev.nextRetryAt } : {}),
+        // A limit judged from usage alone (manual) resumes nothing — its time is the reset, so the
+        // summary is not handed it as a resume time.
+        ...(ev.nextRetryAt !== undefined && !ev.manual ? { nextRetryAt: ev.nextRetryAt } : {}),
         ...(ev.scope !== undefined ? { scope: ev.scope } : {})
       }
     case 'switching':

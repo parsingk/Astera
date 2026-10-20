@@ -2,11 +2,13 @@
 // user's gh. Pure over an injected GhRunner; the Host's github-ci and github-ci-rerun commands wrap them.
 import { cutTail } from '../orchestration/taskOutput'
 import { ghFailureSentence, type GhFailed, type GhRunner } from './gh'
+import { ghRepoArg, type GitHubRepo } from './remote'
 
 const CHECK_FIELDS = 'name,state,bucket,link,workflow,startedAt,completedAt'
 
-export function prChecksArgs(n: number): string[] {
-  return ['pr', 'checks', String(n), '--json', CHECK_FIELDS]
+/** `repo` names the repository; without it gh takes the one at the folder it runs in. */
+export function prChecksArgs(n: number, repo?: GitHubRepo): string[] {
+  return ['pr', 'checks', String(n), '--json', CHECK_FIELDS, ...(repo ? ['--repo', ghRepoArg(repo)] : [])]
 }
 
 export interface CiCheck {
@@ -74,14 +76,15 @@ export function parsePrChecks(stdout: string): CiCheck[] | null {
   return checks
 }
 
-/** The checks of PR `n` in the repository at `cwd`. A failing or pending check is a result, not a
+/** The checks of PR `n` in `repo`, or in the repository at `cwd`. A failing or pending check is a result, not a
  *  failure: gh exits 1 or 8 for those and still prints the JSON. */
 export async function readPrChecks(
   run: GhRunner,
   cwd: string,
-  n: number
+  n: number,
+  repo?: GitHubRepo
 ): Promise<{ ok: true; checks: CiCheck[] } | GhFailed> {
-  const r = await run(prChecksArgs(n), cwd)
+  const r = await run(prChecksArgs(n, repo), cwd)
   if (r.spawnError === undefined && (r.ok || CHECKS_RESULT_EXIT_CODES.has(r.exitCode ?? -1))) {
     const checks = parsePrChecks(r.stdout)
     if (checks !== null) return { ok: true, checks }
@@ -91,19 +94,53 @@ export async function readPrChecks(
   return { ok: false, ...ghFailureSentence(r) }
 }
 
-/** The tail of the failed jobs' log of Actions run `runId`, cut to whole lines. */
+/** The tail of the failed jobs' log of Actions run `runId` in `repo`, or in the repository at `cwd`, cut to whole
+ *  lines. */
 export async function failedLogTail(
   run: GhRunner,
   cwd: string,
-  runId: number
+  runId: number,
+  repo?: GitHubRepo
 ): Promise<{ ok: true; text: string; cut: boolean } | GhFailed> {
-  const r = await run(['run', 'view', String(runId), '--log-failed'], cwd)
+  const r = await run(['run', 'view', String(runId), '--log-failed', ...(repo ? ['--repo', ghRepoArg(repo)] : [])], cwd)
   if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
   return { ok: true, text: cutTail(r.stdout, FAILED_LOG_MAX), cut: r.stdout.length > FAILED_LOG_MAX }
 }
 
-/** Reruns the failed jobs of Actions run `runId`. */
-export async function rerunFailed(run: GhRunner, cwd: string, runId: number): Promise<{ ok: true } | GhFailed> {
-  const r = await run(['run', 'rerun', String(runId), '--failed'], cwd)
-  return r.ok ? { ok: true } : { ok: false, ...ghFailureSentence(r) }
+/** The commit an Actions run ran on, its attempt and status, in `repo` or in the repository at `cwd` (GitHub lifecycle
+ *  G4; measured on the sandbox 2026-10-19). An answer that is not one is a failed read. */
+export async function ciRunHead(
+  run: GhRunner,
+  cwd: string,
+  runId: number,
+  repo?: GitHubRepo
+): Promise<{ ok: true; headSha: string; attempt: number; status: string } | GhFailed> {
+  const r = await run(['run', 'view', String(runId), '--json', 'headSha,attempt,status', ...(repo ? ['--repo', ghRepoArg(repo)] : [])], cwd)
+  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  let v: unknown
+  try {
+    v = JSON.parse(r.stdout)
+  } catch {
+    v = null
+  }
+  const o = v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  if (typeof o.headSha !== 'string' || typeof o.attempt !== 'number' || typeof o.status !== 'string')
+    return { ok: false, kind: 'other', message: `gh run view ${runId} answered with something that is not a CI run` }
+  return { ok: true, headSha: o.headSha, attempt: o.attempt, status: o.status }
+}
+
+/** gh's words for a rerun of a run that is going again (measured on the sandbox, 2026-10-19). */
+const RUN_ALREADY_RUNNING = /This workflow is already running/i
+
+/** Reruns the failed jobs of Actions run `runId` in `repo`, or in the repository at `cwd`. `running`: the run is going
+ *  again already, so its attempt moved past the one that failed (GitHub lifecycle L16). */
+export async function rerunFailed(
+  run: GhRunner,
+  cwd: string,
+  runId: number,
+  repo?: GitHubRepo
+): Promise<{ ok: true } | (GhFailed & { running?: true })> {
+  const r = await run(['run', 'rerun', String(runId), '--failed', ...(repo ? ['--repo', ghRepoArg(repo)] : [])], cwd)
+  if (r.ok) return { ok: true }
+  return { ok: false, ...ghFailureSentence(r), ...(RUN_ALREADY_RUNNING.test(r.stderr) ? { running: true as const } : {}) }
 }

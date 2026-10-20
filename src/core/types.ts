@@ -1,3 +1,6 @@
+import type { GitHubLifecycleDefaults } from './github/lifecycleDefaults'
+import type { CiFailureClass, GitHubInvalidatedReason } from './github/lifecycle'
+import type { GitHubLifecycleView } from './github/view'
 import type { SlashCommand } from './commands/slashCommands'
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
@@ -121,6 +124,11 @@ export interface SessionInfo {
   kind?: SessionKind
   /** Chat only: the protocol's own thread id once known (Codex threadId). What resume needs. */
   threadId?: string
+  /** `'agent'`: an agent or Astera itself started this session — a Job's worker, reviewer or coordinator, or a session
+   *  an agent made with `astera sessions create` or MCP — not a person from the new-session dialog. Its tab closes when
+   *  the session ends (2026-10-20). Written into the pty's note at spawn, so it survives a Host handing the session back;
+   *  absent on every session a person started and on every note written before it. */
+  startedBy?: 'agent'
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.
@@ -391,6 +399,10 @@ export interface RollStateEvent {
   reattach?: boolean
   nextRetryAt?: string // ISO — the retry time, when state='waiting'
   scope?: 'session' | 'weekly' // which limit, when state='waiting' — selects the banner wording and time format
+  // When state='waiting': the limit was inferred from a usage figure alone (the claude coordinator's
+  // fallback trigger), so nothing is typed when it lifts — the person resumes. `nextRetryAt` is then when
+  // the window resets, not a resume time; the banner and the notices word it so (2026-10-19).
+  manual?: boolean
 }
 
 /** Schedule progress (main to renderer, for the banner both views wear — the terminal and the chat pane) */
@@ -464,6 +476,9 @@ export interface JobConvergence {
 export interface JobTask {
   id: string
   title: string
+  /** The Task Astera adds to carry a GitHub lifecycle Run through GitHub (G7b): `ciWait` while its round waits for
+   *  CI on the head it pushed (`since` is when the current wait began). Its stored title is not translated. */
+  lifecycle?: { ciWait?: { pr?: number; sha?: string; since: string } }
   status: TaskStatus
   /** The worker session this Task was dispatched to, when this app process still has that session —
    *  so it is present for a worker that has exited as well as a running one, because the tab is still
@@ -524,6 +539,8 @@ export interface JobTask {
   convergence?: JobConvergence
 }
 
+/** A Run's timeline kinds; the `github-*` ones are a lifecycle Run's GitHub steps (GitHub lifecycle design §5.5, G7b),
+ *  from its record's log. */
 export type JobEventKind =
   | 'run-created'
   | 'task-created'
@@ -537,6 +554,16 @@ export type JobEventKind =
   | 'runtime-lost'
   /** Job Continuity: recovery strategy decision (journal RECOVERY_STRATEGY_SELECTED). */
   | 'recovery'
+  | 'github-pr-bound'
+  | 'github-pr-created'
+  | 'github-pushed'
+  | 'github-ci-started'
+  | 'github-ci-failed'
+  | 'github-ci-rerun'
+  | 'github-ci-passed'
+  | 'github-merge-ready'
+  | 'github-invalidated'
+  | 'github-source-changed'
 
 /** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
  *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */
@@ -575,6 +602,8 @@ export interface JobEvent {
   /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
    *  판정이고 같은 이유로 주입받는다 */
   sessionId?: string
+  /** A `github-*` line's facts (G7b): the commit, the check, its failure class, the pull request, a withdrawal's reason. */
+  github?: { sha?: string; check?: string; class?: CiFailureClass; pr?: number; reason?: GitHubInvalidatedReason }
 }
 
 /** 상세 창이 한 번에 받는 것. 이벤트만 오던 것을 그래프까지 함께 주도록 넓혔고, 그래서 이름이
@@ -700,6 +729,12 @@ export interface JobRow {
   children?: JobRow[]
   /** The job source's item the Job was made from (plugin Phase 4 J18): the chip on its card and in its detail. */
   source?: JobSourceRef
+  /** A GitHub lifecycle Run's GitHub side (G7b, design §8): the view `runs get` gives, for the Run detail's block and
+   *  the card's chip. Absent for a Job without the lifecycle, and on a Job row with no Run yet. */
+  github?: GitHubLifecycleView
+  /** A lifecycle Run with ordinary Tasks of which none names a local check (design §7.2 S16): every repair goes to
+   *  GitHub CI unchecked locally, which the Run's GitHub block says. */
+  githubNoLocalCheck?: true
   tasks: JobTask[]
 }
 /** Why the Jobs view has nothing to draw, when the reason is the Host rather than the state.
@@ -1394,6 +1429,9 @@ export interface CoreApi {
     // Whether an MCP client may act on GitHub (off by default; needs access Read and control).
     getMcpGithubWrite(): Promise<boolean>
     setMcpGithubWrite(v: boolean): Promise<void>
+    // The GitHub lifecycle's policy defaults a new lifecycle Job takes (G7a); a value out of bounds is refused.
+    getGithubLifecycle(): Promise<GitHubLifecycleDefaults>
+    setGithubLifecycle(v: GitHubLifecycleDefaults): Promise<void>
     // MCP over HTTP (off by default). Saving also asks the Host to apply it (mcp-http-reload).
     getMcpHttp(): Promise<McpHttpSettings>
     setMcpHttp(v: McpHttpSettings): Promise<void>
@@ -1869,7 +1907,7 @@ export interface SourcesApi {
   list(): Promise<SourcesCallAnswer>
   items(a: { source: string; projectPath: string; query?: string; cursor?: string }): Promise<SourcesCallAnswer>
   show(a: { source: string; item: string; projectPath: string }): Promise<SourcesCallAnswer>
-  create(a: { source: string; item: string; projectPath: string; coordinatorAccount: string; convergence?: boolean }): Promise<SourcesCallAnswer>
+  create(a: { source: string; item: string; projectPath: string; coordinatorAccount: string; convergence?: boolean; githubLifecycle?: boolean }): Promise<SourcesCallAnswer>
 }
 
 /** Settings › Plugins (plugin runtime design slice 2d): the Host's `plugins-*` commands the tab uses, as the app, and

@@ -78,6 +78,31 @@ describe('executeRecovery', () => {
     expect(spec).not.toContain('## Project knowledge')
   })
 
+  // GitHub lifecycle G3c1: a lost lifecycle repair is rebuilt with what GitHub said, as performRepair writes it
+  it('a recovered lifecycle repair carries the GitHub block', async () => {
+    const h = deps({}, task({ kind: 'lifecycle', checks: [{ configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'test (test): x' }] }))
+    await h.d.setState({
+      ...h.state,
+      runs: h.state.runs.map((r) => ({ ...r, githubState: { binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW }, log: [], seq: 0 } }))
+    })
+    const r = await executeRecovery({ attempt: attempt({ repair: 'check-failure' }), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(r.ok).toBe(true)
+    expect((h.started[0] as { specFileContent: string }).specFileContent).toContain('#12 https://github.com/o/r/pull/12')
+    // G3c1 final review I1, M2: the Run's objective, in the Run root, rolling through the latest ordinary Task's accounts
+    expect((h.started[0] as { specFileContent: string }).specFileContent).not.toContain('Your previous report')
+  })
+
+  // G3c1 final review M2: a recovered fresh lifecycle repair works in the Run root and rolls accounts as performRepair's
+  it('restarts a lost lifecycle repair in the Run root, rolling through the latest ordinary Task’s accounts', async () => {
+    const h = deps({}, task({ kind: 'lifecycle', accountIds: undefined, checks: [{ configId: 'github:ci', name: 'GitHub CI', status: 'failed', summary: 'x' }] }))
+    const ordinary = { ...task({ id: 'tsk_o', status: 'completed', accountIds: ['acc_9', 'acc_8'] }) }
+    const done = { ...lost({ id: 'dsp_o', taskId: 'tsk_o', accountId: 'acc_9', cwd: 'D:/wt/o', workerState: 'stopped', outcome: 'succeeded' }) }
+    await h.d.setState({ ...h.state, tasks: [...h.state.tasks, ordinary], dispatches: [...h.state.dispatches, done] })
+    const r = await executeRecovery({ attempt: attempt({ repair: 'check-failure', cwd: 'D:/wt/run' }), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    expect(r.ok).toBe(true)
+    expect(h.started[0]).toMatchObject({ worktree: 'D:/wt/run', rollFrom: ['acc_9', 'acc_8'] })
+  })
+
   it('repair attempt 의 resume-native 도 repair 표시를 잇고 repair spec 을 넘긴다', async () => {
     const h = deps({}, task({ checks: [{ configId: 'c1', name: 'Tests', status: 'failed', exitCode: 1 }] }))
     await executeRecovery(

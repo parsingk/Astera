@@ -376,7 +376,25 @@ missing, the plugin stopped) is asked again at once, and a second one spends no 
 on a question of kind `check-unavailable`, and `runs wait` ends with 8. Its `options` are the answers:
 `retry` runs the task's checks again, `skip-check` lets this round go on without that check, which the
 task's record keeps as skipped, and `mark-failed` fails the task, as in
-`astera questions answer --id <questionId> --answer retry`. Any other answer is a 2.
+`astera questions answer --id <questionId> --answer retry`. Any other answer is a 2. When the check that
+could not be made is GitHub CI, `skip-check` is not offered: a round never passes with CI unproven.
+
+**A GitHub lifecycle round asks with questions of its own.** Where the Host must stop a round it carries
+to GitHub, the task waits on a question whose `kind` says why: `github-no-ci` (no CI appeared on the pushed
+head in 3 minutes), `github-ci-cap` (no verdict within the Job's `ciWaitMinutes`), `github-external-head`
+(GitHub has a commit on the branch Astera did not push), `github-pr-ambiguous` (several open pull requests
+for the branch), `github-pr-closed` (the bound pull request was closed or merged), `github-ci-outside`
+(CI failed for a reason outside the code, such as a runner lost or a permission missing, GitHub refused this
+account's reads, CI failed again for a reason Astera could not classify after one repair, or a repair reported
+it fixed nothing) or `github-carry` (the round could not be taken to GitHub: no origin, a HEAD off the
+branch, a lookup or a record that failed). The question keeps the round's wait, and its `options` act on it:
+`wait` waits again on the same head, `no-ci` lets the round pass without CI and records that a person chose
+it, `continue` brings GitHub's commits into the Run's branch by fast-forward and runs the checks again from
+the first (a history that cannot fast-forward is refused with git's reason, and the question stays open),
+`retry` runs the round again from the first check, `rerun` reruns the failed jobs of the CI run on GitHub and
+waits for its new attempt (offered for a failure outside the code a rerun can cure, once Astera's own reruns are
+spent or turned off, or GitHub refused one), `pr-<n>` binds pull request n, and `mark-failed` fails the task. Any
+answer it does not list is a 2.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and
@@ -692,8 +710,8 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
-astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
+astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
 astera runs    get    --id <runId>
@@ -702,6 +720,7 @@ astera runs    follow --id <runId>  [--timeout-ms <n>]
 astera runs    stop   --id <runId>
 astera runs    resume --id <runId>
 astera runs    checks --id <runId>
+astera runs    reconverge --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
 astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
@@ -817,6 +836,28 @@ permission prompt: the number of those Tasks, read from the same hook events as 
 `waiting`. With none it is left out. A person answers the prompt in Astera, in the worker's terminal
 ([mcp.md](mcp.md) says more).
 
+**`runs get` carries `github`** for a run of a `--github-lifecycle` Job: the pull request Astera bound for the run's
+branch, its head, the CI checks of that head with the `verdict` and the check that failed first (with its `class`, such
+as `test` or `infrastructure`, and a one-line `summary`), and a `state` that sums
+it up (`unbound`, `pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or
+`external-state-unavailable` while GitHub cannot be read; while the run's lifecycle Task works, `pr-ready`,
+`awaiting-push`, `ci-pending`, `repairing`, `reviewing`, `waiting-for-user`, `ci-infrastructure-failure` or `exhausted`;
+and `merge-ready` once its review found the pull request ready, while that holds). [sdk.md](sdk.md) lists the fields. Once every Task of
+such a run is completed, Astera adds one more, `GitHub 전달` (`kind: lifecycle`, no worker): it folds the Task
+worktrees into the run's branch and runs the checks there, and `tasks add` on the run is refused until it ends. Once
+those checks pass, the Host pushes the branch to `origin` (never forced), binds its open pull request or opens a draft
+one (its body ending `Refs #N` for an issue of the same repository), and waits for CI on the head it pushed: a pass
+takes the Task to review, a failure of the code to a repair; anything it cannot settle on its own asks a person,
+with a question of kind `github-*` where the answer acts on the wait (above).
+
+**`runs reconverge --id <runId>` carries a finished lifecycle run through GitHub again.** Once the run's latest
+lifecycle Task completed or failed, it adds a new one to the same run, with a fresh repair and rerun budget, and drops
+the old merge-ready evidence; the run then reads as running until the new Task ends, and its outcome follows the new
+Task alone. It answers with `runId` and the new `taskId`. It is refused with a 6 for a run whose Job is not a
+`--github-lifecycle` Job, a run with no branch of its own or whose branch was removed, a run not carried through GitHub
+yet (its lifecycle Task comes once its Tasks complete), a run whose lifecycle Task still works, and a pull request that is
+merged or closed; the Host reads the pull request from GitHub first, so a merge it has not seen yet still counts.
+
 **The global `--project <path>` goes before the command**, as in `astera --project . jobs list`, and
 is the default for the three commands that take a project: `jobs list`, `runs list` and `sessions
 list`. A `--project` after the command belongs to that command and wins over the global one. Every
@@ -867,6 +908,23 @@ account of that provider logged in it is a 2 that names the provider. When both 
 `--coordinator-account` wins.
 A Host that announces `dispatch` places them whether Astera is open or closed, and otherwise Astera
 does (see "Jobs run with Astera closed").
+
+**`--github-lifecycle` carries the Job's work through GitHub.** Astera binds the open pull request of
+each run's branch and watches its CI, and `runs get` shows where it stands as `github`. Before it makes
+the Job, the Astera Host checks that the folder's `origin` is a GitHub repository you can push to
+(WRITE, MAINTAIN or ADMIN through your `gh` login) and refuses with a 6 that says why otherwise. The flag
+turns `--convergence` on. `--github-checks build,test` makes those checks decide beside the ones the
+repository requires; without it, the branch rules' required checks decide, or every reported check when the
+rules name none. The Job carries the
+policy as `github`. A worker session Astera started is refused the flag with a 5, as it is
+`jobs-create-from-issue`, `jobs create-from-source --source github`, `github-pr-create`, `github-ci-rerun` and `runs reconverge`: those
+writes are the coordinator's or yours. The worker still runs with your own git and `gh` login, so this keeps it off
+Astera's GitHub commands and is not a sandbox.
+In the app, **New job** and **From a source** have the same switch (**Carry it through GitHub**, off by default),
+which asks the Host about the folder before the Job is made and holds **Create** (**Make the job** in the source
+window) until it can carry it. The rerun and
+CI-wait policy a Job takes comes from **Settings › GitHub** (reruns of a CI failure outside the code, 1 to 10; the wait
+for CI, 10 to 1440 minutes), read by the Host when the Job is made and kept by the Job.
 
 **`tasks add` takes exactly one of `--job` or `--run`**, and there is no default. `--job` adds a task
 to the plan, and `jobs run` copies it, with its `--deps` pointing at the copies, into every run it
@@ -983,13 +1041,13 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-forty tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
 sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
 allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project
 and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
 Settings (CLI tab). The six Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
-`resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the three
-GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`), `create_job_from_source` and
+`resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the four
+GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`), `create_job_from_source` and
 `regenerate_work_record`. See [MCP](mcp.md).
 
 **`mcp status` says whether `mcp serve` would work on this profile**, and starts no Host. It prints
@@ -1277,7 +1335,9 @@ nothing, so run it again a moment later. It refuses while a dispatch is held ope
 are the ones the run's timeline shows in the Jobs view: the run and its tasks being created, workers,
 reviewers and repair workers starting, their reports and status messages, questions opened and
 answered, usage limits hit and resumed, and, with Job Continuity on, the rows of the run's journal: a
-worker lost when the Host restarted, and each recovery decision. It prints every event so far first, then each new one as
+worker lost when the Host restarted, and each recovery decision. For a `--github-lifecycle` run they include its
+GitHub steps: the pull request bound or opened, each push, CI starting, failing, rerun and passing, merge-ready, not
+merge-ready (with the reason), and its issue changing. It prints every event so far first, then each new one as
 it lands, each exactly once.
 
 With `--human` each event is one line, the local time first:

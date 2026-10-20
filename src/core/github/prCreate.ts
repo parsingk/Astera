@@ -101,12 +101,22 @@ export async function readCommits(
   base: string,
   runGit: (args: string[], cwd: string) => Promise<GitResult> = (a, cwd) => git(a, { cwd })
 ): Promise<CommitSummary[]> {
+  return (await readCommitsOrNull(worktreePath, base, runGit)) ?? []
+}
+
+/** readCommits, null when git failed: a caller that acts on "no commits" tells it from a read that did not happen
+ *  (GitHub lifecycle G3b1 final review M3). */
+export async function readCommitsOrNull(
+  worktreePath: string,
+  base: string,
+  runGit: (args: string[], cwd: string) => Promise<GitResult> = (a, cwd) => git(a, { cwd })
+): Promise<CommitSummary[] | null> {
   // %x00 separates subject from body, %x01 separates commits — neither occurs in a message.
   const r = await runGit(
     ['log', '--format=%s%x00%b%x01', `${base}..HEAD`],
     worktreePath
   )
-  if (!r.ok) return []
+  if (!r.ok) return null
   return r.stdout
     .split('\u0001')
     .map((c) => c.trim())

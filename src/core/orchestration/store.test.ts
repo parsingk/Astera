@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { OrchestrationStore, RUN_TTL_MS } from './store'
+import { OrchestrationStore, RUN_TTL_MS, interruptedResumes } from './store'
 import { emptyState, type OrchState } from './state'
 import { stateFromLegacy } from './legacyState'
 
@@ -1069,5 +1069,31 @@ describe('a coordinator that did not survive the restart', () => {
     const store = new OrchestrationStore(file)
     const res = await store.load()
     expect(res.coordinatorsLost).toBe(0)
+  })
+})
+
+// GitHub lifecycle G3a (design §6.3, Review Focus 2): a lifecycle Task has no implementation Dispatch; a restart re-runs
+// its round in the Run root before the hand-over, and leaves it alone after
+describe('interruptedResumes — the lifecycle Task', () => {
+  const github = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const withLifecycle = (ciWait?: { since: string; done: [] }): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: '/p', createdAt: NOW, github, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: NOW, worktree: '/wt-run' }],
+    tasks: [
+      { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW },
+      {
+        id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status: 'validating', validateConfigIds: ['github:ci'],
+        reviewRequested: true, consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, convergenceStartedAt: NOW, ...(ciWait ? { ciWait } : {})
+      }
+    ]
+  })
+
+  it('re-runs a round not yet handed over, in the Run root', () => {
+    expect(interruptedResumes(withLifecycle(), NOW)).toEqual({ revalidate: [{ taskId: 'tsk_l', cwd: '/wt-run' }], rereview: [], stuck: 0 })
+  })
+
+  it('leaves a handed-over round to the Host, and does not count it as stuck', () => {
+    expect(interruptedResumes(withLifecycle({ since: NOW, done: [] }), NOW)).toEqual({ revalidate: [], rereview: [], stuck: 0 })
   })
 })

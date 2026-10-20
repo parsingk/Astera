@@ -7,6 +7,7 @@ import { buildCheckpoint, type GitSummary } from '../orchestration/checkpoint'
 import { formatResumeSection } from '../orchestration/resumeSection'
 import { policyOf, repairCountOf } from '../orchestration/convergence'
 import { FAILURE_LIMIT } from '../orchestration/types'
+import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf, lifecycleRepairFacts } from '../orchestration/lifecycleTask'
 import { isSamePath } from '../files/tree'
 import { t, type Lang } from '../i18n'
 import type { LostAttempt, RecoveryDecision } from './types'
@@ -35,6 +36,8 @@ export interface ExecuteDeps {
     worktree: string
     /** Present for resume-native and smart-resume only; absent for a plain redispatch. */
     resume?: { nativeSessionId?: string; briefing?: string }
+    /** The accounts a lifecycle Task's worker rolls through, it naming none (GitHub lifecycle G3c1; startWorker's). */
+    rollFrom?: string[]
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   /** Not injected = recheck cannot start a check; the Task still moves to `validating` and waits. */
   startValidation?(a: { taskId: string; cwd: string }): void
@@ -63,6 +66,11 @@ interface ExecuteInput {
   decision: RecoveryDecision
   state: OrchState
   now: string
+}
+
+const rollFromOf = (s: OrchState, runId: string | undefined): { rollFrom?: string[] } => {
+  const ids = runId === undefined ? undefined : latestOrdinaryWork(s, runId)?.task.accountIds
+  return ids?.length ? { rollFrom: [...ids] } : {}
 }
 
 export async function executeRecovery(a: ExecuteInput, deps: ExecuteDeps): Promise<ExecuteResult> {
@@ -149,9 +157,11 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
     // repair.ts 의 performRepair 와 같은 안전망 — 지식 스캔 하나가 실패한다고 repair 자체를 막을 이유는
     // 아니다. 주입되지 않았으면(knowledge 미주입) buildSpecFile 이 지식 없는 저장소와 똑같이 다룬다.
     const knowledge = deps.knowledge ? await deps.knowledge(attempt.cwd).catch(() => undefined) : undefined
+    // A lifecycle Task's repair is asked to satisfy the Run's objective, as performRepair asks it (G3c1 final review I1)
+    const brief = isLifecycleTask(task) ? lifecycleBriefOf(deps.getState(), task) : { title: task.title, spec: task.spec }
     specFileContent = buildSpecFile({
-      title: task.title,
-      spec: task.spec,
+      title: brief.title,
+      spec: brief.spec,
       taskId: task.id,
       dispatchId,
       committing: !isSamePath(attempt.cwd, jobOf(state, run)?.cwd ?? ''),
@@ -170,7 +180,9 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
         // (Dispatch.grantedExtra, reconciler.ts 가 LostAttempt 로 그대로 옮긴다) 을 읽는다 — 사람이
         // 실제로 retry-once 를 눌렀을 때만 참이고, recovery 가 다시 세는 것과 무관하게 크래시를
         // 넘어 살아남는다.
-        ...(attempt.grantedExtra ? { extra: true } : {})
+        ...(attempt.grantedExtra ? { extra: true } : {}),
+        // What GitHub said, as performRepair writes it for a lifecycle Task (GitHub lifecycle G3c1)
+        ...(isLifecycleTask(task) ? { github: lifecycleRepairFacts(deps.getState(), task) } : {})
       }
     })
   }
@@ -202,7 +214,9 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       accountId: attempt.accountId,
       runCwd: jobOf(state, run)?.cwd ?? '',
       worktree: attempt.cwd,
-      ...(resume ? { resume } : {})
+      ...(resume ? { resume } : {}),
+      // A lifecycle Task names no account: its worker rolls through the Run's latest ordinary Task's, as performRepair's
+      ...(isLifecycleTask(task) ? rollFromOf(deps.getState(), task.runId) : {})
     })
   } catch (e) {
     // A worker that could not be (re)started must not leave an orphaned open Dispatch behind, and

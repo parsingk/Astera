@@ -30,6 +30,18 @@ describe('publicFor', () => {
     expect(made).not.toHaveProperty('internalField')
   })
 
+  // GitHub lifecycle G1: a Job's lifecycle policy is public, a Run's raw GitHub record is not
+  it('keeps a Job’s GitHub lifecycle policy and drops a Run’s raw GitHub record', () => {
+    const github = { ci: { mode: 'selected', selectedChecks: ['build'] }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    expect(publicFor('jobs-get', { id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: 'T', github })).toMatchObject({ github })
+    expect(publicFor('runs-get', { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T', githubState: { log: [], seq: 0 } })).not.toHaveProperty('githubState')
+  })
+
+  it('keeps a Run’s derived github field', () => {
+    const github = { state: 'ci-pending', pr: { number: 12, url: 'u', isDraft: true, state: 'open' } }
+    expect(publicFor('runs-get', { id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: 'T', github })).toMatchObject({ github })
+  })
+
   // 없는 것을 undefined 로 찍으면 JSON 에서 사라져 결과는 같지만, 있는데 비어 있는 것과
   // 아예 없는 것이 한 모양이 된다
   it('없는 칸을 만들지 않는다', () => {
@@ -125,6 +137,12 @@ describe('publicFor', () => {
       { id: 't1', spec: '짧게', spec_truncated: true }
     ]) as Record<string, unknown>[]
     expect(out[0]).toEqual({ id: 't1', spec: '짧게', spec_truncated: true })
+  })
+
+  // GitHub lifecycle G3a: a lifecycle Task says what it is; the round it handed to the Host is the app's bookkeeping
+  it('a lifecycle Task keeps its kind and never shows its handed-off round', () => {
+    const out = publicFor('tasks-list', [{ id: 't1', kind: 'lifecycle', ciWait: { since: 'T', done: [] } }]) as Record<string, unknown>[]
+    expect(out[0]).toEqual({ id: 't1', kind: 'lifecycle' })
   })
 
   // phase C 의 셋. 새 목록을 만들지 않는다 — 개체마다 한 목록이다(설계 §11).
@@ -428,7 +446,7 @@ describe('publicFor runs-completion', () => {
 // SDK 1d: the public events (SDK spec §6). The envelope is an allowlist like any answer, and the payload is the public
 // DTO of its type, shaped by the same rules as the read that returns that object.
 describe('the event types', () => {
-  it('are the eighteen the Host produces, once each, frozen', () => {
+  it('are the twenty-seven the Host produces, once each, frozen', () => {
     expect(pkg.EVENT_TYPES).toEqual([
       'job.created',
       'job.updated',
@@ -447,7 +465,16 @@ describe('the event types', () => {
       'completion.exhausted',
       'session.input_needed',
       'session.limit_waiting',
-      'session.account_switched'
+      'session.account_switched',
+      'github.pr_bound',
+      'github.pr_created',
+      'github.head_changed',
+      'github.ci_passed',
+      'github.ci_failed',
+      'github.ci_rerun_requested',
+      'github.source_changed',
+      'github.merge_ready',
+      'github.merge_ready_invalidated'
     ])
     expect(Object.isFrozen(pkg.EVENT_TYPES)).toBe(true)
   })

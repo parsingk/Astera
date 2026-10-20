@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { openSecretStore, SecretFileUnsafe, SecretStoreBusy } from './secretStore'
+import { openSecretStore, SecretFileUnsafe, SecretStoreBusy, tightenDir } from './secretStore'
+import type { StatLike } from './posixCheck'
 import { runChild } from './runChild.testutil'
 
 let profile: string
@@ -107,6 +108,33 @@ describe('SecretStore (remote runtime design §4.6)', () => {
     await fs.chmod(path.join(dir, 'a'), 0o644)
     await expect(s.read('a')).rejects.toBeInstanceOf(SecretFileUnsafe)
   })
+  // Issue #8 (Ubuntu 24.04): another process made a folder above the store 775 under the default umask 002; the store
+  // tightens it (this user's own, inside the profile) instead of refusing every plugin secret
+  it.runIf(process.platform !== 'win32')('tightens a group-writable folder above the store it creates, and works', async () => {
+    const plugins = path.join(profile, 'plugins')
+    await fs.mkdir(plugins)
+    await fs.chmod(plugins, 0o775)
+    const s = openSecretStore({ dir: path.join(plugins, 'secrets', 'demo'), profileDir: profile })
+    await s.withLock((tx) => tx.write('token', 't'))
+    expect(await s.read('token')).toBe('t')
+    expect((await fs.stat(plugins)).mode & 0o022).toBe(0)
+    expect((await fs.stat(path.join(plugins, 'secrets'))).mode & 0o022).toBe(0)
+  })
+  // An earlier version made the store folder (0700) and only then refused it under the 775 folder above, so a person who
+  // ever saved a plugin secret has one: every check tightens the folders above, not only the run that creates the store
+  // (final review C2)
+  it.runIf(process.platform !== 'win32')('tightens a group-writable folder above a store an earlier run left, and works', async () => {
+    const plugins = path.join(profile, 'plugins')
+    const demo = path.join(plugins, 'secrets', 'demo')
+    await fs.mkdir(demo, { recursive: true, mode: 0o700 })
+    await fs.chmod(plugins, 0o775)
+    await fs.chmod(path.join(plugins, 'secrets'), 0o775)
+    const s = openSecretStore({ dir: demo, profileDir: profile })
+    expect(await s.read('token')).toBe(null)
+    expect((await fs.stat(plugins)).mode & 0o777).toBe(0o755)
+    await s.withLock((tx) => tx.write('token', 't'))
+    expect(await s.read('token')).toBe('t')
+  })
   it('two processes adding and removing at once lose no update (X1-12)', async () => {
     const s = openSecretStore({ dir, profileDir: profile })
     await s.withLock((tx) => tx.write('set.json', JSON.stringify(Array.from({ length: 20 }, (_, i) => `r${i}`))))
@@ -116,6 +144,76 @@ describe('SecretStore (remote runtime design §4.6)', () => {
     const final = JSON.parse((await s.read('set.json'))!) as string[]
     expect(final.sort()).toEqual(Array.from({ length: 20 }, (_, i) => `a${i}`).sort())
   }, 60_000)
+})
+
+// The POSIX rules on any OS: a fake lstat over the real folders, and a tighten that changes the fake's modes
+describe('SecretStore on POSIX: the folders above the store (issue #8)', () => {
+  const posix = (modes: Map<string, number>) => ({
+    platform: 'linux' as const,
+    uid: 1000,
+    lstat: (p: string): StatLike => ({ isSymbolicLink: () => false, isDirectory: () => true, uid: 1000, mode: modes.get(p) ?? 0o700 })
+  })
+  it('tightens them on a read of a store that already exists, farthest first, before it checks', async () => {
+    const plugins = path.join(profile, 'plugins')
+    const demo = path.join(plugins, 'secrets', 'demo')
+    await fs.mkdir(demo, { recursive: true })
+    const modes = new Map([[plugins, 0o775], [path.join(plugins, 'secrets'), 0o775]])
+    const changed: string[] = []
+    const tighten = async (p: string): Promise<void> => {
+      changed.push(p)
+      modes.set(p, (modes.get(p) ?? 0o700) & ~0o022)
+    }
+    const s = openSecretStore({ dir: demo, profileDir: profile, ...posix(modes), tighten })
+    expect(await s.read('token')).toBe(null)
+    expect(changed).toEqual([plugins, path.join(plugins, 'secrets')])
+  })
+  // M1: a folder that cannot be changed (EPERM on NFS, a read-only mount) is refused with its reason, not a raw chmod error
+  it('a folder it cannot change is refused with the reason, not the error from changing it', async () => {
+    const plugins = path.join(profile, 'plugins')
+    const demo = path.join(plugins, 'secrets', 'demo')
+    await fs.mkdir(demo, { recursive: true })
+    const tighten = async (): Promise<void> => {
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+    }
+    const s = openSecretStore({ dir: demo, profileDir: profile, ...posix(new Map([[plugins, 0o775]])), tighten })
+    const refused = await s.read('token').catch((e: unknown) => e)
+    expect(refused).toBeInstanceOf(SecretFileUnsafe)
+    expect((refused as SecretFileUnsafe).reason).toBe(`${plugins} has mode 775, which is group or other writable`)
+  })
+})
+
+// The change itself, on a real POSIX file system (final review I1, M2)
+describe.runIf(process.platform !== 'win32')('tightenDir', () => {
+  const uid = process.getuid?.() ?? -1
+  it('drops group and other write from this user’s folder and keeps its sticky bit', async () => {
+    const d = path.join(profile, 'd')
+    await fs.mkdir(d)
+    await fs.chmod(d, 0o1777)
+    await tightenDir(d, uid)
+    expect((await fs.stat(d)).mode & 0o7777).toBe(0o1755)
+  })
+  // A folder swapped for a symlink after the look is never followed: the chmod would land on what it points at
+  it('refuses a symlink, and leaves what it points at as it was', async () => {
+    const f = path.join(profile, 'key')
+    writeFileSync(f, 'k')
+    await fs.chmod(f, 0o600)
+    await fs.symlink(f, path.join(profile, 'to-key'))
+    const d = path.join(profile, 'd')
+    await fs.mkdir(d)
+    await fs.chmod(d, 0o775)
+    await fs.symlink(d, path.join(profile, 'to-d'))
+    await expect(tightenDir(path.join(profile, 'to-key'), uid)).rejects.toThrow()
+    await expect(tightenDir(path.join(profile, 'to-d'), uid)).rejects.toThrow()
+    expect((await fs.stat(f)).mode & 0o777).toBe(0o600)
+    expect((await fs.stat(d)).mode & 0o777).toBe(0o775)
+  })
+  it('leaves a folder that is not this user’s', async () => {
+    const d = path.join(profile, 'd')
+    await fs.mkdir(d)
+    await fs.chmod(d, 0o775)
+    await tightenDir(d, uid + 1)
+    expect((await fs.stat(d)).mode & 0o777).toBe(0o775)
+  })
 })
 
 describe('SecretStore lock: final review fixes', () => {

@@ -88,6 +88,8 @@ const SESSION = {
         about: 'which review findings block; needs --convergence'
       },
       { name: 'max-total-minutes', value: '<n>', about: 'time budget per Task; needs --convergence' },
+      { name: 'github-lifecycle', about: 'carry the work through a pull request and GitHub CI (origin must be GitHub, and yours to push)' },
+      { name: 'github-checks', value: '<name,...>', about: 'CI checks that decide beside the ones the repository requires; needs --github-lifecycle' },
       { name: 'auto', about: "this Job's workers are placed for you, and it holds until `run-start`" }
     ]
   },
@@ -169,6 +171,48 @@ const SESSION = {
       { name: 'dispatchId', value: '<dispatchId>', about: 'the attempt to record it on' },
       { name: 'base', value: '<sha>', about: 'where the work started; kept once set' },
       { name: 'head', value: '<sha>', about: 'where the work stands now' }
+    ]
+  },
+  'runs-github-record': {
+    summary: "record what the Host read of a run's pull request and CI",
+    detail: 'The Host records it itself (GitHub lifecycle); anyone else is refused.',
+    flags: [
+      { name: 'runId', value: '<runId>', about: 'the run to record it on' },
+      { name: 'patch', value: '<object>', about: 'what was read; the Host passes it in-process' }
+    ]
+  },
+  'lifecycle-start': {
+    summary: "start a GitHub lifecycle Task's checks in its run's root",
+    detail: 'The dispatch loop starts it itself, once every Task worktree is folded into the run root (GitHub lifecycle); anyone else is refused.',
+    flags: [req('task', '<taskId>', 'the lifecycle Task')]
+  },
+  'lifecycle-ci-begin': {
+    summary: "hand a GitHub lifecycle Task's round to the Host at github:ci",
+    detail: 'A validator hands it over itself (GitHub lifecycle): the Host keeps the results until CI settles the round; anyone else is refused.',
+    flags: [
+      { name: 'taskId', value: '<taskId>', about: 'the lifecycle Task' },
+      { name: 'done', value: '<results>', about: 'the round’s check results so far; the validator passes them in-process' }
+    ]
+  },
+  'lifecycle-ci-wait': {
+    summary: "record the pull request and pushed head a GitHub lifecycle round waits on",
+    detail: 'The Host records it itself (GitHub lifecycle); anyone else is refused.',
+    flags: [
+      { name: 'taskId', value: '<taskId>', about: 'the lifecycle Task' },
+      { name: 'since', value: '<time>', about: 'the round the push was for (its hand-over time)' },
+      { name: 'pr', value: '<n>', about: 'the bound pull request' },
+      { name: 'sha', value: '<sha>', about: 'the head the Host pushed' }
+    ]
+  },
+  'lifecycle-gate': {
+    summary: 'ask a person about a GitHub lifecycle round, keeping its wait',
+    detail: 'The Host asks it itself (GitHub lifecycle); anyone else is refused. The answers act on the round (gate-resolve).',
+    flags: [
+      { name: 'task', value: '<taskId>', about: 'the lifecycle Task' },
+      { name: 'since', value: '<time>', about: 'the round the question is about (its hand-over time)' },
+      { name: 'kind', value: '<kind>', about: 'github-no-ci, github-ci-cap, github-external-head, github-pr-ambiguous, github-pr-closed, github-ci-outside or github-carry' },
+      { name: 'question', value: '<text>', about: 'the question, in the person’s language' },
+      { name: 'options', value: '<answers>', about: 'among wait, no-ci, continue, retry, rerun, mark-failed and pr-<n>' }
     ]
   },
   'run-worktree-set': {
@@ -315,19 +359,25 @@ const SESSION = {
   'github-pr': {
     summary: "the pull request of a Run's branch, or of a project's branch, through the Host's gh (the MCP server's get_pr_status)",
     detail:
-      'Exactly one of --run or --project. A Run working in the project folder has no branch of its own (409). `pr` is null when the branch has none.',
+      'Exactly one of --run or --project. A Run working in the project folder has no branch of its own (409). A GitHub lifecycle Run bound to a pull request reads that one, in its repository. `pr` is null when the branch has none.',
     flags: [
-      { name: 'run', value: '<runId>', about: "the Run whose worktree branch to look up" },
+      { name: 'run', value: '<runId>', about: "the Run whose worktree branch to look up (a GitHub lifecycle Run's bound pull request is read)" },
       { name: 'project', value: '<projectId>', about: 'the project whose repository to look in (from `projects list`)' },
       { name: 'branch', value: '<branch>', about: 'the head branch, with --project' }
     ]
   },
+  'github-preflight': {
+    summary: "whether a folder can carry a Job through GitHub, through the Host's gh (the GitHub lifecycle's preflight)",
+    detail:
+      'The check run-create makes before a Job with --github-lifecycle: origin is a GitHub repository, gh is logged in, and you may push and rerun CI there. Answers `{ ok: true, repo }`, or `{ ok: false, reason }` with the reason a create would be refused with. The app asks it before you make the Job. Only the Host answers it (409 elsewhere).',
+    flags: [req('cwd', '<path>', 'the project folder to check')]
+  },
   'github-ci': {
     summary: "the CI checks of a pull request, through the Host's gh (the MCP server's get_ci)",
     detail:
-      "Exactly one of --run or --project. With --run the pull request is its branch's (409 when there is none). A failing or pending check is an answer, not an error.",
+      "Exactly one of --run or --project. With --run the pull request is the one a GitHub lifecycle Run is bound to, read in the bound repository, else its branch's (409 when there is none). A failing or pending check is an answer, not an error. The failed log is redacted before it is answered; a bound Run gets only the logs of its pull request's checks (409 for another CI run).",
     flags: [
-      { name: 'run', value: '<runId>', about: "the Run whose branch's pull request to read" },
+      { name: 'run', value: '<runId>', about: "the Run whose pull request to read: the one it is bound to, else its branch's" },
       { name: 'project', value: '<projectId>', about: 'the project whose repository to look in (from `projects list`)' },
       { name: 'pr', value: '<n>', about: 'the pull request number, with --project' },
       { name: 'log', value: '<ciRunId>', about: "adds the tail of that CI run's failed log (a check's runId)" }
@@ -369,9 +419,11 @@ const SESSION = {
   },
   'github-ci-rerun': {
     summary: "rerun the failed jobs of a CI run, through the Host's gh (the MCP server's retry_ci)",
-    detail: 'MCP clients need the "Let MCP clients act on GitHub" setting.',
+    detail:
+      'Exactly one of --run or --project. Through a Run, only a CI run of the head of its pull request (the one a GitHub lifecycle Run is bound to, in its repository, or its branch\'s) is rerun; another commit\'s is a 409, and a lifecycle Run\'s wait holds for the new attempt. MCP clients need the "Let MCP clients act on GitHub" setting.',
     flags: [
-      req('project', '<projectId>', 'the project whose repository the CI run is in (from `projects list`)'),
+      { name: 'run', value: '<runId>', about: "the Run whose pull request's head the CI run must have run on" },
+      { name: 'project', value: '<projectId>', about: 'the project whose repository the CI run is in (from `projects list`)' },
       req('run-id', '<ciRunId>', "the CI run to rerun (a check's runId)")
     ]
   },

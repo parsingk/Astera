@@ -4,6 +4,7 @@
 import { z } from 'zod'
 import { LIST_LIMIT } from './lists'
 import { SESSION_TEXT_CAP } from './sessionText'
+import { LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX } from '../../core/github/lifecycle'
 
 export const MCP_LIMITS = {
   objective: 20_000,
@@ -84,6 +85,28 @@ export const CONVERGENCE_KNOBS = {
     .describe('Time budget per Task in minutes (an integer >= 1). Needs convergence: true.')
 }
 
+/** create_job*'s GitHub lifecycle fields: the CLI's `--github-lifecycle` and `--github-checks`. */
+export const GITHUB_LIFECYCLE_FIELDS = {
+  githubLifecycle: z
+    .boolean()
+    .optional()
+    .describe(
+      "Carry the Job's work through GitHub: Astera binds the open pull request of each Run's branch and watches its CI. The project's origin must be a GitHub repository you can push to. Turns convergence on. Needs \"Let MCP clients act on GitHub\" in Astera Settings (CLI tab)."
+    ),
+  githubChecks: z
+    .array(z.string().min(1).max(LIFECYCLE_CHECK_NAME_MAX))
+    // Counted once each, as run-create counts them (G7a final review M9)
+    .refine((names) => new Set(names.map((n) => n.trim())).size <= LIFECYCLE_CHECKS_MAX, { message: `at most ${LIFECYCLE_CHECKS_MAX} check names` })
+    .optional()
+    .describe("With githubLifecycle: these CI checks decide too, by name, beside the ones the repository requires. Without it the branch rules' required checks decide, or every reported check when the rules name none.")
+}
+
+function lifecycleArgs(i: Record<string, unknown>): Record<string, unknown> {
+  return i.githubLifecycle === true
+    ? { githubLifecycle: true, ...(Array.isArray(i.githubChecks) ? { githubChecks: i.githubChecks } : {}) }
+    : {}
+}
+
 /** Why create_task's input is refused before the Host is asked, or null: the Host's tasks-add takes
  *  exactly one of `--job` or `--run`, and the server reads the Job before it (its coordinator account). */
 export function taskTargetRefusal(input: Record<string, unknown>): string | null {
@@ -109,6 +132,15 @@ export function sendTextRefusal(text: string): string | null {
     if ((c < 0x20 && c !== 0x0a && c !== 0x09) || (c >= 0x7f && c <= 0x9f))
       return `text holds a control character (U+${c.toString(16).toUpperCase().padStart(4, '0')}): send_message refuses every character below U+0020 except a line feed and a tab (those two into a chat session only), and U+007F to U+009F, since a terminal takes them as keys${c === 0x0d ? '; use LF line breaks' : ''}`
   }
+  return null
+}
+
+/** Why retry_ci's target is refused before the Host is asked, or null: a Run or a project, one of them (G4). */
+export function rerunTargetRefusal(input: Record<string, unknown>): string | null {
+  const run = input.runId !== undefined
+  const project = input.projectId !== undefined
+  if (run && project) return 'give either runId or projectId, not both'
+  if (!run && !project) return 'runId or projectId is required'
   return null
 }
 
@@ -248,10 +280,11 @@ const LISTED_TOOLS: ToolDef[] = [
       coordinatorProvider,
       convergence,
       ...CONVERGENCE_KNOBS,
+      ...GITHUB_LIFECYCLE_FIELDS,
       requestId
     },
     // coordinatorArgs: the knobs go only with convergence: true; without it server.ts refuses them (convergenceRefusal).
-    args: (i) => ({ objective: i.objective, cwd: i.projectPath, ...coordinatorArgs(i) })
+    args: (i) => ({ objective: i.objective, cwd: i.projectPath, ...coordinatorArgs(i), ...lifecycleArgs(i) })
   },
   {
     name: 'run_job',
@@ -364,7 +397,7 @@ const LISTED_TOOLS: ToolDef[] = [
     readOnly: false,
     cmd: 'questions-answer',
     description:
-      'Answer a blocking question raised in an Astera Run. Use list_questions first to retrieve open questions. When a question lists options, answer with one of them. A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed.',
+      'Answer a blocking question raised in an Astera Run. Use list_questions first to retrieve open questions. When a question lists options, answer with one of them. A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed. A question about a GitHub lifecycle round (kind github-*) takes only the options it lists, among wait, no-ci, continue, retry, rerun, mark-failed and pr-<n>.',
     inputSchema: { questionId: id, answer: z.string().min(1).max(MCP_LIMITS.answer), requestId },
     args: (i) => ({ id: i.questionId, answer: i.answer })
   },
@@ -550,9 +583,9 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get a pull request',
     readOnly: true,
     cmd: 'github-pr',
-    description: `The pull request of a Run's branch (runId), or of a branch of a project (projectId and branch): number, title, state, whether it is a draft, url and a summary of its checks. pr is null when the branch has none. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
+    description: `The pull request of a Run's branch (runId), or of a branch of a project (projectId and branch): number, title, state, whether it is a draft, url and a summary of its checks. A GitHub lifecycle Run bound to a pull request reads that one. pr is null when the branch has none. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
     inputSchema: {
-      runId: id.optional().describe("A Run with a branch of its own; its worktree's branch is read."),
+      runId: id.optional().describe("A Run with a branch of its own; its worktree's branch is read, or for a GitHub lifecycle Run the pull request it is bound to."),
       projectId: id.optional().describe('A project from list_projects; give it with branch, not with runId.'),
       branch: id.optional().describe('The branch name, with projectId.')
     },
@@ -563,7 +596,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get CI checks',
     readOnly: true,
     cmd: 'github-ci',
-    description: `The CI checks of a pull request: the one of a Run's branch (runId), or a project's pull request number (projectId and pr). Each check has its name, workflow, state, bucket (pass, fail, pending, skipping or cancel), link and the Actions run id behind it. With failedLogOf, an Actions run id from here, the result also carries the tail of that run's failed log, with anything that looks like a secret redacted. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
+    description: `The CI checks of a pull request: the one of a Run's branch (runId; for a GitHub lifecycle Run, the pull request Astera bound), or a project's pull request number (projectId and pr). Each check has its name, workflow, state, bucket (pass, fail, pending, skipping or cancel), link and the Actions run id behind it. With failedLogOf, an Actions run id from here, the result also carries the tail of that run's failed log, with anything that looks like a secret redacted. ${GITHUB_READ} Needs MCP access "Read only" or "Read and control".`,
     inputSchema: {
       runId: id.optional().describe('A Run with a branch of its own; the pull request of its branch is read.'),
       projectId: id.optional().describe('A project from list_projects; give it with pr, not with runId.'),
@@ -609,9 +642,23 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Rerun failed CI',
     readOnly: false,
     cmd: 'github-ci-rerun',
-    description: `Rerun the failed jobs of a GitHub Actions run (ciRunId, from get_ci's checks). It does not wait for the rerun: poll get_ci. ${GITHUB_WRITE}`,
-    inputSchema: { projectId: id, ciRunId: z.number().int().min(1).describe("The Actions run id, from get_ci's checks."), requestId },
-    args: (i) => ({ project: i.projectId, runId: i.ciRunId })
+    description: `Rerun the failed jobs of a GitHub Actions run (ciRunId, from get_ci's checks), of a Run's pull request (runId) or of a project's repository (projectId). Through a Run, only a CI run of the head of its pull request (the one Astera bound, in that repository, or its branch's) is rerun; any other is refused with CONFLICT, and a GitHub lifecycle Run's wait holds for the new attempt. It does not wait for the rerun: poll get_ci. ${GITHUB_WRITE}`,
+    inputSchema: {
+      runId: id.optional().describe('A Run with a branch of its own: the CI run must be of its pull request’s head.'),
+      projectId: id.optional().describe('A project from list_projects; give it instead of runId.'),
+      ciRunId: z.number().int().min(1).describe("The Actions run id, from get_ci's checks."),
+      requestId
+    },
+    args: (i) => (i.runId !== undefined ? { run: i.runId, runId: i.ciRunId } : { project: i.projectId, runId: i.ciRunId })
+  },
+  {
+    name: 'reconverge_run',
+    title: 'Carry a Run through GitHub again',
+    readOnly: false,
+    cmd: 'runs-reconverge',
+    description: `Carry a finished GitHub lifecycle Run through GitHub again (runId): once its latest lifecycle Task completed or failed, a new one joins the Run with a fresh repair and rerun budget, and the old merge-ready evidence goes. The Run reads as running until the new Task ends. Returns runId and the new taskId. Refused with CONFLICT for a Run whose Job is not carried through GitHub, a Run with no branch of its own or whose branch was removed, a Run not carried through GitHub yet, a Run whose lifecycle Task still works, and a pull request that is merged or closed (read from GitHub first). ${GITHUB_WRITE}`,
+    inputSchema: { runId: id.describe('A Run of a GitHub lifecycle Job, from list_runs.'), requestId },
+    args: (i) => ({ id: i.runId })
   },
   {
     name: 'create_job_from_issue',
@@ -626,9 +673,10 @@ const LISTED_TOOLS: ToolDef[] = [
       coordinatorProvider,
       convergence,
       ...CONVERGENCE_KNOBS,
+      ...GITHUB_LIFECYCLE_FIELDS,
       requestId
     },
-    args: (i) => ({ project: i.projectId, number: i.number, ...coordinatorArgs(i) })
+    args: (i) => ({ project: i.projectId, number: i.number, ...coordinatorArgs(i), ...lifecycleArgs(i) })
   },
   // Plugin Phase 4 J22. The Host's job-source commands, named for the CLI (`sources show --item`). `source` keeps its
   // name because the Host's MCP gate reads it off the command's args (mcpRefusal: a Job from GitHub is a GitHub write);
@@ -684,9 +732,10 @@ const LISTED_TOOLS: ToolDef[] = [
       coordinatorProvider,
       convergence,
       ...CONVERGENCE_KNOBS,
+      ...GITHUB_LIFECYCLE_FIELDS,
       requestId
     },
-    args: (i) => ({ source: i.source, item: i.itemId, project: i.projectId, ...coordinatorArgs(i) })
+    args: (i) => ({ source: i.source, item: i.itemId, project: i.projectId, ...coordinatorArgs(i), ...lifecycleArgs(i) })
   },
   // P2-C. The Host reads its profile's understanding.json; `project` is the project id, as for GitHub.
   {
@@ -703,7 +752,7 @@ const LISTED_TOOLS: ToolDef[] = [
     title: 'Get a work record',
     readOnly: true,
     cmd: 'understanding-get',
-    description: `One How It Works record in full: request, source, changed files, git heads and commits, verification (validation on older records), Job tasks, status, reason, and the explanation (overview, user-visible changes, flow, decisions, implementation and evidence). ${WORK_RECORDS}`,
+    description: `One How It Works record in full: request, source, changed files, git heads and commits, verification (validation on older records), Job tasks, a GitHub lifecycle Run's GitHub evidence (\`github\`: its issue, pull request, local checks, GitHub CI at the head, Astera's review, and whether it was merge-ready when the Run finished), status, reason, and the explanation (overview, user-visible changes, flow, decisions, implementation and evidence). ${WORK_RECORDS}`,
     inputSchema: { projectId: id, recordId: id.describe('A record id from list_work_records.') },
     args: (i) => ({ project: i.projectId, id: i.recordId })
   },

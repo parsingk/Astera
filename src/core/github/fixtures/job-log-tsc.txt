@@ -1,0 +1,6 @@
+tsc	Run npx tsc --noEmit -p .	﻿2026-10-18T05:11:00.8091913Z ##[group]Run npx tsc --noEmit -p .
+tsc	Run npx tsc --noEmit -p .	2026-10-18T05:11:00.8092192Z ^[[36;1mnpx tsc --noEmit -p .^[[0m
+tsc	Run npx tsc --noEmit -p .	2026-10-18T05:11:00.8150007Z shell: /usr/bin/bash -e {0}
+tsc	Run npx tsc --noEmit -p .	2026-10-18T05:11:00.8150293Z ##[endgroup]
+tsc	Run npx tsc --noEmit -p .	2026-10-18T05:11:02.3808554Z ##[error]index.ts(1,14): error TS2322: Type 'string' is not assignable to type 'number'.
+tsc	Run npx tsc --noEmit -p .	2026-10-18T05:11:02.4019998Z ##[error]Process completed with exit code 2.

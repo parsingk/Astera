@@ -10,7 +10,8 @@ import path from 'node:path'
 import { createHostOrch } from './orch'
 import { attachGatewayLink, type GatewayLinkHandle } from './gatewayLink'
 import { controllerRecordsFile, createControllerRegistry } from './controllers'
-import { createJob, emptyState, type OrchState } from '../core/orchestration/state'
+import { createJob, emptyState, startJobRun, type OrchState } from '../core/orchestration/state'
+import type { OrchServerDeps } from '../core/orchestration/command'
 import { openSecretStore } from '../core/secrets/secretStore'
 import { buildCertificate, certificatePem, spkiSha256 } from '../core/remote/cert'
 import { connectRuntime, type RuntimeLink } from '../core/remote/client'
@@ -19,6 +20,7 @@ import { openRemoteLink, type RemoteLink, type RemoteTarget } from '../core/remo
 import { startGateway, type GatewayHandle } from '../cli/runtime/gateway'
 import { controllerRegistry, runRuntimesCommand } from '../cli/runtimes'
 import { answerRemote } from '../cli/remote'
+import { publicFor } from '../core/orchestration/cliPublic'
 import { openMcpRuntimes } from '../cli/mcp/remoteLink'
 
 const NOW = '2026-10-08T00:00:00.000Z'
@@ -49,10 +51,11 @@ afterEach(async () => {
   for (const d of [runtimeDir, laptopDir]) await fs.rm(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
 })
 
-async function runtime() {
+/** The Runtime, with one Job already there, or `seed` (G7c: a lifecycle Run), and the Host's GitHub when given. */
+async function runtime(seed?: OrchState, o: { github?: OrchServerDeps['github'] } = {}) {
   const job = createJob(emptyState(), { objective: 'already here', cwd: 'D:/p' }, NOW)
   if (!job.ok) throw new Error(job.error)
-  await fs.writeFile(path.join(runtimeDir, 'orchestration.json'), JSON.stringify(job.state, null, 2), 'utf8')
+  await fs.writeFile(path.join(runtimeDir, 'orchestration.json'), JSON.stringify(seed ?? job.state, null, 2), 'utf8')
   const controllers = createControllerRegistry({ records: controllerRecordsFile(openSecretStore({ dir: path.join(runtimeDir, 'remote'), profileDir: runtimeDir })) })
   await controllers.load()
   const logs: string[] = []
@@ -68,6 +71,7 @@ async function runtime() {
     onState: () => {},
     log: (m) => logs.push(m),
     controllers,
+    ...(o.github ? { github: o.github } : {}),
     closeControllerConns: (conns) => link?.closeConns(conns),
     sessions: { listSessions: async () => [], readSession: async () => ({ cols: 80, rows: 24, screen: [], scrollback: [] }), sendSession: async () => {}, readChat: async () => [], sendChat: async () => {}, serial: (_id, run) => run() }
   })
@@ -96,7 +100,7 @@ async function runtime() {
     return formatPairing({ address: '127.0.0.1', port: started.port, code: (r.body as { code: string }).code, fingerprint: identity.spkiSha256 })
   }
   const state = (): OrchState => orch.state()
-  return { orch, logs, pairing, state, port: started.port, local }
+  return { orch, logs, pairing, state, port: started.port, local, controllers }
 }
 
 /** `astera runtimes add --pair <string>` on the laptop. */
@@ -248,5 +252,132 @@ describe('Remote Runtime Phase 4 acceptance (design §6 Phase 4)', { timeout: 30
     expect(JSON.stringify(view)).toContain('already here')
     // The seeded Job has never run, so it has no Run timeline: the read is reached, and says so.
     expect(await remote('rt_p4', 'runs-timeline', { runId: rt.state().jobs[0].id })).toMatchObject({ error: { code: 'NOT_FOUND', details: { runtime: 'rt_p4' } } })
+  })
+})
+
+// GitHub lifecycle design §10 "Remote" (G7c): a paired device reads a lifecycle Run's GitHub side, needs control to carry
+// it through GitHub again, never reaches GitHub itself, leaves the Runtime's wait alone when it goes, and never sees the
+// Runtime's GitHub record or gh login.
+describe('a GitHub lifecycle Run on a Runtime (design §10 Remote)', { timeout: 30_000 }, () => {
+  const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const B = 'b'.repeat(40)
+  /** A lifecycle Job whose Run waits for CI on PR #12, its record kept on the Runtime. */
+  const lifecycleState = (): OrchState => {
+    const made = createJob(emptyState(), { objective: 'carried', cwd: 'D:/p', convergence: {}, github: POLICY }, NOW)
+    if (!made.ok) throw new Error(made.error)
+    const run = startJobRun(made.state, made.value.id, NOW)
+    if (!run.ok) throw new Error(run.error)
+    const runId = run.value.id
+    const s = run.state
+    return {
+      ...s,
+      projects: [{ id: 'proj_p', name: 'p', path: 'D:/p', addedAt: NOW }],
+      runs: s.runs.map((r) =>
+        r.id === runId
+          ? {
+              ...r,
+              worktree: 'D:/p/.astera-wt/u-a',
+              githubState: {
+                binding: { repository: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', baseBranch: 'main', headBranch: 'u/a', createdByAstera: true, boundAt: NOW },
+                headSha: B,
+                lastPushedSha: B,
+                pr: { state: 'open' as const, isDraft: true, baseBranch: 'main' },
+                log: [{ seq: 1, at: NOW, kind: 'pr-created' as const, pr: 12 }],
+                seq: 1
+              }
+            }
+          : r
+      ),
+      tasks: [
+        ...s.tasks,
+        {
+          id: 'tsk_life', runId, title: 'GitHub 전달', spec: 's', deps: [], status: 'validating' as const, kind: 'lifecycle' as const,
+          consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ciWait: { since: NOW, done: [], pr: 12, sha: B, waitingSince: NOW }
+        }
+      ]
+    } as OrchState
+  }
+  /** The Run the seed holds: the Runtime's Host loads its state on its first call, so the id is the seed's. */
+  const runIdOf = (s: OrchState): string => s.runs[0].id
+
+  it('a read-only device reads the GitHub side as the CLI prints it, and no gh login crosses the wire', async () => {
+    // A token in the Runtime's environment, as a gh login can be: nothing the device receives may carry it
+    vi.stubEnv('GH_TOKEN', 'gho_sentinelG7cTokenNotToTravel')
+    const seed = lifecycleState()
+    const rt = await runtime(seed)
+    await pair(await rt.pairing('read-only'))
+    const got = await remote('rt_p4', 'runs-get', { id: runIdOf(seed) })
+    expect(got).toMatchObject({ status: 200 })
+    // What `astera --runtime … runs get` prints: the derived view, the Host's record kept back
+    const printed = JSON.stringify(publicFor('runs-get', (got as { body: unknown }).body))
+    expect(printed).toContain('"ci-pending"')
+    expect(printed).toContain('"number":12')
+    expect(printed).not.toContain('githubState')
+    // Nothing of the Runtime's gh login travels, whatever the answer holds
+    const wire = JSON.stringify(got)
+    for (const secret of ['gho_sentinelG7cTokenNotToTravel', 'GH_TOKEN', 'oauth_token', 'hosts.yml']) expect(wire, secret).not.toContain(secret)
+    vi.unstubAllEnvs()
+  })
+
+  it('carrying a Run through GitHub again is refused to a read-only device', async () => {
+    const seed = lifecycleState()
+    const rt = await runtime(seed)
+    await pair(await rt.pairing('read-only'), 'reader')
+    expect(await remote('rt_p4', 'runs-reconverge', { id: runIdOf(seed) })).toMatchObject({ error: { code: 'RUNTIME_PERMISSION_DENIED' } })
+  })
+
+  it('with control, reconverge is the Runtime Host’s to answer: its lifecycle Task still works, so it is refused there', async () => {
+    const seed = lifecycleState()
+    const rt = await runtime(seed)
+    await pair(await rt.pairing('full-control'))
+    const r = await remote('rt_p4', 'runs-reconverge', { id: runIdOf(seed) })
+    expect(r).toMatchObject({ error: { code: 'CONFLICT', message: expect.stringContaining('lifecycle Task is still validating') } })
+  })
+
+  it('a device never writes to GitHub itself, at full control either: the CLI sends nothing, and the Runtime refuses', async () => {
+    const seed = lifecycleState()
+    const rt = await runtime(seed)
+    await pair(await rt.pairing('full-control'))
+    for (const [cmd, args] of [['github-pr-create', { run: runIdOf(seed) }], ['github-ci-rerun', { run: runIdOf(seed), runId: 1 }]] as const)
+      expect(await remote('rt_p4', cmd, args), cmd).toMatchObject({ error: { code: 'RUNTIME_CAPABILITY_MISSING' } })
+    // A device that sends one anyway (another client) is refused by the Runtime's own gate
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'laptop', permission: 'full-control' as const }, toOthers: () => {} }
+    for (const cmd of ['github-pr-create', 'github-ci-rerun'])
+      expect(await rt.orch.call({ cmd, args: { run: runIdOf(seed) }, sessionId: '', from: controller as never }), cmd).toMatchObject({ status: 403, body: { code: 'RUNTIME_PERMISSION_DENIED' } })
+  })
+
+  it('the device going leaves the Runtime’s wait as it was', async () => {
+    const seed = lifecycleState()
+    const rt = await runtime(seed)
+    await pair(await rt.pairing('read-only'))
+    // A link the device keeps open (answerRemote closes its own), then drops
+    let held: RemoteLink | undefined
+    const keep = (target: RemoteTarget): RemoteLink => {
+      held = openRemoteLink({ target, client: { surface: 'cli' } })
+      const h = held
+      return { hello: () => h.hello(), call: (c, a, opts) => h.call(c, a, opts), subscribe: (pty, hs) => h.subscribe(pty, hs), close: () => {} }
+    }
+    expect(await remote('rt_p4', 'runs-get', { id: runIdOf(seed) }, { link: keep })).toMatchObject({ status: 200 })
+    const clientId = rt.controllers.list()[0].clientId
+    expect(rt.controllers.boundCount(1, clientId)).toBeGreaterThan(0)
+    held!.close()
+    // The Runtime saw it go
+    await vi.waitFor(() => expect(rt.controllers.boundCount(1, clientId)).toBe(0), { timeout: 5000, interval: 20 })
+    expect(rt.state().tasks.find((t) => t.id === 'tsk_life')).toMatchObject({ status: 'validating', ciWait: { pr: 12, sha: B } })
+    expect(rt.state().runs.find((r) => r.id === runIdOf(seed))?.githubState?.binding?.number).toBe(12)
+  })
+
+  it('the New Job check answers a device only for a folder inside the Runtime’s projects', async () => {
+    const seed = lifecycleState()
+    const github = {
+      run: async () => ({ ok: true, stdout: JSON.stringify({ nameWithOwner: 'o/r', viewerPermission: 'WRITE' }), stderr: '' }),
+      originOf: async () => 'git@github.com:o/r.git'
+    } as unknown as OrchServerDeps['github']
+    const rt = await runtime(seed, { github })
+    await pair(await rt.pairing('read-only'))
+    expect(await remote('rt_p4', 'github-preflight', { cwd: 'D:/elsewhere' })).toMatchObject({
+      error: { message: expect.stringContaining('only for a folder inside a project this Host knows') }
+    })
+    expect(await remote('rt_p4', 'github-preflight', { cwd: 'D:/p' })).toMatchObject({ status: 200, body: { ok: true, repo: 'o/r' } })
   })
 })

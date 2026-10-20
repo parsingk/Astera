@@ -230,6 +230,9 @@ export class SessionManager {
      *  those always win (S6 R6). A rolling respawn carries `rolledFrom` and its chain's snapshot here, so
      *  a process that takes the session over before the rekey commits still knows what it is. */
     restoreExtra?: RollSpawnExtra
+    /** `'agent'`: an agent or Astera started this session, not a person (SessionInfo.startedBy). Written into the info
+     *  and the note; its tab closes when it ends. */
+    startedBy?: 'agent'
   }): SessionInfo {
     // The folder `prepare` just confirmed is not looked at again. The sync check is left only for a
     // caller that did not prepare (tests, and anything added later without it): it is the one that can
@@ -258,8 +261,11 @@ export class SessionManager {
     // desktop notification for a choice or an approval is offered for any session, and gating it here
     // is what left that feature inert. What is still gated is what only slack.ts reads: the turn
     // summary's Stop, and the per-tool-call capture pair.
-    // Rolling is kept in the condition even though its idle nudge only needs the Notification hook:
-    // its own tap reads the same pending-tool captures when deciding what a stalled screen shows.
+    // Rolling is in the condition for a reason that is gone: its idle nudge read the Notification hook,
+    // and that nudge was removed on 2026-10-19 — rolling itself reads no hook now. What a rolling session
+    // still gets from the tool-call pair is what attention and pendingPrompt read off it (the call a
+    // session is waiting on). Whether that is worth a node process per write/execute call in a session
+    // that only rolls is a separate decision; the condition is left as it was.
     // SlackNotifier.register gates separately on info.slackNotify, so Slack traffic does not grow.
     const wantToolHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
     const sl = d.usesStatusLine
@@ -366,7 +372,8 @@ export class SessionManager {
           ...(opts.rollAccountIds ? { rollAccountIds: opts.rollAccountIds } : {}),
           ...(opts.rollPrompt ? { rollPrompt: opts.rollPrompt } : {}),
           ...(opts.slackNotify !== undefined ? { slackNotify: opts.slackNotify } : {}),
-          ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {})
+          ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {}),
+          ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
         }
       }
     })
@@ -384,7 +391,8 @@ export class SessionManager {
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
-      schedule: opts.schedule
+      schedule: opts.schedule,
+      ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
     }
     return this.track(info, pty)
   }

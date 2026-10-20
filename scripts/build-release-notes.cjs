@@ -41,10 +41,11 @@ if (!tag) {
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim()
 const lines = (s) => s.split('\n').filter(Boolean)
 
-// The tag before this one. Absent on the very first release, where every commit belongs to it.
+// The tag before this one. Absent on the very first release, where every commit belongs to it. Only an app release's
+// tag: a package's (client-v…, plugin-sdk-v…) can sit on the same commit, as on v1.4.14's, and describe may pick it.
 let previous = null
 try {
-  previous = git('describe', '--tags', '--abbrev=0', `${tag}^`)
+  previous = git('describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*', `${tag}^`)
 } catch {
   previous = null
 }

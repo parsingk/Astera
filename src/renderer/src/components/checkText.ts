@@ -59,6 +59,22 @@ export function checkChoicesOf(configs: { id: string; name: string }[], plugins:
   ]
 }
 
+/** A Task's title as the app shows it (G7b): the lifecycle Task's is stored in one language (lifecycleTask.ts), so it
+ *  is shown in the app's; any other Task's is the person's or the coordinator's own words. */
+export const taskTitleOf = (task: { title: string; lifecycle?: unknown }, t: Translate): string =>
+  task.lifecycle !== undefined ? t('jobs.lifecycle.title') : task.title
+
+/** A timeline line's Task title as the app shows it (G7b final review I2): the Task's, translated when it is the
+ *  lifecycle Task; the line's own when the Task is gone. */
+export const eventTitleOf = (
+  e: { taskId?: string; taskTitle?: string },
+  tasks: readonly { id: string; title: string; lifecycle?: unknown }[],
+  t: Translate
+): string => {
+  const task = tasks.find((x) => x.id === e.taskId)
+  return task ? taskTitleOf(task, t) : (e.taskTitle ?? '')
+}
+
 /** nodeMetaOf 의 판정을 문장으로. 우선순위는 그쪽에 있다 — 여기는 kind 마다 문구 하나다. undefined 면 줄을 그리지 않는다 */
 export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
   switch (m.kind) {
@@ -79,6 +95,8 @@ export function nodeMetaText(m: NodeMeta, t: Translate): string | undefined {
       return m.retrying === null ? t('jobs.convergence.node.checking') : t('jobs.convergence.node.rechecking', { name: m.retrying })
     case 'reviewing':
       return t('jobs.convergence.node.reviewing', { round: m.round, max: m.max })
+    case 'ci-waiting':
+      return m.pr !== undefined ? t('jobs.convergence.node.ciWaiting', { pr: m.pr }) : t('jobs.convergence.node.ciWaitingNoPr')
     case 'failed':
       return t(m.unavailable ? 'jobs.convergence.node.unavailable' : 'jobs.convergence.node.failed', { name: m.name })
     case 'provider':

@@ -26,7 +26,7 @@ const payload = (pct: number, sid = 'claude-sess', slug = 'D--work-p'): unknown 
   rate_limits: { five_hour: { used_percentage: pct } }
 })
 
-// resets_at(epoch초) 포함 페이로드 — reset 앵커(3-b) 테스트용. normalizeReset이 초→ISO 변환한다.
+// resets_at(epoch초) 포함 페이로드. normalizeReset이 초→ISO 변환한다.
 const payloadReset = (five: number, fiveResetsAtSec: number, sid = 'claude-sess'): unknown => ({
   session_id: sid,
   transcript_path: path.join('D:\\cfg', 'a1', 'projects', 'D--work-p', `${sid}.jsonl`),
@@ -531,6 +531,23 @@ describe('RollingCoordinator', () => {
     expect(h.spawned[0].bypassPermissions).toBe(true)
   })
 
+  // An agent-started session's tab closes when it ends (2026-10-20): a roll is the same work on another account, so
+  // the respawned session is the agent's too, and a person's stays a person's
+  it('a roll keeps who started the chain', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, startedBy: 'agent' })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawnedOpts[0].startedBy).toBe('agent')
+    const p = harness()
+    p.payloads.set('s1', payload(97))
+    p.coord.register(p.info1)
+    p.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(p.spawnedOpts[0]).not.toHaveProperty('startedBy')
+  })
+
   it('활성 체인의 claude 세션 ID로 live 세션을 찾는다 (resume 가드)', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))
@@ -809,17 +826,24 @@ describe('RollingCoordinator 주간 한도 롤링', () => {
     expect(h.spawned.length).toBe(spawnedBefore + 1) // 폴백으로 재시도 발생
   })
 
-  it('무출력 폴백 트리거를 주간 100%에서도 발동한다 (틱)', async () => {
-    const h = harness()
-    h.payloads.set('s1', payloadEx({ five: 20, weekly: 100, weeklyReset: new Date(Date.now() + 20 * MIN).toISOString() }))
+  // 폴백은 사용률만 본 판단이라 표시만 한다(2026-10-19 사람의 결정): 대기 배너와 차단 기록은 남기고,
+  // 계정을 바꾸지도 '이어서' 를 치지도 않는다 — 배너에는 그 사실이 실린다(manual).
+  it('무출력 폴백 트리거를 주간 100%에서도 발동한다 (틱) — 표시만 한다', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const resetAt = Date.now() + 20 * MIN
+    h.payloads.set('s1', payloadEx({ five: 20, weekly: 100, weeklyReset: new Date(resetAt).toISOString() }))
     h.coord.register(h.info1)
-    // handleData(출력) 없이 30초 이상 무출력 → 15초 틱이 주간 100%를 보고 폴백 롤.
+    // handleData(출력) 없이 30초 이상 무출력 → 15초 틱이 주간 100%를 보고 폴백.
     // tickChain이 이제 limitTailCheck(①)를 await한 뒤에야 폴백을 평가한다 — 이 체인의
     // transcript_path는 존재하지 않는 더미 경로라 ①의 open()이 실패로 안착하는 데도 실제 fs I/O
     // 완료 콜백이 필요하다. 순수 fake-timer 진행만으로는 그 콜백이 돌지 않으므로(파일 하단 advanceIo
-    // 주석 참고) advanceIo로 바꿔 실제 타이머 틱을 끼워 넣는다 — 발동 조건·기대값은 그대로다.
+    // 주석 참고) advanceIo로 바꿔 실제 타이머 틱을 끼워 넣는다.
     await advanceIo(46_000)
-    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    expect(h.events).toEqual([]) // 롤하지 않는다
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true, scope: 'weekly' })
+    expect(Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))).toBe(resetAt)
+    expect(blocks.get('a1', Date.now())).not.toBeNull() // 다른 체인은 이 계정을 피한다
   })
 
   it('reset이 이미 지난 경우 즉시가 아니라 최소 대기(하한) 후 재시도한다', async () => {
@@ -1072,103 +1096,7 @@ describe('RollingCoordinator 단일 계정 자동 재개', () => {
   })
 })
 
-describe('사각지대 3-b — 단일 계정 reset 앵커 후향 판정', () => {
-  const single = (h: ReturnType<typeof harness>): SessionInfo => ({ ...h.info1, rollAccountIds: ['a1'] })
-
-  it('reset 후 활동이 재개됐으면(자가 회복) 개입하지 않는다', async () => {
-    const resetSec = Math.floor(Date.now() / 1000) + 600 // +10분
-    let probed = Date.now() - 60_000
-    const h = harness({
-      probeActivity: () => Promise.resolve(probed),
-      readPending: () => Promise.resolve(1)
-    })
-    h.payloads.set('s1', payloadReset(95, resetSec)) // 한도 증거 게이트를 넘는 사용률
-    h.coord.register(single(h))
-    await vi.advanceTimersByTimeAsync(20_000) // 첫 틱 → applyMeta → 앵커 예약
-    probed = resetSec * 1000 + 30_000 // 리셋 직후 서브에이전트 파일 갱신 (자가 회복)
-    await vi.advanceTimersByTimeAsync(16 * 60_000) // reset(+10분) + GRACE(5분) 경과
-    expect(h.written).toEqual([])
-    expect(h.events).toEqual([])
-  })
-
-  it('reset 전 정지 + pending ≥ 1 + reset 후 무활동 → 살아있는 세션에 프롬프트만 (무파괴), Enter 150ms 뒤 none 게시', async () => {
-    // 정각으로 고정 — Enter/none 150ms 타이밍을 ms 오차 없이 딱 잘라 검증하기 위해 (내부적으로
-    // reset(+10분)+GRACE(5분)=정확히 15분 뒤 발화하도록 만든다)
-    vi.setSystemTime(new Date(2026, 6, 31, 10, 0, 0))
-    const start = Date.now()
-    const resetSec = Math.floor(start / 1000) + 600
-    const h = harness({
-      probeActivity: () => Promise.resolve(start - 60_000), // reset 한참 전에 멈춘 활동
-      readPending: () => Promise.resolve(1)
-    })
-    h.payloads.set('s1', payloadReset(95, resetSec)) // 한도 증거 게이트를 넘는 사용률
-    h.coord.register(single(h))
-    // reset(+10분)+GRACE(5분)=15분 직전까지는 아무것도 전송되지 않는다
-    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
-    expect(h.written).toEqual([])
-    // 발화 시각(15분) 도달 — 프롬프트는 즉시 쓰지만 Enter는 150ms 뒤로 미룬다 (rolling 규약)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(h.events).toEqual([]) // kill/copy/spawn 없음
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘'])
-    expect(
-      h.sent.some((s) => s.channel === 'session:rollState' && s.payload.state === 'nudged')
-    ).toBe(true)
-    // 'none'은 Enter 전송(150ms 뒤) 전에는 게시되지 않는다 — scheduler의 nudged 억제가
-    // 그때까지 유지돼야 재개 프롬프트와 스케쥴 발화가 같은 입력 줄에 섞이지 않는다
-    await vi.advanceTimersByTimeAsync(149)
-    expect(h.sent.some((s) => s.payload.state === 'none')).toBe(false)
-    await vi.advanceTimersByTimeAsync(1)
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
-    expect(h.sent.some((s) => s.payload.state === 'none')).toBe(true)
-  })
-
-  it('pending이 없으면(그냥 idle 세션) 프롬프트를 보내지 않는다', async () => {
-    const start = Date.now()
-    const resetSec = Math.floor(start / 1000) + 600
-    const h = harness({
-      probeActivity: () => Promise.resolve(start - 60_000),
-      readPending: () => Promise.resolve(0)
-    })
-    h.payloads.set('s1', payloadReset(95, resetSec))
-    h.coord.register(single(h))
-    await vi.advanceTimersByTimeAsync(16 * 60_000)
-    expect(h.written).toEqual([])
-    expect(h.events).toEqual([])
-  })
-
-  // 한도 증거 게이트. 이 경로는 reset 시각 도달만으로 발화하므로, 한도로 막힌 흔적이 없으면
-  // "사용자가 자리를 비운 정상 세션"에 프롬프트를 밀어 넣는다 — 실제로 관측된 사고다.
-  it('사용률이 한도 임계 미달이면 pending이 있어도 프롬프트를 보내지 않는다 — 한도 증거 없음', async () => {
-    const start = Date.now()
-    const resetSec = Math.floor(start / 1000) + 600
-    const h = harness({
-      probeActivity: () => Promise.resolve(start - 60_000), // reset 한참 전에 멈춘 활동
-      readPending: () => Promise.resolve(1) // 백그라운드 작업은 남아 있다
-    })
-    h.payloads.set('s1', payloadReset(30, resetSec)) // 30% — 한도로 막힌 세션이 아니다
-    h.coord.register(single(h))
-    await vi.advanceTimersByTimeAsync(16 * 60_000) // reset(+10분) + GRACE(5분) 경과
-    expect(h.written).toEqual([])
-    expect(h.events).toEqual([])
-  })
-
-  it('동일 resets_at 스냅샷을 반복해도 reset 타이머를 한 번만 예약한다 (재무장 가드)', async () => {
-    const resetSec = Math.floor(Date.now() / 1000) + 600
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now()),
-      readPending: () => Promise.resolve(1)
-    })
-    h.payloads.set('s1', payloadReset(84, resetSec))
-    h.coord.register(single(h))
-    const spy = vi.spyOn(globalThis, 'setTimeout')
-    // 여러 틱(15초 간격)에서 동일 스냅샷이 반복 → armResetCheck가 매 틱 호출되지만,
-    // 재무장 가드(resetCheckAt === at)로 reset 타이머(지연 > GRACE)는 첫 틱에서만 예약된다.
-    await vi.advanceTimersByTimeAsync(45_000)
-    const resetArms = spy.mock.calls.filter((c) => typeof c[1] === 'number' && c[1] > 5 * 60_000)
-    expect(resetArms).toHaveLength(1)
-    spy.mockRestore()
-  })
-
+describe('한도 문구의 reset 시각 — recordRecovery', () => {
   // 한도 문구의 reset 시각을 1차 소스로 쓴다 — 스냅샷은 한도로 멈춘 순간부터
   // 얼어 있을 수 있어 신뢰하지 않는다. 아래 5건은 recordRecovery가 private이라 관측 가능한
   // 결과(재개 시각)로만 검증한다 — 위 605-680 라인의 payloadReset + advanceTimersByTimeAsync
@@ -1306,33 +1234,6 @@ describe('상태 세대 가드 — 지연된 none이 최신 상태를 덮어쓰�
     expect(h.sent.some((s) => s.payload.state === 'none')).toBe(false) // 지연 none은 낡은 세대라 건너뜀
     expect(h.sent.at(-1)).toBe(waiting) // 'waiting'이 마지막 rollState로 유지된다
   })
-
-  it('resetAnchorCheck(nudge) Enter 대기(150ms) 중 방해가 있으면 지연된 none을 건너뛴다', async () => {
-    vi.setSystemTime(new Date(2026, 6, 31, 10, 0, 0)) // 정각 고정 — 기존 테스트와 동일한 15분 타이밍
-    const start = Date.now()
-    const resetSec = Math.floor(start / 1000) + 600
-    const h = harness({
-      probeActivity: () => Promise.resolve(start - 60_000), // reset 한참 전에 멈춘 활동
-      readPending: () => Promise.resolve(1)
-    })
-    h.payloads.set('s1', payloadReset(95, resetSec)) // 한도 증거 게이트를 넘는 사용률
-    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
-    await vi.advanceTimersByTimeAsync(15 * 60_000 - 1)
-    expect(h.written).toEqual([])
-    await vi.advanceTimersByTimeAsync(1) // reset(+10분)+GRACE(5분) 도달 → nudge, Enter 150ms 타이머 예약(세대 캡처)
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘'])
-    // Enter 대기 중 방해: 한도 게이트를 넘는 statusline + 한도 문구 → onLimitCandidate → onLimit.
-    // 단일 계정(count=1)은 RollCycle.onLimit이 항상 wait를 반환하므로 예외 없이 'waiting'이 게시된다
-    h.payloads.set('s1', payload(97, 'claude-sess'))
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await flush()
-    const waiting = h.sent.find((s) => s.payload.state === 'waiting')
-    expect(waiting).toBeDefined()
-    await vi.advanceTimersByTimeAsync(150) // 원래 Enter 타이머 발화 시점
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r']) // Enter는 그대로 전송된다
-    expect(h.sent.some((s) => s.payload.state === 'none')).toBe(false) // 지연 none은 낡은 세대라 건너뜀
-    expect(h.sent.at(-1)).toBe(waiting) // 'waiting'이 마지막 rollState로 유지된다
-  })
 })
 
 it('claudeSessionId 최초 학습 시 롤링 설정을 1회 persist하고 재학습엔 저장하지 않는다', async () => {
@@ -1365,264 +1266,69 @@ it('reports the native session id once when first learned, and again only when i
   vi.useRealTimers()
 })
 
-describe('idle nudge', () => {
-  const idleHook = { hook_event_name: 'Notification', message: 'Claude is waiting for your input' }
+// 2026-10-19 사람의 결정: "이어서 작업 진행해 줘" 는 감지한 한도가 풀린 뒤에만 간다. 현재 계정의 차단 기록이나
+// 사용률 90% 이상으로 한도를 짐작해 보내던 두 경로 — 멈춘 세션 재촉(idle nudge)과 사용 창 초기화 시각의 후향
+// 판정(reset anchor) — 는 없앴다. 설치본에서 7일 창 97%(5시간 창 17%)로 막히지 않은 세션에 하루 넘게 되풀이되었다.
+describe('이어서 하라는 문구는 감지한 한도가 풀린 뒤에만 간다', () => {
   const MIN = 60_000
 
-  // notification_type이 실린 페이로드로 실제 진입점을 통과시킨다. 순수 함수 단위 테스트만으로는
-  // 필드가 onHookEvent에서 판정 함수까지 실제로 전달되는지 검증되지 않는다 — 캐스트나 필드명이
-  // 어긋나도 문구 폴백이 받아내며 조용히 통과한다.
-  it('notification_type=idle_prompt만으로 nudge가 나간다 (문구 없이)', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
+  // 설치본의 그 세션 모양 그대로: 7일 창 97%, 5시간 창 17%. 막히지 않았고 그냥 쉬고 있다.
+  it('사용률이 높은 채 쉬는 세션은 아무리 오래 쉬어도 재촉받지 않는다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payloadEx({ five: 17, weekly: 97 }))
     h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
-    // payload(95)의 transcript_path는 존재하지 않는 더미 경로다. tick()이 이제 limitTailCheck(①)를
-    // await한 뒤에야 idleNudgeCheck를 평가하므로, ①의 실패 판정(open() 실패)이 실제로
-    // 안착해야 아래 idleNudgeCheck가 계속 돌 수 있다 — 순수 fake-timer 진행만으로는 그 완료 콜백이
-    // 돌지 않는다(파일 하단 advanceIo 주석 참고). advanceIo로 바꿔 실제 타이머 틱을 끼워 넣는다.
-    await advanceIo(11 * MIN)
-    // nudge의 Enter는 advanceIo가 실제 I/O를 안착시킨 "뒤"에야 예약되는 페이크 타이머(150ms)라
-    // advanceIo 자체의 0ms 보정으론 못 잡는다 — 그 시점부터 별도로 페이크 시간을 더 흘려준다.
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
-  })
-
-  it('타입이 유휴가 아니면 문구가 유휴여도 nudge하지 않는다 — 타입이 우선', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', {
-      hook_event_name: 'Notification',
-      notification_type: 'worker_permission_prompt',
-      message: 'Claude is waiting for your input'
-    })
-    await vi.advanceTimersByTimeAsync(11 * MIN)
-    expect(h.written).toEqual([])
-  })
-
-  it('Notification 후 10분 정지가 이어지면 프롬프트를 1회 보낸다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    // advanceIo가 필요한 이유는 위 idle_prompt 테스트와 동일 — 더미 transcript_path에 대한 ①의
-    // 실패 판정이 실제로 안착해야 idleNudgeCheck가 계속 돈다
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200) // nudge의 Enter(150ms 페이크 타이머) — 이유는 위와 동일
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
-  })
-
-  // Dispatch 가 닫힌 워커 세션. 위 테스트와 setup 이 같고 unregister 한 줄만 다르다 — 그것이
-  // 이 부정 단언의 근거다(위가 통과하는 동안에만 이 테스트가 무언가를 증명한다).
-  it('unregister한 세션은 유휴 알림에도 프롬프트를 받지 않는다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.unregister('s1') // Dispatch 가 닫혔다 — 세션은 살아 있다
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(11 * MIN)
+    // 한 번에 흘리지 않고 나눠 흘린다 — 틱마다 더미 transcript 경로의 판정(①)이 실제 I/O 로 안착해야
+    // 그 뒤의 판정이 돈다(advanceIo 주석). 여섯 번 안착시켜, 틱 뒤쪽이 실제로 여러 번 돌게 한다.
+    for (let i = 0; i < 6; i++) await advanceIo(10 * MIN)
     await vi.advanceTimersByTimeAsync(200)
     expect(h.written).toEqual([])
+    expect(h.sent.filter((s) => s.payload.state === 'nudged' || s.payload.state === 'stalled')).toEqual([])
   })
 
-  it('unregister는 등록되지 않은 id에 무해하다 — 다른 체인도 건드리지 않는다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    expect(() => h.coord.unregister('s-nope')).not.toThrow()
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
+  // 없앤 리셋 앵커가 실제로 발화하던 모양 그대로 차린다: 단일 계정, 사용률 97%, 실제 전사 파일의 마지막
+  // turn_duration 에 남은 백그라운드 작업 1, 초기화 전에 멈춘 활동. 2026-10-19 까지는 초기화 5분 뒤
+  // "이어서" 가 나갔다 — 한도를 감지한 적이 없는데도.
+  it('단일 계정 세션의 사용 창이 초기화되어도, 한도를 감지한 적이 없으면 아무것도 보내지 않는다', async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'astera-reset-'))
+    try {
+      const tPath = path.join(dir, 'claude-sess.jsonl')
+      await fsp.writeFile(tPath, JSON.stringify({ type: 'system', subtype: 'turn_duration', pendingWorkflowCount: 1 }) + '\n')
+      const start = Date.now()
+      const stale = new Date(start - 60_000)
+      await fsp.utimes(tPath, stale, stale) // 초기화 한참 전에 멈춘 활동
+      const resetSec = Math.floor(start / 1000) + 600
+      const h = harness()
+      h.payloads.set('s1', {
+        session_id: 'claude-sess',
+        transcript_path: tPath,
+        rate_limits: { five_hour: { used_percentage: 97, resets_at: resetSec } }
+      })
+      h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+      // 나눠 흘린다 — 틱과 그 뒤의 판정이 실제 파일 I/O 를 기다리므로 매번 안착시킨다(advanceIo 주석)
+      for (let i = 0; i < 4; i++) await advanceIo(5 * MIN) // 초기화(+10분)와 그 뒤 5분을 지난다
+      await vi.advanceTimersByTimeAsync(200)
+      expect(h.written).toEqual([])
+      expect(h.sent.filter((s) => s.payload.state === 'nudged')).toEqual([])
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
   })
 
-  it('같은 스톨에서 두 번 nudge하지 않고 stalled로 사람을 부른다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(11 * MIN) // 1회차 nudge (advanceIo 필요 이유는 위와 동일)
-    await vi.advanceTimersByTimeAsync(200) // nudge의 Enter(150ms 페이크 타이머) — 위 첫 테스트와 동일 이유
-    const afterFirst = h.written.length
-    await advanceIo(11 * MIN) // 계속 정지 → stalled
-    expect(h.written.length).toBe(afterFirst) // 추가 입력 없음
-    expect(h.sent.filter((s) => s.payload.state === 'stalled').length).toBe(1)
-  })
-
-  it('10분 안에 출력이 있으면 nudge하지 않는다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now()),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    // 이 테스트는 실패하지 않았어도 advanceIo로 바꾼다 — 그대로 두면 tickChain이 더미 경로의 ①
-    // 판정에 막혀 idleNudgeCheck가 전혀 안 돌아도 기대값(빈 배열)이 우연히 같아, "최근 활동이면
-    // nudge 안 함"을 더는 검증하지 못하는 채로 조용히 통과한다
-    await advanceIo(5 * MIN)
-    h.coord.handleData({ sessionId: 's1', data: 'still working' }) // 활동 재개
-    await advanceIo(11 * MIN)
-    expect(h.written).toEqual([])
-  })
-
-  it('권한 요청 Notification은 nudge하지 않는다 — 선택지에 텍스트를 밀어 넣지 않는다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', {
-      hook_event_name: 'Notification',
-      message: 'Claude needs your permission to use Bash'
-    })
-    await vi.advanceTimersByTimeAsync(11 * MIN)
-    expect(h.written).toEqual([])
-  })
-
-  it('nudge 직후의 echo는 스톨 상태를 지우지 않는다 — 재nudge 루프 방지', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(10 * MIN) // 1회차 nudge 발화 (grace 안, advanceIo 이유는 위와 동일)
-    await vi.advanceTimersByTimeAsync(200) // Enter(150ms 페이크 타이머)까지만 — 위 첫 테스트와 동일 이유
-    const afterFirst = h.written.length
-    // nudge가 쓴 프롬프트가 PTY echo로 되돌아오는 것을 재현 (grace 창 안)
-    h.coord.handleData({ sessionId: 's1', data: '이어서 작업 진행해 줘' })
-    await advanceIo(11 * MIN)
-    // echo로 상태가 지워졌다면 여기서 2회차 nudge가 나간다 — 나가면 안 된다
-    expect(h.written.length).toBe(afterFirst)
-    expect(h.sent.filter((s) => s.payload.state === 'stalled').length).toBe(1)
-  })
-
-  it('grace 창을 지난 실제 응답은 스톨을 해제해 다음 스톨에서 다시 nudge할 수 있다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(11 * MIN) // 1회차 nudge (advanceIo 이유는 위와 동일)
-    const afterFirst = h.written.length
-    await advanceIo(5_000) // NUDGE_ECHO_GRACE_MS 경과
-    h.coord.handleData({ sessionId: 's1', data: 'Claude가 실제로 응답을 시작한 출력' })
-    h.coord.onHookEvent('s1', idleHook) // 새 스톨
-    await advanceIo(11 * MIN)
-    expect(h.written.length).toBeGreaterThan(afterFirst) // 2회차 nudge가 나가야 한다
-  })
-
-  it('스톨이 이어지는 동안 Notification이 반복돼도 nudge 시각을 미루지 않는다', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(5 * MIN)
-    h.coord.onHookEvent('s1', idleHook) // 같은 스톨의 반복 알림 — 시계를 되돌리면 안 된다
-    await advanceIo(5 * MIN + 30_000)
-    expect(h.written.length).toBeGreaterThan(0) // 첫 알림 기준 10분이 지났으므로 nudge가 나가야 한다
-  })
-
-  // 한도 증거 게이트. idle_prompt Notification은 "턴이 정상 종료되고 사용자 차례"에도 발화하므로
-  // (core/hooks/notification.ts), 이 게이트가 없으면 자리를 비운 정상 세션이 프롬프트를 받는다 —
-  // 실제로 관측된 사고다(한도 감지 기록이 전혀 없는 세션에서 nudge 발화).
-  it('사용률이 한도 임계 미달이면 정지가 이어져도 nudge하지 않는다 — 한도 증거 없음', async () => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(30)) // 30% — 한도로 막힌 세션이 아니다
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
-  })
-
-  // 이 테스트는 종전에 **idle nudge 가** 멈춘 세션을 되살리는 것을 검사했다(롤이 중단되면 체인이
-  // 대기도 아니고 롤링도 아닌 상태로 남았으므로 틱이 그 체인을 계속 봤다). 중단이 이제 재시도를
-  // 예약하므로 그 전제가 사라졌다 — 대기가 걸린 체인은 틱이 건너뛰고(waitTimer 가드), 그와 함께
-  // 감지·폴백·nudge 가 모두 멈춘다. 되살리는 것은 이제 nudge 가 아니라 그 예약된 재시도다.
-  //
-  // 그래서 검사 대상을 그 우선순위로 바꾼다: 대기 중에는 아무것도 세션에 쓰지 않고(nudge 가
-  // 끼어들면 예약된 재시도와 두 번 개입한다), 예약된 시각에 재개 문장이 들어간다. 종전 기대값과
-  // 같은 문장이 같은 세션에 들어가는 것이고, 다른 것은 그것을 넣는 경로와 시각이다.
-  it('롤이 실패해 멈춘 세션은 예약된 재시도가 되살린다 — 대기 중에는 nudge하지 않는다', async () => {
-    // probeActivity·readPending 오버라이드가 없다: 대기의 억제는 **틱 자체**에서 걸려
-    // (tick 의 waitTimer 가드) idleNudgeCheck 가 아예 호출되지 않으므로, nudge 의 전제 조건을
-    // 차려 놓아도 이 테스트에서는 아무것도 달라지지 않는다.
-    const h = harness({
-      // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(claudeCoordinator.ts 의 rescheduleAbortedRoll)
-      getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null)
-    })
-    h.payloads.set('s1', payload(30)) // 스냅샷은 게이트 미달 — 차단 기록만이 증거다
-    h.coord.register(h.info1)
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await flush()
-    expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
-    const retryAt = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
-    expect(retryAt).toBeGreaterThan(Date.now())
-    h.coord.onHookEvent('s1', idleHook)
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([]) // 대기 중 — nudge 가 끼어들지 않는다
-    await advanceIo(retryAt - Date.now() + 1_000) // 예약된 시각
-    await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
-    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
-    expect(h.events).toEqual([]) // 같은 계정이므로 kill·spawn 없이 제자리 재개다
-  })
-
-  // `limitEvidence` 의 분기 ①(현재 계정에 차단 기록이 있으면 사용률이 낮아도 nudge 한다)을 위한
-  // 테스트. 위의 테스트가 종전에 이 분기를 덮고 있었고, 중단이 재시도를 예약하게 되면서 그 경로로는
-  // 더 이상 이 상태에 닿을 수 없다 — 그래서 **살아 있는 생산자**로 다시 덮는다.
-  //
-  // 살아 있는 생산자는 이것이다: `roll()` 은 `chain.recovery` 를 지우지 않고, healthy 타이머는
-  // **현재 칸만** 지운다(다른 계정의 기록은 남긴다). 그래서 기록이 남은 계정으로 되돌아오면 그 기록이
-  // 현재 칸의 기록이 된다. 그 뒤 자동 프롬프트가 120초 만료로 'stalled' 로 끝나면 — 그 경로는
-  // awaitingReady 만 풀고 프롬프트를 보내지 않으므로 **healthy 타이머가 걸리지 않는다** — 기록은
-  // 지워지지 않은 채 체인이 다시 틱 대상이 된다. 스냅숏은 없으니(분기 ②는 false) nudge 를 내는 것은
-  // 분기 ① 하나뿐이고, 관측되는 결과는 살아 있는 PTY 로 나가는 재개 문장이다.
-  it('되돌아온 계정에 차단 기록이 남아 있으면 사용률 근거 없이도 nudge한다', async () => {
+  // 다른 조건 — 현재 계정에 차단 기록이 남아 있다 — 도 근거가 되지 않는다. 그 기록을 남기는 살아 있는
+  // 생산자는 이것이다: `roll()` 은 `chain.recovery` 를 지우지 않고, 건강 선언은 **현재 칸만** 지운다.
+  // 그래서 기록이 남은 계정으로 되돌아오면 그 기록이 현재 칸의 기록이 된다. 그 뒤 자동 프롬프트가
+  // 120초 만료로 'stalled' 로 끝나면 — 프롬프트도 건강 선언도 없다 — 기록이 지워지지 않은 채 쉰다.
+  it('되돌아온 계정에 차단 기록이 남아 있어도, 쉬는 세션에 이어서 하라고 보내지 않는다', async () => {
     const T0 = Date.UTC(2026, 7, 3, 0, 0)
     vi.setSystemTime(new Date(T0))
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN), // 서브에이전트 활동 없음
-      readPending: () => Promise.resolve(null)
-    })
+    const h = harness()
     const twoAccounts = { ...h.info1, rollAccountIds: ['a1', 'a2'] }
     // a1 의 차단은 2분 뒤 풀린다 — 그래야 아래에서 a1 으로 되돌아올 수 있다
     h.payloads.set('s1', payloadReset(97, Math.floor((T0 + 2 * MIN) / 1000)))
-    h.payloads.set('s2', payloadEx({ five: 20 })) // a2 는 멀쩡하다 → 자동 프롬프트가 정상 발화해 healthy 타이머를 건다
+    h.payloads.set('s2', payloadEx({ five: 20 })) // a2 는 멀쩡하다 → 자동 프롬프트가 정상 발화해 건강 선언을 건다
     h.coord.register(twoAccounts)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advanceIo(3 * MIN) // a1 → a2 롤 + healthy 타이머(60초)로 recovery[a2] 정리. recovery[a1] 은 남는다
+    await advanceIo(3 * MIN) // a1 → a2 롤 + 60초 뒤 recovery[a2] 정리. recovery[a1] 은 남는다
     expect(h.spawned.at(-1)?.accountId).toBe('a2')
     // a2 도 한도에 걸린다 → a1 의 차단은 이미 풀렸으므로 a1 으로 되돌아간다
     h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
@@ -1630,20 +1336,69 @@ describe('idle nudge', () => {
     expect(h.spawned.at(-1)?.accountId).toBe('a1') // 기록이 남아 있는 칸으로 돌아왔다
     const liveId = h.spawned.at(-1)!.id
     // 자동 프롬프트를 30초 폴백에서 붙잡아 둔다(화면에 인식 못한 대화상자가 떠 있는 모양) → 120초
-    // 만료가 'stalled' 로 끝나고 프롬프트도 healthy 타이머도 없다. s3 의 statusLine 은 주지 않으므로
-    // lastUsagePct 는 null 로 남는다 — 분기 ② 는 성립하지 않는다.
+    // 만료가 'stalled' 로 끝나고 프롬프트도 건강 선언도 없다
     h.coord.handleData({ sessionId: liveId, data: WAIT_DIALOG })
     await advanceIo(2 * MIN + 10_000)
     expect(h.sent.at(-1)?.payload.state).toBe('stalled')
     expect(h.written.filter((w) => w.id === liveId)).toEqual([]) // 자동 프롬프트는 나가지 않았다
-    // 이제 정지가 이어진다 → 근거는 남은 차단 기록 하나뿐이다
-    h.coord.onHookEvent(liveId, idleHook)
+    // 이제 쉰다 — 근거라고는 남은 차단 기록 하나뿐이다
+    for (let i = 0; i < 3; i++) await advanceIo(10 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written.filter((w) => w.id === liveId)).toEqual([])
+  })
+
+  // 감지한 한도 뒤의 정상 경로는 그대로다: 롤이 중단되면 재시도를 예약하고, 대기 중에는 아무것도
+  // 세션에 쓰지 않다가(대기가 걸린 체인은 틱이 건너뛴다) 예약된 시각에 재개 문장이 들어간다.
+  it('롤이 실패해 멈춘 세션은 예약된 재시도가 되살린다 — 대기 중에는 아무것도 쓰지 않는다', async () => {
+    const h = harness({
+      // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(claudeCoordinator.ts 의 rescheduleAbortedRoll)
+      getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null)
+    })
+    h.payloads.set('s1', payload(30)) // 스냅샷은 게이트 미달 — 감지한 것은 문구다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
+    const retryAt = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    expect(retryAt).toBeGreaterThan(Date.now())
     await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([]) // 대기 중
+    await advanceIo(retryAt - Date.now() + 1_000) // 예약된 시각
     await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
-    expect(h.written.filter((w) => w.id === liveId).map((w) => w.data)).toEqual([
-      '이어서 작업 진행해 줘',
-      '\r'
-    ])
+    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
+    expect(h.events).toEqual([]) // 같은 계정이므로 kill·spawn 없이 제자리 재개다
+  })
+})
+
+// Dispatch 가 닫힌 워커 세션(unregister). 세션은 살아 있고 체인만 버린다 — 그 전에 걸어 둔 대기가 끝나도
+// 재개 문장이 들어가면 안 된다. 둘째 테스트가 짝이다: 같은 차림에서 체인이 살아 있으면 문장이 들어간다.
+describe('unregister — 체인을 버린 세션에는 쓰지 않는다', () => {
+  const MIN = 60_000
+  const waiting = (h: ReturnType<typeof harness>): void => {
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+  }
+
+  it('unregister한 세션은 걸어 둔 대기가 끝나도 재개 문장을 받지 않는다', async () => {
+    const h = harness()
+    waiting(h)
+    await flush()
+    expect(lastWaiting(h.sent)).toBeDefined()
+    h.coord.unregister('s1') // Dispatch 가 닫혔다 — 세션은 살아 있다
+    await vi.advanceTimersByTimeAsync(12 * MIN)
+    expect(h.written).toEqual([])
+    expect(h.events).toEqual([])
+  })
+
+  it('unregister는 등록되지 않은 id에 무해하다 — 다른 체인도 건드리지 않는다', async () => {
+    const h = harness()
+    waiting(h)
+    await flush()
+    expect(() => h.coord.unregister('s-nope')).not.toThrow()
+    await vi.advanceTimersByTimeAsync(12 * MIN)
+    expect(h.written.filter((w) => w.id === 's1' && w.data === RESUME_PROMPT)).toHaveLength(1)
   })
 })
 
@@ -1660,8 +1415,7 @@ describe('roll() disposed 가드', () => {
       copy: () => {
         copied = true
         return copyPromise
-      },
-      probeActivity: () => Promise.resolve(null) // 무출력 폴백 회피
+      }
     })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)
@@ -2390,7 +2144,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     // tickChain이 limitTailCheck를 await하는데 더미 transcript 경로의 open() 실패에도 실제 fs I/O
     // 완료 콜백이 필요하다 — 순수 fake-timer 진행으로는 돌지 않는다(advanceIo 주석 참조).
     await advanceIo(46_000)
-    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
     expect(calls).toBe(0)
   })
 
@@ -2399,12 +2153,14 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
   // statusLine 은 세션이 입력 대기에서 멈추는 순간 갱신을 멈추고, 그 전 값에 얼어붙는다. 폴백은
   // 바로 그 얼어붙은 값을 읽고 "아직 여유 있다"고 판단했다. 문구 경로는 배너가 없어서, 트랜스크립트
   // 경로는 기록이 안 남아서 각각 실패했으니, 세 그물이 모두 같은 죽은 정보를 보고 있었다.
-  it('statusLine 이 얼어붙어도 계정이 100% 라고 하면 롤링한다', async () => {
+  // 그 그물은 남긴다 — 다만 표시만 한다. 사용률만 본 판단이라 계정을 바꾸지도 '이어서' 를 치지도 않는다.
+  it('statusLine 이 얼어붙어도 계정이 100% 라고 하면 한도를 표시한다 — 롤하지 않는다', async () => {
     const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
     h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 })) // 한도에 걸리기 전 값에 멈춰 있다
     h.coord.register(h.info1)
     await advanceIo(46_000)
-    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
+    expect(h.events).toEqual([])
   })
 
   // 돌고 있는 세션은 묻지 않는다 — 조회는 네트워크 왕복이고, 출력이 흐르는 동안 statusLine 은
@@ -2426,22 +2182,67 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
 
   // 문구가 없으면 파싱할 시각도 없고, 스냅샷은 문턱(GATE_PCT) 아래라 후보가 아니다. 그때 남는
   // 유일한 시각이 계정이 알려 준 것이다 — 없으면 대기가 실제 리셋이 아니라 기본 간격을 겨냥한다.
-  it('계정이 알려 준 리셋 시각으로 기다린다 — 문구도 스냅샷도 없을 때', async () => {
+  it('계정이 알려 준 리셋 시각까지 표시한다 — 문구도 스냅샷도 없을 때, 그 뒤에도 치지 않는다', async () => {
     vi.setSystemTime(new Date(Date.UTC(2026, 7, 30, 0, 0)))
     const resetsAt = new Date(Date.UTC(2026, 7, 30, 2, 0)).toISOString() // 2시간 뒤
     const h = harness({ readUsage: () => Promise.resolve(peak(100, resetsAt, false)) })
     h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 }))
-    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] }) // 단일 계정 — 롤 대신 대기
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
     await advanceIo(46_000)
-    expect(resumeCount(h)).toBe(0)
+    // 기본 간격(15분)이 아니라 계정이 준 시각이 배너에 실린다
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true, nextRetryAt: resetsAt })
+    await advanceIo(30 * 60_000)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 아직 그 시각 전이다
+    await advanceIo(100 * 60_000) // 2시간을 넘긴다
+    expect(h.sent.at(-1)?.payload.state).toBe('none') // 배너는 내려간다
+    expect(h.written).toEqual([]) // 아무것도 치지 않는다
+  })
 
-    // 30분: 기본 대기 간격(15분)을 썼다면 여기서 이미 재개했다. 계정이 준 시각을 썼다는 증거가
-    // 이 0 이다 — 이 줄이 이 테스트의 판별력 전부다.
-    await vi.advanceTimersByTimeAsync(30 * 60_000)
-    expect(resumeCount(h)).toBe(0)
+  // 표시는 한 번 쉬는 동안 한 번이다. 상태줄은 세션이 쉬는 동안 갱신되지 않아 100% 에 얼어 있으므로,
+  // 시각이 지나 배너가 내려간 뒤에도 같은 값으로 다시 띄우면 쉬는 세션에 배너가 끝없이 돌아온다.
+  it('표시가 시각으로 끝난 뒤에는 세션이 다시 말할 때까지 다시 띄우지 않는다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() }))
+    h.coord.register(h.info1)
+    await advanceIo(46_000)
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
+    for (let i = 0; i < 4; i++) await advanceIo(10 * MIN) // 초기화가 지나고도 한참 — 상태줄은 100% 그대로
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toHaveLength(1)
+    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    expect(h.written).toEqual([])
+  })
 
-    await vi.advanceTimersByTimeAsync(100 * 60_000) // 2시간을 넘긴다
-    expect(resumeCount(h)).toBeGreaterThan(0)
+  // 세션이 말하면(출력) 막힌 것이 아니다 — 배너를 내린다. 다시 조용해지면 다시 판단한다.
+  it('표시 중에 세션이 말하면 배너를 내리고, 다시 조용해지면 다시 판단한다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 60 * MIN).toISOString() }))
+    h.coord.register(h.info1)
+    await advanceIo(46_000)
+    expect(h.sent.at(-1)?.payload).toMatchObject({ state: 'waiting', manual: true })
+    h.coord.handleData({ sessionId: 's1', data: 'working on it' })
+    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    await advanceIo(46_000) // 다시 30초 넘게 조용하다
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toHaveLength(2)
+    expect(h.events).toEqual([])
+    expect(h.written).toEqual([])
+  })
+
+  // 표시 중에 진짜 한도(화면 문구)가 오면 그쪽이 이긴다: 감지한 한도이므로 대기하고, 풀린 뒤 이어서 친다.
+  it('표시 중에 화면 문구로 한도를 감지하면 진짜 대기로 바뀌고, 풀린 뒤 이어서를 친다', async () => {
+    const h = harness()
+    const resetAt = Date.now() + 10 * MIN
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(resetAt).toISOString() }))
+    h.coord.register(infoSelf())
+    await advanceIo(46_000)
+    expect(lastWaiting(h.sent)).toMatchObject({ manual: true })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    const real = lastWaiting(h.sent)
+    expect(real).toBeDefined()
+    expect(real?.manual).toBeUndefined()
+    await advanceIo(resetAt - Date.now() + 2 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(resumeCount(h)).toBe(1)
   })
 })
 
@@ -2507,34 +2308,28 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
     expect(h.events.slice(before)).toEqual(['copy', 'kill:s2', 'spawn:s3:a1'])
   })
 
+  // 자기 체인의 기록은 스냅숏의 recovery 로 본다 — 끝의 'a settle while quiet declares no health' 의 짝이다
+  // (그쪽은 조용한 체인이 기록을 남기는 것을, 이쪽은 일하는 체인이 지우는 것을 본다).
   it('제자리 재개 60초 뒤 차단 기록이 해제된다 — 롤 경로와 같은 정리', async () => {
-    // idleNudgeCheck가 실제 fs를 stat하는데 fake timer 아래서는 그 완료 콜백이 돌지 않는다
-    const h = harness({ probeActivity: () => Promise.resolve(null) })
-    h.payloads.set(
-      's1',
-      payloadEx({ five: 95, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() })
-    )
+    vi.setSystemTime(new Date(Date.UTC(2026, 7, 3, 0, 0))) // 09:00 KST — 문구의 11am 은 같은 날 두 시간 뒤
+    const snaps: RollSnapshot[] = []
+    const h = harness({ snapshot: (_id, s) => snaps.push(s) })
+    h.payloads.set('s1', payload(20))
     h.coord.register(infoSelf())
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    h.coord.handleData({ sessionId: 's1', data: limitWithReset('session', '11am') })
     await flush()
-    await vi.advanceTimersByTimeAsync(11 * MIN + 30_000)
-    const sentBefore = h.sent.length
-    // 스냅샷 사용률을 낮춰 증거원을 차단 기록 하나로 좁힌다 — 그러지 않으면 lastUsagePct(95%)만으로
-    // limitEvidence()가 참이 되어 기록 해제 여부와 무관하게 nudge가 뜬다.
-    h.payloads.set('s1', payloadEx({ five: 20, weekly: 20 }))
-    // 기록이 남아 있으면 limitEvidence()가 계속 true라 idle nudge가 무장 상태로 고정된다.
-    // 해제되면 "한도 흔적 없음"으로 판정돼 개입하지 않는다.
-    await vi.advanceTimersByTimeAsync(70_000)
-    h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
-    await vi.advanceTimersByTimeAsync(11 * MIN)
-    expect(h.sent.slice(sentBefore).some((s) => s.payload.state === 'nudged')).toBe(false)
+    const retryAt = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(retryAt - Date.now() + 1_000) // 제자리 재개
+    expect(h.written.filter((w) => w.id === 's1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    expect(snaps.at(-1)?.recovery[0]).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(61_000) // settleInPlace: 메타가 돌아왔다 → 건강 선언
+    expect(snaps.at(-1)?.recovery[0]).toBeNull()
   })
 
   // 네 지우는 자리 중 **제자리 재개 쪽**을 못박는다. 위 테스트는 자기 체인의 기록만 보므로 그 한 줄을
   // 지워도 통과한다 — 공유 기록까지 함께 풀리는지는 다른 체인이 적은 기록으로만 볼 수 있다.
   it('제자리 재개 60초 뒤 다른 체인이 적은 공유 기록도 함께 풀린다 (오탐 안전 밸브)', async () => {
-    // resetAnchorCheck(단일 계정 3-b)가 실제 fs를 stat한다 — fake timer 아래서 그 완료 콜백은 안 돈다
-    const h = harness({ probeActivity: () => Promise.resolve(null) })
+    const h = harness()
     const t0 = Date.now()
     // 체인 1: 단일 계정 a1, reset은 2분 뒤 → 판정 시점의 계획은 3분 뒤 제자리 재개다
     h.payloads.set('s1', payloadEx({ five: 95, weekly: 20, fiveReset: new Date(t0 + 2 * MIN).toISOString() }))
@@ -2626,42 +2421,6 @@ describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로
     expect(h0.forms).toEqual(['update'])
     expect(h.spawned).toEqual([]) // 죽이지도 다시 띄우지도 않는다
     // update 는 **덧붙임**이다 — 사용자가 지정할 수 있는 chain.prompt 를 버리지 않는다
-    expect(h.written[0]?.data).toBe(
-      '이어서 작업 진행해 줘 While you waited the worktree did not move.'
-    )
-  })
-
-  it('idle nudge 도 update 를 묻는다 — 세션이 살아 있다', async () => {
-    const h0 = hook('While you waited the worktree did not move.')
-    const h = harness({
-      resumeText: h0.fn,
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h0.forms).toEqual(['update'])
-    expect(h.written[0]?.data).toBe(
-      '이어서 작업 진행해 줘 While you waited the worktree did not move.'
-    )
-  })
-
-  it('리셋 앵커 재개도 update 를 묻는다 — 세션이 살아 있다', async () => {
-    const start = Date.now()
-    const resetSec = Math.floor(start / 1000) + 600
-    const h0 = hook('While you waited the worktree did not move.')
-    const h = harness({
-      resumeText: h0.fn,
-      probeActivity: () => Promise.resolve(start - 60_000),
-      readPending: () => Promise.resolve(1)
-    })
-    h.payloads.set('s1', payloadReset(95, resetSec))
-    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
-    await vi.advanceTimersByTimeAsync(15 * MIN + 200)
-    expect(h0.forms).toEqual(['update'])
     expect(h.written[0]?.data).toBe(
       '이어서 작업 진행해 줘 While you waited the worktree did not move.'
     )
@@ -2882,7 +2641,7 @@ describe('중단된 롤이 다음 시도를 예약한다', () => {
 // 제자리 재개가 실제로 턴을 시작했는지 판정하는 자리. 여기서 판정을 하지 않으면 — 실측(2026-08-27):
 // 세션 메타를 못 배운 단일 계정이 대기 뒤 제자리 재개를 하고, 60초 뒤 healthyTimer 가 무조건
 // "건강하다"를 선언한 다음, **45분 동안 아무 일도 일어나지 않았다**. limitTail 이 없어 ①이 죽고,
-// 페이로드가 없어 fallback 트리거가 죽고, Notification 이 없어 idle nudge 도 뜨지 않는다.
+// 페이로드가 없어 fallback 트리거가 죽는다.
 // 메타를 배운 경우는 얼어붙은 페이로드가 fallback 을 다시 살려 스스로 복구되므로(실측) 여기서
 // 묻는 것은 "그동안 메타가 도착했는가" 하나다.
 describe('제자리 재개의 정착 판정', () => {
@@ -3397,8 +3156,7 @@ describe('chat chains', () => {
   })
 
   // Ruling 4c-7 (spec §8.1's utilization clause). A chat session writes no statusLine, so the number
-  // the replay grace, the limit-evidence gate and the single-account blind-spot check all read can only
-  // arrive on the rateLimit event. Without it the grace is unconditional for the whole 60 seconds after
+  // the replay grace reads can only arrive on the rateLimit event. Without it the grace is unconditional for the whole 60 seconds after
   // a roll, and switching onto an account that is already exhausted is met with silence.
   it('a rateLimit records the usage figure, so an exhausted account is not shielded by the replay grace', async () => {
     const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
@@ -4216,68 +3974,5 @@ describe('a held roll (S6 Task 9, fix round 1)', () => {
     may = false
     await vi.advanceTimersByTimeAsync(61_000) // settleInPlace: the metadata is there, so it would declare health
     expect(snaps.at(-1)?.recovery[0]).not.toBeNull()
-  })
-})
-
-describe('the idle nudge while quiet (S6 Task 9, fix round 1)', () => {
-  const MIN = 60_000
-  const nudgeRig = (over: Partial<RollingDeps>) => {
-    const h = harness({
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null),
-      ...over
-    })
-    h.payloads.set('s1', payload(95))
-    h.coord.register(h.info1)
-    h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
-    return h
-  }
-
-  // Each gate is tested on its own by opening or closing the gate between two of them: a chain quiet
-  // throughout is stopped by whichever gate comes first, and would prove nothing about the others.
-  it('types nothing when quiet at the tick, even if the gate opens during the activity probe', async () => {
-    let may = false
-    const h = nudgeRig({
-      mayAct: () => may,
-      probeActivity: () => {
-        may = true
-        return Promise.resolve(Date.now() - 20 * MIN)
-      }
-    })
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
-  })
-
-  it('types nothing when the chain turns quiet during the activity probe', async () => {
-    let may = true
-    const h = nudgeRig({
-      mayAct: () => may,
-      probeActivity: () => {
-        may = false
-        return Promise.resolve(Date.now() - 20 * MIN)
-      },
-      resumeText: () => {
-        may = true // open again before the last gate, so only the one after the probe can stop it
-        return Promise.resolve(null)
-      }
-    })
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
-  })
-
-  it('types nothing when the chain turns quiet while the prompt is built', async () => {
-    let may = true
-    const h = nudgeRig({
-      mayAct: () => may,
-      resumeText: () => {
-        may = false
-        return Promise.resolve(null)
-      }
-    })
-    await advanceIo(11 * MIN)
-    await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
   })
 })

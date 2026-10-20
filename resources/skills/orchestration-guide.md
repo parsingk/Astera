@@ -985,6 +985,9 @@ meaningless and repeats the same failure indefinitely.
   (section 11).
 - Do not resolve a `check-unavailable` Gate yourself: `retry`, `skip-check` and `mark-failed` are a person's call
   (section 11).
+- Do not resolve a GitHub Gate (`kind: "github-*"`) yourself: going on without CI (`no-ci`), bringing commits someone
+  else pushed into the Run's branch (`continue`) and which pull request to bind (`pr-<n>`) are a person's call
+  (section 11).
 - Do not `sessions send` without a `sessions read` right before it. The text answers whatever prompt
   the other session shows, a folder-trust or first-run screen included (12.3).
 - Do not send anything again after exit `3` or `7`. Follow `nextSteps` in its order (4.10): after a
@@ -1077,6 +1080,11 @@ run-create --objective <s> --convergence [--max-fix-attempts <n>] [--max-review-
   `options: ["retry", "skip-check", "mark-failed"]`, on any Run, convergence or not. No repair is sent and none is
   spent. **This is a person's decision, not yours:** `skip-check` lets the Task complete without a check the person
   asked for. Do not call `gate-resolve` on it yourself.
+- **A GitHub lifecycle round stopped.** Where Astera stops a Run it carries through GitHub, the lifecycle Task waits on a
+  Gate whose `kind` starts with `github-` (no CI on the pushed head, the wait cap, a head Astera did not push, several
+  open pull requests, a closed pull request, a CI failure outside the code, a round that could not be taken to GitHub).
+  Its `options` act on the round: `wait`, `no-ci`, `continue`, `retry`, `rerun`, `pr-<n>` and `mark-failed`. **This is a person's decision, not yours.** Do not call
+  `gate-resolve` on it yourself.
 
 **What is refused while a Task is converging, and why.** A repair keeps the Task on the same worker on
 purpose — close that session now and the next one starts fresh, having forgotten what it just tried —

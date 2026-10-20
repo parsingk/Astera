@@ -8,7 +8,17 @@ export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 're
 export type Outcome = 'succeeded' | 'failed'
 export type MessageType = 'status' | 'worker_done' | 'question' | 'escalation' | 'heartbeat' | 'decision_gate'
 export type RepairReason = 'check-failure' | 'review-failure'
-export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable'
+export type GateKind =
+  | 'convergence-exhausted'
+  | 'convergence-blocked'
+  | 'check-unavailable'
+  | 'github-no-ci'
+  | 'github-ci-cap'
+  | 'github-external-head'
+  | 'github-pr-ambiguous'
+  | 'github-pr-closed'
+  | 'github-ci-outside'
+  | 'github-carry'
 export type ReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 /** When a scheduled Job fires again. */
@@ -57,6 +67,108 @@ export interface JobSource {
   /** The item's title, as the app names the Job: someone else's text, at most 300 characters. */
   readonly title?: string
   readonly url?: string
+  /** A GitHub issue's body hash and update time when the Job was made (Astera 1.4.15 and later): Astera compares them
+   *  to notice an edit after the Job began. */
+  readonly capturedBodyHash?: string
+  readonly capturedUpdatedAt?: string
+}
+
+/** A Job's GitHub lifecycle policy (Astera 1.4.15 and later): which CI checks decide a pull request's head, and the
+ *  bounds of reruns and waits. Its presence means Astera may push, open a PR and rerun CI on the Job's branches. */
+export interface GitHubLifecyclePolicy {
+  readonly ci: { readonly mode: 'required' | 'selected'; readonly selectedChecks?: readonly string[] }
+  readonly autoRerunInfrastructureFailures: boolean
+  readonly maxInfrastructureReruns: number
+  readonly ciWaitMinutes: number
+}
+
+/** Where a GitHub lifecycle Run's pull request stands, or, while the Run's lifecycle Task works, where that Task stands
+ *  (Astera 1.4.15 and later). */
+export type GitHubLifecycleState =
+  | 'unbound'
+  | 'pr-bound'
+  | 'ci-pending'
+  | 'ci-passed'
+  | 'ci-failed'
+  | 'pr-merged'
+  | 'pr-closed'
+  | 'external-state-unavailable'
+  | 'pr-ready'
+  | 'awaiting-push'
+  | 'repairing'
+  | 'reviewing'
+  | 'waiting-for-user'
+  | 'exhausted'
+  | 'ci-infrastructure-failure'
+  | 'merge-ready'
+
+/** Why merge-ready was withheld by the review's verdict or withdrawn by a later read (Astera 1.4.15 and later). */
+export type GitHubInvalidatedReason =
+  | 'not-bound'
+  | 'external-state-unavailable'
+  | 'pr-not-open'
+  | 'head-not-pushed'
+  | 'review-of-another-head'
+  | 'ci-not-passed'
+  | 'question-open'
+  | 'local-check-failed'
+  | 'local-check-skipped'
+  | 'closed'
+  | 'merged'
+  | 'head-changed'
+  | 'base-changed'
+  | 'ci-failed'
+  | 'checks-changed'
+
+/** A GitHub lifecycle Run's pull request and CI, as Astera last read them. */
+export interface GitHubLifecycle {
+  readonly state: GitHubLifecycleState
+  readonly pr?: {
+    readonly number: number
+    readonly url: string
+    readonly isDraft: boolean
+    readonly state: 'open' | 'closed' | 'merged'
+    readonly mergeStateStatus?: string
+    /** GitHub's own review decision (APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED); shown, never Astera's verdict. */
+    readonly reviewDecision?: string
+  }
+  /** The PR's head commit. */
+  readonly headSha?: string
+  readonly ci?: {
+    /** The commit these checks belong to. */
+    readonly sha: string
+    /** Which checks decide: the required ones, every reported one (no required checks), or the Job's selection. */
+    readonly basis: 'required' | 'all-reported' | 'selected'
+    readonly verdict: 'pending' | 'passed' | 'failed' | 'none'
+    readonly checks: readonly { readonly name: string; readonly status: 'queued' | 'in-progress' | 'completed'; readonly conclusion?: string; readonly required: boolean }[]
+  }
+  /** The check that failed first; `class` (test, build, lint, typecheck, infrastructure, ...) and `summary` say why, as
+   *  Astera classified it. */
+  readonly failing?: { readonly check: string; readonly class?: string; readonly summary?: string; readonly detailsUrl?: string }
+  readonly candidates?: readonly number[]
+  readonly sourceChanged?: true
+  /** Merge-ready while it holds: the head Astera's review found ready, when, and `ciOverride: 'no-ci'` when a person chose
+   *  to go on without CI. */
+  readonly mergeReady?: { readonly headSha: string; readonly evaluatedAt: string; readonly ciOverride?: 'no-ci' }
+  /** Why merge-ready was withheld by the review's verdict or withdrawn since (`GitHubInvalidatedReason`). */
+  readonly invalidated?: { readonly reason: GitHubInvalidatedReason; readonly at: string }
+  /** The commit Astera last pushed. */
+  readonly pushedSha?: string
+  /** A head on GitHub Astera did not push, until Astera pushes again. */
+  readonly externalHead?: { readonly sha?: string; readonly at: string }
+  /** The pull request's base as bound, and when it was bound again after the pull request was retargeted. */
+  readonly base?: { readonly branch: string; readonly reboundAt?: string }
+  /** The lifecycle Task's repair attempt against the Job's budget, once it has repaired, and while a repair runs what it
+   *  repairs: GitHub CI (its failing check), a local check the last round failed, or the review's findings. */
+  readonly repair?: {
+    readonly attempt: number
+    readonly max: number
+    readonly subject?: { readonly kind: 'ci'; readonly check?: string } | { readonly kind: 'local'; readonly check: string } | { readonly kind: 'review' }
+  }
+  /** A person chose to go on without CI for the head. */
+  readonly noCi?: true
+  /** Where Astera's review of the lifecycle Task stands: running, passed, or the blocking issues the last review found. */
+  readonly review?: { readonly state: 'running' } | { readonly state: 'passed' } | { readonly state: 'found-issues'; readonly blocking: number }
 }
 
 export interface Job {
@@ -76,6 +188,8 @@ export interface Job {
   /** Where the Job came from: a job source and its item, set by Astera when it made the Job from that item (Astera
    *  1.4.14 and later). */
   readonly source?: JobSource
+  /** The GitHub lifecycle policy, when the Job carries its work through a pull request and GitHub CI. */
+  readonly github?: GitHubLifecyclePolicy
   /** Derived on every read: how the Job's latest Run (or the Job itself before one) stands. */
   readonly outcome: JobOutcome
   readonly progress: Progress
@@ -99,6 +213,8 @@ export interface Run {
   readonly questionsOpen: number
   /** `runs.get` only, and only above zero: Tasks whose worker shows a permission prompt. */
   readonly waitingForApproval?: number
+  /** A GitHub lifecycle Job's Run only: its pull request and CI, derived on every read. */
+  readonly github?: GitHubLifecycle
 }
 
 /** `jobs.get`: the Job, with the Run it names or its latest folded in. */
@@ -167,6 +283,9 @@ export interface Task {
   /** A person's decision to pass the Task over its checks. */
   readonly completionOverride?: { readonly reason: string; readonly at: string }
   readonly consecutiveFailures: number
+  /** `'lifecycle'`: the Task Astera adds once every other Task of a GitHub lifecycle Run is completed, to carry the
+   *  Run through GitHub (push, draft pull request, CI, repair, review). It has no worker. Absent on every other Task. */
+  readonly kind?: 'lifecycle'
   readonly createdAt: string
   readonly updatedAt: string
   /** `tasks.list({ brief: true })` only: the spec was cut to 160 characters. */
@@ -265,6 +384,7 @@ export interface RunCompletion {
   readonly tasks: readonly TaskCompletion[]
 }
 
+/** A Run's timeline kinds; the `github-*` ones are a GitHub lifecycle Run's steps, from the pull request to merge-ready. */
 export type RunEventKind =
   | 'run-created'
   | 'task-created'
@@ -276,6 +396,16 @@ export type RunEventKind =
   | 'resumed'
   | 'runtime-lost'
   | 'recovery'
+  | 'github-pr-bound'
+  | 'github-pr-created'
+  | 'github-pushed'
+  | 'github-ci-started'
+  | 'github-ci-failed'
+  | 'github-ci-rerun'
+  | 'github-ci-passed'
+  | 'github-merge-ready'
+  | 'github-invalidated'
+  | 'github-source-changed'
 
 /** One event of a Run's timeline, as `runs.follow` yields it. */
 export interface RunEvent {
@@ -333,9 +463,9 @@ export interface ListResult<T> {
   readonly nextCursor?: string
 }
 
-/** What the Host's public event log records (SDK spec §6, and the session events of plugin Phase 3). `run.cancelled`,
- *  `github.*` and `runtime.*` are not produced yet: there is no cancel (a stop pauses), and neither GitHub nor a
- *  Runtime's presence moves the state. */
+/** What the Host's public event log records (SDK spec §6, the session events of plugin Phase 3, and the GitHub
+ *  lifecycle's `github.*` from Astera 1.4.15). `run.cancelled` and `runtime.*` are not produced: there is no cancel (a
+ *  stop pauses), and a Runtime's presence does not move the state. */
 export type EventType =
   | 'job.created'
   | 'job.updated'
@@ -355,6 +485,15 @@ export type EventType =
   | 'session.input_needed'
   | 'session.limit_waiting'
   | 'session.account_switched'
+  | 'github.pr_bound'
+  | 'github.pr_created'
+  | 'github.head_changed'
+  | 'github.ci_passed'
+  | 'github.ci_failed'
+  | 'github.ci_rerun_requested'
+  | 'github.source_changed'
+  | 'github.merge_ready'
+  | 'github.merge_ready_invalidated'
 
 /** The session a session event is about: five of the fields `astera sessions list` shows for it. `title`, `provider`
  *  and `cwd` are absent when the Host does not know them. */
@@ -410,6 +549,15 @@ export interface EventPayloads {
   readonly 'session.input_needed': SessionInputNeeded
   readonly 'session.limit_waiting': SessionLimitWaiting
   readonly 'session.account_switched': SessionAccountSwitched
+  readonly 'github.pr_bound': Run
+  readonly 'github.pr_created': Run
+  readonly 'github.head_changed': Run
+  readonly 'github.ci_passed': Run
+  readonly 'github.ci_failed': Run
+  readonly 'github.ci_rerun_requested': Run
+  readonly 'github.source_changed': Run
+  readonly 'github.merge_ready': Run
+  readonly 'github.merge_ready_invalidated': Run
 }
 
 /** One event. A notification, not the source of truth: read the object again when it matters. Delivered at least

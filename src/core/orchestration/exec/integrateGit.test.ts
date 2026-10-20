@@ -6,6 +6,7 @@ import { WorktreeRegistry } from '../../worktrees/registry'
 import { git, GIT_WRITE_TIMEOUT_MS } from '../../worktrees/git'
 import {
   forkWorktree,
+  integrateLive,
   integrateWorktrees,
   reapWorktree,
   worktreeDeps,
@@ -424,6 +425,31 @@ const statusGit = (by: Record<string, string | null>): typeof git =>
     return out === null || out === undefined ? { ok: false, stdout: '', stderr: 'boom' } : { ok: true, stdout: out, stderr: '' }
   }) as typeof git
 const cleanGit = (async () => ({ ok: true, stdout: '', stderr: '' })) as unknown as typeof git
+// G5c final review C1: a dependency worktree the first lifecycle Task's start merged and reaped is gone when a reconverged
+// one starts with the same deps; handing its path to integrateWorktrees made an agent integration Task that can never
+// merge it. The loop's integrate skips a folder that is gone, as mergeWorktrees does.
+describe('integrateLive', () => {
+  const answers = (by: Record<string, 'present' | 'missing' | 'unknown'>) => async (p: string) => by[p] as never
+  it('skips the folders that are gone and integrates the rest', async () => {
+    const calls: string[][] = []
+    const log = logTo()
+    const r = await integrateLive('D:/root', ['D:/gone', 'D:/alive'], async (_into, paths) => { calls.push(paths); return { kind: 'merged', uncommitted: 0 } }, { log, presence: answers({ 'D:/gone': 'missing', 'D:/alive': 'present' }) })
+    expect(r).toEqual({ kind: 'merged', uncommitted: 0 })
+    expect(calls).toEqual([['D:/alive']])
+    expect(logs.join('\n')).toMatch(/skipping 1 removed worktree/)
+  })
+  it('with every folder gone there is nothing to merge, and git does not run', async () => {
+    const calls: string[][] = []
+    expect(await integrateLive('D:/root', ['D:/gone'], async (_into, paths) => { calls.push(paths); return { kind: 'merged', uncommitted: 0 } }, { log: logTo(), presence: answers({ 'D:/gone': 'missing' }) })).toEqual({ kind: 'merged', uncommitted: 0 })
+    expect(calls).toEqual([])
+  })
+  it('keeps a folder it could not reach: that is not gone', async () => {
+    const calls: string[][] = []
+    await integrateLive('D:/root', ['D:/far'], async (_into, paths) => { calls.push(paths); return { kind: 'merged', uncommitted: 0 } }, { log: logTo(), presence: answers({ 'D:/far': 'unknown' }) })
+    expect(calls).toEqual([['D:/far']])
+  })
+})
+
 describe('worktreeDeps', () => {
   it('mergeWorktrees skips folders already gone, and nothing left is success', async () => {
     const calls: unknown[] = []

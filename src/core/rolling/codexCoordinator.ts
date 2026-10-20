@@ -99,6 +99,9 @@ export interface CodexRollingDeps {
      *  here either, for the same reason claudeCoordinator.ts's own comment gives: the wiring's `spawn` callback
      *  computes it itself from `core.bypassSignalFor`. */
     startWithBypass?: boolean
+    /** Who started the chain (SessionInfo.startedBy), kept by every roll: the respawned session is the same work, so an
+     *  agent's stays an agent's and its tab still closes when it ends. */
+    startedBy?: 'agent'
     /** Extra keys for the new pty's note (S6 R6) — `rolledFrom` and the chain's snapshot on its new
      *  account. The manager merges them into `meta.restore` under its own keys. */
     restoreExtra?: RollRespawnExtra
@@ -835,8 +838,8 @@ export class CodexRollingCoordinator {
     // **It clears to `undefined`, not to null, and the difference is the whole point.** null is a value
     // in this design — "no block on record" — and that is precisely the input that makes a phrase alone
     // sufficient (see priorLimitVerdict's last branch). Clearing to null would therefore mean that one
-    // redrawn phrase after a roll produces a wait *and* writes a block against the freshly switched,
-    // perfectly healthy account into the shared registry, where every other chain then honours it.
+    // redrawn phrase after a roll calls a person about the freshly switched, perfectly healthy account
+    // (it once produced a wait *and* a shared block there — judgedByPriorBlock).
     // `undefined` leaves the verdict unconsulted, which is exactly the previous behaviour of both paths.
     chain.priorReset = undefined
     chain.priorAsked = false
@@ -1062,6 +1065,18 @@ export class CodexRollingCoordinator {
     if (chain.state !== null || chain.priorReset === undefined) return false
     const now = this.now()
     const v = priorLimitVerdict(chain.priorReset, { textHit: chain.textHit }, now)
+    if (v.kind === 'limited' && v.at === null) {
+      // priorLimitVerdict's phrase-only branch — the weakest evidence in the design: no record in the
+      // file, so the screen text is all there is, and the scanner reads the whole redraw, so an agent's
+      // own output, a quoted log or a pasted document carrying a limit-shaped sentence reaches it too. It
+      // is not a detected limit (2026-10-19, the person's decision): nothing waits, rolls or types, and
+      // nothing goes into the shared registry — a person is called. A real limit writes its refused turn
+      // into the file on the next turn, and the ordinary path takes it from there.
+      chain.textHit = false // spent — the next tick must not call again on the same phrase
+      this.deps.log(`codex limit-text with no block on record — a person is called, nothing waits session=${chain.liveId}`)
+      if (this.acts(chain)) this.pushState(chain, 'stalled')
+      return true
+    }
     if (v.kind === 'limited') {
       // recordRecovery cannot be reused here — it reads worstResetAt(chain.state) and that state is
       // null. The verdict already carries the reset, so it is recorded as it stands. Writing it into
@@ -1088,18 +1103,10 @@ export class CodexRollingCoordinator {
       // sitting on it, going straight into a wait — so a wrong reset here holds for its full length,
       // for every chain.
       //
-      // **The reset is recorded only when the file supplied one.** at === null is priorLimitVerdict's
-      // phrase-only branch — the weakest evidence in the design: no record in the file, so the screen
-      // text is all there is, and the scanner reads the whole redraw, so an agent's own output, a quoted
-      // log or a pasted document carrying a limit-shaped sentence reaches it too. Leaving the slot empty
-      // keeps that evidence inside this chain. planRetry reads an empty slot as now + RETRY_FALLBACK_MS,
-      // the very value blockedUntil computes from { at: null, since: now }, so this wait is unchanged —
-      // while onLimit, which broadcasts whatever this slot holds, then has nothing to say and no other
-      // chain is steered off a healthy account by one line of text. The one further effect is wanted
-      // too: with the slot empty, a later pass of this chain does not skip the account either.
+      // The phrase-only branch (at === null) never reaches here — it calls a person above.
       if (v.at !== null)
         chain.recovery[chain.cycle.currentIndex] = { at: v.at, weekly: v.weekly, since: now }
-      chain.textHit = false // spent either way — the next tick must not fire on the same phrase again
+      chain.textHit = false // spent — the next tick must not fire on the same phrase again
       this.onLimit(chain, 'priorBlock')
       return true
     }
@@ -1762,6 +1769,7 @@ export class CodexRollingCoordinator {
         orchEnv: this.deps.orchEnv?.(),
         rollPrompt: chain.liveInfo.rollPrompt,
         startWithBypass: wasBypassed,
+        ...(chain.liveInfo.startedBy ? { startedBy: chain.liveInfo.startedBy } : {}),
         // S6 R6: the new pty is born with what a takeover needs if this process dies before the rekey
         // commits — the claude side's field, same contract. awaitingPrompt is false: the carry-on
         // prompt rides this spawn (argv or first chat turn), so nothing is left to type. The tail starts

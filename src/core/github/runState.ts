@@ -1,0 +1,260 @@
+// How what the Host read of a Run's GitHub side changes the Run's record (GitHub lifecycle G1, design §5.2): what moved
+// is logged once, with a number a public event can follow, and a read that finds nothing new answers null so nothing
+// is written. Pure.
+import {
+  CI_CHECKS_MAX,
+  GITHUB_LINE_KINDS,
+  GITHUB_LOG_MAX,
+  RERUNS_MAX,
+  type GitHubBinding,
+  type GitHubCiSnapshot,
+  type GitHubLogEntry,
+  type GitHubPrFacts,
+  type GitHubInvalidatedReason,
+  type GitHubRerun,
+  type MergeReadyEvidence,
+  type RunGitHubState
+} from './lifecycle'
+
+export interface RunGitHubPatch {
+  /** Kept only when the Run has none yet: a binding is made once (§7). */
+  binding?: GitHubBinding
+  /** null clears. */
+  prCandidates?: number[] | null
+  read?: { headSha: string; pr: GitHubPrFacts; ci: Omit<GitHubCiSnapshot, 'changedAt'> }
+  /** null clears: a read succeeded. */
+  lastReadError?: { kind: string } | null
+  sourceChanged?: true
+  /** The head Astera pushed to the Run's branch (G3b1, design §4.2). It clears `externalHeadChange`. */
+  pushed?: { sha: string }
+  /** A head on GitHub Astera did not push (G3b2): the PR's head, or none for a refused push. */
+  externalHead?: { sha?: string }
+  /** A person chose to go on without CI for this head (G3b2). */
+  noCi?: { sha: string }
+  /** The base the pull request was retargeted to, bound by `runs reconverge` (G6, spec §30): the binding is made once,
+   *  and this is the one part of it that moves, noted in `baseReboundAt`. Not on the wire: parseRunGitHubPatch drops it,
+   *  and only the state function writes it. */
+  rebase?: { baseBranch: string }
+  /** A CI run's failed jobs were rerun (G4). */
+  rerun?: Omit<GitHubRerun, 'at'>
+  /** A rerun about to be asked of gh, written down first (acceptance fixes Task 5); null clears it, after the rerun is
+   *  recorded or refused. */
+  rerunPending?: Omit<GitHubRerun, 'at'> | null
+  /** The review's verdict (G5b): the evidence of merge-ready, or null for a fresh verdict that is not (it clears both
+   *  the evidence and an earlier withdrawal, so the `invalidated` beside it is this verdict's). */
+  mergeReady?: Omit<MergeReadyEvidence, 'evaluatedAt'> | null
+  /** Why merge-ready was withheld or withdrawn (G5b): kept once, not replaced while one stands. A withdrawal with no
+   *  merge-ready standing and no verdict beside it is dropped (G5c). */
+  invalidated?: { reason: GitHubInvalidatedReason }
+}
+
+type NewEntry = Omit<GitHubLogEntry, 'seq' | 'at'>
+
+const sameCi = (a: GitHubCiSnapshot | undefined, b: Omit<GitHubCiSnapshot, 'changedAt'>): boolean =>
+  a !== undefined &&
+  a.sha === b.sha &&
+  a.basis === b.basis &&
+  a.verdict === b.verdict &&
+  a.failing === b.failing &&
+  a.failingUrl === b.failingUrl &&
+  JSON.stringify(a.targetNames) === JSON.stringify(b.targetNames) &&
+  JSON.stringify(a.failure) === JSON.stringify(b.failure) &&
+  JSON.stringify(a.checks) === JSON.stringify(b.checks.slice(0, CI_CHECKS_MAX))
+
+export function nextGitHubState(prev: RunGitHubState | undefined, patch: RunGitHubPatch, now: string): RunGitHubState | null {
+  const base: RunGitHubState = prev ?? { log: [], seq: 0 }
+  const next: RunGitHubState = { ...base }
+  const entries: NewEntry[] = []
+  // The push first: it comes before the pull request it opens, and before what a read of it finds (final review M4)
+  if (patch.pushed && base.lastPushedSha !== patch.pushed.sha) entries.push({ kind: 'pushed', sha: patch.pushed.sha })
+  if (patch.binding && !base.binding) {
+    next.binding = patch.binding
+    delete next.prCandidates
+    entries.push({ kind: patch.binding.createdByAstera ? 'pr-created' : 'pr-bound', pr: patch.binding.number })
+  }
+  if (patch.rebase && next.binding && next.binding.baseBranch !== patch.rebase.baseBranch) {
+    next.binding = { ...next.binding, baseBranch: patch.rebase.baseBranch }
+    next.baseReboundAt = now
+  }
+  if (patch.prCandidates !== undefined && !next.binding) {
+    if (patch.prCandidates === null || patch.prCandidates.length === 0) delete next.prCandidates
+    else next.prCandidates = [...patch.prCandidates]
+  }
+  if (patch.read) {
+    const r = patch.read
+    if (base.headSha !== undefined && base.headSha !== r.headSha) entries.push({ kind: 'head-changed', sha: r.headSha })
+    next.headSha = r.headSha
+    next.pr = r.pr
+    const prevCi = base.ci
+    next.ci = sameCi(prevCi, r.ci) ? prevCi : { ...r.ci, checks: r.ci.checks.slice(0, CI_CHECKS_MAX), changedAt: now }
+    // A verdict is news about the PR only for its head: a read can catch GitHub between a push and the PR's own move,
+    // with the checks of the commit before (final review I1). That verdict is kept, never announced.
+    const ofHead = r.ci.sha === r.headSha
+    // CI starts on the timeline when a read first sees the head's checks running (G7b). One already finished at the
+    // first read is said by its verdict alone; a run started again after a verdict starts again.
+    const running = (c: Omit<GitHubCiSnapshot, 'changedAt'> | undefined): boolean => c !== undefined && c.verdict === 'pending' && c.checks.length > 0
+    if (ofHead && running(r.ci) && !(prevCi?.sha === r.ci.sha && running(prevCi))) entries.push({ kind: 'ci-started', sha: r.ci.sha })
+    const moved = ofHead && (!prevCi || prevCi.sha !== r.ci.sha || prevCi.verdict !== r.ci.verdict)
+    if (moved && r.ci.verdict === 'passed') entries.push({ kind: 'ci-passed', sha: r.ci.sha })
+    if (moved && r.ci.verdict === 'failed')
+      entries.push({
+        kind: 'ci-failed',
+        sha: r.ci.sha,
+        ...(r.ci.failing ? { check: r.ci.failing } : {}),
+        // Incomplete evidence classes from what it could read (the check's name while its run goes): not said as settled.
+        ...(r.ci.failure && !r.ci.failure.incomplete ? { class: r.ci.failure.class } : {})
+      })
+  }
+  if (patch.lastReadError === null) delete next.lastReadError
+  else if (patch.lastReadError)
+    next.lastReadError = base.lastReadError?.kind === patch.lastReadError.kind ? base.lastReadError : { kind: patch.lastReadError.kind, since: now }
+  if (patch.sourceChanged && !base.sourceChanged) {
+    next.sourceChanged = { at: now }
+    entries.push({ kind: 'source-changed' })
+  }
+  if (patch.externalHead && !(base.externalHeadChange && base.externalHeadChange.sha === patch.externalHead.sha))
+    next.externalHeadChange = { ...(patch.externalHead.sha !== undefined ? { sha: patch.externalHead.sha } : {}), at: now }
+  if (patch.pushed) {
+    next.lastPushedSha = patch.pushed.sha
+    delete next.externalHeadChange
+  }
+  if (patch.noCi && base.ciOverride?.sha !== patch.noCi.sha) next.ciOverride = { sha: patch.noCi.sha, at: now }
+  // A pending still there when the next rerun is asked was never confirmed, and may have run: it is kept, unconfirmed and
+  // with no log line, so the budget goes on counting it (acceptance fixes final review I1)
+  const unconfirmed = patch.rerunPending && base.rerunPending ? [{ ...base.rerunPending, unconfirmed: true as const }] : []
+  if (patch.rerun || unconfirmed.length > 0)
+    next.reruns = [...(base.reruns ?? []), ...unconfirmed, ...(patch.rerun ? [{ ...patch.rerun, at: now }] : [])].slice(-RERUNS_MAX)
+  if (patch.rerun) entries.push({ kind: 'ci-rerun', sha: patch.rerun.sha, ...(patch.rerun.check !== undefined ? { check: patch.rerun.check } : {}) })
+  if (patch.rerunPending === null) delete next.rerunPending
+  else if (patch.rerunPending) next.rerunPending = { ...patch.rerunPending, at: now }
+  if (patch.mergeReady !== undefined) {
+    delete next.invalidated
+    if (patch.mergeReady === null) delete next.mergeReady
+    else {
+      next.mergeReady = { ...patch.mergeReady, evaluatedAt: now }
+      entries.push({ kind: 'merge-ready', sha: patch.mergeReady.headSha, pr: patch.mergeReady.pullRequestNumber })
+    }
+  }
+  // A withdrawal needs merge-ready standing: a verdict brings its own (`mergeReady: null` beside it), and the watch's read
+  // can be older than a reconverge that already cleared the evidence (G5c final review M2)
+  if (patch.invalidated && !next.invalidated && (patch.mergeReady !== undefined || next.mergeReady !== undefined)) {
+    next.invalidated = { reason: patch.invalidated.reason, at: now }
+    entries.push({ kind: 'invalidated', reason: patch.invalidated.reason })
+  }
+  if (entries.length > 0) {
+    let seq = base.seq
+    const all = [...base.log, ...entries.map((e) => ({ seq: ++seq, at: now, ...e }))]
+    const cut = all.length - GITHUB_LOG_MAX
+    // The lines the cap drops are counted, so the Run's event count keeps growing (final review I3)
+    const lost = cut > 0 ? all.slice(0, cut).filter((e) => GITHUB_LINE_KINDS.has(e.kind)).length : 0
+    if (lost > 0) next.droppedLines = (base.droppedLines ?? 0) + lost
+    next.log = cut > 0 ? all.slice(cut) : all
+    next.seq = seq
+  }
+  return JSON.stringify(next) === JSON.stringify(base) ? null : next
+}
+
+type Obj = Record<string, unknown>
+const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
+const isStr = (v: unknown): v is string => typeof v === 'string'
+
+function bindingOk(b: unknown): b is GitHubBinding {
+  return (
+    isObj(b) &&
+    isStr(b.repository) &&
+    typeof b.number === 'number' &&
+    isStr(b.url) &&
+    isStr(b.baseBranch) &&
+    isStr(b.headBranch) &&
+    typeof b.createdByAstera === 'boolean' &&
+    isStr(b.boundAt) &&
+    (b.host === undefined || isStr(b.host))
+  )
+}
+
+function failureOk(f: unknown): boolean {
+  return (
+    isObj(f) &&
+    isStr(f.check) &&
+    isStr(f.externalId) &&
+    isStr(f.class) &&
+    isStr(f.summary) &&
+    Array.isArray(f.diagnostics) &&
+    (f.incomplete === undefined ||
+      (isObj(f.incomplete) &&
+        (f.incomplete.reason === 'run-in-progress' || f.incomplete.reason === 'read-failed') &&
+        typeof f.incomplete.tries === 'number'))
+  )
+}
+
+function readOk(r: unknown): r is NonNullable<RunGitHubPatch['read']> {
+  if (!isObj(r) || !isStr(r.headSha) || !isObj(r.pr) || !isObj(r.ci)) return false
+  const pr = r.pr
+  const ci = r.ci
+  return (
+    (pr.state === 'open' || pr.state === 'closed' || pr.state === 'merged') &&
+    typeof pr.isDraft === 'boolean' &&
+    isStr(pr.baseBranch) &&
+    isStr(ci.sha) &&
+    (ci.basis === 'required' || ci.basis === 'all-reported' || ci.basis === 'selected') &&
+    (ci.verdict === 'pending' || ci.verdict === 'passed' || ci.verdict === 'failed' || ci.verdict === 'none') &&
+    (ci.failing === undefined || isStr(ci.failing)) &&
+    (ci.failingUrl === undefined || isStr(ci.failingUrl)) &&
+    (ci.failure === undefined || failureOk(ci.failure)) &&
+    (ci.targetNames === undefined || (Array.isArray(ci.targetNames) && ci.targetNames.every(isStr))) &&
+    Array.isArray(ci.checks) &&
+    ci.checks.every((c) => isObj(c) && isStr(c.externalId) && isStr(c.name) && isStr(c.status) && typeof c.required === 'boolean')
+  )
+}
+
+function mergeReadyOk(m: unknown): boolean {
+  return (
+    isObj(m) &&
+    typeof m.pullRequestNumber === 'number' &&
+    isStr(m.headSha) &&
+    typeof m.localChecksPassed === 'boolean' &&
+    typeof m.requiredCiPassed === 'boolean' &&
+    (m.ciOverride === undefined || m.ciOverride === 'no-ci') &&
+    typeof m.reviewPassed === 'boolean' &&
+    typeof m.unresolvedQuestions === 'number' &&
+    Array.isArray(m.ciChecks) &&
+    m.ciChecks.every(isStr)
+  )
+}
+
+function rerunOk(r: unknown): boolean {
+  return (
+    isObj(r) &&
+    typeof r.ciRunId === 'number' &&
+    typeof r.attempt === 'number' &&
+    isStr(r.sha) &&
+    (r.check === undefined || isStr(r.check)) &&
+    (r.externalId === undefined || isStr(r.externalId)) &&
+    (r.by === 'astera' || r.by === 'person') &&
+    (r.unconfirmed === undefined || r.unconfirmed === true)
+  )
+}
+
+/** The patch `runs-github-record` takes, or why it is refused. Only the Host sends it (in-process), so this is a
+ *  sanity check on its shape, not a defence. */
+export function parseRunGitHubPatch(v: unknown): RunGitHubPatch | string {
+  if (!isObj(v)) return 'patch must be an object'
+  if (v.binding !== undefined && !bindingOk(v.binding)) return 'binding is malformed'
+  if (v.read !== undefined && !readOk(v.read)) return 'read is malformed'
+  if (v.prCandidates !== undefined && v.prCandidates !== null && !(Array.isArray(v.prCandidates) && v.prCandidates.every((n) => typeof n === 'number')))
+    return 'prCandidates is malformed'
+  if (v.lastReadError !== undefined && v.lastReadError !== null && !(isObj(v.lastReadError) && isStr(v.lastReadError.kind)))
+    return 'lastReadError is malformed'
+  if (v.sourceChanged !== undefined && v.sourceChanged !== true) return 'sourceChanged is malformed'
+  if (v.pushed !== undefined && !(isObj(v.pushed) && isStr(v.pushed.sha))) return 'pushed is malformed'
+  if (v.externalHead !== undefined && !(isObj(v.externalHead) && (v.externalHead.sha === undefined || isStr(v.externalHead.sha))))
+    return 'externalHead is malformed'
+  if (v.noCi !== undefined && !(isObj(v.noCi) && isStr(v.noCi.sha))) return 'noCi is malformed'
+  if (v.rerun !== undefined && !rerunOk(v.rerun)) return 'rerun is malformed'
+  if (v.rerunPending !== undefined && v.rerunPending !== null && !rerunOk(v.rerunPending)) return 'rerunPending is malformed'
+  if (v.mergeReady !== undefined && v.mergeReady !== null && !mergeReadyOk(v.mergeReady)) return 'mergeReady is malformed'
+  if (v.invalidated !== undefined && !(isObj(v.invalidated) && isStr(v.invalidated.reason))) return 'invalidated is malformed'
+  // The re-bind is reconvergeRun's own (G6): never taken off the wire (G6 final review M8)
+  const { rebase: _rebase, ...wire } = v
+  return wire as RunGitHubPatch
+}

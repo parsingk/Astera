@@ -3,6 +3,7 @@
 // `astera` CLI shuttle already avoids shipping a Node binary.
 //
 // Everything it needs arrives in the environment, because it has no `app.getPath('userData')` to ask.
+import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { hostJobSources } from './jobSources'
@@ -78,9 +79,21 @@ import { connectCdp } from './workspace/cdp'
 import { freePort, killTree, processStartTimes } from './workspace/native'
 import { defaultGhRunner } from '../core/github/gh'
 import { readUnderstandingFile } from '../core/understanding/read'
-import { createPullRequest, readCommits } from '../core/github/prCreate'
+import { createPullRequest, readCommits, readCommitsOrNull } from '../core/github/prCreate'
 import { git as realGit, isCleanWorktree } from '../core/worktrees/git'
 import { createRunGitRecorder, type RunGitRecorder } from './runGitRecorder'
+import { createGithubWatch, type GithubWatch } from './githubWatch'
+import { armEarlyLoad } from './earlyLoad'
+import { createLifecycleCi, type LifecycleCi } from './lifecycleCi'
+import { ancestry, createDraftPr, headOf, pushBranch } from '../core/github/lifecyclePush'
+import { findOpenPrs } from '../core/github/prBinding'
+import { readPrState } from '../core/github/prState'
+import { prByNumber } from '../core/github/prs'
+import { readRuleCheckNames } from '../core/github/ciVerdict'
+import { readIssue } from '../core/github/issue'
+import { readAnnotations, readJobLog } from '../core/github/evidence'
+import { rerunFailed } from '../core/github/checks'
+import { normalizeBaseForGh } from '../core/worktrees/push'
 import { readChanges, readFileDiff } from '../core/git/changes'
 import { createMcpHttpSupervisor } from './mcpHttp'
 import { createGatewaySupervisor } from './gatewaySupervisor'
@@ -88,6 +101,12 @@ import { attachGatewayLink } from './gatewayLink'
 import { readRemoteSettings } from '../core/remote/settings'
 import { loadIdentity, type RuntimeIdentity } from '../core/remote/identity'
 import { readMcpHttp } from '../core/settings/mcpHttp'
+
+/** A folder's `origin` URL, or null: the GitHub lifecycle reads and pushes origin alone (design L24). */
+const originOf = async (cwd: string): Promise<string | null> => {
+  const r = await realGit(['remote', 'get-url', 'origin'], { cwd })
+  return r.ok && r.stdout !== '' ? r.stdout : null
+}
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -228,6 +247,11 @@ async function main(): Promise<void> {
     // check: the Task stays validating or reviewing, and the next Host restarts it (a convergence Job)
     // or gates it (otherwise). Never throws.
     wiring?.dispose()
+    // The GitHub watch reads no more: a read under way records into a state that is about to be saved and left. Nor does
+    // the carrier push, a retry it scheduled included, nor does the early load load (G6 final review M2).
+    githubWatch?.stop()
+    lifecycleCi?.stop()
+    earlyLoad?.cancel()
     // No reap from here on: a leaked console host ends with the Host (measured 2026-09-26).
     conhostReaper.dispose()
     // **The rolling stops with it** (S6 R16): its tick and the app-gone watch stop, so no takeover starts
@@ -336,6 +360,9 @@ async function main(): Promise<void> {
   // Phase 10: the git range each Run and attempt worked over, recorded as the state moves and around every merge.
   // Made below, once `orch` exists to record through; the worktrees' merge hooks read it when a merge runs.
   let runGit: RunGitRecorder | null = null
+  let githubWatch: GithubWatch | null = null
+  let lifecycleCi: LifecycleCi | null = null
+  let earlyLoad: { cancel(): void } | null = null
   const worktrees = createHostWorktrees({
     profileDir,
     integrateHooks: () => runGit,
@@ -738,6 +765,8 @@ async function main(): Promise<void> {
     onState: (state, version) => {
       server.broadcast({ t: 'orch-state', state, version })
       runGit?.onState(state)
+      githubWatch?.onState(state)
+      lifecycleCi?.onState(state)
     },
     // The command layer's own `deps.log?.()` calls end up here too (hostOrchDeps) — a limit probe
     // that could not run, an action that could not be forwarded. Otherwise the Host degrades in
@@ -787,7 +816,13 @@ async function main(): Promise<void> {
       // github-pr-create: the app's own create PR path (push, then gh pr create), over the Run's worktree.
       createPr: (req) => createPullRequest(req),
       readCommits: (wt, base) => readCommits(wt, base),
-      isClean: (wt) => isCleanWorktree(wt)
+      isClean: (wt) => isCleanWorktree(wt),
+      // The lifecycle's preflight (design §7.2): this folder's origin, which the lifecycle pushes to alone (L24).
+      originOf,
+      // G3b2: "continue" on a GitHub external-head question, over this Host's own merge path into the Run root
+      ...(spawner ? { fastForward: (cwd: string, branch: string) => worktrees.fastForwardRoot(cwd, branch) } : {}),
+      // G7a: Settings › GitHub's defaults, read from the app's settings in this profile when a lifecycle Job is made
+      lifecycleDefaults: () => readGitHubLifecycleDefaults(path.join(profileDir, 'app-settings.json'))
     },
     // How It Works records (MCP P2-C): the app's understanding.json in this profile, read on every
     // call and never written, so a record the app wrote is there while the app is closed.
@@ -832,6 +867,8 @@ async function main(): Promise<void> {
         log.write(`the Host's after-load pass failed to start: ${String(err)}`)
       }
       runGit?.onState(orch.state())
+      githubWatch?.onState(orch.state())
+      lifecycleCi?.onState(orch.state())
     },
     // `slack-reload` (P17): absent without the Host's Slack, and the call then answers 501.
     slack: slackWiring ?? undefined,
@@ -856,6 +893,63 @@ async function main(): Promise<void> {
     isDir: (p) => fsp.stat(p).then((st) => st.isDirectory(), () => false),
     log: (m) => log.write(m)
   })
+
+  // The GitHub lifecycle's read-only watch (design 2026-10-17 §6.2, G1): the PR of each lifecycle Run's branch and its
+  // CI, recorded through `runs-github-record`. With no spawner there is no worktree registry, so nothing to watch.
+  githubWatch = spawner
+    ? createGithubWatch({
+        record: (args) => orch.handle('runs-github-record', args),
+        worktreeOf: (p) => worktrees.infoOf(p),
+        baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
+        originOf,
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
+        readPrState: (cwd, repo, n) => readPrState(defaultGhRunner, cwd, repo, n),
+        ruleCheckNames: (cwd, repo, branch) => readRuleCheckNames(defaultGhRunner, cwd, repo, branch),
+        readIssue: (cwd, n) => readIssue(defaultGhRunner, cwd, n),
+        readJobLog: (cwd, repo, id) => readJobLog(defaultGhRunner, cwd, repo, id),
+        readAnnotations: (cwd, repo, id) => readAnnotations(defaultGhRunner, cwd, repo, id),
+        // G3b1: CI on the pushed head settles a lifecycle round through the Host's own validation (its store is the
+        // authoritative one). G3b2: where it must stop, a GitHub question keeps the round's wait, in the person's language
+        settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
+        openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
+        ancestry: (cwd, head, sha) => ancestry(realGit, cwd, head, sha),
+        // G4 (L9): a CI failure a rerun can cure is rerun in the Run's repository, within the Job's budget
+        rerunCi: (cwd, repo, id) => rerunFailed(defaultGhRunner, cwd, id, repo),
+        lang: () => (wiring ? wiring.checks.langNow() : 'en'),
+        log: (m) => log.write(m)
+      })
+    : null
+  githubWatch?.start()
+
+  // G3b1 (design §4.1-4.3): a lifecycle round handed over at github:ci is pushed, bound to its pull request, and set to
+  // wait; the watch above then reads CI on that head. Same condition as the watch: no spawner, no worktree registry.
+  lifecycleCi = spawner
+    ? createLifecycleCi({
+        worktreeOf: (p) => worktrees.infoOf(p),
+        originOf,
+        isClean: (cwd) => isCleanWorktree(cwd),
+        readCommits: (cwd, base) => readCommitsOrNull(cwd, base),
+        baseBranch: (repoPath, baseRef) => normalizeBaseForGh(repoPath, baseRef),
+        push: (cwd, branch) => pushBranch(realGit, cwd, branch),
+        headOf: (cwd, ref) => headOf(realGit, cwd, ref),
+        findOpenPrs: (cwd, repo, branch, base) => findOpenPrs(defaultGhRunner, cwd, repo, branch, base),
+        createDraftPr: (cwd, repo, pr) => createDraftPr(defaultGhRunner, cwd, repo, pr),
+        // G6 (spec §30): the bound pull request as it is now, read before every push
+        readPr: async (cwd, repo, n) => {
+          const r = await prByNumber(defaultGhRunner, cwd, repo, n)
+          // A pull request gh cannot find is a read that failed, never one to push onto (G6 final review M7)
+          if (!r.ok) return r
+          return r.pr ? { ok: true, state: r.pr.state } : { ok: false, kind: 'other', message: `pull request #${n} was not found` }
+        },
+        record: (args) => orch.handle('runs-github-record', args),
+        recordWait: (args) => orch.handle('lifecycle-ci-wait', args),
+        settle: (a) => (wiring ? wiring.checks.settleHandedOff(a) : Promise.resolve()),
+        // G3b2: every stop is a GitHub question; a refused push and several pull requests keep the round's wait
+        openGitHubGate: (a) => orch.handle('lifecycle-gate', { task: a.taskId, since: a.since, kind: a.kind, question: a.question, options: a.options }),
+        lang: () => (wiring ? wiring.checks.langNow() : 'en'),
+        log: (m) => log.write(m)
+      })
+    : null
 
   // Exits of the sessions no app holds (Host S2 design §2.6, R2): closing their Dispatches and
   // emptying their coordinator slots, and the handover sweep when an app leaves. **Only with a
@@ -1037,6 +1131,10 @@ async function main(): Promise<void> {
   void mcpHttp.reload()
   // And the Remote Gateway (remote runtime design §2.3: every Host start reads remote-runtime.json).
   void gateway.reload()
+  // G6 (design §6.3 S5): a Remote Host with no app attached loads its state by itself, so its CI waits resume after a
+  // restart with no client (host/earlyLoad.ts). Armed once the server listens, so `hasApp` has a server to ask, and
+  // cancelled when the Host leaves (G6 final review M2).
+  earlyLoad = armEarlyLoad({ remoteEnabled: () => remoteEnabled, hasApp: () => server.hasApp(), load: () => orch.loadUnattended(), log: (m) => log.write(m) })
   // And the enabled plugins (plugin runtime design P11), once the orch that answers them listens. Never rejects.
   void plugins.startAll()
 

@@ -1,3 +1,5 @@
+import { invalidatedReasonKey } from './githubText'
+import { GitHubBlock } from './GitHubBlock'
 import { useEffect, useState } from 'react'
 import type {
   Account,
@@ -16,7 +18,7 @@ import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { canStopConvergence, nodeMetaOf, retryingCheckOf } from '../../../core/orchestration/nodeMeta'
-import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
+import { DEFAULT_CONCURRENCY, isGitHubGateKind, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
 import { runIdToMerge } from '../../../core/orchestration/snapshot'
 import { useI18n } from '../i18n/I18nProvider'
@@ -25,7 +27,7 @@ import { confirmModal } from '../lib/confirm'
 import { ChangedFilesBlock } from './ChangedFilesBlock'
 import { CompletionBlock } from './CompletionBlock'
 import { GateAnswer } from './GateAnswer'
-import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, type GlyphKind } from './checkText'
+import { GLYPH, checkChoicesOf, checkTooltip, nodeMetaText, taskTitleOf, eventTitleOf, type GlyphKind } from './checkText'
 import { toast } from '../lib/toast'
 import { errText } from '../hooks/useFileOps'
 import {
@@ -65,7 +67,17 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
   'limit-hit': 'jobs.event.limitHit',
   resumed: 'jobs.event.resumed',
   'runtime-lost': 'jobs.event.runtimeLost',
-  recovery: 'jobs.event.recovery'
+  recovery: 'jobs.event.recovery',
+  'github-pr-bound': 'jobs.event.github.prBound',
+  'github-pr-created': 'jobs.event.github.prCreated',
+  'github-pushed': 'jobs.event.github.pushed',
+  'github-ci-started': 'jobs.event.github.ciStarted',
+  'github-ci-failed': 'jobs.event.github.ciFailed',
+  'github-ci-rerun': 'jobs.event.github.ciRerun',
+  'github-ci-passed': 'jobs.event.github.ciPassed',
+  'github-merge-ready': 'jobs.event.github.mergeReady',
+  'github-invalidated': 'jobs.event.github.invalidated',
+  'github-source-changed': 'jobs.event.github.sourceChanged'
 }
 
 /** A recovery line's summary is the strategy as the journal stored it (core/continuity/timelineRows.ts
@@ -712,8 +724,10 @@ export function RunDetail({
    *  ready 로 올리지 않고 pending 으로 내린 뒤 recomputeReady 가 판단한다. 여기서 그 판단을
    *  다시 하지 않는다.
    *
-   *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다. */
-  const resolveGate = async (gateId: string, resolution: string): Promise<void> => {
+   *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다.
+   *
+   *  `github`: a GitHub question, whose answer goes to the Host; its refusal is said in its words (G7a final review I1). */
+  const resolveGate = async (gateId: string, resolution: string, github = false): Promise<void> => {
     const taskId = answering
     const trimmed = resolution.trim()
     if (taskId === null || !trimmed) return
@@ -725,7 +739,7 @@ export function RunDetail({
         resolution: trimmed
       })
       if (reply.status >= 400) {
-        setGateError(replyNote(reply, t as never, t('jobs.node.failed')))
+        setGateError(replyNote(reply, t as never, t('jobs.node.failed'), { reason: github }))
         return
       }
       // 설계 §5(V4): 소진 Gate 에 "한 번 더 수정" 으로 답했는데 그 수정을 열지 못하는 경우가 있다 —
@@ -916,7 +930,7 @@ export function RunDetail({
                     busy={busy !== null}
                     error={gateError}
                     onAnswer={setAnswer}
-                    onResolve={(resolution) => void resolveGate(gate.id, resolution)}
+                    onResolve={(resolution) => void resolveGate(gate.id, resolution, isGitHubGateKind(gate.kind))}
                     onCancel={cancelAnswer}
                   />
                 )
@@ -967,7 +981,7 @@ export function RunDetail({
                 {selectedTask && (
                   <div className="detail-filter">
                     <TaskGlyph task={selectedTask} />
-                    <b>{selectedTask.title}</b>
+                    <b>{taskTitleOf(selectedTask, t as never)}</b>
                     {/* 지정된 계정. **지정이 있을 때만 그린다** — 없는 것이 보통이라 "기본 계정"을
                         늘 적으면 이 줄이 그 낱말로 채워지고, 정작 지정된 Task 가 눈에 안 띈다.
                         그래서 이 칩이 있다는 것 자체가 "이 Task 는 계정이 못박혀 있다"는 뜻이다.
@@ -998,6 +1012,10 @@ export function RunDetail({
                 {/* 고른 Task 의 완료 상세 — 왜 못 넘었는가(설계 §2). 필터 줄 바로 아래, 이벤트
                     목록 위다: 이벤트는 "무슨 일이 있었나" 이고 이것은 "지금 무엇이 막고 있나" 라,
                     찾는 사람이 스크롤하지 않고 만나야 하는 쪽이 이것이다. */}
+                {/* A lifecycle Run's GitHub side (G7b, design §8): the pull request, its checks, where Astera stands */}
+                {run?.github && (
+                  <GitHubBlock github={run.github} noLocalCheck={run.githubNoLocalCheck === true} onOpen={(url) => void window.api.system.openExternal(url)} />
+                )}
                 {selectedTask && (
                   <CompletionBlock projectPath={projectPath} runId={runId} taskId={selectedTask.id} runtimeId={runtimeId} />
                 )}
@@ -1026,11 +1044,17 @@ export function RunDetail({
                     const summary =
                       e.kind === 'dispatch-started'
                         ? ''
+                        : // A Task added line's summary is the Task's title, the lifecycle Task's translated (final review I2)
+                          e.kind === 'task-created'
+                          ? eventTitleOf(e, run?.tasks ?? [], t as never)
                         : e.kind === 'limit-hit' || e.kind === 'resumed'
                           ? (accounts?.find((a) => a.id === e.summary)?.label ?? '')
                           : recoveryKey
                             ? t(recoveryKey)
-                            : e.summary
+                            : // A withdrawal says why in the app's language (G7b); the summary is the Host's code
+                              e.kind === 'github-invalidated' && e.github?.reason
+                              ? t(invalidatedReasonKey(e.github.reason))
+                              : e.summary
                     return (
                       <div key={key} className="detail-event">
                         <div
@@ -1081,8 +1105,8 @@ export function RunDetail({
                               {/* 어느 Task 의 일인가. 걸러 놓은 동안에는 위의 필터 줄이 이미 같은
                                   말을 하고 있어서 적지 않는다 */}
                               {!selectedTask && e.taskTitle && (
-                                <span className="detail-ev-task" title={e.taskTitle}>
-                                  {e.taskTitle}
+                                <span className="detail-ev-task" title={eventTitleOf(e, run?.tasks ?? [], t as never)}>
+                                  {eventTitleOf(e, run?.tasks ?? [], t as never)}
                                 </span>
                               )}
                               {sessionId && (
@@ -1254,14 +1278,14 @@ function Graph({
           ...(pos ? { left: pos.x, top: pos.y } : {})
         }}
         onClick={() => onSelect(task.id)}
-        title={task.title}
+        title={taskTitleOf(task, t as never)}
       >
         {/* 글리프는 왼쪽 칸에서 두 줄에 걸쳐 선다 — 제목 줄에만 붙이면 부제가 있는 카드에서
             글리프가 위로 딸려 올라가 카드마다 다른 높이에 놓인다(styles.css 의 grid-row: 1 / -1) */}
         <span className="detail-node-sig">
           <TaskGlyph task={task} />
         </span>
-        <span className="detail-node-title">{task.title}</span>
+        <span className="detail-node-title">{taskTitleOf(task, t as never)}</span>
         {meta !== undefined && <span className="detail-node-meta">{meta}</span>}
         {/* 검사 칩 한 줄 — 검사가 걸린 Task 만(없으면 요소도 없다: NODE_H 안에서 제목·meta 두 줄이 가운데 서는
             지금 모양을 그대로 두려면 빈 줄을 세우면 안 된다). meta 줄과 따로인 이유는 Gate 질문이 meta 를 차지해도

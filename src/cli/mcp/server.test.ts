@@ -17,7 +17,7 @@ const TOOLS = [
   'list_runs', 'get_run', 'stop_run', 'resume_run', 'list_tasks', 'get_task', 'list_questions', 'answer_question',
   'get_completion', 'create_task', 'list_run_configs',
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
-  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue',
+  'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue', 'reconverge_run',
   'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record',
   'list_job_sources', 'list_source_items', 'get_source_item', 'create_job_from_source'
 ]
@@ -85,7 +85,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-eight tools (a server with no Runtimes behind it)', async () => {
+  it('lists exactly the thirty-nine tools (a server with no Runtimes behind it)', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -117,6 +117,31 @@ describe('the MCP server', () => {
       request: 'req-1'
     })
     expect(r.structuredContent).toMatchObject({ id: 'job_1' })
+  })
+
+  // G7a: the same bounds run-create holds, refused before anything is sent
+  it('create_job refuses more than 20 check names, or one over 100 characters', async () => {
+    const { link, calls } = answering({})
+    const client = await connected(link)
+    const many = Array.from({ length: 21 }, (_, i) => `check-${i}`)
+    for (const githubChecks of [many, ['x'.repeat(101)]]) {
+      const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', githubLifecycle: true, githubChecks } })
+      expect(r.isError).toBe(true)
+    }
+    expect(calls).toEqual([])
+  })
+
+  // G7a final review M9: counted as run-create counts them, once each
+  it('create_job counts check names once each, as run-create does', async () => {
+    const { link, calls } = answering({
+      'projects-get': { status: 200, body: { id: 'p1', name: 'Astera', path: 'D:/repo', addedAt: 'x' } },
+      'jobs-create': { status: 200, body: { id: 'job_1', objective: 'o' } }
+    })
+    const client = await connected(link)
+    const names = [...Array.from({ length: 20 }, (_, i) => `check-${i}`), 'check-0']
+    const r = await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', coordinatorAccountId: 'acc_1', githubLifecycle: true, githubChecks: names } })
+    expect(r.isError).toBeFalsy()
+    expect(calls.at(-1)?.cmd).toBe('jobs-create')
   })
 
   it('create_job stops at a project the Host does not know', async () => {
@@ -559,6 +584,8 @@ describe('the MCP server', () => {
     expect(of('create_task').description).toContain('plugin:<pluginId>')
     // 5b final review M9: only a check-unavailable question refuses an answer that is not one of its options
     expect(of('answer_question').description).toContain('A check that could not be made (kind check-unavailable) refuses any answer but retry, skip-check or mark-failed.')
+    // GitHub lifecycle G3b2
+    expect(of('answer_question').description).toContain('A question about a GitHub lifecycle round (kind github-*) takes only the options it lists, among wait, no-ci, continue, retry, rerun, mark-failed and pr-<n>.')
     expect(of('answer_question').description).not.toContain('takes one of them')
     expect(of('get_completion').description).toMatch(/diagnostics.*externalUrl.*check-unavailable/)
     // 5b final review M10: a plugin's check has no output; its findings are in get_completion
@@ -1355,12 +1382,12 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-eight tools, six of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists thirty-nine tools, seven of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(38)
+    expect(tools).toHaveLength(39)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
-    for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
+    for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue', 'reconverge_run']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)
   })
 
   it('maps each tool to its command and exact args', async () => {
@@ -1373,6 +1400,8 @@ describe('the GitHub tools (MCP P2-B)', () => {
       ['create_pr', { runId: 'r1', requestId: 'q1' }, 'github-pr-create', { run: 'r1', draft: true }, 'q1'],
       ['create_pr', { runId: 'r1', title: 'T', body: 'B', draft: false }, 'github-pr-create', { run: 'r1', title: 'T', body: 'B', draft: false }],
       ['retry_ci', { projectId: 'p1', ciRunId: 55, requestId: 'q2' }, 'github-ci-rerun', { project: 'p1', runId: 55 }, 'q2'],
+      ['retry_ci', { runId: 'run_1', ciRunId: 55, requestId: 'q3' }, 'github-ci-rerun', { run: 'run_1', runId: 55 }, 'q3'],
+      ['reconverge_run', { runId: 'run_1', requestId: 'q4' }, 'runs-reconverge', { id: 'run_1' }, 'q4'],
       [
         'create_job_from_issue',
         { projectId: 'p1', number: 3, requestId: 'q3' },
@@ -1413,7 +1442,10 @@ describe('the GitHub tools (MCP P2-B)', () => {
       ['get_ci', { runId: 'r1', projectId: 'p1', pr: 1 }],
       ['get_ci', {}],
       ['get_ci', { projectId: 'p1' }],
-      ['get_ci', { runId: 'r1', pr: 1 }]
+      ['get_ci', { runId: 'r1', pr: 1 }],
+      // G4: retry_ci takes a Run or a project
+      ['retry_ci', { runId: 'r1', projectId: 'p1', ciRunId: 5 }],
+      ['retry_ci', { ciRunId: 5 }]
     ]
     for (const [name, input] of bad) {
       const { r, calls } = await call(name, input)

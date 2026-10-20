@@ -294,6 +294,8 @@ export function sanitize(text: string): string {
     /\bgh[oprsu]_[A-Za-z0-9]{16,}\b/g,
     // A fine-grained GitHub token, which the gh[oprsu]_ prefixes do not cover.
     /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+    // An npm token, which CI logs print (GitHub lifecycle G2); npm's own npm_config_… words have underscores.
+    /\bnpm_[A-Za-z0-9]{36}\b/g,
     /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
     /\bAKIA[0-9A-Z]{12,}\b/g
   ]) {

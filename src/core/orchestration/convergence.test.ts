@@ -135,6 +135,16 @@ describe('suspiciousCheckFiles', () => {
   it('역슬래시 경로도 같은 규칙으로 본다', () => {
     expect(suspiciousCheckFiles(['.github\\workflows\\ci.yml'])).toEqual(['.github\\workflows\\ci.yml'])
   })
+  // GitHub lifecycle G5a (design §7.4): coverage, Python, JVM and container configs decide how the checks run too
+  it('coverage, Python, JVM and container configs count, in a subfolder too; names that only look alike do not', () => {
+    const files = [
+      '.nycrc', '.nycrc.json', 'pkg/.c8rc.json', 'codecov.yml', '.coveragerc', 'pytest.ini', 'py/pyproject.toml', 'setup.cfg', 'tox.ini',
+      '.ruff.toml', 'ruff.toml', 'mypy.ini', 'build.gradle', 'app/build.gradle.kts', 'pom.xml', 'Dockerfile', 'docker/Dockerfile.ci',
+      'docker-compose.yml', 'docker-compose.test.yaml'
+    ]
+    expect(suspiciousCheckFiles(files)).toEqual(files)
+    expect(suspiciousCheckFiles(['docs/mypy_ini.md', 'pomx.xml', 'src/dockerfile_helper.ts', 'setup.cfg.md', 'notes/tox.ini.txt'])).toEqual([])
+  })
 })
 
 // 설계 G1(§47/§22). 바로 위 reviewRoundOf 가 "유실된 검토는 라운드를 먹지 않는다" 인데, repairCountOf

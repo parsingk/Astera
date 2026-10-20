@@ -159,6 +159,35 @@ Answers come in the public shapes the CLI prints with `--json`, typed: `Project`
 `RunCompletion`, `AsteraEvent` and the rest are exported from the package. The words are the Host's: a question is
 `open` or `resolved`, and a stop pauses a Run (`runs.resume` takes it back). There is no cancel.
 
+A Job made with the GitHub lifecycle (`astera jobs create --github-lifecycle`, Astera 1.4.15 and `@astera-app/client`
+0.4.0 and later) carries its
+policy as `github` (`GitHubLifecyclePolicy`), and each of its Runs carries `github` (`GitHubLifecycle`): the pull
+request Astera bound for the Run's branch, its head commit, the CI checks of that commit with the `verdict` (`pending`,
+`passed`, `failed`, or `none` when the commit has no check and no workflow starting) and its `basis` (the required checks, every reported check,
+or the Job's selection), the check that failed first with its link, its `class` and a one-line `summary` of why, and a
+`state` that sums it up (`unbound`,
+`pr-bound`, `ci-pending`, `ci-passed`, `ci-failed`, `pr-merged`, `pr-closed`, or `external-state-unavailable` while
+GitHub cannot be read). While the Run's lifecycle Task works, `state` says where it stands instead: `pr-ready` (its local
+checks run before the first push), `awaiting-push` (they run again after an earlier push: after a repair, or in a round a
+person started again), `ci-pending` (CI is awaited), `repairing`, `reviewing`, `waiting-for-user` (a question is open on
+it), `ci-infrastructure-failure` (CI failed for a reason a rerun can cure: a rerun of the head's CI is in flight, or a
+question about rerunning it is open) or `exhausted` (its repair budget ran out, or it failed; once its pull request is
+merged or closed, `pr-merged` or `pr-closed` instead). Once its review passed, `merge-ready` says the pull request is
+ready to merge: open, its head the one Astera pushed and reviewed, CI passed on it (or a person chose to go on without
+CI, `mergeReady.ciOverride: 'no-ci'`), no question open; `mergeReady` holds that head and when, while it holds. When the
+review's verdict withheld it, or the pull request moved since (a new head, another base, a check failing or changed,
+closed or merged), `invalidated.reason` says why and `state` reads the record again: the verdict's `not-bound`,
+`external-state-unavailable`, `pr-not-open`, `head-not-pushed`, `review-of-another-head`, `ci-not-passed`,
+`question-open`, `local-check-failed` or `local-check-skipped`, a later read's `closed`, `merged`, `head-changed`,
+`base-changed`, `ci-failed` or `checks-changed`. Astera never merges; GitHub's own
+review decision is `pr.reviewDecision`. It also carries `pushedSha` (the commit Astera last pushed), `externalHead` (a
+head on GitHub Astera did not push, until it pushes again), `base` (the pull request's base as bound, with `reboundAt`
+once `runs reconverge` bound it again after a retarget), `repair` (`attempt` of `max` once the lifecycle Task has
+repaired, and while a repair runs its `subject`: `ci` with the failing `check`, `local` with the check, or `review`)
+`noCi` (a person chose to go on without CI for the head) and `review` (Astera's review of the lifecycle Task: `running`,
+`passed`, or `found-issues` with the count of `blocking` issues the last review found). It is derived on every read, so
+`runs.get` always shows what Astera last read.
+
 ### Jobs and Runs
 
 `jobs.create` takes an `objective`, and where the work happens: a `projectId` (a project registered in the app) or an
@@ -183,7 +212,10 @@ A Job made from a job source's item (a ticket a person picked in the app, with `
 with MCP's `create_job_from_source`) carries `source`: `{ id, itemId, label, title?, url? }`, the source (`github`,
 or a plugin's id), the item's id there, how a person names it (`Linear ENG-123`), the item's title (someone else's
 text, at most 300 characters), and its link. Astera sets it, from 1.4.14
-and `@astera-app/client` 0.3.0; `jobs.create` takes no such field. There is no namespace for job sources yet: make
+and `@astera-app/client` 0.3.0; `jobs.create` takes no such field. A GitHub issue's source also carries
+`capturedBodyHash` (a sha256 of the issue's body when the Job was made) and `capturedUpdatedAt` (GitHub's `updated_at`
+then), from 1.4.15: a GitHub lifecycle Run marks `github.sourceChanged` when the body changes after that, and the Job's
+objective stays as it was. There is no namespace for job sources yet: make
 such a Job with `call('jobs-create-from-source', { source, item, project })`, as the CLI does (`astera jobs
 create-from-source`), with `jobs.create`'s coordinator and convergence arguments beside them; the answer is the Job.
 [Job source plugins](plugins.md#job-source-plugins) says where the items come from.
@@ -220,7 +252,12 @@ for await (const item of astera.runs.follow(runId)) {
 }
 ```
 
-It throws `NOT_FOUND` when the Run is deleted and `HOST_NOT_RUNNING` when the Host goes away; it does not pick up again
+An event's `kind` is one of `run-created`, `task-created`, `dispatch-started`, `message`, `gate-opened`,
+`gate-resolved`, `limit-hit`, `resumed`, `runtime-lost` and `recovery`, and for a GitHub lifecycle Run its GitHub steps:
+`github-pr-bound`, `github-pr-created`, `github-pushed`, `github-ci-started`, `github-ci-failed`, `github-ci-rerun`,
+`github-ci-passed`, `github-merge-ready`, `github-invalidated` (the reason in `summary`) and `github-source-changed`.
+
+`runs.follow` throws `NOT_FOUND` when the Run is deleted and `HOST_NOT_RUNNING` when the Host goes away; it does not pick up again
 by itself (an [events](#events) subscription does). Leaving the loop (`break`, `return()`) or aborting its `signal`
 ends the call it is waiting on. [follow-a-run.ts](../examples/sdk/follow-a-run.ts) prints a Run this way.
 
@@ -239,7 +276,13 @@ for (const q of items) {
 When a question lists `options`, answer with one of them. The one a plugin's completion check opens when it could not
 be made, `kind` `check-unavailable`, refuses any answer but `retry`, `skip-check` or `mark-failed` with
 `INVALID_ARGUMENTS`: `retry` runs the Task's checks again, `skip-check` goes on without that check this round, and
-`mark-failed` fails the Task.
+`mark-failed` fails the Task; when that check is GitHub CI, `skip-check` is not offered. A question about a GitHub
+lifecycle round (`kind` `github-no-ci`, `github-ci-cap`, `github-external-head`, `github-pr-ambiguous`,
+`github-pr-closed`, `github-ci-outside` — also after a second failure Astera could not classify, or a repair that fixed
+nothing — or `github-carry`) takes only the `options` it lists: `wait` waits again on
+the same head, `no-ci` lets the round pass without CI, `continue` brings GitHub's commits in by fast-forward and
+starts the checks again, `retry` starts the round again, `rerun` reruns the failed jobs of the CI run and waits for
+its new attempt, `pr-<n>` binds pull request n, and `mark-failed` fails the Task.
 
 A question someone already answered (in the app, say) keeps that answer, and `questions.answer` gives it back, so
 compare `resolution` with what you sent. When a person takes a while to type, read the question again
@@ -254,7 +297,9 @@ order), `validate` (run configuration ids that check the work, or `plugin:<id>` 
 the order the checks run) and `review`. Without `accountIds` it uses the Job's coordinator account, and is refused when
 the Job has none. A `plugin:<id>` whose plugin is not installed, does not offer completion checks, or is disabled is
 refused with `PLUGIN_CAPABILITY_MISSING` ([plugins.md](plugins.md#completion-check-plugins)). `tasks.list({ runId, status, ready, brief })` and
-`tasks.get` read them.
+`tasks.get` read them. A Task with `kind: 'lifecycle'` is the one Astera adds once every other Task of a GitHub
+lifecycle Run is completed, to carry the Run through GitHub: it has no worker, and `tasks.create` on that Run is
+refused while it is open.
 
 ### Completion
 
@@ -310,6 +355,15 @@ outlives a Host restart, and `events` reads it. An event:
 | `session.input_needed` | a session turns to waiting on a person (a permission, a question), once per turn into it | `{ session, prompt }` |
 | `session.limit_waiting` | a session stops at a usage limit and waits for it to reset | `{ session, scope?, nextRetryAt? }` |
 | `session.account_switched` | a session goes on under another account | `{ session, accountLabel }` |
+| `github.pr_bound` | a GitHub lifecycle Run's branch was bound to a pull request Astera found (one Astera opened is `github.pr_created`) | `Run` |
+| `github.pr_created` | Astera opened the draft pull request a GitHub lifecycle Run is bound to | `Run` |
+| `github.head_changed` | that pull request's head moved | `Run` |
+| `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
+| `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.ci_rerun_requested` | a CI run of the head was rerun through Astera: by Astera itself (a failure outside the code) or by a person's answer or `github-ci-rerun --run` (a rerun made on GitHub's own page is not seen) | `Run` |
+| `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
+| `github.merge_ready` | the review passed and the pull request is ready to merge: `run.github.mergeReady` holds the evidence | `Run` |
+| `github.merge_ready_invalidated` | the review's verdict withheld merge-ready, or the pull request moved since (a new head, another base, a check failing or changed, closed or merged): `run.github.invalidated.reason` says which | `Run` |
 
 The payload is the object as it stood right after the change. A Task is cut like `tasks.list({ brief: true })` and its
 checks carry no output; a plugin check, in a Task or a `TaskCompletion`, carries how many findings it has
@@ -392,7 +446,7 @@ handled, and, while you are not handling one, the subscription's own `cursor`. T
 read a gap. Saved while you handle an event, it is where that event's page was read from, so that page comes again.
 [notify-webhook.ts](../examples/sdk/notify-webhook.ts) does both, posting to a webhook.
 
-Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `github.*` and `runtime.*`.
+Not produced yet: `run.cancelled` (there is no cancel; a stop pauses) and `runtime.*`.
 
 ## Errors
 
@@ -550,10 +604,13 @@ Node 22.6 to 22.17 needs `--experimental-strip-types`; on anything else use `npx
 ## Not yet
 
 - An HTTP mode (`mode: 'http'`) for a Host on another machine, and Runtime targets (`runtimeId`).
-- The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile.
+- The `sessions`, `github`, `howItWorks` and `runtimes` namespaces. Use `call()` or the CLI meanwhile; a GitHub
+  lifecycle Run's pull request and CI are already on `runs.get` (`github`).
+- A GitHub lifecycle option on `jobs.create`, and a method that carries a Run through GitHub again: use
+  `call('jobs-create', { objective, cwd, githubLifecycle: true })` and `call('runs-reconverge', { id })`.
 - A Run cancel (`runs.cancel`, `run.cancelled`): a stop pauses.
 - Paging done by the Host for the lists other than events.
-- `github.*` and `runtime.*` events.
+- `runtime.*` events.
 - A browser build.
 
 ## Troubleshooting

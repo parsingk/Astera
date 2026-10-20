@@ -82,6 +82,14 @@ describe('DesktopNotifier — the three events', () => {
     expect(h.shown.map((s) => s.event)).toEqual(['limitWaiting'])
   })
 
+  // A limit judged from usage alone (manual) resumes nothing — the notice must not say it waits to resume
+  // (2026-10-19). Same event and the same switch, a different sentence.
+  it('a waiting judged from usage alone says nothing resumes automatically', () => {
+    const h = harness()
+    h.notifier.onRollState(roll({ manual: true }))
+    expect(h.shown.map((s) => [s.event, s.body])).toEqual([['limitWaiting', 'Stopped on a limit; nothing resumes automatically']])
+  })
+
   it('account switched is off by default and fires once enabled', () => {
     const off = harness()
     off.notifier.onRollState(roll({ state: 'switching', accountLabel: 'spare' }))

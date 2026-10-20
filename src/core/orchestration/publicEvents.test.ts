@@ -1,9 +1,10 @@
 // SDK 1d: the public events one commit makes, derived from the state before and after it (SDK spec §6). Pure: what
 // these tests build is all the derivation sees.
+import type { GitHubLogKind } from '../github/lifecycle'
 import { describe, it, expect } from 'vitest'
 import { derivePublicEvents, type EventDraft } from './publicEvents'
 import { emptyState, type OrchState } from './state'
-import { FAILURE_LIMIT, type CheckResult, type Dispatch, type Gate, type Job, type JobRun, type Message, type Task } from './types'
+import { FAILURE_LIMIT, GITHUB_GATE_KINDS, type CheckResult, type Dispatch, type Gate, type Job, type JobRun, type Message, type Task } from './types'
 
 const NOW = '2026-10-12T00:00:00.000Z'
 
@@ -192,6 +193,15 @@ describe('derivePublicEvents', () => {
     expect(types(derivePublicEvents(before, after))).toEqual(['question.created'])
   })
 
+  // GitHub lifecycle G3b2: a GitHub question holds the round's wait; the round has not failed
+  it('a GitHub question gives the question, and no completion.failed', () => {
+    for (const kind of GITHUB_GATE_KINDS) {
+      const before = state({ tasks: [task('t1', 'validating')] })
+      const after = state({ tasks: [task('t1', 'blocked')], gates: [gate('g1', 't1', { kind, options: ['wait', 'mark-failed'] })] })
+      expect(types(derivePublicEvents(before, after)), kind).toEqual(['question.created'])
+    }
+  })
+
   it('a completion move made by a Dispatch alone, the Task object unchanged', () => {
     const before = state({ tasks: [task('t1', 'dispatched')], dispatches: [] })
     const after = { ...before, dispatches: [dispatch('d2', 't1', { repair: 'review-failure' })] }
@@ -283,5 +293,43 @@ describe('derivePublicEvents', () => {
   it('no Run ending for a Run removed by the commit', () => {
     const before = state({ tasks: [task('t1', 'completed'), task('t2', 'reviewing')] })
     expect(derivePublicEvents(before, state({ runs: [], tasks: [] }))).toEqual([])
+  })
+})
+
+describe('github events (GitHub lifecycle G1)', () => {
+  const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const entry = (seq: number, kind: GitHubLogKind) => ({ seq, at: NOW, kind })
+  const withLog = (log: ReturnType<typeof entry>[]): OrchState =>
+    state({ jobs: [job({ github: policy })], runs: [{ ...run, githubState: { log, seq: log.at(-1)?.seq ?? 0 } }] })
+
+  it('one event per new log entry, in order, each carrying the Run with its github field', () => {
+    const prev = withLog([entry(1, 'pr-bound')])
+    const next = withLog([entry(1, 'pr-bound'), entry(2, 'head-changed'), entry(3, 'ci-failed')])
+    const es = derivePublicEvents(prev, next)
+    expect(types(es)).toEqual(['github.head_changed', 'github.ci_failed'])
+    expect(es[0]).toMatchObject({ jobId: 'job_1', runId: 'run_1', projectId: 'proj_1' })
+    expect((es[0].payload as { github?: { state: string } }).github?.state).toBe('unbound')
+    expect(es[0].payload).not.toHaveProperty('githubState')
+  })
+
+  it('maps every kind', () => {
+    const next = withLog([
+      entry(1, 'pr-bound'), entry(2, 'head-changed'), entry(3, 'ci-passed'), entry(4, 'ci-failed'), entry(5, 'source-changed'), entry(6, 'pr-created'), entry(7, 'ci-rerun'),
+      entry(8, 'merge-ready'), entry(9, 'invalidated')
+    ])
+    expect(types(derivePublicEvents(withLog([]), next))).toEqual([
+      'github.pr_bound', 'github.head_changed', 'github.ci_passed', 'github.ci_failed', 'github.source_changed', 'github.pr_created', 'github.ci_rerun_requested',
+      'github.merge_ready', 'github.merge_ready_invalidated'
+    ])
+  })
+
+  // G7b: the push and CI starting are timeline lines; design §5.5 names no public event for them
+  it('raises no event for a push or CI starting', () => {
+    expect(types(derivePublicEvents(withLog([]), withLog([entry(1, 'pushed'), entry(2, 'ci-started'), entry(3, 'ci-passed')])))).toEqual(['github.ci_passed'])
+  })
+
+  it('a record that moved nothing makes no event', () => {
+    const prev = withLog([entry(1, 'pr-bound')])
+    expect(derivePublicEvents(prev, { ...prev, runs: [{ ...prev.runs[0] }] })).toEqual([])
   })
 })

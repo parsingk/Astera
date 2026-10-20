@@ -37,8 +37,8 @@ import type { EventType } from './types.js'
 
 const JOB = [...JOB_FIELDS, ...DERIVED_FIELDS]
 /** Derived like DERIVED_FIELDS, by `runs get` alone and only when above zero: how many of the Run's Tasks have a
- *  worker showing a permission prompt. */
-const RUN = [...RUN_FIELDS, ...DERIVED_FIELDS, 'waitingForApproval']
+ *  worker showing a permission prompt. `github` is derived for a GitHub lifecycle Job's Run on every read. */
+const RUN = [...RUN_FIELDS, ...DERIVED_FIELDS, 'waitingForApproval', 'github']
 /** `tasks list --brief` adds the mark of where it cut a spec. A Task has no such field, so it is allowed here by
  *  name: left off this list, `--brief` would silently lose the mark. */
 const TASK = [...TASK_FIELDS, 'spec_truncated']
@@ -184,7 +184,7 @@ export function publicEvent(e: unknown): unknown {
 
 /** A Run as an event carries it: `runs list`'s fields, without `runs get`'s count of prompts, which only a read asks
  *  the sessions for. */
-const EVENT_RUN = [...RUN_FIELDS, ...DERIVED_FIELDS]
+const EVENT_RUN = [...RUN_FIELDS, ...DERIVED_FIELDS, 'github']
 
 /** One payload by its event's type, shaped like the read that returns that object. A type this package does not
  *  know has no fields to keep. */
@@ -194,7 +194,8 @@ function shapePayload(type: unknown, payload: unknown): unknown {
   const list = (v: unknown, fields: readonly string[]): unknown =>
     Array.isArray(v) ? v.map((x) => (x !== null && typeof x === 'object' ? pick(fields, x) : x)) : v
   if (kind === 'job') return pick(JOB, payload)
-  if (kind === 'run') return pick(EVENT_RUN, payload)
+  // A github event carries the Run it moved, shaped as a run event's (its `github` field says what moved).
+  if (kind === 'run' || kind === 'github') return pick(EVENT_RUN, payload)
   if (kind === 'question') return pick(QUESTION_FIELDS, payload)
   if (kind === 'task') {
     const task = pick(TASK, payload)

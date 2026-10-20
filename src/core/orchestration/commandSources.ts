@@ -12,7 +12,7 @@ import type { OrchState } from './state'
 import { SOURCE_ERROR_MAX, clip, isItemId, itemDetail, itemsPage, jobContext, type SourceContext } from '../sources/answers'
 import { sourceTitleOf, sourcedObjective } from '../sources/objective'
 import { GITHUB_SOURCE_ID, issueContext, issueDetail, listIssueItems } from '../github/issueSource'
-import { repoOf } from '../github/issue'
+import { issueBodyHash, repoOf } from '../github/issue'
 import type { GhFailed } from '../github/gh'
 
 type Reply = { status: number; body: unknown }
@@ -181,12 +181,14 @@ export async function sourcesCommand(deps: OrchServerDeps, caller: Caller, cmd: 
   const project = findProject(s, projectId)
   if (!project) return { status: 404, body: { error: `unknown project: ${projectId}` } }
   let ctx: SourceContext
+  let captured: CapturedIssue | undefined
   if (source.kind === 'github') {
     if (!deps.github) return { status: 409, body: { error: 'this Host does not answer GitHub commands' } }
     const r = await issueDetail(deps.github.run, project.path, itemId)
     if (!r.ok) return ghReply(r)
     if (!r.selectable) return { status: 403, body: { error: `#${itemId} cannot become a Job: ${r.reason ?? 'it is not one that can'}` } }
     ctx = issueContext(r.issue)
+    captured = capturedIssue(r.issue)
   } else {
     const asked = await ask(source, 'jobSource.context', { id: itemId }, `build the Job of ${itemId}`)
     if (!('answer' in asked)) return asked
@@ -201,17 +203,38 @@ export async function sourcesCommand(deps: OrchServerDeps, caller: Caller, cmd: 
     ctx,
     sourceId: source.kind === 'github' ? GITHUB_SOURCE_ID : source.id,
     sourceName: source.kind === 'github' ? 'GitHub' : source.name,
-    itemId
+    itemId,
+    ...(captured ? { captured } : {})
   })
 }
 
+/** What a Job keeps of a GitHub issue as it was when the Job was made (GitHub lifecycle §6). */
+export interface CapturedIssue {
+  bodyHash: string
+  updatedAt?: string
+}
+
+export const capturedIssue = (issue: { body: string; updatedAt?: string }): CapturedIssue => ({
+  bodyHash: issueBodyHash(issue.body),
+  ...(issue.updatedAt !== undefined ? { updatedAt: issue.updatedAt } : {})
+})
+
 /** The Job of an item: through `jobs-create` with the rest of the caller's flags, in `cwd`, its objective the Host's
- *  (J14) and its source the item (J15). `jobs-create-from-issue` makes its Job here too (J13). */
+ *  (J14) and its source the item (J15). `jobs-create-from-issue` makes its Job here too (J13). A GitHub issue's
+ *  `captured` hash and time go on the source, for the watch to notice a later edit (GitHub lifecycle §6). */
 export function createFromContext(
   deps: OrchServerDeps,
   caller: Caller,
   handle: Handle,
-  a: { rest: Record<string, unknown>; cwd: string; ctx: SourceContext; sourceId: string; sourceName: string; itemId: string }
+  a: {
+    rest: Record<string, unknown>
+    cwd: string
+    ctx: SourceContext
+    sourceId: string
+    sourceName: string
+    itemId: string
+    captured?: CapturedIssue
+  }
 ): Promise<Reply> {
   // The ticket's title the Job is named by where it is shown (plugin 4d); never part of the objective's own first line
   const title = sourceTitleOf(a.ctx.objective)
@@ -224,7 +247,10 @@ export function createFromContext(
       itemId: a.itemId,
       label: a.ctx.sourceLabel,
       ...(title !== undefined ? { title } : {}),
-      ...(a.ctx.sourceUrl ? { url: a.ctx.sourceUrl } : {})
+      ...(a.ctx.sourceUrl ? { url: a.ctx.sourceUrl } : {}),
+      ...(a.captured
+        ? { capturedBodyHash: a.captured.bodyHash, ...(a.captured.updatedAt !== undefined ? { capturedUpdatedAt: a.captured.updatedAt } : {}) }
+        : {})
     }
   })
 }

@@ -1,0 +1,60 @@
+test	UNKNOWN STEP	﻿2026-10-17T20:32:38.2829300Z Current runner version: '2.337.0'
+test	UNKNOWN STEP	2026-10-17T20:32:40.3754797Z ##[group]Run npm test
+test	UNKNOWN STEP	2026-10-17T20:32:40.3755686Z ^[[36;1mnpm test^[[0m
+test	UNKNOWN STEP	2026-10-17T20:32:40.3920287Z shell: /usr/bin/bash -e {0}
+test	UNKNOWN STEP	2026-10-17T20:32:40.3921049Z ##[endgroup]
+test	UNKNOWN STEP	2026-10-17T20:32:40.4699060Z 
+test	UNKNOWN STEP	2026-10-17T20:32:40.4704612Z > astera-lifecycle-sandbox@1.0.0 test
+test	UNKNOWN STEP	2026-10-17T20:32:40.4706103Z > node --test
+test	UNKNOWN STEP	2026-10-17T20:32:40.4706858Z 
+test	UNKNOWN STEP	2026-10-17T20:32:40.5118188Z TAP version 13
+test	UNKNOWN STEP	2026-10-17T20:32:40.5405711Z # Subtest: adds
+test	UNKNOWN STEP	2026-10-17T20:32:40.5407041Z not ok 1 - adds
+test	UNKNOWN STEP	2026-10-17T20:32:40.5408652Z   ---
+test	UNKNOWN STEP	2026-10-17T20:32:40.5409840Z   duration_ms: 1.875075
+test	UNKNOWN STEP	2026-10-17T20:32:40.5411082Z   type: 'test'
+test	UNKNOWN STEP	2026-10-17T20:32:40.5412691Z   location: '/home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/test/add.test.js:5:1'
+test	UNKNOWN STEP	2026-10-17T20:32:40.5414407Z   failureType: 'testCodeFailure'
+test	UNKNOWN STEP	2026-10-17T20:32:40.5415274Z   error: |-
+test	UNKNOWN STEP	2026-10-17T20:32:40.5416601Z     Expected values to be strictly equal:
+test	UNKNOWN STEP	2026-10-17T20:32:40.5418305Z     
+test	UNKNOWN STEP	2026-10-17T20:32:40.5419809Z     -1 !== 5
+test	UNKNOWN STEP	2026-10-17T20:32:40.5421154Z     
+test	UNKNOWN STEP	2026-10-17T20:32:40.5422018Z   code: 'ERR_ASSERTION'
+test	UNKNOWN STEP	2026-10-17T20:32:40.5422812Z   name: 'AssertionError'
+test	UNKNOWN STEP	2026-10-17T20:32:40.5424158Z   expected: 5
+test	UNKNOWN STEP	2026-10-17T20:32:40.5425026Z   actual: -1
+test	UNKNOWN STEP	2026-10-17T20:32:40.5425665Z   operator: 'strictEqual'
+test	UNKNOWN STEP	2026-10-17T20:32:40.5426327Z   stack: |-
+test	UNKNOWN STEP	2026-10-17T20:32:40.5428220Z     TestContext.<anonymous> (file:///home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox/test/add.test.js:5:27)
+test	UNKNOWN STEP	2026-10-17T20:32:40.5430116Z     Test.runInAsyncScope (node:async_hooks:214:14)
+test	UNKNOWN STEP	2026-10-17T20:32:40.5431187Z     Test.run (node:internal/test_runner/test:1047:25)
+test	UNKNOWN STEP	2026-10-17T20:32:40.5432143Z     Test.start (node:internal/test_runner/test:944:17)
+test	UNKNOWN STEP	2026-10-17T20:32:40.5433246Z     startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+test	UNKNOWN STEP	2026-10-17T20:32:40.5434329Z   ...
+test	UNKNOWN STEP	2026-10-17T20:32:40.5462033Z 1..1
+test	UNKNOWN STEP	2026-10-17T20:32:40.5463313Z # tests 1
+test	UNKNOWN STEP	2026-10-17T20:32:40.5464381Z # suites 0
+test	UNKNOWN STEP	2026-10-17T20:32:40.5465431Z # pass 0
+test	UNKNOWN STEP	2026-10-17T20:32:40.5466657Z # fail 1
+test	UNKNOWN STEP	2026-10-17T20:32:40.5467956Z # cancelled 0
+test	UNKNOWN STEP	2026-10-17T20:32:40.5469223Z # skipped 0
+test	UNKNOWN STEP	2026-10-17T20:32:40.5470192Z # todo 0
+test	UNKNOWN STEP	2026-10-17T20:32:40.5471371Z # duration_ms 52.649564
+test	UNKNOWN STEP	2026-10-17T20:32:40.5550546Z ##[error]Process completed with exit code 1.
+test	UNKNOWN STEP	2026-10-17T20:32:40.5729477Z Post job cleanup.
+test	UNKNOWN STEP	2026-10-17T20:32:40.6504395Z [command]/usr/bin/git version
+test	UNKNOWN STEP	2026-10-17T20:32:40.6505457Z git version 2.55.0
+test	UNKNOWN STEP	2026-10-17T20:32:40.6531283Z Temporarily overriding HOME='/home/runner/work/_temp/a6011577-f988-46e3-81f1-2b0d1c89c936' before making global git config changes
+test	UNKNOWN STEP	2026-10-17T20:32:40.6539455Z Adding repository directory to the temporary git global config as a safe directory
+test	UNKNOWN STEP	2026-10-17T20:32:40.6542039Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/astera-lifecycle-sandbox/astera-lifecycle-sandbox
+test	UNKNOWN STEP	2026-10-17T20:32:40.6601117Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+test	UNKNOWN STEP	2026-10-17T20:32:40.6604309Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+test	UNKNOWN STEP	2026-10-17T20:32:40.6869624Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+test	UNKNOWN STEP	2026-10-17T20:32:40.6906014Z http.https://github.com/.extraheader
+test	UNKNOWN STEP	2026-10-17T20:32:40.6909778Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+test	UNKNOWN STEP	2026-10-17T20:32:40.6952411Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+test	UNKNOWN STEP	2026-10-17T20:32:40.7307958Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+test	UNKNOWN STEP	2026-10-17T20:32:40.7321066Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+test	UNKNOWN STEP	2026-10-17T20:32:40.7563420Z Cleaning up orphan processes
+test	UNKNOWN STEP	2026-10-17T20:32:40.7797064Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

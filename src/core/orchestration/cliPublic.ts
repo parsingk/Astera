@@ -60,12 +60,15 @@ type NothingLeft<T extends never> = T
 /** Held back: the roll tap's bookkeeping of a stopped coordinator, the mark of a coordinator start in flight, the
  *  mark of a coordinator stop not confirmed yet, and the session the inbox net leaves a Run's questions to (an
  *  external coordinator; publishing it would add to the SDK's contract, which nothing has asked for). What a script
- *  needs from the first, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. */
+ *  needs from the first, that the Run waits for a reset and until when, is the `limited` ending of `runs wait`. Also
+ *  held back: the Run's raw GitHub record (`githubState`, GitHub lifecycle), whose public face is the derived `github`
+ *  field. */
 const RUN_HIDDEN = [
   'coordinatorStop',
   'coordinatorStartingAt',
   'coordinatorStopPending',
-  'externalCoordinatorSessionId'
+  'externalCoordinatorSessionId',
+  'githubState'
 ] as const
 
 /**
@@ -84,11 +87,15 @@ const TASK_HIDDEN = [
   'suspiciousFiles',
   'reviewRequested',
   // A skipped round's bookkeeping (plugin Phase 5 C9): its results are the Task's `checks` once it settles
-  'checkResume'
+  'checkResume',
+  // A lifecycle round handed to the Host (GitHub lifecycle G3a): its results are the Task's `checks` once CI settles it
+  'ciWait',
+  'ciUnknowns'
 ] as const
 
 /** A followed event's message body (pages long) and the app's link from an event to a tab. */
-const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId'] as const
+// `github` (G7b): a GitHub line's facts for the app's timeline; the public line says them in its summary
+const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github'] as const
 
 // A Job's and a Run's derived fields (the package's DERIVED_FIELDS: outcome, progress, questionsOpen) are not fields
 // of the objects, so they are on neither side of these checks.

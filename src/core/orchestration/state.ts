@@ -4,6 +4,7 @@ import {
   DELIVERY_MAX,
   FAILURE_LIMIT,
   canTransition,
+  isGitHubGateKind,
   newId,
   placeholderSessionId,
   recomputeReady,
@@ -14,6 +15,7 @@ import {
   type Dispatch,
   type Gate,
   type GateKind,
+  type GitHubGateKind,
   type GitRange,
   type Message,
   type MessageType,
@@ -26,6 +28,7 @@ import {
 } from './types'
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
+import { GITHUB_CI_CHECK, type GitHubLifecyclePolicy } from '../github/lifecycle'
 import { t, type Lang } from '../i18n'
 import {
   appendHistory,
@@ -41,6 +44,8 @@ import {
 import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
+import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
+import { isLifecycleTask, latestLifecycleTaskOf, lifecycleTaskFor, mergeReadyOf, withLifecycleTask } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -196,9 +201,10 @@ const replace = <T extends { id: string }>(xs: T[], next: T): T[] =>
 function moveTask(t: Task, to: Task['status'], now: string): Task | null {
   if (t.status === to) return t
   if (!canTransition(t.status, to)) return null
-  // A skipped round goes with its round (plugin Phase 5 C9; 5a final review C1): out of `validating`, it is over
-  if (to !== 'validating' && t.checkResume !== undefined) {
-    const { checkResume: _over, ...rest } = t
+  // A skipped round goes with its round (plugin Phase 5 C9; 5a final review C1): out of `validating`, it is over. So
+  // does a lifecycle round handed to the Host (GitHub lifecycle G3a final review I1): the next round is handed fresh.
+  if (to !== 'validating' && (t.checkResume !== undefined || t.ciWait !== undefined)) {
+    const { checkResume: _over, ciWait: _handedOver, ...rest } = t
     return { ...rest, status: to, updatedAt: now }
   }
   return { ...t, status: to, updatedAt: now }
@@ -210,7 +216,8 @@ function moveTask(t: Task, to: Task['status'], now: string): Task | null {
 export function liveCheckResume(s: OrchState, task: Task): NonNullable<Task['checkResume']> | null {
   const resume = task.checkResume
   if (resume === undefined) return null
-  return latestImplDispatch(s, task.id)?.id === resume.dispatchId ? resume : null
+  // '' names "no attempt yet": a lifecycle Task before its first repair has none (GitHub lifecycle G3a final review I2)
+  return (latestImplDispatch(s, task.id)?.id ?? '') === resume.dispatchId ? resume : null
 }
 
 function pushMessage(
@@ -254,6 +261,8 @@ export function createJob(
     convergence?: ConvergencePolicy
     /** The job source's item the Job is made from (plugin Phase 4 J15); only the Host gives it. */
     source?: JobSourceRef
+    /** The GitHub lifecycle policy (design 2026-10-17 L10); the caller (run-create) has already run the preflight. */
+    github?: GitHubLifecyclePolicy
   },
   now: string
 ): Res<Job> {
@@ -274,7 +283,8 @@ export function createJob(
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {}),
     ...(a.convergence ? { convergence: a.convergence } : {}),
-    ...(a.source ? { source: a.source } : {})
+    ...(a.source ? { source: a.source } : {}),
+    ...(a.github ? { github: a.github } : {})
   }
   return ok({ ...s, jobs: [...s.jobs, job] }, job)
 }
@@ -342,11 +352,16 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
     .filter((r) => r.jobId === jobId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     .at(-1)
+  // The previous Run's lifecycle Task is Astera's, made at its end (GitHub lifecycle §3.2), and so is the integration Task
+  // made for it (G3a final review I3): the next Run makes its own.
+  const lifecycleIds = new Set(s.tasks.filter((t) => t.runId === previous?.id && isLifecycleTask(t)).map((t) => t.id))
   const source =
     defs.length > 0
       ? defs
       : previous
-        ? s.tasks.filter((t) => t.runId === previous.id).sort(byCreated)
+        ? s.tasks
+            .filter((t) => t.runId === previous.id && !lifecycleIds.has(t.id) && !(t.parentId !== undefined && lifecycleIds.has(t.parentId)))
+            .sort(byCreated)
         : []
   const idMap = new Map(source.map((t) => [t.id, newId('tsk')]))
   const copies: Task[] = source.map((t) => ({
@@ -514,6 +529,65 @@ export function recordDispatchGit(s: OrchState, dispatchId: string, patch: GitRa
   if (git === null) return ok(s, d)
   const next = { ...d, git }
   return ok({ ...s, dispatches: s.dispatches.map((x) => (x.id === dispatchId ? next : x)) }, next)
+}
+
+/** Records what the Host read of a Run's pull request and CI (GitHub lifecycle G1). A read with nothing new answers the
+ *  same state, so a watch that polls costs no state version. */
+export function recordRunGitHub(s: OrchState, runId: string, patch: RunGitHubPatch, now: string): Res<JobRun> {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return gone(`unknown run: ${runId}`)
+  const githubState = nextGitHubState(run.githubState, patch, now)
+  if (githubState === null) return ok(s, run)
+  const next = { ...run, githubState }
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === runId ? next : r)) }, next)
+}
+
+/** `runs reconverge` (GitHub lifecycle §3.5, G5c): carries a finished lifecycle Run through GitHub again. A new lifecycle
+ *  Task joins the same Run — a fresh id, so a fresh repair budget, and ready at once — and the old merge-ready evidence
+ *  and its withdrawal go in the same write, so the view does not show merge-ready while the new Task works. The earlier
+ *  lifecycle Task stays as it ended; the Run's outcome reads only the latest (outcomeOfTasks).
+ *
+ *  Its deps are the earlier one's deps — the Run's ordinary Tasks, all completed — not the earlier one itself: a failed
+ *  one would hold the new Task pending for ever (recomputeReady), and the dispatch loop folds the Run root and picks the
+ *  accounts for an integration Task from these deps (startLifecycle).
+ *
+ *  Refused: an unknown Run (missing); a Job without lifecycle; a Run without a branch of its own; a Run never carried,
+ *  or whose latest lifecycle Task still works; a bound pull request merged or closed — by the Host's live read when it
+ *  gives one (`live.prState`), else by the record. */
+export function reconvergeRun(s: OrchState, runId: string, now: string, live: { prState?: 'open' | 'closed' | 'merged'; baseBranch?: string } = {}): Res<Task> {
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return gone(`unknown run: ${runId}`)
+  if (!s.jobs.find((j) => j.id === run.jobId)?.github) return err('This Run’s Job is not carried through GitHub')
+  if (run.worktree === undefined) return err('This Run has no branch of its own, so it cannot be carried through GitHub')
+  const latest = latestLifecycleTaskOf(s, runId)
+  if (!latest) return err('This Run has not been carried through GitHub yet: its lifecycle Task comes once its Tasks complete')
+  if (latest.status !== 'completed' && latest.status !== 'failed')
+    return err(`This Run’s lifecycle Task is still ${latest.status}: it is carried through GitHub already`)
+  // What the Host just read from GitHub wins over the record (G6, spec §30): a PR reopened after the Run completed is
+  // carried again, and one merged since the last read is not
+  const prState = live.prState ?? run.githubState?.pr?.state
+  if (prState !== undefined && prState !== 'open') return err(`This Run’s pull request is ${prState}, so there is nothing left to carry`)
+  // "Latest" is read by createdAt, so the new Task is stamped after the earlier one even if the clock went back between
+  // the two (G5c final review M6)
+  const at = now > latest.createdAt ? now : new Date(Date.parse(latest.createdAt) + 1).toISOString()
+  const task = lifecycleTaskFor(runId, latest.deps, latest.validateConfigIds ?? [GITHUB_CI_CHECK], at)
+  let next: OrchState = { ...s, tasks: recomputeReady([...s.tasks, task]) }
+  // A pull request retargeted to another base is carried against that base from now on (G6, spec §30)
+  const gs = run.githubState
+  // The base the Host just read wins over the record's, which can be a read behind (G6 final review M1)
+  const baseNow = live.baseBranch ?? gs?.pr?.baseBranch
+  const retargeted = gs?.binding && baseNow !== undefined && baseNow !== gs.binding.baseBranch ? baseNow : undefined
+  if (gs?.mergeReady || gs?.invalidated || retargeted) {
+    const cleared = recordRunGitHub(
+      next,
+      runId,
+      { ...(gs?.mergeReady || gs?.invalidated ? { mergeReady: null } : {}), ...(retargeted ? { rebase: { baseBranch: retargeted } } : {}) },
+      now
+    )
+    if (!cleared.ok) return err(cleared.error)
+    next = cleared.state
+  }
+  return ok(next, next.tasks.find((t) => t.id === task.id)!)
 }
 
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<JobRun> {
@@ -691,6 +765,8 @@ export function applyWorkerDone(
      *  reviewing 이고, recomputeReady 는 completed 만 승격시키므로 그 의존 서브트리 전체가
      *  pending 에 멈춘다. 기본값 true — 이 인자를 모르는 호출자에게는 지금까지의 동작이 유지된다. */
     canReview?: boolean
+    /** The language of a question this report opens (a lifecycle repair reported failed, GitHub lifecycle G3c1). */
+    lang?: Lang
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -753,6 +829,7 @@ export function applyWorkerDone(
     tasks: recomputeReady(replace(s.tasks, nextTask)),
     dispatches: replace(s.dispatches, nextDispatch)
   }
+  if (to === 'completed') state = withLifecycleTask(state, task.runId, now)
   state = pushMessage(
     state,
     {
@@ -770,6 +847,22 @@ export function applyWorkerDone(
   // Settle unanswered questions without an answer — the worker is finished, so there is nobody
   // left to answer them. See the settlePendingQuestions comment for why they are not deleted.
   state = { ...state, messages: settlePendingQuestions(state.messages, a.dispatchId) }
+  // A lifecycle repair that could not fix the failure — most often one it judged outside the Run's change, as its spec
+  // asks — goes to a person, as a cause outside the code does (GitHub lifecycle §4.6, G3c1 final review I2): ending the
+  // lifecycle Task here would fail the Run with nobody asked
+  if (to === 'failed' && dispatch.repair && isLifecycleTask(task)) {
+    const asked = createGate(
+      state,
+      {
+        taskId: task.id,
+        question: t(a.lang ?? 'en', 'jobs.gate.github.q.repairDeclined', { reason: oneLine(a.body).slice(0, 300) }),
+        options: ['retry', 'mark-failed'],
+        kind: 'github-ci-outside'
+      },
+      now
+    )
+    if (asked.ok) state = asked.state
+  }
   return ok(state, 'accepted')
 }
 
@@ -868,7 +961,8 @@ export function applyValidationResult(
         taskId: task.id,
         // One line, as every list of questions shows it; the result keeps the reason as the plugin wrote it
         question: t(lang, 'jobs.checks.gate.unavailable', { check: unavailableCheck.name, reason: oneLine(unavailableCheck.summary ?? '') }),
-        options: [...CHECK_UNAVAILABLE_OPTIONS],
+        // Skipping GitHub CI would let the round pass with CI unproven (GitHub lifecycle S10)
+        options: unavailableCheck.configId === GITHUB_CI_CHECK ? CHECK_UNAVAILABLE_OPTIONS.filter((o) => o !== 'skip-check') : [...CHECK_UNAVAILABLE_OPTIONS],
         kind: 'check-unavailable'
       },
       now
@@ -888,6 +982,7 @@ export function applyValidationResult(
       ...(passed ? {} : { result: `validation failed (exit ${exitCode})\n${output}` })
     }
     let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+    if (to === 'completed') state = withLifecycleTask(state, task.runId, now)
     state = pushMessage(
       state,
       {
@@ -911,6 +1006,7 @@ export function applyValidationResult(
     if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
     const next: Task = { ...moved, consecutiveFailures: reviewing ? task.consecutiveFailures : 0 }
     let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+    if (to === 'completed') state = withLifecycleTask(state, task.runId, now)
     state = pushMessage(
       state,
       {
@@ -998,13 +1094,16 @@ export function answerCheckUnavailable(
     return ok({ ...s, gates: replace(s.gates, resolved), tasks: replace(s.tasks, failed) }, { gate: resolved, revalidate: null })
   }
   const attempt = latestImplDispatch(s, task.id)
-  if (attempt === undefined) return err(`task ${task.id} has no attempt whose folder its checks could run in`)
-  const cwd = attempt.cwd
+  // A lifecycle Task's round runs in the Run root, with or without an attempt of its own (GitHub lifecycle G3a final
+  // review I2): it has none before its first repair
+  const cwd = isLifecycleTask(task) ? s.runs.find((r) => r.id === task.runId)?.worktree : attempt?.cwd
+  if (cwd === undefined) return err(`task ${task.id} has no attempt whose folder its checks could run in`)
   const round = task.checks ?? []
   const at = round.findIndex((c) => c.status === 'error')
+  if (a.resolution === 'skip-check' && round[at]?.configId === GITHUB_CI_CHECK) return err('GitHub CI cannot be skipped: retry it or mark the Task failed')
   const resume =
     a.resolution === 'skip-check' && at >= 0
-      ? { dispatchId: attempt.id, done: [...round.slice(0, at), skippedResult(round[at])], rest: round.slice(at + 1).map((c) => c.configId) }
+      ? { dispatchId: attempt?.id ?? '', done: [...round.slice(0, at), skippedResult(round[at])], rest: round.slice(at + 1).map((c) => c.configId) }
       : null
   const again: Task = { ...base, status: 'validating', updatedAt: now, ...(resume ? { checkResume: resume } : {}) }
   return ok({ ...s, gates: replace(s.gates, resolved), tasks: replace(s.tasks, again) }, { gate: resolved, revalidate: { taskId: task.id, cwd } })
@@ -1035,7 +1134,8 @@ export function openRepairDispatch(
   const open = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
   if (open) return err(`dispatch already open: ${open.id}`)
   const prior = latestImplDispatch(s, a.taskId)
-  if (!prior) return err(`no implementation dispatch for task ${a.taskId}`)
+  // A lifecycle Task has no attempt of its own before its first repair (GitHub lifecycle G3c1, design §3.4)
+  if (!prior && !isLifecycleTask(task)) return err(`no implementation dispatch for task ${a.taskId}`)
   const sessionId = a.target.kind === 'same-session' ? a.target.sessionId : placeholderSessionId()
   const sessionOpen = s.dispatches.find((d) => d.sessionId === sessionId && !d.outcome && !d.endedAt)
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
@@ -1049,7 +1149,7 @@ export function openRepairDispatch(
     sessionId,
     cwd: a.target.cwd,
     specPath: '',
-    retryOf: prior.id,
+    ...(prior ? { retryOf: prior.id } : {}),
     startedAt: now,
     workerState: 'ready',
     retained: false,
@@ -1211,10 +1311,156 @@ export function stampPolicySnapshot(s: OrchState, a: { taskId: string; key: stri
 export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
+  // A worker's finished attempt is checked: from dispatched, or again from validating. ready → validating is in the
+  // table for the lifecycle Task alone (beginLifecycleValidation, GitHub lifecycle G3a final review M2).
+  if (task.status !== 'dispatched' && task.status !== 'validating') return err(`cannot begin validation from status: ${task.status}`)
   const moved = moveTask(task, 'validating', now)
   if (!moved) return err(`cannot begin validation from status: ${task.status}`)
   const stamped = withConvergenceClock(moved, now)
   return ok({ ...s, tasks: replace(s.tasks, stamped) }, stamped)
+}
+
+/** A ready lifecycle Task starts its checks with no worker (GitHub lifecycle §3.3): ready → validating, its time budget
+ *  starting here. The dispatch loop calls it (`lifecycle-start`) once every Task worktree is in the Run root. */
+export function beginLifecycleValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task)) return err(`task ${a.taskId} is not a lifecycle Task`)
+  if (task.status !== 'ready') return err(`a lifecycle Task starts from ready, not ${task.status}`)
+  const moved = moveTask(task, 'validating', now)
+  if (!moved) return err(`cannot move task ${task.status} -> validating`)
+  // A new round hands over afresh, whatever a hand-edited file left behind (G3a final review I1)
+  const { ciWait: _stale, ...fresh } = moved
+  const stamped = withConvergenceClock(fresh, now)
+  return ok({ ...s, tasks: replace(s.tasks, stamped), gates: supersededGitHubGates(s.gates, task.id, now) }, stamped)
+}
+
+/** A fresh round or a hand-over makes the GitHub questions of the Task's earlier rounds moot (G3b2 final review I2): one
+ *  left open would hold the next round's own question, each refusing an answer while the other is open. */
+const supersededGitHubGates = (gates: Gate[], taskId: string, now: string): Gate[] =>
+  gates.some((g) => g.taskId === taskId && g.status === 'open' && isGitHubGateKind(g.kind))
+    ? gates.map((g) => (g.taskId === taskId && g.status === 'open' && isGitHubGateKind(g.kind) ? { ...g, status: 'resolved', resolution: 'superseded', resolvedAt: now } : g))
+    : gates
+
+/** A lifecycle Task's round handed to the Host at `github:ci` (GitHub lifecycle §4): its results so far kept in `ciWait`
+ *  until the CI result settles the whole round (settleLifecycleCi). **Once**: a second hand-over (a restart that ran the
+ *  round again) changes nothing, so the Host's push and wait are begun once. Passed results are kept without their
+ *  output, as applyValidationResult keeps them. */
+export function beginLifecycleCi(s: OrchState, a: { taskId: string; done: CheckResult[] }, now: string): Res<'begun' | 'already'> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task)) return err(`task ${a.taskId} is not a lifecycle Task`)
+  if (task.status !== 'validating') return err(`a lifecycle Task hands its round over while validating, not ${task.status}`)
+  if (task.ciWait) return ok(s, 'already')
+  const done = a.done.map((r) => {
+    if (r.status !== 'passed') return r
+    const { outputTail: _tail, diagnostics: _diagnostics, diagnosticsTotal: _total, ...kept } = r
+    return kept
+  })
+  const next: Task = { ...task, ciWait: { since: now, done }, updatedAt: now }
+  return ok({ ...s, tasks: replace(s.tasks, next), gates: supersededGitHubGates(s.gates, task.id, now) }, 'begun')
+}
+
+/** The pull request and the head the Host pushed for a handed-off round (GitHub lifecycle G3b1, design §4.4): CI is read
+ *  on this head only. The same values again change nothing; a Task with no round handed over is refused, and so is a
+ *  record for another round than `since` (a carrier of an earlier round, G3b1 final review I1). */
+export function recordLifecycleCiWait(s: OrchState, a: { taskId: string; since: string; pr: number; sha: string }, now: string): Res<'recorded' | 'same'> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to wait on`)
+  if (task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
+  if (task.ciWait.pr === a.pr && task.ciWait.sha === a.sha) return ok(s, 'same')
+  const next: Task = { ...task, ciWait: { ...task.ciWait, pr: a.pr, sha: a.sha, waitingSince: now }, updatedAt: now }
+  return ok({ ...s, tasks: replace(s.tasks, next) }, 'recorded')
+}
+
+/** The CI result settles a lifecycle Task's handed-off round (GitHub lifecycle §4): `[...ciWait.done, result]` goes to
+ *  applyValidationResult once, so the Task's checks and history read as a one-process round would, and `ciWait` is
+ *  cleared in the same write. A Task with no round handed over is refused: a verdict is applied exactly once. */
+export function settleLifecycleCi(
+  s: OrchState,
+  a: { taskId: string; result: CheckResult; since?: string; repair?: RepairTarget; lang?: Lang; ciClass?: string },
+  now: string
+): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isLifecycleTask(task) || !task.ciWait) return err(`task ${a.taskId} has no round handed over to settle`)
+  // A verdict read for an earlier round settles nothing of the round after it (G3b1 final review I1)
+  if (a.since !== undefined && task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
+  const { ciWait, ...kept } = task
+  // A failure Astera could not classify is counted on the Task, so a second one asks a person (G3c1, design §4.6)
+  const rest: Task = a.result.status === 'failed' && a.ciClass === 'unknown' ? { ...kept, ciUnknowns: (kept.ciUnknowns ?? 0) + 1 } : kept
+  const cleared: OrchState = { ...s, tasks: replace(s.tasks, rest) }
+  return applyValidationResult(
+    cleared,
+    { taskId: a.taskId, results: [...ciWait.done, a.result], canReview: true, ...(a.repair ? { repair: a.repair } : {}), ...(a.lang ? { lang: a.lang } : {}) },
+    now
+  )
+}
+
+/** A GitHub Gate (G3b2, design §4.2-4.4, §4.6), opened by the Host for the round `since` names. The Task is blocked as any
+ *  Gate blocks it but **keeps its wait**: every reader of `ciWait` also wants `validating`, so the wait is inert until an
+ *  answer (answerGitHubGate) takes the Task back to it, and an answer that waits again reads the same head. */
+export function openGitHubGate(
+  s: OrchState,
+  a: { taskId: string; since: string; kind: GitHubGateKind; question: string; options: string[] },
+  now: string
+): Res<Gate> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return gone(`unknown task: ${a.taskId}`)
+  if (!isGitHubGateKind(a.kind)) return err(`not a GitHub question kind: ${a.kind}`)
+  if (!isLifecycleTask(task) || task.status !== 'validating' || !task.ciWait) return err(`task ${a.taskId} has no round waiting on GitHub`)
+  if (task.ciWait.since !== a.since) return err(`task ${a.taskId} hands over another round now (since ${task.ciWait.since})`)
+  const opened = createGate(s, { taskId: a.taskId, question: a.question, options: a.options, kind: a.kind }, now)
+  if (!opened.ok) return opened
+  return ok({ ...opened.state, tasks: opened.state.tasks.map((t) => (t.id === task.id ? { ...t, ciWait: task.ciWait } : t)) }, opened.value)
+}
+
+/** `pr-<n>` on a `github-pr-ambiguous` Gate: bind pull request n. */
+const BIND_PR_ANSWER = /^pr-(\d+)$/
+
+/**
+ * A person's answer to a GitHub Gate (G3b2), in one commit with the Gate's resolution, out of `blocked` past the
+ * transition table as answerCheckUnavailable goes:
+ *
+ * - `wait`: back to the same wait, from now (`waitingSince`), so the watch reads that head again;
+ * - `no-ci`: back to the wait, marked to go on without CI; the watch settles the round passed and says why;
+ * - `pr-<n>`: back to the wait, marked to bind pull request n; the carrier binds it;
+ * - `continue`: a fresh round from the first check (gate-resolve brought the outside commits in before this);
+ * - `retry`: a fresh round from the first check (the carrier's own stops, G3b2 final review M7);
+ * - `mark-failed`: the Task fails.
+ *
+ * An answer the Gate does not offer is refused, and so is any answer while another question holds the Task. A Task a
+ * person already moved only has its Gate answered. A wait that is gone (`wait`, `no-ci`, `pr-<n>`) is a fresh round.
+ */
+export function answerGitHubGate(s: OrchState, a: { gateId: string; resolution: string }, now: string): Res<{ gate: Gate }> {
+  const gate = s.gates.find((g) => g.id === a.gateId)
+  if (!gate) return gone(`unknown gate: ${a.gateId}`)
+  if (!isGitHubGateKind(gate.kind) || gate.status !== 'open') return err(`not an open GitHub question: ${a.gateId}`)
+  const options = gate.options ?? []
+  if (!options.includes(a.resolution)) return err(`answer one of ${options.join(', ')}`)
+  const task = s.tasks.find((t) => t.id === gate.taskId)
+  if (!task) return err(`unknown task for gate: ${a.gateId}`)
+  const other = s.gates.find((g) => g.taskId === task.id && g.status === 'open' && g.id !== gate.id)
+  if (other) return err(`another question about this Task is still open: ${other.id}`)
+  const resolved: Gate = { ...gate, status: 'resolved', resolution: a.resolution, resolvedAt: now }
+  const gates = replace(s.gates, resolved)
+  if (task.status !== 'blocked') return ok({ ...s, gates }, { gate: resolved })
+  const { ciWait, ...base } = task
+  if (a.resolution === 'mark-failed') return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'failed', updatedAt: now }) }, { gate: resolved })
+  if (a.resolution === 'continue' || a.resolution === 'retry' || !ciWait) {
+    const moved = moveTask(task, 'pending', now)
+    if (!moved) return err(`cannot unblock from status: ${task.status}`)
+    // A fresh round a person asked for is not held by the failure circuit the loop reads before it starts a lifecycle
+    // Task (lifecycleToStart), as task-update resets it (G3c1 fix pass); the repair budget counts repairs, not this
+    const fresh: Task = { ...moved, consecutiveFailures: 0 }
+    return ok({ ...s, gates, tasks: recomputeReady(replace(s.tasks, fresh)) }, { gate: resolved })
+  }
+  // wait, and rerun (G4: the command reran the CI run first), go back to the wait from now
+  const bind = BIND_PR_ANSWER.exec(a.resolution)
+  const wait: NonNullable<Task['ciWait']> =
+    a.resolution === 'no-ci' ? { ...ciWait, noCi: true, waitingSince: now } : bind ? { ...ciWait, bindPr: Number(bind[1]) } : { ...ciWait, waitingSince: now }
+  return ok({ ...s, gates, tasks: replace(s.tasks, { ...base, status: 'validating', ciWait: wait, updatedAt: now }) }, { gate: resolved })
 }
 
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
@@ -1284,6 +1530,9 @@ export function openReviewDispatch(
     workerState: 'ready',
     retained: false
   }
+  // A lifecycle review reads the head Astera pushed (G5b): the verdict's merge-ready needs to know which
+  const reviewHead = isLifecycleTask(task) ? s.runs.find((r) => r.id === task.runId)?.githubState?.lastPushedSha : undefined
+  if (reviewHead !== undefined) dispatch.reviewHead = reviewHead
   return ok({ ...s, dispatches: [...s.dispatches, dispatch] }, dispatch)
 }
 
@@ -1355,6 +1604,7 @@ export function applyReviewResult(
       consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1
     }
     let state: OrchState = { ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }
+    if (passed) state = withLifecycleTask(state, task.runId, now)
     state = pushMessage(
       state,
       {
@@ -1394,7 +1644,7 @@ export function applyReviewResult(
     const moved = moveTask(recorded, 'completed', now)
     if (!moved) return err(`cannot move task ${task.status} -> completed`)
     const next: Task = { ...moved, consecutiveFailures: 0 }
-    let state: OrchState = { ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }
+    let state: OrchState = withLifecycleTask({ ...closed, tasks: recomputeReady(replace(closed.tasks, next)) }, task.runId, now)
     const notes = issues.length
     state = pushMessage(
       state,
@@ -1408,6 +1658,13 @@ export function applyReviewResult(
       },
       now
     ).state
+    // A lifecycle Task's passing review decides merge-ready from state, in this same write (GitHub lifecycle G5b, §3.5):
+    // the evidence, or why it is withheld
+    if (isLifecycleTask(task) && task.runId !== undefined) {
+      const v = mergeReadyOf(state, next, dispatch)
+      const recorded = recordRunGitHub(state, task.runId, 'evidence' in v ? { mergeReady: v.evidence } : { mergeReady: null, invalidated: { reason: v.reason } }, now)
+      if (recorded.ok) state = recorded.state
+    }
     return ok(state, 'accepted')
   }
   const failed: Task = { ...recorded, consecutiveFailures: task.consecutiveFailures + 1, result: a.body }

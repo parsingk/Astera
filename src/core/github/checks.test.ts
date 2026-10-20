@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { failedLogTail, parsePrChecks, prChecksArgs, readPrChecks, rerunFailed, runIdOf } from './checks'
+import { ciRunHead, failedLogTail, parsePrChecks, prChecksArgs, readPrChecks, rerunFailed, runIdOf } from './checks'
 import type { GhResult, GhRunner } from './gh'
 
 // fixtures/pr-checks.json: the first two rows of
@@ -184,12 +184,48 @@ describe('failedLogTail', () => {
   })
 })
 
+// GitHub lifecycle G4 (measured on the sandbox 2026-10-19: `gh run view <id> --json attempt,status,conclusion,headSha`)
+describe('ciRunHead', () => {
+  it('reads the commit a CI run ran on and its attempt, in the given repository', async () => {
+    const calls: string[][] = []
+    const r = await ciRunHead(
+      answering(result({ ok: true, stdout: JSON.stringify({ attempt: 2, headSha: '9ecb7effb52d478506d719037f79892b714e8cbb', status: 'completed' }) }), calls),
+      'd',
+      39099662373,
+      { host: 'github.com', owner: 'o', name: 'r' }
+    )
+    expect(calls).toEqual([['run', 'view', '39099662373', '--json', 'headSha,attempt,status', '--repo', 'o/r']])
+    expect(r).toEqual({ ok: true, headSha: '9ecb7effb52d478506d719037f79892b714e8cbb', attempt: 2, status: 'completed' })
+  })
+
+  it('an answer that is not a run is a failed read; gh failing is a sentence', async () => {
+    expect(await ciRunHead(answering(result({ ok: true, stdout: '{"attempt":"x"}' })), 'd', 1)).toMatchObject({ ok: false, kind: 'other' })
+    expect(await ciRunHead(answering(result({ ok: true, stdout: 'nope' })), 'd', 1)).toMatchObject({ ok: false, kind: 'other' })
+    expect(await ciRunHead(answering(result({ stderr: 'HTTP 404: Not Found' })), 'd', 1)).toMatchObject({ ok: false })
+  })
+})
+
 describe('rerunFailed', () => {
   it('runs gh run rerun --failed', async () => {
     const calls: string[][] = []
     const r = await rerunFailed(answering(result({ ok: true }), calls), 'd', 42)
     expect(calls).toEqual([['run', 'rerun', '42', '--failed']])
     expect(r).toEqual({ ok: true })
+  })
+
+  // GitHub lifecycle G4: the Run's repository, not whatever gh resolves from the folder's remotes
+  it('names the repository when given one', async () => {
+    const calls: string[][] = []
+    await rerunFailed(answering(result({ ok: true }), calls), 'd', 42, { host: 'github.com', owner: 'o', name: 'r' })
+    expect(calls).toEqual([['run', 'rerun', '42', '--failed', '--repo', 'o/r']])
+  })
+
+  // measured on the sandbox 2026-10-19: a rerun of a run that is still going
+  it('says when the run is already running again: its attempt moved', async () => {
+    const r = await rerunFailed(answering(result({ stderr: 'run 39099662373 cannot be rerun; This workflow is already running' })), 'd', 42)
+    expect(r).toMatchObject({ ok: false, running: true })
+    const done = await rerunFailed(answering(result({ stderr: 'run 39100211754 cannot be rerun; This workflow run cannot be retried' })), 'd', 42)
+    expect(done).not.toHaveProperty('running')
   })
 
   it('a failure maps to a sentence', async () => {

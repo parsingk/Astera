@@ -42,6 +42,11 @@ describe('journalEntryOf (D5: only what a summary needs)', () => {
     expect(journalEntryOf(state('s1', { state: 'stalled', nextRetryAt: undefined, scope: undefined }))).toEqual({ kind: 'state', sessionId: 's1', state: 'stalled' })
     expect(journalEntryOf(rolled('s1', 's2'))).toEqual({ kind: 'rolled', sessionId: 's2', oldSessionId: 's1' })
   })
+  // A limit judged from usage alone (manual) resumes nothing: its time is the reset, and the summary must
+  // not read it as "resuming at" (2026-10-19). The wait is kept, without the time.
+  it('keeps a waiting judged from usage alone without its time — nothing resumes at it', () => {
+    expect(journalEntryOf(state('s1', { manual: true }))).toEqual({ kind: 'state', sessionId: 's1', state: 'waiting', scope: 'session' })
+  })
   it('leaves out trust, none, adopted and a reattach (a restored wait is not new)', () => {
     for (const s of ['trust', 'none', 'adopted'] as const) expect(journalEntryOf(state('s1', { state: s }))).toBeNull()
     expect(journalEntryOf(state('s1', { reattach: true }))).toBeNull()

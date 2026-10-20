@@ -144,11 +144,17 @@ What a Runtime offers is the same list its pairing is checked against:
 
 - **Reads**, at either permission: projects, accounts, Jobs, runs, tasks, questions, run configurations, checks and
   output, `runs wait`, `jobs wait`, `runs follow`, a Run's changed files and diffs, sessions (list, read and their
-  facts), GitHub reads, and `requests show` for your own requests.
+  facts), GitHub reads, a GitHub lifecycle Run's GitHub side (`runs get`), the New Job window's check of a folder
+  inside one of the Runtime's projects (`github-preflight`), and `requests show` for your own requests.
 - **Changes**, with a full-control pairing only: creating, running, stopping and resuming Jobs and runs, adding tasks,
-  answering questions, creating, typing into, resizing and ending sessions.
+  answering questions, creating, typing into, resizing and ending sessions, a Job carried through GitHub
+  (`jobs create --github-lifecycle`, made from an objective: issue → Job is not offered remotely) and carrying a run
+  through GitHub again (`runs reconverge`). Such a Job takes the Runtime's own Settings › GitHub defaults, and the
+  pushes, pull requests and CI reruns it leads to are the Runtime's Host's, with the Runtime's own `gh` login; your
+  credentials never reach it.
 - **Never remotely**: anything on this machine only (`host`, `skills`, `higgsfield`, `mcp`, `runtime`, `runtimes`,
-  `projects add`, `browser js`, `app js`), How It Works records, GitHub writes, and the Host's own management.
+  `projects add`, `browser js`, `app js`), How It Works records, GitHub writes of your own (`github-pr-create`,
+  `github-ci-rerun`, Jobs from issues and job sources), and the Host's own management.
 
 A command with no remote form is refused with `RUNTIME_CAPABILITY_MISSING` before it reads anything on this machine. In
 particular, `--runtime` never falls back to this machine's state file or report queue when the Runtime cannot be

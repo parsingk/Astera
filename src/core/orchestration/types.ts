@@ -3,6 +3,7 @@
 // providers/meta.ts).
 import type { Provider } from '../providers/meta'
 import type { ScheduleRule } from '../scheduler/rule'
+import type { GitHubLifecyclePolicy, RunGitHubState } from '../github/lifecycle'
 
 export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
@@ -102,7 +103,23 @@ export interface ReviewIssue {
 export type RepairReason = 'check-failure' | 'review-failure'
 /** 앱이 특별히 다루는 Gate. exhausted 의 해소는 retry-once / mark-failed 로 갈라지고(server.ts 의
  *  gate-resolve), blocked 는 보통 Gate 처럼 풀린다 — 질문이 왜 막혔는지 말한다 */
-export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable'
+export type GateKind = 'convergence-exhausted' | 'convergence-blocked' | 'check-unavailable' | GitHubGateKind
+
+/** The Gates the Host opens for a GitHub lifecycle round (G3b2, design §4.2-4.4, §4.6): each holds the round's wait
+ *  (`ciWait`) while a person answers, and its answers act on that round (state.ts answerGitHubGate). */
+export const GITHUB_GATE_KINDS = [
+  'github-no-ci',
+  'github-ci-cap',
+  'github-external-head',
+  'github-pr-ambiguous',
+  'github-pr-closed',
+  'github-ci-outside',
+  /** The carrier could not take the round to GitHub (no origin, HEAD, a lookup, a record…): retry or mark-failed. */
+  'github-carry'
+] as const
+export type GitHubGateKind = (typeof GITHUB_GATE_KINDS)[number]
+export const isGitHubGateKind = (k: string | null | undefined): k is GitHubGateKind =>
+  typeof k === 'string' && (GITHUB_GATE_KINDS as readonly string[]).includes(k)
 
 /** worker-start 가 세션을 띄우기 전에 Dispatch 에 적어 두는 자리표시자와 같은 모양(server.ts 의
  *  pendingSessionId). 순수 층은 node:crypto 를 못 쓰므로 newId 의 hex 를 빌린다 — 어떤 세션도 가리키지
@@ -202,6 +219,9 @@ export interface Job {
   /** Where the Job came from: a job source and its item (plugin Phase 4 J15). Set only by the Host, when it makes the
    *  Job from that item (`jobs-create-from-source`); no caller of `jobs-create` can give it. */
   source?: JobSourceRef
+  /** The GitHub lifecycle (design 2026-10-17 L2, L10): present = the Job's consent to push, open a PR and rerun CI on
+   *  its Runs' branches, with the policy written once when the Job was made. */
+  github?: GitHubLifecyclePolicy
 }
 
 /** A job source's item a Job was made from: the source (a plugin's id, or `github`), the item's id there, how a person
@@ -215,6 +235,10 @@ export interface JobSourceRef {
    *  a Job made before 4d. */
   title?: string
   url?: string
+  /** A GitHub issue's body hash and update time when the Job was made (GitHub lifecycle §6): the watch compares them,
+   *  and an edit after the Job started is shown, never folded into the objective. */
+  capturedBodyHash?: string
+  capturedUpdatedAt?: string
 }
 
 /** 한 번의 실행. **계획이 실제로 돈 기록이고, 계획 자체는 Job 이다.**
@@ -291,6 +315,10 @@ export interface JobRun {
   /** The git range this Run worked over (remote runtime design Phase 10): its base when it began and its head as it
    *  moved, recorded by the Host, so its changed files and diffs outlive a reaped worktree. */
   git?: GitRange
+  /** What the Host last read of this Run's pull request and CI (GitHub lifecycle). Written by the Host's
+   *  `runs-github-record` and, for merge-ready, by the lifecycle review's verdict (G5b); kept back from the public
+   *  surface, whose `github` field is derived from it (runView). */
+  githubState?: RunGitHubState
   /** 예약을 세울 때 이 회차도 함께 멈췄다.
    *
    *  **Job.paused 하나로 겸할 수 없다.** Dispatch 를 닫는 것만으로는 회차가 멈추지 않는다 — 닫힌
@@ -396,6 +424,28 @@ export interface Task {
    *  켠다. 검증(validateConfigId)과 독립이고, 둘 다 걸리면 검증이 먼저다 — 컴파일도 안 되는 코드를
    *  읽으라고 에이전트 세션을 태우는 것은 낭비다. */
   reviewRequested?: boolean
+  /** `'lifecycle'`: the Run-level Task Astera adds when the last ordinary Task of a GitHub lifecycle Run completes
+   *  (GitHub lifecycle design §3). It has no worker of its own. Absent on every other Task. */
+  kind?: 'lifecycle'
+  /** A lifecycle Task's round handed to the Host at `github:ci` (design §4): the round's results so far, applied with
+   *  the CI result in one verdict. Kept back from the public surface. */
+  ciWait?: {
+    since: string
+    done: CheckResult[]
+    /** The bound pull request and the head the Host pushed, once it did (G3b1): CI is read on this head only. */
+    pr?: number
+    sha?: string
+    /** When the current wait began (G3b2): the recorded push, or a person's "wait again". The no-CI grace and the cap
+     *  count from it, and the watch decides each wait once. */
+    waitingSince?: string
+    /** A person chose to go on without CI (`github-no-ci`): the watch settles the round passed, saying so. */
+    noCi?: true
+    /** A person chose this pull request among several (`github-pr-ambiguous`): the carrier binds it. */
+    bindPr?: number
+  }
+  /** How many of a lifecycle Task's GitHub CI failures Astera could not classify (G3c1, design §4.6): the first gets a
+   *  repair that diagnoses first, a second asks a person. Kept back from the public surface. */
+  ciUnknowns?: number
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
   createdAt: string
@@ -496,6 +546,10 @@ export interface Dispatch {
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께
    *  붙으므로, worker_done 이 도착했을 때 어느 쪽인지 아는 유일한 방법이다. */
   review?: boolean
+  /** The head a lifecycle Task's review reads: the Run's pushed head when the review opened, the one its spec's diff
+   *  names (GitHub lifecycle G5b). Merge-ready needs it to be the PR's head; the Host records `git.head` only after the
+   *  Dispatch ended, too late for the verdict. */
+  reviewHead?: string
   /** 이 Dispatch 가 구현이 아니라 수리인가, 그리고 왜. review 와 배타적이다. 직전 시도는 retryOf 가
    *  가리킨다 — attempt = Dispatch 라는 기존 모델 그대로다(설계 D4) */
   repair?: RepairReason
@@ -576,7 +630,8 @@ export { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS, DEFAULT_WAIT_TIMEOUT_
 
 const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   pending: ['ready', 'dispatched', 'blocked'],
-  ready: ['dispatched', 'blocked'],
+  // validating: a lifecycle Task has no worker and starts its checks straight away (GitHub lifecycle §3.3)
+  ready: ['dispatched', 'blocked', 'validating'],
   // A Task with a live worker is not gated: a Gate decides the task DAG the coordinator manages, and
   // halting a running worker is worker-stop's job, not a Gate's. `blocked` is nevertheless reachable
   // from `dispatched` because recovery needs it — when a worker is lost and the app cannot prove it is

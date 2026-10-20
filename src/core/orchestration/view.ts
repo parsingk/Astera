@@ -16,8 +16,10 @@ import type { JobRow, JobTask, OrchSnapshot, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import { coordinatorStarting, type OrchState } from './state'
 import { eventCountsOf } from './timeline'
-import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy } from './running'
-import { policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
+import { isTerminal, outcomeOf, outcomeOfTasks, tasksOwnedBy, withoutSupersededLifecycle } from './running'
+import { checkConfigIdsOf, policyOfJob, repairCountIn, reviewRoundIn } from './convergence'
+import { githubLifecycleOf } from '../github/view'
+import { isLifecycleTask, lifecycleFactsIn } from './lifecycleTask'
 import type { Dispatch, Gate, Job, JobRun, Task } from './types'
 
 /** 한 프로젝트에 속한 Run 들, 최신순.
@@ -77,7 +79,9 @@ export function progressOf(state: OrchState, runId: string): { done: number; tot
   return progressOfTasks(tasksOwnedBy(state, runId))
 }
 
-const progressOfTasks = (tasks: readonly Task[]): { done: number; total: number } => {
+const progressOfTasks = (all: readonly Task[]): { done: number; total: number } => {
+  // A lifecycle Task `runs reconverge` superseded is not part of the Run's work any more (G5c final review M1)
+  const tasks = withoutSupersededLifecycle(all)
   return { done: tasks.filter((t) => t.status === 'completed').length, total: tasks.length }
 }
 
@@ -161,6 +165,20 @@ function jobTaskOf(
   // "켜진 것" 으로 읽히면 안 된다. 기본값이 채워진 정책이라 화면이 3/2 를 지어내지 않는다.
   const policy = policyOfJob(task.runId === undefined ? undefined : ix.jobOfRun(task.runId))
   return {
+    // The lifecycle Task, and what its round waits on (G7b)
+    ...(isLifecycleTask(task)
+      ? {
+          lifecycle: task.ciWait
+            ? {
+                ciWait: {
+                  ...(task.ciWait.pr !== undefined ? { pr: task.ciWait.pr } : {}),
+                  ...(task.ciWait.sha !== undefined ? { sha: task.ciWait.sha } : {}),
+                  since: task.ciWait.waitingSince ?? task.ciWait.since
+                }
+              }
+            : {}
+        }
+      : {}),
     id: task.id,
     title: task.title,
     status: task.status,
@@ -324,6 +342,13 @@ function foldIndex(state: OrchState): FoldIndex {
  *  core.worktrees, and runsForProject needs it to map a worktree-rooted Run.cwd back to its
  *  repository (see there). nextFireOf is injected for the same reason again — a template's next
  *  fire time lives in the ticker's memory, not in OrchState. */
+/** Ordinary Tasks there are, and none names a local check (design §7.2 S16): every repair goes to GitHub CI unchecked
+ *  locally. The lifecycle Task is not one of them. */
+const noLocalCheck = (tasks: readonly Task[]): boolean => {
+  const ordinary = tasks.filter((t) => !isLifecycleTask(t))
+  return ordinary.length > 0 && ordinary.every((t) => checkConfigIdsOf(t).length === 0)
+}
+
 export function snapshotFor(
   state: OrchState,
   projectPath: string,
@@ -408,6 +433,23 @@ export function snapshotFor(
       ...(run !== undefined ? { fireOrdinal: run.ordinal } : {}),
       // Where the Job came from (plugin Phase 4 J18), on every row of the Job: the chip opens the ticket
       ...(job.source ? { source: job.source } : {}),
+      // A lifecycle Run's GitHub side, as runs get derives it (G7b)
+      // From the fold's index, scanning nothing per row (final review M1)
+      ...(run !== undefined && job.github
+        ? {
+            github: githubLifecycleOf(
+              job.github,
+              run.githubState,
+              lifecycleFactsIn(
+                ix.tasksByRun.get(run.id) ?? [],
+                (id) => ix.openGatesByTask.get(id)?.[0],
+                (id) => ix.dispatchesByTask.get(id) ?? [],
+                policyOfJob(job)?.maxFixAttempts
+              )
+            )
+          }
+        : {}),
+      ...(run !== undefined && job.github && noLocalCheck(ix.tasksByRun.get(run.id) ?? []) ? { githubNoLocalCheck: true } : {}),
       ...(run === undefined && job.schedule && nextFireOf(job.id) !== null
         ? { nextFireAt: nextFireOf(job.id) as number }
         : {}),

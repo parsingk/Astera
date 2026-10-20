@@ -4,7 +4,8 @@
 // is an argument. Main-side (view.ts pulls node:path in): not for tsconfig.web.json.
 import { repairCountOf, reviewRoundOf } from '../orchestration/convergence'
 import { jobOf, runIdOf, type OrchState } from '../orchestration/state'
-import type { Dispatch, Gate, GateKind, TaskStatus } from '../orchestration/types'
+import { isGitHubGateKind, type Dispatch, type Gate, type GateKind, type TaskStatus } from '../orchestration/types'
+import type { GitHubLogKind } from '../github/lifecycle'
 import { outcomeOf } from '../orchestration/view'
 import type { JournalActor } from './actor'
 
@@ -63,6 +64,16 @@ export type ContinuityEventType =
   | 'RECOVERY_REQUIRES_REVIEW'
   | 'RECOVERY_COMPLETED'
   | 'RECOVERY_FAILED'
+  // GitHub lifecycle G6 (design §5.5, L12): one per entry of a Run's GitHub log
+  | 'GITHUB_PR_BOUND'
+  | 'GITHUB_PR_CREATED'
+  | 'GITHUB_HEAD_CHANGED'
+  | 'GITHUB_CI_PASSED'
+  | 'GITHUB_CI_FAILED'
+  | 'GITHUB_CI_RERUN_REQUESTED'
+  | 'GITHUB_SOURCE_CHANGED'
+  | 'GITHUB_MERGE_READY'
+  | 'GITHUB_MERGE_READY_INVALIDATED'
 
 /** Every event type by name. A Record so the compiler rejects a type left out here. */
 const EVENT_TYPES: Record<ContinuityEventType, true> = {
@@ -115,7 +126,33 @@ const EVENT_TYPES: Record<ContinuityEventType, true> = {
   RECOVERY_TASK_RESTARTED: true,
   RECOVERY_REQUIRES_REVIEW: true,
   RECOVERY_COMPLETED: true,
-  RECOVERY_FAILED: true
+  RECOVERY_FAILED: true,
+  GITHUB_PR_BOUND: true,
+  GITHUB_PR_CREATED: true,
+  GITHUB_HEAD_CHANGED: true,
+  GITHUB_CI_PASSED: true,
+  GITHUB_CI_FAILED: true,
+  GITHUB_CI_RERUN_REQUESTED: true,
+  GITHUB_SOURCE_CHANGED: true,
+  GITHUB_MERGE_READY: true,
+  GITHUB_MERGE_READY_INVALIDATED: true
+}
+
+/** The journal row of each GitHub log kind (GitHub lifecycle G6, design §5.5) — a Record, so a new log kind is a compile
+ *  error here as it is in publicEvents.ts's GITHUB_EVENT. */
+/** null: a timeline line only (G7b; design §5.5 names no journal row for it). */
+const GITHUB_ROW: Record<GitHubLogKind, ContinuityEventType | null> = {
+  'pr-bound': 'GITHUB_PR_BOUND',
+  'pr-created': 'GITHUB_PR_CREATED',
+  pushed: null,
+  'ci-started': null,
+  'head-changed': 'GITHUB_HEAD_CHANGED',
+  'ci-passed': 'GITHUB_CI_PASSED',
+  'ci-failed': 'GITHUB_CI_FAILED',
+  'ci-rerun': 'GITHUB_CI_RERUN_REQUESTED',
+  'source-changed': 'GITHUB_SOURCE_CHANGED',
+  'merge-ready': 'GITHUB_MERGE_READY',
+  invalidated: 'GITHUB_MERGE_READY_INVALIDATED'
 }
 
 /** Whether `v` names an event type this build knows (a row sent over the wire is checked with it). */
@@ -170,7 +207,9 @@ function runStartEvents(prev: OrchState, next: OrchState, now: string, stamp: st
         // 이제는 모든 회차가 Job 을 가리키므로 이름도 그것이다.
         jobId: run.jobId,
         ordinal: run.ordinal,
-        convergence: job?.convergence ?? null
+        convergence: job?.convergence ?? null,
+        // The GitHub lifecycle's policy (design 2026-10-17 §5.1): the Job's, written once when it was made
+        github: job?.github ?? null
       })
     )
   }
@@ -197,8 +236,9 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string, stamp: stri
 }
 
 /** Whether a Gate of this kind is a verdict's result. A `check-unavailable` one is not (plugin Phase 5 C9): the check
- *  could not be made, as a Gate with no kind says a check could not run. */
-const isVerdictGate = (kind: GateKind | undefined): boolean => kind !== undefined && kind !== 'check-unavailable'
+ *  could not be made, as a Gate with no kind says a check could not run. Nor is a GitHub one (GitHub lifecycle G3b2): it
+ *  holds the round's wait while a person answers. */
+const isVerdictGate = (kind: GateKind | undefined): boolean => kind !== undefined && kind !== 'check-unavailable' && !isGitHubGateKind(kind)
 
 /** Which events a Task transition is. A check's verdict (validating → a state other than blocked)
  *  comes first; blocked out of validating is ordinarily a question about an interrupted check, not a
@@ -410,6 +450,36 @@ function dispatchEvents(prev: OrchState, next: OrchState, now: string, stamp: st
   return out
 }
 
+/** The GitHub log entries a Run's record gained in this write (GitHub lifecycle G6, design §5.5), one row each, as the
+ *  public events read them (publicEvents.ts githubEventsOf). One-shot: keyed on the entry's seq, which is never reused,
+ *  and at the entry's own time. */
+function githubEvents(prev: OrchState, next: OrchState): ContinuityEvent[] {
+  const before = new Map(prev.runs.map((r) => [r.id, r.githubState]))
+  const out: ContinuityEvent[] = []
+  for (const run of next.runs) {
+    const gs = run.githubState
+    const was = before.get(run.id)
+    if (gs === undefined || gs === was) continue
+    const seen = was?.seq ?? 0
+    for (const e of gs.log) {
+      if (e.seq <= seen) continue
+      const type = GITHUB_ROW[e.kind]
+      if (type === null) continue
+      out.push(
+        ev({ runId: run.id }, type, e.at, `${type}:${run.id}:${e.seq}`, {
+          seq: e.seq,
+          ...(e.pr !== undefined ? { pr: e.pr } : {}),
+          ...(e.sha !== undefined ? { sha: e.sha } : {}),
+          ...(e.check !== undefined ? { check: e.check } : {}),
+          ...(e.class !== undefined ? { class: e.class } : {}),
+          ...(e.reason !== undefined ? { reason: e.reason } : {})
+        })
+      )
+    }
+  }
+  return out
+}
+
 /** A Gate that is resolved now and was not before (P3). Keyed on the Gate: it resolves once. */
 function gateEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
   const before = new Map(prev.gates.map((g) => [g.id, g]))
@@ -428,13 +498,15 @@ function gateEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
   return out
 }
 
-/** Everything the write prev → next did, in journal order: runs that started, then task transitions,
+/** Everything the write prev → next did, in journal order: runs that started, then the Runs' GitHub events (before the
+ *  Task rows, as the public events put merge-ready ahead of the completion it comes with), then task transitions,
  *  then the questions answered, then dispatch (worker attempt) changes, then runs that paused, resumed
  *  or finished. `stamp` ends every repeatable row's key (P1, P2): the Host passes
  *  `<hostStartedAt>#<version>`, everyone else the default, `now`. */
 export function deriveEvents(prev: OrchState, next: OrchState, now: string, stamp: string = now): ContinuityEvent[] {
   return [
     ...runStartEvents(prev, next, now, stamp),
+    ...githubEvents(prev, next),
     ...taskEvents(prev, next, now, stamp),
     // After the Task rows (P3): a transition's first row stays the Task's.
     ...gateEvents(prev, next, now),

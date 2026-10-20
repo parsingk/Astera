@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { deriveEvents, isContinuityEventType } from './events'
 import { emptyState, type OrchState } from '../orchestration/state'
-import { FAILURE_LIMIT, type Task, type Dispatch } from '../orchestration/types'
+import { FAILURE_LIMIT, GITHUB_GATE_KINDS, type Task, type Dispatch } from '../orchestration/types'
 import { stateFromLegacy } from '../orchestration/legacyState'
+import type { GitHubLogEntry } from '../github/lifecycle'
 import type { LegacyRun } from '../orchestration/legacy'
 
 const NOW = '2026-09-08T10:00:00.000Z'
@@ -388,6 +389,15 @@ describe('deriveEvents — convergence', () => {
     expect(ev.map((e) => e.type)).toEqual(['TASK_WAITING_INPUT'])
     expect(ev[0].payload.checks).toBeUndefined()
   })
+  // GitHub lifecycle G3b2: a GitHub question holds the round's wait; it ends no round in failure
+  it('a GitHub Gate is no verdict: the round waits on a person', () => {
+    for (const kind of GITHUB_GATE_KINDS) {
+      const gate = { id: 'g1', runId: 'run_1', taskId: 'tsk_1', question: 'q', status: 'open' as const, createdAt: NOW, kind, options: ['wait', 'mark-failed'] }
+      const ev = deriveEvents(withRun(run(), [task({ status: 'validating' })]), { ...withRun(run(), [task({ status: 'blocked', checks })]), gates: [gate] }, NOW)
+      expect(ev.map((e) => e.type), kind).toEqual(['TASK_WAITING_INPUT'])
+      expect(ev[0].payload.checks, kind).toBeUndefined()
+    }
+  })
   it('Gate 없는 interrupted block 은 판정이 아니라 이전 라운드의 checks 를 새것처럼 싣지 않는다', () => {
     // A second-round Task still carries round 1's checks (the field is overwritten only when a new
     // round finishes) when blockForValidation interrupts round 2 before any check ran — no Gate kind,
@@ -406,6 +416,14 @@ describe('deriveEvents — convergence', () => {
     expect(ev.find((e) => e.type === 'ATTEMPT_START_REQUESTED')?.payload.repair).toBe('check-failure')
     const started = deriveEvents(emptyState(), withRun(run({ convergence: { maxFixAttempts: 2 } })), NOW)[0]
     expect(started.payload.convergence).toEqual({ maxFixAttempts: 2 })
+  })
+  // GitHub lifecycle design §5.1 (final review M3): the run's start records the Job's GitHub policy beside convergence
+  it('JOB_RUN_STARTED 는 GitHub lifecycle 정책을 싣고, 없으면 null 이다', () => {
+    const policy = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    const s = withRun(run())
+    const lifecycle = { ...s, jobs: s.jobs.map((j) => ({ ...j, github: policy })) }
+    expect(deriveEvents(emptyState(), lifecycle, NOW)[0].payload.github).toEqual(policy)
+    expect(deriveEvents(emptyState(), s, NOW)[0].payload.github).toBeNull()
   })
   it('one-shot 키(dispatch id로 끝난다)는 다른 now 에 다시 관찰해도 그대로다; repeatable 키(now 로 끝난다)는 아니다', () => {
     // This is what the journal's `OR IGNORE` insert actually depends on (design §5 "Dedupe"), not
@@ -468,8 +486,63 @@ describe('deriveEvents — keys (Host journal J6, P2)', () => {
 
   it('knows every event type by name, and nothing else', () => {
     expect(isContinuityEventType('GATE_RESOLVED')).toBe(true)
+    expect(isContinuityEventType('GITHUB_MERGE_READY')).toBe(true)
+    expect(isContinuityEventType('GITHUB_MERGE_READY_INVALIDATED')).toBe(true)
     expect(isContinuityEventType('RECOVERY_FAILED')).toBe(true)
     expect(isContinuityEventType('toString')).toBe(false)
     expect(isContinuityEventType('TASK_EXPLODED')).toBe(false)
+  })
+})
+
+// GitHub lifecycle G6 (design §5.5, L12): a lifecycle Run's GitHub events are journaled as its record logs them — one row
+// per new log entry, keyed on the entry's seq (never reused), at the entry's own time, before the write's Task rows
+describe('GITHUB_* rows', () => {
+  const T2 = '2026-09-08T09:30:00.000Z'
+  const lifecycle = (log: GitHubLogEntry[], status: Task['status'] = 'reviewing'): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: T1, convergence: {} }],
+    runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: T1, githubState: { log, seq: log.at(-1)?.seq ?? 0 } }],
+    tasks: [task({ id: 'tsk_l', kind: 'lifecycle', status })]
+  })
+  const bound: GitHubLogEntry = { seq: 1, at: T1, kind: 'pr-created', pr: 12 }
+
+  it('turns each new log entry into a row, in order, keyed on its seq, at its own time', () => {
+    const next = lifecycle([bound, { seq: 2, at: T2, kind: 'ci-failed', sha: 'a'.repeat(40), check: 'build', class: 'test' }, { seq: 3, at: NOW, kind: 'ci-rerun', sha: 'a'.repeat(40), check: 'build' }])
+    const rows = deriveEvents(lifecycle([bound]), next, NOW).filter((e) => e.type.startsWith('GITHUB_'))
+    expect(rows).toEqual([
+      { runId: 'run_1', type: 'GITHUB_CI_FAILED', at: T2, idempotencyKey: 'GITHUB_CI_FAILED:run_1:2', payload: { seq: 2, sha: 'a'.repeat(40), check: 'build', class: 'test' } },
+      { runId: 'run_1', type: 'GITHUB_CI_RERUN_REQUESTED', at: NOW, idempotencyKey: 'GITHUB_CI_RERUN_REQUESTED:run_1:3', payload: { seq: 3, sha: 'a'.repeat(40), check: 'build' } }
+    ])
+  })
+
+  it('maps every kind, and the same diff gives the same keys', () => {
+    const kinds: GitHubLogEntry['kind'][] = ['pr-bound', 'pr-created', 'head-changed', 'ci-passed', 'ci-failed', 'ci-rerun', 'source-changed', 'merge-ready', 'invalidated']
+    const next = lifecycle(kinds.map((kind, i) => ({ seq: i + 1, at: T2, kind })))
+    const once = deriveEvents(lifecycle([]), next, NOW).filter((e) => e.type.startsWith('GITHUB_'))
+    expect(once.map((e) => e.type)).toEqual([
+      'GITHUB_PR_BOUND', 'GITHUB_PR_CREATED', 'GITHUB_HEAD_CHANGED', 'GITHUB_CI_PASSED', 'GITHUB_CI_FAILED',
+      'GITHUB_CI_RERUN_REQUESTED', 'GITHUB_SOURCE_CHANGED', 'GITHUB_MERGE_READY', 'GITHUB_MERGE_READY_INVALIDATED'
+    ])
+    const again = deriveEvents(lifecycle([]), next, '2026-09-08T11:00:00.000Z', 'h#9').filter((e) => e.type.startsWith('GITHUB_'))
+    expect(again.map((e) => e.idempotencyKey)).toEqual(once.map((e) => e.idempotencyKey))
+  })
+
+  // G7b: the push and CI starting are timeline lines; design §5.5 names no journal row for them
+  it('writes no row for a push or CI starting', () => {
+    const next = lifecycle([{ seq: 1, at: T2, kind: 'pushed' }, { seq: 2, at: T2, kind: 'ci-started' }, { seq: 3, at: T2, kind: 'ci-passed' }])
+    expect(deriveEvents(lifecycle([]), next, NOW).filter((e) => e.type.startsWith('GITHUB_')).map((e) => e.type)).toEqual(['GITHUB_CI_PASSED'])
+  })
+
+  it('comes before the write’s Task rows: merge-ready ahead of the lifecycle Task completing', () => {
+    const rows = deriveEvents(lifecycle([bound]), lifecycle([bound, { seq: 2, at: NOW, kind: 'merge-ready', sha: 'a'.repeat(40), pr: 12 }], 'completed'), NOW)
+    const ready = rows.findIndex((e) => e.type === 'GITHUB_MERGE_READY')
+    const taskRow = rows.findIndex((e) => e.type.startsWith('TASK_'))
+    expect(ready).toBeGreaterThanOrEqual(0)
+    expect(taskRow).toBeGreaterThan(ready)
+  })
+
+  it('writes nothing for a record that did not change', () => {
+    const same = lifecycle([bound])
+    expect(deriveEvents(same, { ...same, tasks: [...same.tasks] }, NOW).filter((e) => e.type.startsWith('GITHUB_'))).toEqual([])
   })
 })

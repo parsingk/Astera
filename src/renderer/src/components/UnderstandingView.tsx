@@ -3,6 +3,7 @@ import type { OpenSessionTask } from '../../../core/types'
 import type { ProjectUnderstanding, RecordStatus, WorkRecord } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR, StatusGlyph } from './UnderstandingIcons'
+import { requestShownOf } from '../../../core/understanding/requestShown'
 
 const dateOf = (iso: string): string => {
   const d = new Date(iso)
@@ -149,7 +150,7 @@ export function UnderstandingView({
               <StatusGlyph glyph={RECORD_GLYPH[r.status]} spinning={r.status === 'generating'} />
             </span>
             <span className="hiw-body">
-              <span className="hiw-name" title={r.request}>{r.explanation?.title ?? r.request}</span>
+              <span className="hiw-name" title={requestShownOf(r.request)}>{r.explanation?.title ?? requestShownOf(r.request)}</span>
               <span className="hiw-meta">
                 {dateOf(r.at)} · {sourceLabel(r)}
               </span>

@@ -149,7 +149,8 @@ export function createHostSessionEvents(d: {
     if (e.reattach) return
     const rest =
       e.state === 'waiting'
-        ? { type: 'session.limit_waiting' as const, payload: { ...(e.scope ? { scope: e.scope } : {}), ...(e.nextRetryAt ? { nextRetryAt: e.nextRetryAt } : {}) } }
+        ? // A limit judged from usage alone (manual) resumes nothing, so no retry time goes out with it.
+          { type: 'session.limit_waiting' as const, payload: { ...(e.scope ? { scope: e.scope } : {}), ...(e.nextRetryAt && !e.manual ? { nextRetryAt: e.nextRetryAt } : {}) } }
         : e.state === 'switching' && e.accountLabel
           ? { type: 'session.account_switched' as const, payload: { accountLabel: e.accountLabel } }
           : null

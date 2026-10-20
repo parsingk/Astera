@@ -22,6 +22,11 @@ import {
   createGate,
   createQuestion,
   createJob,
+  beginLifecycleValidation,
+  beginLifecycleCi,
+  recordLifecycleCiWait,
+  openGitHubGate,
+  answerGitHubGate,
   createTask,
   emptyState,
   latestRun,
@@ -46,6 +51,8 @@ import {
   resumeRun,
   setRunWorktree,
   recordRunGit,
+  recordRunGitHub,
+  reconvergeRun,
   resolveRunId,
   recordDispatchGit,
   placedByApp,
@@ -83,9 +90,12 @@ import {
   DEFAULT_WAIT_TIMEOUT_MS,
   DEFAULT_CONCURRENCY,
   FAILURE_LIMIT,
+  GITHUB_GATE_KINDS,
   canTransition,
+  isGitHubGateKind,
   isPlaceholderSessionId,
   recomputeReady,
+  type CheckResult,
   type ConvergencePolicy,
   type Dispatch,
   type Job,
@@ -105,28 +115,36 @@ import type { Provider } from '../providers/meta'
 import { isValidRule, type ScheduleRule } from '../scheduler/rule'
 import { parseCheckFlag } from '../workUnit/verification'
 import { isTerminal as taskFinished, outcomeOf, progressOf } from './view'
-import { runningRunCount } from './running'
+import { runningRunCount, withoutSupersededLifecycle } from './running'
 import { FINISHED_RUN_GRACE_MS } from './exec/dispatchLoop'
 import { appDriven } from './schedule'
 import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
-import { failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
-import { prForBranch } from '../github/prs'
+import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
+import { ghRepoArg, repoOfBinding, type GitHubRepo } from '../github/remote'
+import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
 import { fillFromCommits, type CommitSummary } from '../github/fill'
 import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
+import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFECYCLE_CHECK_NAME_MAX, type GitHubLifecyclePolicy } from '../github/lifecycle'
+import { lifecyclePreflight } from '../github/preflight'
+import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
+import { RepairNeeded } from '../settings/repairNeeded'
+import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
+import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../sessions/pty'
 import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { parseHandoffBody } from '../handoff/parse'
 import type { HandoffBody } from '../handoff/types'
 import type { Lang } from '../i18n'
-import { isOverrideCompletion, policyOf } from './convergence'
+import { isOverrideCompletion, policyOf, resolvedConvergence } from './convergence'
 import { leftNothingBehind } from '../host/orchProtocol'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
 import { UNREADABLE, recordDetail, recordSummary, recordsFor, type StoreShape } from '../understanding/read'
-import { JOB_SOURCE, SOURCE_COMMANDS, createFromContext, sourcesCommand, type JobSourcesDeps } from './commandSources'
+import { JOB_SOURCE, SOURCE_COMMANDS, capturedIssue, createFromContext, sourcesCommand, type JobSourcesDeps } from './commandSources'
 export { JOB_SOURCE } from './commandSources'
 import { pluginIdOfCheck, type CompletionCheckInput, type PluginCheckAnswer } from './pluginChecks'
 import { checkIdsOf, pluginCheckRefusal, tasksOfNextRun } from './commandChecks'
@@ -277,13 +295,16 @@ export interface OrchServerDeps {
     /** Forwarded straight through to OrchCoordinator.startWorker, where the reason it exists is
      *  documented. Type-only pass-through here — this file adds no behaviour for it. */
     launchPhrase?: string
+    /** The accounts to roll through when the Task names none of its own (GitHub lifecycle G3c1): a lifecycle Task has
+     *  no account by design, and its repair rolls through the Run's latest ordinary Task's (startWorkerWithChain). */
+    rollFrom?: string[]
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
    *
    *  **Dispatch 가 닫혔는데 세션이 살아 있는 자리에서만 부른다.** 워커는 보고한 뒤에도 일부러 살아
    *  있고(가이드 8절), 롤링 체인은 세션이 죽을 때만 버려졌다. 그 사이의 창에서 롤링은 이미 끝난 일의
-   *  세션에 재개 프롬프트를 타이핑하거나(claude 의 idle nudge) 그 세션을 죽이고 다시 띄운다(codex 의
+   *  세션에 재개 프롬프트를 타이핑하거나(먼저 걸린 대기가 끝난 claude 의 resumeInPlace) 그 세션을 죽이고 다시 띄운다(codex 의
    *  maxed+silent 폴백) — 아무도 요청하지 않은 작업이고, 워크트리 워커라면 커밋 의무까지 딸린다.
    *
    *  **세션을 죽이는 경로에서는 부르지 않는다**(worker-stop, run-delete, run-pause, 그리고
@@ -545,7 +566,7 @@ export interface OrchServerDeps {
    *  못했을 때(예: 이 Task 를 막는 다른 Gate 가 이미 열려 있다) gate-resolve 의 200 응답이 그 사실을
    *  담을 수 있게 한다 — repairOnce 자신은 실패를 이미 로그하므로(그 함수의 주석) 이 반환값은 응답에
    *  싣는 용도이지, 여기서 또 로그할 것이 있어서가 아니다. */
-  repairOnce?(a: { taskId: string }): Promise<{ ok: true } | { ok: false; error: string }>
+  repairOnce?(a: { taskId: string; from?: OrchState }): Promise<{ ok: true } | { ok: false; error: string }>
   /** Gate 문구의 언어. 배선이 앱 언어를 넘긴다(applyValidationResult/applyReviewResult 의 `lang`
    *  으로 그대로 간다); 주입되지 않으면 영어다.
    *
@@ -639,6 +660,14 @@ export interface OrchServerDeps {
     createPr(req: PrCreateRequest): Promise<PrCreateResult>
     readCommits(worktree: string, base: string): Promise<CommitSummary[]>
     isClean(worktree: string): Promise<{ changedCount: number }>
+    /** The folder's `origin` URL, or null (GitHub lifecycle L24); the lifecycle's preflight reads it. */
+    originOf?(cwd: string): Promise<string | null>
+    /** The Run root brought up to `origin/<branch>`, fast-forward only: "continue" on a GitHub external-head question
+     *  (GitHub lifecycle G3b2). */
+    fastForward?(cwd: string, branch: string): Promise<{ ok: true } | { ok: false; message: string }>
+    /** Settings › GitHub's policy defaults a new lifecycle Job takes (G7a, design §5.1): app-settings.json read when the
+     *  Job is made. Rejects when the file cannot be read. Absent, the built-in defaults. */
+    lifecycleDefaults?(): Promise<GitHubLifecycleDefaults>
   }
   /** How It Works records (MCP P2-C): understanding.json as it is on disk now, read on every call and
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
@@ -691,6 +720,9 @@ export interface SessionCreate {
   prompt?: string
   rollAccountIds: string[]
   unattended?: 'hold' | 'deny-after-60s'
+  /** `'agent'` when the CLI, MCP or a plugin asked for it (SessionInfo.startedBy): its tab closes when it ends. Absent
+   *  for a person's, from a remote controller's new-session dialog or the app. */
+  startedBy?: 'agent'
 }
 
 type Reply = { status: number; body: unknown }
@@ -707,6 +739,11 @@ const bad = (msg: string): Reply => ({ status: 400, body: { error: msg } })
  *  "그런 id 가 없다"(exit 4)를 구별할 수 있어야 한다(공개 CLI 설계 §8). 그 전에는 둘 다 400 이라
  *  부르는 쪽이 문구를 읽어야 알 수 있었다. */
 const notFound = (msg: string): Reply => ({ status: 404, body: { error: msg } })
+/** The GitHub writes a worker session is refused (GitHub lifecycle §7.1, G3c2, and `runs-reconverge` since G5c);
+ *  `jobs-create` with the lifecycle on and `jobs-create-from-source` from the github source or with the lifecycle on are
+ *  refused beside them. */
+const GITHUB_WRITES: ReadonlySet<string> = new Set(['github-pr-create', 'github-ci-rerun', 'jobs-create-from-issue', 'runs-reconverge'])
+const githubWriteRefusal = (cmd: string): string => `worker sessions cannot write to GitHub: ${cmd} is the coordinator's or the person's`
 /** A pure-layer refusal handed straight to the caller: 404 when it is marked `missing` (the id the
  *  caller named is not there — state.ts marks it where it refuses), 400 otherwise. For the cases that
  *  do not go through `commit()`; the same fact must not exit 4 from one command and 2 from another. */
@@ -714,6 +751,18 @@ const refused = (r: { error: string; missing?: true }): Reply =>
   r.missing ? notFound(r.error) : bad(r.error)
 const denied = (msg: string): Reply => ({ status: 403, body: { error: msg } })
 const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
+
+/** A lifecycle Task is carried by Astera (GitHub lifecycle §3.3): no worker is started on it by request. */
+const LIFECYCLE_NO_WORKER = 'Astera carries this Task through GitHub itself; it has no worker'
+
+const CHECK_STATUSES: readonly string[] = ['passed', 'failed', 'timed-out', 'not-run', 'error']
+/** A validation round's results as a validator sends them (lifecycle-ci-begin): each names its check and a status. */
+const checkResultsOk = (v: unknown): v is CheckResult[] =>
+  Array.isArray(v) &&
+  v.every((r) => {
+    const o = r as Record<string, unknown> | null
+    return typeof o === 'object' && o !== null && typeof o.configId === 'string' && typeof o.name === 'string' && CHECK_STATUSES.includes(o.status as string)
+  })
 /** How long after its `startedAt` a `pending:` Dispatch still counts as a start in flight (Host S2
  *  fix round 2, N1). A start waits at most a spawn deadline (SPAWN_DEADLINE_MS, 20 s) plus the
  *  coordinator's idle wait before its prompt (30 s), plus trust and account reads; two minutes covers
@@ -779,7 +828,8 @@ const runningRunOf = (s: OrchState, job: Job, now: string): JobRun | undefined =
  * never one `jobs run` refuses on, and a Run `jobs run` refuses on is never replaced.
  */
 const runMoves = (s: OrchState, job: Job, run: JobRun, now: string): boolean => {
-  const tasks = s.tasks.filter((t) => t.runId === run.id)
+  // A lifecycle Task `runs reconverge` superseded is not part of the Run's work any more (G5c final review I1)
+  const tasks = withoutSupersededLifecycle(s.tasks.filter((t) => t.runId === run.id))
   if (tasks.length > 0 && tasks.every(taskFinished)) return false
   if (run.paused === true || job.paused === true) return false
   if (coordinatorStarting(run, Date.parse(now))) return true
@@ -830,7 +880,9 @@ const startable = (tasks: readonly Task[], coordinated: boolean): Set<string> =>
         return t.consecutiveFailures < FAILURE_LIMIT
       case 'failed':
       case 'dispatched':
-        return coordinated && t.consecutiveFailures < FAILURE_LIMIT
+        // A lifecycle Task has no worker, so a coordinator never starts it again: worker-start refuses it (G5c final
+        // review I1). Only a person's task-update or `runs reconverge` moves it on.
+        return coordinated && t.kind !== 'lifecycle' && t.consecutiveFailures < FAILURE_LIMIT
       case 'pending':
         return t.deps.every(canComplete)
       default:
@@ -1076,7 +1128,7 @@ export function githubTarget(
   s: OrchState,
   args: Record<string, unknown>
 ): GithubTarget | { error: Reply } {
-  if (!deps.github) return { error: conflict('GitHub commands are answered by the Astera Host, and this caller is not one') }
+  if (!deps.github) return { error: conflict(NO_GITHUB_HERE) }
   const gh = deps.github.run
   if ((args.run === undefined) === (args.project === undefined))
     return { error: bad('give exactly one of --run (a Run id) or --project (a project id)') }
@@ -1096,6 +1148,30 @@ export function githubTarget(
   if (id === null) return { error: bad('--project needs a value: a project id (from `projects list`)') }
   const project = findProject(s, id)
   return project ? { gh, cwd: project.path, project } : { error: notFound(`unknown project: ${id}`) }
+}
+
+const NO_GITHUB_HERE = 'GitHub commands are answered by the Astera Host, and this caller is not one'
+
+/** The failed Actions run a `rerun` answer reruns (GitHub lifecycle G4): the failing check of the CI read on the head the
+ *  round waits on, in the bound repository, from the Run root; or why there is none. */
+function rerunTargetOf(
+  s: OrchState,
+  task: Task
+): { cwd: string; repo: GitHubRepo; ciRunId: number; attempt: number; sha: string; check: string; externalId: string } | string {
+  const run = s.runs.find((r) => r.id === task.runId)
+  const gs = run?.githubState
+  const repo = gs?.binding ? repoOfBinding(gs.binding) : null
+  const sha = task.ciWait?.sha
+  const ci = gs?.ci
+  // The failure names its run (final review M2); the check by its id is the fallback for a record older than that.
+  // Never by name: two workflows can have checks of one name.
+  const failure = ci?.verdict === 'failed' && sha !== undefined && ci.sha === sha ? ci.failure : undefined
+  const check = failure ? ci?.checks.find((c) => c.externalId === failure.externalId) : undefined
+  const ciRunId = failure?.ciRunId ?? check?.ciRunId
+  if (!run?.worktree || !repo || sha === undefined || !failure || ciRunId === undefined)
+    return 'No failed CI run of the head this round waits on can be rerun: wait, or mark the Task failed'
+  const attempt = failure.ciRunAttempt ?? check?.ciRunAttempt ?? 1
+  return { cwd: run.worktree, repo, ciRunId, attempt, sha, check: failure.check, externalId: failure.externalId }
 }
 
 /** A failed gh call as a reply: not-found 404, something the person must fix (gh missing, not logged
@@ -1234,8 +1310,20 @@ const jobSourceOf = (args: Record<string, unknown>): JobSourceRef | undefined =>
     itemId: r.itemId,
     label: r.label,
     ...(typeof r.title === 'string' ? { title: r.title } : {}),
-    ...(typeof r.url === 'string' ? { url: r.url } : {})
+    ...(typeof r.url === 'string' ? { url: r.url } : {}),
+    ...(typeof r.capturedBodyHash === 'string' ? { capturedBodyHash: r.capturedBodyHash } : {}),
+    ...(typeof r.capturedUpdatedAt === 'string' ? { capturedUpdatedAt: r.capturedUpdatedAt } : {})
   }
+}
+
+/** `--github-checks a,b` from the CLI, or a list from MCP: the names trimmed, once each; [] when absent; null when
+ *  malformed (an empty name, a bare flag, a value that is not text). */
+const checkNamesOf = (v: unknown): string[] | null => {
+  if (v === undefined) return []
+  const raw: unknown[] | null = typeof v === 'string' ? v.split(',') : Array.isArray(v) ? v : null
+  if (raw === null || raw.some((x) => typeof x !== 'string')) return null
+  const names = (raw as string[]).map((x) => x.trim())
+  return names.some((x) => x === '') ? null : [...new Set(names)]
 }
 
 export async function handleCommand(
@@ -1246,6 +1334,15 @@ export async function handleCommand(
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
+  // A worker asking for a Job from a GitHub issue (jobs-create-from-issue's Job) or a lifecycle Job from any source is
+  // refused before the source is read (GitHub lifecycle G3c2, §7.1; final review M4)
+  if (
+    cmd === 'jobs-create-from-source' &&
+    (args.source === 'github' || args.githubLifecycle === true) &&
+    caller.sessionId !== '' &&
+    deps.getState().dispatches.some((d) => d.sessionId === caller.sessionId)
+  )
+    return denied(githubWriteRefusal(cmd))
   // The job-source commands (plugin Phase 4), in a module of their own; jobs-create-from-source comes back here
   if (SOURCE_COMMANDS.has(cmd)) return sourcesCommand(deps, caller, cmd, args, handleCommand)
   if (cmd === 'browser-js') {
@@ -1308,6 +1405,11 @@ export async function handleCommand(
     s.dispatches.filter((d) => d.sessionId === caller.sessionId).map((d) => d.id)
   )
   const isWorker = myDispatchIds.size > 0
+  // Worker sessions do not write to GitHub through Astera (GitHub lifecycle §7.1, G3c2): a pull request, a CI rerun, a
+  // Job from an issue and a Job's lifecycle are the coordinator's or the person's. The agent still has its own git and
+  // gh: this keeps a well-meaning agent off Astera's write commands, and is no sandbox (design S8). Before
+  // COORDINATOR_ONLY, so a lifecycle Job from a worker names the command it sent, not run-create.
+  if (isWorker && (GITHUB_WRITES.has(cmd) || (cmd === 'jobs-create' && args.githubLifecycle === true))) return denied(githubWriteRefusal(cmd))
   if (isWorker && COORDINATOR_ONLY.has(cmd)) return denied(`worker sessions cannot call ${cmd}`)
   // **The driving loop's own calls are not an agent's** (final review M3). `run-coordinator-stop --gone`
   // empties a slot with nothing stopped, and a coordinator sending it with its own id would orphan
@@ -1550,6 +1652,7 @@ export async function handleCommand(
           // 스냅샷이라 이 회차가 없고, 그러면 policyOf 가 회차를 찾지 못해 정책이 걸린 Job 도
           // "정책 없음" 으로 읽힌다 — 코디네이터가 수렴 절 없는 브리핑을 받는다.
           convergence: policyOf(base, { runId: target.id }) !== null,
+          githubLifecycle: job.github !== undefined,
           jobId: job.id,
           accountId
         })
@@ -1698,6 +1801,25 @@ export async function handleCommand(
           convergence.maxTotalMinutes = n
         }
       }
+      // The GitHub lifecycle (design 2026-10-17 L2, L10): the Job's consent to push, open a PR and rerun CI on its Runs'
+      // branches, its policy written once here. It rides on convergence, which it turns on with defaults when not given.
+      // A worker session never gets here: run-create is in COORDINATOR_ONLY, and jobs-create and the from-source and
+      // from-issue paths all come through run-create with the same caller (design §7.1 holds by that).
+      let github: GitHubLifecyclePolicy | undefined
+      const wantsGithub = args.githubLifecycle === true
+      if (args.githubChecks !== undefined && !wantsGithub) return bad('--github-checks requires --github-lifecycle')
+      if (wantsGithub) {
+        const checks = checkNamesOf(args.githubChecks)
+        if (checks === null) return bad('--github-checks takes check names, comma separated')
+        if (checks.length > LIFECYCLE_CHECKS_MAX || checks.some((n) => n.length > LIFECYCLE_CHECK_NAME_MAX))
+          return bad(`--github-checks takes at most ${LIFECYCLE_CHECKS_MAX} check names, each at most ${LIFECYCLE_CHECK_NAME_MAX} characters`)
+        github = {
+          ci: checks.length > 0 ? { mode: 'selected', selectedChecks: checks } : { mode: 'required' },
+          ...GITHUB_LIFECYCLE_DEFAULTS
+        }
+        // Its repair budget written in as numbers, a snapshot like the rest of its policy (acceptance fixes Task 6)
+        convergence = resolvedConvergence(convergence ?? {})
+      }
       // 이 Run 을 관리할 코디네이터 세션의 계정. **하나다** — 목록이 아닌 이유는 Run.coordinatorAccountId
       // 의 주석에 있다(갈아타는 대신 같은 세션에서 기다린다). 없으면 코디네이터를 띄우지 않는다:
       // `--auto` 면 앱이 돌리고, 아니면 이 명령을 부른 세션이 몬다(아래 끝의 externalCoordinatorSessionId).
@@ -1774,6 +1896,27 @@ export async function handleCommand(
       // The scheduler added in this branch runs after every setState, and the sidebar's "+ 새 작업"
       // button makes a person creating a second Run while workers are running ordinary, not rare —
       // so the window this await always had is now one this app hits in normal use.
+      //
+      // The GitHub lifecycle's preflight (design §7.2) is the Host's: it asks this machine's gh about this folder's
+      // origin. Before the re-read below, since it awaits.
+      if (github) {
+        if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
+        const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
+        if (!pre.ok) return conflict(`the GitHub lifecycle cannot be turned on here: ${pre.reason}`)
+        // Settings › GitHub's defaults, copied into the Job now and never read for it again (design §5.1). A file that
+        // cannot be read refuses: it may have turned the reruns off, and a guess would rerun what the person did not want.
+        if (deps.github.lifecycleDefaults) {
+          let defaults: GitHubLifecycleDefaults
+          try {
+            defaults = await deps.github.lifecycleDefaults()
+          } catch (e) {
+            const refused = conflict(`the GitHub lifecycle defaults in Settings could not be read: ${e instanceof Error ? e.message : String(e)}`)
+            // A file only the app repairs is named, as the Host names it for every such refusal (final review M5)
+            return e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused
+          }
+          github = { ...github, ...defaults }
+        }
+      }
       const latest = deps.getState()
       // **등록되어 있으면 그 프로젝트에 매단다.** 등록은 여기서 하지 않는다 — 프로젝트 목록을
       // 채우는 것은 사람이 프로젝트를 여는 일이고(ipc.ts 의 orch.list), 이 명령은 CLI 로도
@@ -1808,7 +1951,8 @@ export async function handleCommand(
             // 무장하므로(firesDue), '실행' 을 누른 뒤의 첫 예약 시각이 첫 회차가 된다.
             ...(args.auto === true ? { pendingStart: true } : {}),
             ...(convergence ? { convergence } : {}),
-            ...(jobSourceOf(args) ? { source: jobSourceOf(args) } : {})
+            ...(jobSourceOf(args) ? { source: jobSourceOf(args) } : {}),
+            ...(github ? { github } : {})
           },
         now
       )
@@ -2001,6 +2145,8 @@ export async function handleCommand(
         if (validate === null) return bad('--validate needs a value: run configuration ids')
         const ids = validate.split(',').map((x) => x.trim())
         if (ids.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        // Refused before the configurations are looked up, as task-create refuses it (G3a final review M5)
+        if (ids.includes(GITHUB_CI_CHECK)) return bad("github:ci is the GitHub lifecycle's own check; Astera adds it")
         const owner = job !== null ? s.jobs.find((j) => j.id === job) : jobOf(s, s.runs.find((r) => r.id === run)!)
         if (!owner) return notFound(`unknown job for run: ${String(run)}`)
         // A plugin's check (plugin Phase 5 C7): its plugin must be here, offer checks and be enabled. It is no run
@@ -2653,6 +2799,118 @@ export async function handleCommand(
       if (r.ok && r.state === s) return okBody(r.value)
       return commit(r)
     }
+    case 'runs-github-record': {
+      if (caller.sessionId !== HOST_CALLER) return denied('runs-github-record is the Host’s own record')
+      const runId = str(args.runId)
+      if (runId === null) return bad('runs-github-record takes a runId')
+      const patch = parseRunGitHubPatch(args.patch)
+      if (typeof patch === 'string') return bad(`runs-github-record: ${patch}`)
+      const r = recordRunGitHub(s, runId, patch, now)
+      // Nothing changed: no write, as runs-git-record does for a head read twice.
+      if (r.ok && r.state === s) return okBody(r.value)
+      return commit(r)
+    }
+    case 'runs-reconverge': {
+      // GitHub lifecycle §3.5 (G5c): a finished lifecycle Run carried through GitHub again — a new lifecycle Task on the
+      // same Run, which the dispatch loop starts as it started the first. A worker never gets here (GITHUB_WRITES).
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      // What the record may not know, asked where the Host can (G5c final review M3, M11): the Run's branch still there
+      // (a scheduled Run's is reaped when it ends), and the bound pull request still open now — the record can be older
+      // than a merge while the Host was down, and carrying again would push the branch GitHub deleted on that merge.
+      const known = deps.getState().runs.find((r) => r.id === id)
+      let prState: 'open' | 'closed' | 'merged' | undefined
+      let baseBranch: string | undefined
+      if (known?.worktree !== undefined && deps.github) {
+        if (deps.github.worktreeOf && !deps.github.worktreeOf(known.worktree))
+          return conflict('This Run’s branch is gone (its worktree was removed), so it cannot be carried through GitHub again')
+        const binding = known.githubState?.binding
+        const bound = binding ? repoOfBinding(binding) : null
+        if (binding && bound) {
+          const live = await prByNumber(deps.github.run, known.worktree, bound, binding.number)
+          if (!live.ok) return ghRefusal(live)
+          if (live.pr && live.pr.state !== 'open') return conflict(`This Run’s pull request is ${live.pr.state}, so there is nothing left to carry`)
+          // Open now: a PR reopened since the record said closed is carried again (G6, spec §30)
+          if (live.pr) prState = live.pr.state
+          baseBranch = live.base
+        }
+      }
+      const r = reconvergeRun(deps.getState(), id, now, { ...(prState ? { prState } : {}), ...(baseBranch !== undefined ? { baseBranch } : {}) })
+      if (!r.ok) return r.missing ? notFound(r.error) : conflict(r.error)
+      await deps.setState(r.state)
+      return okBody({ runId: id, taskId: r.value.id })
+    }
+    case 'lifecycle-start': {
+      // The dispatch loop's own step (GitHub lifecycle §3.3), after it folded every Task worktree into the Run root: a
+      // caller that skipped the folding would check, push and review a branch missing some Task's work.
+      if (caller.sessionId !== APP_CALLER && caller.sessionId !== HOST_CALLER)
+        return denied('lifecycle-start is the dispatch loop’s own step')
+      const id = str(args.task)
+      if (!id) return bad('--task is required')
+      const latest = deps.getState()
+      const task = latest.tasks.find((t) => t.id === id)
+      if (!task) return notFound(`unknown task: ${id}`)
+      if (!isLifecycleTask(task) || task.status !== 'ready') return conflict(`task ${id} is not a ready lifecycle Task`)
+      const cwd = latest.runs.find((r) => r.id === task.runId)?.worktree
+      if (cwd === undefined) return conflict('This Run has no branch of its own, so it cannot be carried through GitHub')
+      const r = beginLifecycleValidation(latest, { taskId: id }, now)
+      if (!r.ok) return refused(r)
+      await deps.setState(r.state)
+      deps.startValidation?.({ taskId: id, cwd })
+      return okBody({ taskId: id, cwd })
+    }
+    case 'lifecycle-ci-begin': {
+      // The validators' own step (GitHub lifecycle §4): the Host's (its own caller) and the app's (its connection, no
+      // session). Only the Host keeps the round, since only the Host goes on to GitHub (L13).
+      if (caller.sessionId !== HOST_CALLER && !(caller.role === 'app' && caller.sessionId === ''))
+        return denied('lifecycle-ci-begin is the validators’ own step')
+      if (!deps.github?.originOf) return conflict('GitHub CI is checked by the Astera Host')
+      const taskId = str(args.taskId)
+      if (!taskId) return bad('--taskId is required')
+      if (!checkResultsOk(args.done)) return bad("--done must be the round's check results so far")
+      const r = beginLifecycleCi(deps.getState(), { taskId, done: args.done }, now)
+      if (!r.ok) return refused(r)
+      if (r.value === 'begun') await deps.setState(r.state)
+      return okBody({ taskId, ciWait: r.value })
+    }
+    case 'lifecycle-ci-wait': {
+      // The Host's own record (GitHub lifecycle G3b1): the pull request and the head it pushed for a handed-off round
+      if (caller.sessionId !== HOST_CALLER) return denied('lifecycle-ci-wait is the Host’s own record')
+      const taskId = str(args.taskId)
+      const since = str(args.since)
+      const sha = str(args.sha)
+      if (!taskId) return bad('--taskId is required')
+      if (!since) return bad('--since is required: the round the push was for')
+      if (typeof args.pr !== 'number' || !Number.isInteger(args.pr) || args.pr <= 0) return bad('--pr must be a pull request number')
+      if (!sha) return bad('--sha is required: the head the Host pushed')
+      const r = recordLifecycleCiWait(deps.getState(), { taskId, since, pr: args.pr, sha }, now)
+      if (!r.ok) return refused(r)
+      if (r.value === 'recorded') await deps.setState(r.state)
+      return okBody({ taskId, wait: r.value })
+    }
+    case 'lifecycle-gate': {
+      // The Host's own question about a round it carries (GitHub lifecycle G3b2): the Task waits for the answer keeping
+      // the round's wait, which the answer acts on (answerGitHubGate)
+      if (caller.sessionId !== HOST_CALLER) return denied('lifecycle-gate is the Host’s own question')
+      const taskId = str(args.task)
+      const since = str(args.since)
+      const kind = str(args.kind)
+      const question = str(args.question)
+      const options = args.options
+      if (!taskId) return bad('--task is required')
+      if (!since) return bad('--since is required: the round the question is about')
+      if (!isGitHubGateKind(kind)) return bad(`--kind must be one of ${GITHUB_GATE_KINDS.join(', ')}`)
+      if (!question || question.trim() === '') return bad('--question is required')
+      if (!Array.isArray(options) || options.length === 0 || !options.every((o) => typeof o === 'string' && o !== ''))
+        return bad('--options must name the answers')
+      // Redacted once, here, where every GitHub question passes: git's and gh's own words ride in it (a token in a remote
+      // URL among them), and the question goes on to the timeline, the journal and the public event (acceptance fixes
+      // Task 2)
+      const r = openGitHubGate(deps.getState(), { taskId, since, kind, question: sanitize(question), options }, now)
+      if (!r.ok) return refused(r)
+      await deps.setState(r.state)
+      return okBody(r.value)
+    }
     case 'run-worktree-set': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
@@ -2934,6 +3192,7 @@ export async function handleCommand(
       if (validateArg !== null) {
         const parts = validateArg.split(',').map((x) => x.trim())
         if (parts.some((x) => x === '')) return bad('--validate must not contain an empty entry')
+        if (parts.includes(GITHUB_CI_CHECK)) return bad("github:ci is the GitHub lifecycle's own check; Astera adds it")
         validateIds = parts
       }
       // **getState is read again here, not the entry snapshot `s`.** `listAccounts` above is now
@@ -2942,6 +3201,12 @@ export async function handleCommand(
       // `run-create`'s re-read documents at length a few hundred lines up, arriving here for the
       // same reason: a dependency that used to be a function call became a round trip.
       const latest = deps.getState()
+      // While its lifecycle Task is open the Run is being carried through GitHub, and the PR head is what the Tasks made:
+      // nothing is added but the integration Task the dispatch loop makes for the lifecycle Task (GitHub lifecycle L20).
+      const carrying = openLifecycleTaskOf(latest, runId)
+      const loopsOwn = caller.sessionId === APP_CALLER || caller.sessionId === HOST_CALLER
+      if (carrying && !(loopsOwn && str(args.parent) === carrying.id))
+        return conflict('This Run is carried through GitHub now (its lifecycle Task is open): no Task can be added until it ends')
       return commit(
         createTask(
           latest,
@@ -2987,6 +3252,7 @@ export async function handleCommand(
       if (!id) return bad('--id is required: a task id from `tasks list`')
       const task = s.tasks.find((t) => t.id === id)
       if (!task) return notFound(`unknown task: ${id}`)
+      if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
       const run = task.runId === undefined ? undefined : s.runs.find((r) => r.id === task.runId)
       if (!run)
         return conflict(
@@ -3121,8 +3387,10 @@ export async function handleCommand(
         return bad(
           'this task has not satisfied its completion policy — pass --reason to record why it is being completed anyway'
         )
+      // A lifecycle round handed to the Host is its validating stretch's alone, past the table too (G3a final review I1)
+      const { ciWait: _handedOver, ...kept } = task
       const nextTask: Task = {
-        ...task,
+        ...(status === 'validating' ? task : kept),
         status,
         updatedAt: now,
         ...(override && reason ? { completionOverride: { reason, at: now } } : {}),
@@ -3145,8 +3413,10 @@ export async function handleCommand(
       // createTask and applyWorkerDone already use. recomputeReady only promotes pending to ready
       // and never touches blocked — that property is unchanged.
       const tasks = recomputeReady(s.tasks.map((t) => (t.id === id ? nextTask : t)))
-      await deps.setState({ ...s, tasks })
-      return okBody(tasks.find((t) => t.id === id)!)
+      // Completing a lifecycle Run's last ordinary Task adds its lifecycle Task in the same write (GitHub lifecycle §3.2)
+      const next = nextTask.status === 'completed' ? withLifecycleTask({ ...s, tasks }, nextTask.runId, now) : { ...s, tasks }
+      await deps.setState(next)
+      return okBody(next.tasks.find((t) => t.id === id)!)
     }
     case 'session-task-start': {
       // A worker is executing a Jobs task, and a Run coordinator is running one — either way that
@@ -3221,6 +3491,8 @@ export async function handleCommand(
       // structurally impossible: if openDispatch is rejected the coordinator is never called at all.
       const task = s.tasks.find((t) => t.id === taskId)
       if (!task) return notFound(`unknown task: ${taskId}`)
+      // Its repairs are Astera's (G3c), through the repair path, never this command (G3a final review)
+      if (isLifecycleTask(task)) return conflict(LIFECYCLE_NO_WORKER)
       if (task.status === 'blocked') return bad('task is blocked by an open gate')
       // openDispatch(state.ts) 도 이것을 거절한다 — 여기서 앞질러 보는 이유는 이 함수의 다른 앞선
       // 검사들과 같다: 코디네이터에게 더 뚜렷한 에러를 준다("전이 거절" 문구가 아니라). validating·
@@ -3742,6 +4014,13 @@ export async function handleCommand(
         // above, and calling applyWorkerDone with the pre-await snapshot (s) would overwrite and
         // lose that change (the same reason as in handleExit — the write inversion this has caused
         // before).
+        // The language only for the one report that opens a question (a lifecycle repair reported failed, G3c1): every
+        // other report must not wait on it, nor fail with it (on the Host it may be the app's answer). Read before the
+        // state, so the state the report applies to is the one read last.
+        const reported = s.dispatches.find((x) => x.id === dispatchId)
+        const reportedTask = reported && s.tasks.find((x) => x.id === reported.taskId)
+        const asks = outcome === 'failed' && reported?.repair !== undefined && reportedTask !== undefined && isLifecycleTask(reportedTask)
+        const lang = asks && deps.lang ? await Promise.resolve(deps.lang()).catch(() => undefined) : undefined
         const result = applyWorkerDone(
           deps.getState(),
           {
@@ -3758,7 +4037,9 @@ export async function handleCommand(
             // 보내면 결과를 가져다줄 것이 없어 Task 가 거기서 영원히 멈춘다(startValidation 참고).
             canValidate: !!deps.startValidation,
             // startValidation 과 같은 이유 — 주입되지 않은 배선에서는 검토가 없는 것으로 동작한다.
-            canReview: !!deps.startReview
+            canReview: !!deps.startReview,
+            // A lifecycle repair reported failed asks a person, in the person's language (GitHub lifecycle G3c1)
+            ...(lang ? { lang } : {})
           },
           now
         )
@@ -4029,10 +4310,55 @@ export async function handleCommand(
       if (!gateId) return bad('--id is required')
       if (!resolution) return bad('--resolution is required')
       const gate = s.gates.find((g) => g.id === gateId)
-      // **A check that could not be made takes its three answers and no other** (plugin Phase 5 C9): the plain
-      // resolve below would move the Task to ready, and a worker would redo work that is done.
+      // **A GitHub question takes only the answers it offers, and acts on its round** (GitHub lifecycle G3b2): the plain
+      // resolve below would start a fresh round and lose the wait a person chose to keep
+      if (gate && isGitHubGateKind(gate.kind) && gate.status === 'open') {
+        const offered = gate.options ?? []
+        if (!offered.includes(resolution)) return bad(`answer one of ${offered.join(', ')}`)
+        const task = s.tasks.find((t) => t.id === gate.taskId)
+        // Refused before anything moves (G3b2 final review M1): another question still holds the Task
+        const other = s.gates.find((g) => g.taskId === gate.taskId && g.status === 'open' && g.id !== gate.id)
+        if (other) return conflict(`another question about this Task is still open: ${other.id}`)
+        // continue brings the commits Astera did not push into the Run root before the fresh round's first check reads it
+        if (resolution === 'continue' && task?.status === 'blocked') {
+          const root = s.runs.find((r) => r.id === task.runId)?.worktree
+          const info = root === undefined ? null : (deps.github?.worktreeOf?.(root) ?? null)
+          if (!deps.github?.fastForward || root === undefined || !info) return conflict('The Run’s branch cannot be brought up to date here')
+          const ff = await deps.github.fastForward(root, info.branch)
+          if (!ff.ok) return conflict(`The Run’s branch could not be brought up to date with GitHub: ${ff.message}`)
+        }
+        // rerun reruns the failed Actions run of the waited head before the round waits again (G4, design §4.6); a run
+        // already going again is waited on as it is (L16), and the rerun's record is written with the answer
+        let rerun: RunGitHubPatch['rerun']
+        if (resolution === 'rerun' && task?.status === 'blocked') {
+          const target = rerunTargetOf(s, task)
+          if (typeof target === 'string') return conflict(target)
+          if (!deps.github) return conflict(NO_GITHUB_HERE)
+          const r = await rerunFailed(deps.github.run, target.cwd, target.ciRunId, target.repo)
+          if (!r.ok && !r.running) return ghRefusal(r)
+          if (r.ok) rerun = { ciRunId: target.ciRunId, attempt: target.attempt, sha: target.sha, check: target.check, externalId: target.externalId, by: 'person' }
+        }
+        const answered = answerGitHubGate(deps.getState(), { gateId, resolution }, now)
+        // A rerun GitHub already took is kept whatever the answer meets
+        const kept = (base: OrchState): OrchState => {
+          if (!rerun || task?.runId === undefined) return base
+          const recorded = recordRunGitHub(base, task.runId, { rerun }, now)
+          return recorded.ok ? recorded.state : base
+        }
+        // A refusal of the moment (the question answered meanwhile, another one open) is a conflict, as check-unavailable's
+        if (!answered.ok) {
+          if (rerun) await deps.setState(kept(deps.getState()))
+          return answered.missing ? refused(answered) : conflict(answered.error)
+        }
+        deps.log?.(`gate-resolve: task=${gate.taskId} ${resolution} on a ${gate.kind} Gate`)
+        await deps.setState(kept(answered.state))
+        return okBody(answered.value.gate satisfies AnsweredQuestion)
+      }
+      // **A check that could not be made takes the answers it offers and no other** (plugin Phase 5 C9; GitHub CI is
+      // never skipped, G3b2): the plain resolve below would move the Task to ready, and a worker would redo work that is done.
       if (gate?.kind === 'check-unavailable' && gate.status === 'open') {
-        if (!isCheckUnavailableAnswer(resolution)) return bad(`answer one of ${CHECK_UNAVAILABLE_OPTIONS.join(', ')}`)
+        const offered: readonly string[] = gate.options ?? CHECK_UNAVAILABLE_OPTIONS
+        if (!isCheckUnavailableAnswer(resolution) || !offered.includes(resolution)) return bad(`answer one of ${offered.join(', ')}`)
         if (resolution !== 'mark-failed' && !deps.startValidation) return conflict('the checks cannot be run here')
         const answered = answerCheckUnavailable(s, { gateId, resolution }, now)
         if (!answered.ok) return answered.missing ? refused(answered) : conflict(answered.error)
@@ -4070,7 +4396,13 @@ export async function handleCommand(
           )
         }
       }
-      await deps.setState(finalState)
+      // retry-once opens its Dispatch on the answered state and commits both at once (G3c1 final review M4): committed
+      // apart, the Task would show ready in between, and the loop could start a lifecycle Task's fresh round
+      // (lifecycleToStart) or place an ordinary one (slotsToFill) instead of the repair a person asked for
+      const retrying = exhaustedOpen && resolution === 'retry-once' && deps.repairOnce !== undefined
+      const retried = retrying ? await deps.repairOnce!({ taskId: gate!.taskId, from: finalState }) : undefined
+      // A retry-once that opened nothing committed nothing: the answer is recorded here
+      if (!retried?.ok) await deps.setState(finalState)
       // retry-once 는 repair.ts 의 repairOnce — **그 Dispatch 커밋까지만 기다린다.** repairOnce 는
       // Dispatch 를 열어 커밋한 뒤에야 resolve 하고, 부수 효과(spec 파일 쓰기, 세션 띄우기)는
       // 백그라운드로 넘긴다(repair.ts 의 주석). 여기서 기다리지 않으면 이 응답이 먼저 나가고, 그
@@ -4081,7 +4413,6 @@ export async function handleCommand(
       // 열려 있으면(openDispatch 의 "task is blocked by an open gate") repairOnce 는 아무것도 열지
       // 못한 채 그 사실을 로그만 하고 돌아온다 — 이 Gate 자체는 정상적으로 풀렸으니 200 이 맞지만,
       // 사람의 "한 번 더" 가 조용히 무효가 된 사실까지 감추면 안 된다.
-      const retried = exhaustedOpen && resolution === 'retry-once' ? await deps.repairOnce?.({ taskId: gate!.taskId }) : undefined
       if (retried && !retried.ok)
         return okBody({ ...r.value, retryOnceFailed: retried.error } satisfies AnsweredQuestion)
       return okBody(r.value satisfies AnsweredQuestion)
@@ -4456,7 +4787,10 @@ export async function handleCommand(
             ...(args.title !== undefined ? { title: str(args.title)! } : {}),
             ...(args.prompt !== undefined ? { prompt: str(args.prompt)! } : {}),
             rollAccountIds: chain,
-            ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {})
+            ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {}),
+            // Who started it, by who asked (2026-10-20, review M1): a remote controller's new-session dialog and the app
+            // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends
+            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const })
           })
         )
       } catch (e) {
@@ -4517,6 +4851,20 @@ export async function handleCommand(
         )
       return okBody({ sessionId: target.sessionId, id, decision, answered: true })
     }
+    // The New Job window's inline check (GitHub lifecycle G7a, design §7.2): run-create's own preflight, asked before the
+    // Job is made, so the window can say why this folder cannot carry it. Its result is the answer, refusal included;
+    // only the Host has gh and the folder's origin.
+    case 'github-preflight': {
+      if (!deps.github?.originOf) return conflict('the GitHub lifecycle is answered by the Astera Host only')
+      const cwd = str(args.cwd)
+      if (!cwd) return bad('--cwd is required')
+      // A paired device asks about the Runtime's own projects only (final review M2): any folder would tell it whose
+      // origin and what push permission sit anywhere on this machine, and run git there
+      if (caller.role === 'controller' && !findProjectContaining(s, cwd))
+        return denied('github-preflight answers a controller only for a folder inside a project this Host knows')
+      const pre = await lifecyclePreflight({ gh: deps.github.run, originOf: deps.github.originOf }, cwd)
+      return okBody(pre.ok ? { ok: true, repo: ghRepoArg(pre.repo) } : { ok: false, reason: pre.reason })
+    }
     /**
      * GitHub reads through the user's gh (MCP P2-B), answered by the Host only (`deps.github`). The
      * repository is the Run's worktree or the project's root (`githubTarget`). A failing or pending
@@ -4534,18 +4882,28 @@ export async function handleCommand(
         if (given === null) return bad('--branch is required with --project: the head branch to look up')
         branch = given
       }
-      const found = await prForBranch(t.gh, t.cwd, branch)
-      return found.ok ? okBody({ branch, pr: found.pr }) : ghRefusal(found)
+      // A bound Run's pull request is the one it is bound to, read in the binding's repository — not the newest of its
+      // branch, which can be a closed one (GitHub lifecycle G3c2, design §8 Actions)
+      const binding = 'run' in t ? t.run.githubState?.binding : undefined
+      const bound = binding ? repoOfBinding(binding) : null
+      const found = binding && bound ? await prByNumber(t.gh, t.cwd, bound, binding.number) : await prForBranch(t.gh, t.cwd, branch)
+      return found.ok ? okBody({ branch: binding && bound ? binding.headBranch : branch, pr: found.pr }) : ghRefusal(found)
     }
     case 'github-ci': {
       if (args.run !== undefined && args.pr !== undefined)
-        return bad("--pr goes with --project; a Run's pull request is its branch's")
+        return bad("--pr goes with --project; a Run's pull request is the one it is bound to, or its branch's")
       const log = args.log === undefined ? undefined : posInt(args.log)
       if (log === null) return bad('--log must be a CI run id (a positive integer, from a check\'s runId)')
       const t = githubTarget(deps, s, args)
       if ('error' in t) return t.error
       let pr: number
-      if ('branch' in t) {
+      // A GitHub lifecycle Run reads the pull request it is bound to: a lookup by branch picks open-else-newest and
+      // can land on a closed PR of the same branch (G2, inventory I-§12.4). It reads it in the bound repository: in a
+      // checkout with an `upstream` remote, gh would take another repository's PR of that number (G2 final review M10).
+      const bound = 'run' in t ? t.run?.githubState?.binding : undefined
+      const repo = bound ? (repoOfBinding(bound) ?? undefined) : undefined
+      if (bound) pr = bound.number
+      else if ('branch' in t) {
         const found = await prForBranch(t.gh, t.cwd, t.branch)
         if (!found.ok) return ghRefusal(found)
         if (!found.pr) return conflict("This Run's branch has no pull request")
@@ -4555,12 +4913,16 @@ export async function handleCommand(
         if (given === null) return bad('--pr is required with --project: a pull request number')
         pr = given
       }
-      const checks = await readPrChecks(t.gh, t.cwd, pr)
+      const checks = await readPrChecks(t.gh, t.cwd, pr, repo)
       if (!checks.ok) return ghRefusal(checks)
       if (log === undefined) return okBody({ pr, checks: checks.checks })
-      const tail = await failedLogTail(t.gh, t.cwd, log)
+      // A bound Run reads the logs of its pull request's checks only (design §8, closes inventory I-§12.4).
+      if (bound && !checks.checks.some((c) => c.runId === log))
+        return conflict(`CI run ${log} ran no check of pull request #${pr}, the one this Run is bound to`)
+      const tail = await failedLogTail(t.gh, t.cwd, log, repo)
       if (!tail.ok) return ghRefusal(tail)
-      return okBody({ pr, checks: checks.checks, log: { runId: log, text: tail.text, cut: tail.cut } })
+      // Redacted here, in the Host, so the CLI and a Runtime's controller get what MCP gets (G2, design L22).
+      return okBody({ pr, checks: checks.checks, log: { runId: log, text: sanitize(tail.text), cut: tail.cut } })
     }
     case 'github-issue': {
       if (args.run !== undefined) return bad('--run does not go with github-issue: give --project')
@@ -4660,13 +5022,43 @@ export async function handleCommand(
       return { status: refused.status, body: { ...(refused.body as object), pushed: made.pushed } }
     }
     case 'github-ci-rerun': {
-      if (args.run !== undefined) return bad('--run does not go with github-ci-rerun: give --project')
       const t = githubTarget(deps, s, args)
       if ('error' in t) return t.error
       const runId = posInt(args.runId)
       if (runId === null) return bad("--run-id is required: the CI run id (a positive integer, from a check's runId)")
-      const r = await rerunFailed(t.gh, t.cwd, runId)
-      return r.ok ? okBody({ runId, rerun: true }) : ghRefusal(r)
+      if (!('run' in t)) {
+        const r = await rerunFailed(t.gh, t.cwd, runId)
+        return r.ok ? okBody({ runId, rerun: true }) : ghRefusal(r)
+      }
+      // Through a Run, only a CI run of its pull request's head (GitHub lifecycle G4, design §8 Actions, closes inventory
+      // I-§12.4): the pull request it is bound to, in the bound repository, or its branch's
+      const binding = t.run.githubState?.binding
+      const repo = binding ? (repoOfBinding(binding) ?? undefined) : undefined
+      let pr: number
+      if (binding) pr = binding.number
+      else {
+        const found = await prForBranch(t.gh, t.cwd, t.branch)
+        if (!found.ok) return ghRefusal(found)
+        if (!found.pr) return conflict(`no pull request for ${t.branch}`)
+        pr = found.pr.number
+      }
+      const head = await prHead(t.gh, t.cwd, pr, repo)
+      if (!head.ok) return ghRefusal(head)
+      const ci = await ciRunHead(t.gh, t.cwd, runId, repo)
+      if (!ci.ok) return ghRefusal(ci)
+      if (ci.headSha !== head.headSha)
+        return conflict(`CI run ${runId} ran on ${ci.headSha.slice(0, 7)}, not on the head of pull request #${pr} (${head.headSha.slice(0, 7)})`)
+      // A run still going has nothing to rerun yet (G4 final review M4); gh saying so between the read and the rerun too
+      const stillRunning = conflict(`CI run ${runId} is still running: rerun it once it has finished`)
+      if (ci.status !== 'completed') return stillRunning
+      const r = await rerunFailed(t.gh, t.cwd, runId, repo)
+      if (!r.ok) return r.running ? stillRunning : ghRefusal(r)
+      // A bound Run keeps the rerun, so a round waiting on that head waits for the new attempt (G4)
+      if (binding) {
+        const recorded = recordRunGitHub(deps.getState(), t.run.id, { rerun: { ciRunId: runId, attempt: ci.attempt, sha: ci.headSha, by: 'person' } }, now)
+        if (recorded.ok) await deps.setState(recorded.state)
+      }
+      return okBody({ runId, rerun: true, pr })
     }
     /**
      * An issue becomes a Job, as the GitHub job source makes one (plugin Phase 4 J13): the objective the job sources'
@@ -4700,7 +5092,8 @@ export async function handleCommand(
         ctx: issueContext(issue),
         sourceId: GITHUB_SOURCE_ID,
         sourceName: 'GitHub',
-        itemId: String(issue.number)
+        itemId: String(issue.number),
+        captured: capturedIssue(issue)
       })
       if (reply.status < 200 || reply.status >= 300) return reply
       return okBody({ ...(reply.body as object), issue: { number: issue.number, url: issue.url } })

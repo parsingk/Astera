@@ -2,6 +2,7 @@ import { stripAnsi } from '../../rolling/detect'
 import { PTY_LOST_SIGHT_EXIT_CODE } from '../../sessions/pty'
 import { CHECK_TIMEOUT_MS, type CheckResult } from '../types'
 import { pluginIdOfCheck, unavailable, type PluginCheckAnswer } from '../pluginChecks'
+import { GITHUB_CI_CHECK } from '../../github/lifecycle'
 
 // Validation run sequencing. Knows neither RunManager nor OrchState — only a runner and two callbacks,
 // which is what lets tests reach it (inside ipc.ts they could not).
@@ -110,6 +111,10 @@ export class TaskValidator {
       plugins?: ValidatorPluginRunner
       onSettled: (a: { taskId: string; results: CheckResult[] }) => Promise<void>
       onCannotRun: (a: { taskId: string; reason: string }) => Promise<void>
+      /** A round that reaches `github:ci` (GitHub lifecycle §4): its results so far go to the Host, which settles the
+       *  round with the CI result. Absent: that entry cannot be run here. A rejection is the reason it could not;
+       *  'skip', a round nobody needs any more (the Task left validating, or its round is already the Host's). */
+      onHandedOff?: (a: { taskId: string; cwd: string; done: CheckResult[] }) => Promise<void | 'skip'>
       log?: (message: string) => void
       /** 테스트 주입용. 배선은 넘기지 않는다 */
       timeoutMs?: number
@@ -296,6 +301,10 @@ export class TaskValidator {
       this.settle(cwd, head)
       return
     }
+    if (configId === GITHUB_CI_CHECK) {
+      await this.handOff(cwd, head)
+      return
+    }
     if (configId !== undefined && pluginIdOfCheck(configId) !== null) {
       await this.askPlugin(cwd, head, configId)
       return
@@ -426,6 +435,24 @@ export class TaskValidator {
     if (answer.status !== 'passed')
       for (const rest of head.configIds.slice(head.index + 1)) head.results.push({ configId: rest, name: rest, status: 'not-run' })
     this.settle(cwd, head)
+  }
+
+  /** `github:ci` (GitHub lifecycle §4): the round so far goes to the Host, which settles it once with the CI result. This
+   *  validator settles nothing and frees the folder, so `holds` is false from here: the Task waits on GitHub, not here.
+   *  **Identity-checked after the await**, as askPlugin is. */
+  private async handOff(cwd: string, head: Pending): Promise<void> {
+    head.settling = true
+    try {
+      if (!this.deps.onHandedOff) throw new Error('GitHub CI is checked by the Astera Host')
+      if ((await this.deps.onHandedOff({ taskId: head.taskId, cwd, done: [...head.results] })) === 'skip')
+        this.deps.log?.(`hand-off no longer needed task=${head.taskId} cwd=${cwd}`)
+    } catch (e) {
+      await this.deps
+        .onCannotRun({ taskId: head.taskId, reason: e instanceof Error ? e.message : String(e) })
+        .catch((err) => this.deps.log?.(`onCannotRun failed task=${head.taskId}: ${String(err)}`))
+    }
+    if (this.queues.get(cwd)?.[0] !== head) return
+    this.advance(cwd, head)
   }
 
   /** Hands the head's round to onSettled, then moves past it. */

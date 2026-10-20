@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { justFinished, runRecordInputOf } from './runRecord'
 import { foldsCaseHere } from '../testPaths'
 import { createJob, createTask, emptyState, jobOf, startJobRun, type OrchState } from './state'
+import type { CheckResult, Task } from './types'
+import type { RunGitHubState } from '../github/lifecycle'
 
 const state = (tasks: { runId: string; status: string; consecutiveFailures?: number }[]): OrchState =>
   ({
@@ -76,6 +78,29 @@ describe('justFinished', () => {
 })
 
 describe('runRecordInputOf', () => {
+  // G5c final review M10: a reconverged Run that ends again is written up again, as the second carry it is; the lifecycle
+  // Task `runs reconverge` superseded is not part of it
+  it('leaves out a lifecycle Task that runs reconverge superseded', () => {
+    const T = '2026-10-19T00:00:00.000Z'
+    const life = (id: string, status: 'failed' | 'completed', createdAt: string) => ({
+      id, runId: 'run_1', kind: 'lifecycle' as const, title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], status, consecutiveFailures: 0, createdAt, updatedAt: createdAt
+    })
+    const s: OrchState = {
+      ...emptyState(),
+      jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: T, convergence: {} }],
+      runs: [{ id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: T }],
+      tasks: [
+        { id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: T, updatedAt: T },
+        life('tsk_l1', 'failed', '2026-10-19T01:00:00.000Z'),
+        life('tsk_l2', 'completed', '2026-10-19T02:00:00.000Z')
+      ]
+    }
+    const r = runRecordInputOf(s, 'run_1')!
+    expect(r.taskIds).toEqual(['tsk_a', 'tsk_l2'])
+    expect(r.tasks.map((t) => t.outcome)).toEqual(['completed', 'completed'])
+    expect(r.validation).toEqual({ status: 'passed' })
+  })
+
   const finished = (): { s: OrchState; runId: string } => {
     const job = createJob(emptyState(), { objective: 'x'.repeat(70), cwd: 'D:/p' }, '2026-10-02T10:00:00.000Z')
     if (!job.ok) throw new Error(job.error)
@@ -184,5 +209,165 @@ describe('runRecordInputOf', () => {
     const { s, runId } = finished()
     expect(runRecordInputOf(s, 'nope')).toBeNull()
     expect(runRecordInputOf({ ...s, jobs: [] }, runId)).toBeNull()
+  })
+})
+
+// GitHub lifecycle G8 (spec §40): a lifecycle Run's record says where the work came from and went, and what verified it,
+// as the Run's state stood when it finished. What did not happen is `skipped`, never passed.
+describe('runRecordInputOf: a GitHub lifecycle Run', () => {
+  const T = '2026-10-19T00:00:00.000Z'
+  const HEAD = 'c'.repeat(40)
+  const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const SOURCE = { id: 'github', itemId: '12', label: 'GitHub #12', title: 'Fix login', url: 'https://github.com/o/r/issues/12' }
+  const BINDING = {
+    repository: 'o/r', number: 34, url: 'https://github.com/o/r/pull/34', baseBranch: 'main', headBranch: 'astera/x', createdByAstera: true, boundAt: T
+  }
+  const OPEN = { state: 'open' as const, isDraft: true, baseBranch: 'main' }
+  const ordinary: Task = {
+    id: 'tsk_a', runId: 'run_1', title: 'a', spec: 's', deps: [], validateConfigIds: ['cfg_test'], status: 'completed', consecutiveFailures: 0, createdAt: T, updatedAt: T
+  }
+  const lifecycle = (over: Partial<Task> = {}): Task => ({
+    id: 'tsk_l', runId: 'run_1', kind: 'lifecycle', title: 'GitHub 전달', spec: 's', deps: ['tsk_a'], validateConfigIds: ['cfg_test', 'github:ci'],
+    reviewRequested: true, status: 'completed', consecutiveFailures: 0, createdAt: T, updatedAt: T,
+    checks: [
+      { configId: 'cfg_test', name: 'test', status: 'passed' },
+      { configId: 'github:ci', name: 'GitHub CI', status: 'passed' }
+    ],
+    ...over
+  })
+  const ci = (verdict: 'passed' | 'failed' | 'pending' | 'none', sha = HEAD): NonNullable<RunGitHubState['ci']> =>
+    ({ sha, basis: 'required', verdict, checks: [], changedAt: T })
+  const lifecycleState = (o: { task?: Task | null; github?: Partial<Omit<RunGitHubState, 'seq' | 'log'>> | null; source?: boolean } = {}): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_1', objective: 'o', cwd: 'D:/p', createdAt: T, github: POLICY, ...(o.source === false ? {} : { source: SOURCE }) }],
+    runs: [
+      {
+        id: 'run_1', jobId: 'job_1', ordinal: 1, createdAt: T,
+        ...(o.github === null ? {} : { githubState: { binding: BINDING, headSha: HEAD, lastPushedSha: HEAD, pr: OPEN, ci: ci('passed'), ...o.github, log: [], seq: 0 } })
+      }
+    ],
+    tasks: o.task === null ? [ordinary] : [ordinary, o.task ?? lifecycle()]
+  })
+  const MERGE_READY = {
+    pullRequestNumber: 34, headSha: HEAD, localChecksPassed: true, requiredCiPassed: true, reviewPassed: true, unresolvedQuestions: 0, ciChecks: [], evaluatedAt: T
+  }
+
+  // G8 final review I1: the watch withdraws merge-ready by recording `invalidated` and keeps the evidence, and the Run's
+  // GitHub block reads it as holding only while nothing withdrew it, its head is the PR's head and the PR is open
+  it('merge-ready withdrawn since, of an earlier head, or of a pull request no longer open, is not merge-ready', () => {
+    const ready = (github: Partial<Omit<RunGitHubState, 'seq' | 'log'>>): boolean | undefined =>
+      runRecordInputOf(lifecycleState({ github: { mergeReady: MERGE_READY, ...github } }), 'run_1')?.github?.mergeReady
+    expect(ready({ invalidated: { reason: 'head-changed', at: T } })).toBe(false)
+    expect(ready({ headSha: 'd'.repeat(40) })).toBe(false)
+    expect(ready({ pr: { ...OPEN, state: 'closed' } })).toBe(false)
+  })
+
+  it('a lifecycle Task that did not complete is not merge-ready, whatever evidence an earlier carry left', () => {
+    const task = lifecycle({ status: 'failed' })
+    expect(runRecordInputOf(lifecycleState({ task, github: { mergeReady: MERGE_READY } }), 'run_1')?.github?.mergeReady).toBe(false)
+  })
+
+  // G8 final review M1: before the lifecycle Task, the local checks that ran are the ordinary Tasks' own
+  it('an ordinary Task whose local check failed, before the lifecycle Task, has local failed', () => {
+    const failed = { ...ordinary, status: 'failed' as const, checks: [{ configId: 'cfg_test', name: 'test', status: 'failed' as const }] }
+    const s = { ...lifecycleState({ task: null, github: null }), tasks: [failed] }
+    expect(runRecordInputOf(s, 'run_1')?.github?.local).toBe('failed')
+  })
+
+  it('a merge-ready Run names its issue and pull request, and its local checks, CI at the head, and review passed', () => {
+    expect(runRecordInputOf(lifecycleState({ github: { mergeReady: MERGE_READY } }), 'run_1')?.github).toEqual({
+      source: { label: 'GitHub #12', url: 'https://github.com/o/r/issues/12' },
+      pr: { number: 34, url: 'https://github.com/o/r/pull/34' },
+      local: 'passed',
+      ci: { status: 'passed', sha: HEAD },
+      review: 'passed',
+      mergeReady: true
+    })
+  })
+
+  it('a Run whose review passed but was not merge-ready says so', () => {
+    const r = runRecordInputOf(lifecycleState({ github: { invalidated: { reason: 'question-open', at: T } } }), 'run_1')
+    expect(r?.github?.review).toBe('passed')
+    expect(r?.github?.mergeReady).toBe(false)
+  })
+
+  it('a Run that failed in CI has CI failed at the head and no review', () => {
+    const task = lifecycle({
+      status: 'failed',
+      checks: [
+        { configId: 'cfg_test', name: 'test', status: 'passed' },
+        { configId: 'github:ci', name: 'GitHub CI', status: 'failed' }
+      ]
+    })
+    const g = runRecordInputOf(lifecycleState({ task, github: { ci: ci('failed') } }), 'run_1')?.github
+    expect(g).toMatchObject({ local: 'passed', ci: { status: 'failed', sha: HEAD }, review: 'skipped', mergeReady: false })
+  })
+
+  it('a local check that failed, timed out or could not be made is failed; one not run or skipped is skipped', () => {
+    const local = (status: CheckResult['status'], skipped?: true): string | undefined =>
+      runRecordInputOf(
+        lifecycleState({ task: lifecycle({ status: 'failed', checks: [{ configId: 'cfg_test', name: 'test', status, ...(skipped ? { skipped } : {}) }] }) }),
+        'run_1'
+      )?.github?.local
+    expect(local('failed')).toBe('failed')
+    expect(local('timed-out')).toBe('failed')
+    expect(local('error')).toBe('failed')
+    expect(local('not-run')).toBe('skipped')
+    expect(local('not-run', true)).toBe('skipped')
+  })
+
+  it('a local check with no result in the last round is not passed', () => {
+    const task = lifecycle({ status: 'failed', validateConfigIds: ['cfg_test', 'cfg_lint', 'github:ci'] })
+    expect(runRecordInputOf(lifecycleState({ task }), 'run_1')?.github?.local).toBe('skipped')
+  })
+
+  it('a review that found blocking issues is failed', () => {
+    const task = lifecycle({ status: 'failed', reviewIssues: [{ severity: 'high', title: 't', blocking: true }] as Task['reviewIssues'] })
+    expect(runRecordInputOf(lifecycleState({ task }), 'run_1')?.github?.review).toBe('failed')
+  })
+
+  it('a lifecycle Task a person moved to completed past its policy is not a review passed', () => {
+    const task = lifecycle({ completionOverride: { reason: 'r', at: T } })
+    expect(runRecordInputOf(lifecycleState({ task }), 'run_1')?.github?.review).toBe('skipped')
+  })
+
+  it('CI of an older commit, or still pending, is not CI of the head', () => {
+    expect(runRecordInputOf(lifecycleState({ github: { ci: ci('passed', 'd'.repeat(40)) } }), 'run_1')?.github?.ci).toEqual({ status: 'skipped' })
+    expect(runRecordInputOf(lifecycleState({ github: { ci: ci('pending') } }), 'run_1')?.github?.ci).toEqual({ status: 'skipped' })
+  })
+
+  it('a head a person let go on without CI says so', () => {
+    const g = runRecordInputOf(lifecycleState({ github: { ci: ci('none'), ciOverride: { sha: HEAD, at: T } } }), 'run_1')?.github
+    expect(g?.ci).toEqual({ status: 'skipped', sha: HEAD, noCi: true })
+  })
+
+  it('a Run that failed before its lifecycle Task has nothing passed', () => {
+    const failedFirst = { ...lifecycleState({ task: null, github: null }), tasks: [{ ...ordinary, status: 'failed' as const }] }
+    expect(runRecordInputOf(failedFirst, 'run_1')?.github).toEqual({
+      source: { label: 'GitHub #12', url: 'https://github.com/o/r/issues/12' },
+      local: 'skipped',
+      ci: { status: 'skipped' },
+      review: 'skipped',
+      mergeReady: false
+    })
+  })
+
+  it('a Run with no local check to run has no local line', () => {
+    const task = lifecycle({ validateConfigIds: ['github:ci'], checks: [{ configId: 'github:ci', name: 'GitHub CI', status: 'passed' }] })
+    const s = lifecycleState({ task })
+    const noChecks = { ...s, tasks: s.tasks.map((t) => (t.id === 'tsk_a' ? { ...t, validateConfigIds: [] } : t)) }
+    expect(runRecordInputOf(noChecks, 'run_1')?.github).not.toHaveProperty('local')
+    const noLifecycle = { ...noChecks, tasks: [{ ...noChecks.tasks[0], status: 'failed' as const }] }
+    expect(runRecordInputOf(noLifecycle, 'run_1')?.github).not.toHaveProperty('local')
+  })
+
+  it('a lifecycle Job made by hand has no source line', () => {
+    expect(runRecordInputOf(lifecycleState({ source: false }), 'run_1')?.github).not.toHaveProperty('source')
+  })
+
+  it('a Job without the lifecycle has no GitHub evidence, even one made from an issue', () => {
+    const s = lifecycleState()
+    const plain = { ...s, jobs: s.jobs.map(({ github: _g, ...j }) => j) }
+    expect(runRecordInputOf(plain, 'run_1')).not.toHaveProperty('github')
   })
 })

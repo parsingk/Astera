@@ -32,7 +32,8 @@ export const JOB_FIELDS = Object.freeze([
   'pendingStart',
   'paused',
   'convergence',
-  'source'
+  'source',
+  'github'
 ] as const)
 
 export const RUN_FIELDS = Object.freeze([
@@ -68,6 +69,8 @@ export const TASK_FIELDS = Object.freeze([
   // Not bookkeeping but a decision a person made: where a watcher asks "why did this pass".
   'completionOverride',
   'consecutiveFailures',
+  // 'lifecycle' for the Task Astera adds to carry a Run through GitHub (GitHub lifecycle G3a); absent otherwise
+  'kind',
   'createdAt',
   'updatedAt'
 ] as const)
@@ -190,7 +193,16 @@ const EVENT_TYPE_SET = {
   'completion.exhausted': true,
   'session.input_needed': true,
   'session.limit_waiting': true,
-  'session.account_switched': true
+  'session.account_switched': true,
+  'github.pr_bound': true,
+  'github.pr_created': true,
+  'github.head_changed': true,
+  'github.ci_passed': true,
+  'github.ci_failed': true,
+  'github.ci_rerun_requested': true,
+  'github.source_changed': true,
+  'github.merge_ready': true,
+  'github.merge_ready_invalidated': true
 } as const satisfies Record<EventType, true>
 /** The event types the Host produces, in the order of the spec's list. */
 export const EVENT_TYPES: readonly EventType[] = Object.freeze(Object.keys(EVENT_TYPE_SET) as EventType[])

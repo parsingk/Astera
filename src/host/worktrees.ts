@@ -24,6 +24,7 @@ import type { OrchServerDeps } from '../core/orchestration/command'
 import type { OrchState } from '../core/orchestration/state'
 import {
   forkWorktree,
+  integrateLive,
   integrateWorktrees,
   reapWorktree,
   worktreeDeps,
@@ -32,6 +33,7 @@ import {
 } from '../core/orchestration/exec/integrateGit'
 import { WorktreeRegistry, defaultWorktreeRoot, isRegistryFile } from '../core/worktrees/registry'
 import { git as realGit } from '../core/worktrees/git'
+import { fastForward } from '../core/github/lifecyclePush'
 import { isPathWithin, isSamePath } from '../core/files/tree'
 import { hostMergesPathIn } from '../core/git/hostMerges'
 import { createMergeRecorder } from './mergeRecords'
@@ -77,6 +79,9 @@ export interface HostWorktrees {
   /** The dispatch loop's integration merge (Task 12): integrateWorktrees over this Host's git-op and
    *  reap, the same pair `mergeWorktrees` sends. */
   integrate(runRoot: string, merges: string[]): Promise<Integration>
+  /** "continue" on a GitHub external-head question (GitHub lifecycle G3b2, design §4.2): the Run root brought up to
+   *  `origin/<branch>`, fast-forward only, announced and recorded as this Host's own merge into it. */
+  fastForwardRoot(root: string, branch: string): Promise<{ ok: true } | { ok: false; message: string }>
   /** The dispatch loop's child-run reap (Task 12): rule 11 over this Host's sessions. Never throws. */
   reap(worktreePath: string): Promise<boolean>
   /** Whether the registry lists this folder, by `isSamePath` — from memory, as the app's loop asks
@@ -392,7 +397,18 @@ export function createHostWorktrees(d: HostWorktreesDeps): HostWorktrees {
     // app's own (`integrateWorktrees(runRoot, merges, {}, gitCtx)` in ipc.ts).
     integrate: async (runRoot, merges) => {
       await checkGit()
-      return integrateInto(runRoot, merges, {})
+      return integrateLive(runRoot, merges, (into, paths) => integrateInto(into, paths, {}), { log: d.log })
+    },
+    // A merge into the Run root like any other: the sessions' work units do not read it as someone else's change, and
+    // the Run's git range takes the head it leaves
+    fastForwardRoot: async (runRoot, branch) => {
+      const op = await gitOp.begin('job-merge', runRoot)
+      try {
+        return await fastForward(d.git ?? realGit, runRoot, branch)
+      } finally {
+        await gitOp.end(op)
+        await d.integrateHooks?.()?.afterIntegrate(runRoot).catch((e) => d.log(`git range after a fast-forward of ${runRoot}: ${message(e)}`))
+      }
     },
     reap,
     isRegistered: (p) => registry.list().some((w) => isSamePath(w.path, p)),

@@ -1,3 +1,5 @@
+import { taskTitleOf } from './checkText'
+import { githubChipOf } from './githubText'
 import { memo, useCallback, useEffect, useState } from 'react'
 import { clockFor } from '../lib/runClock'
 import type { JobRow, JobTask, OrchHostGate, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
@@ -196,6 +198,8 @@ function RunCardImpl({
         </span>
         {/* The ticket the Job was made from (plugin Phase 4 J18): a click opens it, and does not fold the card */}
         <SourceChip source={run.source} />
+        {/* A lifecycle Run's GitHub side in a word (G7b): merge-ready, waiting on CI, repairing CI */}
+        {githubChipOf(run) && <span className="jobs-ordinal jobs-github">{t(githubChipOf(run)!)}</span>}
         {/* 이 Run 의 워커가 프로젝트 폴더를 다른 Run 과 나눠 쓰고 있다. **막힌 것이 아니라
             얽힌 것**이라 Gate 글리프(주황 `!`)를 빌리지 않는다 — 그것은 사람을 기다리는
             자리의 모양이고, 여기서는 기다리는 것이 없다. 경고 톤의 테두리(styles.css)와 이
@@ -276,7 +280,7 @@ function RunCardImpl({
             key={task.id}
             className="jobs-seg"
             style={{ background: segColor(task) }}
-            title={task.title}
+            title={taskTitleOf(task, t as never)}
           />
         ))}
       </div>
@@ -296,8 +300,8 @@ function RunCardImpl({
               >
                 <span className="jobs-av">{PROVIDER_ABBR[task.provider]}</span>
                 <span className="jobs-task-body">
-                  <span className="jobs-task-title" title={task.title}>
-                    {task.title}
+                  <span className="jobs-task-title" title={taskTitleOf(task, t as never)}>
+                    {taskTitleOf(task, t as never)}
                   </span>
                   <span className="jobs-task-meta" title={`${task.provider} · ${taskMeta(task, nowMs, t)}`}>
                     {task.provider} · {taskMeta(task, nowMs, t)}

@@ -1,5 +1,6 @@
 import { ghFailureSentence, type GhFailed, type GhRunner } from './gh'
 import type { PrChecks, PrInfo, PrState } from './types'
+import { ghRepoArg, type GitHubRepo } from './remote'
 
 /** The PR window per repository. Branches older than the newest 200 PRs are not found — accepted
  *  in the design doc §3.3; Astera-created worktree branches are recent. */
@@ -93,6 +94,52 @@ export function parsePrList(stdout: string): Record<string, PrInfo> | null {
     }
   }
   return byBranch
+}
+
+/** A pull request's head commit and state, in `repo` or in the repository at `cwd` (GitHub lifecycle G4): what a CI run
+ *  must have run on to be rerun through a Run. An answer that is not one is a failed read. */
+export async function prHead(
+  run: GhRunner,
+  cwd: string,
+  n: number,
+  repo?: GitHubRepo
+): Promise<{ ok: true; headSha: string; state: string } | GhFailed> {
+  const r = await run(['pr', 'view', String(n), '--json', 'headRefOid,state', ...(repo ? ['--repo', ghRepoArg(repo)] : [])], cwd)
+  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  let v: unknown
+  try {
+    v = JSON.parse(r.stdout)
+  } catch {
+    v = null
+  }
+  const o = v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  if (typeof o.headRefOid !== 'string' || typeof o.state !== 'string')
+    return { ok: false, kind: 'other', message: `gh pr view ${n} answered with something that is not a pull request` }
+  return { ok: true, headSha: o.headRefOid, state: o.state }
+}
+
+/** One pull request by its number in `repo` (GitHub lifecycle G3c2): the PR a Run is bound to, read as the list reads a
+ *  row. `gh pr view` answers one object; output that is not one PR is a failed read, never "no PR". */
+export async function prByNumber(
+  run: GhRunner,
+  cwd: string,
+  repo: GitHubRepo,
+  n: number
+): Promise<{ ok: true; pr: PrInfo | null; base?: string } | GhFailed> {
+  // The base too: runs reconverge binds the base the pull request has now (G6 final review M1)
+  const fields = `${PR_LIST_ARGS[PR_LIST_ARGS.length - 1]},baseRefName`
+  const r = await run(['pr', 'view', String(n), '--repo', ghRepoArg(repo), '--json', fields], cwd)
+  if (!r.ok) return { ok: false, ...ghFailureSentence(r) }
+  let one: unknown
+  try {
+    one = JSON.parse(r.stdout)
+  } catch {
+    return { ok: false, kind: 'other', message: 'gh pr view answered with something that is not JSON' }
+  }
+  const rows = parsePrList(JSON.stringify([one]))
+  const pr = rows ? Object.values(rows)[0] : undefined
+  const base = typeof one === 'object' && one !== null && typeof (one as { baseRefName?: unknown }).baseRefName === 'string' ? (one as { baseRefName: string }).baseRefName : undefined
+  return pr ? { ok: true, pr, ...(base !== undefined ? { base } : {}) } : { ok: false, kind: 'other', message: `gh pr view ${n} answered with something that is not a pull request` }
 }
 
 /** The PR of one head branch, by the same fold as the coordinator's list: an open PR wins, else the

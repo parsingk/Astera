@@ -1693,3 +1693,106 @@ describe('a worker revived through a recovery Gate', () => {
     expect(fresh).toEqual([expect.objectContaining({ taskId: 'tsk_1', retryOf: 'dsp_lost' })])
   })
 })
+
+// GitHub lifecycle G3a (design §3.3): Astera folds every Task worktree into the Run root, then starts the lifecycle
+// Task's checks there with no worker, in every Run, coordinator-driven ones included (Review Focus 3).
+describe('the lifecycle Task is started by the loop', () => {
+  const POLICY = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+  const lifecycleState = (o: { coordinator?: boolean; dispatchCwd?: string; paused?: boolean; worktree?: string | null } = {}): OrchState => ({
+    ...emptyState(),
+    jobs: [{ id: 'job_l', objective: 'ship it', cwd: '/p', createdAt: NOW, github: POLICY, convergence: {}, ...(o.coordinator ? { coordinatorAccountId: 'accA' } : { autoDispatch: true }) }],
+    runs: [
+      {
+        id: 'run_l', jobId: 'job_l', ordinal: 1, createdAt: NOW,
+        ...(o.worktree === null ? {} : { worktree: o.worktree ?? '/wt-run' }),
+        ...(o.paused ? { paused: true } : {}),
+        ...(o.coordinator ? { coordinatorSessionId: 'coord-1' } : {})
+      }
+    ],
+    tasks: [
+      task({ id: 'tsk_a', runId: 'run_l', jobId: undefined, status: 'completed', updatedAt: NOW }),
+      task({ id: 'tsk_l', runId: 'run_l', jobId: undefined, kind: 'lifecycle', title: 'GitHub 전달', deps: ['tsk_a'], accountIds: undefined, validateConfigIds: ['github:ci'], reviewRequested: true })
+    ],
+    dispatches: [
+      {
+        id: 'dsp_a', taskId: 'tsk_a', provider: 'claude', accountId: 'accA', sessionId: 's-a', cwd: o.dispatchCwd ?? '/wt-run', specPath: 'x',
+        startedAt: NOW, endedAt: NOW, outcome: 'succeeded', workerState: 'stopped', retained: false
+      } as Dispatch
+    ]
+  })
+  const lifecycleStatus = (h: ReturnType<typeof rig>): string => h.state().tasks.find((t) => t.id === 'tsk_l')!.status
+
+  it('starts the checks in the Run root when nothing is left to fold in', async () => {
+    const h = rig()
+    h.setState(lifecycleState())
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled().filter((c) => c === 'lifecycle-start')).toHaveLength(1)
+    expect(lifecycleStatus(h)).toBe('validating')
+    expect(h.startWorker).not.toHaveBeenCalled()
+  })
+
+  it('folds a Task worktree into the Run root first', async () => {
+    const h = rig()
+    h.setState(lifecycleState({ dispatchCwd: '/wt-a' }))
+    const integrated: [string, string[]][] = []
+    h.ctx.integrate = async (root, merges) => (integrated.push([root, merges]), { kind: 'merged', uncommitted: [] } as never)
+    await h.loop.run()
+    await h.settle()
+    expect(integrated).toEqual([['/wt-run', ['/wt-a']]])
+    expect(lifecycleStatus(h)).toBe('validating')
+  })
+
+  it('a conflict makes an integration Task for the lifecycle Task, on the accounts of the Task it folds in, and waits', async () => {
+    const h = rig()
+    h.setState(lifecycleState({ dispatchCwd: '/wt-a' }))
+    h.ctx.integrate = async () => ({ kind: 'agent', reason: 'conflict in a.ts', worktrees: [{ path: '/wt-a', branch: 'a' }] }) as never
+    await h.loop.run()
+    await h.settle()
+    const made = h.state().tasks.find((t) => t.parentId === 'tsk_l')
+    expect(made).toMatchObject({ runId: 'run_l', accountIds: ['accA'], deps: ['tsk_a'] })
+    expect(h.handled()).not.toContain('lifecycle-start')
+    expect(lifecycleStatus(h)).toBe('ready')
+  })
+
+  it('starts it in a coordinator-driven Run too, and never in a paused one', async () => {
+    const h = rig()
+    h.setState(lifecycleState({ coordinator: true }))
+    await h.loop.run()
+    await h.settle()
+    expect(lifecycleStatus(h)).toBe('validating')
+    const paused = rig()
+    paused.setState(lifecycleState({ paused: true }))
+    await paused.loop.run()
+    await paused.settle()
+    expect(paused.handled()).not.toContain('lifecycle-start')
+  })
+
+  // G3a final review M3: a throw in the lifecycle pass is that Task's Gate, not the end of the activation
+  it('a folding that throws asks a person about the lifecycle Task, and the other Runs are still placed', async () => {
+    const h = rig()
+    const base = lifecycleState({ dispatchCwd: '/wt-a' })
+    h.setState({
+      ...base,
+      jobs: [...base.jobs, { id: 'job_o', objective: 'other', cwd: '/p', createdAt: NOW, autoDispatch: true }],
+      runs: [...base.runs, { id: 'run_o', jobId: 'job_o', ordinal: 1, createdAt: NOW, worktree: '/wt-o' }],
+      tasks: [...base.tasks, task({ id: 'tsk_o', runId: 'run_o', jobId: undefined })]
+    })
+    h.ctx.integrate = async () => {
+      throw new Error('git is not answering')
+    }
+    await h.loop.run()
+    await h.settle()
+    expect(h.state().gates.find((g) => g.taskId === 'tsk_l')?.question).toContain('git is not answering')
+    expect(h.startWorker).toHaveBeenCalledTimes(1)
+  })
+
+  it('a Run with no branch of its own asks a person', async () => {
+    const h = rig()
+    h.setState(lifecycleState({ worktree: null }))
+    await h.loop.run()
+    await h.settle()
+    expect(h.handled()).toContain('gate-create')
+    expect(h.state().gates.find((g) => g.taskId === 'tsk_l')?.question).toContain('GitHub')
+  })
+})

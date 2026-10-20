@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for the Linux builds (linux.extraFiles in electron-builder.yml). The AppImage catalog,
+     appimage.github.io, shows its summary, description and screenshot on Astera's page. -->
+<component type="desktop-application">
+  <id>io.github.parsingk.astera</id>
+  <name>Astera</name>
+  <summary>Keep Claude Code and Codex working while you are away</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <developer id="io.github.parsingk">
+    <name>parsingk</name>
+  </developer>
+  <description>
+    <p>
+      Astera is a desktop app for running many Claude Code and Codex sessions side by side, and for keeping them
+      working while you are away.
+    </p>
+    <ul>
+      <li>Several sessions in one window, in split panes, each a terminal or a chat view</li>
+      <li>Several accounts per vendor, and account rolling: a session that hits a usage limit carries on under the next account</li>
+      <li>Each task in a git worktree of its own</li>
+      <li>Jobs that split work into tasks, check them with your tests and send what fails back for repair</li>
+      <li>Scheduled sessions, and Slack notifications and replies</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">astera.desktop</launchable>
+  <url type="homepage">https://github.com/parsingk/Astera</url>
+  <url type="bugtracker">https://github.com/parsingk/Astera/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Four sessions in one window: three Claude Code and one Codex, on two Claude accounts and a Codex one</caption>
+      <image>https://raw.githubusercontent.com/parsingk/Astera/main/assets/hero.jpg</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+</component>

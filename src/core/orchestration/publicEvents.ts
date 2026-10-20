@@ -21,7 +21,8 @@ import { briefTask, jobView, latestRunOf, runView } from './publicViews'
 import { outcomeOfTasks } from './running'
 import { countedCheck, findingsCounted, taskCompletionOf, taskCompletionState, type CompletionState } from './runCompletion'
 import type { OrchState } from './state'
-import { isPlaceholderSessionId, type Dispatch, type Gate, type Job, type JobRun, type Task } from './types'
+import { isGitHubGateKind, isPlaceholderSessionId, type Dispatch, type Gate, type Job, type JobRun, type Task } from './types'
+import type { GitHubLogKind, RunGitHubState } from '../github/lifecycle'
 
 /** One event before the log gives it an id, a sequence and a time. */
 export interface EventDraft {
@@ -103,6 +104,31 @@ const eventState = (s: OrchState, by: ByTask, t: Task): CompletionState => {
   return open !== undefined && isPlaceholderSessionId(open.sessionId) ? 'not-started' : state
 }
 
+/** null: a timeline line only (G7b; design §5.5 names no public event for it). */
+const GITHUB_EVENT: Record<GitHubLogKind, EventType | null> = {
+  'pr-bound': 'github.pr_bound',
+  'pr-created': 'github.pr_created',
+  pushed: null,
+  'ci-started': null,
+  'head-changed': 'github.head_changed',
+  'ci-passed': 'github.ci_passed',
+  'ci-failed': 'github.ci_failed',
+  'ci-rerun': 'github.ci_rerun_requested',
+  'source-changed': 'github.source_changed',
+  'merge-ready': 'github.merge_ready',
+  invalidated: 'github.merge_ready_invalidated'
+}
+
+/** The GitHub events a Run's record gained in one commit: its log entries numbered past the last one it had. */
+export function githubEventsOf(prev: RunGitHubState | undefined, next: RunGitHubState | undefined): EventType[] {
+  if (next === undefined || next === prev) return []
+  const seen = prev?.seq ?? 0
+  return next.log
+    .filter((e) => e.seq > seen)
+    .map((e) => GITHUB_EVENT[e.kind])
+    .filter((t): t is EventType => t !== null)
+}
+
 export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft[] {
   if (prev === next) return []
   const out: EventDraft[] = []
@@ -136,6 +162,15 @@ export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft
 
   const runsBefore = prev.runs === next.runs ? null : new Set(prev.runs.map((r) => r.id))
   if (runsBefore !== null) for (const run of next.runs) if (!runsBefore.has(run.id)) runEvent('run.started', run)
+
+  if (prev.runs !== next.runs) {
+    const runBefore = byId(prev.runs)
+    for (const run of next.runs) {
+      const was = runBefore.get(run.id)
+      if (was === run) continue
+      for (const type of githubEventsOf(was?.githubState, run.githubState)) runEvent(type, run)
+    }
+  }
 
   const tasksMoved = prev.tasks !== next.tasks
   const gatesMoved = prev.gates !== next.gates
@@ -193,7 +228,9 @@ export function derivePublicEvents(prev: OrchState, next: OrchState): EventDraft
         if (from === to) continue
         // A check that could not be made (plugin Phase 5 C9) ends no round in failure: the question it opens says the
         // Task waits, and its answer starts the checks again (5a final review M2)
-        const unavailable = to === 'waiting-for-user' && (byNow.gates.get(t.id) ?? []).some((g) => g.status === 'open' && g.kind === 'check-unavailable')
+        // Nor does a GitHub question (GitHub lifecycle G3b2): it holds the round's wait while a person answers
+        const unavailable =
+          to === 'waiting-for-user' && (byNow.gates.get(t.id) ?? []).some((g) => g.status === 'open' && (g.kind === 'check-unavailable' || isGitHubGateKind(g.kind)))
         const types = completionTypes(from, to).filter((x) => !(unavailable && x === 'completion.failed'))
         if (types.length === 0) continue
         const payload = findingsCounted(taskCompletionOf(narrowed(next, byNow, t.id), t))

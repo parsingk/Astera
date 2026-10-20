@@ -820,6 +820,17 @@ describe('createHostOrch', () => {
       expect((second.body as { boot: unknown }).boot).toBeNull()
     })
 
+    // GitHub lifecycle G6 (design §6.3 S5): a load with no app attached is the Host's own — it drives and sweeps itself —
+    // so its findings are spent, and an app attaching later does not act on them again
+    it('an unattended load spends the findings: a later app asking for boot gets none', async () => {
+      await seedOpenDispatch()
+      const orch = orchOver({ aliveSessionIds: () => new Set<string>() })
+      await orch.loadUnattended()
+      const app = await orch.call({ cmd: 'state-get', args: { boot: true }, sessionId: '', from: { role: 'app', toOthers: () => {} } })
+      expect((app.body as { boot: unknown }).boot).toBeNull()
+      expect((app.body as { state: OrchState }).state.dispatches).toHaveLength(1)
+    })
+
     // **`boot: true` 는 읽기가 아니다** — 가져가면 없어진다. CLI 가 (실수로든 아니든) 그것을
     // 집어 가면 앱은 boot 없이 뜨고, 재시작이 끊어 놓은 검증은 아무도 다시 시작하지 않는다.
     it('CLI 는 boot 를 물어도 받지 못하고, 앱 몫을 축내지도 않는다', async () => {
@@ -1518,7 +1529,7 @@ describe('요청 영수증', () => {
       path.join(dir, 'accounts.json'),
       JSON.stringify({
         accounts: [
-          { id: 'acc1', label: '일', configDir: 'D:/cfg', color: '#fff', createdAt: 'T', provider: 'claude' }
+          { id: 'acc1', label: '일', configDir: path.join(dir, 'cfg'), color: '#fff', createdAt: 'T', provider: 'claude' }
         ]
       }),
       'utf8'
@@ -1557,7 +1568,7 @@ describe('요청 영수증', () => {
       path.join(dir, 'accounts.json'),
       JSON.stringify({
         accounts: [
-          { id: 'acc1', label: '일', configDir: 'D:/cfg', color: '#fff', createdAt: 'T', provider: 'claude' }
+          { id: 'acc1', label: '일', configDir: path.join(dir, 'cfg'), color: '#fff', createdAt: 'T', provider: 'claude' }
         ]
       }),
       'utf8'
@@ -2614,7 +2625,7 @@ describe('Host-local spawn (S2)', () => {
     const { taskId } = await seed()
     for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
     await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
-    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] }))
     const forkedDir = path.join(dir, 'wt-a'); await fs.mkdir(forkedDir)
     const spawned: { cwd: string }[] = []
     const registry = new PtyRegistry({
@@ -3027,7 +3038,7 @@ describe('Host-local spawn (S2)', () => {
     startValidation: vi.fn(), startReview: vi.fn(), startRepair: vi.fn(),
     repairTargetFor: vi.fn(() => null), repairOnce: vi.fn(async () => ({ ok: true as const })), lang: vi.fn(async () => 'en' as const),
     stopValidation: vi.fn(() => false), stopForeignValidations: vi.fn(async () => 0), checking: vi.fn(() => false), resumeSweep: vi.fn(), langNow: vi.fn(() => 'en' as const),
-    accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false)
+    accounts: vi.fn(async () => []), loginStatus: vi.fn(async () => false), settleHandedOff: vi.fn(async () => {})
   })
   /** R10's fixture: a --validate Task whose Host-spawned worker has just reported, with no app. */
   const reportWithNoApp = async (drive: Parameters<typeof createHostOrch>[0]['drive']) => {
@@ -3286,7 +3297,9 @@ describe('Host-local spawn (S2)', () => {
  * edits the one thing that was right.
  */
 describe('repair refusals (S2)', () => {
-  const ACCOUNTS = JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] })
+  // A config folder inside the test's own profile (issue #8): 'D:/cfg' is a relative path on Linux, and on Windows it is
+  // a real folder outside the repository, where the spawn's pre-trust kept writing .claude.json
+  const ACCOUNTS = (): string => JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] })
   const withSpawner = async () => {
     for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
     await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
@@ -3332,7 +3345,7 @@ describe('repair refusals (S2)', () => {
 
   it('answers a Host-local worker-start over a corrupt app-settings.json with 409 and repair', async () => {
     const { taskId } = await seed()
-    await fs.writeFile(path.join(dir, 'accounts.json'), ACCOUNTS)
+    await fs.writeFile(path.join(dir, 'accounts.json'), ACCOUNTS())
     await fs.writeFile(path.join(dir, 'app-settings.json'), '{not json')
     const orch = await withSpawner()
     const r = await orch.call({ cmd: 'worker-start', args: worker(taskId), sessionId: '' })
@@ -3378,7 +3391,7 @@ describe('a retiring Host refuses new spawns (S2)', () => {
     const { taskId } = await seed()
     for (const f of ['Astera.exe', 'cli.js']) await fs.writeFile(path.join(dir, f), '')
     await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
-    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: 'D:/cfg', color: '#888', createdAt: NOW, provider: 'claude' }] }))
+    await fs.writeFile(path.join(dir, 'accounts.json'), JSON.stringify({ accounts: [{ id: 'acc1', label: 'one', configDir: path.join(dir, 'cfg'), color: '#888', createdAt: NOW, provider: 'claude' }] }))
     const spawned: string[] = []
     const registry = new PtyRegistry({
       spawn: (file) => { spawned.push(file); return { pid: 1, onData() {}, onExit() {}, write() {}, resize() {}, kill() {}, pause() {}, resume() {} } },

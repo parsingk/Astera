@@ -257,7 +257,7 @@ describe('createHostSpawner', () => {
       rollPrompt: (h.registry.list()[0].meta!.restore as { rollPrompt: string }).rollPrompt, rollProviders: ['claude'],
       orchEnv: { cliPath: path.join(profile, 'orch', process.platform === 'win32' ? 'astera.cmd' : 'astera'), skillsPath: path.join(dir, 'skills'), profileDir: profile },
       // S6 R6: the one key the Host's note adds, that the Host started it; everything else stays equal.
-      restoreExtra: { rolledBy: 'host' } })
+      restoreExtra: { rolledBy: 'host' }, startedBy: 'agent' })
     const norm = (x: unknown, id: string) => JSON.parse(JSON.stringify(x).split(id).join('<id>'))
     expect(norm(h.spawned[0].file, r.sessionId)).toEqual(norm(app[0].file, info.id))
     expect(norm(h.spawned[0].args, r.sessionId)).toEqual(norm(app[0].args, info.id))
@@ -708,6 +708,15 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const pty = h.registry.sessionPty(info.id)!
     expect(h.registry.metaOf(pty)?.restore).toMatchObject({ rolledBy: 'host', rolledFrom: 's0', accountId: account.id })
   })
+  // An agent-started session's tab closes when it ends (2026-10-20): a roll keeps who started the chain
+  it('rollSpawn writes who started the chain into the note', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    await h.spawner.prepareRollSpawn(account, h.cwd)
+    const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], startedBy: 'agent', restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
+    expect(info.startedBy).toBe('agent')
+    expect(h.registry.metaOf(h.registry.sessionPty(info.id)!)?.restore).toMatchObject({ startedBy: 'agent' })
+  })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')
@@ -724,6 +733,12 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const pty = h.registry.sessionPty(r.sessionId)!
     expect(h.registry.metaOf(pty)?.restore.rolledBy).toBe('host')
     expect(seen).toEqual([r.sessionId])
+  })
+  // 2026-10-20: every session this Host starts is an agent's — a Job's worker or coordinator, or one an agent made
+  it('a worker it starts is marked as started by an agent', async () => {
+    const h = await spawnerRig()
+    const r = await h.spawner.startWorker(h.workerArgs())
+    expect(h.registry.metaOf(h.registry.sessionPty(r.sessionId)!)?.restore.startedBy).toBe('agent')
   })
   it('retarget moves the tail and readWorker ownership to the rolled session (R19)', async () => {
     const h = await spawnerRig()
@@ -781,6 +796,18 @@ describe('createHostSpawner — createSession', () => {
     expect(JSON.stringify(h.spawned[0].args)).toContain('run the tests')
     // The rolling hears it the way it hears a worker (a chain when it has accounts to roll onto).
     expect(spawnedCb).toEqual([info.id])
+  })
+
+  // 2026-10-20: a session made with `astera sessions create` or MCP is an agent's, and its tab closes when it ends
+  it('marks a session it creates as the command says who started it', async () => {
+    const h = rig()
+    const info = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], startedBy: 'agent' })
+    expect(info.startedBy).toBe('agent')
+    expect(h.registry.list()[0].meta!.restore).toMatchObject({ startedBy: 'agent' })
+    // Review M1: a person's, from a remote controller's dialog, carries nothing and keeps its tab
+    const person = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+    expect(person).not.toHaveProperty('startedBy')
+    expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('startedBy')
   })
 
   it('reads the permission setting as a worker start does: manual means prompts on', async () => {

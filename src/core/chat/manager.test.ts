@@ -388,6 +388,17 @@ describe('ChatSessionManager.spawn', () => {
     expect(meta.restore).not.toHaveProperty('schedule')
   })
 
+  // An agent-started session's tab closes when it ends (2026-10-20), a chat session's as a terminal's
+  it('writes startedBy agent into the info and the note, and nothing for a person’s session', () => {
+    const { spawned, manager } = setup('win32')
+    const agent = manager.spawn({ account: codexAccount, cwd: 'D:/p', startedBy: 'agent' })
+    expect(agent.startedBy).toBe('agent')
+    expect(spawned[0].opts.meta!.restore).toMatchObject({ startedBy: 'agent' })
+    const person = manager.spawn({ account: codexAccount, cwd: 'D:/p' })
+    expect(person).not.toHaveProperty('startedBy')
+    expect(spawned[1].opts.meta!.restore).not.toHaveProperty('startedBy')
+  })
+
   it('spawn without the feature fields writes none of them to info or the note', () => {
     const { spawned, manager } = setup('win32')
     const info = manager.spawn({ account: codexAccount, cwd: 'D:/p' })

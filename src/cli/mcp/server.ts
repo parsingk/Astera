@@ -26,7 +26,7 @@ import { resolveRuntime } from '../runtimes'
 import { LIST_LIMIT, cursorOffset, orderAndCut } from './lists'
 import { registerPrompts, registerResources } from './resources'
 import { SESSION_TEXT_CAP, capSession, redactRows } from './sessionText'
-import { MCP_LIMITS, RUNTIME_TOOLS, TOOLS, convergenceRefusal, githubTargetRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
+import { MCP_LIMITS, RUNTIME_TOOLS, TOOLS, convergenceRefusal, githubTargetRefusal, rerunTargetRefusal, sendTextRefusal, taskTargetRefusal, type ToolDef } from './tools'
 
 /** The fields that carry free text, from a person or an agent, at any depth. Only these go through the
  *  checkpoint's secret filter: ids, paths, cwd, worktrees and timestamps are left exactly as they are,
@@ -292,7 +292,9 @@ async function runTool(link: HostLink, t: ToolDef, input: Record<string, unknown
           ? githubTargetRefusal(input, 'branch')
           : t.name === 'get_ci'
             ? githubTargetRefusal(input, 'pr')
-            : null
+            : t.name === 'retry_ci'
+              ? rerunTargetRefusal(input)
+              : null
   if (refused !== null) return errorResult('INVALID_ARGUMENTS', refused)
   // create_task without an accountId runs on the Job's coordinator account, the default the
   // coordinator's own planning brief uses. jobs-get takes a Job id or a Run id.

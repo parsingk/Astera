@@ -6,6 +6,8 @@ import type { RunOutcome } from '../types'
 import type { OrchState } from './state'
 import type { Job, JobRun, Task } from './types'
 import { outcomeOf, progressOf } from './view'
+import { githubLifecycleOf } from '../github/view'
+import { lifecycleFactsOf } from './lifecycleTask'
 
 /**
  * 계획과 회차에 붙는 파생값 — 공개 읽기 표면이 상태를 말하는 방식(공개 CLI 설계 §6).
@@ -52,12 +54,19 @@ export const jobView = (s: OrchState, job: Job, run: JobRun | undefined): Record
 
 /** A paused Run's `outcome` is `paused` (e2e 2026-10-01: `runs stop` left `paused: true` beside
  *  `outcome: "running"`). outcomeOf reads only the Tasks, so it cannot see the pause. `paused` is the
- *  JOB_STATES word, and stateWord puts it ahead of the Tasks' outcome, as this does. */
-export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => ({
-  ...run,
-  ...derivedFor(s, run.id, [run.id]),
-  ...(run.paused === true ? { outcome: 'paused' satisfies RunOutcomePublic } : {})
-})
+ *  JOB_STATES word, and stateWord puts it ahead of the Tasks' outcome, as this does.
+ *
+ *  A GitHub lifecycle Job's Run carries `github`, derived from the Host's record (githubState, kept back). */
+export const runView = (s: OrchState, run: JobRun): Record<string, unknown> => {
+  const policy = s.jobs.find((j) => j.id === run.jobId)?.github
+  const github = policy ? githubLifecycleOf(policy, run.githubState, lifecycleFactsOf(s, run.id)) : undefined
+  return {
+    ...run,
+    ...derivedFor(s, run.id, [run.id]),
+    ...(run.paused === true ? { outcome: 'paused' satisfies RunOutcomePublic } : {}),
+    ...(github !== undefined ? { github } : {})
+  }
+}
 
 /** A spec longer than this is cut in a brief Task (`tasks list --brief`, and every Task an event carries). */
 const BRIEF_SPEC_CHARS = 160

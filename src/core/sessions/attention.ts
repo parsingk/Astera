@@ -22,10 +22,10 @@ export type { Attention }
 export interface AttentionState {
   /** One hook event for one session. The payload is the raw hook payload, exactly as the existing
    *  taps receive it, so this can be added to the same fan-out without reshaping anything:
-   *  `HookEventWatcher` in `src/main/index.ts` already calls `slack.onHookEvent(sid, payload)`,
-   *  `rolling.onHookEvent(sid, payload)` and `desktop.onHookEvent(sid, payload)` with this shape.
+   *  `HookEventWatcher` in `src/main/index.ts` already calls `slack.onHookEvent(sid, payload)` with
+   *  this shape (rolling and the desktop notifier were taps too, once).
    *  Read `hook_event_name` off it yourself; it is `unknown` because the watcher does not validate.
-   *  The name matches the three existing taps on purpose, so the fan-out reads the same for all. */
+   *  The name matches the other taps on purpose, so the fan-out reads the same for all. */
   onHookEvent(sessionId: string, payload: unknown): void
   /** Writes a session's value outright, with none of `onHookEvent`'s bookkeeping — no `outstanding`
    *  set is touched, because the caller already knows the answer. This is how a chat session's

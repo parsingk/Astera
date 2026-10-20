@@ -46,6 +46,15 @@ function stripLineComments(text: string): string {
 }
 
 describe('ipc.ts convergence wiring (source guard)', () => {
+  // GitHub lifecycle G5a final review M-11: a review starter without rangeDiff turns the weakening findings off quietly
+  it('both review starters, the app’s and the Host’s, are given the range diff reader', () => {
+    const app = stripLineComments(sliceBetween(ipcSource, 'const startReview = createReviewStarter({', '})'))
+    expect(app).toMatch(/rangeDiff: \(cwd, base, head\) => readRangeDiff\(cwd, base, head\)/)
+    const hostSource = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../host/checks.ts'), 'utf8')
+    const host = stripLineComments(sliceBetween(hostSource, 'const reviewStarter = createReviewStarter({', '})'))
+    expect(host).toMatch(/rangeDiff: \(cwd, base, head\) => readRangeDiff\(cwd, base, head\)/)
+  })
+
   it('the startWorker wrapper hands every worker start to startWorkerWithChain (property 4)', () => {
     // deps.startWorker — every worker-start, repair (same-session reuse or fresh) and review Dispatch
     // goes through this one wrapper (repair.ts's RepairDeps.startWorker JSDoc names it explicitly).

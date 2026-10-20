@@ -37,6 +37,8 @@ export const CONTROLLER_READ_COMMANDS = [
   'github-pr',
   'github-ci',
   'github-issue',
+  // G7a: the New Job window's inline check, asked of the Runtime whose folder it is
+  'github-preflight',
   // Only the controller's own receipts: they are keyed by its principal (§3.9).
   'requests-show',
   // Sanitized for a controller (§3.6).
@@ -50,6 +52,9 @@ export const CONTROLLER_CONTROL_COMMANDS = [
   'jobs-run',
   'runs-stop',
   'runs-resume',
+  // GitHub lifecycle §6.4 (G5c): a finished lifecycle Run carried through GitHub again, on the Runtime's own gh; the raw
+  // GitHub writes stay off this list
+  'runs-reconverge',
   'run-pause',
   'run-resume',
   'run-create',

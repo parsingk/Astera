@@ -18,7 +18,10 @@ import type { OrchServerDeps } from '../command'
 import { checkConfigIdsOf, policyOf } from '../convergence'
 import { pickReviewer } from '../reviewer'
 import { openReviewDispatch, type OrchState } from '../state'
+import { isLifecycleTask, latestOrdinaryWork, lifecycleBriefOf } from '../lifecycleTask'
 import { buildReviewSpecFile, knowledgeIn, specFileName } from './coordinator'
+import { promptText, weakeningFindings } from '../../github/weakening'
+import type { RunGitHubState } from '../../github/lifecycle'
 import { createReviewGate } from './reviewGate'
 
 export interface ReviewContext {
@@ -32,6 +35,19 @@ export interface ReviewContext {
   /** The start wrapper that attaches the chain and the tail — never the bare coordinator. */
   startWorker: OrchServerDeps['startWorker']
   specsDir: string
+  /** The whole diff of a range in a folder, capped (`readRangeDiff`): what a lifecycle review's weakening findings are
+   *  read from (GitHub lifecycle G5a). Absent: no findings. */
+  rangeDiff?(cwd: string, base: string, head: string): Promise<{ diff: string; truncated: boolean } | null>
+}
+
+/** The Run's CI failures of the verification configuration (G5a, design §4.6), each check and head once, from the Run's
+ *  GitHub log: the snapshot is overwritten by later reads. */
+function configurationNotesOf(gs: RunGitHubState | undefined): string[] {
+  // The check's name is a workflow's own, which an agent can write: made fit for the prompt (G5a final review M-5)
+  const notes = (gs?.log ?? [])
+    .filter((e) => e.kind === 'ci-failed' && e.class === 'configuration')
+    .map((e) => `${promptText(e.check ?? 'a check')}${e.sha ? ` on ${e.sha.slice(0, 7)}` : ''}`)
+  return [...new Set(notes)]
 }
 
 /** OrchServerDeps.startReview 의 본문을 돌려준다. 돌려준 함수는 흘려보내는 쪽이 종단 .catch 를
@@ -67,12 +83,23 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       if (await reviewGate.refuseIfRunGated({ taskId })) return
       // 구현 Dispatch — 그 provider 를 피해야 하고, cwd 도 여기서 얻는다(그래서 이 함수는 taskId
       // 하나만 받는다: 호출자가 cwd 를 따로 구하면 두 경로가 갈라진다)
-      const impl = st.dispatches
-        .filter((d) => d.taskId === taskId && !d.review)
-        .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
-        .at(-1)
+      // A lifecycle Task is reviewed in the Run root, the branch Astera pushed, over its pull request's diff; the
+      // implementer to avoid is the latest repair of any of the Run's lifecycle Tasks — after a reconverge the earlier
+      // one's repairs made the branch's latest changes (G5c final review M4) — else the Run's latest ordinary work
+      // (GitHub lifecycle G3c1, §3.4 S7)
+      const lifecycle = isLifecycleTask(task)
+      const run = st.runs.find((r) => r.id === task.runId)
+      const carriers = lifecycle ? new Set(st.tasks.filter((t) => t.runId === task.runId && isLifecycleTask(t)).map((t) => t.id)) : new Set([taskId])
+      const impl =
+        st.dispatches
+          .filter((d) => carriers.has(d.taskId) && !d.review)
+          .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+          .at(-1) ?? (lifecycle && task.runId !== undefined ? latestOrdinaryWork(st, task.runId)?.dispatch : undefined)
       if (!impl) return void (await gate(`no implementation dispatch for task ${taskId}`))
-      const cwd = impl.cwd
+      const cwd = lifecycle ? run?.worktree : impl.cwd
+      if (cwd === undefined) return void (await gate(`the Run of task ${taskId} has no folder of its own to review in`))
+      const base = lifecycle ? run?.git?.base : undefined
+      const diff = base !== undefined ? { base, head: run?.githubState?.lastPushedSha ?? 'HEAD' } : undefined
       const accounts = await c.accounts()
       // core.ts 의 defaultAccountIdFor 와 같은 모양 — 로그인 조회는 계정마다 파일(또는 macOS 에서는
       // Keychain)을 읽으므로 순차로 돌리면 계정 수만큼 늘어난다. 같은 일을 하는 자리가 이미 있으니
@@ -87,6 +114,10 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       // PTY 를 띄울 경로는 가드를 통과해야 한다 — validator.start 와 같은 이유(Dispatch.cwd 는
       // 오케스트레이션 소켓에서 온 값이고 정규화는 검증이 아니다, ADR-003).
       await c.assertAllowedPath(cwd)
+      // The pull request's whole diff, read for what can weaken its checks (GitHub lifecycle G5a, §7.4 S9): a read that
+      // fails gives no findings, never a review that does not start
+      const read = lifecycle && diff && c.rangeDiff ? await c.rangeDiff(cwd, diff.base, diff.head).catch(() => null) : null
+      const findings = read ? { ...weakeningFindings(read.diff), cut: read.truncated } : undefined
       // Dispatch 를 먼저 커밋한다 — 세션을 띄우기 전에 id 가 있어야 spec 파일의 보고 문장에
       // 그것을 실을 수 있다. worker-start 가 같은 순서다(server.ts: openDispatch 커밋 → startWorker).
       //
@@ -124,9 +155,11 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
       // `onOpenRefused` 안에 있다.
       if (!opened.ok) return void (await reviewGate.onOpenRefused({ taskId, error: opened.error }))
       await c.setState(opened.state)
+      // The reviewer judges the Run's objective and Tasks for a lifecycle Task, not its placeholder (G3c1 final review I1)
+      const brief = lifecycle ? lifecycleBriefOf(fresh, task) : { title: task.title, spec: task.spec }
       const spec = buildReviewSpecFile({
-        title: task.title,
-        spec: task.spec,
+        title: brief.title,
+        spec: brief.spec,
         taskId,
         dispatchId: opened.value.id,
         implReport: task.result,
@@ -150,6 +183,8 @@ export function createReviewStarter(c: ReviewContext): (a: { taskId: string }) =
         // 값이라 그런 창이 없다.
         checks: task.checks,
         previousIssues: task.reviewIssues,
+        ...(diff ? { diff } : {}),
+        ...(lifecycle ? { lifecycle: { ...(findings ? { findings } : {}), configurationNotes: configurationNotesOf(run?.githubState) } } : {}),
         suspiciousFiles: freshTask.suspiciousFiles,
         policyChanged: freshTask.policyChanged === true,
         // review.ts·state.ts 가 이미 기대하는 이름과 같은 규칙이다 — 이 Dispatch 의 spec 파일

@@ -115,6 +115,15 @@ for await (const e of astera.events.subscribe({ types: ['run.completed', 'run.fa
 | `session.input_needed` | a session turns to waiting on a person (a permission, a question), once per turn into it | `{ session, prompt }` |
 | `session.limit_waiting` | a session stops at a usage limit and waits for it to reset | `{ session, scope?, nextRetryAt? }` |
 | `session.account_switched` | a session goes on under another account | `{ session, accountLabel }` |
+| `github.pr_bound` | a GitHub lifecycle Run's branch was bound to a pull request Astera found (one Astera opened is `github.pr_created`) | `Run` |
+| `github.pr_created` | Astera opened the draft pull request a GitHub lifecycle Run is bound to | `Run` |
+| `github.head_changed` | that pull request's head moved | `Run` |
+| `github.ci_passed` | CI passed for the head (`run.github.ci`) | `Run` |
+| `github.ci_failed` | CI failed for the head; `run.github.failing` names the check | `Run` |
+| `github.ci_rerun_requested` | a CI run of the head was rerun through Astera: by Astera itself (a failure outside the code) or by a person's answer or `github-ci-rerun --run` (a rerun made on GitHub's own page is not seen) | `Run` |
+| `github.source_changed` | the GitHub issue the Job came from changed after it began | `Run` |
+| `github.merge_ready` | the review passed and the pull request is ready to merge: `run.github.mergeReady` holds the evidence | `Run` |
+| `github.merge_ready_invalidated` | the review's verdict withheld merge-ready, or the pull request moved since (a new head, another base, a check failing or changed, closed or merged): `run.github.invalidated.reason` says which | `Run` |
 
 - An event is `{ id, type, sequence, occurredAt, projectId?, jobId?, runId?, taskId?, sessionId?, payload }`, the
   payload the object as it stood right after the change (a session event's is `{ session, ... }`). A Task is cut like
@@ -138,7 +147,7 @@ for await (const e of astera.events.subscribe({ types: ['run.completed', 'run.fa
 - A subscription outlives a Host restart: a call that fails because the Host went away or did not answer is sent
   again from the same cursor after 250 ms, 1 s, then every 5 s. It ends only on `break`/`return()`, its `signal`, or
   an error waiting cannot mend (a Host too old for events answers `VERSION_MISMATCH`).
-- Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `github.*`, `runtime.*`. Local Host only for
+- Not produced yet: `run.cancelled` (there is no cancel; a stop pauses), `runtime.*`. Local Host only for
   now.
 
 It is versioned apart from the Astera app, and 0.x, so a minor version may still change names:

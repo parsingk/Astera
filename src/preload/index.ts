@@ -210,6 +210,8 @@ const api = {
     setMcpSessions: invoke('settings.setMcpSessions'),
     getMcpGithubWrite: invoke('settings.getMcpGithubWrite'),
     setMcpGithubWrite: invoke('settings.setMcpGithubWrite'),
+    getGithubLifecycle: invoke('settings.getGithubLifecycle'),
+    setGithubLifecycle: invoke('settings.setGithubLifecycle'),
     getMcpHttp: invoke('settings.getMcpHttp'),
     setMcpHttp: invoke('settings.setMcpHttp'),
     getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
