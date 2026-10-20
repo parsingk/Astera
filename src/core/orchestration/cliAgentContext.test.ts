@@ -52,7 +52,7 @@ describe('agent-context — 무엇이 실리는가', () => {
   // 수용 기준 수정 최종 리뷰 C1: 고른 검사는 저장소가 요구하는 검사와 함께 판정한다 — 세션의 run-create 도 공개 명령과 같은 말을 한다
   it('run-create 의 --github-checks 는 공개 jobs-create 와 같은 설명이다', () => {
     const create = ctx.commands.find((c) => c.name === 'run-create')!
-    const pub = USAGE['jobs-create'].flags.find((f) => f.name === 'github-checks')!
+    const pub = USAGE['jobs-create'].flags?.find((f) => f.name === 'github-checks')!
     expect(create.flags.find((f) => f.name === 'github-checks')?.about).toBe(pub.about)
   })
 
