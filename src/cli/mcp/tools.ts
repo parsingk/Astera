@@ -98,7 +98,7 @@ export const GITHUB_LIFECYCLE_FIELDS = {
     // Counted once each, as run-create counts them (G7a final review M9)
     .refine((names) => new Set(names.map((n) => n.trim())).size <= LIFECYCLE_CHECKS_MAX, { message: `at most ${LIFECYCLE_CHECKS_MAX} check names` })
     .optional()
-    .describe("With githubLifecycle: decide by these CI checks only, by name. Without it the branch rules' required checks decide, or every reported check when the rules name none.")
+    .describe("With githubLifecycle: these CI checks decide too, by name, beside the ones the repository requires. Without it the branch rules' required checks decide, or every reported check when the rules name none.")
 }
 
 function lifecycleArgs(i: Record<string, unknown>): Record<string, unknown> {

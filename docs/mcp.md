@@ -254,8 +254,8 @@ loops as they run.
 request of each Run's branch and watches its CI. The project's origin must be a GitHub repository you
 can push to (the Astera Host checks this before it makes the Job, and refuses with `CONFLICT` and the
 reason otherwise), and the field turns convergence on. `githubChecks` (a list of check names) makes
-those checks decide; without it, the branch rules' required checks decide, or every reported check
-when the rules name none. It needs "Let MCP clients act on GitHub" like the other GitHub writes. The
+those checks decide beside the ones the repository requires; without it, the branch rules' required
+checks decide, or every reported check when the rules name none. It needs "Let MCP clients act on GitHub" like the other GitHub writes. The
 Job carries the policy as `github`.
 
 `run_job` makes the Run's worktree and starts its coordinator before it

@@ -24,24 +24,25 @@ const NOTHING_CHECKED: readonly GitHubCiConclusion[] = ['skipped', 'neutral']
 const settled = (c: GitHubCiCheck): boolean => c.status === 'completed' && c.conclusion !== undefined && c.conclusion !== 'stale'
 
 /** What CI is judged on under the policy (design L3), from the whole read: the basis, the target checks, their names
- *  sorted once, the names a policy requires (present or not), and whether the read cannot know them (cut, or in required
- *  mode with no rule names or required-ness GitHub could not resolve). evaluateCi judges on these; merge-ready keeps the
- *  names and the watch compares a later read's (G5b final review I1, M2). */
+ *  sorted once, the names a policy requires (present or not), and whether the read cannot know them (cut, or with no rule
+ *  names or required-ness GitHub could not resolve). Selected checks decide beside the ones the repository requires —
+ *  branch protection first (spec §9; acceptance fixes Task 1) — so either mode is held alike by what it cannot know.
+ *  evaluateCi judges on these; merge-ready keeps the names and the watch compares a later read's (G5b final review I1, M2). */
 export function ciTargets(
   read: Pick<PrStateRead, 'checks' | 'requiredUnknown' | 'truncated'>,
   policy: GitHubCiPolicy,
   ruleNames: readonly string[] | null
 ): { basis: CiBasis; targets: GitHubCiCheck[]; names: string[]; named: string[]; unknowable: boolean } {
-  const unknowable = read.truncated === true || (policy.mode === 'required' && (ruleNames === null || read.requiredUnknown === true))
+  const unknowable = read.truncated === true || ruleNames === null || read.requiredUnknown === true
+  const required = new Set([...(ruleNames ?? []), ...read.checks.filter((c) => c.required).map((c) => c.name)])
   let basis: CiBasis
   let targets: GitHubCiCheck[]
   let named: string[] = []
   if (policy.mode === 'selected') {
     basis = 'selected'
-    named = [...new Set(policy.selectedChecks ?? [])]
+    named = [...new Set([...(policy.selectedChecks ?? []), ...required])]
     targets = read.checks.filter((c) => named.includes(c.name))
   } else {
-    const required = new Set([...(ruleNames ?? []), ...read.checks.filter((c) => c.required).map((c) => c.name)])
     if (required.size > 0) {
       basis = 'required'
       named = [...required]
@@ -54,9 +55,9 @@ export function ciTargets(
   return { basis, targets, names: [...new Set(targets.map((c) => c.name))].sort(), named, unknowable }
 }
 
-/** `ruleNames` is null when the branch rules could not be read. In `required` mode that, or a read that could not say
- *  whether some check is required, keeps a verdict from passing (spec §9: do not guess a pass), and so does a read
- *  that ran past its page in any mode; a failure seen still fails (final review C1, I2, M1). */
+/** `ruleNames` is null when the branch rules could not be read. That, or a read that could not say whether some check
+ *  is required, keeps a verdict from passing in either mode (spec §9: do not guess a pass), and so does a read that ran
+ *  past its page; a failure seen still fails (final review C1, I2, M1; acceptance fixes Task 1). */
 export function evaluateCi(
   read: Pick<PrStateRead, 'checks' | 'suites' | 'requiredUnknown' | 'truncated'>,
   policy: GitHubCiPolicy,
