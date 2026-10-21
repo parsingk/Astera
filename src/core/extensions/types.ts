@@ -42,3 +42,6 @@ export interface ExtensionRegistry {
   version: 1
   entries: ExtensionEntry[]
 }
+
+/** How an item's copy in one account stands after a sync (design §4.6); here so Settings › Extensions can name them. */
+export type SyncOutcome = 'written' | 'unchanged' | 'adopted' | 'restored' | 'conflict' | 'removed' | 'forgotten' | 'failed' | 'not-applicable'

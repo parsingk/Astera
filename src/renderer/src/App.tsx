@@ -47,6 +47,7 @@ import { CliSettings } from './components/CliSettings'
 import { McpSettings } from './components/McpSettings'
 import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { PluginsSettings } from './components/PluginsSettings'
+import { ExtensionsSettings } from './components/ExtensionsSettings'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
@@ -706,6 +707,7 @@ export default function App(): React.JSX.Element {
     | 'github'
     | 'remote'
     | 'plugins'
+    | 'extensions'
     | 'worktree'
     | 'history'
   >('general') // the settings sidebar, with general and accounts added
@@ -4985,6 +4987,8 @@ export default function App(): React.JSX.Element {
                     ['remote', t('settings.tab.remote')],
                     // Plugins (plugin runtime design slice 2d, spec §30): beside the other ways in to the Host.
                     ['plugins', t('settings.tab.plugins')],
+                    // Shared extensions (Agent Control Plane release 1): what every account gets, next to the plugins.
+                    ['extensions', t('settings.tab.extensions')],
                     ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
@@ -5420,6 +5424,7 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'github' && <GithubSettings />}
                 {settingsTab === 'remote' && <RemoteRuntimesSettings onChanged={() => setPairedChanged((n) => n + 1)} />}
                 {settingsTab === 'plugins' && <PluginsSettings />}
+                {settingsTab === 'extensions' && <ExtensionsSettings accounts={accounts} />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>

@@ -226,6 +226,7 @@ export function PluginsSettings(): React.JSX.Element {
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.plugins.hint')}</p>
+      <p className="settings-hint">{t('settings.extensions.pluginsLink')}</p>
       <div className="remote-actions">
         {/* Nothing to install into with no Host, or one that runs no plugins (M5). */}
         <button className="primary" disabled={installing !== 'idle' || installBlocked(listFailure?.code ?? null)} onClick={() => void installFolder()}>

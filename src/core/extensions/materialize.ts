@@ -13,7 +13,7 @@ import { keepDamaged, readStoreFile } from '../storeFile'
 import { hashFile, hashTree } from './hash'
 import { readExtensionRegistry } from './registry'
 import type { Account, Provider } from '../types'
-import type { FileExtension } from './types'
+import type { FileExtension, SyncOutcome } from './types'
 
 export interface MaterializedRecord {
   id: string
@@ -27,7 +27,7 @@ export interface MaterializedRecord {
   lastSyncedAt: string
 }
 
-export type SyncOutcome = 'written' | 'unchanged' | 'adopted' | 'restored' | 'conflict' | 'removed' | 'forgotten' | 'failed' | 'not-applicable'
+export type { SyncOutcome }
 
 export interface SyncItem {
   id: string

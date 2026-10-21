@@ -37,8 +37,20 @@ and resuming. With multiple accounts, rolling is automatic; check the displayed 
 there is no available account to switch to.
 
 When adding an account, **Import settings from the default account** can bring over its setup.
-Review the import dialog: merge and replacement rules differ by file and provider, and imported
-settings apply to new sessions rather than sessions already running.
+Review the import dialog: both providers merge item by item, Codex keeps the account's own trusted
+folders and hook approvals, and imported settings apply to new sessions rather than sessions
+already running.
+
+To give every account the same MCP servers, skills, slash commands and subagents, use
+**Settings → Extensions**. **Import from** a provider's default account, pick what to share, and
+choose which environment values to keep as secrets. Every session Astera starts then gets the
+shared MCP servers, with secret values passed only into the session's environment, and each
+account gets a copy of the shared skills, commands and subagents. Each item shows how its copy
+stands in every account: a copy edited outside Astera is put back and the edit kept in backups,
+and an account that already has its own different copy keeps it until you choose **Replace with
+the shared copy**. Once anything is shared, **Import settings from the default account** leaves
+these to Extensions and copies settings only. `astera ext list` and `astera ext sync` do the same
+from a terminal (see [the CLI reference](cli.md)).
 
 **Smart Resume** is optional and experimental. Choose it under **Settings → Agents → Session
 resume strategy** to give a new session a compact checkpoint when rolling moves work to another

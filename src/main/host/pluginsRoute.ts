@@ -17,8 +17,10 @@ const CODES: Record<number, string> = { 400: 'INVALID_ARGUMENTS', 403: 'FORBIDDE
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-export function createPluginsRoute(d: { call: Call }): PluginsApi {
-  const send = async (cmd: string, args: Record<string, unknown>, change = false): Promise<PluginsCallAnswer> => {
+/** One Host command sent as the app, answered as the tab reads it: the body on a 200, else a code and the Host's
+ *  sentence. Settings › Extensions sends its commands the same way (extensionsRoute.ts). */
+export function hostSender(d: { call: Call }): (cmd: string, args: Record<string, unknown>, change?: boolean) => Promise<PluginsCallAnswer> {
+  return async (cmd, args, change = false) => {
     let r: { status: number; body: unknown }
     try {
       r = await d.call({ cmd, args, sessionId: '', ...(change ? { timeoutMs: PLUGIN_CHANGE_DEADLINE_MS } : {}) })
@@ -38,6 +40,10 @@ export function createPluginsRoute(d: { call: Call }): PluginsApi {
       ...(typeof body.reason === 'string' ? { reason: body.reason } : {})
     }
   }
+}
+
+export function createPluginsRoute(d: { call: Call }): PluginsApi {
+  const send = hostSender(d)
   return {
     list: () => send('plugins-list', {}),
     // An npm package's inspect downloads it, so it waits as a change does (plugins 2e).
