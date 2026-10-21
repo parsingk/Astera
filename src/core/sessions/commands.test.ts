@@ -177,3 +177,31 @@ describe('win32 never hands a bare CLI name to cmd.exe', () => {
       expect(cmd.file).not.toBe('cmd.exe')
   })
 })
+
+// Agent Control Plane release 1 (design §4.5): shared MCP servers arrive as extra arguments, placed where each CLI
+// reads them: Claude after --settings and before the variadic --add-dir and the prompt; Codex with the other -c
+// overrides, ahead of `resume`; Codex app-server after the subcommand, which takes -c itself.
+describe('extraArgs (shared extensions)', () => {
+  const EXTRA = ['--mcp-config', '/p/claude-1.json']
+  it('claude: after --settings, before --add-dir and the prompt', () => {
+    const c = buildClaudeCommand('linux')({ settingsFile: '/s.json', addDirs: ['/d'], extraArgs: EXTRA, initialPrompt: 'go' })
+    expect(c.args).toEqual(['--settings', '/s.json', '--mcp-config', '/p/claude-1.json', '--add-dir', '/d', '--', 'go'])
+  })
+  it('codex: with the -c overrides, ahead of resume', () => {
+    const x = ['-c', "mcp_servers.a.command='npx'"]
+    const c = buildCodexCommand('linux')({ resumeSessionId: 'r1', extraArgs: x })
+    expect(c.args).toEqual([...NO_UPDATE, ...x, 'resume', 'r1'])
+  })
+  it('codex app-server: after the subcommand', () => {
+    const x = ['-c', "mcp_servers.a.command='npx'"]
+    expect(buildCodexAppServerCommand('linux', undefined, x).args).toEqual(['app-server', ...x])
+  })
+  it('claude chat: appended to the stream flags', () => {
+    const c = buildClaudeChatCommand('linux', { bypass: false, extraArgs: EXTRA })
+    expect(c.args.slice(-2)).toEqual(EXTRA)
+  })
+  it('none: the command is as it was', () => {
+    expect(buildClaudeCommand('linux')({ initialPrompt: 'go' }).args).toEqual(['--', 'go'])
+    expect(buildCodexAppServerCommand('linux').args).toEqual(['app-server'])
+  })
+})

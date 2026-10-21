@@ -1926,6 +1926,20 @@ export interface PluginsApi {
   configure(id: string, set: Record<string, string | boolean>, unset: string[]): Promise<PluginsCallAnswer>
 }
 
+/** Settings › Extensions (Agent Control Plane release 1 design §4.10): the Host's `extensions-*` commands, as the app.
+ *  Every answer carries names only; no environment value reaches the renderer. */
+export interface ExtensionsApi {
+  list(): Promise<PluginsCallAnswer>
+  /** What an account (its provider's default) holds that could be shared. */
+  discover(accountId: string): Promise<PluginsCallAnswer>
+  import(accountId: string, picks: { kind: 'mcp' | 'skill' | 'command' | 'agent'; name: string; secretNames?: string[] }[]): Promise<PluginsCallAnswer>
+  setEnabled(id: string, enabled: boolean): Promise<PluginsCallAnswer>
+  remove(id: string): Promise<PluginsCallAnswer>
+  sync(): Promise<PluginsCallAnswer>
+  /** "Replace with the shared copy" for an account that has its own different copy. */
+  replace(accountId: string, id: string): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2065,6 +2079,7 @@ export type RendererApi = CoreApi & {
   /** Remote Runtimes (remote runtime design Phase 6): Settings › Remote Runtimes and the Jobs view's selectors. */
   remote: RemoteApi
   plugins: PluginsApi
+  extensions: ExtensionsApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

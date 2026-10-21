@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { redactSecrets } from './redact'
+import { redactSecrets, redactTerms, redactionTerms } from './redact'
 
 const TOKEN = 'q5c2X0p9-wVz8JkR7aLmN1oPqRsTuVwXyZ0123456_A'
 
@@ -28,5 +28,16 @@ describe('redactSecrets (remote runtime design §4.7)', () => {
     expect(out).not.toContain("'h1'")
     expect(out).not.toContain('ABCDEFGHJK')
     expect(out).toContain("other: 'keep'")
+  })
+})
+
+// Agent Control Plane release 1 (design §4.9): the exact-value redaction the plugin runtime does, shared
+describe('redactTerms', () => {
+  it('replaces every occurrence of each term, the longest first', () => {
+    const terms = redactionTerms(['abcd1234', 'abcd1234-long-secret'])
+    expect(redactTerms('a abcd1234-long-secret b abcd1234 c', terms)).toBe('a [redacted] b [redacted] c')
+  })
+  it('leaves a line with no term as it was, and skips values too short to take out', () => {
+    expect(redactTerms('plain line', redactionTerms(['abc']))).toBe('plain line')
   })
 })

@@ -8,7 +8,7 @@ import type { Duplex, Readable } from 'node:stream'
 import path from 'node:path'
 import { hostWorkerBaseEnv } from '../../core/host/spawn'
 import { killProcessTree } from '../../core/run/kill'
-import { redactSecrets } from '../../core/remote/redact'
+import { REDACT_MIN, redactSecrets, redactTerms, redactionTerms } from '../../core/remote/redact'
 import type { OrchCall } from '../../core/host/orchProtocol'
 import { RPC_CLOSED, RPC_INTERNAL_ERROR, RPC_INVALID_PARAMS, RPC_METHOD_NOT_FOUND, RPC_NOT_READY, RpcError, createRpcPeer, type RpcPeer } from '../../core/plugins/rpc'
 import { capabilityPermissionProblem, type PluginCapability } from '../../core/plugins/manifest'
@@ -164,26 +164,9 @@ const delivered = (p: PluginLaunch): boolean => p.capabilities.includes('event')
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
-/** A secret shorter than this is too common a run of text to take out of a log line (docs/cli.md says so). */
-export const REDACT_MIN = 4
-/** A line of a secret of many lines shorter than this is too common to take out on its own. */
-const REDACT_LINE_MIN = 8
-
-/** What a plugin's log hides for its secret values (2c final review I4, M15): each value; each line of a value of many
- *  lines, since the log is written a line at a time; and each value as JSON writes it, for a plugin that prints its
- *  settings. Longest first, so a secret that holds a shorter one is hidden whole. */
-export function redactionTerms(values: Iterable<string>): string[] {
-  const terms = new Set<string>()
-  for (const v of values) {
-    if (v.length < REDACT_MIN) continue
-    terms.add(v)
-    if (/[\r\n]/.test(v))
-      for (const l of v.split(/\r\n|\r|\n/)) if (l.trim().length >= REDACT_LINE_MIN) terms.add(l.trim())
-    const json = JSON.stringify(v).slice(1, -1)
-    if (json !== v) terms.add(json)
-  }
-  return [...terms].sort((a, b) => b.length - a.length)
-}
+// REDACT_MIN and redactionTerms moved to core/remote/redact.ts, shared with the extension secrets (Agent Control
+// Plane release 1 design §4.9); still exported from here for the plugin manager and the docs test.
+export { REDACT_MIN, redactionTerms }
 
 /** Kills the plugin and everything it started: taskkill /T on Windows; elsewhere the process group the plugin was
  *  started as the leader of. */
@@ -273,9 +256,7 @@ export function createPluginRuntime(d: {
   // a secret: redacted like the plugin's own lines (2b final review M1).
   /** A line for a plugin's log, with every secret of that plugin and every secret-shaped value taken out (P13). */
   const hide = (s: Slot, line: string): string => {
-    let out = redactSecrets(line)
-    for (const v of (s.terms ??= redactionTerms([...s.launch.redact, ...s.learned.values()]))) out = out.split(v).join('[redacted]')
-    return out
+    return redactTerms(redactSecrets(line), (s.terms ??= redactionTerms([...s.launch.redact, ...s.learned.values()])))
   }
   const learn = (s: Slot, name: unknown, value: unknown): void => {
     if (typeof name !== 'string' || typeof value !== 'string' || s.learned.get(name.toLowerCase()) === value) return

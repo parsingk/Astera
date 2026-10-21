@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { isHomeClaudeDir, syncClaudeSettings, syncCodexSettings } from './settingsSync'
+import { readTomlObject } from '../providers/configWrite'
 import { foldsCaseHere } from '../testPaths'
 
 let home: string
@@ -16,7 +17,7 @@ beforeEach(async () => {
 
 /** The source used to be hardcoded to the home account, and these cases still cover that shape */
 const syncFromHome = (): ReturnType<typeof syncClaudeSettings> =>
-  syncClaudeSettings(path.join(home, '.claude'), target, home)
+  syncClaudeSettings(path.join(home, '.claude'), target, home, { capabilities: true })
 
 async function writeHomeSettings(data: unknown): Promise<void> {
   await fs.mkdir(path.join(home, '.claude'), { recursive: true })
@@ -228,6 +229,21 @@ describe('syncClaudeSettings —콘텐츠 디렉토리 파트', () => {
   })
 })
 
+// Agent Control Plane release 1 (design §4.7, D9): once something is shared in Extensions, the button leaves MCP
+// servers, skills, commands and agents to it
+describe('syncClaudeSettings — capabilities 가 꺼져 있을 때', () => {
+  it('settings.json 만 가져오고 mcpServers 와 skills·commands·agents 는 건드리지 않는다', async () => {
+    await writeHomeSettings({ theme: 'light' })
+    await fs.writeFile(path.join(home, '.claude.json'), JSON.stringify({ mcpServers: { linear: { command: 'npx' } } }), 'utf8')
+    await fs.mkdir(path.join(home, '.claude', 'skills', 'review'), { recursive: true })
+    await fs.writeFile(path.join(home, '.claude', 'skills', 'review', 'SKILL.md'), '# review', 'utf8')
+    const r = await syncClaudeSettings(path.join(home, '.claude'), target, home, { capabilities: false })
+    expect(r).toEqual({ settingsApplied: true, mcpApplied: false, contentApplied: [] })
+    await expect(fs.access(path.join(target, '.claude.json'))).rejects.toThrow()
+    await expect(fs.access(path.join(target, 'skills'))).rejects.toThrow()
+  })
+})
+
 // The source is no longer always the home account — it is whichever account is that provider's default,
 // which is usually but not necessarily the home one.
 describe('syncClaudeSettings — 원본이 홈이 아닌 계정일 때', () => {
@@ -246,7 +262,7 @@ describe('syncClaudeSettings — 원본이 홈이 아닌 계정일 때', () => {
       JSON.stringify({ mcpServers: { fromSrc: { type: 'stdio', command: 'src.exe' } } }),
       'utf8'
     )
-    const r = await syncClaudeSettings(src, target, home)
+    const r = await syncClaudeSettings(src, target, home, { capabilities: true })
     expect(r.mcpApplied).toBe(true)
     expect((await readTarget('.claude.json')).mcpServers).toEqual({
       fromSrc: { type: 'stdio', command: 'src.exe' }
@@ -261,7 +277,7 @@ describe('syncClaudeSettings — 원본이 홈이 아닌 계정일 때', () => {
     await writeHomeSettings({ theme: 'home' })
     await writeHomeContent('skills', 's.md', 'from home')
 
-    const r = await syncClaudeSettings(src, target, home)
+    const r = await syncClaudeSettings(src, target, home, { capabilities: true })
     expect(r.settingsApplied).toBe(true)
     expect(await readTarget('settings.json')).toEqual({ theme: 'src' })
     expect(await readTargetFile('skills/s.md')).toBe('from src')
@@ -279,18 +295,43 @@ describe('syncCodexSettings', () => {
     await fs.mkdir(dst, { recursive: true })
   })
 
-  it('config.toml을 통째로 대체하고 기존 파일을 .bak으로 남긴다', async () => {
-    await fs.writeFile(path.join(src, 'config.toml'), 'model = "src"\n', 'utf8')
-    await fs.writeFile(path.join(dst, 'config.toml'), 'model = "old"\n', 'utf8')
-    const r = await syncCodexSettings(src, dst)
+  // Agent Control Plane release 1 (design §4.7, D9): merged, no longer replaced
+  it('config.toml을 키 단위로 합친다: 원본 키가 이기고, 대상의 주석·폴더 신뢰·훅 승인은 남는다', async () => {
+    await fs.writeFile(
+      path.join(src, 'config.toml'),
+      'model = "src"\n[projects."C:/src"]\ntrust_level = "trusted"\n[hooks.state]\nsrc = { trusted_hash = "sha256:s" }\n[mcp_servers.linear]\ncommand = "npx"\n',
+      'utf8'
+    )
+    await fs.writeFile(
+      path.join(dst, 'config.toml'),
+      '# my notes\nmodel = "old"\napproval_policy = "never"\n[projects."D:/work"]\ntrust_level = "trusted"\n[hooks.state]\nmine = { trusted_hash = "sha256:d" }\n[mcp_servers.own]\ncommand = "own"\n',
+      'utf8'
+    )
+    const r = await syncCodexSettings(src, dst, { capabilities: true })
     expect(r.settingsApplied).toBe(true)
-    expect(await fs.readFile(path.join(dst, 'config.toml'), 'utf8')).toBe('model = "src"\n')
-    expect(await fs.readFile(path.join(dst, 'config.toml.bak'), 'utf8')).toBe('model = "old"\n')
+    const text = await fs.readFile(path.join(dst, 'config.toml'), 'utf8')
+    expect(text).toContain('# my notes')
+    const merged = readTomlObject(text)
+    expect(merged.model).toBe('src')
+    expect(merged.approval_policy).toBe('never')
+    expect(Object.keys(merged.projects as object)).toEqual(['D:/work'])
+    expect(JSON.parse(JSON.stringify(merged.hooks))).toEqual({ state: { mine: { trusted_hash: 'sha256:d' } } })
+    expect(Object.keys(merged.mcp_servers as object).sort()).toEqual(['linear', 'own'])
+    expect(await fs.readFile(path.join(dst, 'config.toml.bak'), 'utf8')).toContain('model = "old"')
+  })
+
+  it('capabilities 가 꺼져 있으면 대상의 mcp_servers 를 그대로 둔다', async () => {
+    await fs.writeFile(path.join(src, 'config.toml'), 'model = "src"\n[mcp_servers.linear]\ncommand = "npx"\n', 'utf8')
+    await fs.writeFile(path.join(dst, 'config.toml'), 'model = "old"\n[mcp_servers.own]\ncommand = "own"\n', 'utf8')
+    await syncCodexSettings(src, dst, { capabilities: false })
+    const merged = readTomlObject(await fs.readFile(path.join(dst, 'config.toml'), 'utf8'))
+    expect(merged.model).toBe('src')
+    expect(Object.keys(merged.mcp_servers as object)).toEqual(['own'])
   })
 
   it('대상에 config.toml이 없으면 새로 만들고 .bak은 남기지 않는다', async () => {
     await fs.writeFile(path.join(src, 'config.toml'), 'model = "src"\n', 'utf8')
-    const r = await syncCodexSettings(src, dst)
+    const r = await syncCodexSettings(src, dst, { capabilities: true })
     expect(r.settingsApplied).toBe(true)
     expect(await fs.readFile(path.join(dst, 'config.toml'), 'utf8')).toBe('model = "src"\n')
     await expect(fs.access(path.join(dst, 'config.toml.bak'))).rejects.toThrow()
@@ -298,7 +339,7 @@ describe('syncCodexSettings', () => {
 
   it('원본에 config.toml이 없으면 아무것도 하지 않는다', async () => {
     await fs.writeFile(path.join(dst, 'config.toml'), 'model = "keep"\n', 'utf8')
-    const r = await syncCodexSettings(src, dst)
+    const r = await syncCodexSettings(src, dst, { capabilities: true })
     expect(r.settingsApplied).toBe(false)
     expect(await fs.readFile(path.join(dst, 'config.toml'), 'utf8')).toBe('model = "keep"\n')
   })
@@ -310,7 +351,7 @@ describe('syncCodexSettings', () => {
     await fs.writeFile(path.join(src, 'sessions', 's.jsonl'), 'src session', 'utf8')
     await fs.writeFile(path.join(dst, 'auth.json'), '{"tokens":{"id_token":"DST"}}', 'utf8')
 
-    await syncCodexSettings(src, dst)
+    await syncCodexSettings(src, dst, { capabilities: true })
     expect(await fs.readFile(path.join(dst, 'auth.json'), 'utf8')).toBe('{"tokens":{"id_token":"DST"}}')
     await expect(fs.access(path.join(dst, 'sessions'))).rejects.toThrow()
   })

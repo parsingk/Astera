@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { comparablePath } from '../files/tree'
+import { patchTomlFile, readTomlObject } from '../providers/configWrite'
 
 type JsonObject = Record<string, unknown>
 
@@ -8,6 +9,12 @@ export interface SyncResult {
   settingsApplied: boolean // whether the default account's settings.json was merged and written
   mcpApplied: boolean // whether the default account's mcpServers was merged and written
   contentApplied: string[] // the names of the personal content directories whose files were copied (skills/commands/agents)
+}
+
+/** `capabilities`: whether MCP servers, skills, commands and agents are copied too. Off once anything is shared in
+ *  Settings › Extensions, which then gives them to every account itself (Agent Control Plane release 1 design §4.7, D9). */
+export interface SyncOptions {
+  capabilities: boolean
 }
 
 // Paths compare through comparablePath (core/files/tree.ts): case folded on win32 and darwin, exact on linux.
@@ -77,7 +84,8 @@ async function mergeDirTree(srcDir: string, destDir: string): Promise<boolean> {
 export async function syncClaudeSettings(
   srcConfigDir: string,
   targetConfigDir: string,
-  homeDir: string
+  homeDir: string,
+  opts: SyncOptions
 ): Promise<SyncResult> {
   const result: SyncResult = { settingsApplied: false, mcpApplied: false, contentApplied: [] }
 
@@ -88,6 +96,7 @@ export async function syncClaudeSettings(
     await writeJsonBackedUp(targetFile, { ...target, ...srcSettings })
     result.settingsApplied = true
   }
+  if (!opts.capabilities) return result
 
   // User-scope MCP sits in a different file depending on which kind of account holds it: the home account
   // keeps it in the home-root sidecar ~/.claude.json, an isolated account inside its own configDir. That
@@ -123,17 +132,16 @@ export async function syncClaudeSettings(
 /**
  * Copies one codex account's config into another.
  *
- * Unlike claude this **replaces** config.toml rather than merging it. Codex keeps settings and MCP servers
- * together in one TOML file and this project has no TOML parser — adding a dependency to enable key-level
- * merging was not worth it for one button. The existing file is backed up to .bak first, the same as the
- * JSON path, and the write is tmp+rename so a failure cannot leave a half-written config.
+ * config.toml is **merged** key by key, in place, so the target keeps its comments and the order of its tables
+ * (configWrite.ts). The source's keys win, except two that belong to the target account alone: `projects`, the
+ * folders it trusts, and `hooks.state`, the hooks it approved. With `capabilities` off the target's `mcp_servers` is
+ * kept too; with it on the servers merge by name, as Claude's do. The existing file is backed up to .bak first, and a
+ * file that does not parse is refused, never overwritten. This used to replace the whole file, because there was no
+ * TOML parser here.
  *
  * auth.json (credentials) and sessions/ (history) are never touched.
  */
-export async function syncCodexSettings(
-  srcConfigDir: string,
-  targetConfigDir: string
-): Promise<SyncResult> {
+export async function syncCodexSettings(srcConfigDir: string, targetConfigDir: string, opts: SyncOptions): Promise<SyncResult> {
   const result: SyncResult = { settingsApplied: false, mcpApplied: false, contentApplied: [] }
 
   let raw: string
@@ -142,13 +150,28 @@ export async function syncCodexSettings(
   } catch {
     return result // the source has no config.toml — nothing to copy, same as an absent settings.json
   }
+  const source = readTomlObject(raw)
 
-  const targetFile = path.join(targetConfigDir, 'config.toml')
   await fs.mkdir(targetConfigDir, { recursive: true })
-  await fs.copyFile(targetFile, targetFile + '.bak').catch(() => {}) // ignored when the target is absent
-  const tmp = targetFile + '.tmp'
-  await fs.writeFile(tmp, raw, 'utf8')
-  await fs.rename(tmp, targetFile)
+  await patchTomlFile(path.join(targetConfigDir, 'config.toml'), (current) => {
+    const next: JsonObject = { ...current, ...source }
+    const keep = (key: string): void => {
+      if (key in current) next[key] = current[key]
+      else delete next[key]
+    }
+    keep('projects')
+    const targetHooks = isPlainObject(current.hooks) ? current.hooks : null
+    if (isPlainObject(next.hooks)) {
+      const hooks: JsonObject = { ...next.hooks }
+      if (targetHooks && 'state' in targetHooks) hooks.state = targetHooks.state
+      else delete hooks.state
+      next.hooks = hooks
+    }
+    if (!opts.capabilities) keep('mcp_servers')
+    else if (isPlainObject(current.mcp_servers) && isPlainObject(source.mcp_servers))
+      next.mcp_servers = { ...current.mcp_servers, ...source.mcp_servers }
+    return next
+  })
   result.settingsApplied = true
 
   return result

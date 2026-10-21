@@ -146,6 +146,7 @@ export function composeHostRolling(a: {
     baseEnv: () => hostWorkerBaseEnv(process.env),
     askApp: (n, args) => a.server().act(n, args),
     orchEnv: () => a.spawner.orchEnvNow(),
+    capabilities: a.spawner.capabilities,
     log,
     ...a.chatsDeps
   })

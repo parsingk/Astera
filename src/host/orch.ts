@@ -3,6 +3,7 @@
 // `OrchCall.call` and did not change when it did.
 import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } from './remoteSessions'
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
+import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
 import type { PluginManager } from './plugins/manager'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -569,6 +570,9 @@ export function createHostOrch(a: {
   /** The plugins this profile has installed (plugin runtime design P4, P5): every `plugins-*` command, for this
    *  machine's app and CLI, below the receipt line. Absent: all of them answer 501. */
   plugins?: PluginManager
+  /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
+   *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
+  extensions?: Pick<HostExtensions, 'command'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -2000,6 +2004,20 @@ export function createHostOrch(a: {
             ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
             marks
           })
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Shared extensions**, the same way and for the same reason as the plugins above (Agent Control Plane
+        // release 1 design §4.3): no gate lists them, so only the app and the CLI get here.
+        if (EXTENSION_COMMANDS.has(cmd)) {
+          const answered = a.extensions
+            ? await a.extensions.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.

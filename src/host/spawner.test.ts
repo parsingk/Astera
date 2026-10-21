@@ -10,6 +10,7 @@ import type { HostMessage } from '../core/host/protocol'
 import { HOST_ONLY_ENV } from '../core/host/spawn'
 import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
 import { SessionManager } from '../core/sessions/manager'
+import { writeExtensionRegistry } from '../core/extensions/registry'
 import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
@@ -716,6 +717,22 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], startedBy: 'agent', restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
     expect(info.startedBy).toBe('agent')
     expect(h.registry.metaOf(h.registry.sessionPty(info.id)!)?.restore).toMatchObject({ startedBy: 'agent' })
+  })
+  // Agent Control Plane release 1 (design §4.5): a roll's respawn is synchronous, so its prepare resolves the
+  // target account's shared servers and the respawn starts with them
+  it('a roll respawn starts with the shared MCP servers resolved for the account it rolls onto', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    await writeExtensionRegistry(h.profileDir, { version: 1, entries: [
+      { id: 'mcp-linear', kind: 'mcp', name: 'linear', transport: 'stdio', command: 'npx', env: { LOG_LEVEL: { value: 'info' } },
+        providers: ['claude', 'codex'], importedFrom: 'acc0', enabled: true }
+    ] })
+    await h.spawner.prepareRollSpawn(account, h.cwd)
+    h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id] })
+    const last = h.spawned[h.spawned.length - 1]
+    const cmd = Array.isArray(last.args) ? last.args.join(' ') : last.args
+    expect(cmd).toContain('--mcp-config')
+    expect(last.opts.env.LOG_LEVEL).toBe('info')
   })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()

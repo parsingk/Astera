@@ -164,13 +164,14 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
                 label: syncTarget.label
               })}
             </p>
-            {/* The two CLIs differ in kind, not degree: claude merges, codex overwrites the file. The
-                codex case can lose settings, so it gets the warning style. */}
+            {/* Both CLIs merge now; codex keeps the account's own trusted folders and hook approvals, so it gets
+                its own sentence. */}
             {providerOf(syncTarget) === 'codex' ? (
-              <p className="warn-text">{t('account.sync.replaceNote')}</p>
+              <p className="confirm-text">{t('account.sync.codexMergeNote')}</p>
             ) : (
               <p className="confirm-text">{t('account.sync.mergeNote')}</p>
             )}
+            <p className="confirm-text">{t('account.sync.extensionsNote')}</p>
             <p className="warn-text">{t('account.sync.appliesNextSession')}</p>
             <div className="row right">
               <button type="button" disabled={syncing} onClick={() => setSyncTarget(null)}>

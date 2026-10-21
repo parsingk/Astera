@@ -6,6 +6,8 @@
 import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
+import { createHostExtensions } from './extensions/commands'
+import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
 import { PLUGIN_STOP_CAP_MS, createPluginRuntime } from './plugins/runtime'
@@ -735,11 +737,19 @@ async function main(): Promise<void> {
     })
   })
   const plugins = createPluginManager({ profileDir, hostVersion, runtime: pluginRuntime, log: (m) => log.write(m) })
+  // The shared extensions (Agent Control Plane release 1 design §4.3, §4.6): the registry this Host owns
+  const extensions = createHostExtensions({
+    profileDir,
+    homeDir: os.homedir(),
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    log: (m) => log.write(m)
+  })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
     controllers,
     plugins,
+    extensions,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
@@ -800,6 +810,7 @@ async function main(): Promise<void> {
       chats: rollingWiring?.chats ?? null,
       rolling: rollingWiring?.rolling ?? null,
       readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      refreshCapabilities: (account) => spawner?.capabilities?.refresh(account) ?? Promise.resolve(),
       bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
       probeCwd: defaultCwdProbe,
       announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),
@@ -1137,6 +1148,11 @@ async function main(): Promise<void> {
   earlyLoad = armEarlyLoad({ remoteEnabled: () => remoteEnabled, hasApp: () => server.hasApp(), load: () => orch.loadUnattended(), log: (m) => log.write(m) })
   // And the enabled plugins (plugin runtime design P11), once the orch that answers them listens. Never rejects.
   void plugins.startAll()
+  // And the shared skills, commands and agents, into every account as it is now (design §4.6). A profile that shares
+  // nothing writes nothing. Never rejects.
+  void extensions.sync()
+  // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
+  void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

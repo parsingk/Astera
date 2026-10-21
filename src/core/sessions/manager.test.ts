@@ -1362,3 +1362,39 @@ describe('SessionManager.prepare — the spawn path never waits on a sync probe'
     expect(() => manager.spawn({ account, cwd })).toThrow(/CWD_MISSING/)
   })
 })
+
+// Agent Control Plane release 1 (design §4.5, AC-09.1): the spawn reads the shared capabilities a prepare just
+// refreshed for that account; with none set, argv and env are exactly as before.
+describe('shared capabilities', () => {
+  const caps = {
+    context: { kind: 'implicit' as const, accounts: ['acc-1'], policyMode: 'compatibility' as const, executionMode: 'managed' as const },
+    args: ['--mcp-config', '/p/claude-1.json'],
+    env: { LINEAR_API_KEY: 'secret-in-env' },
+    given: ['linear'],
+    skipped: []
+  }
+  it('prepare refreshes the account, and spawn adds its arguments and environment', async () => {
+    const { manager, spawned } = setup()
+    const refreshed: string[] = []
+    manager.capabilities = { get: (a) => (a.id === 'acc-1' ? caps : null), refresh: async (a) => void refreshed.push(a.id) }
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'astera-caps-'))
+    try {
+      await manager.prepare({ account, cwd })
+      manager.spawn({ account, cwd })
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+    expect(refreshed).toEqual(['acc-1'])
+    expect(argsText(spawned[0].args)).toContain('--mcp-config /p/claude-1.json')
+    expect(spawned[0].opts.env?.LINEAR_API_KEY).toBe('secret-in-env')
+  })
+  it('without capabilities the command and environment are unchanged', () => {
+    const a = setup()
+    const b = setup()
+    b.manager.capabilities = { get: () => null, refresh: async () => {} }
+    a.manager.spawn({ account, cwd: os.tmpdir() })
+    b.manager.spawn({ account, cwd: os.tmpdir() })
+    expect(b.spawned[0].args).toEqual(a.spawned[0].args)
+    expect(b.spawned[0].opts.env).toEqual(a.spawned[0].opts.env)
+  })
+})

@@ -368,6 +368,16 @@ const api = {
     settings: invoke('plugins.settings'),
     configure: invoke('plugins.configure')
   },
+  // Settings › Extensions (Agent Control Plane release 1): the Host's shared extensions, through main's route
+  extensions: {
+    list: invoke('extensions.list'),
+    discover: invoke('extensions.discover'),
+    import: invoke('extensions.import'),
+    setEnabled: invoke('extensions.setEnabled'),
+    remove: invoke('extensions.remove'),
+    sync: invoke('extensions.sync'),
+    replace: invoke('extensions.replace')
+  },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {
     list: invoke('sources.list'),

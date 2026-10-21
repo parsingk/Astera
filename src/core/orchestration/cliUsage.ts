@@ -501,6 +501,17 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
     flags: [{ name: 'account', value: '<id|label|email>', required: true, about: 'the account to switch to' }]
   },
 
+  'ext-list': {
+    summary: 'the extensions shared with every account, and where Astera put their copies',
+    detail:
+      'Each shared MCP server, skill, command and agent from Settings › Extensions, with `enabled` and `providers`. An MCP server lists its environment names with where each value comes from (`secret`, `value` or `inherit`), never a value. `copies` names each account copy Astera owns, with `adopted` for one that was already there. It reads the profile and needs no Host and no app.'
+  },
+  'ext-sync': {
+    summary: 'put the shared skills, commands and agents into every account now',
+    detail:
+      "The sync the Host runs whenever the shared extensions change. Each item comes back per account as written, unchanged, adopted, restored (an edited copy put back; the edit is kept in extension-state/backups), conflict (the account has its own different copy, left alone), removed, forgotten, not-applicable or failed, and any failed makes it exit 1. Running it twice changes nothing the second time. It needs no Host and no app."
+  },
+
   // Answered by the Host out of its own registries, so the app may be closed; it needs a Host.
   'sessions-list': {
     summary: 'the agent sessions the Host holds, running and ended',
