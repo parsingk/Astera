@@ -7,6 +7,7 @@ import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
+import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
 import { PLUGIN_STOP_CAP_MS, createPluginRuntime } from './plugins/runtime'
@@ -1150,6 +1151,8 @@ async function main(): Promise<void> {
   // And the shared skills, commands and agents, into every account as it is now (design §4.6). A profile that shares
   // nothing writes nothing. Never rejects.
   void extensions.sync()
+  // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
+  void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

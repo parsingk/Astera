@@ -71,6 +71,7 @@ describe('syncMaterialized', () => {
     await s.register([])
     expect((await s.sync()).items).toEqual([])
     expect(await exists(s.paths.materializedState)).toBe(false)
+    expect(await exists(path.dirname(s.paths.materializedState))).toBe(false)
   })
 
   it('changes nothing when run a second time (AC-14)', async () => {
@@ -155,5 +156,27 @@ describe('syncMaterialized', () => {
     expect(await exists(s.claude.configDir)).toBe(false)
     const state = JSON.parse(await fs.readFile(s.paths.materializedState, 'utf8'))
     expect(state.records.filter((x: { accountId: string }) => x.accountId === 'acc_c')).toHaveLength(2)
+  })
+})
+
+// Final review M2, M5
+describe('syncMaterialized, after the final review', () => {
+  it('drops the records of an account that is no longer registered, and leaves its folder alone', async () => {
+    const s = await setup()
+    await s.sync([s.claude, s.codex])
+    await s.sync([s.codex])
+    const state = JSON.parse(await fs.readFile(s.paths.materializedState, 'utf8'))
+    expect(state.records.every((r: { accountId: string }) => r.accountId === 'acc_x')).toBe(true)
+    expect(await exists(path.join(skillDest(s), 'SKILL.md'))).toBe(true)
+  })
+
+  it('keeps every record when two syncs run at once', async () => {
+    const s = await setup()
+    await Promise.all([s.sync([s.claude]), s.sync([s.claude]), s.sync([s.claude])])
+    const state = JSON.parse(await fs.readFile(s.paths.materializedState, 'utf8'))
+    expect(state.records.map((r: { id: string; adopted: boolean }) => [r.id, r.adopted]).sort()).toEqual([
+      ['command-ship', false],
+      ['skill-review', false]
+    ])
   })
 })

@@ -43,10 +43,13 @@ already running.
 
 To give every account the same MCP servers, skills, slash commands and subagents, use
 **Settings → Extensions**. **Import from** a provider's default account, pick what to share, and
-choose which environment values to keep as secrets. Every session Astera starts then gets the
-shared MCP servers, with secret values passed only into the session's environment, and each
-account gets a copy of the shared skills, commands and subagents. Each item shows how its copy
-stands in every account: a copy edited outside Astera is put back and the edit kept in backups,
+choose which environment values to keep as secrets. A server that would put a credential on a
+command line, or replace a variable the session itself needs such as `PATH`, is not offered.
+The sessions Astera starts then get the shared MCP servers, with secret values passed only into
+the session's environment, and each server says per account whether its sessions get it and why
+not (an account with its own server of that name keeps its own, for example). Each account also
+gets a copy of the shared skills, commands and subagents. Each item shows how its copy stands in
+every account: a copy edited outside Astera is put back and the edit kept in backups,
 and an account that already has its own different copy keeps it until you choose **Replace with
 the shared copy**. Once anything is shared, **Import settings from the default account** leaves
 these to Extensions and copies settings only. `astera ext list` and `astera ext sync` do the same

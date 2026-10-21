@@ -31,3 +31,11 @@ describe('looksSecret', () => {
     for (const n of ['LOG_LEVEL', 'PORT', 'NODE_ENV']) expect(looksSecret(n)).toBe(false)
   })
 })
+
+// Final review I2: a name the session's own process depends on is never overwritten by a shared server
+describe('envNameRefusal, process names', () => {
+  it('refuses the names the CLI process itself needs, in any letter case, and Astera\u2019s own', () => {
+    for (const n of ['PATH', 'Path', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'COMSPEC', 'NODE_OPTIONS', 'TEMP', 'TMP', 'ASTERA_SESSION', 'astera_cli'])
+      expect(envNameRefusal(n, 'v', new Map()), n).toBe('process-env-name')
+  })
+})

@@ -3,6 +3,7 @@
 // the person keeps as secret goes to the extension secret store, a plain one stays in the registry, a Codex
 // `env_vars` name passes the session's own variable through. Skills, commands and agents are copied to the canonical
 // folders with their hash. The source account is never changed.
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { extensionPaths } from '../profile/paths'
@@ -32,8 +33,25 @@ type Obj = Record<string, unknown>
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
 const BOTH: Provider[] = ['claude', 'codex']
 
-/** A registry id from a kind and a name, safe as a secret-store name part. */
-export const entryId = (kind: ExtensionKind, name: string): string => `${kind}-${name.replace(/[^A-Za-z0-9_-]/g, '_')}`.slice(0, 60)
+const shortHash = (text: string, n: number): string => createHash('sha256').update(text).digest('hex').slice(0, n)
+
+/** A registry id from a kind and a name: the name itself when it is short and plain, else a readable part and a hash
+ *  of the whole name, so `a.b` and `a_b`, or two long names that start alike, never share one (final review M1). */
+export const entryId = (kind: ExtensionKind, name: string): string => {
+  const safe = name.replace(/[^A-Za-z0-9_-]/g, '_')
+  return safe === name && safe.length <= 40 ? `${kind}-${safe}` : `${kind}-${safe.slice(0, 32)}-${shortHash(name, 8)}`
+}
+
+/** The secret store's name for one environment value: readable when it fits the store's 80 characters, hashed when not. */
+const SECRET_NAME = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,79}$/
+const secretRef = (id: string, env: string): string => {
+  const plain = `mcp.${id}.${env}`
+  return SECRET_NAME.test(plain) ? plain : `mcp.${shortHash(`${id}\0${env}`, 32)}`
+}
+
+/** Stands for "the session's own variable" in the clash rule: two servers passing it through agree; one passing it and
+ *  one setting it do not (final review M8). */
+const INHERITED = '\0inherit'
 
 async function serverDefinition(account: Account, homeDir: string, name: string): Promise<Obj | null> {
   if (providerOf(account) === 'claude') {
@@ -55,6 +73,7 @@ async function sharedEnvValues(profileDir: string, entries: ExtensionEntry[]): P
     for (const [n, v] of Object.entries(e.env)) {
       if ('value' in v) out.set(n, v.value)
       else if ('secret' in v) out.set(n, (await secrets.get(v.secret)) ?? '')
+      else out.set(n, INHERITED)
     }
   }
   return out
@@ -93,14 +112,23 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
       const toStore: [string, string][] = []
       let refused: NotShareableReason | null = null
       for (const n of d.mcp.envNames) {
-        if (passed.includes(n) && values[n] === undefined) {
+        const raw = values[n]
+        // `${NAME}` passes the session's own variable through, as Codex's env_vars does; a reference to another name
+        // cannot be delivered under this one by either CLI (final review M4)
+        const selfReference = typeof raw === 'string' && raw === `\${${n}}`
+        if (typeof raw === 'string' && raw.includes('${') && !selfReference) {
+          refused = refused ?? 'env-reference'
+          continue
+        }
+        if (selfReference || (passed.includes(n) && raw === undefined)) {
+          refused = refused ?? envNameRefusal(n, INHERITED, taken)
           env[n] = { inherit: true }
           continue
         }
-        const value = String(values[n] ?? '')
+        const value = String(raw ?? '')
         refused = refused ?? envNameRefusal(n, value, taken)
         if (secretNames.has(n)) {
-          const ref = `mcp.${id}.${n}`
+          const ref = secretRef(id, n)
           env[n] = { secret: ref }
           toStore.push([ref, value])
         } else env[n] = { value }

@@ -9,7 +9,7 @@ import { removeFixture } from '../testFixtures'
 import { extensionPaths } from '../profile/paths'
 import { readExtensionRegistry } from './registry'
 import { extensionSecrets } from './secrets'
-import { importItems, removeEntry, setEnabled } from './importItems'
+import { entryId, importItems, removeEntry, setEnabled } from './importItems'
 import type { Account } from '../types'
 
 const dirs: string[] = []
@@ -110,5 +110,48 @@ describe('importItems', () => {
     expect((await readExtensionRegistry(s.profileDir)).entries).toEqual([])
     expect(await extensionSecrets(s.profileDir).terms()).toEqual([])
     await expect(fs.stat(path.join(extensionPaths(s.profileDir).skills, 'review'))).rejects.toThrow()
+  })
+})
+
+// Final review M1, M4, M8
+describe('importItems, after the final review', () => {
+  it('stores a long server\u2019s secret under a name the store takes, and keeps two similar names apart', async () => {
+    const s = await setup()
+    const long = 'x'.repeat(55)
+    await write(path.join(s.configDir, '.claude.json'), JSON.stringify({ mcpServers: {
+      [long]: { command: 'npx', env: { ATLASSIAN_API_TOKEN: SECRET } },
+      'a.b': { command: 'npx' },
+      a_b: { command: 'npx' }
+    } }))
+    const r = await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: long }, { kind: 'mcp', name: 'a.b' }, { kind: 'mcp', name: 'a_b' }] })
+    expect(r.imported).toEqual([long, 'a.b', 'a_b'])
+    const reg = await readExtensionRegistry(s.profileDir)
+    expect(new Set(reg.entries.map((e) => e.id)).size).toBe(3)
+    expect(entryId('mcp', 'a.b')).not.toBe(entryId('mcp', 'a_b'))
+    const e = reg.entries.find((x) => x.name === long)!
+    const ref = e.kind === 'mcp' ? (e.env.ATLASSIAN_API_TOKEN as { secret: string }).secret : ''
+    expect(await extensionSecrets(s.profileDir).get(ref)).toBe(SECRET)
+  })
+
+  it('keeps a self-reference as the session\u2019s own variable and refuses a reference to another name', async () => {
+    const s = await setup()
+    await write(path.join(s.configDir, '.claude.json'), JSON.stringify({ mcpServers: {
+      self: { command: 'npx', env: { GH_HOST: '${GH_HOST}' } },
+      other: { command: 'npx', env: { API_KEY: '${MY_KEY}' } }
+    } }))
+    const r = await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'self' }, { kind: 'mcp', name: 'other' }] })
+    expect(r).toEqual({ imported: ['self'], refused: [{ name: 'other', reason: 'env-reference' }] })
+    const e = (await readExtensionRegistry(s.profileDir)).entries[0]
+    expect(e.kind === 'mcp' && e.env).toEqual({ GH_HOST: { inherit: true } })
+  })
+
+  it('refuses a server that sets a name another shared server passes through, and the other way round', async () => {
+    const s = await setup()
+    await write(path.join(s.configDir, '.claude.json'), JSON.stringify({ mcpServers: {
+      passes: { command: 'npx', env: { GITHUB_TOKEN: '${GITHUB_TOKEN}' } },
+      sets: { command: 'npx', env: { GITHUB_TOKEN: 'ghp_other_value_00000000' } }
+    } }))
+    const r = await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'passes' }, { kind: 'mcp', name: 'sets' }] })
+    expect(r).toEqual({ imported: ['passes'], refused: [{ name: 'sets', reason: 'env-name-clash' }] })
   })
 })

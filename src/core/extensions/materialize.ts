@@ -10,6 +10,7 @@ import { providerOf } from '../providers/meta'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { renameRetrying } from '../renameRetry'
 import { keepDamaged, readStoreFile } from '../storeFile'
+import { withFileLock } from '../fileLock'
 import { hashFile, hashTree } from './hash'
 import { readExtensionRegistry } from './registry'
 import type { Account, Provider } from '../types'
@@ -163,13 +164,29 @@ async function accountFolderThere(account: Account): Promise<void> {
   if (!st?.isDirectory()) throw new Error(`the account folder is missing: ${account.configDir}`)
 }
 
+/** One sync or replace at a time across processes, the Host's and `astera ext sync`'s (final review M2): a record lost
+ *  between two writers would turn a copy Astera wrote into an adopted one, which removal then leaves behind. */
+const stateLocked = <T>(profileDir: string, fn: () => Promise<T>): Promise<T> =>
+  withFileLock(path.dirname(extensionPaths(profileDir).materializedState), fn, { waitMs: 60_000, staleMs: 600_000 })
+
 export async function syncMaterialized(a: { profileDir: string; accounts: Account[]; now?: () => string }): Promise<{ items: SyncItem[] }> {
+  // A profile that shares no file and owns no copy has nothing to lock or write (the Host syncs at every start)
+  const nothing =
+    !(await readExtensionRegistry(a.profileDir)).entries.some((e) => e.kind !== 'mcp') &&
+    !(await fs.stat(extensionPaths(a.profileDir).materializedState).then(() => true, () => false))
+  if (nothing) return { items: [] }
+  return stateLocked(a.profileDir, () => syncUnlocked(a))
+}
+
+async function syncUnlocked(a: { profileDir: string; accounts: Account[]; now?: () => string }): Promise<{ items: SyncItem[] }> {
   const now = (a.now ?? (() => new Date().toISOString()))()
   const registry = await readExtensionRegistry(a.profileDir)
   const files = registry.entries.filter((e): e is FileExtension => e.kind !== 'mcp')
   const kindOf = new Map(files.map((e) => [e.id, e.kind]))
   const old = await readState(a.profileDir)
-  const next = new Map(old.map((r) => [keyOf(r.accountId, r.id), r]))
+  // An account no longer registered keeps its folder as it is; only its records go (final review M5)
+  const registered = new Set(a.accounts.map((x) => x.id))
+  const next = new Map(old.filter((r) => registered.has(r.accountId)).map((r) => [keyOf(r.accountId, r.id), r]))
   const items: SyncItem[] = []
 
   for (const account of a.accounts) {
@@ -215,7 +232,11 @@ export async function syncMaterialized(a: { profileDir: string; accounts: Accoun
 
 /** "Replace with the shared copy" for a conflict: the account's own copy is backed up, then the shared one written
  *  and recorded as Astera's. */
-export async function replaceConflict(a: { profileDir: string; accountId: string; id: string; accounts: Account[]; now?: () => string }): Promise<void> {
+export function replaceConflict(a: { profileDir: string; accountId: string; id: string; accounts: Account[]; now?: () => string }): Promise<void> {
+  return stateLocked(a.profileDir, () => replaceUnlocked(a))
+}
+
+async function replaceUnlocked(a: { profileDir: string; accountId: string; id: string; accounts: Account[]; now?: () => string }): Promise<void> {
   const now = (a.now ?? (() => new Date().toISOString()))()
   const account = a.accounts.find((x) => x.id === a.accountId)
   if (!account) throw new Error(`no account ${a.accountId}`)

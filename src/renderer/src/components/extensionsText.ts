@@ -3,7 +3,7 @@
 // import dialog and what the person picked in it, and why a call came back with nothing. No environment value ever
 // reaches this side; the Host answers names only.
 import type { MessageKey, MessageParams } from '../../../core/i18n'
-import type { ExtensionKind, SyncOutcome } from '../../../core/extensions/types'
+import type { ExtensionKind, SkipReason, SyncOutcome } from '../../../core/extensions/types'
 import type { NotShareableReason, ShareWarning } from '../../../core/extensions/envRules'
 import { looksSecret } from '../../../core/extensions/envRules'
 
@@ -34,9 +34,21 @@ const OUTCOMES: Record<SyncOutcome, MessageKey> = {
 }
 const REASONS: Record<NotShareableReason, MessageKey> = {
   'cli-env-name': 'settings.extensions.reason.cli-env-name',
+  'process-env-name': 'settings.extensions.reason.process-env-name',
   'env-name-clash': 'settings.extensions.reason.env-name-clash',
+  'env-reference': 'settings.extensions.reason.env-reference',
   'astera-own': 'settings.extensions.reason.astera-own',
-  'header-secret': 'settings.extensions.reason.header-secret'
+  'header-secret': 'settings.extensions.reason.header-secret',
+  'arg-secret': 'settings.extensions.reason.arg-secret'
+}
+const MCP_STATES: Record<'given' | SkipReason, MessageKey> = {
+  given: 'settings.extensions.mcp.given',
+  'account-own': 'settings.extensions.mcp.account-own',
+  'account-unreadable': 'settings.extensions.mcp.account-unreadable',
+  'launch-chars': 'settings.extensions.mcp.launch-chars',
+  'secret-unavailable': 'settings.extensions.mcp.secret-unavailable',
+  provider: 'settings.extensions.mcp.provider',
+  transport: 'settings.extensions.mcp.transport'
 }
 const WARNINGS: Record<ShareWarning, MessageKey> = {
   'session-tools': 'settings.extensions.warning.session-tools',
@@ -54,6 +66,8 @@ export const kindLabel = (k: ExtensionKind, t: T): string => t(KINDS[k])
 export const kindOneLabel = (k: ExtensionKind, t: T): string => t(KIND_ONE[k])
 /** How an item's copy in one account stands after the last sync; one this app does not know by itself. */
 export const outcomeLabel = (o: string, t: T): string => (Object.hasOwn(OUTCOMES, o) ? t(OUTCOMES[o as SyncOutcome]) : o)
+/** Whether one account's sessions get a shared MCP server, or why not (final review I1). */
+export const mcpStateLabel = (s: string, t: T): string => (Object.hasOwn(MCP_STATES, s) ? t(MCP_STATES[s as 'given' | SkipReason]) : s)
 export const reasonLabel = (r: string, t: T): string => (Object.hasOwn(REASONS, r) ? t(REASONS[r as NotShareableReason]) : r)
 export const warningLabel = (w: string, t: T): string => (Object.hasOwn(WARNINGS, w) ? t(WARNINGS[w as ShareWarning]) : w)
 /** Where an MCP server's environment value comes from, as the Host names it. */

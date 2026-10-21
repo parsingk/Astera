@@ -6,10 +6,11 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
-import { envSourceLabel, failureLine, importPrompt, kindLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
+import { envSourceLabel, failureLine, importPrompt, kindLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
 
 type Entry = Record<string, unknown>
 type Status = { id: string; accountId: string; outcome: string; detail?: string }
+type McpState = { id: string; accountId: string; state: string }
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 
 const KINDS: ExtensionKind[] = ['mcp', 'skill', 'command', 'agent']
@@ -30,6 +31,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   const { defaultIdByProvider } = useAccountStatus(accounts)
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [status, setStatus] = useState<Status[]>([])
+  const [mcpStatus, setMcpStatus] = useState<McpState[]>([])
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   /** One change at a time: every change syncs every account before the Host answers. */
   const [busy, setBusy] = useState<'reading' | 'changing' | null>(null)
@@ -41,6 +43,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     setListFailure(null)
     setEntries(arr<Entry>(r.body.entries))
     setStatus(arr<Status>(r.body.status))
+    setMcpStatus(arr<McpState>(r.body.mcpStatus))
   }
   useEffect(() => {
     void load()
@@ -140,6 +143,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
                 key={str(e.id)}
                 entry={e}
                 status={status.filter((s) => s.id === e.id)}
+                mcpStatus={mcpStatus.filter((s) => s.id === e.id)}
                 labelOf={labelOf}
                 busy={busy !== null}
                 onToggle={() => void change(() => window.api.extensions.setEnabled(str(e.id), e.enabled !== true))}
@@ -158,6 +162,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
 function ExtensionCard({
   entry,
   status,
+  mcpStatus,
   labelOf,
   busy,
   onToggle,
@@ -166,6 +171,8 @@ function ExtensionCard({
 }: {
   entry: Entry
   status: Status[]
+  /** Per account, whether its sessions get this MCP server, or why not. */
+  mcpStatus: McpState[]
   labelOf: (accountId: string) => string
   busy: boolean
   onToggle: () => void
@@ -190,6 +197,12 @@ function ExtensionCard({
               {t('settings.extensions.env', { names: env.map(([name, source]) => `${name} (${envSourceLabel(str(source), t)})`).join(', ') })}
             </span>
           )}
+          {mcpStatus.map((s) => (
+            <div key={s.accountId} className="plugin-facts">
+              <span className="settings-field-label">{labelOf(s.accountId)}</span>
+              <span className={`plugin-status${s.state === 'given' ? ' is-running' : s.state === 'provider' || s.state === 'account-own' ? '' : ' is-failed'}`}>{mcpStateLabel(s.state, t)}</span>
+            </div>
+          ))}
         </>
       ) : enabled && status.length === 0 ? (
         <span className="settings-hint">{t('settings.extensions.noStatus')}</span>

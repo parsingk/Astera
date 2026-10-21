@@ -11,7 +11,8 @@ import { discoverIn } from '../../core/extensions/discover'
 import { importItems, removeEntry, setEnabled, type ImportPick } from '../../core/extensions/importItems'
 import { replaceConflict, syncMaterialized, type SyncItem } from '../../core/extensions/materialize'
 import type { OrchCaller } from '../../core/host/orchProtocol'
-import type { ExtensionKind } from '../../core/extensions/types'
+import type { ExtensionEntry, ExtensionKind } from '../../core/extensions/types'
+import { resolveSessionCapabilities, type SkipReason } from '../../core/extensions/resolve'
 import type { Account } from '../../core/types'
 
 export const EXTENSION_COMMANDS: ReadonlySet<string> = new Set([
@@ -76,6 +77,7 @@ export function createHostExtensions(d: {
   homeDir: string
   readAccounts: () => Promise<Account[]>
   log: (line: string) => void
+  platform?: NodeJS.Platform
 }): HostExtensions {
   // Every line written about shared extensions, and every error answered, has the stored secret values taken out
   // (design §4.9): an error's own words may quote a file that holds one
@@ -98,11 +100,25 @@ export function createHostExtensions(d: {
     return r.items
   }
 
+  /** For each enabled MCP server, per account, whether that account's sessions get it or why not (final review I1),
+   *  worked out the way a spawn does, without writing anything. */
+  const mcpStatus = async (entries: ExtensionEntry[]): Promise<{ id: string; accountId: string; state: 'given' | SkipReason }[]> => {
+    const servers = entries.filter((e) => e.kind === 'mcp' && e.enabled)
+    if (servers.length === 0) return []
+    const out: { id: string; accountId: string; state: 'given' | SkipReason }[] = []
+    for (const account of await d.readAccounts()) {
+      const r = await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform ?? process.platform, dryRun: true })
+      const skipped = new Map(r.skipped.map((s) => [s.name, s.reason]))
+      for (const e of servers) out.push({ id: e.id, accountId: account.id, state: r.given.includes(e.name) ? 'given' : (skipped.get(e.name) ?? 'provider') })
+    }
+    return out
+  }
+
   const answer = async (cmd: string, args: Record<string, unknown>): Promise<ExtensionsAnswer> => {
     switch (cmd) {
       case 'extensions-list': {
         const registry = await readExtensionRegistry(d.profileDir)
-        return { status: 200, body: { entries: registry.entries.map(publicEntry), status: last } }
+        return { status: 200, body: { entries: registry.entries.map(publicEntry), status: last, mcpStatus: await mcpStatus(registry.entries) } }
       }
       case 'extensions-discover': {
         if (typeof args.accountId !== 'string') return bad('extensions-discover needs accountId')

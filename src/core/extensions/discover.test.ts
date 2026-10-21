@@ -106,3 +106,39 @@ describe('discoverIn', () => {
     expect(await discoverIn({ account: account(dir), homeDir: home, registry })).toEqual([])
   })
 })
+
+// Final review I3, I4, M4
+describe('discoverIn, what an MCP server carries', () => {
+  const one = async (servers: unknown, provider: 'claude' | 'codex' = 'claude') => {
+    const home = await temp()
+    const dir = path.join(home, provider === 'claude' ? '.claude-accounts' : '.codex-accounts', 'x')
+    if (provider === 'claude') await write(path.join(dir, '.claude.json'), JSON.stringify({ mcpServers: servers }))
+    else await write(path.join(dir, 'config.toml'), servers as string)
+    return discoverIn({ account: account(dir, provider), homeDir: home, registry: EMPTY })
+  }
+  it('refuses a server that passes a credential in its arguments or its address', async () => {
+    const found = await one({
+      flag: { command: 'npx', args: ['-y', 'srv', '--api-key', SECRET] },
+      joined: { command: 'npx', args: ['--token=' + SECRET] },
+      query: { type: 'http', url: 'https://mcp.example.com/sse?access_token=' + SECRET },
+      plain: { command: 'npx', args: ['-y', 'srv', '--port', '3000'] }
+    })
+    expect(found.map((d) => [d.name, d.shareable ? 'ok' : d.reason])).toEqual([
+      ['flag', 'arg-secret'],
+      ['joined', 'arg-secret'],
+      ['query', 'arg-secret'],
+      ['plain', 'ok']
+    ])
+  })
+  it('keeps an SSE server as SSE', async () => {
+    const [d] = await one({ events: { type: 'sse', url: 'https://mcp.example.com/sse' } })
+    expect(d.mcp?.transport).toBe('sse')
+  })
+  it('carries a Codex server\u2019s timeouts and tool lists', async () => {
+    const [d] = await one(
+      '[mcp_servers.slow]\ncommand = "npx"\nstartup_timeout_sec = 40\ntool_timeout_sec = 120\nenabled_tools = ["a", "b"]\ndisabled_tools = ["c"]\n',
+      'codex'
+    )
+    expect(d.mcp?.options).toEqual({ startupTimeoutSec: 40, toolTimeoutSec: 120, enabledTools: ['a', 'b'], disabledTools: ['c'] })
+  })
+})

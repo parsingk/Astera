@@ -30,7 +30,7 @@ export function createCapabilityCache(d: {
       const policyMode = d.policyMode ? await d.policyMode().catch(() => 'compatibility' as const) : 'compatibility'
       byAccount.set(
         account.id,
-        await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform, launch: 'terminal', policyMode, log: d.log })
+        await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform, policyMode, log: d.log })
       )
     } catch (e) {
       d.log?.(`extensions: shared capabilities for account ${account.id} could not be resolved (${e instanceof Error ? e.message : String(e)})`)

@@ -7,17 +7,18 @@ import path from 'node:path'
 import { isHomeClaudeDir } from '../accounts/settingsSync'
 import { providerOf } from '../providers/meta'
 import { readTomlObject } from '../providers/configWrite'
-import { envNameRefusal, envNameWarning, type NotShareableReason, type ShareWarning } from './envRules'
+import { envNameRefusal, envNameWarning, looksSecret, type NotShareableReason, type ShareWarning } from './envRules'
 import type { Account, Provider } from '../types'
-import type { ExtensionKind, ExtensionRegistry } from './types'
+import type { ExtensionKind, ExtensionRegistry, McpOptions } from './types'
 
 export interface DiscoveredMcp {
-  transport: 'stdio' | 'http'
+  transport: 'stdio' | 'http' | 'sse'
   command?: string
   args?: string[]
   cwd?: string
   url?: string
   envNames: string[]
+  options?: McpOptions
 }
 
 interface DiscoveredBase {
@@ -63,32 +64,80 @@ const entries = async (dir: string): Promise<{ name: string; dir: boolean }[]> =
 export const claudeMcpFile = (account: Account, homeDir: string): string =>
   isHomeClaudeDir(homeDir, account.configDir) ? path.join(homeDir, '.claude.json') : path.join(account.configDir, '.claude.json')
 
-/** The MCP server names an account's own configuration defines (for the clash rule, design §4.5). */
+/** The MCP server names an account's own configuration defines (for the clash rule, design §4.5). A missing file
+ *  defines none; one that is there but cannot be read or parsed (the CLI may be writing it) throws, since passing a
+ *  shared server then could put it beside the account's own of the same name (final review M7). */
 export async function ownMcpNames(account: Account, homeDir: string): Promise<Set<string>> {
-  if (providerOf(account) === 'claude') {
-    const servers = (await readJson(claudeMcpFile(account, homeDir)))?.mcpServers
-    return new Set(isObj(servers) ? Object.keys(servers) : [])
+  const claude = providerOf(account) === 'claude'
+  const file = claude ? claudeMcpFile(account, homeDir) : path.join(account.configDir, 'config.toml')
+  let text: string
+  try {
+    text = await fs.readFile(file, 'utf8')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return new Set()
+    throw e
   }
-  const servers = (await readToml(path.join(account.configDir, 'config.toml')))?.mcp_servers
+  if (text.trim() === '') return new Set()
+  const root: unknown = claude ? JSON.parse(text) : readTomlObject(text)
+  const servers = isObj(root) ? (claude ? root.mcpServers : root.mcp_servers) : undefined
   return new Set(isObj(servers) ? Object.keys(servers) : [])
 }
 
-function mcpOf(def: Obj): { mcp: DiscoveredMcp; headerSecret: boolean } {
+/** Whether a server's arguments or address carry a credential (final review I3): `--api-key <value>`, `--token=<value>`,
+ *  a query parameter such as `access_token`, or a password in the address. Shared, it would sit on every Codex
+ *  session's command line, in Claude's generated file and in the registry. */
+function credentialInLaunch(args: string[] | undefined, url: string | undefined): boolean {
+  const a = args ?? []
+  for (let i = 0; i < a.length; i++) {
+    const joined = /^--?([\w.-]+)=(.+)$/.exec(a[i])
+    if (joined && looksSecret(joined[1])) return true
+    const flag = /^--?([\w.-]+)$/.exec(a[i])
+    if (flag && looksSecret(flag[1]) && i + 1 < a.length && !a[i + 1].startsWith('-')) return true
+  }
+  if (url !== undefined) {
+    try {
+      const u = new URL(url)
+      if (u.password !== '') return true
+      for (const key of u.searchParams.keys()) if (looksSecret(key)) return true
+    } catch {
+      /* not an address this can read; nothing to find in it */
+    }
+  }
+  return false
+}
+
+const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : typeof v === 'bigint' ? Number(v) : undefined)
+
+/** Codex's per-server settings that change how a session uses the server (final review M4). */
+function optionsOf(def: Obj): McpOptions | undefined {
+  const o: McpOptions = {
+    ...(num(def.startup_timeout_sec) !== undefined ? { startupTimeoutSec: num(def.startup_timeout_sec) } : {}),
+    ...(num(def.tool_timeout_sec) !== undefined ? { toolTimeoutSec: num(def.tool_timeout_sec) } : {}),
+    ...(strings(def.enabled_tools) ? { enabledTools: strings(def.enabled_tools) } : {}),
+    ...(strings(def.disabled_tools) ? { disabledTools: strings(def.disabled_tools) } : {})
+  }
+  return Object.keys(o).length > 0 ? o : undefined
+}
+
+function mcpOf(def: Obj): { mcp: DiscoveredMcp; headerSecret: boolean; argSecret: boolean } {
   const url = typeof def.url === 'string' ? def.url : undefined
   const http = url !== undefined || def.type === 'http' || def.type === 'sse'
+  const options = optionsOf(def)
   const env = isObj(def.env) ? Object.keys(def.env) : []
   const passed = strings(def.env_vars) ?? []
   const headers = [def.headers, def.http_headers, def.env_http_headers].some((h) => isObj(h) && Object.keys(h).length > 0) || typeof def.bearer_token_env_var === 'string'
   return {
     mcp: {
-      transport: http ? 'http' : 'stdio',
+      transport: def.type === 'sse' ? 'sse' : http ? 'http' : 'stdio',
       ...(typeof def.command === 'string' ? { command: def.command } : {}),
       ...(strings(def.args) ? { args: strings(def.args) } : {}),
       ...(typeof def.cwd === 'string' ? { cwd: def.cwd } : {}),
       ...(url !== undefined ? { url } : {}),
-      envNames: [...new Set([...env, ...passed])].sort()
+      envNames: [...new Set([...env, ...passed])].sort(),
+      ...(options ? { options } : {})
     },
-    headerSecret: headers
+    headerSecret: headers,
+    argSecret: credentialInLaunch(strings(def.args), url)
   }
 }
 
@@ -108,13 +157,14 @@ export async function discoverIn(a: { account: Account; homeDir: string; registr
   if (isObj(servers)) {
     for (const [name, def] of Object.entries(servers)) {
       if (!isObj(def)) continue
-      const { mcp, headerSecret } = mcpOf(def)
+      const { mcp, headerSecret, argSecret } = mcpOf(def)
       const warnings: ShareWarning[] = []
-      let reason: NotShareableReason | null = name === 'astera' ? 'astera-own' : headerSecret ? 'header-secret' : null
+      let reason: NotShareableReason | null = name === 'astera' ? 'astera-own' : headerSecret ? 'header-secret' : argSecret ? 'arg-secret' : null
       for (const n of mcp.envNames) {
-        // Values are unknown here: only the CLI-name rule can refuse; a name another shared server uses is a warning,
+        // Values are unknown here: only the name rules can refuse; a name another shared server uses is a warning,
         // and the import, which knows the values, refuses it if they differ (Task 4 ruling)
-        if (!reason && envNameRefusal(n, '', new Map()) === 'cli-env-name') reason = 'cli-env-name'
+        const byName = envNameRefusal(n, '', new Map())
+        if (!reason && (byName === 'cli-env-name' || byName === 'process-env-name')) reason = byName
         if (envNameWarning(n) && !warnings.includes('session-tools')) warnings.push('session-tools')
         if (sharedEnvNames.has(n) && !warnings.includes('env-name-shared')) warnings.push('env-name-shared')
       }

@@ -107,6 +107,20 @@ describe('createHostExtensions', () => {
     expect(logs.join(' ')).toContain('[redacted]')
   })
 
+  // Final review I1: a server a session cannot get is said, per account, with why
+  it('lists for each MCP server, per account, whether its sessions get it and why not', async () => {
+    const h = await rig()
+    await fs.writeFile(path.join(h.source.configDir, '..', '.claude.json'), JSON.stringify({ mcpServers: { linear: { command: 'npx' } } }))
+    await h.call('extensions-import', { accountId: 'acc_1', picks: [{ kind: 'mcp', name: 'linear' }] })
+    const listed = await h.call('extensions-list')
+    expect((listed.body as { mcpStatus: unknown[] }).mcpStatus).toEqual(
+      expect.arrayContaining([
+        { id: 'mcp-linear', accountId: 'acc_1', state: 'account-own' },
+        { id: 'mcp-linear', accountId: 'acc_2', state: 'given' }
+      ])
+    )
+  })
+
   it('removes a copy it wrote when the item is disabled, and answers a damaged registry with 409', async () => {
     const h = await rig()
     await h.call('extensions-import', { accountId: 'acc_1', picks: [{ kind: 'command', name: 'ship' }] })

@@ -9,16 +9,26 @@ export type ExtensionKind = 'mcp' | 'skill' | 'command' | 'agent'
  *  own variable of that name passed through (Codex `env_vars`, which name no value). */
 export type McpEnvValue = { secret: string } | { value: string } | { inherit: true }
 
+export interface McpOptions {
+  startupTimeoutSec?: number
+  toolTimeoutSec?: number
+  enabledTools?: string[]
+  disabledTools?: string[]
+}
+
 export interface McpExtension {
   id: string
   kind: 'mcp'
   name: string
-  transport: 'stdio' | 'http'
+  /** `sse` reaches Claude only: Codex speaks stdio and streamable HTTP. */
+  transport: 'stdio' | 'http' | 'sse'
   command?: string
   args?: string[]
   cwd?: string
   url?: string
   env: Record<string, McpEnvValue>
+  /** Codex's own per-server settings, carried from a Codex source and given to Codex sessions only. */
+  options?: McpOptions
   providers: Provider[]
   /** The account it was imported from. */
   importedFrom: string
@@ -45,3 +55,6 @@ export interface ExtensionRegistry {
 
 /** How an item's copy in one account stands after a sync (design §4.6); here so Settings › Extensions can name them. */
 export type SyncOutcome = 'written' | 'unchanged' | 'adopted' | 'restored' | 'conflict' | 'removed' | 'forgotten' | 'failed' | 'not-applicable'
+
+/** Why a session does not get a shared MCP server (design §4.5): here so Settings › Extensions can name them. */
+export type SkipReason = 'account-own' | 'account-unreadable' | 'launch-chars' | 'secret-unavailable' | 'provider' | 'transport'

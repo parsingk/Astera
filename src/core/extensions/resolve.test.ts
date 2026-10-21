@@ -6,9 +6,10 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../testFixtures'
+import { extensionPaths } from '../profile/paths'
 import { writeExtensionRegistry } from './registry'
 import { extensionSecrets } from './secrets'
-import { resolveSessionCapabilities } from './resolve'
+import { resolveSessionCapabilities, sweepGeneratedMcp } from './resolve'
 import type { Account } from '../types'
 import type { ExtensionRegistry, McpExtension } from './types'
 import * as secretsModule from './secrets'
@@ -41,7 +42,7 @@ async function setup(entries: McpExtension[] = [server()]) {
   return { home, profileDir, claude, codex }
 }
 const call = (s: Awaited<ReturnType<typeof setup>>, account: Account, platform: NodeJS.Platform = 'linux') =>
-  resolveSessionCapabilities({ profileDir: s.profileDir, homeDir: s.home, account, platform, launch: 'terminal' })
+  resolveSessionCapabilities({ profileDir: s.profileDir, homeDir: s.home, account, platform })
 
 describe('resolveSessionCapabilities', () => {
   it('adds nothing when nothing is shared', async () => {
@@ -68,10 +69,10 @@ describe('resolveSessionCapabilities', () => {
   it('reuses the same generated file for the same set and writes a new one when the set changes', async () => {
     const s = await setup()
     const a = await call(s, s.claude)
-    const before = (await fs.stat(a.args[1])).mtimeMs
+    const before = await fs.readFile(a.args[1], 'utf8')
     const b = await call(s, s.claude)
     expect(b.args[1]).toBe(a.args[1])
-    expect((await fs.stat(a.args[1])).mtimeMs).toBe(before)
+    expect(await fs.readFile(a.args[1], 'utf8')).toBe(before)
     await writeExtensionRegistry(s.profileDir, { version: 1, entries: [server({ args: ['-y', 'linear-mcp@2'] })] })
     const c = await call(s, s.claude)
     expect(c.args[1]).not.toBe(a.args[1])
@@ -114,5 +115,58 @@ describe('resolveSessionCapabilities', () => {
     const ambient: Account = { ...s.claude, configDir: path.join(s.home, '.claude') }
     await fs.writeFile(path.join(s.home, '.claude.json'), JSON.stringify({ mcpServers: { linear: { command: 'mine' } } }))
     expect((await call(s, ambient)).skipped).toEqual([{ name: 'linear', reason: 'account-own' }])
+  })
+})
+
+// Final review I1, I4, M3, M4, M7
+describe('resolveSessionCapabilities, after the final review', () => {
+  it('passes an SSE server to Claude as SSE and leaves it out of Codex, whose sessions cannot use it', async () => {
+    const s = await setup([server({ transport: 'sse', command: undefined, args: undefined, url: 'https://mcp.example.com/sse', env: {} })])
+    const r = await call(s, s.claude)
+    expect(JSON.parse(await fs.readFile(r.args[1], 'utf8')).mcpServers.linear).toEqual({ type: 'sse', url: 'https://mcp.example.com/sse' })
+    expect((await call(s, s.codex)).skipped).toEqual([{ name: 'linear', reason: 'transport' }])
+  })
+
+  it('gives Codex a server\u2019s timeouts and tool lists', async () => {
+    const s = await setup([server({ env: {}, args: undefined, options: { startupTimeoutSec: 40, toolTimeoutSec: 120, enabledTools: ['a'], disabledTools: ['c'] } })])
+    expect((await call(s, s.codex)).args).toEqual([
+      '-c', "mcp_servers.linear.command='npx'",
+      '-c', 'mcp_servers.linear.startup_timeout_sec=40',
+      '-c', 'mcp_servers.linear.tool_timeout_sec=120',
+      '-c', "mcp_servers.linear.enabled_tools=['a']",
+      '-c', "mcp_servers.linear.disabled_tools=['c']"
+    ])
+  })
+
+  it('writes no file in a dry run, and says which servers a session would get', async () => {
+    const s = await setup()
+    const r = await resolveSessionCapabilities({ profileDir: s.profileDir, homeDir: s.home, account: s.claude, platform: 'linux', dryRun: true })
+    expect(r.given).toEqual(['linear'])
+    expect(r.args).toEqual([])
+    expect(await fs.stat(extensionPaths(s.profileDir).generatedMcp).then(() => true, () => false)).toBe(false)
+  })
+
+  it('passes nothing when the account\u2019s own file cannot be read, rather than risking a clash', async () => {
+    const s = await setup()
+    await fs.mkdir(s.claude.configDir, { recursive: true })
+    await fs.writeFile(path.join(s.claude.configDir, '.claude.json'), '{ half written')
+    const r = await call(s, s.claude)
+    expect(r.args).toEqual([])
+    expect(r.skipped).toEqual([{ name: 'linear', reason: 'account-unreadable' }])
+  })
+
+  it('sweeps generated files nobody has used for a long time, and keeps one a session just used', async () => {
+    const s = await setup()
+    const used = (await call(s, s.claude)).args[1]
+    const dir = extensionPaths(s.profileDir).generatedMcp
+    const old = path.join(dir, 'claude-0000000000000000.json')
+    await fs.writeFile(old, '{}')
+    const longAgo = new Date(Date.now() - 40 * 24 * 3600 * 1000)
+    await fs.utimes(old, longAgo, longAgo)
+    await fs.utimes(used, longAgo, longAgo)
+    await call(s, s.claude)
+    await sweepGeneratedMcp(s.profileDir, 30 * 24 * 3600 * 1000)
+    expect(await fs.stat(old).then(() => true, () => false)).toBe(false)
+    expect(await fs.stat(used).then(() => true, () => false)).toBe(true)
   })
 })

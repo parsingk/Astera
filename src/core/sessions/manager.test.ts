@@ -1370,6 +1370,7 @@ describe('shared capabilities', () => {
     context: { kind: 'implicit' as const, accounts: ['acc-1'], policyMode: 'compatibility' as const, executionMode: 'managed' as const },
     args: ['--mcp-config', '/p/claude-1.json'],
     env: { LINEAR_API_KEY: 'secret-in-env' },
+    given: ['linear'],
     skipped: []
   }
   it('prepare refreshes the account, and spawn adds its arguments and environment', async () => {

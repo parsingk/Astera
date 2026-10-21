@@ -1232,6 +1232,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
       context: { kind: 'implicit' as const, accounts: ['acc-cl'], policyMode: 'compatibility' as const, executionMode: 'managed' as const },
       args: ['--mcp-config', 'C:/p/claude-1.json'],
       env: { LINEAR_API_KEY: 'secret-in-env' },
+      given: ['linear'],
       skipped: []
     }
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
