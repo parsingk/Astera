@@ -779,8 +779,10 @@ export const es: Catalog = {
     'Se importará la configuración de la cuenta «{source}» a la cuenta «{label}».',
   'account.sync.mergeNote':
     'Los plugins, MCP y las habilidades, comandos y agentes personales se combinan elemento por elemento. Los elementos coincidentes toman el valor del origen y los que solo tiene esta cuenta se conservan.',
-  'account.sync.replaceNote':
-    'El archivo config.toml se reemplaza por completo con el del origen. La configuración exclusiva de esta cuenta se pierde; el archivo existente se respalda como .bak.',
+  'account.sync.codexMergeNote':
+    'El archivo config.toml se combina clave por clave. Las claves coincidentes toman el valor del origen, y esta cuenta conserva sus propias claves, sus carpetas de confianza y sus aprobaciones de hooks. El archivo existente se respalda como .bak.',
+  'account.sync.extensionsNote':
+    'En cuanto se comparta algo en Ajustes › Extensiones, los servidores MCP, las habilidades, los comandos y los agentes vienen de allí y no se copian aquí.',
   'account.sync.appliesNextSession':
     'No se aplica a las sesiones en ejecución: surte efecto a partir de la siguiente sesión.',
   'account.sync.confirm': 'Importar',

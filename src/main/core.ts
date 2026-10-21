@@ -47,6 +47,7 @@ import type { BypassSignal } from '../core/sessions/retryBypass'
 import { detectBypassableManager } from './cliLocate'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
+import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 
 export interface Core {
   accounts: AccountRegistry
@@ -415,11 +416,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     if (srcId === account.id) return { ok: false, message: { key: 'account.sync.isDefaultSource' } }
     const src = accounts.get(srcId)
     try {
-      const r = await descriptorOf(descriptors, account).syncSettings(
-        src.configDir,
-        account.configDir,
-        os.homedir()
-      )
+      const r = await descriptorOf(descriptors, account).syncSettings(src.configDir, account.configDir, os.homedir(), {
+        capabilities: await settingsImportCopiesCapabilities(userDataDir)
+      })
       if (!r.settingsApplied && !r.mcpApplied && r.contentApplied.length === 0)
         return { ok: true, message: { key: 'account.sync.nothingToCopy' } }
       return { ok: true }

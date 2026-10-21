@@ -942,8 +942,10 @@ export const en: Record<keyof typeof ko, string> = {
     'Imports settings from the “{source}” account into the “{label}” account.',
   'account.sync.mergeNote':
     'Plugins, MCP and personal skills/commands/agents are merged item by item. Matching items take the source values, and items only this account has are kept.',
-  'account.sync.replaceNote':
-    'config.toml is replaced wholesale by the source file. Settings only this account had are lost; the existing file is backed up as .bak.',
+  'account.sync.codexMergeNote':
+    'config.toml is merged key by key. Matching keys take the source values, and this account keeps its own keys, its trusted folders and its hook approvals. The existing file is backed up as .bak.',
+  'account.sync.extensionsNote':
+    'Once anything is shared in Settings › Extensions, MCP servers, skills, commands and agents come from there and are not copied here.',
   'account.sync.appliesNextSession':
     'This does not apply to running sessions — it takes effect starting with the next session.',
   'account.sync.confirm': 'Import',

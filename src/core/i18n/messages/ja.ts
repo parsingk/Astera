@@ -770,8 +770,10 @@ export const ja: Catalog = {
     '「{source}」アカウントの設定を「{label}」アカウントへ取り込みます。',
   'account.sync.mergeNote':
     'プラグイン・MCP・個人のスキル/コマンド/エージェントを項目単位でマージします。同じ項目は取り込み元の値で上書きし、このアカウントにしかない項目は残ります。',
-  'account.sync.replaceNote':
-    'config.toml ファイルが取り込み元のものでまるごと置き換えられます。このアカウントにしかなかった設定は失われ、既存のファイルは .bak としてバックアップします。',
+  'account.sync.codexMergeNote':
+    'config.toml をキー単位でマージします。同じキーは取り込み元の値になり、このアカウントだけのキー、信頼したフォルダ、承認したフックはそのまま残ります。既存のファイルは .bak としてバックアップします。',
+  'account.sync.extensionsNote':
+    '設定 › 拡張機能 で何かを共有すると、MCP サーバー・スキル・コマンド・エージェントはそちらから届き、ここではコピーしません。',
   'account.sync.appliesNextSession':
     '実行中のセッションには適用されず、次のセッションから反映されます。',
   'account.sync.confirm': '取り込む',

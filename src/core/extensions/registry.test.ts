@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../testFixtures'
 import { extensionPaths } from '../profile/paths'
-import { readExtensionRegistry, writeExtensionRegistry, registryIsEmpty } from './registry'
+import { readExtensionRegistry, writeExtensionRegistry, registryIsEmpty, settingsImportCopiesCapabilities } from './registry'
 import { extensionSecrets } from './secrets'
 import type { ExtensionRegistry } from './types'
 
@@ -57,6 +57,16 @@ describe('extension registry', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('{ broken')
     const kept = (await fs.readdir(path.dirname(file))).filter((f) => f.endsWith('.bak'))
     expect(kept.length).toBe(1)
+  })
+
+  // Design §4.7, D9: the settings import button copies MCP servers and skills only while nothing is shared
+  it('lets the settings import copy capabilities only while the registry is empty, and not when it is damaged', async () => {
+    const p = await profile()
+    expect(await settingsImportCopiesCapabilities(p)).toBe(true)
+    await writeExtensionRegistry(p, REGISTRY)
+    expect(await settingsImportCopiesCapabilities(p)).toBe(false)
+    await fs.writeFile(extensionPaths(p).registry, '{ broken')
+    expect(await settingsImportCopiesCapabilities(p)).toBe(false)
   })
 
   it('never holds a secret value: only the secret name is written', async () => {

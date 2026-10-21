@@ -8,7 +8,7 @@ import { codexNoDaemonProbe } from '../sessions/codexNoDaemon'
 import { warmWindowsExecutable } from '../sessions/windowsExecutable'
 import { readAccountEmail, detectConfigDirs } from '../accounts/detect'
 import { readCodexEmail, detectCodexConfigDirs } from '../accounts/detectCodex'
-import { syncClaudeSettings, syncCodexSettings, type SyncResult } from '../accounts/settingsSync'
+import { syncClaudeSettings, syncCodexSettings, type SyncOptions, type SyncResult } from '../accounts/settingsSync'
 import { PROVIDER_META, providerOf, type Provider, type ProviderMeta } from './meta'
 import type { HistoryStrategy } from '../history/strategies/types'
 import { claudeHistoryStrategy } from '../history/strategies/claude'
@@ -53,7 +53,7 @@ export interface ProviderDescriptor extends ProviderMeta {
    *
    *  The two providers behave differently and deliberately so: claude merges per key, codex replaces the
    *  whole config.toml (no TOML parser here). The confirmation wording splits on the same line. */
-  syncSettings(srcConfigDir: string, targetConfigDir: string, homeDir: string): Promise<SyncResult>
+  syncSettings(srcConfigDir: string, targetConfigDir: string, homeDir: string, opts: SyncOptions): Promise<SyncResult>
   history: HistoryStrategy
   /** Can busy/idle be decided reliably from the window-title OSC (BusyScanner, core/terminal/busy.ts)
    *  (measured on win32 and darwin).
@@ -149,8 +149,8 @@ export function makeDescriptors(
       readEmail: (configDir) => readCodexEmail(configDir),
       detect: detectCodexConfigDirs,
       // homeDir is unused here — codex keeps everything inside configDir, with no home-root sidecar
-      syncSettings: (srcConfigDir, targetConfigDir) =>
-        syncCodexSettings(srcConfigDir, targetConfigDir),
+      syncSettings: (srcConfigDir, targetConfigDir, _homeDir, opts) =>
+        syncCodexSettings(srcConfigDir, targetConfigDir, opts),
       history: codexHistoryStrategy,
       busyTitleReliable: false
     }

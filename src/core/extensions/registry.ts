@@ -45,6 +45,13 @@ export function registryIsEmpty(r: ExtensionRegistry): boolean {
   return r.entries.length === 0
 }
 
+/** Whether the settings import button copies MCP servers, skills, commands and agents too (design §4.7, D9): only
+ *  while nothing is shared, so a profile that never uses Extensions keeps today's button. A registry that cannot be
+ *  read says something was shared, so the button leaves them alone. */
+export async function settingsImportCopiesCapabilities(profileDir: string): Promise<boolean> {
+  return readExtensionRegistry(profileDir).then(registryIsEmpty, () => false)
+}
+
 /** An entry as the app and the CLI see it: an MCP server's environment names say where each value comes from, and no
  *  value is in it (D5). */
 export function publicEntry(e: ExtensionEntry): unknown {

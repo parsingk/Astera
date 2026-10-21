@@ -28,7 +28,7 @@ export interface ProviderMeta {
   usesStatusLine: boolean
 }
 // There is no supportsSettingsSync flag any more: both providers import settings now, they just do it
-// differently (claude merges per key, codex replaces config.toml). The how lives on ProviderDescriptor
+// differently (claude merges its JSON files per key, codex merges config.toml keeping its trust and hook tables). The how lives on ProviderDescriptor
 // .syncSettings; nothing left for the renderer to branch on.
 
 export const PROVIDER_META: Record<Provider, ProviderMeta> = {
