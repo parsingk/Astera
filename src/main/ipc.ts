@@ -2198,6 +2198,7 @@ export function registerIpc(
       // "왜 시작 버튼이 안 눌리나" exists to keep fast; paying that cost on every chat spawn was fix
       // round 1's own Critical finding.
       const bypassSignal = core.bypassSignalFor(providerOf(account))
+      await core.capabilities.refresh(account)
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,

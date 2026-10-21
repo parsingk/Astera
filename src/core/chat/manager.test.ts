@@ -1225,6 +1225,24 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     manager.spawn({ account: claudeAccount, cwd: 'D:/p' })
     expect(factory.mock.calls[0][2].env.ONLY_HERE).toBe('1')
   })
+
+  // Agent Control Plane release 1 (design §4.5): a chat session gets the shared extensions a terminal one does
+  it('adds the shared capabilities’ arguments and environment, and nothing without them', () => {
+    const caps = {
+      context: { kind: 'implicit' as const, accounts: ['acc-cl'], policyMode: 'compatibility' as const, executionMode: 'managed' as const },
+      args: ['--mcp-config', 'C:/p/claude-1.json'],
+      env: { LINEAR_API_KEY: 'secret-in-env' },
+      skipped: []
+    }
+    const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
+    const deps = { factory, descriptors: makeDescriptors('linux'), homeDir: '/home/t', platform: 'linux' as const, version: '1', log: () => {}, createAdapter: makeAdapterFactory().createAdapter }
+    new ChatSessionManager({ ...deps, capabilities: { get: () => caps, refresh: async () => {} } }).spawn({ account: claudeAccount, cwd: '/p' })
+    new ChatSessionManager(deps).spawn({ account: claudeAccount, cwd: '/p' })
+    expect(factory.mock.calls[0][1].slice(-2)).toEqual(['--mcp-config', 'C:/p/claude-1.json'])
+    expect(factory.mock.calls[0][2].env.LINEAR_API_KEY).toBe('secret-in-env')
+    expect(factory.mock.calls[1][1]).not.toContain('--mcp-config')
+    expect(factory.mock.calls[1][2].env.LINEAR_API_KEY).toBeUndefined()
+  })
 })
 
 describe('ChatSessionManager.sendCarryOn — the app sends a carry-on the Host left (final review I1)', () => {

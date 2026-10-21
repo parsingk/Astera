@@ -800,6 +800,7 @@ async function main(): Promise<void> {
       chats: rollingWiring?.chats ?? null,
       rolling: rollingWiring?.rolling ?? null,
       readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      refreshCapabilities: (account) => spawner?.capabilities?.refresh(account) ?? Promise.resolve(),
       bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
       probeCwd: defaultCwdProbe,
       announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),

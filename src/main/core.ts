@@ -45,6 +45,8 @@ import type { PtyFactory } from '../core/sessions/pty'
 import type { ProcFactory } from '../core/sessions/proc'
 import type { BypassSignal } from '../core/sessions/retryBypass'
 import { detectBypassableManager } from './cliLocate'
+import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
+import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
 
 export interface Core {
   accounts: AccountRegistry
@@ -55,6 +57,9 @@ export interface Core {
    *  resizing or acking a pty applies to it. `registerIpc` fans its events out as `chat:event` and
    *  every lookup that resolves a session id asks both. */
   chat: ChatSessionManager
+  /** Shared extensions (Agent Control Plane release 1): one cache for both managers, refreshed by
+   *  `sessions.prepare` and by the chat spawn path before each spawn. */
+  capabilities: CapabilityCache
   history: HistoryIndex
   // Provider descriptor table. ipc reads per-provider facts from it without branching —
   // before it was exposed, choosing the transcript path mapper was a hardcoded branch in ipc.ts
@@ -265,6 +270,16 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     process.env,
     defaultSpawnChecks(sessionsLog)
   )
+  // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
+  // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
+  const capabilities = createCapabilityCache({
+    profileDir: userDataDir,
+    homeDir: os.homedir(),
+    platform: process.platform,
+    policyMode: () => readControlPlanePolicyMode(path.join(userDataDir, 'app-settings.json')),
+    log: sessionsLog
+  })
+  sessions.capabilities = capabilities
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly
   // the reason SessionManager is handed `ptyRouter.factory`: which one a spawn reaches is decided at
   // spawn time, once registerIpc has learned whether this Host speaks procs. `version` is the app's
@@ -276,7 +291,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     homeDir: os.homedir(),
     platform: process.platform,
     version: app.getVersion(),
-    log: chatLog
+    log: chatLog,
+    capabilities
   })
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.
@@ -441,6 +457,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     accounts,
     sessions,
     chat,
+    capabilities,
     history,
     descriptors,
     projects,
