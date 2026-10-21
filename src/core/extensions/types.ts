@@ -5,8 +5,9 @@ import type { Provider } from '../types'
 
 export type ExtensionKind = 'mcp' | 'skill' | 'command' | 'agent'
 
-/** An MCP server's environment value: a secret kept in the store under that name, or a plain value. */
-export type McpEnvValue = { secret: string } | { value: string }
+/** An MCP server's environment value: a secret kept in the store under that name, a plain value, or the session's
+ *  own variable of that name passed through (Codex `env_vars`, which name no value). */
+export type McpEnvValue = { secret: string } | { value: string } | { inherit: true }
 
 export interface McpExtension {
   id: string
