@@ -21,6 +21,7 @@ import { privateIPv4s } from '../core/remote/addresses'
 import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProtocolHost, runHostCommand, siblingHostError } from './host'
 import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
+import { extensionsCommand } from './extensions'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
@@ -1395,6 +1396,19 @@ export async function main(): Promise<void> {
     const done = await higgsfieldCommand({ cmd: parsed.cmd, args, profileDir })
     if (!done.ok) fail(done.error)
     out(renderOk(parsed.cmd, publicFor(parsed.cmd, done.body), mode))
+    process.exit(0)
+  }
+
+  // ext list|sync are answered here too, from the profile's shared extensions (cli/extensions.ts), no Host.
+  if (parsed.cmd === 'ext-list' || parsed.cmd === 'ext-sync') {
+    if (presented)
+      fail({
+        code: 'INVALID_ARGUMENTS',
+        message: `${spelledCommand(parsed.cmd)} does not go through the Host's command layer, so it cannot carry a request id`
+      })
+    const done = await extensionsCommand({ cmd: parsed.cmd, profileDir })
+    if (!done.ok) fail(done.error)
+    out(renderOk(parsed.cmd, done.body, mode))
     process.exit(0)
   }
 

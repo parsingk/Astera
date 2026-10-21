@@ -85,7 +85,8 @@ async function backUp(profileDir: string, stamp: string, accountId: string, e: F
   await fs.cp(dest, to, { recursive: true })
 }
 
-async function readState(profileDir: string): Promise<MaterializedRecord[]> {
+/** The copies Astera owns now. Throws when the state file is there but cannot be read; a damaged one is kept aside. */
+export async function readState(profileDir: string): Promise<MaterializedRecord[]> {
   const file = extensionPaths(profileDir).materializedState
   const read = await readStoreFile(file)
   if (read.kind === 'missing') return []
@@ -205,8 +206,10 @@ export async function syncMaterialized(a: { profileDir: string; accounts: Accoun
       }
     }
   }
-  // Sorted and stamped only when a record changed, so a run that changed nothing writes the same bytes
-  await writeState(a.profileDir, [...next.values()])
+  // Written only when a record changed: a run that changed nothing, and a profile that shares nothing, write nothing
+  const records = [...next.values()]
+  const same = records.length === old.length && records.every((r) => old.includes(r))
+  if (!same) await writeState(a.profileDir, records)
   return { items }
 }
 

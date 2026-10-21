@@ -1931,8 +1931,27 @@ export function registerIpc(
 
   // accounts
   ipcMain.handle('accounts.list', () => core.accounts.list())
-  ipcMain.handle('accounts.create', (_e, input) => core.accounts.create(input))
-  ipcMain.handle('accounts.import', (_e, input) => core.accounts.import(input))
+  // A new account gets Astera's own skills and the shared extensions now, not at the next app or Host start
+  // (Agent Control Plane release 1 design §4.6, inventory §4). With no Host the sync waits for its next start, which
+  // syncs every account: the Host is the registry's one writer.
+  const afterAccountAdded = (): void => {
+    installStubsForCurrentToggles()
+    void orchCall({ cmd: 'extensions-sync', args: {}, sessionId: '' })
+      .then((r) => {
+        if (r.status !== 200) orchLog(`extensions sync after an account was added answered ${r.status}`)
+      })
+      .catch((err: unknown) => orchLog(`extensions sync after an account was added did not run: ${String(err)}`))
+  }
+  ipcMain.handle('accounts.create', async (_e, input) => {
+    const account = await core.accounts.create(input)
+    afterAccountAdded()
+    return account
+  })
+  ipcMain.handle('accounts.import', async (_e, input) => {
+    const account = await core.accounts.import(input)
+    afterAccountAdded()
+    return account
+  })
   // 돌아가는 세션이 쓰는 계정은 지우지 않는다 — 판단은 accountRemovalBlockers(위)에 있고, 여기는
   // 세션 목록을 건네고 결과를 렌더러가 읽을 모양으로 바꾸는 일만 한다. 렌더러에도 같은 검사를 두면
   // 두 곳이 어긋날 수 있으므로 두지 않는다: 여기가 경계다.

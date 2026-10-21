@@ -65,6 +65,14 @@ describe('syncMaterialized', () => {
     )
   })
 
+  // The Host syncs at start, and a profile that shares nothing must not get files from it
+  it('writes no state file when nothing is shared', async () => {
+    const s = await setup()
+    await s.register([])
+    expect((await s.sync()).items).toEqual([])
+    expect(await exists(s.paths.materializedState)).toBe(false)
+  })
+
   it('changes nothing when run a second time (AC-14)', async () => {
     const s = await setup()
     await s.sync()

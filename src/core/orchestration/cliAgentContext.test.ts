@@ -140,6 +140,8 @@ const NOT_SWITCHED = [
   'skills-install',
   'higgsfield-list',
   'higgsfield-use',
+  'ext-list',
+  'ext-sync',
   'mcp-serve',
   'mcp-status',
   'projects-add',

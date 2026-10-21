@@ -1031,6 +1031,49 @@ describe('plugins (plugin runtime design P5)', () => {
   })
 })
 
+// Agent Control Plane release 1 (design §4.3): the gates' lists are unchanged, so only the app and the CLI reach the
+// extensions commands; an agent's shell is told why it may not change them.
+describe('shared extensions', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { agentRefusal?: string }[] = []
+    return {
+      seen,
+      extensions: {
+        command: async (a: { agentRefusal?: string }) => {
+          seen.push(a)
+          return { status: 200, body: { ok: true } }
+        }
+      }
+    }
+  }
+
+  it('is refused to MCP, a controller and a plugin by their gates, before the extensions are asked', async () => {
+    const f = answering()
+    const orch = orchOver({ extensions: f.extensions })
+    const args = { accountId: 'acc_1', picks: [{ kind: 'skill', name: 'x' }] }
+    expect((await orch.call({ cmd: 'extensions-import', args, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'extensions-import', args, sessionId: '', from: controller })).status).toBe(403)
+    const plugin = { role: 'plugin' as const, plugin: { id: 'astera-hello', granted: new Set(['jobs.read', 'jobs.create']) }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'extensions-import', args, sessionId: '', from: plugin })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('tells the extensions an agent session’s shell is the caller, and answers the CLI', async () => {
+    const f = answering()
+    const orch = orchOver({ extensions: f.extensions })
+    expect((await orch.call({ cmd: 'extensions-list', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'extensions-sync', args: {}, sessionId: 'sess_1', from: cli })
+    expect(f.seen[0].agentRefusal).toBeUndefined()
+    expect(f.seen[1].agentRefusal).toMatch(/not an agent session/)
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'extensions-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
 describe('pairing and clients (local only)', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   it('pair-create answers a code to the CLI, and clients-list and clients-revoke see the redeemed client', async () => {

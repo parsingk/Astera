@@ -7,7 +7,7 @@ import { extensionPaths } from '../profile/paths'
 import { keepDamaged, readStoreFile } from '../storeFile'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { RepairNeeded } from '../settings/repairNeeded'
-import type { ExtensionRegistry } from './types'
+import type { ExtensionEntry, ExtensionRegistry } from './types'
 
 const FILE = path.join('extensions', 'registry.json')
 
@@ -43,4 +43,12 @@ export async function writeExtensionRegistry(profileDir: string, r: ExtensionReg
 /** Nothing shared yet: the profile behaves as it did before shared extensions existed (design D9, AC-09.1). */
 export function registryIsEmpty(r: ExtensionRegistry): boolean {
   return r.entries.length === 0
+}
+
+/** An entry as the app and the CLI see it: an MCP server's environment names say where each value comes from, and no
+ *  value is in it (D5). */
+export function publicEntry(e: ExtensionEntry): unknown {
+  if (e.kind !== 'mcp') return e
+  const env = Object.fromEntries(Object.entries(e.env).map(([n, v]) => [n, 'secret' in v ? 'secret' : 'value' in v ? 'value' : 'inherit']))
+  return { ...e, env }
 }

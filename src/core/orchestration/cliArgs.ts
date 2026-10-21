@@ -136,6 +136,9 @@ export const NOUNS = {
   skills: ['list', 'install'],
   // **Answered in the CLI process** (higgsfield accounts design §3): reads <profile>/higgsfield; the agent runs `use` only after the person picked an account.
   higgsfield: ['list', 'use'],
+  // **Answered in the CLI process** (Agent Control Plane release 1 design §4.6): reads the profile's shared extension
+  // registry and puts its skills, commands and agents into every account itself (cli/extensions.ts), no Host.
+  ext: ['list', 'sync'],
   // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
   // id 는 앱의 세션 id(`ASTERA_SESSION`)이다. 대화 세션도 읽고 친다(phase D) — 치기는 앱이 열려 있으면 앱이 한다.
   sessions: ['list', 'read', 'send', 'create'],
