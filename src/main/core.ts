@@ -48,6 +48,7 @@ import { detectBypassableManager } from './cliLocate'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
+import { hidingLog } from '../core/extensions/secrets'
 
 export interface Core {
   accounts: AccountRegistry
@@ -278,7 +279,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     homeDir: os.homedir(),
     platform: process.platform,
     policyMode: () => readControlPlanePolicyMode(path.join(userDataDir, 'app-settings.json')),
-    log: sessionsLog
+    log: hidingLog(userDataDir, sessionsLog)
   })
   sessions.capabilities = capabilities
   // The chat sessions. It is handed `procRouter.factory` rather than a factory chosen now, for exactly

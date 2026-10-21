@@ -1,6 +1,6 @@
 // Agent Control Plane release 1 (design §4.3, §4.6, D5): the Host's extensions commands. For the app and the CLI
 // only, changes refused to an agent's shell, every change followed by a sync, and no environment value in any answer.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -80,6 +80,31 @@ describe('createHostExtensions', () => {
     expect((await h.call('extensions-import', { accountId: 'nope', picks: [{ kind: 'skill', name: 'x' }] })).status).toBe(404)
     expect((await h.call('extensions-disable', { id: 'skill-nope' })).status).toBe(404)
     expect((await h.call('extensions-discover', { accountId: 'acc_1' })).body).toMatchObject({ items: [{ kind: 'command', name: 'ship', shareable: true }] })
+  })
+
+  // Design §4.9: a stored secret value never reaches the Host's log or an answer, even inside an error's own words
+  it('redacts a stored secret value from its log lines and its error answers', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-ext-'))
+    dirs.push(root)
+    const profileDir = path.join(root, 'profile')
+    await extensionSecrets(profileDir).put('mcp.mcp-linear.LINEAR_API_KEY', SECRET)
+    const logs: string[] = []
+    const ext = createHostExtensions({
+      profileDir,
+      homeDir: root,
+      readAccounts: async () => {
+        throw new Error(`accounts.json could not be read near "${SECRET}"`)
+      },
+      log: (l) => logs.push(l)
+    })
+    const r = await ext.command({ cmd: 'extensions-sync', args: {}, role: 'app', marks: { effects: 0 } })
+    expect(r.status).toBe(500)
+    expect(JSON.stringify(r.body)).not.toContain(SECRET)
+    expect(JSON.stringify(r.body)).toContain('[redacted]')
+    await ext.sync()
+    await vi.waitFor(() => expect(logs.length).toBeGreaterThan(0))
+    expect(logs.join(' ')).not.toContain(SECRET)
+    expect(logs.join(' ')).toContain('[redacted]')
   })
 
   it('removes a copy it wrote when the item is disabled, and answers a damaged registry with 409', async () => {

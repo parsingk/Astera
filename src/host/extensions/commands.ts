@@ -5,6 +5,8 @@
 // afterwards, and the answer never carries an environment value, only names (D5).
 import { RepairNeeded } from '../../core/settings/repairNeeded'
 import { publicEntry, readExtensionRegistry } from '../../core/extensions/registry'
+import { hideExtensionSecrets, hidingLog } from '../../core/extensions/secrets'
+import { redactSecrets } from '../../core/remote/redact'
 import { discoverIn } from '../../core/extensions/discover'
 import { importItems, removeEntry, setEnabled, type ImportPick } from '../../core/extensions/importItems'
 import { replaceConflict, syncMaterialized, type SyncItem } from '../../core/extensions/materialize'
@@ -75,6 +77,10 @@ export function createHostExtensions(d: {
   readAccounts: () => Promise<Account[]>
   log: (line: string) => void
 }): HostExtensions {
+  // Every line written about shared extensions, and every error answered, has the stored secret values taken out
+  // (design §4.9): an error's own words may quote a file that holds one
+  const log = hidingLog(d.profileDir, d.log)
+  const hide = (line: string): Promise<string> => hideExtensionSecrets(d.profileDir, line).catch(() => redactSecrets(line))
   // The last sync's outcome per item and account: what `extensions-list` reports as status
   let last: SyncItem[] = []
   // One change at a time: an import and a sync must not both rewrite the registry or the state file
@@ -88,7 +94,7 @@ export function createHostExtensions(d: {
   const syncNow = async (): Promise<SyncItem[]> => {
     const r = await syncMaterialized({ profileDir: d.profileDir, accounts: await d.readAccounts() })
     last = r.items
-    for (const i of r.items) if (i.outcome === 'failed') d.log(`extensions: ${i.id} could not be synced into account ${i.accountId} (${i.detail ?? 'unknown'})`)
+    for (const i of r.items) if (i.outcome === 'failed') log(`extensions: ${i.id} could not be synced into account ${i.accountId} (${i.detail ?? 'unknown'})`)
     return r.items
   }
 
@@ -151,14 +157,14 @@ export function createHostExtensions(d: {
         r = await answer(a.cmd, a.args)
       } catch (e) {
         // A damaged registry or accounts file is the person's to repair in the app (RepairNeeded), anything else failed
-        r = e instanceof RepairNeeded ? { status: 409, body: { error: e.message } } : { status: 500, body: { error: message(e) } }
+        r = { status: e instanceof RepairNeeded ? 409 : 500, body: { error: await hide(message(e)) } }
       }
       if (r.status === 200 && EXTENSION_CHANGES.has(a.cmd)) a.marks.effects += 1
       return r
     },
     sync: () =>
       queued(syncNow).catch((e: unknown) => {
-        d.log(`extensions: the shared copies could not be synced (${message(e)})`)
+        log(`extensions: the shared copies could not be synced (${message(e)})`)
         return []
       })
   }

@@ -9,14 +9,20 @@ import type { Account } from '../core/types'
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { publicEntry, readExtensionRegistry } from '../core/extensions/registry'
 import { readState, syncMaterialized } from '../core/extensions/materialize'
+import { hideExtensionSecrets } from '../core/extensions/secrets'
+import { redactSecrets } from '../core/remote/redact'
 
 type Outcome = { ok: true; body: Record<string, unknown> } | { ok: false; error: CliError }
 
-const refusal = (err: unknown, file: string): Outcome => ({
-  ok: false,
-  // The same refusal `skills` gives for a damaged accounts.json: opening Astera repairs it
-  error: { code: 'CONFLICT', message: err instanceof Error ? err.message : String(err), details: { repair: file } }
-})
+// The same refusal `skills` gives for a damaged accounts.json: opening Astera repairs it. The message has the stored
+// secret values taken out, as every line about shared extensions does (design §4.9).
+const refusal = async (profileDir: string, err: unknown, file: string): Promise<Outcome> => {
+  const message = err instanceof Error ? err.message : String(err)
+  return {
+    ok: false,
+    error: { code: 'CONFLICT', message: await hideExtensionSecrets(profileDir, message).catch(() => redactSecrets(message)), details: { repair: file } }
+  }
+}
 
 export async function extensionsCommand(a: { cmd: 'ext-list' | 'ext-sync'; profileDir: string }): Promise<Outcome> {
   if (a.cmd === 'ext-list') {
@@ -25,20 +31,20 @@ export async function extensionsCommand(a: { cmd: 'ext-list' | 'ext-sync'; profi
       const copies = (await readState(a.profileDir)).map((r) => ({ id: r.id, accountId: r.accountId, destination: r.destination, adopted: r.adopted }))
       return { ok: true, body: { entries: registry.entries.map(publicEntry), copies } }
     } catch (err) {
-      return refusal(err, 'extensions/registry.json')
+      return refusal(a.profileDir, err, 'extensions/registry.json')
     }
   }
   let accounts: Account[]
   try {
     accounts = await readAccountEntries(path.join(a.profileDir, 'accounts.json'))
   } catch (err) {
-    return refusal(err, 'accounts.json')
+    return refusal(a.profileDir, err, 'accounts.json')
   }
   let items: Awaited<ReturnType<typeof syncMaterialized>>['items']
   try {
     items = (await syncMaterialized({ profileDir: a.profileDir, accounts })).items
   } catch (err) {
-    return refusal(err, 'extensions/registry.json')
+    return refusal(a.profileDir, err, 'extensions/registry.json')
   }
   // A copy that could not be written is the command's failure (1), as in `skills install`: the whole answer goes in
   // error.details

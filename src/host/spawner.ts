@@ -52,6 +52,7 @@ import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
 import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
 import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
+import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
 /** Which session each attempt was started on, for the newest this many (audit H5); an older attempt's tail is long gone. */
@@ -349,7 +350,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     homeDir,
     platform,
     policyMode: () => readControlPlanePolicyMode(settingsPath),
-    log
+    log: hidingLog(profileDir, log)
   })
   sessions.capabilities = capabilities
   sessions.onExit = (e) => {

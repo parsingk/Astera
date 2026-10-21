@@ -3,6 +3,7 @@
 // (into that session's environment) and to redact logs; nothing here reaches the renderer, the CLI or MCP.
 import { openSecretStore, type SecretStore } from '../secrets/secretStore'
 import { extensionPaths } from '../profile/paths'
+import { redactSecrets, redactTerms, redactionTerms } from '../remote/redact'
 
 export interface ExtensionSecrets {
   put(name: string, value: string): Promise<void>
@@ -31,5 +32,19 @@ export function extensionSecrets(profileDir: string): ExtensionSecrets {
       const values = await Promise.all(names.map((n) => s.read(n)))
       return values.filter((v): v is string => v !== null)
     }
+  }
+}
+
+/** The line with every stored extension secret value taken out (design §4.9), read fresh each time so a value just
+ *  stored or removed counts. For the rare lines about shared extensions: a failure, a skipped server. */
+export async function hideExtensionSecrets(profileDir: string, line: string): Promise<string> {
+  return redactTerms(redactSecrets(line), redactionTerms(await extensionSecrets(profileDir).terms()))
+}
+
+/** A synchronous log callback that writes its line once the extension secrets are taken out of it, or with only the
+ *  secret-shaped runs taken out when the store cannot be read. */
+export function hidingLog(profileDir: string, log: (line: string) => void): (line: string) => void {
+  return (line) => {
+    void hideExtensionSecrets(profileDir, line).then(log, () => log(redactSecrets(line)))
   }
 }
