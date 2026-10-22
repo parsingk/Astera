@@ -917,6 +917,25 @@ describe('createHostSpawner — createSession', () => {
       expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
     })
 
+    // Agent Profiles design §6: a Job's worker runs as its Task's profile; a Task whose profile was deleted after it was
+    // made still starts, implicit, with one log line (Review Focus 5)
+    it('starts a worker as its Task\'s profile, and one whose profile is gone without it, logged once', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
+      const first = seeded()
+      const box = { state: first.s }
+      const h = rig({ state: () => box.state })
+      await h.spawner!.startWorker({ ...startArgs(first.taskId, first.dispatchId), agentProfileId: 'ap_b' })
+      expect(JSON.stringify(h.spawned[0].args)).toMatch(SKIP)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_b' })
+      const again = seeded()
+      box.state = again.s
+      await expect(h.spawner!.startWorker({ ...startArgs(again.taskId, again.dispatchId), agentProfileId: 'ap_gone' })).resolves.toMatchObject({ sessionId: expect.any(String) })
+      expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
+      expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('agentProfileId')
+      expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    })
+
     it('stamps the profile\'s use after the spawn, and a stamp that throws costs nothing', async () => {
       await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
       const touched: string[] = []

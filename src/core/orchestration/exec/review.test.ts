@@ -44,6 +44,8 @@ interface RigOpts {
   convergenceNull?: boolean
   runPaused?: boolean
   startFails?: string
+  /** The Task runs as this agent profile */
+  agentProfileId?: string
 }
 
 type StartArgs = Parameters<ReviewContext['startWorker']>[0]
@@ -64,7 +66,7 @@ function rig(o: RigOpts) {
   const t = unwrap<{ id: string }>(
     createTask(
       started0.state,
-      { runId: started0.value.id, title: 'T', spec: 'do it', deps: [], reviewRequested: true },
+      { runId: started0.value.id, title: 'T', spec: 'do it', deps: [], reviewRequested: true, ...(o.agentProfileId ? { agentProfileId: o.agentProfileId } : {}) },
       NOW
     ) as never
   )
@@ -260,6 +262,15 @@ describe('createReviewStarter', () => {
     // Committed before the spawn: the Dispatch named in the call already existed.
     expect(h.committedBeforeSpawn()).toBe(true)
     expect(h.state().dispatches.find((d) => d.id === a.dispatchId)?.sessionId).toBe('s-review')
+  })
+
+  // Agent Profiles design §6: a reviewer is Astera's own role, not the person's agent
+  it('starts the reviewer of a Task that runs as an agent profile without that profile', async () => {
+    const h = rig({ accounts: [claude('c1'), codex('x1')], loggedIn: ['c1', 'x1'], agentProfileId: 'ap_1' })
+    await h.start({ taskId: h.taskId })
+    const a = h.startWorker.mock.calls[0][0]
+    expect(a).not.toHaveProperty('agentProfileId')
+    expect(h.state().dispatches.find((d) => d.id === a.dispatchId)).not.toHaveProperty('agentProfileId')
   })
 
   it('with no logged-in account on another provider it opens a Gate and starts nobody', async () => {

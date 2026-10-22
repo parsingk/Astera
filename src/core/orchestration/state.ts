@@ -45,7 +45,7 @@ import { normalizeIssues, type ReviewIssueInput } from './review'
 import { failedChecksSummary } from './completion'
 import { oneLine, pluginCheckText, skippedResult } from './pluginChecks'
 import { nextGitHubState, type RunGitHubPatch } from '../github/runState'
-import { isLifecycleTask, latestLifecycleTaskOf, lifecycleTaskFor, mergeReadyOf, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, latestLifecycleTaskOf, lifecycleTaskFor, mergeReadyOf, withLifecycleTask, workerProfileOf } from './lifecycleTask'
 
 export interface OrchState {
   /** 계획. 설계 §4 — 여기 있는 것이 "무엇을 시킬 것인가" 이고, 아래 runs 가 "실제로 돈 것" 이다. */
@@ -263,6 +263,8 @@ export function createJob(
     source?: JobSourceRef
     /** The GitHub lifecycle policy (design 2026-10-17 L10); the caller (run-create) has already run the preflight. */
     github?: GitHubLifecyclePolicy
+    /** The agent profile's real id (Agent Profiles design §6); the caller (run-create) has resolved and checked it. */
+    agentProfileId?: string
   },
   now: string
 ): Res<Job> {
@@ -279,6 +281,7 @@ export function createJob(
     // 빈 문자열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
     // 정하기 때문이다
     ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
+    ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {}),
@@ -374,6 +377,7 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
       ? { parentId: idMap.get(t.parentId)! }
       : {}),
     ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
+    ...(t.agentProfileId !== undefined ? { agentProfileId: t.agentProfileId } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.validateConfigIds?.length ? { validateConfigIds: [...t.validateConfigIds] } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
@@ -620,6 +624,8 @@ export function createTask(
      *  core 는 계정 목록을 못 보므로 "하나 이상" 만 확인해도 그 하나가 실재하는지는 알 수 없고,
      *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
+    /** The agent profile's real id (Agent Profiles design §6); the caller (task-create) has resolved it. */
+    agentProfileId?: string
     validateConfigId?: string
     validateConfigIds?: string[]
     reviewRequested?: boolean
@@ -651,6 +657,7 @@ export function createTask(
     // 빈 배열은 **지정 없음**이다 — 그것도 실으면 Task 를 값으로 비교하는 자리에서 지정이 없는
     // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
     ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
+    ...(a.agentProfileId ? { agentProfileId: a.agentProfileId } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     ...(a.validateConfigIds?.length ? { validateConfigIds: a.validateConfigIds } : {}),
     ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
@@ -720,6 +727,7 @@ export function openDispatch(
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
   const moved = moveTask(task, 'dispatched', now)
   if (!moved) return err(`cannot dispatch from status: ${task.status}`)
+  const profile = workerProfileOf(s, task)
   const dispatch: Dispatch = {
     id: newId('dsp'),
     taskId: a.taskId,
@@ -735,7 +743,9 @@ export function openDispatch(
     ...(a.repair ? { repair: a.repair } : {}),
     // 열 때 한 번만 적는다 — 나중에 카운트로 되짚지 않는다(Dispatch.grantedExtra 의 주석, 전체 브랜치
     // 리뷰 Finding 3).
-    ...(a.ignoreCircuit ? { grantedExtra: true } : {})
+    ...(a.ignoreCircuit ? { grantedExtra: true } : {}),
+    // The worker's spawn reads it from here (worker-start, recovery): what the Task runs as when it is opened
+    ...(profile !== undefined ? { agentProfileId: profile } : {})
   }
   return ok(
     { ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] },
@@ -1141,6 +1151,7 @@ export function openRepairDispatch(
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
   const moved = moveTask(task, 'dispatched', now)
   if (!moved) return err(`cannot dispatch from status: ${task.status}`)
+  const profile = workerProfileOf(s, task)
   const dispatch: Dispatch = {
     id: newId('dsp'),
     taskId: a.taskId,
@@ -1153,7 +1164,9 @@ export function openRepairDispatch(
     startedAt: now,
     workerState: 'ready',
     retained: false,
-    repair: a.reason
+    repair: a.reason,
+    // performRepair's spawn reads it from here, borrowed with the accounts for a lifecycle Task (workerProfileOf)
+    ...(profile !== undefined ? { agentProfileId: profile } : {})
   }
   return ok({ ...s, tasks: replace(s.tasks, moved), dispatches: [...s.dispatches, dispatch] }, dispatch)
 }

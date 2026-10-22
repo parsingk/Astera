@@ -82,7 +82,8 @@ export interface CoordinatorDeps {
      *  롤링이 기본값으로 돌기 때문이다 — rollAccountIds 처럼 지우면 기능이 꺼지는 값이 아니다. */
     rollPrompt?: string
     /** The agent profile the session is started from, by id or name (Agent Profiles design §5): the wiring resolves
-     *  it, and its permission decides the bypass when `bypassPermissions` is not given. Nothing passes it yet. */
+     *  it, and its permission decides the bypass when `bypassPermissions` is not given. A worker's start passes its
+     *  Dispatch's; a coordinator's and a reviewer's never do. */
     agentProfileId?: string
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
@@ -887,6 +888,9 @@ export class OrchCoordinator {
      *  LAUNCH_FORBIDDEN 검사보다 먼저 끝나 있어야 한다: 그 검사는 실제로 보내는 문자열을 봐야
      *  한다. */
     launchPhrase?: string
+    /** The agent profile the worker starts as (Agent Profiles design §6), handed to `spawnSession`, which resolves it.
+     *  Not used by a reuse (`terminal`): that session was started already, as whatever it started as. */
+    agentProfileId?: string
   }): Promise<{ sessionId: string; cwd: string; specPath: string }> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
@@ -1080,7 +1084,8 @@ export class OrchCoordinator {
         // codex takes the resume phrase as its own argument after `resume <id>`; claude takes it as
         // the positional prompt after `--resume <id>` (core/sessions/commands.ts) — so claude gets it
         // as initialPrompt, same as an ordinary (non-resuming) start.
-        ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt })
+        ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt }),
+        ...(a.agentProfileId !== undefined ? { agentProfileId: a.agentProfileId } : {})
       })
       finalSessionId = spawned.id
       promptWrite('confirmed', 'argv')

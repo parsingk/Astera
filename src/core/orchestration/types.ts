@@ -178,6 +178,9 @@ export interface Job {
    *  생기기 전에 만든 Run 과 CLI 로 만든 Run 이 그 갈래다 — UI 가 만들지 못하는 것과 코드가 다루지
    *  못하는 것은 다르다. 그때 워커의 질문을 풀어 주는 것은 앱의 그물이다(inbox.ts). */
   coordinatorAccountId?: string
+  /** The agent profile this Job runs as (Agent Profiles design §6), its real id: the default of its Tasks, and where its
+   *  coordinator account came from when none was given. The coordinator itself starts without it (Astera's own role). */
+  agentProfileId?: string
   /** 앱이 이 Job 을 스스로 돌리는가. **UI 가 만든 Job 에만 참이다** — 코디네이터가 만든 Job 을
    *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
@@ -381,6 +384,10 @@ export interface Task {
    *  그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중 못 쓰는 것만 순서를 지키며
    *  제자리에서 빠진다. */
   accountIds?: string[]
+  /** The agent profile this Task's workers run as (Agent Profiles design §6), its real id. When the Task was made from
+   *  it alone, `accountIds` were copied from it then and stay fixed; the profile decides MCP and permission at each
+   *  spawn, and one deleted since falls back to implicit there. */
+  agentProfileId?: string
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string
@@ -507,6 +514,9 @@ export interface Dispatch {
    *  reason: a paused schedule fire is documented not to continue (docs/jobs.md), so resuming the
    *  schedule must not resurrect its Tasks. */
   closedBy?: 'stop' | 'abandon' | 'pause'
+  /** The agent profile this worker was started as (Agent Profiles design §6): its Task's, or for a lifecycle Task the
+   *  one borrowed with the accounts (`workerProfileOf`). A reviewer's Dispatch has none. */
+  agentProfileId?: string
   /**
    * The reset time (epoch ms) for when this Dispatch was judged to have ended at a usage limit.
    * The app derives it from transcript/rollout signals and fills it in — the orchestrator does not

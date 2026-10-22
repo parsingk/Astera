@@ -7,7 +7,7 @@ import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
-import { createHostAgentProfiles } from './agentProfiles/commands'
+import { agentProfileInUse, createHostAgentProfiles } from './agentProfiles/commands'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -36,7 +36,6 @@ import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
 import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
-import { agentProfileIdOf } from '../core/sessions/noteInfo'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
@@ -759,11 +758,12 @@ async function main(): Promise<void> {
     gateway: mcpGateway
   })
   // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
-  // (the session's note carries `agentProfileId`; Task 6 adds Tasks, Jobs and Dispatches to what counts as holding it)
+  // (the session's note carries `agentProfileId`) or unfinished orchestration work does (a Job, a Task, an open
+  // Dispatch). `orch` is made below; the guard reads it only when a delete is asked.
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-    inUse: async (id) => [...registry.list(), ...procs.list()].some((e) => e.alive && agentProfileIdOf(e.meta?.restore) === id),
+    inUse: agentProfileInUse({ sessions: () => [...registry.list(), ...procs.list()], orch: () => orch }),
     log: (m) => log.write(m)
   })
   /** `agent-profiles-touch` as the app would send it, not awaited by the spawn that asks: the command logs its own

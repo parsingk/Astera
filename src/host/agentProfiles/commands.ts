@@ -6,6 +6,9 @@ import { findProfile, liveAccounts, readAgentProfiles, validateProfile, writeAge
 import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/types'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { Account } from '../../core/types'
+import { agentProfileIdOf } from '../../core/sessions/noteInfo'
+import { holdsAgentProfile } from '../../core/orchestration/running'
+import type { OrchState } from '../../core/orchestration/state'
 
 export const AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set([
   'agent-profiles-list',
@@ -201,5 +204,21 @@ export function createHostAgentProfiles(d: {
       if (r.status === 200 && AGENT_PROFILE_CHANGES.has(a.cmd)) a.marks.effects += 1
       return r
     }
+  }
+}
+
+/** The delete guard's `inUse` (ruling P1): a live session this Host holds that was started from the profile (its note
+ *  carries the id), or unfinished orchestration work that names it (holdsAgentProfile). The state is loaded first, as
+ *  every orchestration command loads it: a Task queued before a restart holds the profile as much as a running one. */
+export function agentProfileInUse(d: {
+  sessions: () => Array<{ alive: boolean; meta?: { restore?: Record<string, unknown> } | null }>
+  /** Asked only when a delete is: the load stays lazy (createHostOrch) */
+  orch: () => { ready(): Promise<void>; state(): OrchState }
+}): (id: string) => Promise<boolean> {
+  return async (id) => {
+    if (d.sessions().some((e) => e.alive && agentProfileIdOf(e.meta?.restore) === id)) return true
+    const orch = d.orch()
+    await orch.ready()
+    return holdsAgentProfile(orch.state(), id)
   }
 }

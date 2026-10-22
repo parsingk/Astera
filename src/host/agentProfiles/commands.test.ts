@@ -7,7 +7,8 @@ import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { profilePaths } from '../../core/profile/paths'
 import { readAgentProfiles } from '../../core/agentProfiles/store'
-import { createHostAgentProfiles } from './commands'
+import { agentProfileInUse, createHostAgentProfiles } from './commands'
+import { createJob, createTask, emptyState, startJobRun, type OrchState } from '../../core/orchestration/state'
 import type { Account } from '../../core/types'
 
 const dirs: string[] = []
@@ -181,5 +182,44 @@ describe('createHostAgentProfiles', () => {
     await fs.writeFile(file, '{ not json')
     expect((await h.call('agent-profiles-touch', { id: p.id })).status).toBe(200)
     expect(h.logs.some((l) => l.includes('agent profiles'))).toBe(true)
+  })
+})
+
+// Ruling P1: what holds a profile on this Host, the delete guard's `inUse`: a live session started from it, and
+// unfinished orchestration work (a Job, a Task, an open Dispatch), read once the state is loaded
+describe('agentProfileInUse', () => {
+  const T0 = '2026-10-22T00:00:00.000Z'
+  const unwrapped = <T>(r: { ok: true; state: OrchState; value: T } | { ok: false; error: string }): { state: OrchState; value: T } => {
+    if (!r.ok) throw new Error(r.error)
+    return r
+  }
+
+  it('is held by a live session, not a dead one; and by a queued Task, once the state is loaded', async () => {
+    let state = emptyState()
+    let loaded = false
+    const sessions = [
+      { alive: true, meta: { restore: { agentProfileId: 'ap_live' } } },
+      { alive: false, meta: { restore: { agentProfileId: 'ap_dead' } } },
+      { alive: true }
+    ]
+    const inUse = agentProfileInUse({
+      sessions: () => sessions,
+      orch: () => ({
+        ready: async () => {
+          loaded = true
+        },
+        state: () => {
+          if (!loaded) throw new Error('read before the load')
+          return state
+        }
+      })
+    })
+    expect(await inUse('ap_live')).toBe(true)
+    expect(await inUse('ap_dead')).toBe(false)
+    const job = unwrapped(createJob(emptyState(), { objective: 'o', cwd: '/p' }, T0))
+    const run = unwrapped(startJobRun(job.state, job.value.id, T0))
+    state = unwrapped(createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [], accountIds: ['acc_1'], agentProfileId: 'ap_q' }, T0)).state
+    expect(await inUse('ap_q')).toBe(true)
+    expect(await inUse('ap_other')).toBe(false)
   })
 })

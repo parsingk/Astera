@@ -140,3 +140,23 @@ export function runningRunCount(s: OrchState): number {
     )
   ).length
 }
+
+/** Whether unfinished orchestration work holds this agent profile, so that deleting it would pull it from under that
+ *  work (Agent Profiles design §4, ruling P1): a Task of a Run that has not ended, an open Dispatch, or a Job that has
+ *  not ended. A Job has not ended while it is a schedule (it fires again), has no Run yet, or has a Run still running;
+ *  its plan's Tasks hold the profile for exactly as long. Ended work keeps the id it ran as, which nothing resolves
+ *  again, so it does not hold it. */
+export function holdsAgentProfile(s: OrchState, id: string): boolean {
+  const unfinished = (jobId: string | undefined): boolean => {
+    const job = s.jobs.find((j) => j.id === jobId)
+    if (!job) return false
+    if (job.schedule !== undefined) return true
+    const runs = s.runs.filter((r) => r.jobId === job.id)
+    return runs.length === 0 || runs.some((r) => outcomeOf(s, r.id) === 'running')
+  }
+  return (
+    s.dispatches.some((d) => d.agentProfileId === id && !d.outcome && !d.endedAt) ||
+    s.tasks.some((t) => t.agentProfileId === id && (t.runId !== undefined ? !isTerminal(t) : unfinished(t.jobId))) ||
+    s.jobs.some((j) => j.agentProfileId === id && unfinished(j.id))
+  )
+}

@@ -40,6 +40,7 @@ import type { PrCreateRequest, PrCreateResult } from '../github/prCreate'
 import { parseIssue } from '../github/issue'
 import { issueContext } from '../github/issueSource'
 import { sourcedObjective } from '../sources/objective'
+import type { AgentProfile } from '../agentProfiles/types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -9994,5 +9995,165 @@ describe('runs-github-record (GitHub lifecycle G1)', () => {
     const { deps, runId } = await seeded()
     expect((await call(deps, 'runs-github-record', { runId, patch: { binding: 1 } }, HOST_CALLER)).status).toBe(400)
     expect((await call(deps, 'runs-github-record', { runId: 'run_nope', patch }, HOST_CALLER)).status).toBe(404)
+  })
+})
+
+// Agent Profiles design §6: a Job and a Task can be made to run as an agent profile, by its id or its name; the profile
+// is read once, when they are made, and the Task's accounts are copied from it then
+describe('agent profiles: run-create, task-create, worker-start', () => {
+  const P = (over: Partial<AgentProfile>): AgentProfile => ({
+    id: 'ap_1', name: 'Night shift', status: 'active', accountIds: ['acc_b', 'acc_a'], mcpExclude: [], permission: 'inherit',
+    createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const profiled = (profiles: AgentProfile[]) => {
+    const deps = makeDeps()
+    deps.listAccounts = () => [
+      { id: 'acc_a', label: 'a', provider: 'claude' },
+      { id: 'acc_b', label: 'b', provider: 'claude' },
+      { id: 'acc_x', label: 'x', provider: 'codex' }
+    ]
+    const reads = { n: 0 }
+    deps.readAgentProfiles = async () => {
+      reads.n += 1
+      return { version: 1, profiles }
+    }
+    const started: Array<Parameters<OrchServerDeps['startWorker']>[0]> = []
+    deps.startWorker = async (a) => {
+      started.push(a)
+      return { sessionId: `sess_${started.length}`, cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }
+    }
+    return { deps, reads, started }
+  }
+  const reasonOf = (r: { body: unknown }): unknown => (r.body as { reason?: unknown }).reason
+  const idOf = (r: { body: unknown }): string => (r.body as { id: string }).id
+
+  it("run-create keeps the profile, named, as its real id; with no coordinator account the profile's first live one coordinates", async () => {
+    const { deps } = profiled([P({ accountIds: ['acc_gone', 'acc_b', 'acc_a'] })])
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'night SHIFT' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().jobs[0]).toMatchObject({ agentProfileId: 'ap_1', coordinatorAccountId: 'acc_b' })
+  })
+
+  it("run-create: a coordinator account given wins over the profile's", async () => {
+    const { deps } = profiled([P({})])
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1', coordinatorAccount: 'acc_a' })
+    expect(deps.getState().jobs[0]).toMatchObject({ agentProfileId: 'ap_1', coordinatorAccountId: 'acc_a' })
+  })
+
+  it('run-create refuses an unknown or archived profile, and one with no live account to coordinate', async () => {
+    const { deps } = profiled([P({ id: 'ap_old', name: 'Old', status: 'archived' }), P({ id: 'ap_empty', name: 'Empty', accountIds: ['acc_gone'] })])
+    for (const id of ['ap_nope', 'Old']) {
+      const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: id })
+      expect([r.status, reasonOf(r)]).toEqual([400, 'agent-profile-unavailable'])
+    }
+    const empty = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_empty' })
+    expect([empty.status, reasonOf(empty)]).toEqual([400, 'agent-profile-no-account'])
+    // Its coordinator named, the profile's accounts are not needed for it
+    expect((await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_empty', coordinatorAccount: 'acc_a' })).status).toBe(200)
+    expect(deps.getState().jobs).toHaveLength(1)
+  })
+
+  it('run-create with no profile reads no profile and makes the Job as before', async () => {
+    const { deps, reads } = profiled([P({})])
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    expect(reads.n).toBe(0)
+    expect(deps.getState().jobs[0]).not.toHaveProperty('agentProfileId')
+    expect(deps.getState().jobs[0]).not.toHaveProperty('coordinatorAccountId')
+  })
+
+  it('a damaged profile store refuses and names the file; a caller with no store answers 409', async () => {
+    const { deps } = profiled([])
+    deps.readAgentProfiles = async () => {
+      throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+    }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' })
+    expect(r.status).toBe(409)
+    expect(r.body).toMatchObject({ repair: 'agent-profiles.json' })
+    const bare = makeDeps()
+    expect((await call(bare, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' })).status).toBe(409)
+    expect(bare.getState().jobs).toHaveLength(0)
+  })
+
+  it("task-create from a profile only gets the profile's live accounts, in its order", async () => {
+    const { deps } = profiled([P({ accountIds: ['acc_b', 'acc_gone', 'acc_a'] })])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const r = await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: 'Night shift' })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ accountIds: ['acc_b', 'acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it('task-create with accounts and a profile keeps the accounts given and still records the profile', async () => {
+    const { deps } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const r = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a', agentProfileId: 'ap_1' })
+    expect(r.body).toMatchObject({ accountIds: ['acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it('task-create refuses an unknown or archived profile, one with no live account, and neither account nor profile', async () => {
+    const { deps } = profiled([P({ id: 'ap_old', name: 'Old', status: 'archived' }), P({ id: 'ap_empty', name: 'Empty', accountIds: ['acc_gone'] })])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    for (const id of ['ap_nope', 'ap_old']) {
+      const r = await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: id, account: 'acc_a' })
+      expect([r.status, reasonOf(r)]).toEqual([400, 'agent-profile-unavailable'])
+    }
+    const empty = await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: 'ap_empty' })
+    expect([empty.status, reasonOf(empty)]).toEqual([400, 'agent-profile-no-account'])
+    expect((await call(deps, 'task-create', { run: runId, spec: 's' })).body).toMatchObject({ error: '--account is required' })
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  it("a Job's profile is its Tasks' default, for a Task of its plan and a Task of its Run", async () => {
+    const { deps } = profiled([P({})])
+    const jobId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1', auto: true }))
+    const def = await call(deps, 'task-create', { run: jobId, spec: 's' })
+    expect(def.body).toMatchObject({ jobId, accountIds: ['acc_b', 'acc_a'], agentProfileId: 'ap_1' })
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }))
+    const inRun = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a' })
+    expect(inRun.body).toMatchObject({ accountIds: ['acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it("a Job's profile deleted since: a Task given accounts still records it, unread; one that needs its accounts is refused", async () => {
+    const { deps, reads } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }))
+    deps.readAgentProfiles = async () => {
+      reads.n += 1
+      return { version: 1, profiles: [] }
+    }
+    const before = reads.n
+    const given = await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a' })
+    expect(given.body).toMatchObject({ accountIds: ['acc_a'], agentProfileId: 'ap_1' })
+    expect(reads.n).toBe(before)
+    const needs = await call(deps, 'task-create', { run: runId, spec: 's' })
+    expect([needs.status, reasonOf(needs)]).toEqual([400, 'agent-profile-unavailable'])
+  })
+
+  it("a Job's archived profile still gives a new Task its accounts: work holding it keeps resolving it", async () => {
+    const { deps } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_1' }))
+    deps.readAgentProfiles = async () => ({ version: 1, profiles: [P({ status: 'archived' })] })
+    const r = await call(deps, 'task-create', { run: runId, spec: 's' })
+    expect(r.body).toMatchObject({ accountIds: ['acc_b', 'acc_a'], agentProfileId: 'ap_1' })
+  })
+
+  it("worker-start carries the Task's profile to its Dispatch and its spawn, unread, even once the profile is gone", async () => {
+    const { deps, reads, started } = profiled([P({})])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const taskId = idOf(await call(deps, 'task-create', { run: runId, spec: 's', agentProfileId: 'ap_1' }))
+    deps.readAgentProfiles = async () => ({ version: 1, profiles: [] })
+    const before = reads.n
+    const r = await call(deps, 'worker-start', { taskId, agent: 'claude', account: 'acc_b', worktree: 'current' })
+    expect(r.status).toBe(200)
+    expect(started[0].agentProfileId).toBe('ap_1')
+    expect(deps.getState().dispatches[0].agentProfileId).toBe('ap_1')
+    expect(reads.n).toBe(before)
+  })
+
+  it('worker-start with no profile hands the spawn exactly what it did before', async () => {
+    const { deps, started } = profiled([])
+    const runId = idOf(await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' }))
+    const taskId = idOf(await call(deps, 'task-create', { run: runId, spec: 's', account: 'acc_a' }))
+    await call(deps, 'worker-start', { taskId, agent: 'claude', account: 'acc_a', worktree: 'current' })
+    expect(started[0]).not.toHaveProperty('agentProfileId')
+    expect(deps.getState().dispatches[0]).not.toHaveProperty('agentProfileId')
   })
 })

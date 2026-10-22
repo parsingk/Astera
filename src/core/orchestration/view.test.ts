@@ -228,6 +228,18 @@ describe('snapshotFor', () => {
     expect(snapshotFor(short, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].objective).toBe('objective r1')
   })
 
+  // Agent Profiles design §6: the Job row and the Task row carry the profile's id when there is one (its name is the
+  // screen's to look up)
+  it('a row and its Task carry their agent profile id, and only when there is one', () => {
+    const s = withRuns([run('r1', absPath('p'))], [{ ...task('t1', 'r1', 'ready'), agentProfileId: 'ap_t' }, task('t2', 'r1', 'ready')])
+    const profiled: OrchState = { ...s, jobs: s.jobs.map((j) => ({ ...j, agentProfileId: 'ap_j' })) }
+    const row = snapshotFor(profiled, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]
+    expect(row.agentProfileId).toBe('ap_j')
+    expect(row.tasks.find((t) => t.id === 't1')!.agentProfileId).toBe('ap_t')
+    expect(row.tasks.find((t) => t.id === 't2')).not.toHaveProperty('agentProfileId')
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0]).not.toHaveProperty('agentProfileId')
+  })
+
   it('그 프로젝트의 Run 을 진행률과 함께 접는다', () => {
     const s = withRuns([run('r1', absPath('p')), run('r2', absPath('other'))], [
       task('t1', 'r1', 'completed'), task('t2', 'r1', 'ready'), task('t3', 'r2', 'ready')

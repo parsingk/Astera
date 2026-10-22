@@ -5,6 +5,7 @@ import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } fro
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
 import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
+import { readAgentProfiles } from '../core/agentProfiles/store'
 import type { PluginManager } from './plugins/manager'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -819,6 +820,8 @@ export function createHostOrch(a: {
       ...(a.createSession ? { createSession: a.createSession } : {}),
       ...(a.github ? { github: a.github } : {}),
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
+      // The agent profiles this Host owns (Agent Profiles design §6), read when a Job or Task is made from one
+      readAgentProfiles: () => readAgentProfiles(a.profileDir),
       ...(a.changes ? { changes: a.changes } : {}),
       ...(a.jobSources ? { jobSources: a.jobSources } : {}),
       ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),

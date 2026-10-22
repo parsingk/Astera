@@ -132,6 +132,8 @@ import { GITHUB_CI_CHECK, GITHUB_LIFECYCLE_DEFAULTS, LIFECYCLE_CHECKS_MAX, LIFEC
 import { lifecyclePreflight } from '../github/preflight'
 import type { GitHubLifecycleDefaults } from '../github/lifecycleDefaults'
 import { RepairNeeded } from '../settings/repairNeeded'
+import { findProfile, liveAccounts } from '../agentProfiles/store'
+import type { AgentProfile, AgentProfileStore } from '../agentProfiles/types'
 import { parseRunGitHubPatch, type RunGitHubPatch } from '../github/runState'
 import { sanitize } from './checkpoint'
 import type { SessionCheck } from '../workUnit/types'
@@ -298,6 +300,10 @@ export interface OrchServerDeps {
     /** The accounts to roll through when the Task names none of its own (GitHub lifecycle G3c1): a lifecycle Task has
      *  no account by design, and its repair rolls through the Run's latest ordinary Task's (startWorkerWithChain). */
     rollFrom?: string[]
+    /** The agent profile the worker starts as (Agent Profiles design §6), read off its Dispatch (`Dispatch.agentProfileId`):
+     *  forwarded to the session spawn, which resolves it and falls back to implicit, logged, when it is gone. A reviewer's
+     *  start never sets it. */
+    agentProfileId?: string
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
@@ -673,6 +679,11 @@ export interface OrchServerDeps {
    *  never written (`readUnderstandingFile`). **Only the Host injects it**, over its profile's file: the
    *  app has the records in its own store and no caller asks it. Absent, `understanding-*` answer 409. */
   readUnderstanding?(): Promise<StoreShape>
+  /** The agent profile store (Agent Profiles design §6), read when a Job or Task is made from a profile: `run-create`
+   *  and `task-create` resolve the id or name and copy the accounts then. **Only the Host injects it**, over its
+   *  profile's file, which it owns. Absent, a Job or Task named with a profile answers 409. Throws RepairNeeded when the
+   *  file is damaged. */
+  readAgentProfiles?(): Promise<AgentProfileStore>
   /** The job-source plugins (plugin Phase 4 J10): which there are and a question to one. **Only the Host injects it**,
    *  from its plugin manager and runtime; absent, the sources are GitHub's alone. */
   jobSources?: JobSourcesDeps
@@ -1270,6 +1281,37 @@ function parseAccountList(
   return { ok: true, ids: parts }
 }
 
+/** A refusal of the agent profile a Job or Task is made from, with its reason as a field so nobody reads it off the
+ *  words (Agent Profiles design §6). */
+const profileRefused = (reason: 'agent-profile-unavailable' | 'agent-profile-no-account', msg: string): Reply => ({
+  status: 400,
+  body: { error: msg, reason }
+})
+
+/** The agent profile a Job or Task is made from, by its id or its name (Agent Profiles design §6), or the reply that
+ *  refuses it: one not found or archived is `agent-profile-unavailable`, and a damaged store refuses and names the file
+ *  as the GitHub defaults do (a guess would make the work run as the wrong profile). `archivedOk` is for a profile the
+ *  Job already holds: work that holds one keeps resolving it after it is archived (design §4). */
+async function profileFor(
+  deps: OrchServerDeps,
+  idOrName: string,
+  archivedOk = false
+): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
+  if (!deps.readAgentProfiles) return { ok: false, reply: conflict('agent profiles are answered by the Astera Host only') }
+  let store: AgentProfileStore
+  try {
+    store = await deps.readAgentProfiles()
+  } catch (e) {
+    const refused = conflict(`the agent profiles could not be read: ${e instanceof Error ? e.message : String(e)}`)
+    return { ok: false, reply: e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused }
+  }
+  const profile = findProfile(store, idOrName)
+  if (!profile) return { ok: false, reply: profileRefused('agent-profile-unavailable', `unknown agent profile: ${idOrName}`) }
+  if (profile.status === 'archived' && !archivedOk)
+    return { ok: false, reply: profileRefused('agent-profile-unavailable', `agent profile ${profile.name} is archived; restore it to start new work as it`) }
+  return { ok: true, profile }
+}
+
 /** The mark `jobs run` gives the `run-start` it calls: its plugin checks were looked at already (plugin Phase 5 C7). A
  *  symbol, so no JSON a caller sends can carry it. */
 const PLUGIN_CHECKS_PASSED: unique symbol = Symbol('plugin-checks-passed')
@@ -1855,6 +1897,22 @@ export async function handleCommand(
           )
         coordinatorAccountId = chosen.id
       }
+      // The agent profile the Job runs as (Agent Profiles design §6), by id or name, stored as its real id: its Tasks'
+      // default. With no coordinator named, the profile's first live account coordinates; the coordinator itself starts
+      // without the profile, as Astera's own role. Read before the re-read below, since it awaits.
+      const profileArg = str(args.agentProfileId)
+      let agentProfileId: string | undefined
+      if (profileArg !== null) {
+        const found = await profileFor(deps, profileArg)
+        if (!found.ok) return found.reply
+        agentProfileId = found.profile.id
+        if (coordinatorAccountId === undefined) {
+          const first = liveAccounts(found.profile, await deps.listAccounts())[0]
+          if (first === undefined)
+            return profileRefused('agent-profile-no-account', `agent profile ${found.profile.name} has no account left to coordinate with; name one with --coordinator-account`)
+          coordinatorAccountId = first
+        }
+      }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
       let schedule: ScheduleRule | undefined
@@ -1935,6 +1993,7 @@ export async function handleCommand(
             ...(project ? { projectId: project.id } : {}),
             ...(concurrency !== null ? { concurrency } : {}),
             ...(coordinatorAccountId ? { coordinatorAccountId } : {}),
+            ...(agentProfileId ? { agentProfileId } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿 자신은 돌지 않기 때문이다.
             //
@@ -3180,13 +3239,35 @@ export async function handleCommand(
       // 받는다. `ask --options` 가 이미 CSV 이므로 그 관례를 쓴다 — 계정 하나만 주는 기존 호출은
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
-      if (accountArg === null) return bad('--account is required')
-      // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
-      // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
-      const parsedAccounts = parseAccountList(accountArg, await deps.listAccounts(), '--account')
-      if (!parsedAccounts.ok)
-        return parsedAccounts.missing ? notFound(parsedAccounts.reason) : bad(parsedAccounts.reason)
-      const accountIds: string[] = parsedAccounts.ids
+      // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
+      // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
+      // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
+      // are needed, and may be archived since (the Job holds it); a profile the caller names now must be usable.
+      const profileArg = str(args.agentProfileId)
+      const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
+      let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
+      if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
+      let profile: AgentProfile | undefined
+      if (profileArg !== null || accountArg === null) {
+        const found = await profileFor(deps, profileArg ?? agentProfileId!, profileArg === null)
+        if (!found.ok) return found.reply
+        profile = found.profile
+        agentProfileId = found.profile.id
+      }
+      const known = await deps.listAccounts()
+      let accountIds: string[]
+      if (accountArg !== null) {
+        // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
+        // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
+        const parsedAccounts = parseAccountList(accountArg, known, '--account')
+        if (!parsedAccounts.ok)
+          return parsedAccounts.missing ? notFound(parsedAccounts.reason) : bad(parsedAccounts.reason)
+        accountIds = parsedAccounts.ids
+      } else {
+        accountIds = liveAccounts(profile!, known)
+        if (accountIds.length === 0)
+          return profileRefused('agent-profile-no-account', `agent profile ${profile!.name} has no account left; add one to it, or name one with --account`)
+      }
       // `--validate` 는 쉼표 목록이다(설계 D8) — `--account` 와 같은 규약. 옛 단일 값도 한 칸짜리
       // 목록으로 저장한다; validateConfigId 는 더 쓰지 않는다(읽기는 checkConfigIdsOf 가 합친다).
       const validateArg = str(args.validate)
@@ -3221,6 +3302,7 @@ export async function handleCommand(
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
             ...(accountIds ? { accountIds } : {}),
+            ...(agentProfileId !== undefined ? { agentProfileId } : {}),
             ...(validateIds ? { validateConfigIds: validateIds } : {}),
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
@@ -3666,7 +3748,10 @@ export async function handleCommand(
           terminal,
           terminalCwd,
           terminalProvider,
-          terminalAccountId
+          terminalAccountId,
+          // What the Task runs as, read off the Dispatch openDispatch just opened (workerProfileOf); not resolved here, so
+          // a profile deleted since starts the worker implicit at the spawn, logged, rather than refusing it
+          ...(opened.value.agentProfileId !== undefined ? { agentProfileId: opened.value.agentProfileId } : {})
         })
       } catch (e) {
         // Failure rollback — this is the server's transaction handling, not a pure-layer transition

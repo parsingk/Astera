@@ -97,7 +97,7 @@ export function validateProfile(
 }
 
 /** The profile's accounts that still exist, in order: a removed account is dropped when read (design §4). */
-export function liveAccounts(p: AgentProfile, accounts: Account[]): string[] {
+export function liveAccounts(p: AgentProfile, accounts: Pick<Account, 'id'>[]): string[] {
   const ids = new Set(accounts.map((a) => a.id))
   return p.accountIds.filter((id) => ids.has(id))
 }

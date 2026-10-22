@@ -494,6 +494,8 @@ export interface JobTask {
    *  스케줄러와 **같은 계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워,
    *  같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다. */
   accountIds?: string[]
+  /** The agent profile the Task runs as (Task.agentProfileId), its id; the screen shows its name from the profile list. */
+  agentProfileId?: string
   /** 가장 이른 열린 Gate. 없으면 이 칸이 없다.
    *
    *  **셋을 한 묶음으로 싣는다.** 한때 질문만 따로 실었는데, 화면에서 답하려면 `gate-resolve` 가
@@ -672,6 +674,8 @@ export interface JobRow {
    *  가질 수 있으므로 Run 줄에 실을 하나의 값이 아예 없다. 지금 도는 것의 provider 는 Task 줄이
    *  보여 준다(JobTask.provider — 열린 Dispatch 에서 온다). */
   concurrency?: number
+  /** The agent profile the Job runs as (Job.agentProfileId), its id; the screen shows its name from the profile list. */
+  agentProfileId?: string
   /** 저장된 값이 아니라 Task 에서 계산된다 — core/orchestration/view.ts 의 outcomeOf */
   outcome: RunOutcome
   done: number

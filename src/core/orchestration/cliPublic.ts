@@ -71,6 +71,10 @@ const RUN_HIDDEN = [
   'githubState'
 ] as const
 
+/** The agent profile a Job or Task runs as (Agent Profiles design §6): held back until the CLI, the MCP tools and the
+ *  SDK learn it together, with their docs and pinned tests, so that no one of them shows it before the others. */
+const PROFILE_NOT_YET_PUBLIC = ['agentProfileId'] as const
+
 /**
  * A Task's fields kept back on purpose: all of them **the ledger the app keeps to drive convergence**. The guide
  * tells a coordinator to read `checks`, `consecutiveFailures` and `parentId` (resources/skills/orchestration-guide.md)
@@ -90,7 +94,8 @@ const TASK_HIDDEN = [
   'checkResume',
   // A lifecycle round handed to the Host (GitHub lifecycle G3a): its results are the Task's `checks` once CI settles it
   'ciWait',
-  'ciUnknowns'
+  'ciUnknowns',
+  ...PROFILE_NOT_YET_PUBLIC
 ] as const
 
 /** A followed event's message body (pages long) and the app's link from an event to a tab. */
@@ -100,7 +105,7 @@ const FOLLOW_EVENT_HIDDEN = ['body', 'sessionId', 'github'] as const
 // A Job's and a Run's derived fields (the package's DERIVED_FIELDS: outcome, progress, questionsOpen) are not fields
 // of the objects, so they are on neither side of these checks.
 type _project = NothingLeft<Unlisted<Project, typeof PROJECT_FIELDS, []>>
-type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, []>>
+type _job = NothingLeft<Unlisted<Job, typeof JOB_FIELDS, typeof PROFILE_NOT_YET_PUBLIC>>
 type _run = NothingLeft<Unlisted<JobRun, typeof RUN_FIELDS, typeof RUN_HIDDEN>>
 type _task = NothingLeft<Unlisted<Task, typeof TASK_FIELDS, typeof TASK_HIDDEN>>
 type _question = NothingLeft<Unlisted<Gate, typeof QUESTION_FIELDS, []>>

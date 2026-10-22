@@ -55,6 +55,18 @@ describe('startWorkerWithChain', () => {
     expect(startWorker.mock.calls[0][0].rollAccountIds).toEqual(['a1', 'a2'])
   })
 
+  // Agent Profiles design §6: the profile the caller read off the Dispatch goes to the coordinator unchanged, with the
+  // borrowed accounts of a lifecycle repair as with a Task's own
+  it('hands the coordinator the agent profile it is given, beside the chain', async () => {
+    const { s, taskId } = stateWithTask()
+    const startWorker = vi.fn().mockResolvedValue({ sessionId: 'ses_1', cwd: 'D:/p', specPath: 'D:/s.md' })
+    await startWorkerWithChain({
+      getState: () => s, accounts: async () => [acct('a1'), acct('a2')], loginStatus: async () => true,
+      coordinator: { startWorker }, tails: new WorkerTails(), log: () => {}
+    }, { ...args(taskId), rollFrom: ['a1', 'a2'], agentProfileId: 'ap_1' })
+    expect(startWorker.mock.calls[0][0]).toMatchObject({ rollAccountIds: ['a1', 'a2'], agentProfileId: 'ap_1' })
+  })
+
   it('falls back to the one account and says so when the login lookup throws', async () => {
     const { s, taskId } = stateWithTask(['a1', 'a2'])
     const logs: string[] = []

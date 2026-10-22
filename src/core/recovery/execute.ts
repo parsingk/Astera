@@ -38,6 +38,8 @@ export interface ExecuteDeps {
     resume?: { nativeSessionId?: string; briefing?: string }
     /** The accounts a lifecycle Task's worker rolls through, it naming none (GitHub lifecycle G3c1; startWorker's). */
     rollFrom?: string[]
+    /** The agent profile the worker starts as (Agent Profiles design §6; startWorker's). */
+    agentProfileId?: string
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   /** Not injected = recheck cannot start a check; the Task still moves to `validating` and waits. */
   startValidation?(a: { taskId: string; cwd: string }): void
@@ -216,7 +218,9 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       worktree: attempt.cwd,
       ...(resume ? { resume } : {}),
       // A lifecycle Task names no account: its worker rolls through the Run's latest ordinary Task's, as performRepair's
-      ...(isLifecycleTask(task) ? rollFromOf(deps.getState(), task.runId) : {})
+      ...(isLifecycleTask(task) ? rollFromOf(deps.getState(), task.runId) : {}),
+      // The new Dispatch's, as worker-start reads it: the Task's, or borrowed with those accounts (workerProfileOf)
+      ...(opened.value.agentProfileId !== undefined ? { agentProfileId: opened.value.agentProfileId } : {})
     })
   } catch (e) {
     // A worker that could not be (re)started must not leave an orphaned open Dispatch behind, and

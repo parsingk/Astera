@@ -163,6 +163,9 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
       // A lifecycle Task names no account; a fresh repair rolls through the Run's latest ordinary Task's, a live session
       // keeps its own chain (G3c1, final review M7)
       ...(isLifecycleTask(task) && !same ? rollFromOf(s, task) : {}),
+      // What the repair runs as, recorded on the Dispatch when it opened: the Task's, or for a lifecycle Task the one
+      // borrowed with those accounts (workerProfileOf)
+      ...(d.agentProfileId !== undefined ? { agentProfileId: d.agentProfileId } : {}),
       ...(same
         ? {
             terminal: d.sessionId,
