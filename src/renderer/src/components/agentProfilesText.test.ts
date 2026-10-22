@@ -13,7 +13,9 @@ import {
   profileAccounts,
   profileFailureLine,
   profileNameOf,
-  reasonLine
+  profileOfConversation,
+  reasonLine,
+  spawnPermission
 } from './agentProfilesText'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -95,8 +97,39 @@ describe('agentProfilesText', () => {
     const dialog = source('./NewSessionDialog.tsx')
     expect(dialog).toContain('...permissionFields(profileId, bypassPermissions)')
     const app = source('../App.tsx')
-    expect(app).toContain('...permissionFields(opts.agentProfileId, opts.bypassPermissions)')
+    expect(app).toContain('...spawnPermission(opts)')
     expect(app).not.toMatch(/bypassPermissions: opts\.bypassPermissions, \/\/ start without permission prompts/)
+  })
+
+  // Fix round 1 (I2): a restart keeps the session's profile beside the bypass it already resolved, which keeps winning;
+  // the app's spawn sends both when both are given, and only the checkbox's value when there is no profile
+  it('the app’s spawn passes on what it is given, a profile beside an explicit bypass included', () => {
+    expect(spawnPermission({ agentProfileId: 'ap_1' })).toEqual({ agentProfileId: 'ap_1' })
+    expect('bypassPermissions' in spawnPermission({ agentProfileId: 'ap_1' })).toBe(false)
+    expect(spawnPermission({ agentProfileId: 'ap_1', bypassPermissions: false })).toEqual({ agentProfileId: 'ap_1', bypassPermissions: false })
+    expect(spawnPermission({ bypassPermissions: true })).toEqual({ bypassPermissions: true })
+    expect(spawnPermission({})).toEqual({ bypassPermissions: undefined })
+  })
+
+  it('a restart and a history resume carry the session’s profile', () => {
+    const app = source('../App.tsx')
+    const restart = app.slice(app.indexOf('const restart = (old: SessionInfo)'), app.indexOf('const resumeFromHistory = ('))
+    expect(restart).toContain('bypassPermissions: old.bypassPermissions,')
+    expect(restart).toContain("...(old.agentProfileId !== undefined ? { agentProfileId: old.agentProfileId } : {})")
+    const resume = app.slice(app.indexOf('const resumeFromHistory = ('), app.indexOf('// 마지막으로 활성이었던 세션'))
+    expect(resume).toContain('profileOfConversation(sessionsRef.current, entry.sessionId)')
+  })
+
+  it('finds the profile of a conversation a tab of this app held', () => {
+    const sessions = [
+      { resumeSessionId: 'conv-a', agentProfileId: 'ap_1' },
+      { threadId: 'thr-b', agentProfileId: 'ap_2' },
+      { resumeSessionId: 'conv-c' }
+    ]
+    expect(profileOfConversation(sessions, 'conv-a')).toBe('ap_1')
+    expect(profileOfConversation(sessions, 'thr-b')).toBe('ap_2')
+    expect(profileOfConversation(sessions, 'conv-c')).toBeUndefined()
+    expect(profileOfConversation(sessions, 'unknown')).toBeUndefined()
   })
 
   it('a chat session holds a prompt only when it asks for permission', () => {

@@ -8,13 +8,15 @@ import { useAgentProfilesNaming } from '../lib/agentProfiles'
 /** The "Agent profile" picker the new-session, new-Job and new-Task forms put above their account picker (Agent Profiles
  *  design §6): None, then every active profile that still has an account. Picking one hands the form the profile's
  *  accounts in order; None hands it nothing, so the form stays as it was. An active profile left without an account is
- *  not offered, and a line says why. */
+ *  not offered, and a line says why. In a Job with a profile the empty choice is that profile instead of None: a Task
+ *  given none inherits the Job's, so None would hide its MCP servers and permission. */
 export function AgentProfileField({
   profiles,
   accounts,
   value,
   onChange,
-  hint
+  hint,
+  jobProfileId
 }: {
   profiles: AgentProfile[]
   accounts: Account[]
@@ -23,16 +25,20 @@ export function AgentProfileField({
   onChange: (profile: AgentProfile | undefined, accountIds: string[]) => void
   /** A line under the picker while a profile is picked: what it decides in this form. */
   hint?: string
+  /** The Job's own profile, for a Task's form: what the empty choice means there. */
+  jobProfileId?: string
 }): React.JSX.Element | null {
   const { t } = useI18n()
   const { pickable, unpickable } = pickableProfiles(profiles, accounts)
   // No profile at all: the form looks exactly as it did before profiles
-  if (pickable.length === 0 && unpickable.length === 0) return null
+  if (pickable.length === 0 && unpickable.length === 0 && jobProfileId === undefined) return null
+  const empty =
+    jobProfileId === undefined ? t('agentProfiles.pick.none') : t('agentProfiles.pick.followJob', { name: profileNameOf(profiles, jobProfileId) })
   return (
     <div className="field">
       <label>{t('agentProfiles.pick.label')}</label>
       <Select
-        items={[{ value: '', label: t('agentProfiles.pick.none') }, ...pickable.map((p) => ({ value: p.id, label: p.name }))]}
+        items={[{ value: '', label: empty }, ...pickable.map((p) => ({ value: p.id, label: p.name }))]}
         value={value}
         ariaLabel={t('agentProfiles.pick.label')}
         onChange={(id) => {

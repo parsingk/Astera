@@ -10,7 +10,7 @@ import { profilePaths } from '../profile/paths'
 import { RepairNeeded } from '../settings/repairNeeded'
 import { writeAgentProfiles } from './store'
 import type { AgentProfile } from './types'
-import { bypassFor, profileSpawn } from './permission'
+import { appProfileSpawn, bypassFor, profileSpawn } from './permission'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -113,5 +113,40 @@ describe('profileSpawn', () => {
       appWideYolo: async () => { throw new RepairNeeded('app-settings.json is damaged', 'app-settings.json') },
       log: () => {}
     })).rejects.toBeInstanceOf(RepairNeeded)
+  })
+})
+
+// Task 8 fix round 1 (minor 5): the app's spawn path. A picked profile that no longer resolves at Start must leave the
+// session with the app-wide mode, as a spawn without a profile gets from the dialog, not with no bypass at all (ask).
+describe('appProfileSpawn', () => {
+  const call = async (dir: string, over: { agentProfileId: string; bypassPermissions?: boolean; yolo: boolean }) =>
+    appProfileSpawn({
+      profileDir: dir,
+      agentProfileId: over.agentProfileId,
+      ...(over.bypassPermissions !== undefined ? { bypassPermissions: over.bypassPermissions } : {}),
+      appWideYolo: async () => over.yolo,
+      log: () => {}
+    })
+
+  it('a profile that resolves gives its id and permission', async () => {
+    const dir = await profileDir([P({ id: 'ap_a', permission: 'ask' })])
+    expect(await call(dir, { agentProfileId: 'ap_a', yolo: true })).toEqual({ agentProfileId: 'ap_a', bypassPermissions: false })
+  })
+
+  it('a profile that does not resolve falls back to the app-wide mode, with no id', async () => {
+    const dir = await profileDir([P()])
+    expect(await call(dir, { agentProfileId: 'ap_gone', yolo: true })).toEqual({ bypassPermissions: true })
+    expect(await call(dir, { agentProfileId: 'ap_gone', yolo: false })).toEqual({ bypassPermissions: false })
+  })
+
+  it('a damaged store falls back to the app-wide mode too', async () => {
+    const dir = await profileDir()
+    await fs.writeFile(profilePaths(dir).agentProfiles, '{ damaged')
+    expect(await call(dir, { agentProfileId: 'ap_000000000001', yolo: true })).toEqual({ bypassPermissions: true })
+  })
+
+  it('an explicit value from the caller still wins when the profile does not resolve', async () => {
+    const dir = await profileDir()
+    expect(await call(dir, { agentProfileId: 'ap_gone', bypassPermissions: false, yolo: true })).toEqual({ bypassPermissions: false })
   })
 })

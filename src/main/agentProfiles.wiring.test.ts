@@ -1,5 +1,5 @@
 // Agent Profiles design §5: the app's spawn paths resolve the profile a spawn names (a name to its id, one that does not
-// resolve dropped) with profileSpawn, whose rules core/agentProfiles/permission.test.ts pins, then hand the id to the
+// resolve dropped) with profileSpawn (appProfileSpawn for a person's spawn), whose rules core/agentProfiles/permission.test.ts pins, then hand the id to the
 // capability refresh and the spawn, and stamp the profile's use after it. registerIpc cannot run without Electron, so the
 // wiring is guarded by its text, as agentSessions.wiring.test.ts guards who started a session.
 import { describe, it, expect } from 'vitest'
@@ -25,10 +25,12 @@ describe('ipc.ts starts a session from an agent profile', () => {
   const chat = between("    if (opts.kind === 'chat') {", '      return chatInfo')
   const terminal = body.slice(body.indexOf('      return chatInfo'))
 
-  it('resolves the profile, dropping an unresolved one, before the chat fork and the terminal prepare', () => {
-    expect(body).toMatch(/const profile = await profileSpawn\(/)
-    expect(body).toMatch(/opts = profile \? \{ \.\.\.rest, \.\.\.profile \} : rest/)
-    expect(before(body, 'profileSpawn(', "if (opts.kind === 'chat')")).toBe(true)
+  // Task 8 fix round 1: an unresolved profile drops its id but not the bypass, which falls back to the app-wide mode
+  // (appProfileSpawn, pinned in permission.test.ts): the dialog sent none with the profile picked
+  it('resolves the profile, an unresolved one falling back to the app-wide mode, before the chat fork and the terminal prepare', () => {
+    expect(body).toMatch(/const resolved = await appProfileSpawn\(/)
+    expect(body).toMatch(/opts = \{ \.\.\.rest, \.\.\.resolved \}/)
+    expect(before(body, 'appProfileSpawn(', "if (opts.kind === 'chat')")).toBe(true)
   })
 
   it('a chat session: the capability refresh and the spawn take the profile, and its use is stamped', () => {

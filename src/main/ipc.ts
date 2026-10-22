@@ -54,7 +54,7 @@ import { createHostWorkspaceView, type HostWorkspaceView } from './host/hostWork
 import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
-import { profileSpawn } from '../core/agentProfiles/permission'
+import { appProfileSpawn, profileSpawn } from '../core/agentProfiles/permission'
 import { readAgentProfiles } from '../core/agentProfiles/store'
 import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
@@ -2087,17 +2087,18 @@ export function registerIpc(
     const account = core.accounts.get(opts.accountId)
     // The agent profile it names, by id or name (Agent Profiles design §5): the session keeps the profile's real id, and
     // the profile's permission decides the bypass when the caller gave none. One that does not resolve is logged and
-    // dropped, so the session starts as it did before profiles. With none named, nothing here changes the options.
+    // dropped, and the session starts with the app-wide mode as a dialog spawn without a profile does (the dialog sent
+    // no bypass, so dropping only the id would have left it asking). With none named, nothing here changes the options.
     if (opts.agentProfileId !== undefined) {
       const { agentProfileId, ...rest } = opts
-      const profile = await profileSpawn({
+      const resolved = await appProfileSpawn({
         profileDir: app.getPath('userData'),
         agentProfileId,
         bypassPermissions: opts.bypassPermissions,
         appWideYolo,
         log: orchLog
       })
-      opts = profile ? { ...rest, ...profile } : rest
+      opts = { ...rest, ...resolved }
     }
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
     // read again first (at most every 30 s, and only when the CLI is missing: core/sessions/windowsPath.ts).

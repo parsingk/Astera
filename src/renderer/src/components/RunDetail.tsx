@@ -915,6 +915,7 @@ export function RunDetail({
                 tasks={tasks}
                 accounts={accounts}
                 runConfigs={runConfigs === null ? null : checkChoicesOf(runConfigs, checkPlugins, t)}
+                {...(run?.agentProfileId !== undefined ? { jobAgentProfileId: run.agentProfileId } : {})}
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}
               />

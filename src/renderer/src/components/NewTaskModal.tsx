@@ -31,6 +31,7 @@ export function NewTaskModal({
   tasks,
   accounts,
   runConfigs,
+  jobAgentProfileId,
   onClose,
   onCreated
 }: {
@@ -48,6 +49,9 @@ export function NewTaskModal({
   /** 검증 구성 목록. null 은 아직 안 온 것. The checks a Task can name: the run configurations, then this computer's
    *  check plugins as `plugin:<id>` (plugin Phase 5 C6, RunDetail's checkChoicesOf) */
   runConfigs: { id: string; name: string }[] | null
+  /** 이 Job 의 에이전트 프로필(JobRow.agentProfileId). 있으면 고르지 않은 Task 가 그것을 물려받으므로(task-create),
+   *  빈 선택지는 "없음" 이 아니라 그 프로필을 따른다고 말한다. */
+  jobAgentProfileId?: string
   onClose: () => void
   onCreated: () => void
 }): React.JSX.Element {
@@ -64,8 +68,8 @@ export function NewTaskModal({
    *  첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다. **첫 칸을 비우면 뒤 칸도 함께
    *  사라진다** — 첫 계정이 provider 를 정하므로 그것 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다. */
   const [accountIds, setAccountIds] = useState<string[]>([])
-  /** 고른 에이전트 프로필(Agent Profiles design §6). '' 는 없음 — 그때는 지금까지와 같고, Job 에 프로필이 있으면
-   *  task-create 가 그것을 물려준다. 고르면 그 프로필의 계정이 accountIds 를 채우고, 사람이 그 목록을 고쳐도 MCP 와
+  /** 고른 에이전트 프로필(Agent Profiles design §6). '' 는 고르지 않은 것 — Job 에 프로필이 없으면 지금까지와 같고,
+   *  있으면 task-create 가 그것을 물려준다(빈 선택지가 그렇게 말한다, jobAgentProfileId). 고르면 그 프로필의 계정이 accountIds 를 채우고, 사람이 그 목록을 고쳐도 MCP 와
    *  권한은 프로필이 정한다. 짝 지은 Runtime 의 Task 에는 칸이 없다: 이 컴퓨터의 프로필은 그쪽에 없다. */
   const [agentProfileId, setAgentProfileId] = useState('')
   const profiles = useAgentProfiles()
@@ -243,6 +247,7 @@ export function NewTaskModal({
             profiles={profiles}
             accounts={accounts}
             value={agentProfileId}
+            {...(jobAgentProfileId !== undefined ? { jobProfileId: jobAgentProfileId } : {})}
             onChange={(p, ids) => {
               setAgentProfileId(p?.id ?? '')
               if (p) setAccountIds(ids)

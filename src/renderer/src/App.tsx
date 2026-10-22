@@ -49,7 +49,7 @@ import { RemoteRuntimesSettings } from './components/RemoteRuntimesSettings'
 import { PluginsSettings } from './components/PluginsSettings'
 import { ExtensionsSettings } from './components/ExtensionsSettings'
 import { AgentProfilesSettings } from './components/AgentProfilesSettings'
-import { permissionFields } from './components/agentProfilesText'
+import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
@@ -1764,8 +1764,9 @@ export default function App(): React.JSX.Element {
         rollAccountIds: rolling ? opts.accountIds : undefined,
         rollPrompt: rolling ? opts.rollPrompt : undefined,
         slackNotify: opts.slackNotify, // Slack progress notifications
-        // Start without permission prompts, or as the picked profile says: never both, the explicit value would win
-        ...permissionFields(opts.agentProfileId, opts.bypassPermissions),
+        // Start without permission prompts, or as the session's profile says: an explicit bypass wins, so the dialog
+        // sends none with a picked profile, and a restart sends the one the session already resolved
+        ...spawnPermission(opts),
         unattendedPermission: opts.unattendedPermission, // chat takeover P8: hold, or deny after 60 s
         schedule: opts.schedule
       })
@@ -2473,6 +2474,8 @@ export default function App(): React.JSX.Element {
       saveDefault: false,
       slackNotify: old.slackNotify,
       bypassPermissions: old.bypassPermissions,
+      // The session's agent profile: its MCP servers again; the bypass above is what the profile resolved to and wins
+      ...(old.agentProfileId !== undefined ? { agentProfileId: old.agentProfileId } : {}),
       replacesSessionId: old.id,
       kind: old.kind,
       ...(sessionKindOf(old) === 'chat' && old.threadId !== undefined ? { resumeThreadId: old.threadId } : {})
@@ -2495,6 +2498,9 @@ export default function App(): React.JSX.Element {
       schedule?: ScheduleConfig
     }
   ): void => {
+    // The profile of a tab that held this conversation, so its MCP servers come back; the resume dialog's own
+    // permission checkbox is explicit and decides the bypass
+    const agentProfileId = profileOfConversation(sessionsRef.current, entry.sessionId)
     void spawn({
       // Resume under the selected account — the original account resumes as-is, a different one has the
       // transcript copied by ipc. With rolling on, the chain the modal computed follows [0].
@@ -2515,6 +2521,7 @@ export default function App(): React.JSX.Element {
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
+      ...(agentProfileId !== undefined ? { agentProfileId } : {}),
       schedule: opts.schedule
     })
   }

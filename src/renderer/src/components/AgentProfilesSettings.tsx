@@ -12,7 +12,8 @@ import { failureLine } from './extensionsText'
 import { permissionLabel, profileFailureLine } from './agentProfilesText'
 
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
-type Server = { id: string; name: string }
+/** A shared MCP server; `off` when it is switched off in MCP & Skills, so no session gets it whatever is ticked. */
+type Server = { id: string; name: string; off: boolean }
 type Draft = Required<AgentProfileFields> & { description: string }
 
 const PERMISSIONS: ProfilePermission[] = ['inherit', 'bypass', 'ask']
@@ -61,7 +62,7 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
       setServers(
         arr<Record<string, unknown>>(ext.body.entries)
           .filter((e) => e.kind === 'mcp' && typeof e.id === 'string')
-          .map((e) => ({ id: e.id as string, name: typeof e.name === 'string' ? e.name : (e.id as string) }))
+          .map((e) => ({ id: e.id as string, name: typeof e.name === 'string' ? e.name : (e.id as string), off: e.enabled !== true }))
       )
   }
   useEffect(() => {
@@ -266,6 +267,7 @@ function ProfileEditor({
               onChange={(e) => set('mcpExclude', e.target.checked ? d.mcpExclude.filter((x) => x !== s.id) : [...d.mcpExclude, s.id])}
             />
             <span>{s.name}</span>
+            {s.off && <span className="plugin-status">{t('settings.extensions.off')}</span>}
           </label>
         ))}
         <span className="settings-hint">{t('settings.agentProfiles.mcpHint')}</span>

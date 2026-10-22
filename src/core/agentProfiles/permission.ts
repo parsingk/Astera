@@ -37,3 +37,16 @@ export async function profileSpawn(a: {
   }
   return { agentProfileId: profile.id, bypassPermissions: a.bypassPermissions ?? (await bypassFor(profile.permission, a.appWideYolo)) }
 }
+
+/** The app's spawn path (Task 8 fix round 1): `profileSpawn`, except that a profile which does not resolve leaves the
+ *  session with the caller's own value or, when it gave none, the app-wide mode: what a spawn without a profile gets
+ *  from the new-session dialog (design §5), never no bypass at all. */
+export async function appProfileSpawn(a: {
+  profileDir: string
+  agentProfileId: string
+  bypassPermissions?: boolean
+  appWideYolo: () => Promise<boolean>
+  log: (line: string) => void
+}): Promise<{ agentProfileId?: string; bypassPermissions: boolean }> {
+  return (await profileSpawn(a)) ?? { bypassPermissions: a.bypassPermissions ?? (await a.appWideYolo()) }
+}

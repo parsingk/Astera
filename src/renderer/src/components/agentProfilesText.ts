@@ -61,6 +61,23 @@ export function permissionFields(agentProfileId: string | undefined, bypassPermi
   return agentProfileId !== undefined ? { agentProfileId } : { bypassPermissions }
 }
 
+/** What the app's spawn sends of what it was given: the profile and the bypass each when present, so a restart keeps a
+ *  session's profile beside the bypass it already resolved (that value keeps winning); with no profile, the bypass key
+ *  exactly as before profiles. The dialog leaves the bypass out when a profile is picked (permissionFields). */
+export function spawnPermission(o: { agentProfileId?: string; bypassPermissions?: boolean }): { agentProfileId?: string; bypassPermissions?: boolean } {
+  if (o.agentProfileId === undefined) return { bypassPermissions: o.bypassPermissions }
+  return { agentProfileId: o.agentProfileId, ...(o.bypassPermissions !== undefined ? { bypassPermissions: o.bypassPermissions } : {}) }
+}
+
+/** The profile of a conversation a tab of this app held (its resumed session id or its chat thread id), for resuming
+ *  it from history. Undefined when no tab here knows it: the transcript itself does not record a profile. */
+export function profileOfConversation(
+  sessions: readonly { resumeSessionId?: string; threadId?: string; agentProfileId?: string }[],
+  conversationId: string
+): string | undefined {
+  return sessions.find((s) => s.agentProfileId !== undefined && (s.resumeSessionId === conversationId || s.threadId === conversationId))?.agentProfileId
+}
+
 /** Whether a new chat session will hold a permission prompt, so the dialog offers what to do with one nobody answers:
  *  the profile's choice when one is picked (inherit is the app-wide mode), else the dialog's checkbox. */
 export function chatHoldsPrompts(profile: AgentProfile | undefined, appWideYolo: boolean, checkbox: boolean): boolean {
