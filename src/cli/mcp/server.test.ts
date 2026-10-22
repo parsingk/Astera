@@ -367,6 +367,16 @@ describe('the MCP server', () => {
     expect(data.nextSteps.some((s) => s.includes('requests show') && s.includes('rq-1'))).toBe(true)
   })
 
+  // Agent Profiles follow-up: a refusal that says why in a word carries the word, as the CLI's envelope does
+  it("a refusal with a reason carries it as details, an agent profile's included", async () => {
+    const error = 'agent profile Unattended runs without permission checks'
+    const client = await connected(
+      answering({ 'tasks-add': { status: 403, body: { error, reason: 'agent-profile-bypass-refused' } } }).link
+    )
+    const r = await client.callTool({ name: 'create_task', arguments: { jobId: 'job_1', spec: 's', agentProfileId: 'Unattended' } })
+    expect(errorOf(r)).toMatchObject({ code: 'PERMISSION_DENIED', message: error, details: { reason: 'agent-profile-bypass-refused' } })
+  })
+
   it('a refusal naming no ids carries no details', async () => {
     const client = await connected(answering({ 'runs-get': { status: 404, body: { error: 'unknown run: run_9' } } }).link)
     const r = await client.callTool({ name: 'get_run', arguments: { runId: 'run_9' } })

@@ -524,6 +524,16 @@ describe('refusalDetailsOf — 요청을 이름 댄 거절만 그 id 를 싣는�
     expect(refusalDetailsOf({ jobId: 3 })).toBeUndefined()
   })
 
+  // Agent Profiles follow-up: a refusal that says why in a word (an agent profile's: agent-profile-bypass-refused, in-use,
+  // name-taken, …) carries it, so a script branches on the field and not on the sentence
+  it('본문의 reason 도 details 로 올린다', () => {
+    expect(refusalDetailsOf({ error: 'agent profile X runs without permission checks', reason: 'agent-profile-bypass-refused' })).toEqual({
+      reason: 'agent-profile-bypass-refused'
+    })
+    expect(refusalDetailsOf({ error: 'the profile is in use; archive it instead', reason: 'in-use' })).toEqual({ reason: 'in-use' })
+    expect(refusalDetailsOf({ error: 'x', reason: 7 })).toBeUndefined()
+  })
+
   // `check --ack` of no such batch answers 404 with the Run it was checked against; nextSteps fills
   // `check --run <runId>` with it (cliOutput).
   it('check --ack 의 404 가 싣는 runId 를 details 로 올린다', () => {

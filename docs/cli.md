@@ -1085,7 +1085,8 @@ has is refused with 2, naming it, and nothing is changed. `update` changes only 
 `--account` and `--exclude-mcp` replace the lists (`--exclude-mcp ""` leaves no server out). An archived profile
 starts no new work, while the work that holds it goes on; `restore` takes it back. `delete` is refused with 6 while
 unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
-refused with 5, and the reads are not.
+refused with 5, and the reads are not. A profile the Host refuses says why in `error.details.reason`: `name-empty`,
+`name-too-long`, `name-taken`, `no-account`, `unknown-account` or `mixed-provider` with 2, and `in-use` with 6.
 
 `jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
 unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`
@@ -1097,7 +1098,9 @@ for agents only while Astera skips the checks itself**: from inside an agent ses
 a Job that holds one, is refused with 5 and makes nothing unless **Run agents without permission checks** is on in
 Astera's settings. A person at their own shell is not asked. Nor is a run's coordinator about the profile its Job
 holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A bypass profile the
-coordinator names itself with `--agent-profile` is asked about like any other.
+coordinator names itself with `--agent-profile` is asked about like any other. These refusals say why in
+`error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and `agent-profile-no-account` with 2,
+`agent-profile-bypass-refused` with 5.
 
 ```json
 {"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",
