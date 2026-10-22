@@ -4706,7 +4706,6 @@ export function registerIpc(
   )
   ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
-  ipcMain.handle('extensions.sync', () => extensions.sync())
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))

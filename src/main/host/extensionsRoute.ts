@@ -15,7 +15,6 @@ export function createExtensionsRoute(d: { call: Call }): ExtensionsApi {
     import: (accountId, picks) => send('extensions-import', { accountId, picks }, true),
     setEnabled: (id, enabled) => send(enabled ? 'extensions-enable' : 'extensions-disable', { id }, true),
     remove: (id) => send('extensions-remove', { id }, true),
-    sync: () => send('extensions-sync', {}, true),
     replace: (accountId, id) => send('extensions-replace', { accountId, id }, true),
     setIsolation: (id, isolation) => send('extensions-isolation', { id, isolation }, true)
   }

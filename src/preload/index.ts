@@ -375,7 +375,6 @@ const api = {
     import: invoke('extensions.import'),
     setEnabled: invoke('extensions.setEnabled'),
     remove: invoke('extensions.remove'),
-    sync: invoke('extensions.sync'),
     replace: invoke('extensions.replace'),
     setIsolation: invoke('extensions.setIsolation')
   },

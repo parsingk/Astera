@@ -1935,7 +1935,6 @@ export interface ExtensionsApi {
   import(accountId: string, picks: { kind: 'mcp' | 'skill' | 'command' | 'agent'; name: string; secretNames?: string[] }[]): Promise<PluginsCallAnswer>
   setEnabled(id: string, enabled: boolean): Promise<PluginsCallAnswer>
   remove(id: string): Promise<PluginsCallAnswer>
-  sync(): Promise<PluginsCallAnswer>
   /** "Replace with the shared copy" for an account that has its own different copy. */
   replace(accountId: string, id: string): Promise<PluginsCallAnswer>
   /** One process per project folder, or one per session, for a shared stdio server (Gateway design G8). */
