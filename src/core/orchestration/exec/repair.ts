@@ -164,7 +164,8 @@ export async function performRepair(deps: RepairDeps, a: { dispatchId: string })
       // keeps its own chain (G3c1, final review M7)
       ...(isLifecycleTask(task) && !same ? rollFromOf(s, task) : {}),
       // What the repair runs as, recorded on the Dispatch when it opened: the Task's, or for a lifecycle Task the one
-      // borrowed with those accounts (workerProfileOf)
+      // borrowed with those accounts (workerProfileOf). The profile is read at open and `rollFrom` here, both from
+      // latestOrdinaryWork; they differ only if another ordinary Task completes in between
       ...(d.agentProfileId !== undefined ? { agentProfileId: d.agentProfileId } : {}),
       ...(same
         ? {

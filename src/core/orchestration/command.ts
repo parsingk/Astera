@@ -680,9 +680,10 @@ export interface OrchServerDeps {
    *  app has the records in its own store and no caller asks it. Absent, `understanding-*` answer 409. */
   readUnderstanding?(): Promise<StoreShape>
   /** The agent profile store (Agent Profiles design §6), read when a Job or Task is made from a profile: `run-create`
-   *  and `task-create` resolve the id or name and copy the accounts then. **Only the Host injects it**, over its
-   *  profile's file, which it owns. Absent, a Job or Task named with a profile answers 409. Throws RepairNeeded when the
-   *  file is damaged. */
+   *  and `task-create` resolve the id or name and copy the accounts then. The Host and the app both inject it, over the
+   *  same profile's file (the Host writes it; both read it), since the app answers its own UI's creates. Absent (the
+   *  CLI's state-file reader with no Host, which writes nothing anyway), a Job or Task named with a profile answers
+   *  409. Throws RepairNeeded when the file is damaged. */
   readAgentProfiles?(): Promise<AgentProfileStore>
   /** The job-source plugins (plugin Phase 4 J10): which there are and a question to one. **Only the Host injects it**,
    *  from its plugin manager and runtime; absent, the sources are GitHub's alone. */
@@ -1297,7 +1298,7 @@ async function profileFor(
   idOrName: string,
   archivedOk = false
 ): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
-  if (!deps.readAgentProfiles) return { ok: false, reply: conflict('agent profiles are answered by the Astera Host only') }
+  if (!deps.readAgentProfiles) return { ok: false, reply: conflict('this caller cannot read the agent profiles; start Astera and try again') }
   let store: AgentProfileStore
   try {
     store = await deps.readAgentProfiles()
@@ -1897,21 +1898,16 @@ export async function handleCommand(
           )
         coordinatorAccountId = chosen.id
       }
-      // The agent profile the Job runs as (Agent Profiles design §6), by id or name, stored as its real id: its Tasks'
-      // default. With no coordinator named, the profile's first live account coordinates; the coordinator itself starts
-      // without the profile, as Astera's own role. Read before the re-read below, since it awaits.
+      // The agent profile the Job runs as (Agent Profiles design §6), by id or name, stored as its real id: only its
+      // Tasks' default. It never picks the coordinator: who drives the Job (a coordinator account, `--auto`, or the
+      // calling session) is decided above and below exactly as without a profile, and a coordinator starts without
+      // it, as Astera's own role. Read before the re-read below, since it awaits.
       const profileArg = str(args.agentProfileId)
       let agentProfileId: string | undefined
       if (profileArg !== null) {
         const found = await profileFor(deps, profileArg)
         if (!found.ok) return found.reply
         agentProfileId = found.profile.id
-        if (coordinatorAccountId === undefined) {
-          const first = liveAccounts(found.profile, await deps.listAccounts())[0]
-          if (first === undefined)
-            return profileRefused('agent-profile-no-account', `agent profile ${found.profile.name} has no account left to coordinate with; name one with --coordinator-account`)
-          coordinatorAccountId = first
-        }
       }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
@@ -3722,7 +3718,8 @@ export async function handleCommand(
           sessionId: pendingSessionId,
           cwd: runJob?.cwd ?? '',
           specPath: '',
-          retryOf
+          retryOf,
+          ...(terminal ? { reusesSession: true } : {})
         },
         now
       )

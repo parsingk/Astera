@@ -4508,3 +4508,16 @@ describe('agent profiles', () => {
     expect(r.value.agentProfileId).toBe('ap_1')
   })
 })
+
+// Task 6 fix round 1 (minor): a Dispatch that types into a session already running records no profile
+describe('agent profiles: a reused session', () => {
+  it('a same-session repair and a reusing openDispatch record none', () => {
+    let { state: s, value: run } = seedRun({ objective: 'o', cwd: 'D:/p' }, NOW)
+    const t = unwrap<{ id: string }>(createTask(s, { runId: run.id, title: 't', spec: 's', deps: [], accountIds: ['acc1'], agentProfileId: 'ap_1', validateConfigIds: ['cfg1'] }, NOW) as never)
+    const d = unwrap<Dispatch>(openDispatch(t.state, { taskId: t.value.id, provider: 'codex', accountId: 'acc1', sessionId: 'sess1', cwd: 'D:/p', specPath: '', reusesSession: true }, NOW) as never)
+    expect(d.value).not.toHaveProperty('agentProfileId')
+    s = unwrap(applyWorkerDone(d.state, { taskId: t.value.id, dispatchId: d.value.id, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never).state
+    const r = unwrap<Dispatch>(openRepairDispatch(s, { taskId: t.value.id, reason: 'check-failure', target: SAME }, NOW) as never)
+    expect(r.value).not.toHaveProperty('agentProfileId')
+  })
+})

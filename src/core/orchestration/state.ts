@@ -684,6 +684,9 @@ export function openDispatch(
     /** 소진 Gate 의 retry-once 만 쓴다 — 사람이 "한 번 더" 라고 말한 자리이고, 그 한 번은
      *  예산 밖이다(설계 §5.2). 그 밖의 모든 호출은 회로를 그대로 본다. */
     ignoreCircuit?: boolean
+    /** The Dispatch types into a session already running (worker-start `--terminal`): that session runs as whatever it
+     *  was started as, so no agent profile is recorded for this attempt. */
+    reusesSession?: boolean
   },
   now: string
 ): Res<Dispatch> {
@@ -727,7 +730,7 @@ export function openDispatch(
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
   const moved = moveTask(task, 'dispatched', now)
   if (!moved) return err(`cannot dispatch from status: ${task.status}`)
-  const profile = workerProfileOf(s, task)
+  const profile = a.reusesSession ? undefined : workerProfileOf(s, task)
   const dispatch: Dispatch = {
     id: newId('dsp'),
     taskId: a.taskId,
@@ -1151,7 +1154,8 @@ export function openRepairDispatch(
   if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
   const moved = moveTask(task, 'dispatched', now)
   if (!moved) return err(`cannot dispatch from status: ${task.status}`)
-  const profile = workerProfileOf(s, task)
+  // A same-session repair types into a session already running as whatever it was started as
+  const profile = a.target.kind === 'same-session' ? undefined : workerProfileOf(s, task)
   const dispatch: Dispatch = {
     id: newId('dsp'),
     taskId: a.taskId,

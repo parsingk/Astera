@@ -55,6 +55,7 @@ import { clampAppSize } from '../core/workspace/size'
 import { createHostMcpHttpView, type HostMcpHttpView } from './host/hostMcpHttp'
 import { mcpHttpHostsProblem, mcpHttpOf, type McpHttpSettings } from '../core/settings/mcpHttp'
 import { profileSpawn } from '../core/agentProfiles/permission'
+import { readAgentProfiles } from '../core/agentProfiles/store'
 import { createTokenReader, newToken, tokenPath } from '../core/mcp/httpToken'
 import { createOfflineRolls } from './host/offlineRolls'
 import type { BlockRegistry } from '../core/rolling/blockRegistry'
@@ -3266,6 +3267,9 @@ export function registerIpc(
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
+      // The agent profiles (Agent Profiles design §6): this app answers its own UI's run-create and task-create, so it
+      // reads the store the Host writes, from the same profile folder its spawns resolve profiles from
+      readAgentProfiles: () => readAgentProfiles(app.getPath('userData')),
       // The completion check plugins are the Host's (plugin Phase 5 C7, C8): this copy's early refusals and the app's
       // own checks ask it, as the app.
       completionChecks: createAppCompletionChecks({ call: (m) => orchCall(m) }),

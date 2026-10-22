@@ -716,8 +716,8 @@ export function hostOrchDeps(a: {
   /** How It Works records (MCP P2-C): this Host's profile's understanding.json, read per call. Absent:
    *  the `understanding-*` commands answer 409, as a caller that is not the Host. */
   readUnderstanding?: OrchServerDeps['readUnderstanding']
-  /** The agent profile store (Agent Profiles design §6): this Host's agent-profiles.json, read per call. Absent: a Job or
-   *  Task named with a profile answers 409, as a caller that is not the Host. */
+  /** The agent profile store (Agent Profiles design §6): this Host's agent-profiles.json, read per call; the app's own
+   *  deps read the same file. Absent: a Job or Task named with a profile answers 409. */
   readAgentProfiles?: OrchServerDeps['readAgentProfiles']
   /** A Run's changed files and diffs from this Host's git (Phase 10). Absent: the two commands answer 409. */
   changes?: OrchServerDeps['changes']

@@ -640,7 +640,8 @@ export function createHostOrch(a: {
     }
   }
 
-  /** **Nothing is read at construction, and `host/index.ts` never calls `ready()`.**
+  /** **Nothing is read at construction, and `host/index.ts` never calls `ready()` at its start** — only from calls
+   *  that need the state as a command does (a notification's wording, the agent profile delete guard).
    *
    *  The load happens at the first call that needs the state — and, once the app has pushed its state
    *  with `state-put`, never at all. Lazy because a Host that nobody asks anything of has no reason to

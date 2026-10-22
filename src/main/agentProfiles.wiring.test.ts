@@ -67,3 +67,15 @@ describe('index.ts prepares a roll on the chain’s agent profile', () => {
     }
   })
 })
+
+// Agent Profiles design §6, Task 6 fix round 1 (I2): the app answers its own UI's run-create and task-create, so its orch
+// deps read the profile store, from the same folder its spawns resolve profiles from. The deps are built inside
+// registerIpc, so the wiring is guarded by its text; core/orchestration/command.test.ts runs task-create over the same
+// reader on a real file.
+describe('ipc.ts answers a Job or Task made from an agent profile', () => {
+  it('its orch deps read the profile store of the app’s own profile folder', () => {
+    const deps = between('    const deps: OrchServerDeps = {', '      listAccounts: (provider, opts) =>')
+    expect(deps).toMatch(/readAgentProfiles: \(\) => readAgentProfiles\(app\.getPath\('userData'\)\)/)
+    expect(src).toMatch(/import \{ readAgentProfiles \} from '\.\.\/core\/agentProfiles\/store'/)
+  })
+})
