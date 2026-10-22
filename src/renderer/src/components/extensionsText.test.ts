@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { t as translate, LANGS, type MessageKey, type MessageParams } from '../../../core/i18n'
-import { envSourceLabel, failureLine, importPrompt, kindLabel, kindOneLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, warningLabel, type FoundItem } from './extensionsText'
+import { envSourceLabel, failureLine, gatewayLine, importPrompt, kindLabel, kindOneLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
 import type { SyncOutcome } from '../../../core/extensions/types'
-import type { NotShareableReason, ShareWarning } from '../../../core/extensions/envRules'
+import type { NotShareableReason } from '../../../core/extensions/envRules'
 import type { ExtensionKind, SkipReason } from '../../../core/extensions/types'
 
 const en = (key: MessageKey, params?: MessageParams): string => translate('en', key, params)
@@ -12,16 +12,15 @@ const OUTCOMES = Object.keys({
   written: 1, unchanged: 1, adopted: 1, restored: 1, conflict: 1, removed: 1, forgotten: 1, failed: 1, 'not-applicable': 1
 } satisfies Record<SyncOutcome, 1>)
 const REASONS = Object.keys({
-  'cli-env-name': 1, 'process-env-name': 1, 'env-name-clash': 1, 'env-reference': 1, 'astera-own': 1, 'header-secret': 1, 'arg-secret': 1
+  'env-reference': 1, 'astera-own': 1, 'header-secret': 1, 'arg-secret': 1
 } satisfies Record<NotShareableReason, 1>)
 const MCP_STATES = ['given', ...Object.keys({
-  'account-own': 1, 'account-unreadable': 1, 'launch-chars': 1, 'secret-unavailable': 1, provider: 1, transport: 1
+  'account-own': 1, 'account-unreadable': 1, 'launch-chars': 1, 'gateway-unavailable': 1, provider: 1, transport: 1
 } satisfies Record<SkipReason, 1>)]
-const WARNINGS = Object.keys({ 'session-tools': 1, 'env-name-shared': 1 } satisfies Record<ShareWarning, 1>)
 const KINDS = Object.keys({ mcp: 1, skill: 1, command: 1, agent: 1 } satisfies Record<ExtensionKind, 1>) as ExtensionKind[]
 
 const ITEMS: FoundItem[] = [
-  { kind: 'mcp', name: 'linear', shareable: true, warnings: ['session-tools'], mcp: { envNames: ['LINEAR_API_KEY', 'LOG_LEVEL'] } },
+  { kind: 'mcp', name: 'linear', shareable: true, mcp: { envNames: ['LINEAR_API_KEY', 'LOG_LEVEL'] } },
   { kind: 'skill', name: 'review', shareable: true },
   { kind: 'skill', name: 'astera-task', shareable: false, reason: 'astera-own' }
 ]
@@ -32,7 +31,6 @@ describe('extensionsText', () => {
       const tr = (key: MessageKey, params?: MessageParams): string => translate(lang, key, params)
       for (const o of OUTCOMES) expect(outcomeLabel(o, tr), `${lang} ${o}`).not.toMatch(/^settings\./)
       for (const r of REASONS) expect(reasonLabel(r, tr), `${lang} ${r}`).not.toMatch(/^settings\./)
-      for (const w of WARNINGS) expect(warningLabel(w, tr), `${lang} ${w}`).not.toMatch(/^settings\./)
       for (const m of MCP_STATES) expect(mcpStateLabel(m, tr), `${lang} ${m}`).not.toMatch(/^settings\./)
       for (const k of KINDS) {
         expect(kindLabel(k, tr), `${lang} ${k}`).not.toMatch(/^settings\./)
@@ -51,7 +49,7 @@ describe('extensionsText', () => {
       ['secret:mcp:linear:LOG_LEVEL', false],
       ['item:skill:review', false]
     ])
-    expect(p.choices[0].hint).toBe(en('settings.extensions.warning.session-tools'))
+    expect(p.choices[0]).not.toHaveProperty('hint')
     expect(p.body).toContain('astera-task')
     expect(p.body).toContain(en('settings.extensions.reason.astera-own'))
   })
@@ -67,5 +65,19 @@ describe('extensionsText', () => {
     expect(failureLine({ ok: false, code: 'HOST_NOT_RUNNING', message: '' }, en)).toBe(en('settings.plugins.fail.noHost'))
     expect(failureLine({ ok: false, code: 'NOT_SUPPORTED', message: 'x' }, en)).toBe(en('settings.extensions.fail.notSupported', { message: 'x' }))
     expect(failureLine({ ok: false, code: 'CONFLICT', message: 'extensions/registry.json is damaged' }, en)).toBe('extensions/registry.json is damaged')
+  })
+})
+
+// Gateway design §4.5: the Gateway's state of a stdio server, in words
+describe('gatewayLine', () => {
+  it('says how the server’s processes stand, in every language, with the last error when it failed', () => {
+    for (const lang of LANGS) {
+      const tr = (key: MessageKey, params?: MessageParams): string => translate(lang, key, params)
+      for (const state of ['running', 'stopped', 'restarting', 'failed'] as const)
+        expect(gatewayLine({ state, processes: 2, lastError: 'boom' }, tr), `${lang} ${state}`).not.toMatch(/settings\./)
+    }
+    expect(gatewayLine({ state: 'running', processes: 2 }, en)).toContain('2')
+    expect(gatewayLine({ state: 'failed', processes: 0, lastError: 'the secret could not be read' }, en)).toContain('the secret could not be read')
+    expect(gatewayLine(undefined, en)).toBe(gatewayLine({ state: 'stopped', processes: 0 }, en))
   })
 })

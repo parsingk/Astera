@@ -7,6 +7,8 @@ import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
+import { createGatewayHub } from './gateway/hub'
+import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
@@ -223,6 +225,9 @@ async function main(): Promise<void> {
   // writer only while no app socket holds it. Fed by the server hooks below; an ended proc drops its holds.
   const procHolders = createProcHolders({ log: (m) => log.write(m) })
   procs.onExit((id) => procHolders.ended(id))
+  // The MCP Gateway (Agent Control Plane release 2): shared stdio servers run here once per folder, and each session the
+  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens only while a stdio server is shared.
+  const mcpGateway = createGatewayHub({ profileDir, ptys: registry, procs, log: hidingLog(profileDir, (m) => log.write(m)) })
 
   let server: Awaited<ReturnType<typeof startHostServer>>
   /** Declared here and assigned below `createHostOrch` (S6 final review M3): the rolling wiring's
@@ -269,6 +274,8 @@ async function main(): Promise<void> {
     void mcpHttp.stop()
     // The Remote Gateway stops with the Host the same way: its stdin ends (remote runtime design §2.3). Never rejects.
     void gateway.stop()
+    // The MCP Gateway's servers stop with the Host: they are its children, and nothing else would end them. Never rejects.
+    void mcpGateway.close().catch(() => {})
     // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
@@ -426,6 +433,8 @@ async function main(): Promise<void> {
   // closures only run inside a command, long after both exist.
   const spawner = createHostSpawner({
     profileDir,
+    // Synced first, so a spawn right after an import finds the listener open
+    gatewayPort: () => mcpGateway.sync(),
     env: process.env,
     platform: process.platform,
     homeDir: os.homedir(),
@@ -742,7 +751,8 @@ async function main(): Promise<void> {
     profileDir,
     homeDir: os.homedir(),
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-    log: (m) => log.write(m)
+    log: (m) => log.write(m),
+    gateway: mcpGateway
   })
   const orch = createHostOrch({
     profileDir,
@@ -1151,6 +1161,8 @@ async function main(): Promise<void> {
   // And the shared skills, commands and agents, into every account as it is now (design §4.6). A profile that shares
   // nothing writes nothing. Never rejects.
   void extensions.sync()
+  // And the MCP Gateway, when a stdio server is shared. Never rejects.
+  void mcpGateway.sync().catch(() => null)
   // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
   void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
 

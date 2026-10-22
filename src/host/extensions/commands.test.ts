@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { extensionPaths } from '../../core/profile/paths'
-import { writeExtensionRegistry } from '../../core/extensions/registry'
+import { readExtensionRegistry, writeExtensionRegistry } from '../../core/extensions/registry'
 import { extensionSecrets } from '../../core/extensions/secrets'
 import { createHostExtensions } from './commands'
 import type { Account } from '../../core/types'
@@ -28,12 +28,19 @@ async function rig() {
   await fs.mkdir(other.configDir, { recursive: true })
   await fs.writeFile(path.join(source.configDir, 'commands', 'ship.md'), 'ship it\n')
   const logs: string[] = []
-  const ext = createHostExtensions({ profileDir, homeDir: home, readAccounts: async () => [source, other], log: (l) => logs.push(l) })
+  // The Gateway as the Host's hub shows it to the commands: a port while something is shared over stdio
+  const gateway = {
+    port: (): number | null => 47999,
+    sync: vi.fn(async (): Promise<number | null> => 47999),
+    states: () => [{ serverId: 'mcp-linear', processes: 1, state: 'running' as const }],
+    stopServer: vi.fn(async (_id: string) => {})
+  }
+  const ext = createHostExtensions({ profileDir, homeDir: home, readAccounts: async () => [source, other], log: (l) => logs.push(l), gateway })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: 'app' | 'cli' | 'mcp'; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return ext.command({ cmd, args, role: extra.role ?? 'app', ...(extra.agentRefusal ? { agentRefusal: extra.agentRefusal } : {}), marks }).then((r) => ({ ...r, marks }))
   }
-  return { profileDir, home, source, other, ext, call, logs }
+  return { profileDir, home, source, other, ext, call, logs, gateway }
 }
 
 describe('createHostExtensions', () => {
@@ -130,5 +137,49 @@ describe('createHostExtensions', () => {
     await fs.writeFile(extensionPaths(h.profileDir).registry, '{ damaged')
     expect((await h.call('extensions-list')).status).toBe(409)
     expect(await h.ext.sync()).toEqual([])
+  })
+})
+
+// Gateway design §4.1, §4.5, G8
+describe('createHostExtensions, with the Gateway', () => {
+  it('answers the Gateway’s port, syncing it first, and the processes’ state in the list', async () => {
+    const h = await rig()
+    expect((await h.call('extensions-gateway')).body).toEqual({ port: 47999 })
+    expect(h.gateway.sync).toHaveBeenCalled()
+    expect((await h.call('extensions-list')).body).toMatchObject({ gateway: [{ serverId: 'mcp-linear', processes: 1, state: 'running' }] })
+  })
+
+  it('syncs the Gateway after an import, and stops a server’s processes when it is disabled or removed', async () => {
+    const h = await rig()
+    await fs.writeFile(path.join(h.home, '.claude.json'), JSON.stringify({ mcpServers: { linear: { command: 'npx' } } }))
+    await h.call('extensions-import', { accountId: 'acc_1', picks: [{ kind: 'mcp', name: 'linear' }] })
+    expect(h.gateway.sync).toHaveBeenCalled()
+    await h.call('extensions-disable', { id: 'mcp-linear' })
+    await h.call('extensions-remove', { id: 'mcp-linear' })
+    expect(h.gateway.stopServer.mock.calls).toEqual([['mcp-linear'], ['mcp-linear']])
+  })
+
+  it('switches a server to one process per session, refused to an agent shell', async () => {
+    const h = await rig()
+    await fs.writeFile(path.join(h.home, '.claude.json'), JSON.stringify({ mcpServers: { linear: { command: 'npx' } } }))
+    await h.call('extensions-import', { accountId: 'acc_1', picks: [{ kind: 'mcp', name: 'linear' }] })
+    expect((await h.call('extensions-isolation', { id: 'mcp-linear', isolation: 'session' }, { role: 'cli', agentRefusal: 'no' })).status).toBe(403)
+    expect((await h.call('extensions-isolation', { id: 'mcp-linear', isolation: 'nope' })).status).toBe(400)
+    const r = await h.call('extensions-isolation', { id: 'mcp-linear', isolation: 'session' })
+    expect(r.status).toBe(200)
+    expect(r.marks.effects).toBe(1)
+    expect((await readExtensionRegistry(h.profileDir)).entries[0]).toMatchObject({ isolation: 'session' })
+  })
+})
+
+// Final review of release 2 (M2): the Gateway's last error is shown with stored secret values taken out
+describe('createHostExtensions, the Gateway’s errors', () => {
+  it('redacts a stored secret value from the processes’ last error', async () => {
+    const h = await rig()
+    await extensionSecrets(h.profileDir).put('mcp.mcp-linear.LINEAR_API_KEY', SECRET)
+    h.gateway.states = () => [{ serverId: 'mcp-linear', processes: 0, state: 'failed', lastError: `refused ${SECRET}` }] as never
+    const listed = await h.call('extensions-list')
+    expect(JSON.stringify(listed.body)).not.toContain(SECRET)
+    expect(JSON.stringify(listed.body)).toContain('[redacted]')
   })
 })

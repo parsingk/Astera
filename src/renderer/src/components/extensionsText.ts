@@ -4,7 +4,7 @@
 // reaches this side; the Host answers names only.
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import type { ExtensionKind, SkipReason, SyncOutcome } from '../../../core/extensions/types'
-import type { NotShareableReason, ShareWarning } from '../../../core/extensions/envRules'
+import type { NotShareableReason } from '../../../core/extensions/envRules'
 import { looksSecret } from '../../../core/extensions/envRules'
 
 type T = (key: MessageKey, params?: MessageParams) => string
@@ -33,9 +33,6 @@ const OUTCOMES: Record<SyncOutcome, MessageKey> = {
   'not-applicable': 'settings.extensions.outcome.not-applicable'
 }
 const REASONS: Record<NotShareableReason, MessageKey> = {
-  'cli-env-name': 'settings.extensions.reason.cli-env-name',
-  'process-env-name': 'settings.extensions.reason.process-env-name',
-  'env-name-clash': 'settings.extensions.reason.env-name-clash',
   'env-reference': 'settings.extensions.reason.env-reference',
   'astera-own': 'settings.extensions.reason.astera-own',
   'header-secret': 'settings.extensions.reason.header-secret',
@@ -46,13 +43,9 @@ const MCP_STATES: Record<'given' | SkipReason, MessageKey> = {
   'account-own': 'settings.extensions.mcp.account-own',
   'account-unreadable': 'settings.extensions.mcp.account-unreadable',
   'launch-chars': 'settings.extensions.mcp.launch-chars',
-  'secret-unavailable': 'settings.extensions.mcp.secret-unavailable',
+  'gateway-unavailable': 'settings.extensions.mcp.gateway-unavailable',
   provider: 'settings.extensions.mcp.provider',
   transport: 'settings.extensions.mcp.transport'
-}
-const WARNINGS: Record<ShareWarning, MessageKey> = {
-  'session-tools': 'settings.extensions.warning.session-tools',
-  'env-name-shared': 'settings.extensions.warning.env-name-shared'
 }
 const ENV_SOURCES: Record<string, MessageKey> = {
   secret: 'settings.extensions.envSource.secret',
@@ -66,10 +59,23 @@ export const kindLabel = (k: ExtensionKind, t: T): string => t(KINDS[k])
 export const kindOneLabel = (k: ExtensionKind, t: T): string => t(KIND_ONE[k])
 /** How an item's copy in one account stands after the last sync; one this app does not know by itself. */
 export const outcomeLabel = (o: string, t: T): string => (Object.hasOwn(OUTCOMES, o) ? t(OUTCOMES[o as SyncOutcome]) : o)
+/** How the Gateway's processes of one shared stdio server stand (Gateway design §4.5); none listed reads as stopped. */
+export function gatewayLine(s: { state: string; processes: number; lastError?: string } | undefined, t: T): string {
+  switch (s?.state) {
+    case 'running':
+      return t('settings.extensions.gateway.running', { count: s.processes })
+    case 'restarting':
+      return t('settings.extensions.gateway.restarting')
+    case 'failed':
+      return t('settings.extensions.gateway.failed', { error: s.lastError ?? '' })
+    default:
+      return t('settings.extensions.gateway.stopped')
+  }
+}
+
 /** Whether one account's sessions get a shared MCP server, or why not (final review I1). */
 export const mcpStateLabel = (s: string, t: T): string => (Object.hasOwn(MCP_STATES, s) ? t(MCP_STATES[s as 'given' | SkipReason]) : s)
 export const reasonLabel = (r: string, t: T): string => (Object.hasOwn(REASONS, r) ? t(REASONS[r as NotShareableReason]) : r)
-export const warningLabel = (w: string, t: T): string => (Object.hasOwn(WARNINGS, w) ? t(WARNINGS[w as ShareWarning]) : w)
 /** Where an MCP server's environment value comes from, as the Host names it. */
 export const envSourceLabel = (s: string, t: T): string => (Object.hasOwn(ENV_SOURCES, s) ? t(ENV_SOURCES[s]) : s)
 
@@ -79,7 +85,6 @@ export interface FoundItem {
   name: string
   shareable: boolean
   reason?: string
-  warnings?: string[]
   mcp?: { envNames?: string[] }
 }
 
@@ -102,8 +107,7 @@ export function importPrompt(
 ): { title: string; body: string; footer: string; confirmLabel: string; choices: { id: string; label: string; hint?: string; defaultChecked: boolean }[] } {
   const choices: { id: string; label: string; hint?: string; defaultChecked: boolean }[] = []
   for (const i of items.filter((x) => x.shareable)) {
-    const warnings = (i.warnings ?? []).map((w) => warningLabel(w, t))
-    choices.push({ id: itemId(i), label: `${kindOneLabel(i.kind, t)} ${i.name}`, ...(warnings.length ? { hint: warnings.join(' ') } : {}), defaultChecked: false })
+    choices.push({ id: itemId(i), label: `${kindOneLabel(i.kind, t)} ${i.name}`, defaultChecked: false })
     for (const env of i.mcp?.envNames ?? [])
       choices.push({
         id: secretId(i, env),

@@ -23,7 +23,10 @@ export const MANAGED_ENV_KEYS = [
   'ASTERA_CLI',
   'ASTERA_PROFILE_DIR',
   'ASTERA_SKILLS',
-  'ASTERA_SESSION'
+  'ASTERA_SESSION',
+  // A session's own MCP Gateway token and grant (Agent Control Plane release 2): never handed on to another session
+  'ASTERA_GATEWAY_TOKEN',
+  'ASTERA_GATEWAY_GRANT'
 ] as const
 
 /**

@@ -29,6 +29,9 @@ export interface McpExtension {
   env: Record<string, McpEnvValue>
   /** Codex's own per-server settings, carried from a Codex source and given to Codex sessions only. */
   options?: McpOptions
+  /** How the Gateway shares the server's process (Gateway design G3, G8): per project folder, or one per session.
+   *  Absent means `folder`. */
+  isolation?: 'folder' | 'session'
   providers: Provider[]
   /** The account it was imported from. */
   importedFrom: string
@@ -57,4 +60,4 @@ export interface ExtensionRegistry {
 export type SyncOutcome = 'written' | 'unchanged' | 'adopted' | 'restored' | 'conflict' | 'removed' | 'forgotten' | 'failed' | 'not-applicable'
 
 /** Why a session does not get a shared MCP server (design §4.5): here so Settings › Extensions can name them. */
-export type SkipReason = 'account-own' | 'account-unreadable' | 'launch-chars' | 'secret-unavailable' | 'provider' | 'transport'
+export type SkipReason = 'account-own' | 'account-unreadable' | 'launch-chars' | 'gateway-unavailable' | 'provider' | 'transport'

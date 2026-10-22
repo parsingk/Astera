@@ -376,7 +376,8 @@ const api = {
     setEnabled: invoke('extensions.setEnabled'),
     remove: invoke('extensions.remove'),
     sync: invoke('extensions.sync'),
-    replace: invoke('extensions.replace')
+    replace: invoke('extensions.replace'),
+    setIsolation: invoke('extensions.setIsolation')
   },
   // The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, through main's sources route
   sources: {

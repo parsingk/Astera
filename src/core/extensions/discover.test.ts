@@ -5,7 +5,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { removeFixture } from '../testFixtures'
-import { discoverIn } from './discover'
+import { discoverIn, knownSessionIsolated } from './discover'
 import type { Account } from '../types'
 
 const dirs: string[] = []
@@ -71,11 +71,12 @@ describe('discoverIn', () => {
     expect(JSON.stringify(found)).not.toContain(SECRET)
     const gh = found.find((d) => d.name === 'gh')!
     expect(gh.mcp).toMatchObject({ transport: 'stdio', command: 'npx', args: ['gh-mcp'], envNames: ['GITHUB_TOKEN', 'LOG_LEVEL'] })
-    expect(gh.warnings).toEqual(['session-tools'])
+    expect(gh).not.toHaveProperty('warnings')
     expect(found.map((d) => `${d.kind}:${d.name}`).sort()).toEqual(['mcp:gh', 'skill:plan'])
   })
 
-  it('marks a server that needs a CLI-steering name, or a secret header, as not shareable', async () => {
+  // Gateway design §4.6: a name the CLI itself reads is the server's own business now; a secret header still is not
+  it('shares a server that needs a CLI-steering name, and still refuses a secret header', async () => {
     const home = await temp()
     const dir = path.join(home, '.claude-accounts', 'd')
     await write(
@@ -90,7 +91,7 @@ describe('discoverIn', () => {
     const found = await discoverIn({ account: account(dir), homeDir: home, registry: EMPTY })
     expect(JSON.stringify(found)).not.toContain(SECRET)
     expect(found.map((d) => [d.name, d.shareable ? null : d.reason]).sort()).toEqual([
-      ['llm', 'cli-env-name'],
+      ['llm', null],
       ['remote', 'header-secret']
     ])
   })
@@ -140,5 +141,16 @@ describe('discoverIn, what an MCP server carries', () => {
       'codex'
     )
     expect(d.mcp?.options).toEqual({ startupTimeoutSec: 40, toolTimeoutSec: 120, enabledTools: ['a', 'b'], disabledTools: ['c'] })
+  })
+})
+
+// Gateway design G8: browser servers keep one process per session from the start
+describe('knownSessionIsolated', () => {
+  it('names the well-known browser servers by their command or arguments', () => {
+    expect(knownSessionIsolated({ command: 'npx', args: ['-y', '@playwright/mcp@latest'] })).toBe(true)
+    expect(knownSessionIsolated({ command: 'npx', args: ['puppeteer-mcp-server'] })).toBe(true)
+    expect(knownSessionIsolated({ command: 'chrome-devtools-mcp' })).toBe(true)
+    expect(knownSessionIsolated({ command: 'npx', args: ['-y', 'linear-mcp'] })).toBe(false)
+    expect(knownSessionIsolated({})).toBe(false)
   })
 })

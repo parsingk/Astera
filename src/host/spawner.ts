@@ -88,6 +88,8 @@ export interface HostLocal {
 }
 
 export interface HostSpawnerDeps {
+  /** Where the Host's MCP Gateway listens (Agent Control Plane release 2), asked before each spawn; absent means none. */
+  gatewayPort?: () => Promise<number | null>
   profileDir: string
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
@@ -350,6 +352,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     homeDir,
     platform,
     policyMode: () => readControlPlanePolicyMode(settingsPath),
+    ...(d.gatewayPort ? { gatewayPort: d.gatewayPort } : {}),
     log: hidingLog(profileDir, log)
   })
   sessions.capabilities = capabilities

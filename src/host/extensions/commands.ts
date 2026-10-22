@@ -8,7 +8,8 @@ import { publicEntry, readExtensionRegistry } from '../../core/extensions/regist
 import { hideExtensionSecrets, hidingLog } from '../../core/extensions/secrets'
 import { redactSecrets } from '../../core/remote/redact'
 import { discoverIn } from '../../core/extensions/discover'
-import { importItems, removeEntry, setEnabled, type ImportPick } from '../../core/extensions/importItems'
+import { importItems, removeEntry, setEnabled, setIsolation, type ImportPick } from '../../core/extensions/importItems'
+import type { GatewayHub } from '../gateway/hub'
 import { replaceConflict, syncMaterialized, type SyncItem } from '../../core/extensions/materialize'
 import type { OrchCaller } from '../../core/host/orchProtocol'
 import type { ExtensionEntry, ExtensionKind } from '../../core/extensions/types'
@@ -23,7 +24,9 @@ export const EXTENSION_COMMANDS: ReadonlySet<string> = new Set([
   'extensions-disable',
   'extensions-remove',
   'extensions-sync',
-  'extensions-replace'
+  'extensions-replace',
+  'extensions-gateway',
+  'extensions-isolation'
 ])
 
 /** The ones that change the registry or the accounts' copies. */
@@ -33,7 +36,8 @@ export const EXTENSION_CHANGES: ReadonlySet<string> = new Set([
   'extensions-disable',
   'extensions-remove',
   'extensions-sync',
-  'extensions-replace'
+  'extensions-replace',
+  'extensions-isolation'
 ])
 
 export interface ExtensionsAnswer {
@@ -78,6 +82,9 @@ export function createHostExtensions(d: {
   readAccounts: () => Promise<Account[]>
   log: (line: string) => void
   platform?: NodeJS.Platform
+  /** The Host's MCP Gateway (Gateway design §4.1): synced after every change, its port for the per-account status and
+   *  the app, its processes' state for the list. Absent: this Host runs none, and stdio servers are not given. */
+  gateway?: Pick<GatewayHub, 'sync' | 'port' | 'states' | 'stopServer'>
 }): HostExtensions {
   // Every line written about shared extensions, and every error answered, has the stored secret values taken out
   // (design §4.9): an error's own words may quote a file that holds one
@@ -107,18 +114,38 @@ export function createHostExtensions(d: {
     if (servers.length === 0) return []
     const out: { id: string; accountId: string; state: 'given' | SkipReason }[] = []
     for (const account of await d.readAccounts()) {
-      const r = await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform ?? process.platform, dryRun: true })
+      const r = await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform ?? process.platform, gatewayPort: d.gateway?.port() ?? null, dryRun: true })
       const skipped = new Map(r.skipped.map((s) => [s.name, s.reason]))
       for (const e of servers) out.push({ id: e.id, accountId: account.id, state: r.given.includes(e.name) ? 'given' : (skipped.get(e.name) ?? 'provider') })
     }
     return out
   }
 
+  /** The Gateway's processes, their last error with the stored secret values taken out (final review M2). */
+  const hiddenStates = async () =>
+    Promise.all((d.gateway?.states() ?? []).map(async (s) => (s.lastError === undefined ? s : { ...s, lastError: await hide(s.lastError) })))
+
   const answer = async (cmd: string, args: Record<string, unknown>): Promise<ExtensionsAnswer> => {
     switch (cmd) {
       case 'extensions-list': {
         const registry = await readExtensionRegistry(d.profileDir)
-        return { status: 200, body: { entries: registry.entries.map(publicEntry), status: last, mcpStatus: await mcpStatus(registry.entries) } }
+        await d.gateway?.sync()
+        return {
+          status: 200,
+          body: { entries: registry.entries.map(publicEntry), status: last, mcpStatus: await mcpStatus(registry.entries), gateway: await hiddenStates() }
+        }
+      }
+      case 'extensions-gateway':
+        // Synced first, so a spawn that asks right after an import finds the listener open
+        return { status: 200, body: { port: d.gateway ? await d.gateway.sync() : null } }
+      case 'extensions-isolation': {
+        if (typeof args.id !== 'string' || (args.isolation !== 'folder' && args.isolation !== 'session')) return bad('extensions-isolation needs id and isolation (folder or session)')
+        const { id, isolation } = args as { id: string; isolation: 'folder' | 'session' }
+        return queued(async () => {
+          if (!(await readExtensionRegistry(d.profileDir)).entries.some((e) => e.id === id && e.kind === 'mcp')) return { status: 404, body: { error: `no shared server ${id}` } }
+          await setIsolation(d.profileDir, id, isolation)
+          return { status: 200, body: { isolation } }
+        })
       }
       case 'extensions-discover': {
         if (typeof args.accountId !== 'string') return bad('extensions-discover needs accountId')
@@ -134,6 +161,7 @@ export function createHostExtensions(d: {
         if (!account) return { status: 404, body: { error: `no account ${args.accountId}` } }
         return queued(async () => {
           const result = await importItems({ profileDir: d.profileDir, homeDir: d.homeDir, account, picks })
+          await d.gateway?.sync()
           return { status: 200, body: { ...result, sync: await syncNow() } }
         })
       }
@@ -146,6 +174,9 @@ export function createHostExtensions(d: {
           if (!(await readExtensionRegistry(d.profileDir)).entries.some((e) => e.id === id)) return { status: 404, body: { error: `no shared item ${id}` } }
           if (cmd === 'extensions-remove') await removeEntry(d.profileDir, id)
           else await setEnabled(d.profileDir, id, cmd === 'extensions-enable')
+          // A server no longer shared stops at once; the listener closes when nothing is shared over stdio
+          if (cmd !== 'extensions-enable') await d.gateway?.stopServer(id)
+          await d.gateway?.sync()
           return { status: 200, body: { sync: await syncNow() } }
         })
       }

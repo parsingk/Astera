@@ -6,11 +6,12 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
-import { envSourceLabel, failureLine, importPrompt, kindLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
+import { envSourceLabel, failureLine, gatewayLine, importPrompt, kindLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
 
 type Entry = Record<string, unknown>
 type Status = { id: string; accountId: string; outcome: string; detail?: string }
 type McpState = { id: string; accountId: string; state: string }
+type GatewayState = { serverId: string; processes: number; state: string; lastError?: string }
 type Failure = Extract<PluginsCallAnswer, { ok: false }>
 
 const KINDS: ExtensionKind[] = ['mcp', 'skill', 'command', 'agent']
@@ -32,6 +33,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [status, setStatus] = useState<Status[]>([])
   const [mcpStatus, setMcpStatus] = useState<McpState[]>([])
+  const [gateway, setGateway] = useState<GatewayState[]>([])
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   /** One change at a time: every change syncs every account before the Host answers. */
   const [busy, setBusy] = useState<'reading' | 'changing' | null>(null)
@@ -44,6 +46,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     setEntries(arr<Entry>(r.body.entries))
     setStatus(arr<Status>(r.body.status))
     setMcpStatus(arr<McpState>(r.body.mcpStatus))
+    setGateway(arr<GatewayState>(r.body.gateway))
   }
   useEffect(() => {
     void load()
@@ -144,6 +147,8 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
                 entry={e}
                 status={status.filter((s) => s.id === e.id)}
                 mcpStatus={mcpStatus.filter((s) => s.id === e.id)}
+                gateway={gateway.find((g) => g.serverId === e.id)}
+                onIsolation={(on) => void change(() => window.api.extensions.setIsolation(str(e.id), on ? 'session' : 'folder'))}
                 labelOf={labelOf}
                 busy={busy !== null}
                 onToggle={() => void change(() => window.api.extensions.setEnabled(str(e.id), e.enabled !== true))}
@@ -163,6 +168,8 @@ function ExtensionCard({
   entry,
   status,
   mcpStatus,
+  gateway,
+  onIsolation,
   labelOf,
   busy,
   onToggle,
@@ -173,6 +180,9 @@ function ExtensionCard({
   status: Status[]
   /** Per account, whether its sessions get this MCP server, or why not. */
   mcpStatus: McpState[]
+  /** The Gateway's processes of this server, for a stdio one. */
+  gateway: GatewayState | undefined
+  onIsolation: (on: boolean) => void
   labelOf: (accountId: string) => string
   busy: boolean
   onToggle: () => void
@@ -191,7 +201,19 @@ function ExtensionCard({
       <span className="settings-hint">{t('settings.extensions.from', { label: labelOf(str(entry.importedFrom)) })}</span>
       {entry.kind === 'mcp' ? (
         <>
-          <span className="settings-hint">{t('settings.extensions.mcpGiven')}</span>
+          {entry.transport === 'stdio' ? (
+            <>
+              <span className="settings-hint">{t('settings.extensions.mcpGivenGateway')}</span>
+              <span className={`settings-hint${gateway?.state === 'failed' ? ' is-warning' : ''}`}>{gatewayLine(gateway, t)}</span>
+              <label className="check-small">
+                <input type="checkbox" checked={entry.isolation === 'session'} disabled={busy} onChange={(ev) => onIsolation(ev.target.checked)} />
+                <span>{t('settings.extensions.isolation')}</span>
+              </label>
+              <span className="settings-hint">{t('settings.extensions.isolationHint')}</span>
+            </>
+          ) : (
+            <span className="settings-hint">{t('settings.extensions.mcpGiven')}</span>
+          )}
           {env.length > 0 && (
             <span className="settings-hint">
               {t('settings.extensions.env', { names: env.map(([name, source]) => `${name} (${envSourceLabel(str(source), t)})`).join(', ') })}
