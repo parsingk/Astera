@@ -44,6 +44,8 @@ export function ResumeDialog({
     slackNotify: boolean
     bypassPermissions: boolean
     schedule?: ScheduleConfig
+    /** The agent profile the app recorded for this conversation (sessions.resumeDefaults), when it has one. */
+    agentProfileId?: string
   }) => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -65,6 +67,8 @@ export function ResumeDialog({
   const [slackNotify, setSlackNotify] = useState(false)
   const [slackReady, setSlackReady] = useState(false)
   const [bypassPermissions, setBypassPermissions] = useState(false)
+  // The agent profile the conversation ran as, so its MCP servers come back; the checkbox above still decides the bypass
+  const [savedProfile, setSavedProfile] = useState<string | null>(null)
   const [loadedDefaults, setLoadedDefaults] = useState(false) // mount ScheduleFields only after the prefill
 
   // The entry's owner, registered or not. undefined means not even detection knows the directory any
@@ -112,6 +116,7 @@ export function ResumeDialog({
         setRollPrompt(d.roll?.prompt ?? '')
         setSavedSchedule(d.schedule)
         setSchedOn(d.schedule !== null)
+        setSavedProfile(d.agentProfileId)
       })
       .catch(() => {})
       .finally(() => {
@@ -154,7 +159,8 @@ export function ResumeDialog({
       rollPrompt: rollOn ? rollPrompt.trim() || undefined : undefined,
       slackNotify: slackReady && slackNotify,
       bypassPermissions,
-      schedule: schedOn ? (schedule ?? undefined) : undefined
+      schedule: schedOn ? (schedule ?? undefined) : undefined,
+      ...(savedProfile !== null ? { agentProfileId: savedProfile } : {})
     })
   }
 

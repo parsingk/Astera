@@ -2496,11 +2496,13 @@ export default function App(): React.JSX.Element {
       slackNotify: boolean
       bypassPermissions: boolean
       schedule?: ScheduleConfig
+      /** The profile the app recorded for the conversation (ResumeDialog). Optional for the reason `kind` is. */
+      agentProfileId?: string
     }
   ): void => {
-    // The profile of a tab that held this conversation, so its MCP servers come back; the resume dialog's own
-    // permission checkbox is explicit and decides the bypass
-    const agentProfileId = profileOfConversation(sessionsRef.current, entry.sessionId)
+    // The profile of a tab that held this conversation, else the one the app recorded for it, so its MCP servers come
+    // back; the resume dialog's own permission checkbox is explicit and decides the bypass
+    const agentProfileId = profileOfConversation(sessionsRef.current, entry.sessionId) ?? opts.agentProfileId
     void spawn({
       // Resume under the selected account — the original account resumes as-is, a different one has the
       // transcript copied by ipc. With rolling on, the chain the modal computed follows [0].

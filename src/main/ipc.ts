@@ -1800,6 +1800,9 @@ export function registerIpc(
     if (event.type === 'ready') {
       const info = core.chat.info(sessionId)
       if (!info) return
+      // The thread is the conversation a history resume names (a `/clear` names a new one): the profile the session runs
+      // as is written down by it, never waited on
+      void core.profileConversations.learned(sessionId, event.threadId)
       // The rollout watcher is codex's: claude writes no rollout at all, so registering a claude session
       // would set the watcher scanning for a file that is never going to be there (once a second, each
       // one an ENOENT) and leave a log line saying it was looking.
@@ -2100,6 +2103,8 @@ export function registerIpc(
       })
       opts = { ...rest, ...resolved }
     }
+    // A resume names its conversation now: the profile it resumes as is written down by it, as the schedule is above
+    if (resumeId && opts.agentProfileId !== undefined) void core.profileConversations.record(resumeId, opts.agentProfileId)
     // win32: a CLI installed since this app started is not on its PATH yet; the Path Windows keeps is
     // read again first (at most every 30 s, and only when the CLI is missing: core/sessions/windowsPath.ts).
     if (account) await ensureOnWindowsPath([providerOf(account)])
@@ -4105,7 +4110,9 @@ export function registerIpc(
     roll:
       core.rollConfig.get(sessionId) ??
       (await readRollConfigKey(hostRollConfigPath(app.getPath('userData')), sessionId)),
-    schedule: core.schedulerConfig.get(sessionId)
+    schedule: core.schedulerConfig.get(sessionId),
+    // The agent profile it ran as, while that profile is still there (null otherwise: it resumes without one)
+    agentProfileId: await core.profileConversations.profileOf(sessionId)
   }))
 
   // Turning a schedule off — the banner button

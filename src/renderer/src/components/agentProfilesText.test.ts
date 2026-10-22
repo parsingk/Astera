@@ -137,6 +137,17 @@ describe('agentProfilesText', () => {
     expect(resume).toContain('profileOfConversation(sessionsRef.current, entry.sessionId)')
   })
 
+  // Follow-up: a conversation no tab holds resumes as the profile the app recorded for it (sessions.resumeDefaults, null
+  // once that profile is gone); a tab that holds it still answers first
+  it('a history resume no tab holds takes the recorded profile from the resume dialog', () => {
+    const dialog = source('./ResumeDialog.tsx')
+    expect(dialog).toMatch(/setSavedProfile\(d\.agentProfileId\)/)
+    expect(dialog).toContain('...(savedProfile !== null ? { agentProfileId: savedProfile } : {})')
+    const app = source('../App.tsx')
+    const resume = app.slice(app.indexOf('const resumeFromHistory = ('), app.indexOf('// 마지막으로 활성이었던 세션'))
+    expect(resume).toContain('profileOfConversation(sessionsRef.current, entry.sessionId) ?? opts.agentProfileId')
+  })
+
   it('finds the profile of a conversation a tab of this app held', () => {
     const sessions = [
       { resumeSessionId: 'conv-a', agentProfileId: 'ap_1' },

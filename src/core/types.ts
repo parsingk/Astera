@@ -142,6 +142,8 @@ export interface SessionInfo {
 export interface ResumeDefaults {
   roll: RollConfig | null
   schedule: ScheduleConfig | null
+  /** The agent profile the conversation ran as, while it is still there; null when none was recorded or it is gone. */
+  agentProfileId: string | null
 }
 
 /** 워크트리 항목의 상태. **'missing' 은 없다** — 폴더가 사라졌다고 확인된 항목은 listWithStatus 가

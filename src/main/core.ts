@@ -49,6 +49,7 @@ import { createCapabilityCache, type CapabilityCache } from '../core/extensions/
 import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
 import { settingsImportCopiesCapabilities } from '../core/extensions/registry'
 import { hidingLog } from '../core/extensions/secrets'
+import { profileConversations, type ProfileConversations } from '../core/agentProfiles/conversations'
 
 export interface Core {
   accounts: AccountRegistry
@@ -113,6 +114,10 @@ export interface Core {
   // Corruption-recovery result from schedulerConfig.load() — createCore has no logger, so index.ts logs it instead
   // pruned: how many expired (TTL) entries were cleaned up
   schedulerConfigLoad: { recovered: boolean; dropped: number; pruned: number }
+  /** The agent profile each conversation ran as, by the provider's conversation id (core/agentProfiles/conversations.ts):
+   *  index.ts and ipc.ts tell it the id when a session learns it, and ipc.ts reads it for sessions.resumeDefaults, so a
+   *  history resume of a conversation no tab holds starts as its profile again. */
+  profileConversations: ProfileConversations
   runConfig: RunConfigStore // User run config persistence
   run: RunManager // Project run management
   terminal: TerminalManager // Project terminal management
@@ -319,6 +324,11 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   await rollConfig.load()
   const schedulerConfig = new SchedulerConfigStore(path.join(userDataDir, 'scheduler.json'))
   const schedulerConfigLoad = await schedulerConfig.load()
+  const conversationProfiles = profileConversations({
+    profileDir: userDataDir,
+    log: sessionsLog,
+    profileOfSession: (id) => sessions.list().find((s) => s.id === id)?.agentProfileId ?? chat.info(id)?.agentProfileId
+  })
   const runConfig = new RunConfigStore(path.join(userDataDir, 'run-configs.json'))
   await runConfig.load()
   const worktrees = new WorktreeRegistry(
@@ -482,6 +492,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     rollConfig,
     schedulerConfig,
     schedulerConfigLoad,
+    profileConversations: conversationProfiles,
     runConfig,
     run,
     terminal,

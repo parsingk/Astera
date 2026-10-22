@@ -81,3 +81,46 @@ describe('ipc.ts answers a Job or Task made from an agent profile', () => {
     expect(src).toMatch(/import \{ readAgentProfiles \} from '\.\.\/core\/agentProfiles\/store'/)
   })
 })
+
+// Follow-up: a history resume of a conversation no tab holds starts as the profile that ran it. The app writes the
+// profile down by the conversation's own id when one of its sessions learns that id (core/agentProfiles/conversations.ts
+// pins the store); the three places the id is learned and the reader the resume dialog asks are built inside
+// createCore, registerIpc and index.ts's whenReady, so they are guarded by their text.
+describe('the app records the conversation a profiled session is on, and reads it back for a history resume', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const index = readFileSync(path.join(here, 'index.ts'), 'utf8')
+  const core = readFileSync(path.join(here, 'core.ts'), 'utf8')
+
+  it('core builds the recorder over the app’s own profile folder, asking both managers for a session’s profile', () => {
+    expect(core).toMatch(/profileConversations\(\{\s*profileDir: userDataDir,/)
+    expect(core).toMatch(/profileOfSession: \(id\) => sessions\.list\(\)\.find\(\(s\) => s\.id === id\)\?\.agentProfileId \?\? chat\.info\(id\)\?\.agentProfileId/)
+  })
+
+  // After the fan-out, so it can never cost the attention, prompt and Slack taps their turn
+  it('a Claude terminal session learns it from every hook payload, after the fan-out', () => {
+    const hook = index.slice(index.indexOf('const hookWatcher = new HookEventWatcher('), index.indexOf('hookWatcher.start()'))
+    expect(hook).toMatch(/void core!\.profileConversations\.learned\(sessionId, extractStatusLineSession\(payload\)\.sessionId\)/)
+    expect(before(hook, 'fanOutHookEvent(', 'profileConversations.learned(')).toBe(true)
+  })
+
+  it('a Codex terminal session learns it from the thread its rollout scan maps', () => {
+    const remember = index.slice(index.indexOf('    remember: (sessionId, note) => {'), index.indexOf('codexRolloutRef = codexRollout'))
+    expect(remember).toMatch(/void core!\.profileConversations\.learned\(sessionId, note\.codexSessionId\)/)
+  })
+
+  it('a chat session learns it from its ready', () => {
+    const ready = between("    if (event.type === 'ready') {", '      const provider = core.chat.state(sessionId)?.provider')
+    expect(ready).toMatch(/void core\.profileConversations\.learned\(sessionId, event\.threadId\)/)
+  })
+
+  it('a resume names it at the spawn, recorded once the profile is resolved', () => {
+    const body = between('  async function spawnSession(opts: any)', "ipcMain.handle('sessions.spawn'")
+    expect(body).toMatch(/if \(resumeId && opts\.agentProfileId !== undefined\) void core\.profileConversations\.record\(resumeId, opts\.agentProfileId\)/)
+    expect(before(body, 'opts = { ...rest, ...resolved }', 'core.profileConversations.record(resumeId')).toBe(true)
+  })
+
+  it('the resume dialog’s defaults carry the profile it ran as', () => {
+    const defaults = between("ipcMain.handle('sessions.resumeDefaults'", '\n  }))')
+    expect(defaults).toMatch(/agentProfileId: await core\.profileConversations\.profileOf\(sessionId\)/)
+  })
+})

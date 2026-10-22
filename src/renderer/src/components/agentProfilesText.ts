@@ -70,7 +70,8 @@ export function spawnPermission(o: { agentProfileId?: string; bypassPermissions?
 }
 
 /** The profile of a conversation a tab of this app held (its resumed session id or its chat thread id), for resuming
- *  it from history. Undefined when no tab here knows it: the transcript itself does not record a profile. */
+ *  it from history. Undefined when no tab here knows it: the transcript itself does not record a profile, so the resume
+ *  then takes the one the app recorded for the conversation (sessions.resumeDefaults, via ResumeDialog). */
 export function profileOfConversation(
   sessions: readonly { resumeSessionId?: string; threadId?: string; agentProfileId?: string }[],
   conversationId: string

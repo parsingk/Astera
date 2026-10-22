@@ -57,6 +57,7 @@ import { createSessionSignalForwarder } from './sessionSignals'
 import { hearForwarded } from '../core/slack/forwarded'
 import { HookEventWatcher } from '../core/hooks/eventWatcher'
 import { fanOutHookEvent } from './hookFanOut'
+import { extractStatusLineSession } from '../core/usage/statusline'
 import { DesktopNotifier } from './desktopNotifier'
 import { createAttentionState } from '../core/sessions/attention'
 import { createPendingPromptState } from '../core/sessions/pendingPrompt'
@@ -673,6 +674,8 @@ app.whenReady().then(async () => {
       } catch {
         /* writing the mapping down must not disturb the poll that produced it */
       }
+      // The thread is the conversation a history resume names: the profile the session runs as is written down by it
+      void core!.profileConversations.learned(sessionId, note.codexSessionId)
     },
     log: slackLog
   })
@@ -686,7 +689,9 @@ app.whenReady().then(async () => {
     // instead (desktopNotifier.ts's constructor) — see hookFanOut.ts's own comment on why `attention`
     // still runs first regardless.
     // Slack hears the hooks only while this app owns it: a Slack-owning Host reads the same hook files.
-    (sessionId, payload) =>
+    // Every hook payload names the Claude conversation (`session_id`, as the statusLine payload does), which a history
+    // resume names too: the profile the session runs as is written down by it, after the taps, never waited on.
+    (sessionId, payload) => {
       fanOutHookEvent(
         {
           attention,
@@ -699,7 +704,9 @@ app.whenReady().then(async () => {
         },
         sessionId,
         payload
-      ),
+      )
+      void core!.profileConversations.learned(sessionId, extractStatusLineSession(payload).sessionId)
+    },
     slackLog
   )
   hookWatcher.start()
