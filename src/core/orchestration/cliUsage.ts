@@ -334,7 +334,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'jobs-run': {
     summary: 'start a run of this Job now',
     detail:
-      'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going. From inside an agent session, a Job made as a bypass agent profile is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
+      'Returns the run it started, which is the id to pass to `runs wait`. Refused while a run of this Job is already going. From inside an agent session, a Job made as a bypass agent profile, or whose tasks the run would copy name one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<jobId>', 'the Job to run')]
   },
   'jobs-create': {
@@ -396,13 +396,13 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'runs-resume': {
     summary: 'let a paused run go again',
     detail:
-      'From inside an agent session, a run of a Job made as a bypass agent profile is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
+      'From inside an agent session, a run of a Job made as a bypass agent profile, or with an unfinished task that names one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<runId>', 'the run to resume')]
   },
   'runs-reconverge': {
     summary: 'carry a finished GitHub lifecycle run through GitHub again',
     detail:
-      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting. From inside an agent session, a run of a Job made as a bypass agent profile is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
+      'Adds a new lifecycle task to the run, with a fresh repair and rerun budget, once its latest one completed or failed, and drops the old merge-ready evidence. Refused (409) for a run whose job is not carried through GitHub, a run with no branch of its own (or whose branch was removed), a run not carried through GitHub yet, a run whose lifecycle task still works, and a pull request that is merged or closed (the Host reads it from GitHub first). A worker session Astera started is refused (5). MCP clients need the "Let MCP clients act on GitHub" setting. From inside an agent session, a run of a Job made as a bypass agent profile, or with a task that names one, is refused with 5 unless Astera\'s "Run agents without permission checks" is on.',
     flags: [ID('<runId>', 'the run to carry again')]
   },
   'runs-checks': {
@@ -463,7 +463,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'tasks-dispatch': {
     summary: 'place one ready task now, the way the loop places one',
     detail:
-      'The Host places it through the same path its loop uses: the account the task names, the run worktree, the placement, then worker-start, so the answer is the worker it started (dispatchId, sessionId). Refused with 6 when the task is not ready, the run is paused or not running, the run is at its concurrency limit, the run is driven by a coordinator (tell the coordinator instead, or stop the run first), or the Host does not drive Jobs right now. What would open a question in the loop (no usable account, a worktree that cannot be made) is a 6 with the reason instead, and nothing is opened. It is for a person or a script, so a worker session is refused with 5. With --request-id a retry is not placed twice.',
+      'The Host places it through the same path its loop uses: the account the task names, the run worktree, the placement, then worker-start, so the answer is the worker it started (dispatchId, sessionId). Refused with 6 when the task is not ready, the run is paused or not running, the run is at its concurrency limit, the run is driven by a coordinator (tell the coordinator instead, or stop the run first), or the Host does not drive Jobs right now. What would open a question in the loop (no usable account, a worktree that cannot be made) is a 6 with the reason instead, and nothing is opened. It is for a person or a script, so a worker session is refused with 5. From inside an agent session, a task that names a bypass agent profile is refused with 5 unless Astera\'s "Run agents without permission checks" is on. With --request-id a retry is not placed twice.',
     flags: [ID('<taskId>', 'the task to place (from `tasks list --ready`)')]
   },
 

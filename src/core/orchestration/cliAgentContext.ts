@@ -45,6 +45,9 @@ const req = (name: string, value: string, about: string): UsageFlag => ({
 
 const DISPATCH = (about: string): UsageFlag => req('dispatch', '<dispatchId>', about)
 const RUN_ARG = (value: string, about: string): UsageFlag => req('run', value, about)
+/** What starting work asks of an agent (Agent Profiles follow-up): said once, for the commands that start a run or a worker. */
+const BYPASS_START =
+  'From inside an agent session, work that would run as a bypass agent profile (the Job\'s, or a Task\'s it starts) is refused with 5 unless Astera\'s "Run agents without permission checks" is on.'
 
 /**
  * The commands `USAGE` does not carry — the surface a session uses and a shell does not.
@@ -105,7 +108,7 @@ const SESSION = {
   },
   'run-start': {
     summary: "clear a Job's start gate and run it, or restart a run's coordinator",
-    detail: "Given a run id, it only starts that run's coordinator when it has none; the Job's gate is left alone.",
+    detail: `Given a run id, it only starts that run's coordinator when it has none; the Job's gate is left alone. ${BYPASS_START}`,
     flags: [RUN_ARG('<jobId|runId>', 'the Job to start, or the run whose coordinator to restart')]
   },
   'run-pause': {
@@ -114,11 +117,12 @@ const SESSION = {
   },
   'run-resume': {
     summary: 'let a held Job fire again',
+    detail: BYPASS_START,
     flags: [RUN_ARG('<jobId>', 'the Job to let go')]
   },
   'run-spawn': {
     summary: 'start one more run of a Job',
-    detail: "It starts the run's coordinator when the Job has a coordinator account.",
+    detail: `It starts the run's coordinator when the Job has a coordinator account. ${BYPASS_START}`,
     flags: [
       RUN_ARG('<jobId>', 'the Job to run again'),
       { name: 'unless-running', about: "make no run while the Job's latest run still runs (409); a schedule's fire sends it" }
@@ -447,6 +451,7 @@ const SESSION = {
   },
   'worker-start': {
     summary: 'start a worker session for a Task',
+    detail: `${BYPASS_START} The coordinator Astera started for the Task's run is not asked.`,
     flags: [
       req('task', '<taskId>', 'the Task to work on'),
       req('agent', '<claude|codex>', 'which CLI the worker runs'),

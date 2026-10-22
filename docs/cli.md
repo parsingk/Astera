@@ -985,7 +985,8 @@ What would open a question in the app, such as no usable account or a worktree t
 a 6 carrying the reason instead, and no question is opened: you asked, so you get the answer. When the
 task first needs the worktrees it depends on merged, the Host makes the merge task and says so with a 6;
 the merge task runs first and the task after it. A start that fails is handed back as `worker-start`
-answered it. A worker session is refused with 5, as it is for `worker-start`. The Host places the
+answered it. A worker session is refused with 5, as it is for `worker-start`, and so is any other agent session
+for a task that names a bypass agent profile while **Run agents without permission checks** is off. The Host places the
 task only when its loop is not in the middle of a pass, and judges the run again once it may, so a run
 paused or handed to a coordinator meanwhile gets no worker. That wait can outlast the command's own
 deadline: a 7 then leaves the placement going on the Host, and the task may still get its worker.
@@ -1101,8 +1102,12 @@ profile its Job holds: the person chose that profile, so the tasks it adds to th
 bypass profile the coordinator names itself with `--agent-profile` is asked about like any other, and so is a session
 that drives the run from outside (one that made itself its driver with `check --run`). Running a Job that holds a
 bypass profile starts work as it too, so from inside an agent session `jobs run`, `runs resume` and `runs reconverge`
-of such a Job's runs are refused with 5 and change nothing under the same setting; a Job whose profile was deleted
-since runs as before, and a profile file that cannot be read refuses with 6 and `error.details.repair`. These refusals
+of such a Job's runs are refused with 5 and change nothing under the same setting. So are they when the work would run
+as a bypass profile a task names in a Job with none: a task the new run copies, a task of the run not finished yet,
+or for `runs reconverge` any task of the run, since its repair borrows one's profile. Starting one task's worker is
+asked the same about that task's profile: `tasks dispatch`, and `worker-start` unless the caller is the coordinator
+Astera started for that run; the Host's and Astera's own placing is not asked. A profile deleted since runs as before,
+and a profile file that cannot be read refuses with 6 and `error.details.repair`. These refusals
 say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and
 `agent-profile-no-account` with 2, `agent-profile-bypass-refused` with 5.
 

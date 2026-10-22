@@ -237,7 +237,8 @@ a `run_job` that failed. A Run that `stop_run` paused has `paused: true` and `ou
 only while Astera skips them anyway.** `create_job`, `create_task` and `create_session` with such a profile, and
 `create_task`, `run_job`, `resume_run` and `reconverge_run` for a Job that holds one, are refused with
 `PERMISSION_DENIED` (its `details.reason` is `agent-profile-bypass-refused`) and make or start nothing unless **Run
-agents without permission checks** is on in Astera's settings. A profile set to `inherit` or `ask` is not affected, and a person choosing in Astera or at their own shell
+agents without permission checks** is on in Astera's settings. `run_job`, `resume_run` and `reconverge_run` are also
+refused when a Task of the work they would start names such a profile in a Job with none. A profile set to `inherit` or `ask` is not affected, and a person choosing in Astera or at their own shell
 is not asked. Neither is the coordinator Astera started to carry out such a Job, an agent session and never an MCP
 client, when the Tasks it adds inherit the profile a person chose for the Job.
 

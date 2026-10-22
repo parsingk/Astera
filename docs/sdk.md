@@ -322,7 +322,8 @@ A profile whose `permission` is `bypass` runs without permission checks, so **a 
 Astera skips them anyway**: its `jobs.create` or `tasks.create` with such a profile, or a `tasks.create`, `jobs.run` or
 `runs.resume` for a Job that holds one, fails with `PERMISSION_DENIED` (`details.reason` is
 `agent-profile-bypass-refused`) and makes or starts nothing unless **Run agents without permission checks** is on in
-Astera's settings. A client your own program makes on this machine is
+Astera's settings. `jobs.run` and `runs.resume` fail the same way when a Task of the work they would start names such a
+profile in a Job with none. A client your own program makes on this machine is
 answered as your own shell is, and is not asked.
 
 ```ts

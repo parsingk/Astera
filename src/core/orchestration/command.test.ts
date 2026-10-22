@@ -10549,4 +10549,205 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       expect((await damaged.as({ sessionId: APP_CALLER }, 'jobs-run', { id: damagedJob })).status).toBe(200)
     })
   })
+
+  // Fourth follow-up, the same decision: the work a start sets going may run as a profile its own Tasks hold, in a Job
+  // with none. The run-start family also asks the profiles of the Run's Tasks not finished yet (for runs reconverge,
+  // whose repair borrows a finished Task's, every ordinary Task's) or of the Job's plan a new Run copies; and starting
+  // one Task's worker (worker-start, tasks dispatch) asks that Task's. Astera's coordinator of its own Run and the
+  // automatic placing (the app's and the Host's own callers) are not asked; a person is not asked
+  describe('work whose own Task holds such a profile, in a Job with none', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    const plainJob = async (deps: Deps, extra: Record<string, unknown> = {}): Promise<string> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', ...extra })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const runOf = (deps: Deps, jobId: string): string => deps.getState().runs.find((r) => r.jobId === jobId)!.id
+    /** A Task a person made as the bypass profile, in a Job's plan or a Run */
+    const personsTask = async (deps: Deps, target: string): Promise<string> =>
+      idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: target, spec: 's', account: 'acc1', agentProfileId: 'ap_b' }))
+    const patch = async (deps: Deps, f: (s: ReturnType<Deps['getState']>) => ReturnType<Deps['getState']>): Promise<void> => deps.setState(f(deps.getState()))
+    const taskStatus = (deps: Deps, id: string, status: 'completed'): Promise<void> =>
+      patch(deps, (s) => ({ ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, status } : t)) }))
+
+    const ENTRIES: Array<{ name: string; prepare: (deps: Deps) => Promise<{ cmd: string; args: Record<string, unknown>; unchanged: () => unknown }> }> = [
+      {
+        name: 'jobs run, a plan Task',
+        prepare: async (deps) => {
+          const jobId = await plainJob(deps, { auto: true })
+          await personsTask(deps, jobId)
+          return { cmd: 'jobs-run', args: { id: jobId }, unchanged: () => deps.getState().runs.length }
+        }
+      },
+      {
+        name: 'run-spawn, a plan Task',
+        prepare: async (deps) => {
+          const jobId = await plainJob(deps)
+          await personsTask(deps, jobId)
+          return { cmd: 'run-spawn', args: { run: jobId }, unchanged: () => deps.getState().runs.length }
+        }
+      },
+      {
+        name: 'run-resume of a schedule, a plan Task',
+        prepare: async (deps) => {
+          const jobId = await plainJob(deps, { schedule: { kind: 'daily', time: '09:00' } })
+          await personsTask(deps, jobId)
+          await patch(deps, (s) => ({ ...s, jobs: s.jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) }))
+          return { cmd: 'run-resume', args: { run: jobId }, unchanged: () => deps.getState().jobs[0].paused }
+        }
+      },
+      {
+        name: 'run-start of a Run, a Task not finished',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await plainJob(deps))
+          await personsTask(deps, runId)
+          return { cmd: 'run-start', args: { run: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.coordinatorSessionId }
+        }
+      },
+      {
+        name: 'runs resume, a Task not finished',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await plainJob(deps))
+          await personsTask(deps, runId)
+          await patch(deps, (s) => ({ ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }))
+          return { cmd: 'runs-resume', args: { id: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.paused }
+        }
+      },
+      {
+        name: 'runs reconverge, a finished Task its repair would borrow',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await plainJob(deps))
+          await taskStatus(deps, await personsTask(deps, runId), 'completed')
+          return { cmd: 'runs-reconverge', args: { id: runId }, unchanged: () => deps.getState().tasks.length }
+        }
+      }
+    ]
+
+    it('the run-start family refuses an agent while the app-wide mode asks, changing nothing', async () => {
+      for (const entry of ENTRIES)
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          const { cmd, args, unchanged } = await entry.prepare(deps)
+          const before = JSON.stringify(unchanged())
+          const r = await as(caller, cmd, args)
+          expect([r.status, reasonOf(r)], `${entry.name} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(JSON.stringify(unchanged()), `${entry.name} ${JSON.stringify(caller)}`).toBe(before)
+        }
+    })
+
+    it('the run-start family lets a person, and an agent once the app-wide mode skips the checks', async () => {
+      for (const entry of ENTRIES) {
+        for (const caller of PEOPLE) {
+          const { deps, appWideYolo, as } = setup(false)
+          const { cmd, args } = await entry.prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${entry.name} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+          expect(appWideYolo, entry.name).not.toHaveBeenCalled()
+        }
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(true)
+          const { cmd, args } = await entry.prepare(deps)
+          expect(reasonOf(await as(caller, cmd, args)), `${entry.name} ${JSON.stringify(caller)}`).toBeUndefined()
+        }
+      }
+    })
+
+    it('a Task finished already is not asked about when its Run resumes; an unreadable store refuses an agent', async () => {
+      const { deps, as } = setup(false)
+      const runId = runOf(deps, await plainJob(deps))
+      await taskStatus(deps, await personsTask(deps, runId), 'completed')
+      await patch(deps, (s) => ({ ...s, runs: s.runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) }))
+      expect(reasonOf(await as({ sessionId: 'sess_agent', role: 'cli' }, 'runs-resume', { id: runId }))).toBeUndefined()
+      const damaged = setup(false)
+      const jobId = await plainJob(damaged.deps, { auto: true })
+      await personsTask(damaged.deps, jobId)
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: jobId })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(damaged.deps.getState().runs).toHaveLength(0)
+    })
+
+    /** A ready Task a person made as the bypass profile, in a Run of a Job with none */
+    const readyTask = async (deps: Deps): Promise<{ runId: string; taskId: string }> => {
+      const runId = runOf(deps, await plainJob(deps))
+      return { runId, taskId: await personsTask(deps, runId) }
+    }
+    const start = (taskId: string) => ({ task: taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const opened = (deps: Deps): number => deps.getState().dispatches.length
+
+    it('worker-start refuses an agent a Task held by such a profile while the app-wide mode asks, opening nothing', async () => {
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const r = await as(caller, 'worker-start', start(taskId))
+        expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+        expect(opened(deps), JSON.stringify(caller)).toBe(0)
+      }
+      // The coordinator of another Run is no coordinator of this one
+      const { deps, as } = setup(false)
+      const { taskId } = await readyTask(deps)
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'other', cwd: 'D:/p' })
+      await patch(deps, (s) => ({ ...s, runs: s.runs.map((r, i) => (i === 1 ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) }))
+      expect(reasonOf(await as({ sessionId: 'sess_coord', role: 'cli' }, 'worker-start', start(taskId)))).toBe('agent-profile-bypass-refused')
+    })
+
+    it('worker-start lets a person, the automatic placing, its Run’s own coordinator, and an agent under yolo', async () => {
+      const LOOPS: Caller[] = [{ sessionId: APP_CALLER }, { sessionId: HOST_CALLER }]
+      for (const caller of [...PEOPLE, ...LOOPS]) {
+        const { deps, appWideYolo, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const r = await as(caller, 'worker-start', start(taskId))
+        expect(r.status, `${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBe(200)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      const own = setup(false)
+      const mine = await readyTask(own.deps)
+      await patch(own.deps, (s) => ({ ...s, runs: s.runs.map((r) => (r.id === mine.runId ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) }))
+      const coordinated = await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'worker-start', start(mine.taskId))
+      expect(coordinated.status, JSON.stringify(coordinated.body)).toBe(200)
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const { taskId } = await readyTask(deps)
+        expect((await as(caller, 'worker-start', start(taskId))).status, JSON.stringify(caller)).toBe(200)
+      }
+      // A Task with no profile is placed by an agent as before, nothing read
+      const plain = setup(false)
+      const runId = runOf(plain.deps, await plainJob(plain.deps))
+      const plainTask = idOf(await handleCommand(plain.deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec: 's', account: 'acc1' }))
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'worker-start', start(plainTask))).status).toBe(200)
+    })
+
+    it('tasks dispatch refuses an agent such a Task while the app-wide mode asks, and places it for a person or under yolo', async () => {
+      const placed = (deps: Deps) => {
+        const dispatchTask = vi.fn(async () => ({ status: 200, body: {} }))
+        deps.dispatchTask = dispatchTask
+        return dispatchTask
+      }
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const dispatchTask = placed(deps)
+        const r = await as(caller, 'tasks-dispatch', { id: taskId })
+        expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+        expect(dispatchTask).not.toHaveBeenCalled()
+      }
+      for (const caller of PEOPLE) {
+        const { deps, as } = setup(false)
+        const { taskId } = await readyTask(deps)
+        const dispatchTask = placed(deps)
+        expect((await as(caller, 'tasks-dispatch', { id: taskId })).status, JSON.stringify(caller)).toBe(200)
+        expect(dispatchTask).toHaveBeenCalledWith(taskId)
+      }
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const { taskId } = await readyTask(deps)
+        const dispatchTask = placed(deps)
+        expect((await as(caller, 'tasks-dispatch', { id: taskId })).status, JSON.stringify(caller)).toBe(200)
+        expect(dispatchTask).toHaveBeenCalledWith(taskId)
+      }
+    })
+  })
 })
