@@ -101,7 +101,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.extensions.off': 'Off',
   'settings.extensions.attention': 'Needs a look',
   'settings.extensions.isolation': 'Run per session',
-  'settings.extensions.mcpSharing': "By default, sessions (tabs) opened in the same project folder share one MCP server. Even with five sessions open, only one server runs, which saves memory. Sometimes, though, each session needs its own MCP server. For example, playwright opens one browser per server; if two sessions share it, a page one session opened gets overwritten by the other. In that case, check 'Run per session'.",
+  'settings.extensions.mcpSharing': "By default, sessions (tabs) opened in the same project folder share one MCP server.\nEven with five sessions open, only one server runs, which saves memory. Sometimes, though, each session needs its own MCP server.\nFor example, playwright opens one browser per server. If two sessions share it, a page one session opened gets overwritten by the other.\nIn that case, check '{option}'.",
   'settings.extensions.replace': 'Use the shared version',
   'settings.extensions.replaceConfirm.title': 'Replace {name} in {label}?',
   'settings.extensions.replaceConfirm.body': "The account's own {name} is kept in a backup first.",

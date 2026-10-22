@@ -143,7 +143,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
         return (
           <div key={kind} className="settings-stack">
             <span className="settings-field-label">{kindLabel(kind, t)}</span>
-            {kind === 'mcp' && <p className="settings-hint">{t('settings.extensions.mcpSharing')}</p>}
+            {kind === 'mcp' && <McpSharingNote />}
             <div className="ext-list">
               {ofKind.map((e) => {
                 const id = str(e.id)
@@ -170,6 +170,20 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
         )
       })}
     </div>
+  )
+}
+
+/** How MCP servers are shared per project folder, in the person's own line breaks, with the switch's name in bold. */
+function McpSharingNote(): React.JSX.Element {
+  const { t } = useI18n()
+  const marker = '\u0001'
+  const [before, after] = t('settings.extensions.mcpSharing', { option: marker }).split(marker)
+  return (
+    <p className="settings-hint ext-note">
+      {before}
+      <strong>{t('settings.extensions.isolation')}</strong>
+      {after}
+    </p>
   )
 }
 

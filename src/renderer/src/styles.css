@@ -1265,12 +1265,14 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .plugin-facts { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; }
 .plugin-facts > span:last-child { color: var(--text); overflow-wrap: anywhere; }
 /* Settings › Extensions: one scrolling list per kind, rows collapsed to their name until opened */
+.ext-note { white-space: pre-line; }
+.ext-note strong { color: var(--text); font-weight: 600; }
 .ext-list { max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 .ext-row + .ext-row { border-top: 1px solid var(--line); }
 .ext-row-head { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 12px; background: none; border: 0; text-align: left; cursor: pointer; color: inherit; }
 .ext-row-head:hover { background: var(--elevated); }
 .ext-row-chevron { flex-shrink: 0; width: 12px; color: var(--text-dim); font-size: 11px; }
-.ext-row-body { display: flex; flex-direction: column; gap: 8px; padding: 8px 12px 12px 32px; border-top: 1px solid var(--line); }
+.ext-row-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 12px 18px 16px; border-top: 1px solid var(--line); }
 .plugin-card .settings-hint { overflow-wrap: anywhere; }
 /* A fieldset, so a save holds every field at once; its own frame is taken off. */
 .plugin-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 6px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line-soft); }

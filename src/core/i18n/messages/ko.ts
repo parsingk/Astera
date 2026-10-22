@@ -105,7 +105,7 @@ export const ko = {
   'settings.extensions.off': '꺼짐',
   'settings.extensions.attention': '확인 필요',
   'settings.extensions.isolation': '세션마다 실행',
-  'settings.extensions.mcpSharing': "기본적으로 같은 프로젝트 폴더에서 연 세션(탭)들이 MCP 서버 하나를 같이 씁니다. 세션 다섯 개를 열어도 서버는 하나만 떠서 메모리를 아낍니다. 단, 세션마다 MCP 서버를 따로 띄워야 할 때가 있습니다. 예를 들어 playwright는 서버 하나가 브라우저 하나를 띄웁니다. 두 세션이 같이 쓰면 한 세션이 연 페이지를 다른 세션이 덮어쓰게 됩니다. 이런 경우 '세션마다 실행'을 체크하세요.",
+  'settings.extensions.mcpSharing': "기본적으로 같은 프로젝트 폴더에서 연 세션(탭)들이 MCP 서버 하나를 같이 씁니다.\n세션 다섯 개를 열어도 서버는 하나만 떠서 메모리를 아낍니다. 단, 세션마다 MCP 서버를 따로 띄워야 할 때가 있습니다.\n예를 들어 playwright는 서버 하나가 브라우저 하나를 띄웁니다. 두 세션이 같이 쓰면 한 세션이 연 페이지를 다른 세션이 덮어쓰게 됩니다.\n이런 경우 '{option}'을 체크하세요.",
   'settings.extensions.replace': '공유 버전으로 바꾸기',
   'settings.extensions.replaceConfirm.title': '{label}의 {name}을(를) 바꿀까요?',
   'settings.extensions.replaceConfirm.body': '계정에 있던 {name}은(는) 먼저 백업해 둡니다.',

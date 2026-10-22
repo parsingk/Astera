@@ -35,6 +35,14 @@ describe('extensionsText', () => {
     }
   })
 
+  it('keeps the MCP sharing note in four lines, with one place for the switch’s name', () => {
+    for (const lang of LANGS) {
+      const note = translate(lang, 'settings.extensions.mcpSharing', { option: '\u0001' })
+      expect(note.split('\n'), lang).toHaveLength(4)
+      expect(note.split('\u0001'), lang).toHaveLength(2)
+    }
+  })
+
   it('says nothing about what needs no action', () => {
     for (const o of ['written', 'unchanged', 'adopted', 'restored', 'removed', 'forgotten', 'not-applicable']) expect(copyProblem(o, en)).toBeNull()
     expect(serverProblem({ state: 'running' }, en)).toBeNull()
