@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { Account, PluginsCallAnswer, Provider } from '../../../core/types'
 import type { ExtensionKind } from '../../../core/extensions/types'
-import { PROVIDERS, PROVIDER_META } from '../../../core/providers/meta'
+import { PROVIDERS } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
-import { envSourceLabel, failureLine, gatewayLine, importPrompt, kindLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
+import { copyProblem, failureLine, importPrompt, kindLabel, notGivenLabel, notGivenWorthSaying, picksOf, reasonLabel, serverProblem, type FoundItem } from './extensionsText'
 
 type Entry = Record<string, unknown>
 type Status = { id: string; accountId: string; outcome: string; detail?: string }
@@ -17,16 +17,13 @@ type Failure = Extract<PluginsCallAnswer, { ok: false }>
 const KINDS: ExtensionKind[] = ['mcp', 'skill', 'command', 'agent']
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const arr = <V,>(v: unknown): V[] => (Array.isArray(v) ? (v as V[]) : [])
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 /** A call that threw (main gone, an IPC error) answers like one the Host refused, so every path says why. */
 const failed = (e: unknown): PluginsCallAnswer => ({ ok: false, code: 'FAILED', message: e instanceof Error ? e.message : String(e) })
-/** How an outcome looks: in step, needs the person, or neither. */
-const toneOf = (o: string): string => (o === 'written' || o === 'unchanged' || o === 'adopted' ? ' is-running' : o === 'conflict' || o === 'failed' ? ' is-failed' : o === 'restored' ? ' is-starting' : '')
 
-/** Settings › Extensions (Agent Control Plane release 1 design §4.10): the MCP servers, skills, commands and subagents
- *  shared with every account, each with how its copy stands in each account; importing from a provider's default
- *  account; turning one on or off, removing it, syncing now, and replacing an account's own copy. The Host owns the
- *  registry and checks everything; no environment value ever reaches this tab. */
+/** Settings › Extensions (Agent Control Plane release 1 design §4.10, release 2 §4.5): the MCP servers, skills, commands
+ *  and agents shared with every account, one scrolling list per kind of collapsed rows that open on a click. A row shows
+ *  only what a person acts on: whether it is off, what went wrong, and which accounts cannot use it and why. The Host
+ *  owns the registry and checks everything; no environment value ever reaches this tab. */
 export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t } = useI18n()
   const { defaultIdByProvider } = useAccountStatus(accounts)
@@ -37,6 +34,15 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   const [listFailure, setListFailure] = useState<Failure | null>(null)
   /** One change at a time: every change syncs every account before the Host answers. */
   const [busy, setBusy] = useState<'reading' | 'changing' | null>(null)
+  /** The rows opened, by entry id. */
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
+  const toggleOpen = (id: string): void =>
+    setOpen((o) => {
+      const next = new Set(o)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const labelOf = (accountId: string): string => accounts.find((a) => a.id === accountId)?.label ?? accountId
   const load = async (): Promise<void> => {
@@ -110,29 +116,25 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
     if (ok) await change(() => window.api.extensions.replace(accountId, str(e.id)))
   }
 
-  const sources = PROVIDERS.map((p: Provider) => ({ provider: p, accountId: defaultIdByProvider[p] }))
+  const sources = PROVIDERS.map((p: Provider) => ({ provider: p, accountId: defaultIdByProvider[p] })).filter((x) => x.accountId !== null) as {
+    provider: Provider
+    accountId: string
+  }[]
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.extensions.hint')}</p>
       <div className="remote-actions">
-        {sources.map(({ provider, accountId }) =>
-          accountId !== null ? (
-            <button key={provider} className="settings-gen-refresh" disabled={busy !== null || listFailure !== null} onClick={() => void importFrom(accountId)}>
-              {busy === 'reading' ? t('settings.extensions.reading') : t('settings.extensions.importFrom', { label: labelOf(accountId) })}
-            </button>
-          ) : null
-        )}
-        <button className="settings-gen-refresh" disabled={busy !== null || listFailure !== null} onClick={() => void change(() => window.api.extensions.sync(), () => toast.success(t('settings.extensions.synced')))}>
-          {busy === 'changing' ? t('settings.extensions.syncing') : t('settings.extensions.sync')}
-        </button>
-      </div>
-      {sources
-        .filter((s) => s.accountId === null)
-        .map(({ provider }) => (
-          <p key={provider} className="settings-hint">
-            {t('settings.extensions.noDefault', { provider: PROVIDER_META[provider].displayName })}
-          </p>
+        {sources.map(({ provider, accountId }) => (
+          <button key={provider} className="settings-gen-refresh" disabled={busy !== null || listFailure !== null} onClick={() => void importFrom(accountId)}>
+            {busy === 'reading' ? t('settings.extensions.reading') : t('settings.extensions.importFrom', { label: labelOf(accountId) })}
+          </button>
         ))}
+        {entries !== null && entries.length > 0 && (
+          <button className="settings-gen-refresh" disabled={busy !== null || listFailure !== null} onClick={() => void change(() => window.api.extensions.sync(), () => toast.success(t('settings.extensions.synced')))}>
+            {busy === 'changing' ? t('settings.extensions.syncing') : t('settings.extensions.sync')}
+          </button>
+        )}
+      </div>
       {listFailure !== null && <p className="settings-hint is-warning">{failureLine(listFailure, t, { read: true })}</p>}
       {entries !== null && entries.length === 0 && <p className="settings-hint">{t('settings.extensions.none')}</p>}
       {KINDS.map((kind) => {
@@ -141,21 +143,28 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
         return (
           <div key={kind} className="settings-stack">
             <span className="settings-field-label">{kindLabel(kind, t)}</span>
-            {ofKind.map((e) => (
-              <ExtensionCard
-                key={str(e.id)}
-                entry={e}
-                status={status.filter((s) => s.id === e.id)}
-                mcpStatus={mcpStatus.filter((s) => s.id === e.id)}
-                gateway={gateway.find((g) => g.serverId === e.id)}
-                onIsolation={(on) => void change(() => window.api.extensions.setIsolation(str(e.id), on ? 'session' : 'folder'))}
-                labelOf={labelOf}
-                busy={busy !== null}
-                onToggle={() => void change(() => window.api.extensions.setEnabled(str(e.id), e.enabled !== true))}
-                onRemove={() => void remove(e)}
-                onReplace={(accountId) => void replace(e, accountId)}
-              />
-            ))}
+            <div className="ext-list">
+              {ofKind.map((e) => {
+                const id = str(e.id)
+                return (
+                  <ExtensionRow
+                    key={id}
+                    entry={e}
+                    open={open.has(id)}
+                    onOpen={() => toggleOpen(id)}
+                    status={status.filter((s) => s.id === id)}
+                    mcpStatus={mcpStatus.filter((s) => s.id === id)}
+                    gateway={gateway.find((g) => g.serverId === id)}
+                    onIsolation={(on) => void change(() => window.api.extensions.setIsolation(id, on ? 'session' : 'folder'))}
+                    labelOf={labelOf}
+                    busy={busy !== null}
+                    onToggle={() => void change(() => window.api.extensions.setEnabled(id, e.enabled !== true))}
+                    onRemove={() => void remove(e)}
+                    onReplace={(accountId) => void replace(e, accountId)}
+                  />
+                )
+              })}
+            </div>
           </div>
         )
       })}
@@ -163,9 +172,12 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   )
 }
 
-/** One shared item: what it is, where it came from, and how its copy stands in each account. */
-function ExtensionCard({
+/** One shared item: its name, and a mark when it is off or needs a look; opened, what went wrong, which accounts
+ *  cannot use it and why, and its actions. */
+function ExtensionRow({
   entry,
+  open,
+  onOpen,
   status,
   mcpStatus,
   gateway,
@@ -177,10 +189,12 @@ function ExtensionCard({
   onReplace
 }: {
   entry: Entry
+  open: boolean
+  onOpen: () => void
   status: Status[]
   /** Per account, whether its sessions get this MCP server, or why not. */
   mcpStatus: McpState[]
-  /** The Gateway's processes of this server, for a stdio one. */
+  /** The processes of this server, for one that runs as a command. */
   gateway: GatewayState | undefined
   onIsolation: (on: boolean) => void
   labelOf: (accountId: string) => string
@@ -191,66 +205,59 @@ function ExtensionCard({
 }): React.JSX.Element {
   const { t } = useI18n()
   const enabled = entry.enabled === true
-  const env = isObject(entry.env) ? Object.entries(entry.env) : []
+  const problem = entry.kind === 'mcp' ? serverProblem(gateway, t) : null
+  const notGiven = mcpStatus.filter((s) => notGivenWorthSaying(s.state))
+  const copyProblems = status.flatMap((s) => {
+    const line = copyProblem(s.outcome, t)
+    return line === null ? [] : [{ ...s, line }]
+  })
+  const attention = enabled && (problem !== null || notGiven.length > 0 || copyProblems.length > 0)
   return (
-    <div className="settings-group plugin-card">
-      <div className="plugin-head">
+    <div className={`ext-row${open ? ' is-open' : ''}`}>
+      <button type="button" className="ext-row-head" aria-expanded={open} onClick={onOpen}>
+        <span className="ext-row-chevron" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
         <span className="plugin-name">{str(entry.name)}</span>
         {!enabled && <span className="plugin-status">{t('settings.extensions.off')}</span>}
-      </div>
-      <span className="settings-hint">{t('settings.extensions.from', { label: labelOf(str(entry.importedFrom)) })}</span>
-      {entry.kind === 'mcp' ? (
-        <>
-          {entry.transport === 'stdio' ? (
-            <>
-              <span className="settings-hint">{t('settings.extensions.mcpGivenGateway')}</span>
-              <span className={`settings-hint${gateway?.state === 'failed' ? ' is-warning' : ''}`}>{gatewayLine(gateway, t)}</span>
-              <label className="check-small">
-                <input type="checkbox" checked={entry.isolation === 'session'} disabled={busy} onChange={(ev) => onIsolation(ev.target.checked)} />
-                <span>{t('settings.extensions.isolation')}</span>
-              </label>
-              <span className="settings-hint">{t('settings.extensions.isolationHint')}</span>
-            </>
-          ) : (
-            <span className="settings-hint">{t('settings.extensions.mcpGiven')}</span>
-          )}
-          {env.length > 0 && (
-            <span className="settings-hint">
-              {t('settings.extensions.env', { names: env.map(([name, source]) => `${name} (${envSourceLabel(str(source), t)})`).join(', ') })}
+        {attention && <span className="plugin-status is-failed">{t('settings.extensions.attention')}</span>}
+      </button>
+      {open && (
+        <div className="ext-row-body">
+          {problem !== null && <span className="settings-hint is-warning">{problem}</span>}
+          {notGiven.map((s) => (
+            <span key={s.accountId} className="settings-hint">
+              {labelOf(s.accountId)}: {notGivenLabel(s.state, t)}
             </span>
-          )}
-          {mcpStatus.map((s) => (
-            <div key={s.accountId} className="plugin-facts">
-              <span className="settings-field-label">{labelOf(s.accountId)}</span>
-              <span className={`plugin-status${s.state === 'given' ? ' is-running' : s.state === 'provider' || s.state === 'account-own' ? '' : ' is-failed'}`}>{mcpStateLabel(s.state, t)}</span>
+          ))}
+          {copyProblems.map((s) => (
+            <div key={s.accountId} className="remote-actions">
+              <span className="settings-hint" title={s.detail}>
+                {labelOf(s.accountId)}: {s.line}
+              </span>
+              {s.outcome === 'conflict' && (
+                <button className="settings-gen-refresh" disabled={busy} onClick={() => onReplace(s.accountId)}>
+                  {t('settings.extensions.replace')}
+                </button>
+              )}
             </div>
           ))}
-        </>
-      ) : enabled && status.length === 0 ? (
-        <span className="settings-hint">{t('settings.extensions.noStatus')}</span>
-      ) : (
-        status.map((s) => (
-          <div key={s.accountId} className="plugin-facts">
-            <span className="settings-field-label">{labelOf(s.accountId)}</span>
-            <span className={`plugin-status${toneOf(s.outcome)}`} title={s.detail}>
-              {outcomeLabel(s.outcome, t)}
-            </span>
-            {s.outcome === 'conflict' && (
-              <button className="settings-gen-refresh" disabled={busy} onClick={() => onReplace(s.accountId)}>
-                {t('settings.extensions.replace')}
-              </button>
-            )}
+          {entry.kind === 'mcp' && entry.transport === 'stdio' && (
+            <label className="check-small">
+              <input type="checkbox" checked={entry.isolation === 'session'} disabled={busy} onChange={(ev) => onIsolation(ev.target.checked)} />
+              <span>{t('settings.extensions.isolation')}</span>
+            </label>
+          )}
+          <div className="remote-actions">
+            <button className="settings-gen-refresh" disabled={busy} onClick={onToggle}>
+              {enabled ? t('settings.extensions.disable') : t('settings.extensions.enable')}
+            </button>
+            <button className="ghost danger" disabled={busy} onClick={onRemove}>
+              {t('settings.extensions.remove')}
+            </button>
           </div>
-        ))
+        </div>
       )}
-      <div className="remote-actions">
-        <button className="settings-gen-refresh" disabled={busy} onClick={onToggle}>
-          {enabled ? t('settings.extensions.disable') : t('settings.extensions.enable')}
-        </button>
-        <button className="ghost danger" disabled={busy} onClick={onRemove}>
-          {t('settings.extensions.remove')}
-        </button>
-      </div>
     </div>
   )
 }
