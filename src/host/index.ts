@@ -36,6 +36,7 @@ import { openSecretStore } from '../core/secrets/secretStore'
 import { randomBytes } from 'node:crypto'
 import { ensureHostKey } from '../core/host/hostKey'
 import { completeWindowsPath } from '../core/sessions/windowsPath'
+import { agentProfileIdOf } from '../core/sessions/noteInfo'
 import { PtyRegistry } from './registry'
 import { createConhostReaper, reapWindowsConsoleHosts } from './conhostReaper'
 import { createRemoteSessions, type RemoteSessions } from './remoteSessions'
@@ -760,7 +761,7 @@ async function main(): Promise<void> {
   const agentProfiles = createHostAgentProfiles({
     profileDir,
     readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
-    inUse: async (id) => [...registry.list(), ...procs.list()].some((e) => e.alive && (e.meta?.restore as { agentProfileId?: string } | undefined)?.agentProfileId === id),
+    inUse: async (id) => [...registry.list(), ...procs.list()].some((e) => e.alive && agentProfileIdOf(e.meta?.restore) === id),
     log: (m) => log.write(m)
   })
   const orch = createHostOrch({

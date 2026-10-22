@@ -129,6 +129,10 @@ export interface SessionInfo {
    *  the session ends (2026-10-20). Written into the pty's note at spawn, so it survives a Host handing the session back;
    *  absent on every session a person started and on every note written before it. */
   startedBy?: 'agent'
+  /** The agent profile the session was started from (Agent Profiles design §5): its MCP exclusions and permission.
+   *  Written into the pty's note at spawn like startedBy, so it survives a Host handing the session back; absent on a
+   *  session started without one and on every note written before profiles. */
+  agentProfileId?: string
 }
 
 /** The stored settings the resume modal reads to seed its checkboxes.
