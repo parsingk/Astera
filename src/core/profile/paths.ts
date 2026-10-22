@@ -36,3 +36,12 @@ export function extensionPaths(profileDir: string): ExtensionPaths {
     generatedMcp: path.join(profileDir, 'materialized', 'mcp')
   }
 }
+
+export interface ProfilePaths {
+  /** The Agent Profiles: `{ version, profiles }`. */
+  agentProfiles: string
+}
+
+export function profilePaths(profileDir: string): ProfilePaths {
+  return { agentProfiles: path.join(profileDir, 'agent-profiles.json') }
+}
