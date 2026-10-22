@@ -1561,7 +1561,7 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
   const cliBuilt = existsSync(cliBundle)
   if (!cliBuilt) console.warn(`skipping "over HTTP" (MCP against the Host): ${cliBundle} is missing; run npm run build first`)
   it.runIf(cliBuilt)(
-    'over HTTP: the Host runs the entrance, a client with the token lists 39 tools and acts, the journal names its address, and off stops it',
+    'over HTTP: the Host runs the entrance, a client with the token lists 40 tools and acts, the journal names its address, and off stops it',
     async () => {
       const cli: HostCliPaths = {
         exec: createRequire(import.meta.url)('electron') as string,
@@ -1589,8 +1589,10 @@ describe('MCP against the Host', { timeout: 60_000 }, () => {
       await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
       cleanups.push(() => client.close())
       // 39 since G5c's reconverge_run (44371e05): this test runs only where out/main/cli.js is built, so a stale build
-      // kept the old count passing (found in G7a)
-      expect((await client.listTools()).tools).toHaveLength(39)
+      // kept the old count passing (found in G7a). 40 since list_agent_profiles (Agent Profiles Task 7, 22a03402)
+      const listed = (await client.listTools()).tools
+      expect(listed).toHaveLength(40)
+      expect(listed.map((t) => t.name)).toContain('list_agent_profiles')
       const projects = (await client.callTool({ name: 'list_projects', arguments: {} })) as ToolResult
       expect(projects.isError).toBeFalsy()
       expect(projects.structuredContent).toEqual({ projects: [expect.objectContaining({ id: projectId, path: projectPath })] })
