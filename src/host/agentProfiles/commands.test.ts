@@ -108,6 +108,28 @@ describe('createHostAgentProfiles', () => {
     expect((await readAgentProfiles(h.profileDir)).profiles[0]!.accountIds).toEqual(['acc_1', 'acc_2'])
   })
 
+  // Final review I2: an update that leaves the accounts alone keeps the ones still registered, so a profile that lost an
+  // account to its removal from Astera can still be changed; and an update keeps the profile's status and last use
+  it('an update without accountIds keeps the live accounts, and the status and lastUsedAt survive it', async () => {
+    const h = await rig()
+    const p = profileOf(await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1', 'acc_2'] }))
+    await h.call('agent-profiles-touch', { id: p.id })
+    await h.call('agent-profiles-archive', { id: p.id })
+    h.setAccounts(h.accounts().filter((a) => a.id !== 'acc_2'))
+    h.advance(1_000)
+    const r = await h.call('agent-profiles-update', { id: p.id, permission: 'ask' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect((await readAgentProfiles(h.profileDir)).profiles[0]).toMatchObject({
+      accountIds: ['acc_1'],
+      permission: 'ask',
+      status: 'archived',
+      lastUsedAt: '2026-10-22T10:00:00.000Z',
+      updatedAt: '2026-10-22T10:00:01.000Z'
+    })
+    // An accountIds given is still checked whole: the removed account is refused by name
+    expect((await h.call('agent-profiles-update', { id: p.id, accountIds: ['acc_1', 'acc_2'] })).body).toMatchObject({ reason: 'unknown-account' })
+  })
+
   it('refuses a caller that is not the app or the CLI, and a change from an agent\'s shell', async () => {
     const h = await rig()
     expect((await h.call('agent-profiles-list', {}, { role: 'agent' })).status).toBe(403)

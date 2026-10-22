@@ -764,6 +764,25 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const plain = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id] })
     expect(plain).not.toHaveProperty('agentProfileId')
   })
+  // Task 4's deferred minor, folded into the final fix wave: a caller's own bypassPermissions wins over the profile's
+  // permission at the spawner too. A roll is the Host's caller that passes both: the bypass its session started with
+  it("a roll's explicit bypassPermissions wins over its profile's permission, both ways", async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+    const P = (id: string, permission: AgentProfile['permission']): AgentProfile => ({
+      id, name: id, status: 'active', accountIds: [account.id], mcpExclude: [], permission, createdAt: NOW, updatedAt: NOW
+    })
+    await writeAgentProfiles(h.profileDir, { version: 1, profiles: [P('ap_ask', 'ask'), P('ap_bypass', 'bypass')] })
+    const SKIP = /--dangerously-skip-permissions/
+    const last = (): string => JSON.stringify(h.spawned[h.spawned.length - 1].args)
+    await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_ask')
+    h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_ask', bypassPermissions: true })
+    expect(last()).toMatch(SKIP)
+    await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_bypass')
+    h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_bypass', bypassPermissions: false })
+    expect(last()).not.toMatch(SKIP)
+  })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')

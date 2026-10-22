@@ -30,8 +30,10 @@ export const PLUGIN_COMMAND_PERMISSIONS: Readonly<Record<string, PluginPermissio
 })
 
 /** Commands the SDK sends that no permission opens to a plugin: the agent profile reads (Agent Profiles design §6) are
- *  for the app, the CLI and MCP, and the plugin permissions have no word for them yet. A plugin asking is refused as for
- *  any unlisted command. */
+ *  for the app, the CLI and MCP, and the plugin permissions have no word for them yet. This set is a list for the tests
+ *  and the docs, not a check: a plugin asking is refused by `pluginRefusal` as for any unlisted command, and the role
+ *  check in src/host/agentProfiles/commands.ts (the app and the CLI, and MCP only for the list) is what enforces it
+ *  behind the gate. */
 export const SDK_COMMANDS_CLOSED_TO_PLUGINS: ReadonlySet<string> = new Set(['agent-profiles-list', 'agent-profiles-get'])
 
 /** Needs no permission: it reads only the receipts of the plugin that asks (receipts are kept per plugin). */

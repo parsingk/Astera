@@ -133,7 +133,9 @@ export function createHostAgentProfiles(d: {
               ...old,
               ...(args.name !== undefined ? { name: args.name as string } : {}),
               ...(args.description !== undefined ? { description: args.description as string } : {}),
-              ...(args.accountIds !== undefined ? { accountIds: args.accountIds as string[] } : {}),
+              // Left alone, the accounts are the ones still registered: an account removed from Astera since would
+              // otherwise refuse every other change as unknown-account, with nothing the caller asked for being wrong
+              accountIds: args.accountIds !== undefined ? (args.accountIds as string[]) : liveAccounts(old, accounts),
               ...(args.mcpExclude !== undefined ? { mcpExclude: args.mcpExclude as string[] } : {}),
               ...(args.permission !== undefined ? { permission: args.permission as ProfilePermission } : {}),
               updatedAt: new Date(now()).toISOString()

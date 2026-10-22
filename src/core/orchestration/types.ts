@@ -178,8 +178,8 @@ export interface Job {
    *  생기기 전에 만든 Run 과 CLI 로 만든 Run 이 그 갈래다 — UI 가 만들지 못하는 것과 코드가 다루지
    *  못하는 것은 다르다. 그때 워커의 질문을 풀어 주는 것은 앱의 그물이다(inbox.ts). */
   coordinatorAccountId?: string
-  /** The agent profile this Job runs as (Agent Profiles design §6), its real id: the default of its Tasks, and where its
-   *  coordinator account came from when none was given. The coordinator itself starts without it (Astera's own role). */
+  /** The agent profile this Job runs as (Agent Profiles design §6), its real id: only the default of its Tasks. It never
+   *  picks the coordinator account, and the coordinator starts without it (Astera's own role). */
   agentProfileId?: string
   /** 앱이 이 Job 을 스스로 돌리는가. **UI 가 만든 Job 에만 참이다** — 코디네이터가 만든 Job 을
    *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
