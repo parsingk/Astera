@@ -2476,7 +2476,9 @@ describe('GitHub writes and request receipts (MCP P2-B)', () => {
     const next: OrchState = {
       ...reg.state,
       runs: reg.state.runs.map((r) => ({ ...r, worktree: WT })),
-      tasks: reg.state.tasks.map((t) => ({ ...t, status: 'completed' as const }))
+      // Finished now by the wall clock: the store drops a Run 30 days after it finished (RUN_TTL_MS, read off Date.now),
+      // so a fixed date stops this Run existing once the calendar passes it
+      tasks: reg.state.tasks.map((t) => ({ ...t, status: 'completed' as const, updatedAt: new Date().toISOString() }))
     }
     await fs.writeFile(file, JSON.stringify(next), 'utf8')
     return { runId: next.runs[0].id, projectId: reg.project.id }
