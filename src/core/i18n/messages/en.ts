@@ -175,6 +175,7 @@ export const en: Record<keyof typeof ko, string> = {
   'agentProfiles.pick.jobHint': "This job's tasks run as this profile unless a task picks another. The account that manages the job stays as you choose below.",
   'agentProfiles.pick.followJob': "Follow the job's profile ({name})",
   'agentProfiles.shown': 'Agent profile: {name}',
+  'agentProfiles.resumeAs': 'This conversation resumes as the agent profile “{name}”.',
   'settings.plugins.hint': 'A plugin is a program that runs beside the Astera Host. Once installed it runs as trusted code on this computer, and asks Astera only for what you granted.',
   'settings.plugins.none': 'No plugins are installed.',
   'settings.plugins.installFolder': 'Install from a folder…',

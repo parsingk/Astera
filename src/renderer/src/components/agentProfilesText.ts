@@ -79,6 +79,14 @@ export function profileOfConversation(
   return sessions.find((s) => s.agentProfileId !== undefined && (s.resumeSessionId === conversationId || s.threadId === conversationId))?.agentProfileId
 }
 
+/** The line the history resume dialog shows when the conversation resumes as the profile the app recorded for it, by
+ *  the name this computer's list has for it (archived too). Null when none was recorded or the id no longer resolves:
+ *  the dialog says nothing, and the resume starts without it as before. */
+export function resumeAsLine(profiles: readonly AgentProfile[], id: string | null, t: T): string | null {
+  const p = id === null ? undefined : profiles.find((x) => x.id === id)
+  return p === undefined ? null : t('agentProfiles.resumeAs', { name: p.name })
+}
+
 /** Whether a new chat session will hold a permission prompt, so the dialog offers what to do with one nobody answers:
  *  the profile's choice when one is picked (inherit is the app-wide mode), else the dialog's checkbox. */
 export function chatHoldsPrompts(profile: AgentProfile | undefined, appWideYolo: boolean, checkbox: boolean): boolean {

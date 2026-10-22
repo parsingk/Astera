@@ -15,6 +15,7 @@ import {
   profileNameOf,
   profileOfConversation,
   reasonLine,
+  resumeAsLine,
   spawnPermission
 } from './agentProfilesText'
 
@@ -146,6 +147,28 @@ describe('agentProfilesText', () => {
     const app = source('../App.tsx')
     const resume = app.slice(app.indexOf('const resumeFromHistory = ('), app.indexOf('// 마지막으로 활성이었던 세션'))
     expect(resume).toContain('profileOfConversation(sessionsRef.current, entry.sessionId) ?? opts.agentProfileId')
+  })
+
+  // Second follow-up: the resume dialog says when the conversation resumes as a profile, by the name this computer's list
+  // has for it; nothing when none was recorded or the id no longer resolves (it resumes without one)
+  it('says which profile a history resume continues as, only while the profile resolves', () => {
+    const list = [profile(), profile({ id: 'ap_2', name: 'Night shift', status: 'archived' })]
+    expect(resumeAsLine(list, 'ap_1', en)).toBe('This conversation resumes as the agent profile “Reviewer”.')
+    expect(resumeAsLine(list, 'ap_2', en)).toBe('This conversation resumes as the agent profile “Night shift”.')
+    expect(resumeAsLine(list, 'ap_1', (k, p) => translate('ko', k, p))).toBe("에이전트 프로필 'Reviewer'(으)로 이어집니다.")
+    expect(resumeAsLine(list, 'ap_gone', en)).toBeNull()
+    expect(resumeAsLine(list, null, en)).toBeNull()
+    for (const lang of LANGS) expect(resumeAsLine(list, 'ap_1', (k, p) => translate(lang, k, p)), lang).toContain('Reviewer')
+  })
+
+  it('the resume dialog shows that line under its controls, naming the recorded profile from the shared list', () => {
+    const dialog = source('./ResumeDialog.tsx')
+    expect(dialog).toMatch(/useAgentProfilesNaming\(savedProfile !== null \? \[savedProfile\] : \[\]\)/)
+    expect(dialog).toMatch(/const resumeAs = resumeAsLine\(profiles, savedProfile, t\)/)
+    expect(dialog).toContain('{resumeAs !== null && <p className="modal-hint">{resumeAs}</p>}')
+    const controls = dialog.indexOf("{t('session.new.bypassPermissions')}")
+    const line = dialog.indexOf('{resumeAs !== null &&')
+    expect(controls >= 0 && line > controls && line < dialog.indexOf('<div className="row right">')).toBe(true)
   })
 
   it('finds the profile of a conversation a tab of this app held', () => {

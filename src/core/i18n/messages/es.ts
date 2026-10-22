@@ -140,6 +140,7 @@ export const es: Catalog = {
   'agentProfiles.pick.jobHint': 'Las tareas de este trabajo usan este perfil salvo que una tarea elija otro. La cuenta que gestiona el trabajo es la que elijas abajo.',
   'agentProfiles.pick.followJob': 'Seguir el perfil del trabajo ({name})',
   'agentProfiles.shown': 'Perfil de agente: {name}',
+  'agentProfiles.resumeAs': 'La conversación se reanuda con el perfil de agente «{name}».',
   'settings.remote.hint': 'Mira desde esta app los Jobs de Astera que se ejecuta en otro equipo (un Runtime). Solo se conecta tras comprobar la clave de ese equipo, y el token se guarda solo en este equipo.',
   'settings.remote.thisMachine.title': 'Este equipo',
   'settings.remote.thisMachine.off': 'Remote Runtime está apagado. Elige una dirección abajo y enciéndelo para que otro equipo pueda emparejarse con este.',

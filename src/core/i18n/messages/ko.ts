@@ -178,6 +178,7 @@ export const ko = {
   'agentProfiles.pick.jobHint': '이 작업에 추가하는 일은 따로 고르지 않으면 이 프로필로 실행됩니다. 작업을 관리하는 계정은 아래에서 고른 그대로입니다.',
   'agentProfiles.pick.followJob': 'Job 프로필 따름 ({name})',
   'agentProfiles.shown': '에이전트 프로필: {name}',
+  'agentProfiles.resumeAs': "에이전트 프로필 '{name}'(으)로 이어집니다.",
   'settings.plugins.hint': '플러그인은 Astera Host 옆에서 도는 프로그램입니다. 설치하면 이 컴퓨터에서 신뢰된 코드로 실행되고, Astera 에는 허락한 권한 안에서만 요청할 수 있습니다.',
   'settings.plugins.none': '설치된 플러그인이 없습니다.',
   'settings.plugins.installFolder': '폴더에서 설치…',

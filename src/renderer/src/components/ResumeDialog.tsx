@@ -8,6 +8,8 @@ import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
 import { backdropProps } from '../lib/backdrop'
+import { useAgentProfilesNaming } from '../lib/agentProfiles'
+import { resumeAsLine } from './agentProfilesText'
 
 /** Modal for resuming a session from history. Only logged-in accounts appear as candidates and the
  *  original account is preselected. Picking a different account makes ipc copy the transcript into that
@@ -126,6 +128,11 @@ export function ResumeDialog({
       cancelled = true
     }
   }, [entry.sessionId])
+
+  // Said under the controls when the conversation resumes as a profile, by the name the shared list has for it (read
+  // again once when the list does not name it yet); nothing when the id no longer resolves
+  const profiles = useAgentProfilesNaming(savedProfile !== null ? [savedProfile] : [])
+  const resumeAs = resumeAsLine(profiles, savedProfile, t)
 
   const crossAccount = selectedId !== '' && selectedId !== entry.accountId
   // The chain that actually goes to spawn — the display uses this value too (the result after the provider filter and the rotation reorder)
@@ -289,6 +296,7 @@ export function ResumeDialog({
           />
           {t('session.new.bypassPermissions')}
         </label>
+        {resumeAs !== null && <p className="modal-hint">{resumeAs}</p>}
         <div className="row right">
           <button onClick={onCancel}>{t('common.cancel')}</button>
           <button

@@ -139,6 +139,7 @@ export const ja: Catalog = {
   'agentProfiles.pick.jobHint': 'この作業に追加する仕事は、別のものを選ばない限りこのプロファイルで実行されます。作業を管理するアカウントは下で選んだものです。',
   'agentProfiles.pick.followJob': '作業のプロファイルに従う ({name})',
   'agentProfiles.shown': 'エージェントプロファイル: {name}',
+  'agentProfiles.resumeAs': 'エージェントプロファイル「{name}」で会話を再開します。',
   'settings.remote.hint': '別のコンピューターで動く Astera(Runtime)の Job をこのアプリで見ます。接続はそのコンピューターの鍵を確かめた後にだけ行われ、トークンはこのコンピューターにだけ保存されます。',
   'settings.remote.thisMachine.title': 'このコンピューター',
   'settings.remote.thisMachine.off': 'リモート Runtime はオフです。下でアドレスを選んでオンにすると、他のコンピューターがこのコンピューターとペアリングできます。',
