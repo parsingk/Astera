@@ -10300,6 +10300,28 @@ describe('agent profiles: a profile that runs without permission checks, by who 
     }
   })
 
+  // Follow-up to the fix wave: only a profile that resolves to bypass is refused. One deleted since falls back at the
+  // spawn as for a person (design §5), so an agent's Task with its own accounts is made as before, holding the Job's id;
+  // a store that cannot be read refuses an agent, since it may hold a bypass profile
+  it("an agent's Task with its own accounts in a Job whose profile is gone is made as before; an unreadable store refuses", async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(false)
+      const jobId = idOf(await as({ sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', auto: true }))
+      deps.readAgentProfiles = async () => ({ version: 1, profiles: [] })
+      const r = await as(caller, 'task-create', { run: jobId, spec: 's', account: 'acc1' })
+      expect(r.status, `${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBe(200)
+      expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
+      deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      const damaged = await as(caller, 'task-create', { run: jobId, spec: 's', account: 'acc1' })
+      expect(damaged, JSON.stringify(caller)).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(deps.getState().tasks).toHaveLength(1)
+      // A person's is made unread, as before
+      expect((await as({ sessionId: '', role: 'cli' }, 'task-create', { run: jobId, spec: 's', account: 'acc1' })).status).toBe(200)
+    }
+  })
+
   it('lets an agent once the app-wide mode already skips the checks', async () => {
     for (const caller of AGENTS) {
       const { deps, as } = setup(true)

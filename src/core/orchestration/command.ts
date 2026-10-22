@@ -1340,21 +1340,37 @@ async function profileFor(
   idOrName: string,
   archivedOk = false
 ): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
-  if (!deps.readAgentProfiles) return { ok: false, reply: conflict('this caller cannot read the agent profiles; start Astera and try again') }
-  let store: AgentProfileStore
-  try {
-    store = await deps.readAgentProfiles()
-  } catch (e) {
-    const refused = conflict(`the agent profiles could not be read: ${e instanceof Error ? e.message : String(e)}`)
-    return { ok: false, reply: e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused }
-  }
-  const profile = findProfile(store, idOrName)
+  const read = await profileStore(deps)
+  if (!read.ok) return read
+  const profile = findProfile(read.store, idOrName)
   if (!profile) return { ok: false, reply: profileRefused('agent-profile-unavailable', `unknown agent profile: ${idOrName}`) }
   if (profile.status === 'archived' && !archivedOk)
     return { ok: false, reply: profileRefused('agent-profile-unavailable', `agent profile ${profile.name} is archived; restore it to start new work as it`) }
   const refused = await profileBypassRefusal(deps, caller, profile)
   if (refused) return { ok: false, reply: refused }
   return { ok: true, profile }
+}
+
+/** The agent profile store, or the reply that refuses: a caller with no reader, or a store that cannot be read, which
+ *  names the file. */
+async function profileStore(deps: OrchServerDeps): Promise<{ ok: true; store: AgentProfileStore } | { ok: false; reply: Reply }> {
+  if (!deps.readAgentProfiles) return { ok: false, reply: conflict('this caller cannot read the agent profiles; start Astera and try again') }
+  try {
+    return { ok: true, store: await deps.readAgentProfiles() }
+  } catch (e) {
+    const refused = conflict(`the agent profiles could not be read: ${e instanceof Error ? e.message : String(e)}`)
+    return { ok: false, reply: e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused }
+  }
+}
+
+/** A Task an agent gives its own accounts in a Job that holds a profile still runs as that profile, so it is asked the
+ *  same question (`profileBypassRefusal`) about it. Only that: a profile gone since falls back at the spawn as it does for
+ *  a person (design §5), so it is null here, while a store that cannot be read refuses, since it may hold one. */
+async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, id: string): Promise<Reply | null> {
+  const read = await profileStore(deps)
+  if (!read.ok) return read.reply
+  const held = findProfile(read.store, id)
+  return held ? profileBypassRefusal(deps, caller, held) : null
 }
 
 /** `--agent-profile <id|name>` of the public commands (`jobs create`, `tasks add`) as the `agentProfileId` run-create and
@@ -3298,19 +3314,22 @@ export async function handleCommand(
       // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
       // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
       // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
-      // are needed, or when an agent makes the Task (it still decides the Task's permission, which an agent may not
-      // always use: profileBypassRefusal), and may be archived since (the Job holds it); a profile the caller names now
-      // must be usable.
+      // are needed, and may be archived since (the Job holds it); a profile the caller names now must be usable. An
+      // agent's Task given accounts still runs as the Job's profile, so that one is asked about its permission alone
+      // (inheritedBypassRefusal).
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
       let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
       if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
       let profile: AgentProfile | undefined
-      if (profileArg !== null || accountArg === null || (agentProfileId !== undefined && agentCaller(caller))) {
+      if (profileArg !== null || accountArg === null) {
         const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, profileArg === null)
         if (!found.ok) return found.reply
         profile = found.profile
         agentProfileId = found.profile.id
+      } else if (agentProfileId !== undefined && agentCaller(caller)) {
+        const refused = await inheritedBypassRefusal(deps, caller, agentProfileId)
+        if (refused) return refused
       }
       const known = await deps.listAccounts()
       let accountIds: string[]
