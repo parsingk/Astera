@@ -32,6 +32,7 @@ import {
 import { readAccountEntries } from '../core/accounts/accountsFile'
 import { isLoggedIn } from '../core/accounts/loginCheck'
 import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
+import { profileSpawn } from '../core/agentProfiles/permission'
 import { RepairNeeded } from '../core/settings/repairNeeded'
 import { HostRetiring } from '../core/host/hostRetiring'
 import { refusedBeforeActing, undoneBeforeFailing } from '../core/host/orchProtocol'
@@ -120,6 +121,9 @@ export interface HostSpawnerDeps {
   /** Each prompt write of a worker this Host's coordinator starts (Host journal, A19 lifted). Isolated: a
    *  throw is logged and the start goes on. */
   onPromptWrite?(e: PromptWriteEvent): void
+  /** Stamps a profile's use after a spawn started from it (`agent-profiles-touch`). Not awaited, and a throw is logged:
+   *  it never fails or delays the spawn. */
+  touchAgentProfile?(id: string): void
 }
 
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
@@ -159,7 +163,7 @@ export interface HostSpawner extends HostLocal, HostRollSpawner {
    *  and the bypass read from the settings at this spawn. Announced with `pty-opened`, so an attached app
    *  takes it back as a tab, and heard by `onSpawned`, so the rolling registers its chain. A missing
    *  folder or an unknown account starts nothing and is tagged `refusedBeforeActing`. */
-  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[]; startedBy?: 'agent' }): Promise<SessionInfo>
+  createSession(o: { accountId: string; cwd: string; title?: string; initialPrompt?: string; rollAccountIds: string[]; startedBy?: 'agent'; agentProfileId?: string }): Promise<SessionInfo>
 }
 
 type SpawnOpts = Parameters<CoordinatorDeps['spawnSession']>[0]
@@ -473,15 +477,17 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     await preTrustWorkspace({ account, cwd: o.cwd, homeDir, descriptors, log })
     await ensured()
     const cliPath = await shuttlePath()
+    // The profile it names, by id or name; one that does not resolve is logged and the session starts without it
+    // (Agent Profiles design §5). Its explicit permission decides the bypass when the caller gave none.
+    let profile: Awaited<ReturnType<typeof profileSpawn>>
     let bypass = o.bypassPermissions
-    if (bypass === undefined) {
-      try {
-        bypass = await bypassFromSettings()
-      } catch (err) {
-        // Refused before `sessions.spawn`, so no process (m6). The worker start reads this.
-        if (trace) trace.settingsRefused = true
-        throw err
-      }
+    try {
+      profile = await profileSpawn({ profileDir, agentProfileId: o.agentProfileId, bypassPermissions: bypass, appWideYolo: bypassFromSettings, log })
+      bypass = profile?.bypassPermissions ?? bypass ?? (await bypassFromSettings())
+    } catch (err) {
+      // Refused before `sessions.spawn`, so no process (m6). The worker start reads this.
+      if (trace) trace.settingsRefused = true
+      throw err
     }
     // The folder and, on win32, Git Bash, looked for off this thread and within the probe limit
     // (core/sessions/pathProbe.ts), where sessions.spawn used to look for them synchronously — the same
@@ -492,7 +498,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // Before prepare, which keys what it finds by the PATH it sees.
     await ensureOnWindowsPath([providerOf(account)])
     await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-    await sessions.prepare({ account, cwd: o.cwd })
+    await sessions.prepare({ account, cwd: o.cwd, ...(profile ? { agentProfileId: profile.agentProfileId } : {}) })
     const rollProviders = o.rollAccountIds.map((rid) => providerOf(accounts.find((x) => x.id === rid) ?? account))
     const opensBefore = opens
     let info: ReturnType<SessionManager['spawn']>
@@ -513,7 +519,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       restoreExtra: { rolledBy: 'host' },
       // A Job's worker or coordinator is an agent's, and so is a session the CLI, MCP or a plugin made; one a person opened
       // from a remote controller is not (review M1). An agent's tab closes when it ends (2026-10-20).
-      ...(o.startedBy ? { startedBy: o.startedBy } : {})
+      ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+      ...(profile ? { agentProfileId: profile.agentProfileId } : {})
       })
     } finally {
       // Whether it returned or threw, a moved count means a process is running (A36). A throw before
@@ -526,6 +533,13 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
       if (ptyId) locateRollout(ptyId, info.id, account, info.cwd, Date.now())
     }
     tell('spawned', spawnedCbs, info, account)
+    if (profile) {
+      try {
+        d.touchAgentProfile?.(profile.agentProfileId)
+      } catch (err) {
+        log(`agent profile ${profile.agentProfileId}: its use could not be stamped: ${String(err)}`)
+      }
+    }
     return info
   }
 
@@ -755,7 +769,8 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
             title: o.title ?? defaultSessionTitle(o.cwd),
             ...(o.initialPrompt !== undefined ? { initialPrompt: o.initialPrompt } : {}),
             rollAccountIds: o.rollAccountIds,
-            ...(o.startedBy ? { startedBy: o.startedBy } : {})
+            ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+            ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {})
           },
           accounts,
           trace

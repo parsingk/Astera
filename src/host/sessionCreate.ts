@@ -28,6 +28,7 @@ import { ensureOnWindowsPath } from '../core/sessions/windowsPath'
 import { ensureInstallDirOnPath } from '../core/sessions/installDirPath'
 import { providerOf } from '../core/providers/meta'
 import { sourcesOf } from './sessions'
+import { profileSpawn } from '../core/agentProfiles/permission'
 
 export function createHostSessionStarter(d: {
   /** Null for a Host started without the agent CLI paths: it starts no session. */
@@ -37,12 +38,17 @@ export function createHostSessionStarter(d: {
   rolling: Pick<HostRolling, 'adoptSpawned'> | null
   /** The profile's accounts, read now. Rejects on a damaged file (RepairNeeded). */
   readAccounts(): Promise<Account[]>
-  /** Resolves the account's shared extensions before a chat spawn (Agent Control Plane release 1); a terminal
-   *  session's own prepare does it. Never rejects. */
-  refreshCapabilities?(account: Account): Promise<void>
+  /** Resolves the account's shared extensions, with the session's agent profile, before a chat spawn (Agent Control
+   *  Plane release 1); a terminal session's own prepare does it. Never rejects. */
+  refreshCapabilities?(account: Account, agentProfileId?: string): Promise<void>
   /** Whether Astera's setting runs agents without permission checks, read now. Rejects on a damaged
    *  settings file, which may have said manual, so it is never read as the bypass. */
   bypass(): Promise<boolean>
+  /** Where the agent profiles are, for a chat session started from one (Agent Profiles design §5); absent, a chat
+   *  session's profile is not applied. A terminal session's is resolved by the spawner. */
+  profileDir?: string
+  /** Stamps a profile's use once a chat session started from it has started. Never fails or delays the start. */
+  touchAgentProfile?(id: string): void
   /** The session folder, probed off the Host's one thread and within the probe limit
    *  (core/sessions/pathProbe.ts); `timeout` refuses it as not reachable. */
   probeCwd(p: string): Promise<ProbeResult>
@@ -91,7 +97,8 @@ export function createHostSessionStarter(d: {
       ...(o.title !== undefined ? { title: o.title } : {}),
       ...(o.prompt !== undefined ? { initialPrompt: o.prompt } : {}),
       rollAccountIds: o.rollAccountIds,
-      ...(o.startedBy ? { startedBy: o.startedBy } : {})
+      ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+      ...(o.agentProfileId !== undefined ? { agentProfileId: o.agentProfileId } : {})
     })
     d.log(`sessions create: terminal session ${info.id} on ${o.accountId} in ${o.cwd}`)
     return rowOf(info, 'terminal')
@@ -103,6 +110,7 @@ export function createHostSessionStarter(d: {
     // Everything that can refuse comes before the spawn, so a refusal starts nothing.
     let account: Account
     let bypass: boolean
+    let profile: Awaited<ReturnType<typeof profileSpawn>> = null
     try {
       const accounts = await d.readAccounts()
       const found = accounts.find((a) => a.id === o.accountId)
@@ -112,11 +120,14 @@ export function createHostSessionStarter(d: {
       // win32: a CLI installed since this Host started, found on the Path Windows keeps (windowsPath.ts)
       await ensureOnWindowsPath([providerOf(account)])
       await ensureInstallDirOnPath([providerOf(account)]) // macOS and Linux: Claude Code installed since this process started (installDirPath.ts)
-      bypass = await d.bypass()
+      // The profile it names, as the spawner resolves a terminal session's: its id and its permission's bypass
+      if (d.profileDir !== undefined)
+        profile = await profileSpawn({ profileDir: d.profileDir, agentProfileId: o.agentProfileId, appWideYolo: d.bypass, log: d.log })
+      bypass = profile?.bypassPermissions ?? (await d.bypass())
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err
     }
-    await d.refreshCapabilities?.(account)
+    await d.refreshCapabilities?.(account, profile?.agentProfileId)
     const info = chats.spawn({
       account,
       cwd: o.cwd,
@@ -126,11 +137,19 @@ export function createHostSessionStarter(d: {
       ...(o.rollAccountIds.length > 0 ? { rollAccountIds: o.rollAccountIds } : {}),
       unattendedPermission: o.unattended ?? 'hold',
       // Who started it, as the command decided (SessionCreate.startedBy): an agent's tab closes when it ends
-      ...(o.startedBy ? { startedBy: o.startedBy } : {})
+      ...(o.startedBy ? { startedBy: o.startedBy } : {}),
+      ...(profile ? { agentProfileId: profile.agentProfileId } : {})
     })
     // The handshake and the first prompt settle before anyone else may take the session.
     if (!(await chats.started(info.id)))
       throw new Error(`chat session ${info.id} did not finish starting, so it was ended`)
+    if (profile) {
+      try {
+        d.touchAgentProfile?.(profile.agentProfileId)
+      } catch (err) {
+        d.log(`agent profile ${profile.agentProfileId}: its use could not be stamped: ${String(err)}`)
+      }
+    }
     if (o.rollAccountIds.length > 0) d.rolling?.adoptSpawned(info, account)
     const procId = chats.procOf(info.id)
     if (procId !== null) d.announceProc(procId)

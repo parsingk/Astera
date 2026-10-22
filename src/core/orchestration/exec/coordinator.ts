@@ -81,6 +81,9 @@ export interface CoordinatorDeps {
      *  워커에게는 워커용 문구를 준다(startWorker 의 호출 자리). optional 인 이유는 넘기지 않아도
      *  롤링이 기본값으로 돌기 때문이다 — rollAccountIds 처럼 지우면 기능이 꺼지는 값이 아니다. */
     rollPrompt?: string
+    /** The agent profile the session is started from, by id or name (Agent Profiles design §5): the wiring resolves
+     *  it, and its permission decides the bypass when `bypassPermissions` is not given. Nothing passes it yet. */
+    agentProfileId?: string
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
   /** Is that session working. **null = it cannot be decided for this provider** (codex — a

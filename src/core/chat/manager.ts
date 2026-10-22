@@ -249,6 +249,9 @@ export class ChatSessionManager {
     /** `'agent'`: an agent or Astera started this session, not a person (SessionInfo.startedBy). Written into the info
      *  and the note; its tab closes when it ends. */
     startedBy?: 'agent'
+    /** The agent profile the session is started from (SessionInfo.agentProfileId): its capabilities are the ones read,
+     *  and it is written into the info and the note, as a terminal session's is. The caller refreshes it first. */
+    agentProfileId?: string
   }): SessionInfo {
     const provider = providerOf(opts.account)
     const descriptor = descriptorOf(this.deps.descriptors, opts.account)
@@ -283,7 +286,7 @@ export class ChatSessionManager {
       ASTERA_SESSION: id
     }
     // Shared extensions: their environment values only in this process's environment (design D5)
-    const caps = this.deps.capabilities?.get(opts.account) ?? null
+    const caps = this.deps.capabilities?.get(opts.account, opts.agentProfileId) ?? null
     if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     const orchEnv = this.deps.orchEnv?.()
     if (orchEnv) {
@@ -317,6 +320,7 @@ export class ChatSessionManager {
         ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
         ...(rollPrompt === undefined ? {} : { rollPrompt }),
         ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
+        ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {}),
         // design F5 fix round 1 (Critical 2): the durable mark, written into the note itself so an
         // app restart's `adopt()` can restore it too, not only `state()`'s in-memory overlay.
         ...(opts.startWithBypass ? { bypassedToolchain: true } : {}),
@@ -354,7 +358,8 @@ export class ChatSessionManager {
       ...(slackNotify === undefined ? {} : { slackNotify }),
       ...(rollAccountIds === undefined ? {} : { rollAccountIds }),
       ...(rollPrompt === undefined ? {} : { rollPrompt }),
-      ...(opts.startedBy ? { startedBy: opts.startedBy } : {})
+      ...(opts.startedBy ? { startedBy: opts.startedBy } : {}),
+      ...(opts.agentProfileId ? { agentProfileId: opts.agentProfileId } : {})
     }
 
     const adapter = this.makeAdapter(proc, { mode: 'fresh' }, provider)

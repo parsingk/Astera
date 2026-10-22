@@ -723,6 +723,8 @@ export interface SessionCreate {
   /** `'agent'` when the CLI, MCP or a plugin asked for it (SessionInfo.startedBy): its tab closes when it ends. Absent
    *  for a person's, from a remote controller's new-session dialog or the app. */
   startedBy?: 'agent'
+  /** The agent profile the session is started from, by id or name (Agent Profiles design §5). Nothing sets it yet. */
+  agentProfileId?: string
 }
 
 type Reply = { status: number; body: unknown }

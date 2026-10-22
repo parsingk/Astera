@@ -11,6 +11,8 @@ import { HOST_ONLY_ENV } from '../core/host/spawn'
 import { createJob, createTask, emptyState, openDispatch, startJobRun, type OrchState } from '../core/orchestration/state'
 import { SessionManager } from '../core/sessions/manager'
 import { writeExtensionRegistry } from '../core/extensions/registry'
+import { writeAgentProfiles } from '../core/agentProfiles/store'
+import type { AgentProfile } from '../core/agentProfiles/types'
 import { StatusLineManager } from '../core/sessions/statusline'
 import { makeDescriptors } from '../core/providers/descriptor'
 import { previewShotsDir } from '../core/preview/shotsDir'
@@ -41,6 +43,7 @@ const rig = (over: {
   appKeepsWorktrees?: HostSpawnerDeps['appKeepsWorktrees']
   worktrees?: HostSpawnerDeps['worktrees']
   onPromptWrite?: HostSpawnerDeps['onPromptWrite']
+  touchAgentProfile?: HostSpawnerDeps['touchAgentProfile']
 } & LocateHooks = {}) => {
   const spawned: Spawned[] = []
   const logs: string[] = []
@@ -62,6 +65,7 @@ const rig = (over: {
     findRollout: over.findRollout, locatePollMs: over.locatePollMs, locateForMs: over.locateForMs, readAccounts: over.readAccounts,
     appKeepsWorktrees: over.appKeepsWorktrees ?? (() => false),
     onPromptWrite: over.onPromptWrite,
+    touchAgentProfile: over.touchAgentProfile,
     worktrees: over.worktrees ?? { fork: () => Promise.reject(new Error('not in this test')), makeRunWorktree: vi.fn(), mergeWorktrees: vi.fn(), removeWorktrees: vi.fn() } })
   return { spawner, registry, spawned, logs, sent }
 }
@@ -832,6 +836,70 @@ describe('createHostSpawner — createSession', () => {
     const h = rig()
     await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
     expect(JSON.stringify(h.spawned[0].args)).not.toMatch(/--dangerously-skip-permissions/)
+  })
+
+  // Agent Profiles design §5 and AC 3: the profile's explicit choice overrides the app-wide mode, both ways
+  describe('with an agent profile', () => {
+    const P = (over: Partial<AgentProfile>): AgentProfile => ({
+      id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit',
+      createdAt: NOW, updatedAt: NOW, ...over
+    })
+    const SKIP = /--dangerously-skip-permissions/
+
+    it('a bypass profile starts unattended while the app-wide mode is manual, and its id rides the note', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
+      const h = rig()
+      const info = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_b' })
+      expect(JSON.stringify(h.spawned[0].args)).toMatch(SKIP)
+      expect(info.agentProfileId).toBe('ap_b')
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ bypassPermissions: true, agentProfileId: 'ap_b' })
+    })
+
+    it('an ask profile asks while the app-wide mode is yolo', async () => {
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_a', permission: 'ask' })] })
+      const h = rig()
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_a' })
+      expect(JSON.stringify(h.spawned[0].args)).not.toMatch(SKIP)
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ bypassPermissions: false })
+    })
+
+    it('an inherit profile, and no profile, read the app-wide mode as today', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_i', permission: 'inherit' })] })
+      const h = rig()
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_i' })
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+      expect(JSON.stringify(h.spawned[0].args)).not.toMatch(SKIP)
+      expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
+      expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('agentProfileId')
+    })
+
+    // Ruling (b): the delete guard compares ids, so a session started by the profile's name keeps its id
+    it('keeps the profile\'s id when the caller named it, and nothing for one that does not resolve, logged once', async () => {
+      await fs.writeFile(path.join(profile, 'app-settings.json'), JSON.stringify({ agentPermissionMode: 'manual' }))
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', name: 'Night shift', permission: 'bypass' })] })
+      const h = rig()
+      const named = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'night shift' })
+      expect(named.agentProfileId).toBe('ap_b')
+      expect(h.registry.list()[0].meta!.restore).toMatchObject({ agentProfileId: 'ap_b' })
+      const gone = await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_gone' })
+      expect(gone).not.toHaveProperty('agentProfileId')
+      expect(h.registry.list()[1].meta!.restore).not.toHaveProperty('agentProfileId')
+      // Falls back to the app-wide mode, as before profiles
+      expect(JSON.stringify(h.spawned[1].args)).not.toMatch(SKIP)
+      expect(h.logs.filter((l) => l.includes('ap_gone'))).toHaveLength(1)
+    })
+
+    it('stamps the profile\'s use after the spawn, and a stamp that throws costs nothing', async () => {
+      await writeAgentProfiles(profile, { version: 1, profiles: [P({ id: 'ap_b', permission: 'bypass' })] })
+      const touched: string[] = []
+      const h = rig({ touchAgentProfile: (id) => { touched.push(id); throw new Error('store locked') } })
+      await expect(h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [], agentProfileId: 'ap_b' })).resolves.toMatchObject({ agentProfileId: 'ap_b' })
+      await h.spawner!.createSession({ accountId: 'acc1', cwd: repo, rollAccountIds: [] })
+      expect(touched).toEqual(['ap_b'])
+      expect(h.logs.some((l) => l.includes('store locked'))).toBe(true)
+    })
   })
 
   it('a folder that does not exist, or an unknown account, starts nothing and is tagged as such', async () => {

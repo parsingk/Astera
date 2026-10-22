@@ -15,7 +15,7 @@ import { LAUNCH_FORBIDDEN } from '../sessions/commands'
 import { ownMcpNames } from './discover'
 import { readExtensionRegistry } from './registry'
 import { findProfile, readAgentProfiles } from '../agentProfiles/store'
-import type { AgentProfile, ProfilePermission } from '../agentProfiles/types'
+import type { ProfilePermission } from '../agentProfiles/types'
 import type { Account } from '../types'
 import type { McpExtension, SkipReason } from './types'
 
@@ -197,27 +197,27 @@ async function resolveAgentContext(a: {
   const policyMode = a.policyMode ?? 'compatibility'
   const implicit: ResolvedAgentContext = { kind: 'implicit', accounts: [a.account.id], policyMode, executionMode: 'managed' }
   if (a.agentProfileId === undefined) return implicit
-  let profile: AgentProfile | null
+  // Built inside the try too: a hand-edited entry with no exclusion list falls back as a damaged store does, rather
+  // than rejecting the whole resolution and leaving the session no shared server
   try {
-    profile = findProfile(await readAgentProfiles(a.profileDir), a.agentProfileId)
+    const profile = findProfile(await readAgentProfiles(a.profileDir), a.agentProfileId)
+    if (profile)
+      return {
+        kind: 'explicit',
+        id: profile.id,
+        displayName: profile.name,
+        accounts: [a.account.id],
+        mcpExclude: [...profile.mcpExclude],
+        permission: profile.permission,
+        policyMode,
+        executionMode: 'managed'
+      }
   } catch (e) {
     a.log?.(`extensions: the agent profiles could not be read, so profile ${a.agentProfileId} is not applied (${e instanceof Error ? e.message : String(e)})`)
     return implicit
   }
-  if (!profile) {
-    a.log?.(`extensions: agent profile ${a.agentProfileId} was not found, so the session starts without one`)
-    return implicit
-  }
-  return {
-    kind: 'explicit',
-    id: profile.id,
-    displayName: profile.name,
-    accounts: [a.account.id],
-    mcpExclude: [...profile.mcpExclude],
-    permission: profile.permission,
-    policyMode,
-    executionMode: 'managed'
-  }
+  a.log?.(`extensions: agent profile ${a.agentProfileId} was not found, so the session starts without one`)
+  return implicit
 }
 
 /** The variables one spawn adds for the Gateway (design §4.2): a token made for this spawn alone, and the servers it was

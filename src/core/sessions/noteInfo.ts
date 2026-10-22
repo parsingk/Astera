@@ -73,7 +73,8 @@ export function chatInfoFromNote(a: { kind: string; id: string; restore: Record<
       ? { rollAccountIds: [...(r.rollAccountIds as string[])] }
       : {}),
     ...(typeof r.rollPrompt === 'string' ? { rollPrompt: r.rollPrompt } : {}),
-    ...startedByOf(r)
+    ...startedByOf(r),
+    ...(agentProfileIdOf(r) ? { agentProfileId: agentProfileIdOf(r) } : {})
   }
 }
 

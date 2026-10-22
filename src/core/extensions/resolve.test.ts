@@ -267,6 +267,20 @@ describe('resolveSessionCapabilities with an agent profile', () => {
     expect(lines).toHaveLength(1)
     expect(lines[0]).toContain('ap_000000000001')
   })
+
+  // A hand-edited entry with no exclusion list: the session still gets the shared servers, as for a profile that
+  // does not resolve, rather than the whole resolution rejecting and the session getting none
+  it('falls back to no profile, with one log line, for a malformed profile entry', async () => {
+    const s = await setup([server(), remote()])
+    const { mcpExclude: _, ...malformed } = profile()
+    await fs.writeFile(profilePaths(s.profileDir).agentProfiles, JSON.stringify({ version: 1, profiles: [malformed] }))
+    const lines: string[] = []
+    const r = await call(s, s.codex, { agentProfileId: 'ap_000000000001', log: (l) => lines.push(l) })
+    expect(r.context.kind).toBe('implicit')
+    expect(r.given).toEqual(['linear', 'docs'])
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('ap_000000000001')
+  })
 })
 
 describe('gatewayTokenEnv', () => {
