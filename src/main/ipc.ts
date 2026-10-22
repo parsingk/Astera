@@ -4690,6 +4690,15 @@ export function registerIpc(
   const plugins = createPluginsRoute({ call: (m) => orchCall(m) })
   // Settings › Extensions (Agent Control Plane release 1): the Host checks every argument; this only passes them on
   const extensions = createExtensionsRoute({ call: (m) => orchCall(m) })
+  // The app's sessions reach the Host's MCP Gateway (release 2): asked before each spawn, none without a Host
+  core.gateway.ask = async () => {
+    const r = await orchCall({ cmd: 'extensions-gateway', args: {}, sessionId: '' })
+    const port = r.status === 200 && typeof r.body === 'object' && r.body !== null ? (r.body as { port?: unknown }).port : null
+    return typeof port === 'number' ? port : null
+  }
+  ipcMain.handle('extensions.setIsolation', (_e, id: unknown, isolation: unknown) =>
+    extensions.setIsolation(id as string, isolation === 'session' ? 'session' : 'folder')
+  )
   ipcMain.handle('extensions.list', () => extensions.list())
   ipcMain.handle('extensions.discover', (_e, accountId: unknown) => extensions.discover(accountId as string))
   ipcMain.handle('extensions.import', (_e, accountId: unknown, picks: unknown) =>

@@ -62,6 +62,9 @@ export interface Core {
   /** Shared extensions (Agent Control Plane release 1): one cache for both managers, refreshed by
    *  `sessions.prepare` and by the chat spawn path before each spawn. */
   capabilities: CapabilityCache
+  /** Where the Host's MCP Gateway listens (Agent Control Plane release 2); registerIpc points `ask` at the Host once it
+   *  can call it. Until then, and with no Host, there is no Gateway. */
+  gateway: { ask: () => Promise<number | null> }
   history: HistoryIndex
   // Provider descriptor table. ipc reads per-provider facts from it without branching —
   // before it was exposed, choosing the transcript path mapper was a hardcoded branch in ipc.ts
@@ -274,7 +277,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   )
   // Shared extensions (Agent Control Plane release 1 design §4.5). The two managers read the same cache:
   // a chat roll's respawn is prepared through `sessions.prepare`, which refreshes the target account
+  const gateway: Core['gateway'] = { ask: async () => null }
   const capabilities = createCapabilityCache({
+    gatewayPort: () => gateway.ask(),
     profileDir: userDataDir,
     homeDir: os.homedir(),
     platform: process.platform,
@@ -458,6 +463,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     sessions,
     chat,
     capabilities,
+    gateway,
     history,
     descriptors,
     projects,

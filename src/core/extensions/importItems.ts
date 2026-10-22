@@ -153,3 +153,12 @@ export async function setEnabled(profileDir: string, id: string, enabled: boolea
   const registry = await readExtensionRegistry(profileDir)
   await writeExtensionRegistry(profileDir, { version: 1, entries: registry.entries.map((x) => (x.id === id ? { ...x, enabled } : x)) })
 }
+
+/** How the Gateway shares a server's process (Gateway design G8); sessions started after the change follow it. */
+export async function setIsolation(profileDir: string, id: string, isolation: 'folder' | 'session'): Promise<void> {
+  const registry = await readExtensionRegistry(profileDir)
+  await writeExtensionRegistry(profileDir, {
+    version: 1,
+    entries: registry.entries.map((x) => (x.id === id && x.kind === 'mcp' ? { ...x, isolation } : x))
+  })
+}

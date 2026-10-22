@@ -1938,6 +1938,8 @@ export interface ExtensionsApi {
   sync(): Promise<PluginsCallAnswer>
   /** "Replace with the shared copy" for an account that has its own different copy. */
   replace(accountId: string, id: string): Promise<PluginsCallAnswer>
+  /** One process per project folder, or one per session, for a shared stdio server (Gateway design G8). */
+  setIsolation(id: string, isolation: 'folder' | 'session'): Promise<PluginsCallAnswer>
 }
 
 export interface RemoteApi {

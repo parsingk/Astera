@@ -724,7 +724,8 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const h = await spawnerRig()
     const account = h.accounts[0]
     await writeExtensionRegistry(h.profileDir, { version: 1, entries: [
-      { id: 'mcp-linear', kind: 'mcp', name: 'linear', transport: 'stdio', command: 'npx', env: { LOG_LEVEL: { value: 'info' } },
+      // A remote server: given directly, so this needs no Gateway (release 2 sends stdio servers through the Host's)
+      { id: 'mcp-docs', kind: 'mcp', name: 'docs', transport: 'http', url: 'https://mcp.example.com/mcp', env: {},
         providers: ['claude', 'codex'], importedFrom: 'acc0', enabled: true }
     ] })
     await h.spawner.prepareRollSpawn(account, h.cwd)
@@ -732,7 +733,6 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const last = h.spawned[h.spawned.length - 1]
     const cmd = Array.isArray(last.args) ? last.args.join(' ') : last.args
     expect(cmd).toContain('--mcp-config')
-    expect(last.opts.env.LOG_LEVEL).toBe('info')
   })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
