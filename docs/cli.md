@@ -394,7 +394,9 @@ the first (a history that cannot fast-forward is refused with git's reason, and 
 `retry` runs the round again from the first check, `rerun` reruns the failed jobs of the CI run on GitHub and
 waits for its new attempt (offered for a failure outside the code a rerun can cure, once Astera's own reruns are
 spent or turned off, or GitHub refused one), `pr-<n>` binds pull request n, and `mark-failed` fails the task. Any
-answer it does not list is a 2.
+answer it does not list is a 2. `continue` and `retry` start the round afresh with its failures reset, so from inside an
+agent session they are refused with 5 when its repairs would run as a bypass agent profile, unless **Run agents without
+permission checks** is on; the coordinator Astera started for the run is not asked.
 
 **A worker lost while Astera is closed opens a question.** When a worker ends without reporting while
 Astera is closed, in a run with no coordinator session, the Host opens a question on its task, and

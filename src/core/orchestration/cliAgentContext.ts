@@ -335,7 +335,7 @@ const SESSION = {
   'gate-resolve': {
     summary: 'resolve a gate with a decision',
     detail:
-      'From inside an agent session, `retry-once` on an exhausted gate of a Task that runs as a bypass agent profile, which opens a new attempt, is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other decision is not, and the coordinator Astera started for the Task\'s run is not asked.',
+      'From inside an agent session, a decision that opens a new attempt for a Task that runs as a bypass agent profile (`retry-once` on an exhausted gate, or `continue` or `retry` on a GitHub gate, which start its round afresh) is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other decision is not, and the coordinator Astera started for the Task\'s run is not asked.',
     flags: [
       req('id', '<questionId>', 'the gate to resolve'),
       req('resolution', '<text|->', 'the decision')

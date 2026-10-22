@@ -1459,15 +1459,25 @@ function startingProfileIds(s: OrchState, caller: { sessionId: string }, cmd: st
     // Back to ready or pending, its failures cleared: the loop then places it (slotsToFill)
     case 'task-update':
       return args.status === 'ready' || args.status === 'pending' ? ofTask(str(args.id)) : []
-    // An answer that opens a new attempt restarts the Task (the person's decision, sixth follow-up): the exhausted Gate's
-    // retry-once opens a repair Dispatch as the Task's worker profile (repairOnce, workerProfileOf). Any other answer only
-    // lets it continue and is not asked; `questions-answer` comes here with its answer.
+    // An answer that opens a new attempt restarts the Task (the person's decision, sixth and seventh follow-ups), asked
+    // about the profile its worker or repair runs as (workerProfileOf): the exhausted Gate's retry-once opens a repair
+    // Dispatch (repairOnce), and a GitHub question's answer that starts the step afresh with its failures reset
+    // (answerGitHubGate: continue, retry, or one going back to a wait that is gone, never mark-failed) is task-update's
+    // re-arm. Any other answer only lets it continue and is not asked; `questions-answer` comes here with its answer.
     case 'gate-resolve': {
       const gate = s.gates.find((g) => g.id === str(args.id))
-      if (!gate || gate.status !== 'open' || gate.kind !== 'convergence-exhausted' || args.resolution !== 'retry-once') return []
-      const task = s.tasks.find((t) => t.id === gate.taskId)
-      if (!task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
-      return defined([workerProfileOf(s, task)])
+      const task = gate?.status === 'open' ? s.tasks.find((t) => t.id === gate.taskId) : undefined
+      if (!gate || !task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
+      const answer = str(args.resolution)
+      const restarts =
+        (gate.kind === 'convergence-exhausted' && answer === 'retry-once') ||
+        (isGitHubGateKind(gate.kind) &&
+          task.status === 'blocked' &&
+          answer !== null &&
+          answer !== 'mark-failed' &&
+          (gate.options ?? []).includes(answer) &&
+          (answer === 'continue' || answer === 'retry' || task.ciWait === undefined))
+      return restarts ? defined([workerProfileOf(s, task)]) : []
     }
     default:
       return []

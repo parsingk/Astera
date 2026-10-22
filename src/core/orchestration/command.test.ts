@@ -11018,4 +11018,87 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       expect(d.gate().status).toBe('open')
     })
   })
+
+  // Seventh follow-up, the ruling: a GitHub question's continue and retry start the GitHub step afresh with its failures
+  // reset (answerGitHubGate), the same effect as task-update's re-arm. The step's repairs run as the profile of the
+  // latest finished ordinary Task (workerProfileOf), so that profile is asked; other answers are not
+  describe('answering a GitHub question whose step repairs as such a profile', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    const GITHUB = { ci: { mode: 'required' as const }, autoRerunInfrastructureFailures: true, maxInfrastructureReruns: 2, ciWaitMinutes: 90 }
+    /** A person's lifecycle Run: its finished Task made as `profile`, with its attempt, and the GitHub step stopped on an
+     *  open question of `kind` offering `options`, two failures in */
+    const stoppedStep = async (deps: Deps, kind = 'github-carry', options = ['retry', 'mark-failed'], profile: string | null = 'ap_b'): Promise<void> => {
+      await deps.setState({
+        ...emptyState(),
+        jobs: [{ id: 'job_g', objective: 'o', cwd: 'D:/p', createdAt: NOW, github: GITHUB, convergence: {} }],
+        runs: [{ id: 'run_g', jobId: 'job_g', ordinal: 1, createdAt: NOW, worktree: 'D:/wt/run' }],
+        tasks: [
+          { id: 'tsk_a', runId: 'run_g', title: 'a', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: NOW, updatedAt: NOW, ...(profile !== null ? { agentProfileId: profile } : {}) },
+          {
+            id: 'tsk_l', runId: 'run_g', kind: 'lifecycle', title: 'GitHub', spec: 's', deps: ['tsk_a'], status: 'blocked', validateConfigIds: ['github:ci'],
+            consecutiveFailures: 2, createdAt: NOW, updatedAt: NOW, ciWait: { since: NOW, done: [], pr: 12, sha: 'c'.repeat(40), waitingSince: NOW }
+          }
+        ],
+        dispatches: [{ id: 'dsp_a', taskId: 'tsk_a', provider: 'codex', accountId: 'acc1', sessionId: 'sess_w', cwd: 'D:/p', specPath: '', startedAt: NOW, workerState: 'ready', retained: false, outcome: 'succeeded', endedAt: NOW }],
+        gates: [{ id: 'gate_g', runId: 'run_g', taskId: 'tsk_l', question: 'q', kind: kind as never, options, status: 'open', createdAt: NOW }]
+      })
+    }
+    const step = (deps: Deps) => deps.getState().tasks.find((t) => t.id === 'tsk_l')!
+    const gateOf = (deps: Deps) => deps.getState().gates.find((g) => g.id === 'gate_g')!
+
+    it('refuses an agent’s continue or retry while the app-wide mode asks, leaving the step stopped', async () => {
+      for (const [kind, answer] of [['github-carry', 'retry'], ['github-external-head', 'continue']] as const)
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          await stoppedStep(deps, kind, [answer, 'mark-failed'])
+          const r = await as(caller, 'gate-resolve', { id: 'gate_g', resolution: answer })
+          expect([r.status, reasonOf(r)], `${answer} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(gateOf(deps).status).toBe('open')
+          expect(step(deps)).toMatchObject({ status: 'blocked', consecutiveFailures: 2 })
+        }
+    })
+
+    it('lets a person, the Run’s own coordinator and an agent under yolo retry it; another answer is not asked', async () => {
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        await stoppedStep(deps)
+        expect((await as(caller, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status, JSON.stringify(caller)).toBe(200)
+        expect(step(deps).consecutiveFailures, JSON.stringify(caller)).toBe(0)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      const own = setup(false)
+      await stoppedStep(own.deps)
+      await own.deps.setState({ ...own.deps.getState(), runs: own.deps.getState().runs.map((r) => ({ ...r, coordinatorSessionId: 'sess_coord' })) })
+      expect((await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status).toBe(200)
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        await stoppedStep(deps)
+        expect((await as(caller, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status, JSON.stringify(caller)).toBe(200)
+        expect(step(deps).consecutiveFailures).toBe(0)
+      }
+      // Back to the same wait, or giving up, starts nothing afresh
+      for (const [kind, options, answer] of [['github-no-ci', ['wait', 'mark-failed'], 'wait'], ['github-carry', ['retry', 'mark-failed'], 'mark-failed']] as const) {
+        const { deps, appWideYolo, as } = setup(false)
+        await stoppedStep(deps, kind, [...options])
+        expect((await as({ sessionId: '', role: 'mcp' }, 'gate-resolve', { id: 'gate_g', resolution: answer })).status, answer).toBe(200)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+    })
+
+    it('asks nothing when the step borrows no profile; an unreadable store refuses an agent', async () => {
+      const plain = setup(false)
+      await stoppedStep(plain.deps, 'github-carry', ['retry', 'mark-failed'], null)
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).status).toBe(200)
+      const damaged = setup(false)
+      await stoppedStep(damaged.deps)
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'gate-resolve', { id: 'gate_g', resolution: 'retry' })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(gateOf(damaged.deps).status).toBe('open')
+    })
+  })
 })
