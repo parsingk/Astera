@@ -504,7 +504,7 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   'ext-list': {
     summary: 'the extensions shared with every account, and where Astera put their copies',
     detail:
-      'Each shared MCP server, skill, command and agent from Settings › Extensions, with `enabled` and `providers`. An MCP server lists its environment names with where each value comes from (`secret`, `value` or `inherit`), never a value. `copies` names each account copy Astera owns, with `adopted` for one that was already there. It reads the profile and needs no Host and no app.'
+      'Each shared MCP server, skill, command and agent from Settings › MCP & Skills, with `enabled` and `providers`. An MCP server lists its environment names with where each value comes from (`secret`, `value` or `inherit`), never a value. `copies` names each account copy Astera owns, with `adopted` for one that was already there. It reads the profile and needs no Host and no app.'
   },
   'ext-sync': {
     summary: 'put the shared skills, commands and agents into every account now',

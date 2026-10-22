@@ -1268,6 +1268,10 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .ext-note { display: flex; flex-direction: column; gap: 8px; line-height: 1.65; }
 .ext-note p { margin: 0; }
 .ext-note strong { color: var(--text); font-weight: 600; }
+.ext-register { align-self: flex-start; }
+.ext-register-btn { display: inline-flex; align-items: center; gap: 6px; }
+.ext-register .rtp-group { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.ext-register-provider { margin-left: auto; padding-left: 16px; color: var(--text-faint); font-size: 11px; }
 .ext-list { max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 .ext-row + .ext-row { border-top: 1px solid var(--line); }
 .ext-row-head { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 12px; background: none; border: 0; text-align: left; cursor: pointer; color: inherit; }

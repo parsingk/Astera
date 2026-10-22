@@ -44,13 +44,11 @@ export const ja: Catalog = {
   'settings.general.language.saveFailed': '言語設定を保存できませんでした: {detail}',
   'settings.tab.remote': 'リモート Runtime',
   // Settings › Extensions (Agent Control Plane release 1 design §4.10)
-  'settings.tab.extensions': '拡張機能',
+  'settings.tab.extensions': 'MCP & Skills',
   'settings.extensions.hint': 'MCP サーバー、スキル、コマンド、エージェントを一度追加すれば、すべてのアカウントで使えます。',
-  'settings.extensions.importFrom': '{label} から取り込む…',
+  'settings.extensions.register': '追加',
+  'settings.extensions.registerFrom': 'どのアカウントから追加しますか?',
   'settings.extensions.reading': '読み込み中…',
-  'settings.extensions.sync': 'すべてのアカウントに再適用',
-  'settings.extensions.syncing': '適用中…',
-  'settings.extensions.synced': 'すべてのアカウントに適用しました。',
   'settings.extensions.none': 'まだ何も追加していません。',
   'settings.extensions.kind.mcp': 'MCP サーバー',
   'settings.extensions.kind.skill': 'スキル',
@@ -86,7 +84,7 @@ export const ja: Catalog = {
   'settings.extensions.outcome.failed': 'コピーできませんでした',
   'settings.extensions.gateway.failed': '起動できませんでした: {error}',
   'settings.extensions.gateway.restarting': '停止しました。使うと再起動します',
-  'settings.extensions.import.title': '{label} から取り込む',
+  'settings.extensions.import.title': '{label} から追加',
   'settings.extensions.import.body': 'すべてのアカウントで使うものを選んでください。',
   'settings.extensions.import.notShareable': '{kind} {name} は共有できません: {reason}。',
   'settings.extensions.import.footer': '開いているセッションには、新しいセッションから適用されます。',
@@ -826,7 +824,7 @@ export const ja: Catalog = {
   'account.sync.codexMergeNote':
     'config.toml をキー単位でマージします。同じキーは取り込み元の値になり、このアカウントだけのキー、信頼したフォルダ、承認したフックはそのまま残ります。既存のファイルは .bak としてバックアップします。',
   'account.sync.extensionsNote':
-    '設定 › 拡張機能 で何かを共有すると、MCP サーバー・スキル・コマンド・エージェントはそちらから届き、ここではコピーしません。',
+    '設定 › MCP & Skills で何かを共有すると、MCP サーバー・スキル・コマンド・エージェントはそちらから届き、ここではコピーしません。',
   'account.sync.appliesNextSession':
     '実行中のセッションには適用されず、次のセッションから反映されます。',
   'account.sync.confirm': '取り込む',

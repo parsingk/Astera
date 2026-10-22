@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import type { Account, PluginsCallAnswer, Provider } from '../../../core/types'
 import type { ExtensionKind } from '../../../core/extensions/types'
-import { PROVIDERS } from '../../../core/providers/meta'
+import { PROVIDERS, PROVIDER_META } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
@@ -123,18 +124,14 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
   return (
     <div className="settings-stack">
       <p className="settings-hint">{t('settings.extensions.hint')}</p>
-      <div className="remote-actions">
-        {sources.map(({ provider, accountId }) => (
-          <button key={provider} className="settings-gen-refresh" disabled={busy !== null || listFailure !== null} onClick={() => void importFrom(accountId)}>
-            {busy === 'reading' ? t('settings.extensions.reading') : t('settings.extensions.importFrom', { label: labelOf(accountId) })}
-          </button>
-        ))}
-        {entries !== null && entries.length > 0 && (
-          <button className="settings-gen-refresh" disabled={busy !== null || listFailure !== null} onClick={() => void change(() => window.api.extensions.sync(), () => toast.success(t('settings.extensions.synced')))}>
-            {busy === 'changing' ? t('settings.extensions.syncing') : t('settings.extensions.sync')}
-          </button>
-        )}
-      </div>
+      {sources.length > 0 && (
+        <RegisterMenu
+          sources={sources.map((s) => ({ ...s, label: labelOf(s.accountId) }))}
+          reading={busy === 'reading'}
+          disabled={busy !== null || listFailure !== null}
+          onPick={(accountId) => void importFrom(accountId)}
+        />
+      )}
       {listFailure !== null && <p className="settings-hint is-warning">{failureLine(listFailure, t, { read: true })}</p>}
       {entries !== null && entries.length === 0 && <p className="settings-hint">{t('settings.extensions.none')}</p>}
       {KINDS.map((kind) => {
@@ -169,6 +166,70 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/** The one Register button: it opens the list of accounts to register from, the default account of each provider.
+ *  Closes on a pick, a click outside or Escape, as the run type picker does. */
+function RegisterMenu({
+  sources,
+  reading,
+  disabled,
+  onPick
+}: {
+  sources: { provider: Provider; accountId: string; label: string }[]
+  reading: boolean
+  disabled: boolean
+  onPick: (accountId: string) => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDocDown = (e: MouseEvent): void => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDocDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+  return (
+    <div className="rtp-anchor ext-register" ref={rootRef}>
+      <button className="settings-gen-refresh ext-register-btn" aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen((v) => !v)}>
+        {reading ? t('settings.extensions.reading') : t('settings.extensions.register')}
+        <ChevronDown size={12} aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="rtp-menu" role="menu">
+          <div className="rtp-group">{t('settings.extensions.registerFrom')}</div>
+          {sources.map((s) => (
+            <button
+              key={s.provider}
+              type="button"
+              role="menuitem"
+              className="rtp-item"
+              onClick={() => {
+                setOpen(false)
+                onPick(s.accountId)
+              }}
+            >
+              {s.label}
+              <span className="ext-register-provider">{PROVIDER_META[s.provider].displayName}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

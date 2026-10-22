@@ -79,13 +79,11 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.tab.remote': 'Remote Runtimes',
   'settings.tab.plugins': 'Plugins',
   // Settings › Extensions (Agent Control Plane release 1 design §4.10)
-  'settings.tab.extensions': 'Extensions',
+  'settings.tab.extensions': 'MCP & Skills',
   'settings.extensions.hint': 'Add MCP servers, skills, commands and agents once, and every account uses them.',
-  'settings.extensions.importFrom': 'Import from {label}…',
+  'settings.extensions.register': 'Add',
+  'settings.extensions.registerFrom': 'Add from which account?',
   'settings.extensions.reading': 'Reading…',
-  'settings.extensions.sync': 'Apply to all accounts again',
-  'settings.extensions.syncing': 'Applying…',
-  'settings.extensions.synced': 'Applied to every account.',
   'settings.extensions.none': 'Nothing added yet.',
   'settings.extensions.kind.mcp': 'MCP servers',
   'settings.extensions.kind.skill': 'Skills',
@@ -121,7 +119,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.extensions.outcome.failed': 'could not be copied',
   'settings.extensions.gateway.failed': 'Could not start: {error}',
   'settings.extensions.gateway.restarting': 'Stopped; it starts again when used',
-  'settings.extensions.import.title': 'Import from {label}',
+  'settings.extensions.import.title': 'Add from {label}',
   'settings.extensions.import.body': 'Pick what every account should use.',
   'settings.extensions.import.notShareable': '{kind} {name} cannot be shared: {reason}.',
   'settings.extensions.import.footer': 'Sessions already open get it when you open a new one.',
@@ -998,7 +996,7 @@ export const en: Record<keyof typeof ko, string> = {
   'account.sync.codexMergeNote':
     'config.toml is merged key by key. Matching keys take the source values, and this account keeps its own keys, its trusted folders and its hook approvals. The existing file is backed up as .bak.',
   'account.sync.extensionsNote':
-    'Once anything is shared in Settings › Extensions, MCP servers, skills, commands and agents come from there and are not copied here.',
+    'Once anything is shared in Settings › MCP & Skills, MCP servers, skills, commands and agents come from there and are not copied here.',
   'account.sync.appliesNextSession':
     'This does not apply to running sessions — it takes effect starting with the next session.',
   'account.sync.confirm': 'Import',

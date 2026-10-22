@@ -44,13 +44,11 @@ export const es: Catalog = {
   'settings.general.language.saveFailed': 'No se pudo guardar la configuración de idioma: {detail}',
   'settings.tab.remote': 'Runtimes remotos',
   // Settings › Extensions (Agent Control Plane release 1 design §4.10)
-  'settings.tab.extensions': 'Extensiones',
+  'settings.tab.extensions': 'MCP & Skills',
   'settings.extensions.hint': 'Añade una vez servidores MCP, habilidades, comandos y agentes, y todas las cuentas los usan.',
-  'settings.extensions.importFrom': 'Importar de {label}…',
+  'settings.extensions.register': 'Añadir',
+  'settings.extensions.registerFrom': '¿Desde qué cuenta?',
   'settings.extensions.reading': 'Leyendo…',
-  'settings.extensions.sync': 'Volver a aplicar en todas las cuentas',
-  'settings.extensions.syncing': 'Aplicando…',
-  'settings.extensions.synced': 'Aplicado en todas las cuentas.',
   'settings.extensions.none': 'Todavía no has añadido nada.',
   'settings.extensions.kind.mcp': 'Servidores MCP',
   'settings.extensions.kind.skill': 'Habilidades',
@@ -86,7 +84,7 @@ export const es: Catalog = {
   'settings.extensions.outcome.failed': 'no se pudo copiar',
   'settings.extensions.gateway.failed': 'No se pudo iniciar: {error}',
   'settings.extensions.gateway.restarting': 'Se detuvo; se reinicia al usarlo',
-  'settings.extensions.import.title': 'Importar de {label}',
+  'settings.extensions.import.title': 'Añadir desde {label}',
   'settings.extensions.import.body': 'Elige lo que usarán todas las cuentas.',
   'settings.extensions.import.notShareable': '{kind} {name} no se puede compartir: {reason}.',
   'settings.extensions.import.footer': 'Las sesiones ya abiertas lo tendrán al abrir una nueva.',
@@ -835,7 +833,7 @@ export const es: Catalog = {
   'account.sync.codexMergeNote':
     'El archivo config.toml se combina clave por clave. Las claves coincidentes toman el valor del origen, y esta cuenta conserva sus propias claves, sus carpetas de confianza y sus aprobaciones de hooks. El archivo existente se respalda como .bak.',
   'account.sync.extensionsNote':
-    'En cuanto se comparta algo en Ajustes › Extensiones, los servidores MCP, las habilidades, los comandos y los agentes vienen de allí y no se copian aquí.',
+    'En cuanto se comparta algo en Ajustes › MCP & Skills, los servidores MCP, las habilidades, los comandos y los agentes vienen de allí y no se copian aquí.',
   'account.sync.appliesNextSession':
     'No se aplica a las sesiones en ejecución: surte efecto a partir de la siguiente sesión.',
   'account.sync.confirm': 'Importar',
