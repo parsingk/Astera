@@ -393,6 +393,13 @@ describe('publicFor', () => {
       expect(publicFor(cmd, profile), cmd).toEqual(shaped)
   })
 
+  // Task 7 fix round 1: a session started from an agent profile is listed with its id
+  it('keeps the agent profile a session was started from', () => {
+    const row = { id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1', ptyId: 'p' }
+    expect(publicFor('sessions-list', [row])).toEqual([{ id: 's1', kind: 'terminal', title: 't', accountId: 'a', cwd: 'D:/p', alive: true, state: 'unknown', agentProfileId: 'ap_1' }])
+    expect(publicFor('sessions-create', row)).toMatchObject({ agentProfileId: 'ap_1' })
+  })
+
   it('객체가 아닌 것은 그대로 둔다', () => {
     expect(publicFor('jobs-list', [])).toEqual([])
     expect(publicFor('questions-get', null)).toBe(null)

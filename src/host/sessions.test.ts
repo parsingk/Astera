@@ -158,6 +158,17 @@ describe('registrySessions — list', () => {
     expect(rows[0]).toMatchObject({ provider: 'codex', rolledFrom: 'ses-1', sources: { status: 'rollout', prompt: 'none', usage: 'rollout', conversation: 'rollout' } })
   })
 
+  // Task 7 fix round 1: a session started from an agent profile says which, by its id (the note's restore)
+  it('a session started from an agent profile carries its id; one without carries none', async () => {
+    const ptys = new PtyRegistry({ spawn: fakePty, log: () => {} })
+    const procs = new ProcRegistry({ spawn: fakeProc, log: () => {} })
+    ptys.open({ id: 'pty-p', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-p', restore: { accountId: 'cx', cwd: 'D:/repo', agentProfileId: 'ap_1' } } })
+    ptys.open({ id: 'pty-n', file: 'claude', args: [], opts, meta: { kind: 'session', id: 'ses-n', restore: { accountId: 'cx', cwd: 'D:/repo' } } })
+    const rows = await registrySessions({ ptys, procs, hookEventsDir: NO_HOOK_DIR, accounts: async () => [] }).listSessions()
+    expect(rows.find((r) => r.id === 'ses-p')).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(rows.find((r) => r.id === 'ses-n')).not.toHaveProperty('agentProfileId')
+  })
+
   // The entry stays after the exit so `list` can say it ended (registry.ts) — and so does this one.
   it('an ended session stays listed, as not alive', async () => {
     const { sessions, agent } = harness()

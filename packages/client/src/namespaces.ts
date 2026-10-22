@@ -93,7 +93,8 @@ interface CreateTaskFields {
   readonly title?: string
   readonly deps?: readonly string[]
   readonly parentId?: string
-  /** The accounts to run it on, in failover order. Default: the Job's coordinator account. */
+  /** The accounts to run it on, in failover order. Default: its agent profile's accounts (its own `agentProfileId`, or
+   *  its Job's), else the Job's coordinator account. */
   readonly accountIds?: readonly string[]
   /** Run configurations to check the work with, in order. */
   readonly validate?: readonly string[]

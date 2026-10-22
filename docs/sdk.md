@@ -313,8 +313,10 @@ permission choice. Profiles are made and changed in Astera and with `astera agen
 matches without regard to case, and an unknown one is `NOT_FOUND`). Each is an `AgentProfile`: `id`, `name`,
 `description`, `status` (`active`, or `archived`, which starts no new work), `accountIds`, `mcpExclude` (the ids of the
 shared MCP servers it leaves out), `permission` (`inherit`, `bypass` or `ask`) and when it was made, changed and last
-used. A Job and a Task made as a profile carry its id as `agentProfileId`. A Host from before agent profiles answers
-`agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`.
+used. A Job and a Task made as a profile carry its id as `agentProfileId`, and so does a worker attempt of such a
+Task. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A Host from before agent profiles
+answers `agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on
+`jobs.create`, and refuses a `tasks.create` that names a profile but no `accountIds`.
 
 ```ts
 const { items } = await astera.agentProfiles.list()

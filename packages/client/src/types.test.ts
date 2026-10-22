@@ -74,7 +74,7 @@ const task = {
 } satisfies Task
 const detail = {
   ...task,
-  attempts: [{ id: 'dsp_1', provider: 'claude', accountId: 'acc', repair: 'check-failure', outcome: 'failed', startedAt: 'T' }],
+  attempts: [{ id: 'dsp_1', provider: 'claude', accountId: 'acc', repair: 'check-failure', outcome: 'failed', startedAt: 'T', agentProfileId: 'ap_000000000001' }],
   openQuestionId: 'gat_1'
 } satisfies TaskDetail
 const question = { id: 'gat_1', runId: 'run_1', taskId: 'tsk_1', question: 'q', kind: 'convergence-exhausted', status: 'open', createdAt: 'T' } satisfies Question

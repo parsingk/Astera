@@ -3,16 +3,18 @@
 `@astera-app/client` is versioned apart from the Astera app. [docs/sdk.md](https://github.com/parsingk/Astera/blob/main/docs/sdk.md)
 is the guide.
 
-## Unreleased
+## 0.5.0
 
-- Agent profiles: `agentProfiles.list()` and `agentProfiles.get(idOrName)` read the profiles a person made in Astera
-  or with `astera agent-profiles`, each an `AgentProfile` (its accounts in order, the shared MCP servers it leaves out
-  as `mcpExclude`, and its `permission`: `inherit`, `bypass` or `ask`). A Host from before agent profiles answers them
-  with `VERSION_MISMATCH`.
-- `jobs.create` and `tasks.create` take `agentProfileId`, an id or a name. A Job's Tasks run as its profile unless a
-  Task names its own, and the profile never picks the coordinator. A Task with a profile and no `accountIds` runs on
-  the profile's accounts, so `tasks.create` no longer needs the Job's coordinator account for it.
-- `Job.agentProfileId` and `Task.agentProfileId`: the profile they run as, by its id.
+- Agent profiles (the Astera that ships agent profiles or later; an older one answers these with `VERSION_MISMATCH`):
+  `agentProfiles.list()` and `agentProfiles.get(idOrName)` read the profiles a person made in Astera or with
+  `astera agent-profiles`, each an `AgentProfile` (its accounts in order, the shared MCP servers it leaves out as
+  `mcpExclude`, and its `permission`: `inherit`, `bypass` or `ask`).
+- `jobs.create` and `tasks.create` take `agentProfileId`, an id or a name (the Astera that ships agent profiles or
+  later; an older one ignores it on `jobs.create` and refuses `tasks.create` without `accountIds`). A Job's Tasks run
+  as its profile unless a Task names its own, and the profile never picks the coordinator. A Task with a profile and no
+  `accountIds` runs on the profile's accounts, so `tasks.create` no longer needs the Job's coordinator account for it.
+- `Job.agentProfileId` and `Task.agentProfileId`: the profile they run as, by its id. A `Run`'s worker attempts
+  (`TaskAttempt.agentProfileId`) carry it too.
 
 ## 0.4.0
 

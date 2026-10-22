@@ -1,7 +1,7 @@
 // The Host's `agent-profiles-*` commands (Agent Profiles design §4): the Host owns the profile store, so the app and this
 // machine's CLI change it through here. Like the `extensions-*` commands they are for the app and the CLI, and an
-// agent's shell may read but not change. An MCP client may read them too (list_agent_profiles, design §6), behind the
-// MCP gate (core/host/mcpGate.ts), and change none.
+// agent's shell may read but not change. An MCP client may list them too (list_agent_profiles, design §6), behind the
+// MCP gate (core/host/mcpGate.ts), and send nothing else.
 import { RepairNeeded } from '../../core/settings/repairNeeded'
 import { findProfile, liveAccounts, readAgentProfiles, validateProfile, writeAgentProfiles, type ProfileInput } from '../../core/agentProfiles/store'
 import type { AgentProfile, ProfilePermission } from '../../core/agentProfiles/types'
@@ -47,8 +47,8 @@ export interface HostAgentProfiles {
   }): Promise<AgentProfilesAnswer>
 }
 
-/** The two reads, the ones an MCP client may also send. */
-const AGENT_PROFILE_READS: ReadonlySet<string> = new Set(['agent-profiles-list', 'agent-profiles-get'])
+/** What an MCP client may send: the list, the one command the MCP gate admits. */
+const MCP_AGENT_PROFILE_COMMANDS: ReadonlySet<string> = new Set(['agent-profiles-list'])
 
 /** `lastUsedAt` is stamped at most this often per profile. */
 const TOUCH_EVERY_MS = 60_000
@@ -196,7 +196,7 @@ export function createHostAgentProfiles(d: {
 
   return {
     command: async (a) => {
-      const reader = a.role === 'mcp' && AGENT_PROFILE_READS.has(a.cmd)
+      const reader = a.role === 'mcp' && MCP_AGENT_PROFILE_COMMANDS.has(a.cmd)
       if (a.role !== 'app' && a.role !== 'cli' && !reader) return { status: 403, body: { error: `${a.cmd} is for this machine's app and CLI only` } }
       if (AGENT_PROFILE_CHANGES.has(a.cmd) && a.agentRefusal !== undefined) return { status: 403, body: { error: a.agentRefusal } }
       let r: AgentProfilesAnswer

@@ -73,6 +73,7 @@ for await (const item of astera.runs.follow(run.id)) {
 | `tasks` | `list({ runId, status, ready, brief })`, `get`, `create` |
 | `questions` | `list({ runId, taskId, status })`, `get`, `answer` |
 | `completion` | `get` (read only: whether work is done stays Astera's call) |
+| `agentProfiles` | `list`, `get` (by id or name; profiles change only in Astera and with `astera agent-profiles`) |
 
 - Lists come back as `{ items }`. The Host answers whole lists today; `nextCursor` will appear when it pages.
 - A wait or a follow ends with data, not an error: `completed`, `failed`, `waiting` (a question for a person),

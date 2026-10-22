@@ -260,12 +260,14 @@ describe('docs/sdk.md', () => {
   })
 
   // Agent Profiles design §6: the profile a Job or Task runs as, and the reads, in the guide and the CHANGELOG
-  it('names the profile reads and agentProfileId in the guide and in the CHANGELOG’s Unreleased section', () => {
+  it('names the profile reads and agentProfileId in the guide and in the CHANGELOG’s 0.5.0 entry', () => {
     expect(guide).toContain('agentProfileId')
     const changelog = read('packages/client/CHANGELOG.md')
-    const unreleased = changelog.slice(changelog.indexOf('## Unreleased'), changelog.indexOf('## 0.4.0'))
-    expect(changelog.indexOf('## Unreleased')).toBeGreaterThan(0)
-    for (const named of ['agentProfiles.list', 'agentProfiles.get', 'agentProfileId', 'AgentProfile']) expect(unreleased, named).toContain(named)
+    const v050 = changelog.slice(changelog.indexOf('## 0.5.0'), changelog.indexOf('## 0.4.0'))
+    expect(changelog.indexOf('## 0.5.0')).toBeGreaterThan(0)
+    for (const named of ['agentProfiles.list', 'agentProfiles.get', 'agentProfileId', 'AgentProfile']) expect(v050, named).toContain(named)
+    // A Host from before agent profiles, said in the guide (fix round 1)
+    expect(prose(guide).replace(/\s+/g, ' ')).toContain('ignores `agentProfileId` on `jobs.create`')
   })
 
   it('is reached from the CLI and MCP guides and from the package README', () => {

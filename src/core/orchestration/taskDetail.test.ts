@@ -96,6 +96,14 @@ describe('taskDetailOf', () => {
     expect(taskDetailOf(s, 't1')!.attempts[0]).toMatchObject({ repair: 'check-failure', review: true })
   })
 
+  // Task 7 fix round 1: the profile a worker attempt ran as, by its id (Dispatch.agentProfileId)
+  it('says which agent profile an attempt ran as, and nothing for one without', () => {
+    const s = stateWith([task('t1')], [dispatch('d1', 't1', { agentProfileId: 'ap_1' }), dispatch('d2', 't1')])
+    const [a, b] = taskDetailOf(s, 't1')!.attempts
+    expect(a).toMatchObject({ id: 'd1', agentProfileId: 'ap_1' })
+    expect(b).not.toHaveProperty('agentProfileId')
+  })
+
   it('names the open question on it', () => {
     const s = stateWith(
       [task('t1')],

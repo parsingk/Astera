@@ -201,6 +201,8 @@ export interface HostSession {
   provider?: 'claude' | 'codex'
   /** The session this one replaced in an account roll (the note's `restore.rolledFrom`). */
   rolledFrom?: string
+  /** The agent profile it was started from, by its id (the note's `restore.agentProfileId`, Agent Profiles design §6). */
+  agentProfileId?: string
   /** Where the Host reads each fact of this session from (X1-06); `none` means the Host cannot say, and the fact is
    *  shown as unknown, never as idle. */
   sources?: SessionSources

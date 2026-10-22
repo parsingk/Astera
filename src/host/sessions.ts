@@ -34,6 +34,7 @@ import { hookEventAt } from '../core/hooks/eventTime'
 import type { PtyEntry } from '../core/host/protocol'
 import type { Account } from '../core/types'
 import { ptyDriver } from '../core/sessions/sessionDriver'
+import { agentProfileIdOf } from '../core/sessions/noteInfo'
 import { readChatTurns, type ChatTurn } from '../core/sessions/chatRead'
 import { findClaudeTranscript } from '../core/history/strategies/claude'
 import { encodeUserTurn } from '../core/chat/claudeProtocol'
@@ -93,6 +94,7 @@ const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState, prov
   const accountId = text(restore.accountId)
   const provider = accountId === null ? undefined : providers.get(accountId)
   const rolledFrom = text(restore.rolledFrom)
+  const agentProfileId = agentProfileIdOf(restore)
   return {
     id: e.meta!.id,
     kind,
@@ -105,6 +107,7 @@ const rowOf = (e: PtyEntry, kind: HostSession['kind'], state: SessionState, prov
     ...(kind === 'terminal' ? { ptyId: e.id } : { procId: e.id }),
     ...(provider ? { provider } : {}),
     ...(rolledFrom !== null ? { rolledFrom } : {}),
+    ...(agentProfileId !== undefined ? { agentProfileId } : {}),
     sources: sourcesOf(kind, provider)
   }
 }

@@ -80,6 +80,7 @@ export function createHostSessionStarter(d: {
       ...(ptyId ? { ptyId } : {}),
       ...(procId ? { procId } : {}),
       ...(provider ? { provider } : {}),
+      ...(info.agentProfileId !== undefined ? { agentProfileId: info.agentProfileId } : {}),
       sources: sourcesOf(kind, provider)
     }
   }

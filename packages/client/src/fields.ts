@@ -116,7 +116,7 @@ export const RUN_CONFIG_FIELDS = Object.freeze(['id', 'name', 'type'] as const)
 
 /** A session's fields come from the note the app left on its pty, which can hold anything (resume ids, rolling
  *  accounts, permission bypass); only these are public. */
-export const SESSION_FIELDS = Object.freeze(['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state', 'provider', 'rolledFrom', 'sources'] as const)
+export const SESSION_FIELDS = Object.freeze(['id', 'kind', 'title', 'accountId', 'cwd', 'alive', 'state', 'provider', 'rolledFrom', 'agentProfileId', 'sources'] as const)
 
 export const CHAT_TURN_FIELDS = Object.freeze(['role', 'text', 'tools'] as const)
 export const CHAT_PENDING_FIELDS = Object.freeze(['kind', 'summary'] as const)

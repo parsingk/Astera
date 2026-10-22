@@ -331,6 +331,8 @@ export interface TaskAttempt {
   readonly startedAt: string
   readonly endedAt?: string
   readonly waitingForApproval?: true
+  /** The agent profile this attempt's worker ran as, by its id. */
+  readonly agentProfileId?: string
 }
 
 /** `tasks.get`: the Task with its attempts and the question it waits on, if any. */
