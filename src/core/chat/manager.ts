@@ -20,6 +20,7 @@ import type { ProcFactory, ProcLike } from '../sessions/proc'
 import { cliEnvFor } from '../sessions/cliEnv'
 import { EXITED_SESSIONS_KEPT, prependToPath } from '../sessions/manager'
 import type { CapabilitySource } from '../extensions/capabilityCache'
+import { gatewayTokenEnv } from '../extensions/resolve'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -283,7 +284,7 @@ export class ChatSessionManager {
     }
     // Shared extensions: their environment values only in this process's environment (design D5)
     const caps = this.deps.capabilities?.get(opts.account) ?? null
-    if (caps) Object.assign(env, caps.env)
+    if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     const orchEnv = this.deps.orchEnv?.()
     if (orchEnv) {
       env.ASTERA_CLI = orchEnv.cliPath

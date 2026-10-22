@@ -133,7 +133,7 @@ export const ko = {
   'settings.extensions.mcp.account-own': '이 계정에 같은 이름의 자체 서버가 있음',
   'settings.extensions.mcp.account-unreadable': '이 계정의 MCP 목록을 읽지 못함',
   'settings.extensions.mcp.launch-chars': 'Windows 의 Codex 가 시작할 수 없음: 명령에 cmd.exe 가 해석하는 문자가 있음',
-  'settings.extensions.mcp.secret-unavailable': '비밀 값을 읽지 못함',
+  'settings.extensions.mcp.gateway-unavailable': 'Astera 의 MCP Gateway 가 돌고 있지 않아 세션이 받지 못함',
   'settings.extensions.mcp.provider': '이 CLI 용이 아님',
   'settings.extensions.mcp.transport': 'Codex 는 SSE 서버를 쓸 수 없음',
   'settings.extensions.import.title': '{label}에서 가져오기',

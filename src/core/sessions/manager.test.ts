@@ -1371,6 +1371,7 @@ describe('shared capabilities', () => {
     args: ['--mcp-config', '/p/claude-1.json'],
     env: { LINEAR_API_KEY: 'secret-in-env' },
     given: ['linear'],
+    gatewayGrant: ['mcp-linear'],
     skipped: []
   }
   it('prepare refreshes the account, and spawn adds its arguments and environment', async () => {
@@ -1387,6 +1388,17 @@ describe('shared capabilities', () => {
     expect(refreshed).toEqual(['acc-1'])
     expect(argsText(spawned[0].args)).toContain('--mcp-config /p/claude-1.json')
     expect(spawned[0].opts.env?.LINEAR_API_KEY).toBe('secret-in-env')
+  })
+  // Release 2 (Gateway design §4.2): every spawn carries a Gateway token of its own and the servers it was given
+  it('gives each spawn its own Gateway token and the grant', () => {
+    const { manager, spawned } = setup()
+    manager.capabilities = { get: () => caps, refresh: async () => {} }
+    manager.spawn({ account, cwd: os.tmpdir() })
+    manager.spawn({ account, cwd: os.tmpdir() })
+    const [a, b] = spawned.map((s) => s.opts.env ?? {})
+    expect(a.ASTERA_GATEWAY_GRANT).toBe('mcp-linear')
+    expect(a.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(b.ASTERA_GATEWAY_TOKEN).not.toBe(a.ASTERA_GATEWAY_TOKEN)
   })
   it('without capabilities the command and environment are unchanged', () => {
     const a = setup()

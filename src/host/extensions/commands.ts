@@ -78,6 +78,8 @@ export function createHostExtensions(d: {
   readAccounts: () => Promise<Account[]>
   log: (line: string) => void
   platform?: NodeJS.Platform
+  /** Where the Host's MCP Gateway listens, for the per-account status; absent means none. */
+  gatewayPort?: () => number | null
 }): HostExtensions {
   // Every line written about shared extensions, and every error answered, has the stored secret values taken out
   // (design §4.9): an error's own words may quote a file that holds one
@@ -107,7 +109,7 @@ export function createHostExtensions(d: {
     if (servers.length === 0) return []
     const out: { id: string; accountId: string; state: 'given' | SkipReason }[] = []
     for (const account of await d.readAccounts()) {
-      const r = await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform ?? process.platform, dryRun: true })
+      const r = await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform ?? process.platform, gatewayPort: d.gatewayPort?.() ?? null, dryRun: true })
       const skipped = new Map(r.skipped.map((s) => [s.name, s.reason]))
       for (const e of servers) out.push({ id: e.id, accountId: account.id, state: r.given.includes(e.name) ? 'given' : (skipped.get(e.name) ?? 'provider') })
     }

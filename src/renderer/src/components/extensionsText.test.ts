@@ -15,7 +15,7 @@ const REASONS = Object.keys({
   'env-reference': 1, 'astera-own': 1, 'header-secret': 1, 'arg-secret': 1
 } satisfies Record<NotShareableReason, 1>)
 const MCP_STATES = ['given', ...Object.keys({
-  'account-own': 1, 'account-unreadable': 1, 'launch-chars': 1, 'secret-unavailable': 1, provider: 1, transport: 1
+  'account-own': 1, 'account-unreadable': 1, 'launch-chars': 1, 'gateway-unavailable': 1, provider: 1, transport: 1
 } satisfies Record<SkipReason, 1>)]
 const KINDS = Object.keys({ mcp: 1, skill: 1, command: 1, agent: 1 } satisfies Record<ExtensionKind, 1>) as ExtensionKind[]
 

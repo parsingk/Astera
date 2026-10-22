@@ -18,6 +18,7 @@ import { cliEnvFor } from './cliEnv'
 import { providerOf } from '../providers/meta'
 import { codexDeveloperInstructions } from './sessionContext'
 import type { CapabilitySource } from '../extensions/capabilityCache'
+import { gatewayTokenEnv } from '../extensions/resolve'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -280,7 +281,7 @@ export class SessionManager {
     const env = this.envFor(opts.account)
     // Shared extensions: their environment values only here, in this process's environment (design D5)
     const caps = this.capabilities?.get(opts.account) ?? null
-    if (caps) Object.assign(env, caps.env)
+    if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     // What Astera offers, told to a codex session as it starts. A Claude session gets the same lines from
     // the SessionStart hook in `sl`'s settings file; codex runs no hook nobody has trusted, so it gets
     // them as developer instructions instead (sessionContext.ts). Only in a session Astera wires up

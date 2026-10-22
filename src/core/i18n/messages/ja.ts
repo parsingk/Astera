@@ -94,7 +94,7 @@ export const ja: Catalog = {
   'settings.extensions.mcp.account-own': 'このアカウントに同じ名前の独自サーバーがあります',
   'settings.extensions.mcp.account-unreadable': 'このアカウントの MCP 一覧を読めませんでした',
   'settings.extensions.mcp.launch-chars': 'Windows の Codex では起動できません: コマンドに cmd.exe が解釈する文字があります',
-  'settings.extensions.mcp.secret-unavailable': 'シークレットを読めませんでした',
+  'settings.extensions.mcp.gateway-unavailable': 'Astera の MCP Gateway が動いていないため、セッションに渡せません',
   'settings.extensions.mcp.provider': 'この CLI 向けではありません',
   'settings.extensions.mcp.transport': 'Codex は SSE サーバーを使えません',
   'settings.extensions.import.title': '{label} から取り込む',

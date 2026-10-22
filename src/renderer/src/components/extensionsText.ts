@@ -43,7 +43,7 @@ const MCP_STATES: Record<'given' | SkipReason, MessageKey> = {
   'account-own': 'settings.extensions.mcp.account-own',
   'account-unreadable': 'settings.extensions.mcp.account-unreadable',
   'launch-chars': 'settings.extensions.mcp.launch-chars',
-  'secret-unavailable': 'settings.extensions.mcp.secret-unavailable',
+  'gateway-unavailable': 'settings.extensions.mcp.gateway-unavailable',
   provider: 'settings.extensions.mcp.provider',
   transport: 'settings.extensions.mcp.transport'
 }

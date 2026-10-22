@@ -94,7 +94,7 @@ export const es: Catalog = {
   'settings.extensions.mcp.account-own': 'esta cuenta tiene su propio servidor con ese nombre',
   'settings.extensions.mcp.account-unreadable': 'no se pudo leer la lista MCP propia de esta cuenta',
   'settings.extensions.mcp.launch-chars': 'Codex en Windows no puede iniciarlo: su orden contiene caracteres que interpreta cmd.exe',
-  'settings.extensions.mcp.secret-unavailable': 'no se pudo leer su secreto',
+  'settings.extensions.mcp.gateway-unavailable': 'el MCP Gateway de Astera no está en marcha, así que las sesiones no lo reciben',
   'settings.extensions.mcp.provider': 'no es para esta CLI',
   'settings.extensions.mcp.transport': 'Codex no puede usar un servidor SSE',
   'settings.extensions.import.title': 'Importar de {label}',

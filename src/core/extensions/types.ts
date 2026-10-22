@@ -60,4 +60,4 @@ export interface ExtensionRegistry {
 export type SyncOutcome = 'written' | 'unchanged' | 'adopted' | 'restored' | 'conflict' | 'removed' | 'forgotten' | 'failed' | 'not-applicable'
 
 /** Why a session does not get a shared MCP server (design §4.5): here so Settings › Extensions can name them. */
-export type SkipReason = 'account-own' | 'account-unreadable' | 'launch-chars' | 'secret-unavailable' | 'provider' | 'transport'
+export type SkipReason = 'account-own' | 'account-unreadable' | 'launch-chars' | 'gateway-unavailable' | 'provider' | 'transport'

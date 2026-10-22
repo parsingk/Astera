@@ -129,7 +129,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.extensions.mcp.account-own': 'this account has its own server of that name',
   'settings.extensions.mcp.account-unreadable': "this account's own MCP list could not be read",
   'settings.extensions.mcp.launch-chars': 'Codex on Windows cannot start it: its command holds characters cmd.exe reads',
-  'settings.extensions.mcp.secret-unavailable': 'its secret could not be read',
+  'settings.extensions.mcp.gateway-unavailable': "Astera's MCP Gateway is not running, so sessions do not get it",
   'settings.extensions.mcp.provider': 'not for this CLI',
   'settings.extensions.mcp.transport': 'Codex cannot use an SSE server',
   'settings.extensions.import.title': 'Import from {label}',

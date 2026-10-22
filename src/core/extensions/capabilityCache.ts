@@ -22,15 +22,18 @@ export function createCapabilityCache(d: {
   homeDir: string
   platform: NodeJS.Platform
   policyMode?: () => Promise<PolicyMode>
+  /** Where the Host's MCP Gateway listens, asked at every refresh; absent or failing means no Gateway. */
+  gatewayPort?: () => Promise<number | null>
   log?: (line: string) => void
 }): CapabilityCache {
   const byAccount = new Map<string, SessionCapabilities>()
   const refresh = async (account: Account): Promise<void> => {
     try {
       const policyMode = d.policyMode ? await d.policyMode().catch(() => 'compatibility' as const) : 'compatibility'
+      const gatewayPort = d.gatewayPort ? await d.gatewayPort().catch(() => null) : null
       byAccount.set(
         account.id,
-        await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform, policyMode, log: d.log })
+        await resolveSessionCapabilities({ profileDir: d.profileDir, homeDir: d.homeDir, account, platform: d.platform, policyMode, gatewayPort, log: d.log })
       )
     } catch (e) {
       d.log?.(`extensions: shared capabilities for account ${account.id} could not be resolved (${e instanceof Error ? e.message : String(e)})`)

@@ -1233,6 +1233,7 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
       args: ['--mcp-config', 'C:/p/claude-1.json'],
       env: { LINEAR_API_KEY: 'secret-in-env' },
       given: ['linear'],
+      gatewayGrant: ['mcp-linear'],
       skipped: []
     }
     const factory = vi.fn((_f: string, _a: string[], _o: ProcSpawnOptions) => new FakeProc())
@@ -1241,6 +1242,9 @@ describe('ChatSessionManager — what a takeover reads (chat takeover Task 2)', 
     new ChatSessionManager(deps).spawn({ account: claudeAccount, cwd: '/p' })
     expect(factory.mock.calls[0][1].slice(-2)).toEqual(['--mcp-config', 'C:/p/claude-1.json'])
     expect(factory.mock.calls[0][2].env.LINEAR_API_KEY).toBe('secret-in-env')
+    expect(factory.mock.calls[0][2].env.ASTERA_GATEWAY_GRANT).toBe('mcp-linear')
+    expect(factory.mock.calls[0][2].env.ASTERA_GATEWAY_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(factory.mock.calls[1][2].env.ASTERA_GATEWAY_TOKEN).toBeUndefined()
     expect(factory.mock.calls[1][1]).not.toContain('--mcp-config')
     expect(factory.mock.calls[1][2].env.LINEAR_API_KEY).toBeUndefined()
   })
