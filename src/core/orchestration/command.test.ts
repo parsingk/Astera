@@ -26,6 +26,7 @@ import { TaskValidator } from './exec/validator'
 import { TAIL_EMPTY, TAIL_UNTRACKED } from './exec/tail'
 import { FAILURE_LIMIT, MAX_REVIEW_ROUNDS, type CheckResult, type Dispatch, type JobRun, type Project, type Task } from './types'
 import { parseArgs } from './cliArgs'
+import { slotsToFill } from './schedule'
 import { stateWord } from './cliHuman'
 import { outcomeOf, runningRunCount } from './running'
 import { isQueueableReport } from './pendingReports'
@@ -10748,6 +10749,179 @@ describe('agent profiles: a profile that runs without permission checks, by who 
         expect((await as(caller, 'tasks-dispatch', { id: taskId })).status, JSON.stringify(caller)).toBe(200)
         expect(dispatchTask).toHaveBeenCalledWith(taskId)
       }
+    })
+  })
+
+  // Fifth follow-up (the review's reproduction): the gate reads agent-profiles.json, a disk read in the Host, and a command
+  // that took its state before that read committed it over whatever landed meanwhile; two worker-starts at once kept one
+  // Dispatch of two. The gate is asked before the command reads its state, as the plugin checks are
+  describe('the gate is asked before the command reads its state', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    const AGENT: Caller = { sessionId: 'sess_agent', role: 'cli' }
+    const MCP: Caller = { sessionId: '', role: 'mcp' }
+    /** Holds the profile read open until the returned call, as a slow disk would */
+    const holding = (deps: Deps): (() => void) => {
+      const read = deps.readAgentProfiles!
+      let open: () => void = () => {}
+      const held = new Promise<void>((r) => (open = r))
+      deps.readAgentProfiles = async () => {
+        await held
+        return read()
+      }
+      return open
+    }
+    const mark = async (deps: Deps): Promise<void> => {
+      const s = deps.getState()
+      await deps.setState({ ...s, projects: [...s.projects, { id: 'prj_marker', path: 'D:/marker', name: 'marker', createdAt: NOW } as never] })
+    }
+    const marked = (deps: Deps): boolean => deps.getState().projects.some((p) => p.id === 'prj_marker')
+    /** A person's Job made as the `ask` profile (the gate reads the store and lets the start go) */
+    const asksJob = async (deps: Deps, extra: Record<string, unknown> = {}): Promise<string> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_ask', ...extra })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const asksTask = async (deps: Deps, extra: Record<string, unknown> = {}): Promise<{ runId: string; taskId: string }> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', ...extra })
+      const runId = deps.getState().runs.at(-1)!.id
+      return { runId, taskId: idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec: 's', account: 'acc1', agentProfileId: 'ap_ask' })) }
+    }
+    const ENTRIES: Array<{ name: string; prepare: (deps: Deps) => Promise<{ caller: Caller; cmd: string; args: Record<string, unknown> }> }> = [
+      {
+        name: 'runs resume (MCP resume_run)',
+        prepare: async (deps) => {
+          const jobId = await asksJob(deps)
+          const runId = deps.getState().runs.find((r) => r.jobId === jobId)!.id
+          await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) })
+          return { caller: MCP, cmd: 'runs-resume', args: { id: runId } }
+        }
+      },
+      { name: 'jobs run (MCP run_job)', prepare: async (deps) => ({ caller: MCP, cmd: 'jobs-run', args: { id: await asksJob(deps, { auto: true }) } }) },
+      { name: 'run-start of a Job', prepare: async (deps) => ({ caller: AGENT, cmd: 'run-start', args: { run: await asksJob(deps, { auto: true }) } }) },
+      { name: 'run-spawn', prepare: async (deps) => ({ caller: AGENT, cmd: 'run-spawn', args: { run: await asksJob(deps) } }) },
+      {
+        name: 'run-resume of a schedule',
+        prepare: async (deps) => {
+          const jobId = await asksJob(deps, { schedule: { kind: 'daily', time: '09:00' } })
+          await deps.setState({ ...deps.getState(), jobs: deps.getState().jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) })
+          return { caller: AGENT, cmd: 'run-resume', args: { run: jobId } }
+        }
+      },
+      {
+        name: 'worker-start',
+        prepare: async (deps) => ({ caller: AGENT, cmd: 'worker-start', args: { task: (await asksTask(deps)).taskId, agent: 'codex', account: 'acc1', worktree: 'current' } })
+      },
+      {
+        name: 'task-update back to ready',
+        prepare: async (deps) => {
+          const { taskId } = await asksTask(deps)
+          await deps.setState({ ...deps.getState(), tasks: deps.getState().tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed' as const, consecutiveFailures: FAILURE_LIMIT } : t)) })
+          return { caller: AGENT, cmd: 'task-update', args: { id: taskId, status: 'ready' } }
+        }
+      }
+    ]
+
+    it('keeps a write that lands while the gate reads the profiles', async () => {
+      for (const entry of ENTRIES) {
+        const { deps, as } = setup(false)
+        const { caller, cmd, args } = await entry.prepare(deps)
+        const release = holding(deps)
+        const pending = as(caller, cmd, args)
+        await new Promise((r) => setTimeout(r, 5))
+        await mark(deps)
+        release()
+        const r = await pending
+        expect(r.status, `${entry.name} ${JSON.stringify(r.body)}`).toBe(200)
+        expect(marked(deps), `${entry.name}: the write during the read survives`).toBe(true)
+      }
+    })
+
+    it('two worker-starts at once by an agent each keep their Dispatch, profiled or not', async () => {
+      for (const profiled of [true, false]) {
+        const { deps, as } = setup(false)
+        let n = 0
+        deps.startWorker = async () => ({ sessionId: `sess${++n}`, cwd: 'D:/p', specPath: `D:/p/orch/specs/${n}.md` })
+        await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', concurrency: 3 })
+        const runId = deps.getState().runs[0].id
+        const ids: string[] = []
+        for (const spec of ['a', 'b'])
+          ids.push(idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec, account: 'acc1', ...(profiled ? { agentProfileId: 'ap_ask' } : {}) })))
+        const replies = await Promise.all(ids.map((task) => as(AGENT, 'worker-start', { task, agent: 'codex', account: 'acc1', worktree: 'current' })))
+        expect(replies.map((r) => r.status), `${profiled} ${JSON.stringify(replies.map((r) => r.body))}`).toEqual([200, 200])
+        expect(deps.getState().dispatches.map((d) => d.taskId).sort(), `${profiled}: both Dispatches are in the state`).toEqual([...ids].sort())
+      }
+    })
+  })
+
+  // Fifth follow-up, the same decision: task-update moving a failed, circuit-broken or finished Task back to ready (or
+  // pending) re-arms it, and the loop then places it (slotsToFill). For a Task held by a bypass profile that is a restart:
+  // an agent is refused while the app asks; the coordinator Astera started for its Run and a person are not asked
+  describe('task-update re-arming a Task held by such a profile', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    /** A person's app-placed Run of a Job with none: a Task made as `profile` (none for null) and circuit-broken, and
+     *  `another` Task not started yet, which keeps the Run running */
+    const broken = async (deps: Deps, profile: string | null = 'ap_b', another = false): Promise<{ runId: string; taskId: string }> => {
+      const jobId = idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true }))
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: jobId, spec: 's', account: 'acc1', ...(profile !== null ? { agentProfileId: profile } : {}) })
+      if (another) await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: jobId, spec: 'later', account: 'acc1' })
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-start', { run: jobId })
+      const s = deps.getState()
+      const runId = s.runs[0].id
+      const taskId = s.tasks.find((t) => t.runId === runId && t.spec === 's')!.id
+      await deps.setState({ ...s, tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'failed' as const, consecutiveFailures: FAILURE_LIMIT } : t)) })
+      return { runId, taskId }
+    }
+    const offered = (deps: Deps, taskId: string): boolean => slotsToFill(deps.getState()).some((x) => x.taskId === taskId)
+    const rearm = (taskId: string, status = 'ready') => ({ id: taskId, status })
+
+    it('refuses an agent while the app-wide mode asks, leaving the Task as it was and unplaced', async () => {
+      for (const caller of AGENTS)
+        for (const status of ['ready', 'pending']) {
+          const { deps, as } = setup(false)
+          const { taskId } = await broken(deps)
+          const r = await as(caller, 'task-update', rearm(taskId, status))
+          expect([r.status, reasonOf(r)], `${JSON.stringify(caller)} ${status}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(deps.getState().tasks.find((t) => t.id === taskId)).toMatchObject({ status: 'failed', consecutiveFailures: FAILURE_LIMIT })
+          expect(offered(deps, taskId)).toBe(false)
+        }
+    })
+
+    it('lets a person, the coordinator Astera started for the Run, and an agent under yolo, and the loop places it', async () => {
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        const { taskId } = await broken(deps)
+        expect((await as(caller, 'task-update', rearm(taskId))).status, JSON.stringify(caller)).toBe(200)
+        expect(offered(deps, taskId), JSON.stringify(caller)).toBe(true)
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      // drivesRun's coordinator carries out a Run still running: here its other Task is not started yet
+      const own = setup(false)
+      const mine = await broken(own.deps, 'ap_b', true)
+      await own.deps.setState({ ...own.deps.getState(), runs: own.deps.getState().runs.map((r) => (r.id === mine.runId ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) })
+      expect((await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'task-update', rearm(mine.taskId))).status).toBe(200)
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const { taskId } = await broken(deps)
+        expect((await as(caller, 'task-update', rearm(taskId))).status, JSON.stringify(caller)).toBe(200)
+      }
+    })
+
+    it('asks nothing for a Task with no profile or a move that re-arms nothing; an unreadable store refuses an agent', async () => {
+      const plain = setup(false)
+      const p = await broken(plain.deps, null)
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'task-update', rearm(p.taskId))).status).toBe(200)
+      const done = setup(false)
+      const d = await broken(done.deps)
+      expect((await done.as({ sessionId: '', role: 'mcp' }, 'task-update', rearm(d.taskId, 'completed'))).status).toBe(200)
+      const damaged = setup(false)
+      const x = await broken(damaged.deps)
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: 'sess_agent', role: 'cli' }, 'task-update', rearm(x.taskId))).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(offered(damaged.deps, x.taskId)).toBe(false)
     })
   })
 })

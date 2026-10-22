@@ -1106,7 +1106,9 @@ of such a Job's runs are refused with 5 and change nothing under the same settin
 as a bypass profile a task names in a Job with none: a task the new run copies, a task of the run not finished yet,
 or for `runs reconverge` any task of the run, since its repair borrows one's profile. Starting one task's worker is
 asked the same about that task's profile: `tasks dispatch`, and `worker-start` unless the caller is the coordinator
-Astera started for that run; the Host's and Astera's own placing is not asked. A profile deleted since runs as before,
+Astera started for that run; the Host's and Astera's own placing is not asked. So is `task-update --status ready` or
+`pending` of such a task, which puts it back where the loop places it, again except from that coordinator while its run
+is running. A profile deleted since runs as before,
 and a profile file that cannot be read refuses with 6 and `error.details.repair`. These refusals
 say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and
 `agent-profile-no-account` with 2, `agent-profile-bypass-refused` with 5.

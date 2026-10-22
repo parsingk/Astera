@@ -260,7 +260,7 @@ const SESSION = {
   'task-update': {
     summary: "set a Task's status by hand",
     detail:
-      'It bypasses the transition table. --convergence off and --status cannot be sent together.',
+      'It bypasses the transition table. --convergence off and --status cannot be sent together. From inside an agent session, moving a Task that runs as a bypass agent profile back to ready or pending is refused with 5 unless Astera\'s "Run agents without permission checks" is on; the coordinator Astera started for its run is not asked.',
     flags: [
       req('id', '<taskId>', 'the Task to change'),
       { name: 'status', value: '<s>', about: 'the status to set' },

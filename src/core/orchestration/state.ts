@@ -348,7 +348,24 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
     // and stamped on this Run only (JobRun.autoDispatch says why not on the Job).
     ...(job.schedule !== undefined && job.coordinatorAccountId === undefined ? { autoDispatch: true } : {})
   }
-  const source = tasksForNextRun(s, jobId)
+  // createdAt 오름차순 — snapshotFor 가 쓰는 순서이고, 의존 사슬을 읽는 순서다
+  const byCreated = (a: Task, b: Task): number => a.createdAt.localeCompare(b.createdAt)
+  const defs = s.tasks.filter((t) => t.jobId === jobId).sort(byCreated)
+  const previous = s.runs
+    .filter((r) => r.jobId === jobId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .at(-1)
+  // The previous Run's lifecycle Task is Astera's, made at its end (GitHub lifecycle §3.2), and so is the integration Task
+  // made for it (G3a final review I3): the next Run makes its own.
+  const lifecycleIds = new Set(s.tasks.filter((t) => t.runId === previous?.id && isLifecycleTask(t)).map((t) => t.id))
+  const source =
+    defs.length > 0
+      ? defs
+      : previous
+        ? s.tasks
+            .filter((t) => t.runId === previous.id && !lifecycleIds.has(t.id) && !(t.parentId !== undefined && lifecycleIds.has(t.parentId)))
+            .sort(byCreated)
+        : []
   const idMap = new Map(source.map((t) => [t.id, newId('tsk')]))
   const copies: Task[] = source.map((t) => ({
     id: idMap.get(t.id)!,
@@ -379,28 +396,6 @@ export function startJobRun(s: OrchState, jobId: string, now: string): Res<JobRu
     },
     run
   )
-}
-
-/** The Tasks a new Run of this Job copies (startJobRun's "Task 를 어디서 베끼는가"): its definitions, or with none, the
- *  ordinary Tasks of its latest Run, oldest first. Also what an agent starting a Run is asked about (command.ts). */
-export function tasksForNextRun(s: OrchState, jobId: string): Task[] {
-  // createdAt 오름차순 — snapshotFor 가 쓰는 순서이고, 의존 사슬을 읽는 순서다
-  const byCreated = (a: Task, b: Task): number => a.createdAt.localeCompare(b.createdAt)
-  const defs = s.tasks.filter((t) => t.jobId === jobId).sort(byCreated)
-  const previous = s.runs
-    .filter((r) => r.jobId === jobId)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-    .at(-1)
-  // The previous Run's lifecycle Task is Astera's, made at its end (GitHub lifecycle §3.2), and so is the integration Task
-  // made for it (G3a final review I3): the next Run makes its own.
-  const lifecycleIds = new Set(s.tasks.filter((t) => t.runId === previous?.id && isLifecycleTask(t)).map((t) => t.id))
-  return defs.length > 0
-    ? defs
-    : previous
-      ? s.tasks
-          .filter((t) => t.runId === previous.id && !lifecycleIds.has(t.id) && !(t.parentId !== undefined && lifecycleIds.has(t.parentId)))
-          .sort(byCreated)
-      : []
 }
 
 /**

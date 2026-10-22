@@ -39,7 +39,6 @@ import {
   deleteRuns,
   deleteJobs,
   startJobRun,
-  tasksForNextRun,
   releaseJob,
   jobOf,
   jobOfRunId,
@@ -1404,14 +1403,65 @@ async function startRefusal(deps: OrchServerDeps, caller: { sessionId: string; r
 }
 
 /** The profiles the work a start of a Job sets going runs as (startRefusal): the Job's own, which the coordinator Astera
- *  then starts plans with (`drivesRun`); with `plan`, those of the Tasks a new Run copies (tasksForNextRun); with
+ *  then starts plans with (`drivesRun`); with `plan`, those of the Tasks a new Run copies (tasksOfNextRun); with
  *  `runId`, those of that Run's Tasks not finished yet, or with `everyTask` every ordinary one (runs reconverge, whose
  *  repair borrows a finished Task's, workerProfileOf). */
 function startProfiles(s: OrchState, job: Job | undefined, o: { plan?: boolean; runId?: string; everyTask?: boolean }): Array<string | undefined> {
   if (!job) return []
   const ofRun =
     o.runId === undefined ? [] : s.tasks.filter((t) => t.runId === o.runId && (o.everyTask === true ? !isLifecycleTask(t) : !taskFinished(t)))
-  return [job.agentProfileId, ...(o.plan === true ? tasksForNextRun(s, job.id) : []).map((t) => t.agentProfileId), ...ofRun.map((t) => t.agentProfileId)]
+  return [job.agentProfileId, ...(o.plan === true ? tasksOfNextRun(s, job) : []).map((t) => t.agentProfileId), ...ofRun.map((t) => t.agentProfileId)]
+}
+
+/** The commands that set work going, and what each asks of an agent (startRefusal), read from a state of their own:
+ *  handleCommand asks before it reads the state it commits (the fifth follow-up; the plugin checks' reason), so a write
+ *  that lands during the store read is never committed over. Empty when the command starts nothing that holds a profile,
+ *  or when the coordinator Astera started for the Task's Run starts or re-arms it (`drivesRun`). `jobs-run` asks through
+ *  the run-start or run-spawn it calls. */
+function startingProfileIds(s: OrchState, caller: { sessionId: string }, cmd: string, args: Record<string, unknown>): string[] {
+  const defined = (ids: Array<string | undefined>): string[] => ids.filter((id): id is string => id !== undefined)
+  /** One Task's own profile, for starting or re-arming it */
+  const ofTask = (id: string | null): string[] => {
+    const task = id === null ? undefined : s.tasks.find((t) => t.id === id)
+    if (!task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
+    return defined([task.agentProfileId])
+  }
+  switch (cmd) {
+    case 'run-start': {
+      const id = str(args.run)
+      const run = id === null ? undefined : s.runs.find((r) => r.id === id)
+      // A Run id: its coordinator again, with the Tasks it has not finished
+      if (run) return defined(startProfiles(s, jobOf(s, run), { runId: run.id }))
+      const job = id === null ? undefined : s.jobs.find((j) => j.id === id)
+      if (!job) return []
+      // A Job id: a first Run, or a schedule's fires, copy the plan; a Job that ran already hands its latest Run to a
+      // coordinator, with the Tasks that Run has not finished
+      const latest = job.schedule === undefined ? s.runs.filter((r) => r.jobId === job.id).at(-1) : undefined
+      return defined(startProfiles(s, job, { plan: job.schedule !== undefined || latest === undefined, ...(latest ? { runId: latest.id } : {}) }))
+    }
+    // A later Run, or a schedule's fires again: each copies the plan
+    case 'run-spawn':
+    case 'run-resume': {
+      const id = str(args.run)
+      return id === null ? [] : defined(startProfiles(s, s.jobs.find((j) => j.id === id), { plan: true }))
+    }
+    // Its work and its coordinator again, with the Tasks it has not finished
+    case 'runs-resume':
+    case 'runs-reconverge': {
+      const id = str(args.id)
+      const run = id === null ? undefined : s.runs.find((r) => r.id === id)
+      return run ? defined(startProfiles(s, jobOf(s, run), { runId: run.id, everyTask: cmd === 'runs-reconverge' })) : []
+    }
+    case 'worker-start':
+      return ofTask(str(args.taskId ?? args.task))
+    case 'tasks-dispatch':
+      return ofTask(str(args.id))
+    // Back to ready or pending, its failures cleared: the loop then places it (slotsToFill)
+    case 'task-update':
+      return args.status === 'ready' || args.status === 'pending' ? ofTask(str(args.id)) : []
+    default:
+      return []
+  }
 }
 
 /** `--agent-profile <id|name>` of the public commands (`jobs create`, `tasks add`) as the `agentProfileId` run-create and
@@ -1540,6 +1590,17 @@ export async function handleCommand(
   if ((cmd === 'jobs-run' || cmd === 'run-start') && (args as Record<PropertyKey, unknown>)[PLUGIN_CHECKS_PASSED] !== true) {
     const refusal = await pluginCheckRefusal(deps, startingCheckIds(deps, cmd, args))
     if (refusal) return refusal
+  }
+  // **The agent profiles of the work an agent sets going, before the state too** (the person's decision; fifth
+  // follow-up): the store is a disk read in the Host, and a command that took `s` before it committed that over whatever
+  // landed meanwhile. Awaited only when an agent starts work that holds a profile, so a person, the loops and every
+  // start without one read the state in the same turn as before.
+  if (agentCaller(caller)) {
+    const profileIds = startingProfileIds(deps.getState(), caller, cmd, args)
+    if (profileIds.length > 0) {
+      const refused = await startRefusal(deps, caller, profileIds)
+      if (refused) return refused
+    }
   }
   const now = deps.now?.() ?? new Date().toISOString()
   const s = deps.getState()
@@ -2456,9 +2517,6 @@ export async function handleCommand(
       // the slot to empty, and a slot still named after that is a 409 that changes nothing.
       let base = s
       const entry = base.runs.find((r) => r.id === id)
-      // Resuming starts its work and its coordinator again (startRefusal): the Job's profile and its unfinished Tasks'
-      const refusedResume = await startRefusal(deps, caller, startProfiles(base, entry && jobOf(base, entry), { runId: id }))
-      if (refusedResume) return refusedResume
       if (
         entry?.paused === true &&
         entry.coordinatorStopPending !== undefined &&
@@ -2844,8 +2902,6 @@ export async function handleCommand(
       if (namedRun) {
         const runJob = jobOf(s, namedRun)
         if (!runJob) return notFound(`unknown job for run: ${id}`)
-        const refusedStart = await startRefusal(deps, caller, startProfiles(s, runJob, { runId: namedRun.id }))
-        if (refusedStart) return refusedStart
         // **A finished Run gets no coordinator** (fix round 1, I3): there is nothing left for one to
         // manage, and starting it spends an account on a session that only reads a closed Run. The view
         // shows no ▶ for it either (view.ts's rowFor). A start in flight is answered the same way, by
@@ -2857,15 +2913,6 @@ export async function handleCommand(
       // **그 밖의 id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
-      // What this start sets going (startRefusal): a first Run, or a schedule's fires, copy the plan; a Job that ran
-      // already hands its latest Run to a coordinator, with the Tasks that Run has not finished
-      const latestOfJob = job.schedule === undefined ? s.runs.filter((r) => r.jobId === id).at(-1) : undefined
-      const refusedStart = await startRefusal(
-        deps,
-        caller,
-        startProfiles(s, job, { plan: job.schedule !== undefined || latestOfJob === undefined, ...(latestOfJob ? { runId: latestOfJob.id } : {}) })
-      )
-      if (refusedStart) return refusedStart
       // **Not reachable today.** releaseJob and startJobRun refuse only `unknown job: <id>` — the id
       // this command was given, which the guard above has just found in the same state. Were that
       // guard ever to drift from them, the answer is still "no such id", so they go through
@@ -2966,9 +3013,6 @@ export async function handleCommand(
       // **run-start 와 다른 명령이다.** 그쪽은 pendingStart("아직 시작하지 않았다")를 걷고, 이쪽은
       // paused("세워 뒀다")를 걷는다 — 사람에게 다른 버튼이고 다른 상황이다(Run.paused 의 주석).
       // 하나로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 떴다.
-      // Its fires start Runs again, each copying the plan (startRefusal)
-      const refusedResume = await startRefusal(deps, caller, startProfiles(s, s.jobs.find((j) => j.id === id), { plan: true }))
-      if (refusedResume) return refusedResume
       return commit(resumeSchedule(s, id))
     }
     // The git range a Run or one attempt worked over (remote runtime design Phase 10), which `runs-changed-files` and
@@ -3010,9 +3054,6 @@ export async function handleCommand(
       // (a scheduled Run's is reaped when it ends), and the bound pull request still open now — the record can be older
       // than a merge while the Host was down, and carrying again would push the branch GitHub deleted on that merge.
       const known = deps.getState().runs.find((r) => r.id === id)
-      // Its repair runs as a finished Task's profile (workerProfileOf), so an agent is asked first (startRefusal)
-      const refusedCarry = await startRefusal(deps, caller, startProfiles(deps.getState(), known && jobOf(deps.getState(), known), { runId: id, everyTask: true }))
-      if (refusedCarry) return refusedCarry
       let prState: 'open' | 'closed' | 'merged' | undefined
       let baseBranch: string | undefined
       if (known?.worktree !== undefined && deps.github) {
@@ -3174,10 +3215,6 @@ export async function handleCommand(
     case 'run-spawn': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      // Before anything is replaced or made: an agent's later run, which copies the plan (startRefusal). The fire is the
-      // app's or the Host's own, never an agent's.
-      const refusedSpawn = await startRefusal(deps, caller, startProfiles(s, s.jobs.find((j) => j.id === id), { plan: true }))
-      if (refusedSpawn) return refusedSpawn
       // **`--unless-running` is the fire's** (the user's ruling of 2026-09-25): a fire behaves like
       // `jobs run`, which refuses while the Job's latest Run still runs, so the fire is skipped then.
       // Answered 409 with `running`, the Run it was skipped for. The fire does not retry it: its arming
@@ -3513,12 +3550,6 @@ export async function handleCommand(
       const openHere = s.dispatches.filter((d) => mine.has(d.taskId) && !d.outcome && !d.endedAt).length
       if (openHere >= limit)
         return conflict(`run ${run.id} is at its concurrency limit: ${openHere} of ${limit} workers are open`)
-      // Its worker starts as the Task's profile, so an agent is asked about it (startRefusal); a coordinator's Run is
-      // refused above
-      if (agentCaller(caller) && task.agentProfileId !== undefined) {
-        const refusedStart = await startRefusal(deps, caller, [task.agentProfileId])
-        if (refusedStart) return refusedStart
-      }
       if (!deps.dispatchTask) return conflict('placing a task on request is done by the Astera Host, and this caller is not one')
       return deps.dispatchTask(id)
     }
@@ -3746,14 +3777,6 @@ export async function handleCommand(
       // (applyWorkerDone's refusal carries no `missing`), and one fact must not exit 4 from one
       // command and 2 from the other.
       if (!run) return bad(`unknown run for task: ${taskId}`)
-      // The worker starts as the Task's profile, so an agent is asked about it (startRefusal), before anything is opened.
-      // Not the coordinator Astera started for this Run (drivesRun), whose door this is, nor the automatic placing (the
-      // app's and the Host's own callers are no agent's). Awaited only then, so every other start reaches openDispatch in
-      // the same turn as before (the C3 test relies on it).
-      if (agentCaller(caller) && task.agentProfileId !== undefined && !drivesRun(s, caller, run.id)) {
-        const refusedStart = await startRefusal(deps, caller, [task.agentProfileId])
-        if (refusedStart) return refusedStart
-      }
       // **템플릿은 자신의 Task 를 배치하지 않는다.** slotsToFill 이 이미 같은 판단을 하지만 그쪽은
       // 자동 배치 경로뿐이고, 이 명령은 사람과 코디네이터가 직접 부르는 두 번째 문이다. 여기를
       // 열어 두면 템플릿의 Task 가 completed 로 끝나고, 그러면 TTL 정리의 조건(`own.length > 0 &&
