@@ -122,7 +122,7 @@ import type { JobEvent, WorktreeInfo } from '../types'
 import { ghFailureSentence, type GhFailed, type GhRunner } from '../github/gh'
 import { ciRunHead, failedLogTail, readPrChecks, rerunFailed } from '../github/checks'
 import { ghRepoArg, repoOfBinding, type GitHubRepo } from '../github/remote'
-import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask } from './lifecycleTask'
+import { isLifecycleTask, openLifecycleTaskOf, withLifecycleTask, workerProfileOf } from './lifecycleTask'
 import { prByNumber, prForBranch, prHead } from '../github/prs'
 import { ISSUE_JOB_ASSOCIATIONS, readIssue } from '../github/issue'
 import { GITHUB_SOURCE_ID, issueContext } from '../github/issueSource'
@@ -1459,6 +1459,16 @@ function startingProfileIds(s: OrchState, caller: { sessionId: string }, cmd: st
     // Back to ready or pending, its failures cleared: the loop then places it (slotsToFill)
     case 'task-update':
       return args.status === 'ready' || args.status === 'pending' ? ofTask(str(args.id)) : []
+    // An answer that opens a new attempt restarts the Task (the person's decision, sixth follow-up): the exhausted Gate's
+    // retry-once opens a repair Dispatch as the Task's worker profile (repairOnce, workerProfileOf). Any other answer only
+    // lets it continue and is not asked; `questions-answer` comes here with its answer.
+    case 'gate-resolve': {
+      const gate = s.gates.find((g) => g.id === str(args.id))
+      if (!gate || gate.status !== 'open' || gate.kind !== 'convergence-exhausted' || args.resolution !== 'retry-once') return []
+      const task = s.tasks.find((t) => t.id === gate.taskId)
+      if (!task || (task.runId !== undefined && drivesRun(s, caller, task.runId))) return []
+      return defined([workerProfileOf(s, task)])
+    }
     default:
       return []
   }

@@ -10924,4 +10924,98 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       expect(offered(damaged.deps, x.taskId)).toBe(false)
     })
   })
+
+  // Sixth follow-up, the person's decision: answering a stopped Task's question only lets it continue and is not asked;
+  // an answer that opens a new attempt is a restart. The exhausted Gate's retry-once opens a repair Dispatch (repairOnce),
+  // so for a Task held by such a profile an agent is refused while the app asks; mark-failed and a plain answer are not
+  describe('answering a question of a Task held by such a profile', () => {
+    type Deps = ReturnType<typeof setup>['deps']
+    /** A person's Run with a Task made as `profile`, stopped on an open Gate of `kind` (the exhausted one offers
+     *  retry-once and mark-failed); `repairOnce` records the Tasks it opened a repair for */
+    const stopped = async (deps: Deps, kind?: 'convergence-exhausted', profile: string | null = 'ap_b') => {
+      const repairs: string[] = []
+      deps.repairOnce = async (a) => {
+        repairs.push(a.taskId)
+        if (a.from) await deps.setState(a.from)
+        return { ok: true }
+      }
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p' })
+      const runId = deps.getState().runs[0].id
+      const taskId = idOf(await handleCommand(deps, { sessionId: APP_CALLER }, 'task-create', { run: runId, spec: 's', account: 'acc1', ...(profile !== null ? { agentProfileId: profile } : {}) }))
+      const s = deps.getState()
+      await deps.setState({
+        ...s,
+        tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'blocked' as const } : t)),
+        gates: [...s.gates, { id: 'gate_q', runId, taskId, question: 'q?', status: 'open', createdAt: NOW, ...(kind ? { kind, options: ['retry-once', 'mark-failed'] } : {}) }]
+      })
+      return { runId, taskId, repairs, gate: () => deps.getState().gates.find((g) => g.id === 'gate_q')! }
+    }
+    const retryOnce = { id: 'gate_q', resolution: 'retry-once' }
+
+    it('refuses an agent’s retry-once while the app-wide mode asks, opening nothing and leaving the question open', async () => {
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(false)
+        const q = await stopped(deps, 'convergence-exhausted')
+        const r = await as(caller, 'gate-resolve', retryOnce)
+        expect([r.status, reasonOf(r)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+        expect(q.repairs).toEqual([])
+        expect(q.gate().status).toBe('open')
+      }
+      // The public name (questions answer, MCP answer_question) goes through the same door
+      const { deps, as } = setup(false)
+      const q = await stopped(deps, 'convergence-exhausted')
+      const r = await as({ sessionId: '', role: 'mcp' }, 'questions-answer', { id: 'gate_q', answer: 'retry-once' })
+      expect([r.status, reasonOf(r)]).toEqual([403, 'agent-profile-bypass-refused'])
+      expect(q.repairs).toEqual([])
+    })
+
+    it('lets an agent answer a question or mark the Task failed, and lets a person, its Run’s coordinator and yolo retry once', async () => {
+      for (const caller of AGENTS) {
+        const plain = setup(false)
+        const q = await stopped(plain.deps)
+        expect((await plain.as(caller, 'questions-answer', { id: 'gate_q', answer: 'go on' })).status, JSON.stringify(caller)).toBe(200)
+        expect(q.gate().status).toBe('resolved')
+        expect(plain.appWideYolo).not.toHaveBeenCalled()
+        const giving = setup(false)
+        await stopped(giving.deps, 'convergence-exhausted')
+        expect((await giving.as(caller, 'gate-resolve', { id: 'gate_q', resolution: 'mark-failed' })).status, JSON.stringify(caller)).toBe(200)
+      }
+      for (const caller of PEOPLE) {
+        const { deps, appWideYolo, as } = setup(false)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'gate-resolve', retryOnce)).status, JSON.stringify(caller)).toBe(200)
+        expect(q.repairs).toEqual([q.taskId])
+        expect(appWideYolo).not.toHaveBeenCalled()
+      }
+      const own = setup(false)
+      const mine = await stopped(own.deps, 'convergence-exhausted')
+      await own.deps.setState({ ...own.deps.getState(), runs: own.deps.getState().runs.map((r) => (r.id === mine.runId ? { ...r, coordinatorSessionId: 'sess_coord' } : r)) })
+      expect((await own.as({ sessionId: 'sess_coord', role: 'cli' }, 'gate-resolve', retryOnce)).status).toBe(200)
+      expect(mine.repairs).toEqual([mine.taskId])
+      for (const caller of AGENTS) {
+        const { deps, as } = setup(true)
+        const q = await stopped(deps, 'convergence-exhausted')
+        expect((await as(caller, 'gate-resolve', retryOnce)).status, JSON.stringify(caller)).toBe(200)
+        expect(q.repairs).toEqual([q.taskId])
+      }
+    })
+
+    it('asks nothing for a Task with no profile; an unreadable store refuses an agent’s retry-once', async () => {
+      const plain = setup(false)
+      const p = await stopped(plain.deps, 'convergence-exhausted', null)
+      plain.deps.readAgentProfiles = async () => {
+        throw new Error('not read')
+      }
+      expect((await plain.as({ sessionId: 'sess_agent', role: 'cli' }, 'gate-resolve', retryOnce)).status).toBe(200)
+      expect(p.repairs).toEqual([p.taskId])
+      const damaged = setup(false)
+      const d = await stopped(damaged.deps, 'convergence-exhausted')
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'plugin' }, 'gate-resolve', retryOnce)).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(d.repairs).toEqual([])
+      expect(d.gate().status).toBe('open')
+    })
+  })
 })

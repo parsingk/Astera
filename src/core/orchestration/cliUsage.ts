@@ -481,6 +481,8 @@ export const USAGE: Record<PublicCommand, CommandUsage> = {
   },
   'questions-answer': {
     summary: 'answer an open question',
+    detail:
+      'From inside an agent session, `retry-once` on a question about a task that runs as a bypass agent profile, which opens a new attempt, is refused with 5 unless Astera\'s "Run agents without permission checks" is on; any other answer is not.',
     flags: [
       ID('<questionId>', 'the question to answer'),
       {
