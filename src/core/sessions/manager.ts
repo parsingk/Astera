@@ -17,6 +17,8 @@ import { sessionInfoFromNote } from './noteInfo'
 import { cliEnvFor } from './cliEnv'
 import { providerOf } from '../providers/meta'
 import { codexDeveloperInstructions } from './sessionContext'
+import type { CapabilitySource } from '../extensions/capabilityCache'
+import { gatewayTokenEnv } from '../extensions/resolve'
 
 /** statusLine info injected when a session spawns (provided by main's StatusLineManager,
  *  structurally compatible). */
@@ -152,6 +154,9 @@ export class SessionManager {
 
   /** Folders `prepare` confirmed, and when. */
   private confirmedCwds = new Map<string, number>()
+  /** Shared extensions (Agent Control Plane release 1): refreshed by `prepare`, read by `spawn`. Unset: nothing is
+   *  added, as before shared extensions existed. */
+  capabilities?: CapabilitySource
   /** The Git Bash `prepare` found, per PATH string, and when — held here, not read back from the
    *  resolver's cache, so an entry that expires between a prepare and its spawn cannot send the spawn
    *  to the sync search. Trusted as long as a confirmed folder is. */
@@ -178,6 +183,8 @@ export class SessionManager {
       for (const [k, v] of this.preparedGitBash) if (now - v.at >= CWD_CONFIRMED_MS) this.preparedGitBash.delete(k)
       this.preparedGitBash.set(pathValueOf(env), { bash, timedOut, at: now })
     }
+    // The shared extensions this account's session gets, so the synchronous spawn reads them ready
+    await this.capabilities?.refresh(opts.account)
     // The CLI on PATH and codex's --no-daemon, so the spawn's command builder finds both (second pass M2-1, M2-2).
     await descriptorOf(this.descriptors, opts.account)
       .prepare?.()
@@ -272,6 +279,9 @@ export class SessionManager {
       ? (this.statusLineProvider?.(id, opts.account, { toolHooks: wantToolHooks }) ?? null)
       : null
     const env = this.envFor(opts.account)
+    // Shared extensions: their environment values only here, in this process's environment (design D5)
+    const caps = this.capabilities?.get(opts.account) ?? null
+    if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     // What Astera offers, told to a codex session as it starts. A Claude session gets the same lines from
     // the SessionStart hook in `sl`'s settings file; codex runs no hook nobody has trusted, so it gets
     // them as developer instructions instead (sessionContext.ts). Only in a session Astera wires up
@@ -291,7 +301,8 @@ export class SessionManager {
       addDirs: this.sessionReadDirs,
       resumePrompt: opts.resumePrompt,
       initialPrompt: opts.initialPrompt,
-      developerInstructions
+      developerInstructions,
+      ...(caps && caps.args.length > 0 ? { extraArgs: caps.args } : {})
     })
     // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
     // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when

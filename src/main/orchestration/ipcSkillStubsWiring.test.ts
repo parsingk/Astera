@@ -38,6 +38,17 @@ describe('ipc.ts skill stub wiring (source guard)', () => {
     expect(body).toMatch(/\.filter\(\s*\(s\)\s*=>\s*s\.enabled\s*\)/)
   })
 
+  // Agent Control Plane release 1 (inventory §4): a new account used to wait for the next app start for its skills
+  it('installs the skills and syncs the shared extensions when an account is added', () => {
+    const after = ipcSource.slice(ipcSource.indexOf('const afterAccountAdded = (): void => {'), ipcSource.indexOf("ipcMain.handle('accounts.create'"))
+    expect(after).toMatch(/installStubsForCurrentToggles\(\)/)
+    expect(after).toMatch(/cmd: 'extensions-sync'/)
+    for (const channel of ['accounts.create', 'accounts.import']) {
+      const start = ipcSource.indexOf(`ipcMain.handle('${channel}'`)
+      expect(ipcSource.slice(start, ipcSource.indexOf('})', start))).toMatch(/afterAccountAdded\(\)/)
+    }
+  })
+
   it('names no stub file or skill directory of its own', () => {
     const body = installerBody()
     for (const name of ['-stub.md', 'astera-orchestration', 'astera-task', 'astera-browser', 'astera-handoff', 'astera-app'])

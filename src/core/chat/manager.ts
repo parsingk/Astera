@@ -19,6 +19,8 @@ import { descriptorOf, type ProviderDescriptor } from '../providers/descriptor'
 import type { ProcFactory, ProcLike } from '../sessions/proc'
 import { cliEnvFor } from '../sessions/cliEnv'
 import { EXITED_SESSIONS_KEPT, prependToPath } from '../sessions/manager'
+import type { CapabilitySource } from '../extensions/capabilityCache'
+import { gatewayTokenEnv } from '../extensions/resolve'
 
 export { EXITED_SESSIONS_KEPT }
 
@@ -59,6 +61,8 @@ export interface ChatManagerDeps {
    *  terminal session does (core/sessions/manager.ts), so `astera` and the higgsfield shims beside it
    *  answer before anything else on PATH (higgsfield accounts design §2). Read at each spawn. */
   orchEnv?: () => ChatOrchEnv | undefined
+  /** Shared extensions (Agent Control Plane release 1): read at spawn; the caller refreshes the account first. */
+  capabilities?: CapabilitySource
 }
 
 /** What `spawn` takes, for a caller that builds it elsewhere (./respawn.ts). */
@@ -278,6 +282,9 @@ export class ChatSessionManager {
       // own gets past it (docs/cli.md).
       ASTERA_SESSION: id
     }
+    // Shared extensions: their environment values only in this process's environment (design D5)
+    const caps = this.deps.capabilities?.get(opts.account) ?? null
+    if (caps) Object.assign(env, caps.env, gatewayTokenEnv(caps))
     const orchEnv = this.deps.orchEnv?.()
     if (orchEnv) {
       env.ASTERA_CLI = orchEnv.cliPath
@@ -290,8 +297,8 @@ export class ChatSessionManager {
     // takes it directly.
     const { file, args } =
       provider === 'claude'
-        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model })
-        : buildCodexAppServerCommand(this.deps.platform)
+        ? buildClaudeChatCommand(this.deps.platform, { resumeSessionId: resumeThreadId, bypass, model: opts.model, extraArgs: caps?.args })
+        : buildCodexAppServerCommand(this.deps.platform, undefined, caps?.args ?? [])
     const meta: PtyMeta = {
       kind: 'chat',
       id,

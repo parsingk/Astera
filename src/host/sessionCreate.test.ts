@@ -62,6 +62,18 @@ describe('createHostSessionStarter — sessions create, by the spawn paths the H
     expect(r).toMatchObject({ id: 'chat_1', kind: 'chat' })
   })
 
+  // Agent Control Plane release 1: a chat spawn is synchronous, so the account's shared servers are resolved first
+  it('resolves the account’s shared extensions before the chat spawn', async () => {
+    const order: string[] = []
+    const h = rig({ refreshCapabilities: async (a) => { order.push(`refresh ${a.id}`) } })
+    h.chats.spawn.mockImplementationOnce((o: { cwd: string }) => {
+      order.push('spawn')
+      return { id: 'chat_1', accountId: 'acc_c', cwd: o.cwd, title: 'p', status: 'running' } as SessionInfo
+    })
+    await h.start({ kind: 'chat', accountId: 'acc_c', cwd: '/repo', rollAccountIds: [] })
+    expect(order).toEqual(['refresh acc_c', 'spawn'])
+  })
+
   // 2026-10-20: a chat session an agent made is an agent's too, and its tab closes when it ends
   it('passes who started the session on, to the chat manager and the spawner, and nothing for a person’s', async () => {
     const h = rig()

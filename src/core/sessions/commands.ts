@@ -26,13 +26,18 @@ export type CommandBuilder = (opts: {
   /** codex only: what Astera tells the session at start, carried as `-c developer_instructions=…`
    *  (sessionContext.ts, codexDeveloperInstructions — Claude gets the same lines from a hook). */
   developerInstructions?: string
+  /** Shared extensions' arguments (Agent Control Plane release 1): Claude `--mcp-config <file>`, Codex `-c
+   *  mcp_servers.*` overrides, from the spawn-time resolver (core/extensions/resolve.ts). */
+  extraArgs?: string[]
 }) => SpawnCommand
 
 export function buildClaudeCommand(platform: NodeJS.Platform, resolve: ResolveExecutable = resolveWindowsExecutable): CommandBuilder {
-  return ({ resumeSessionId, settingsFile, bypassPermissions, addDirs, initialPrompt }) => {
+  return ({ resumeSessionId, settingsFile, bypassPermissions, addDirs, initialPrompt, extraArgs }) => {
     const args: string[] = []
     // Injects a session-scoped statusLine via --settings (the global settings.json is left alone) — goes before resume
     if (settingsFile) args.push('--settings', settingsFile)
+    // Shared extensions, ahead of the variadic --add-dir so nothing reads them as one more directory
+    if (extraArgs && extraArgs.length > 0) args.push(...extraArgs)
     // Read access to the app's screenshot folder, so the paths Design Mode puts in a prompt open
     // without the "read outside the working directories" question. --add-dir is variadic.
     if (addDirs && addDirs.length > 0) args.push('--add-dir', ...addDirs)
@@ -103,7 +108,7 @@ export function buildCodexCommand(
   resolve: ResolveExecutable = resolveWindowsExecutable,
   noDaemon: () => boolean = () => false
 ): CommandBuilder {
-  return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt, developerInstructions }) => {
+  return ({ resumeSessionId, bypassPermissions, resumePrompt, initialPrompt, developerInstructions, extraArgs }) => {
     // **No update check, ever.** With an update out, codex opens on "Update available … 1. Update now
     // 2. Skip" (measured 2026-10-07, 0.160.0 with 0.160.1 out), and a worker, a coordinator or a roll's
     // respawn has nobody in front of it to answer: the Job just stops. Settled for every session Astera
@@ -115,6 +120,8 @@ export function buildCodexCommand(
     // carried: it would break the launch itself, and a briefing is not worth a session that never starts.
     if (developerInstructions && !LAUNCH_FORBIDDEN.test(developerInstructions))
       args.push('-c', `developer_instructions=${developerInstructions}`)
+    // Shared extensions' -c overrides, root options like the two above, so they reach `resume` too
+    if (extraArgs && extraArgs.length > 0) args.push(...extraArgs)
     if (resumeSessionId) {
       args.push('resume', resumeSessionId)
       const safe = resumePrompt ? sanitizeResumePrompt(resumePrompt) : ''
@@ -134,9 +141,12 @@ export function buildCodexCommand(
  *  as buildCodexCommand, for the same reason: on win32 codex may be a shim the shell must resolve. */
 export function buildCodexAppServerCommand(
   platform: NodeJS.Platform,
-  resolve: ResolveExecutable = resolveWindowsExecutable
+  resolve: ResolveExecutable = resolveWindowsExecutable,
+  /** Shared extensions' `-c` overrides; app-server takes `-c` as its own option (measured, codex 0.160). */
+  extraArgs: string[] = []
 ): { file: string; args: string[] } {
-  return platform === 'win32' ? windowsSpawn('codex', ['app-server'], resolve) : { file: 'codex', args: ['app-server'] }
+  const args = ['app-server', ...extraArgs]
+  return platform === 'win32' ? windowsSpawn('codex', args, resolve) : { file: 'codex', args }
 }
 
 /** A chat session's line process for Claude: `claude --output-format stream-json …`, spoken over stdio
@@ -147,9 +157,9 @@ export function buildCodexAppServerCommand(
  *  shell must resolve. */
 export function buildClaudeChatCommand(
   platform: NodeJS.Platform,
-  opts: { resumeSessionId?: string; bypass: boolean; model?: string | null },
+  opts: { resumeSessionId?: string; bypass: boolean; model?: string | null; extraArgs?: string[] },
   resolve: ResolveExecutable = resolveWindowsExecutable
 ): { file: string; args: string[] } {
-  const args = claudeLaunchArgs(opts)
+  const args = [...claudeLaunchArgs(opts), ...(opts.extraArgs ?? [])]
   return platform === 'win32' ? windowsSpawn('claude', args, resolve) : { file: 'claude', args }
 }

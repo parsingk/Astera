@@ -6,6 +6,10 @@
 import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
+import { createHostExtensions } from './extensions/commands'
+import { createGatewayHub } from './gateway/hub'
+import { hidingLog } from '../core/extensions/secrets'
+import { sweepGeneratedMcp } from '../core/extensions/resolve'
 import { hostJobSources } from './jobSources'
 import { hostCompletionChecks } from './completionChecks'
 import { PLUGIN_STOP_CAP_MS, createPluginRuntime } from './plugins/runtime'
@@ -221,6 +225,9 @@ async function main(): Promise<void> {
   // writer only while no app socket holds it. Fed by the server hooks below; an ended proc drops its holds.
   const procHolders = createProcHolders({ log: (m) => log.write(m) })
   procs.onExit((id) => procHolders.ended(id))
+  // The MCP Gateway (Agent Control Plane release 2): shared stdio servers run here once per folder, and each session the
+  // two registries open with a Gateway token reaches them over 127.0.0.1. Listens only while a stdio server is shared.
+  const mcpGateway = createGatewayHub({ profileDir, ptys: registry, procs, log: hidingLog(profileDir, (m) => log.write(m)) })
 
   let server: Awaited<ReturnType<typeof startHostServer>>
   /** Declared here and assigned below `createHostOrch` (S6 final review M3): the rolling wiring's
@@ -267,6 +274,8 @@ async function main(): Promise<void> {
     void mcpHttp.stop()
     // The Remote Gateway stops with the Host the same way: its stdin ends (remote runtime design §2.3). Never rejects.
     void gateway.stop()
+    // The MCP Gateway's servers stop with the Host: they are its children, and nothing else would end them. Never rejects.
+    void mcpGateway.close().catch(() => {})
     // **The Slack stops with them** (Slack in the Host, Task 5): its socket is closed and its timers
     // stopped before the server stops accepting, so a Host on its way out holds no socket an app taking
     // Slack back would be a second one beside. Never rejects.
@@ -424,6 +433,8 @@ async function main(): Promise<void> {
   // closures only run inside a command, long after both exist.
   const spawner = createHostSpawner({
     profileDir,
+    // Synced first, so a spawn right after an import finds the listener open
+    gatewayPort: () => mcpGateway.sync(),
     env: process.env,
     platform: process.platform,
     homeDir: os.homedir(),
@@ -735,11 +746,20 @@ async function main(): Promise<void> {
     })
   })
   const plugins = createPluginManager({ profileDir, hostVersion, runtime: pluginRuntime, log: (m) => log.write(m) })
+  // The shared extensions (Agent Control Plane release 1 design §4.3, §4.6): the registry this Host owns
+  const extensions = createHostExtensions({
+    profileDir,
+    homeDir: os.homedir(),
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    log: (m) => log.write(m),
+    gateway: mcpGateway
+  })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
     controllers,
     plugins,
+    extensions,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime
@@ -800,6 +820,7 @@ async function main(): Promise<void> {
       chats: rollingWiring?.chats ?? null,
       rolling: rollingWiring?.rolling ?? null,
       readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+      refreshCapabilities: (account) => spawner?.capabilities?.refresh(account) ?? Promise.resolve(),
       bypass: async () => (await readAgentPermissionMode(path.join(profileDir, 'app-settings.json'))) === 'yolo',
       probeCwd: defaultCwdProbe,
       announceProc: (procId) => announceChatProc(server, procId, (m) => log.write(m)),
@@ -1137,6 +1158,13 @@ async function main(): Promise<void> {
   earlyLoad = armEarlyLoad({ remoteEnabled: () => remoteEnabled, hasApp: () => server.hasApp(), load: () => orch.loadUnattended(), log: (m) => log.write(m) })
   // And the enabled plugins (plugin runtime design P11), once the orch that answers them listens. Never rejects.
   void plugins.startAll()
+  // And the shared skills, commands and agents, into every account as it is now (design §4.6). A profile that shares
+  // nothing writes nothing. Never rejects.
+  void extensions.sync()
+  // And the MCP Gateway, when a stdio server is shared. Never rejects.
+  void mcpGateway.sync().catch(() => null)
+  // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
+  void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

@@ -1264,6 +1264,20 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .plugin-status.is-failed, .plugin-status.is-incompatible { color: var(--danger); background: var(--danger-bg); }
 .plugin-facts { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12.5px; }
 .plugin-facts > span:last-child { color: var(--text); overflow-wrap: anywhere; }
+/* Settings › Extensions: one scrolling list per kind, rows collapsed to their name until opened */
+.ext-note { display: flex; flex-direction: column; gap: 8px; line-height: 1.65; }
+.ext-note p { margin: 0; }
+.ext-note strong { color: var(--text); font-weight: 600; }
+.ext-register { align-self: flex-start; }
+.ext-register-btn { display: inline-flex; align-items: center; gap: 6px; }
+.ext-register .rtp-group { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.ext-register-provider { margin-left: auto; padding-left: 16px; color: var(--text-faint); font-size: 11px; }
+.ext-list { max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.ext-row + .ext-row { border-top: 1px solid var(--line); }
+.ext-row-head { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; padding: 8px 12px; background: none; border: 0; text-align: left; cursor: pointer; color: inherit; }
+.ext-row-head:hover { background: var(--elevated); }
+.ext-row-chevron { flex-shrink: 0; width: 12px; color: var(--text-dim); font-size: 11px; }
+.ext-row-body { display: flex; flex-direction: column; gap: 14px; padding: 16px 12px 18px 16px; border-top: 1px solid var(--line); }
 .plugin-card .settings-hint { overflow-wrap: anywhere; }
 /* A fieldset, so a save holds every field at once; its own frame is taken off. */
 .plugin-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 6px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line-soft); }
@@ -1470,12 +1484,13 @@ input[type="checkbox"]:not(.md-task input) {
   place-items: center;
   margin: 0;
   background: var(--bg);
-  border: 1px solid var(--line-soft);
+  /* --line-soft 는 행 사이 구분선 색이라 어두운 바탕에서 쉬는 상자가 거의 보이지 않았다(#26262c 위 #17171a). */
+  border: 1px solid var(--text-faint);
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease);
 }
-input[type="checkbox"]:not(.md-task input):not(:disabled):hover { border-color: var(--text-faint); }
+input[type="checkbox"]:not(.md-task input):not(:disabled):hover { border-color: var(--text-dim); }
 /* 끌 수 없는 체크박스는 그렇게 보여야 한다. button:disabled 와 같은 값을 쓴다.
    새 세션·이어하기 모달의 'Slack 진행상황 알림'이 이것을 쓴다 — Slack 을 등록하지 않으면
    disabled 인데, 여기 규칙이 없던 동안은 활성과 픽셀 단위로 같아 보였고 hover 에도 반응해서

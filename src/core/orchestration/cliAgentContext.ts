@@ -593,6 +593,8 @@ const NOT_SWITCHED = [
   'skills-install',
   'higgsfield-list',
   'higgsfield-use',
+  'ext-list',
+  'ext-sync',
   'mcp-serve',
   'mcp-status',
   // Remote runtime: `projects add` is Host-answered beside `pair-create` (src/host/orch.ts), and the runtime commands

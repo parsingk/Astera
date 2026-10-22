@@ -179,7 +179,7 @@ says the same thing on its own: `data.legacyApp` is `true` once such an Astera h
 prints. The Host also writes it to its own log, once for each attach.
 
 `skills list` and `skills install` are outside both lists: they never contact a Host and never need
-one. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
+one. So are `ext list` and `ext sync`, which read the profile's shared extensions the same way. They read the profile's `accounts.json` and `app-settings.json` and work on files in each
 account's config folder, so they answer the same with Astera and the Host running or not.
 
 **The account list works with the app closed.** `accounts list`, `tasks add` (it checks every
@@ -736,6 +736,9 @@ astera skills  install [--account <accountId>]
 astera higgsfield list
 astera higgsfield use --account <id|label|email>
 
+astera ext     list
+astera ext     sync
+
 astera mcp     serve                     serve Astera to an MCP client over stdio
 astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
@@ -1038,6 +1041,31 @@ second run is all `unchanged`.
 
 **Agent sessions read their skills when they start**, so a session already open does not see a
 skill installed after it, and `data.note` says so. Open a new session.
+
+**`ext` is for the extensions shared with every account**: the MCP servers, skills, slash commands and
+subagents set up once in Settings › Extensions. Every session Astera starts gets the shared MCP servers
+when it starts; a server that runs as a command runs in the Host's MCP Gateway, and the session gets only
+its address and a token of its own. The skills, commands and agents are copied into each account's
+folder, and Astera keeps a record of the copies it owns instead of marking your files. `ext list` names
+what is shared and where the copies are. An MCP server's environment names say where each value comes
+from (`secret`, `value` or `inherit`), and no value is ever printed. `ext list` reads the profile and does
+not show whether the Gateway's processes are running; Settings › Extensions does.
+
+```json
+{"ok":true,"data":{"entries":[{"id":"skill-review","kind":"skill","name":"review","enabled":true, …}],
+  "copies":[{"id":"skill-review","accountId":"acc_1","destination":"…/skills/review","adopted":false}]}}
+```
+
+`ext sync` puts the shared skills, commands and agents into every account now. The Host does the same
+whenever the shared extensions change, when it starts and when an account is added, so this is for
+checking, and for an account folder changed by hand. Each item comes back per account with `outcome`:
+`written`, `unchanged`, `adopted` (an identical copy was already there), `restored` (a copy edited
+outside Astera was put back, and the edit is kept under `extension-state/backups`), `conflict` (the
+account has its own different copy, which is left alone until you replace it in Settings), `removed`,
+`forgotten` (a copy that stays because Astera did not write it or it was changed), `not-applicable`
+(Codex has no slash commands or subagents) or `failed`. **Any `failed` makes the command exit 1**, with
+the items in `error.details`. Running it twice changes nothing the second time. A damaged registry or
+`accounts.json` is a 6, and the message names the file.
 
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves

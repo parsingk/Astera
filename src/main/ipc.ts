@@ -64,6 +64,7 @@ import { chatAdoptPlan, hostCarryOnIsOurs, hostStartingDefers } from './chatAdop
 import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './host/worktreeRoute'
 import { createPluginsRoute } from './host/pluginsRoute'
+import { createExtensionsRoute } from './host/extensionsRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -1931,8 +1932,27 @@ export function registerIpc(
 
   // accounts
   ipcMain.handle('accounts.list', () => core.accounts.list())
-  ipcMain.handle('accounts.create', (_e, input) => core.accounts.create(input))
-  ipcMain.handle('accounts.import', (_e, input) => core.accounts.import(input))
+  // A new account gets Astera's own skills and the shared extensions now, not at the next app or Host start
+  // (Agent Control Plane release 1 design §4.6, inventory §4). With no Host the sync waits for its next start, which
+  // syncs every account: the Host is the registry's one writer.
+  const afterAccountAdded = (): void => {
+    installStubsForCurrentToggles()
+    void orchCall({ cmd: 'extensions-sync', args: {}, sessionId: '' })
+      .then((r) => {
+        if (r.status !== 200) orchLog(`extensions sync after an account was added answered ${r.status}`)
+      })
+      .catch((err: unknown) => orchLog(`extensions sync after an account was added did not run: ${String(err)}`))
+  }
+  ipcMain.handle('accounts.create', async (_e, input) => {
+    const account = await core.accounts.create(input)
+    afterAccountAdded()
+    return account
+  })
+  ipcMain.handle('accounts.import', async (_e, input) => {
+    const account = await core.accounts.import(input)
+    afterAccountAdded()
+    return account
+  })
   // 돌아가는 세션이 쓰는 계정은 지우지 않는다 — 판단은 accountRemovalBlockers(위)에 있고, 여기는
   // 세션 목록을 건네고 결과를 렌더러가 읽을 모양으로 바꾸는 일만 한다. 렌더러에도 같은 검사를 두면
   // 두 곳이 어긋날 수 있으므로 두지 않는다: 여기가 경계다.
@@ -2198,6 +2218,7 @@ export function registerIpc(
       // "왜 시작 버튼이 안 눌리나" exists to keep fast; paying that cost on every chat spawn was fix
       // round 1's own Critical finding.
       const bypassSignal = core.bypassSignalFor(providerOf(account))
+      await core.capabilities.refresh(account)
       const chatInfo = core.chat.spawn({
         account,
         cwd: opts.cwd,
@@ -4667,6 +4688,25 @@ export function registerIpc(
   // Settings › Plugins (plugin runtime design slice 2d): the Host's plugins commands as the app, one a method. The Host
   // checks every argument; a value of the wrong type is its refusal to give.
   const plugins = createPluginsRoute({ call: (m) => orchCall(m) })
+  // Settings › Extensions (Agent Control Plane release 1): the Host checks every argument; this only passes them on
+  const extensions = createExtensionsRoute({ call: (m) => orchCall(m) })
+  // The app's sessions reach the Host's MCP Gateway (release 2): asked before each spawn, none without a Host
+  core.gateway.ask = async () => {
+    const r = await orchCall({ cmd: 'extensions-gateway', args: {}, sessionId: '' })
+    const port = r.status === 200 && typeof r.body === 'object' && r.body !== null ? (r.body as { port?: unknown }).port : null
+    return typeof port === 'number' ? port : null
+  }
+  ipcMain.handle('extensions.setIsolation', (_e, id: unknown, isolation: unknown) =>
+    extensions.setIsolation(id as string, isolation === 'session' ? 'session' : 'folder')
+  )
+  ipcMain.handle('extensions.list', () => extensions.list())
+  ipcMain.handle('extensions.discover', (_e, accountId: unknown) => extensions.discover(accountId as string))
+  ipcMain.handle('extensions.import', (_e, accountId: unknown, picks: unknown) =>
+    extensions.import(accountId as string, picks as Parameters<typeof extensions.import>[1])
+  )
+  ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
+  ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
+  ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))

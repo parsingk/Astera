@@ -50,6 +50,9 @@ import type { Account, SessionInfo } from '../core/types'
 import type { PtyRegistry } from './registry'
 import type { HostRollSpawner, RollSpawnOpts } from './rolling'
 import type { HostWorktrees } from './worktrees'
+import { createCapabilityCache, type CapabilityCache } from '../core/extensions/capabilityCache'
+import { readControlPlanePolicyMode } from '../core/settings/controlPlanePolicyMode'
+import { hidingLog } from '../core/extensions/secrets'
 import { setBounded } from '../core/bounded'
 import { dispatchLookup } from '../core/orchestration/dispatchIndex'
 /** Which session each attempt was started on, for the newest this many (audit H5); an older attempt's tail is long gone. */
@@ -85,6 +88,8 @@ export interface HostLocal {
 }
 
 export interface HostSpawnerDeps {
+  /** Where the Host's MCP Gateway listens (Agent Control Plane release 2), asked before each spawn; absent means none. */
+  gatewayPort?: () => Promise<number | null>
   profileDir: string
   env: NodeJS.ProcessEnv
   platform: NodeJS.Platform
@@ -120,6 +125,9 @@ export interface HostSpawnerDeps {
 /** HostRollSpawner's three (prepareRollSpawn, rollSpawn, statusLinePayload) are the S6 roll's respawn
  *  (R5, R6, preflight C12); their JSDoc is on that interface. */
 export interface HostSpawner extends HostLocal, HostRollSpawner {
+  /** Shared extensions each account's sessions get (Agent Control Plane release 1): refreshed before every spawn,
+   *  shared with the Host's chat sessions. */
+  capabilities?: CapabilityCache
   /** The session shuttle's values once the Host wrote it (kicked at creation); undefined until then. */
   orchEnvNow(): ChatOrchEnv | undefined
   /** How many worker and coordinator starts are under way right now. */
@@ -337,6 +345,17 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
     // The Host's own log: a spawn that had to fall back to a sync check says so in host.log.
     defaultSpawnChecks(log)
   )
+  // Shared extensions (Agent Control Plane release 1 design §4.5): `sessions.prepare` refreshes the account before
+  // every spawn and roll, and the Host's chat sessions read the same cache
+  const capabilities = createCapabilityCache({
+    profileDir,
+    homeDir,
+    platform,
+    policyMode: () => readControlPlanePolicyMode(settingsPath),
+    ...(d.gatewayPort ? { gatewayPort: d.gatewayPort } : {}),
+    log: hidingLog(profileDir, log)
+  })
+  sessions.capabilities = capabilities
   sessions.onExit = (e) => {
     sessions.forget(e.sessionId)
   }
@@ -675,6 +694,7 @@ export function createHostSpawner(d: HostSpawnerDeps): HostSpawner | null {
   void shuttlePath().catch((e) => log(`session astera shuttle: not written at start: ${String(e)}`))
 
   return {
+    capabilities,
     orchEnvNow: () => orchEnvReady,
     inFlight: () => spawnsInFlight,
     closeAndSettle: (ms) => {

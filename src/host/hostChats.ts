@@ -40,6 +40,8 @@ export interface HostChatsDeps {
   orchEnv?: () => ChatOrchEnv | undefined
   /** The app's chatSend (server.act), for a turn while the app is the writer. */
   askApp(name: 'chatSend', args: [string, string]): Promise<unknown>
+  /** Shared extensions, the spawner's cache (Agent Control Plane release 1); the spawn path refreshes it first. */
+  capabilities?: ChatManagerDeps['capabilities']
   log(m: string): void
   /** Test seams. */
   createAdapter?: ChatManagerDeps['createAdapter']
@@ -168,6 +170,7 @@ export function createHostChats(d: HostChatsDeps): HostChats {
     log: d.log,
     baseEnv: d.baseEnv,
     orchEnv: d.orchEnv,
+    capabilities: d.capabilities,
     ...(d.createAdapter ? { createAdapter: d.createAdapter } : {})
   })
 

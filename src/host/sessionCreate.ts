@@ -37,6 +37,9 @@ export function createHostSessionStarter(d: {
   rolling: Pick<HostRolling, 'adoptSpawned'> | null
   /** The profile's accounts, read now. Rejects on a damaged file (RepairNeeded). */
   readAccounts(): Promise<Account[]>
+  /** Resolves the account's shared extensions before a chat spawn (Agent Control Plane release 1); a terminal
+   *  session's own prepare does it. Never rejects. */
+  refreshCapabilities?(account: Account): Promise<void>
   /** Whether Astera's setting runs agents without permission checks, read now. Rejects on a damaged
    *  settings file, which may have said manual, so it is never read as the bypass. */
   bypass(): Promise<boolean>
@@ -113,6 +116,7 @@ export function createHostSessionStarter(d: {
     } catch (err) {
       throw err instanceof Error ? refusedBeforeActing(err) : err
     }
+    await d.refreshCapabilities?.(account)
     const info = chats.spawn({
       account,
       cwd: o.cwd,
