@@ -1099,9 +1099,12 @@ a Job that holds one, is refused with 5 and makes nothing unless **Run agents wi
 Astera's settings. A person at their own shell is not asked. Nor is the coordinator Astera started for a run about the
 profile its Job holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A
 bypass profile the coordinator names itself with `--agent-profile` is asked about like any other, and so is a session
-that drives the run from outside (one that made itself its driver with `check --run`). These refusals say why in
-`error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and `agent-profile-no-account` with 2,
-`agent-profile-bypass-refused` with 5.
+that drives the run from outside (one that made itself its driver with `check --run`). Running a Job that holds a
+bypass profile starts work as it too, so from inside an agent session `jobs run`, `runs resume` and `runs reconverge`
+of such a Job's runs are refused with 5 and change nothing under the same setting; a Job whose profile was deleted
+since runs as before, and a profile file that cannot be read refuses with 6 and `error.details.repair`. These refusals
+say why in `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and
+`agent-profile-no-account` with 2, `agent-profile-bypass-refused` with 5.
 
 ```json
 {"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",

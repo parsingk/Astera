@@ -1386,6 +1386,16 @@ async function inheritedBypassRefusal(deps: OrchServerDeps, caller: { sessionId:
   return held ? profileBypassRefusal(deps, caller, held) : null
 }
 
+/** The person's decision on the third follow-up: starting, running or resuming a Run of a Job made as a profile that
+ *  runs without permission checks starts work as it, and the coordinator Astera then starts plans its Tasks as it
+ *  (`drivesRun`). So an agent is asked about the Job's profile as task-create asks about an inherited one
+ *  (`inheritedBypassRefusal`): a profile gone since, or one that checks or follows the app, starts as before, and a store
+ *  that cannot be read refuses. A person, and a Job with no profile, are not asked and nothing is read. */
+async function runStartRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, job: Job | undefined): Promise<Reply | null> {
+  if (job?.agentProfileId === undefined || !agentCaller(caller)) return null
+  return inheritedBypassRefusal(deps, caller, job.agentProfileId)
+}
+
 /** `--agent-profile <id|name>` of the public commands (`jobs create`, `tasks add`) as the `agentProfileId` run-create and
  *  task-create read, which resolve it (Agent Profiles design §6). A bare flag is refused rather than read as none. */
 function publicProfileArgs(args: Record<string, unknown>): { args: Record<string, unknown> } | { error: string } {
@@ -2428,6 +2438,9 @@ export async function handleCommand(
       // the slot to empty, and a slot still named after that is a 409 that changes nothing.
       let base = s
       const entry = base.runs.find((r) => r.id === id)
+      // Resuming starts its work and its coordinator again (runStartRefusal)
+      const refusedResume = await runStartRefusal(deps, caller, entry && jobOf(base, entry))
+      if (refusedResume) return refusedResume
       if (
         entry?.paused === true &&
         entry.coordinatorStopPending !== undefined &&
@@ -2813,6 +2826,8 @@ export async function handleCommand(
       if (namedRun) {
         const runJob = jobOf(s, namedRun)
         if (!runJob) return notFound(`unknown job for run: ${id}`)
+        const refusedStart = await runStartRefusal(deps, caller, runJob)
+        if (refusedStart) return refusedStart
         // **A finished Run gets no coordinator** (fix round 1, I3): there is nothing left for one to
         // manage, and starting it spends an account on a session that only reads a closed Run. The view
         // shows no ▶ for it either (view.ts's rowFor). A start in flight is answered the same way, by
@@ -2824,6 +2839,8 @@ export async function handleCommand(
       // **그 밖의 id 는 Job 이다.** '실행' 은 계획을 푸는 일이고, 회차는 그 결과로 생긴다.
       const job = s.jobs.find((j) => j.id === id)
       if (!job) return notFound(`unknown job: ${id}`)
+      const refusedStart = await runStartRefusal(deps, caller, job)
+      if (refusedStart) return refusedStart
       // **Not reachable today.** releaseJob and startJobRun refuse only `unknown job: <id>` — the id
       // this command was given, which the guard above has just found in the same state. Were that
       // guard ever to drift from them, the answer is still "no such id", so they go through
@@ -2924,6 +2941,9 @@ export async function handleCommand(
       // **run-start 와 다른 명령이다.** 그쪽은 pendingStart("아직 시작하지 않았다")를 걷고, 이쪽은
       // paused("세워 뒀다")를 걷는다 — 사람에게 다른 버튼이고 다른 상황이다(Run.paused 의 주석).
       // 하나로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 떴다.
+      // Its fires start Runs again (runStartRefusal)
+      const refusedResume = await runStartRefusal(deps, caller, s.jobs.find((j) => j.id === id))
+      if (refusedResume) return refusedResume
       return commit(resumeSchedule(s, id))
     }
     // The git range a Run or one attempt worked over (remote runtime design Phase 10), which `runs-changed-files` and
@@ -2965,6 +2985,9 @@ export async function handleCommand(
       // (a scheduled Run's is reaped when it ends), and the bound pull request still open now — the record can be older
       // than a merge while the Host was down, and carrying again would push the branch GitHub deleted on that merge.
       const known = deps.getState().runs.find((r) => r.id === id)
+      // Its repair runs as the Run's profile (workerProfileOf), so an agent is asked first (runStartRefusal)
+      const refusedCarry = await runStartRefusal(deps, caller, known && jobOf(deps.getState(), known))
+      if (refusedCarry) return refusedCarry
       let prState: 'open' | 'closed' | 'merged' | undefined
       let baseBranch: string | undefined
       if (known?.worktree !== undefined && deps.github) {
@@ -3126,6 +3149,10 @@ export async function handleCommand(
     case 'run-spawn': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
+      // Before anything is replaced or made: an agent's later run of a bypass profile's Job (runStartRefusal). The fire
+      // is the app's or the Host's own, never an agent's.
+      const refusedSpawn = await runStartRefusal(deps, caller, s.jobs.find((j) => j.id === id))
+      if (refusedSpawn) return refusedSpawn
       // **`--unless-running` is the fire's** (the user's ruling of 2026-09-25): a fire behaves like
       // `jobs run`, which refuses while the Job's latest Run still runs, so the fire is skipped then.
       // Answered 409 with `running`, the Run it was skipped for. The fire does not retry it: its arming

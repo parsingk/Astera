@@ -1131,6 +1131,31 @@ describe('agent profiles', () => {
     await settings({})
     for (const [from, sessionId] of agents) expect((await create(from, sessionId)).status, from.role).toBe(200)
   })
+
+  // Third follow-up, the person's decision: running a person's Job made as such a profile (jobs run, MCP run_job) starts
+  // work as it, so an agent's shell and an MCP client are refused while the app-wide mode asks; the person is not asked
+  it('refuses an agent’s jobs run and MCP run_job of a person’s Job made as such a profile while the app-wide mode asks', async () => {
+    await writeAgentProfiles(dir, { version: 1, profiles: [{ id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW }] })
+    const settings = (extra: object): Promise<void> => fs.writeFile(path.join(dir, 'app-settings.json'), JSON.stringify({ mcpAccess: 'control', ...extra }))
+    const orch = orchOver()
+    const app: OrchCaller = { role: 'app', toOthers: () => {} }
+    const mcp: OrchCaller = { role: 'mcp', toOthers: () => {} }
+    const personsJob = async (): Promise<string> =>
+      ((await orch.call({ cmd: 'jobs-create', args: { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' }, sessionId: '', from: app })).body as { id: string }).id
+    const run = (id: string, from: OrchCaller, sessionId = ''): ReturnType<typeof orch.call> => orch.call({ cmd: 'jobs-run', args: { id }, sessionId, from })
+    await settings({ agentPermissionMode: 'manual' })
+    const id = await personsJob()
+    for (const [from, sessionId] of [[cli, 'sess_agent'], [mcp, '']] as Array<[OrchCaller, string]>) {
+      const r = await run(id, from, sessionId)
+      expect([r.status, (r.body as { reason?: unknown }).reason], from.role).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(orch.state().runs).toHaveLength(0)
+    // The person at their own shell runs it
+    expect((await run(id, cli)).status).toBe(200)
+    // Read per call: once the app-wide mode skips the checks, MCP may run one too
+    await settings({})
+    expect((await run(await personsJob(), mcp)).status).toBe(200)
+  })
 })
 
 describe('pairing and clients (local only)', () => {

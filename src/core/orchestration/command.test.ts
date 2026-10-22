@@ -10420,4 +10420,133 @@ describe('agent profiles: a profile that runs without permission checks, by who 
     const r = await bare.as({ sessionId: '', role: 'plugin' }, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
     expect([r.status, reasonOf(r)]).toEqual([403, 'agent-profile-bypass-refused'])
   })
+
+  // Third follow-up, the person's decision: starting, running or resuming a Run of a Job whose profile runs without
+  // permission checks starts work as it (Astera's coordinator would then plan its Tasks), so an agent is asked the same
+  // question: jobs run (MCP run_job, the SDK's jobs.run), run-start, run-spawn, runs resume (resume_run), run-resume and
+  // runs reconverge (reconverge_run). A person in the app or at their own shell is not asked
+  describe('starting a Run of a person’s Job made as such a profile', () => {
+    /** A person's Job made as the bypass profile: with `auto` not run yet, with a schedule waiting for its fire, else
+     *  with its first Run (run-create then answers the Run, so the Job's id is read from the state) */
+    const personsJob = async (deps: ReturnType<typeof setup>['deps'], extra: Record<string, unknown> = {}): Promise<string> => {
+      await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', ...extra })
+      return deps.getState().jobs.at(-1)!.id
+    }
+    const runOf = (deps: ReturnType<typeof setup>['deps'], jobId: string): string => deps.getState().runs.find((r) => r.jobId === jobId)!.id
+    const paused = async (deps: ReturnType<typeof setup>['deps'], runId: string): Promise<void> =>
+      deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, paused: true } : r)) })
+    const pausedSchedule = async (deps: ReturnType<typeof setup>['deps'], jobId: string): Promise<void> =>
+      deps.setState({ ...deps.getState(), jobs: deps.getState().jobs.map((j) => (j.id === jobId ? { ...j, paused: true } : j)) })
+
+    /** Each entry point: the call an agent makes, and what must not have changed when it is refused */
+    const ENTRIES: Array<{ name: string; prepare: (deps: ReturnType<typeof setup>['deps']) => Promise<{ cmd: string; args: Record<string, unknown>; unchanged: () => unknown }> }> = [
+      {
+        name: 'jobs run (MCP run_job), a first run',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps, { auto: true })
+          return { cmd: 'jobs-run', args: { id: jobId }, unchanged: () => [deps.getState().runs.length, deps.getState().jobs[0].pendingStart] }
+        }
+      },
+      {
+        name: 'run-start of the Job',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps, { auto: true })
+          return { cmd: 'run-start', args: { run: jobId }, unchanged: () => [deps.getState().runs.length, deps.getState().jobs[0].pendingStart] }
+        }
+      },
+      {
+        name: 'run-start of a Run (its coordinator again)',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await personsJob(deps))
+          return { cmd: 'run-start', args: { run: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.coordinatorSessionId }
+        }
+      },
+      {
+        name: 'run-spawn (a later run)',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps)
+          return { cmd: 'run-spawn', args: { run: jobId }, unchanged: () => deps.getState().runs.length }
+        }
+      },
+      {
+        name: 'runs resume (MCP resume_run)',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await personsJob(deps))
+          await paused(deps, runId)
+          return { cmd: 'runs-resume', args: { id: runId }, unchanged: () => deps.getState().runs.find((r) => r.id === runId)!.paused }
+        }
+      },
+      {
+        name: 'run-resume of a paused schedule',
+        prepare: async (deps) => {
+          const jobId = await personsJob(deps, { schedule: { kind: 'daily', time: '09:00' } })
+          await pausedSchedule(deps, jobId)
+          return { cmd: 'run-resume', args: { run: jobId }, unchanged: () => deps.getState().jobs[0].paused }
+        }
+      },
+      {
+        name: 'runs reconverge (MCP reconverge_run)',
+        prepare: async (deps) => {
+          const runId = runOf(deps, await personsJob(deps))
+          return { cmd: 'runs-reconverge', args: { id: runId }, unchanged: () => deps.getState().tasks.length }
+        }
+      }
+    ]
+
+    it('refuses an agent’s shell, an MCP client and a plugin at every entry point while the app-wide mode asks, changing nothing', async () => {
+      for (const entry of ENTRIES)
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(false)
+          const { cmd, args, unchanged } = await entry.prepare(deps)
+          const before = JSON.stringify(unchanged())
+          const r = await as(caller, cmd, args)
+          expect([r.status, reasonOf(r)], `${entry.name} ${JSON.stringify(caller)}`).toEqual([403, 'agent-profile-bypass-refused'])
+          expect(JSON.stringify(unchanged()), `${entry.name} ${JSON.stringify(caller)}`).toBe(before)
+        }
+    })
+
+    it('a person in the app or at their own shell is not asked, and an agent is let once the app-wide mode skips the checks', async () => {
+      for (const entry of ENTRIES) {
+        for (const caller of PEOPLE) {
+          const { deps, appWideYolo, as } = setup(false)
+          const { cmd, args } = await entry.prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${entry.name} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+          expect(appWideYolo, entry.name).not.toHaveBeenCalled()
+        }
+        for (const caller of AGENTS) {
+          const { deps, as } = setup(true)
+          const { cmd, args } = await entry.prepare(deps)
+          const r = await as(caller, cmd, args)
+          expect(reasonOf(r), `${entry.name} ${JSON.stringify(caller)} ${JSON.stringify(r.body)}`).toBeUndefined()
+        }
+      }
+      // The run itself goes through for both
+      const person = setup(false)
+      expect((await person.as({ sessionId: '', role: 'cli' }, 'jobs-run', { id: await personsJob(person.deps, { auto: true }) })).status).toBe(200)
+      const yolo = setup(true)
+      expect((await yolo.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: await personsJob(yolo.deps, { auto: true }) })).status).toBe(200)
+    })
+
+    // As task-create's inherited profile: a profile gone since, or one that checks permissions, starts as before; a store
+    // that cannot be read refuses an agent (it may hold a bypass profile) and names the file
+    it('a Job whose profile is gone or checks permissions runs for an agent; an unreadable store refuses it', async () => {
+      const gone = setup(false)
+      const goneJob = await personsJob(gone.deps, { auto: true })
+      gone.deps.readAgentProfiles = async () => ({ version: 1, profiles: [] })
+      expect((await gone.as({ sessionId: 'sess_agent', role: 'cli' }, 'jobs-run', { id: goneJob })).status).toBe(200)
+      const asks = setup(false)
+      const asksJob = idOf(await handleCommand(asks.deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_ask', auto: true }))
+      expect((await asks.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: asksJob })).status).toBe(200)
+      expect(asks.appWideYolo).not.toHaveBeenCalled()
+      const damaged = setup(false)
+      const damagedJob = await personsJob(damaged.deps, { auto: true })
+      damaged.deps.readAgentProfiles = async () => {
+        throw new RepairNeeded('agent-profiles.json is damaged; a copy was kept beside it', 'agent-profiles.json')
+      }
+      expect(await damaged.as({ sessionId: '', role: 'mcp' }, 'jobs-run', { id: damagedJob })).toMatchObject({ status: 409, body: { repair: 'agent-profiles.json' } })
+      expect(damaged.deps.getState().runs).toHaveLength(0)
+      expect((await damaged.as({ sessionId: APP_CALLER }, 'jobs-run', { id: damagedJob })).status).toBe(200)
+    })
+  })
 })
