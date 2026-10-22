@@ -8,7 +8,7 @@ import path from 'node:path'
 import { removeFixture } from '../../core/testFixtures'
 import { extensionSecrets } from '../../core/extensions/secrets'
 import * as secretsModule from '../../core/extensions/secrets'
-import { createUpstreamPool, type UpstreamPool } from './upstream'
+import { createUpstreamPool, upstreamArgs, type UpstreamPool } from './upstream'
 import type { McpExtension } from '../../core/extensions/types'
 import { vi } from 'vitest'
 
@@ -183,5 +183,18 @@ describe('upstream pool, after the final review', () => {
       }
     }
     await expect.poll(alive, { timeout: 8000 }).toBe(false)
+  })
+})
+
+// Real-session check 2026-10-22: two per-session Playwright processes fought over Playwright's one default browser
+// profile ("Browser is already in use … use --isolated"); one process per session needs one profile per process
+describe('upstreamArgs', () => {
+  it('adds --isolated to a per-session browser server that does not have it, and leaves the rest alone', () => {
+    const base = { id: 'mcp-pw', kind: 'mcp' as const, name: 'playwright', transport: 'stdio' as const, command: 'npx', env: {}, providers: ['claude' as const], importedFrom: 'a', enabled: true }
+    expect(upstreamArgs({ ...base, args: ['@playwright/mcp@latest', '--headless'], isolation: 'session' })).toEqual(['@playwright/mcp@latest', '--headless', '--isolated'])
+    expect(upstreamArgs({ ...base, args: ['chrome-devtools-mcp@latest'], isolation: 'session' })).toEqual(['chrome-devtools-mcp@latest', '--isolated'])
+    expect(upstreamArgs({ ...base, args: ['@playwright/mcp', '--isolated'], isolation: 'session' })).toEqual(['@playwright/mcp', '--isolated'])
+    expect(upstreamArgs({ ...base, args: ['@playwright/mcp'] })).toEqual(['@playwright/mcp'])
+    expect(upstreamArgs({ ...base, args: ['-y', 'linear-mcp'], isolation: 'session' })).toEqual(['-y', 'linear-mcp'])
   })
 })

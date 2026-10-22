@@ -46,6 +46,15 @@ export const UPSTREAM_START_TIMEOUT_MS = 30_000
 /** A process that ran this long before it died starts the backoff over. */
 const STABLE_MS = 30_000
 
+/** The arguments a server is started with. A browser server switched to one process per session also gets its own
+ *  browser profile: Playwright and Chrome DevTools MCP otherwise share one profile folder, and a second process is
+ *  refused while the first holds it ("Browser is already in use"). */
+export function upstreamArgs(server: McpExtension): string[] {
+  const args = server.args ?? []
+  const browser = [server.command ?? '', ...args].some((t) => /playwright|chrome-devtools/i.test(t))
+  return server.isolation === 'session' && browser && !args.includes('--isolated') ? [...args, '--isolated'] : args
+}
+
 export function upstreamKey(server: McpExtension, folder: string, sessionToken: string): UpstreamKey {
   const definition = { command: server.command, args: server.args, cwd: server.cwd, env: server.env, options: server.options }
   return createHash('sha256')
@@ -156,7 +165,7 @@ export function createUpstreamPool(d: {
     const env = await envFor(server)
     const transport = new StdioClientTransport({
       command: server.command ?? '',
-      args: server.args ?? [],
+      args: upstreamArgs(server),
       env,
       cwd: server.cwd ?? folder,
       stderr: 'pipe'
