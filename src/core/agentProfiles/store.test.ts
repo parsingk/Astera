@@ -55,6 +55,20 @@ describe('agent profile store', () => {
     expect(await fs.readFile(file, 'utf8')).toBe('{ not json')
   })
 
+  // Every profiled spawn, touch and dialog open reads the store: the same damage is kept aside once, and still refused
+  // every time; a different damage is kept too
+  it('keeps one copy of the same damage however often it is read', async () => {
+    const p = await profile()
+    const file = profilePaths(p).agentProfiles
+    const kept = async (): Promise<string[]> => (await fs.readdir(path.dirname(file))).filter((f) => f.endsWith('.bak'))
+    await fs.writeFile(file, '{ not json')
+    for (let i = 0; i < 3; i++) await expect(readAgentProfiles(p)).rejects.toBeInstanceOf(RepairNeeded)
+    expect(await kept()).toHaveLength(1)
+    await fs.writeFile(file, '{ "version": 2 }')
+    for (let i = 0; i < 2; i++) await expect(readAgentProfiles(p)).rejects.toBeInstanceOf(RepairNeeded)
+    expect(await kept()).toHaveLength(2)
+  })
+
   it('generates ids as ap_ and 12 hex characters', () => {
     expect(newProfileId()).toMatch(/^ap_[0-9a-f]{12}$/)
   })

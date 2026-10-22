@@ -3,7 +3,7 @@
 // for "no profiles", since the next write would erase them.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { profilePaths } from '../profile/paths'
 import { keepDamaged, readStoreFile } from '../storeFile'
 import { writeThroughTmp } from '../accounts/fileQueue'
@@ -16,6 +16,11 @@ const FILE = 'agent-profiles.json'
 const NAME_MAX = 60
 
 const empty = (): AgentProfileStore => ({ version: 1, profiles: [] })
+
+/** The hash of the damaged text this process last kept aside, by file. The store is read on every profiled spawn (up to
+ *  three times), every use stamp and every dialog open, and each read of the same damage kept another stamped copy: one
+ *  per distinct damage is enough, and the read still refuses every time. */
+const keptDamage = new Map<string, string>()
 
 /** The profile's store; empty when there is none. Throws RepairNeeded when the file is damaged or unreadable. */
 export async function readAgentProfiles(profileDir: string): Promise<AgentProfileStore> {
@@ -31,7 +36,11 @@ export async function readAgentProfiles(profileDir: string): Promise<AgentProfil
   }
   const s = parsed as AgentProfileStore | null
   if (!s || s.version !== 1 || !Array.isArray(s.profiles)) {
-    await keepDamaged(file, read.text)
+    const hash = createHash('sha256').update(read.text).digest('hex')
+    if (keptDamage.get(file) !== hash) {
+      await keepDamaged(file, read.text)
+      keptDamage.set(file, hash)
+    }
     throw new RepairNeeded(`${FILE} is damaged; a copy was kept beside it`, FILE)
   }
   return s
