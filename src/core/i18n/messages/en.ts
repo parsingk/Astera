@@ -150,8 +150,10 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.agentProfiles.mcpHint': 'Skills and commands are shared by every profile.',
   'settings.agentProfiles.permission': 'Permission checks',
   'settings.agentProfiles.permission.inherit': 'Follow the app setting',
-  'settings.agentProfiles.permission.bypass': "Don't ask",
-  'settings.agentProfiles.permission.ask': 'Ask',
+  'settings.agentProfiles.permission.bypass': 'Run without permission checks',
+  'settings.agentProfiles.permission.ask': 'Run with permission checks',
+  'settings.agentProfiles.permissionAgents':
+    'Agents, MCP clients and plugins can use a profile set to "Run without permission checks" only while the app\'s own "Run agents without permission checks" is on.',
   'settings.agentProfiles.save': 'Save',
   'settings.agentProfiles.create': 'Create',
   'settings.agentProfiles.archive': 'Archive',

@@ -105,27 +105,26 @@ export function AgentProfilesSettings({ accounts }: { accounts: Account[] }): Re
       )}
       {listFailure !== null && <p className="settings-hint is-warning">{failureLine(listFailure, t, { read: true })}</p>}
       {creating && (
-        <div className="ext-list">
-          <div className="ext-row is-open">
-            <ProfileEditor
-              initial={draftOf()}
-              accounts={accounts}
-              servers={servers}
-              busy={busy}
-              saveLabel={t('settings.agentProfiles.create')}
-              onSave={(d) =>
-                void change(() => window.api.agentProfiles.create(d)).then((ok) => {
-                  if (ok) setCreating(false)
-                })
-              }
-              onCancel={() => setCreating(false)}
-            />
-          </div>
+        // Its own box, outside the list, so its Create and Cancel are never inside the list's scroll
+        <div className="agent-profile-new">
+          <ProfileEditor
+            initial={draftOf()}
+            accounts={accounts}
+            servers={servers}
+            busy={busy}
+            saveLabel={t('settings.agentProfiles.create')}
+            onSave={(d) =>
+              void change(() => window.api.agentProfiles.create(d)).then((ok) => {
+                if (ok) setCreating(false)
+              })
+            }
+            onCancel={() => setCreating(false)}
+          />
         </div>
       )}
       {profiles !== null && profiles.length === 0 && !creating && <p className="settings-hint">{t('settings.agentProfiles.none')}</p>}
       {profiles !== null && profiles.length > 0 && (
-        <div className="ext-list">
+        <div className="ext-list is-uncapped">
           {profiles.map((p) => {
             const first = accounts.find((a) => a.id === p.accountIds[0])
             const isOpen = open.has(p.id)
@@ -212,11 +211,11 @@ function ProfileEditor({
       {warning !== undefined && <span className="settings-hint is-warning">{warning}</span>}
       <label className="plugin-field">
         <span className="plugin-field-label">{t('settings.agentProfiles.name')}</span>
-        <input type="text" value={d.name} maxLength={60} onChange={(e) => set('name', e.target.value)} />
+        <input type="text" className="settings-gen-input" value={d.name} maxLength={60} onChange={(e) => set('name', e.target.value)} />
       </label>
       <label className="plugin-field">
         <span className="plugin-field-label">{t('settings.agentProfiles.description')}</span>
-        <input type="text" value={d.description} onChange={(e) => set('description', e.target.value)} />
+        <input type="text" className="settings-gen-input" value={d.description} onChange={(e) => set('description', e.target.value)} />
       </label>
       <div className="plugin-field">
         <span className="plugin-field-label">{t('settings.agentProfiles.accounts')}</span>
@@ -280,6 +279,7 @@ function ProfileEditor({
             <span>{permissionLabel(p, t)}</span>
           </label>
         ))}
+        <span className="settings-hint">{t('settings.agentProfiles.permissionAgents')}</span>
       </div>
       <div className="remote-actions">
         <button className="settings-gen-refresh" disabled={busy} onClick={() => onSave(d)}>

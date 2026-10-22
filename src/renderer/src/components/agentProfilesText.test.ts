@@ -52,6 +52,23 @@ describe('agentProfilesText', () => {
     }
   })
 
+  // Final fix wave (the person, F7): the permission choices speak the app's own words for skipping permission checks,
+  // the ones Settings › Agents and the New Session dialog already use, not new ones; and the Settings line says when an
+  // agent may use such a profile (F1), naming both settings as they are shown
+  it("names the permission choices in the app's own words, and says when an agent may skip the checks", () => {
+    const ko = (key: MessageKey): string => translate('ko', key)
+    expect(['inherit', 'bypass', 'ask'].map((p) => permissionLabel(p as 'inherit', ko))).toEqual(['앱 설정 따름', '권한 확인 없이 실행', '권한 확인함'])
+    for (const lang of LANGS) {
+      const tr = (key: MessageKey): string => translate(lang, key)
+      const bypass = permissionLabel('bypass', tr)
+      expect(tr('session.new.bypassPermissions').startsWith(`${bypass} (`), lang).toBe(true)
+      const line = tr('settings.agentProfiles.permissionAgents')
+      expect(line, lang).toContain(bypass)
+      expect(line, lang).toContain(tr('settings.agentPermission.label'))
+      expect(line, lang).not.toMatch(/ [-–—] /)
+    }
+  })
+
   it('says the Host’s reason when it gives one, and why nothing came back otherwise', () => {
     expect(profileFailureLine({ ok: false, code: 'INVALID_ARGUMENTS', message: 'the profile was refused (mixed-provider)', reason: 'mixed-provider' }, en)).toBe(
       en('settings.agentProfiles.reason.mixed-provider')

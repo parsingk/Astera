@@ -115,8 +115,10 @@ export const es: Catalog = {
   'settings.agentProfiles.mcpHint': 'Todos los perfiles comparten las habilidades y los comandos.',
   'settings.agentProfiles.permission': 'Comprobación de permisos',
   'settings.agentProfiles.permission.inherit': 'Seguir el ajuste de la app',
-  'settings.agentProfiles.permission.bypass': 'No preguntar',
-  'settings.agentProfiles.permission.ask': 'Preguntar',
+  'settings.agentProfiles.permission.bypass': 'Ejecutar sin comprobar permisos',
+  'settings.agentProfiles.permission.ask': 'Ejecutar comprobando permisos',
+  'settings.agentProfiles.permissionAgents':
+    'Los agentes, los clientes MCP y los plugins solo pueden usar un perfil con «Ejecutar sin comprobar permisos» mientras «Ejecutar agentes sin comprobar permisos» de la app esté activado.',
   'settings.agentProfiles.save': 'Guardar',
   'settings.agentProfiles.create': 'Crear',
   'settings.agentProfiles.archive': 'Archivar',
