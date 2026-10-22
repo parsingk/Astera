@@ -53,3 +53,17 @@ describe('ipc.ts starts a session from an agent profile', () => {
     expect(worker).toMatch(/\.\.\.\(profile \? \{ agentProfileId: profile\.agentProfileId \} : \{\}\)/)
   })
 })
+
+// Agent Profiles design §7: a roll keeps the profile. The coordinators hand the chain's profile id to prepareSpawn (their
+// own tests pin that), and index.ts's two coordinators must pass it on to the prepare that warms the capabilities.
+describe('index.ts prepares a roll on the chain’s agent profile', () => {
+  const index = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.ts'), 'utf8')
+
+  it('both coordinators’ prepareSpawn pass the profile id to the prepare', () => {
+    const lines = index.split('\n').filter((l) => l.includes('prepareSpawn:'))
+    expect(lines).toHaveLength(2)
+    for (const l of lines) {
+      expect(l).toMatch(/prepareSpawn: \(account, cwd, agentProfileId\) => core!\.sessions\.prepare\(\{ account, cwd, \.\.\.\(agentProfileId \? \{ agentProfileId \} : \{\}\) \}\)/)
+    }
+  })
+})

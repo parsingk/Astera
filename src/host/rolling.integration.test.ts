@@ -107,9 +107,12 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   let seq = 1
   const onSpawned: Array<(i: SessionInfo, a: Account) => void> = []
   const onLocated: Array<(s: string, c: string, p: string) => void> = []
+  const prepared: Array<{ accountId: string; agentProfileId?: string }> = []
+  const respawned: Array<{ accountId: string; agentProfileId?: string }> = []
   const spawner = {
-    prepareRollSpawn: async () => {},
-    rollSpawn: (x: { account: Account; cwd: string; rollAccountIds?: string[]; restoreExtra?: Record<string, unknown> }) => {
+    prepareRollSpawn: async (a: Account, _cwd: string, agentProfileId?: string) => { prepared.push({ accountId: a.id, agentProfileId }) },
+    rollSpawn: (x: { account: Account; cwd: string; rollAccountIds?: string[]; restoreExtra?: Record<string, unknown>; agentProfileId?: string }) => {
+      respawned.push({ accountId: x.account.id, agentProfileId: x.agentProfileId })
       const id = `s${++seq}`
       open(`p${seq}`, id, { accountId: x.account.id, cwd: x.cwd, title: 't', rollAccountIds: x.rollAccountIds, ...(x.restoreExtra ?? {}) })
       return { id, accountId: x.account.id, cwd: x.cwd, status: 'running', title: 't', rollAccountIds: x.rollAccountIds } as SessionInfo
@@ -173,14 +176,17 @@ async function rig(o: { appPid?: number | null; coordinator?: string; openStop?:
   return {
     broadcasts,
     logs,
+    /** What the fake spawner's two roll halves were asked for (Agent Profiles design §7). */
+    prepared,
+    respawned,
     now: () => Date.now(),
     spawnWorker: (p: string, s: string, ids: string[]) => { open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, rolledBy: 'host' }); for (const cb of onSpawned) cb({ id: s, accountId: ids[0], cwd: profileDir, status: 'running', title: 't', rollAccountIds: ids }, accounts.find((a) => a.id === ids[0])!); return orch.ready() },
     /** The spawner's locate found a fresh codex session's rollout (R12). */
     rolloutLocated: (s: string, thread: string, file: string) => { for (const cb of onLocated) cb(s, thread, file) },
     profileDir,
     spawnAppWorker: (p: string, s: string, ids: string[]) => { open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, roll: snapOf(ids, {}) }); return orch.ready() },
-    openAppSession: (p: string, s: string, ids: string[], over: Partial<RollSnapshot>, x: { withoutSnapshot?: boolean } = {}) => {
-      open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, ...(x.withoutSnapshot ? {} : { roll: snapOf(ids, over) }) })
+    openAppSession: (p: string, s: string, ids: string[], over: Partial<RollSnapshot>, x: { withoutSnapshot?: boolean; restore?: Record<string, unknown> } = {}) => {
+      open(p, s, { accountId: ids[0], cwd: profileDir, title: 't', rollAccountIds: ids, ...(x.withoutSnapshot ? {} : { roll: snapOf(ids, over) }), ...(x.restore ?? {}) })
       return orch.ready()
     },
     writeSnapshot: (p: string, ids: string[]) => registry.note(p, { roll: snapOf(ids, {}) }),
@@ -291,6 +297,21 @@ describe('the Host rolls, with and without an app (S6 rig)', () => {
     expect(h.note('p9').rolledBy).toBe('host')
     await h.advance(31_000)
     expect(h.typedInto('p9').some((d) => d === '\r')).toBe(true)
+  })
+  // Agent Profiles design §7 and Ruling P2: the profile id rides the note, not the snapshot, so a chain the Host takes
+  // over from a note holding it still prepares and starts its next account on that profile
+  it('a session taken over from a note with an agent profile rolls on that profile', async () => {
+    const h = await rig({ appPid: 100 })
+    h.attachApp(3, ['worktrees', 'dispatch', 'rolling'], [])
+    await h.openAppSession('p9', 't9', ['a1', 'a2'], {}, { restore: { agentProfileId: 'ap_x' } })
+    h.detachApp(3)
+    h.setAppPid(null)
+    h.graceEnds()
+    expect(h.note('p9').rolledBy).toBe('host')
+    h.limit('p9', 't9')
+    await untilReal(() => expect(h.respawned).toHaveLength(1))
+    expect(h.prepared).toEqual([{ accountId: 'a2', agentProfileId: 'ap_x' }])
+    expect(h.respawned).toEqual([{ accountId: 'a2', agentProfileId: 'ap_x' }])
   })
   it('takes nothing over before the first accounts read has finished (Task 12 hard carry)', async () => {
     let release: () => void = () => {}

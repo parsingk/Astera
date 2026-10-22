@@ -65,7 +65,7 @@ afterEach(async () => {
 
 type Over = {
   mayAct?: (pty: string) => boolean
-  prepare?: () => Promise<void>
+  prepare?: (account: Account, cwd: string, agentProfileId?: string) => Promise<void>
   fetchUsage?: (configDir: string) => Promise<RateLimitPeak | null>
   statusLinePayload?: (id: string) => Promise<unknown>
   resumeText?: () => Promise<string | null>
@@ -96,7 +96,7 @@ const rig = async (over: Over = {}) => {
     platform: process.platform,
     registry,
     spawner: {
-      prepareRollSpawn: async () => { await over.prepare?.() },
+      prepareRollSpawn: async (account, cwd, agentProfileId) => { await over.prepare?.(account, cwd, agentProfileId) },
       rollSpawn: (o) => {
         spawned.push(o)
         const id = `s${++seq}`
@@ -145,6 +145,28 @@ describe('createHostRolling (S6 Task 9)', () => {
     expect(r.rolled).toEqual(['s1->s2'])
     expect(r.events.some((e) => e.t === 'session-rolled' && e.oldSessionId === 's1' && e.info.id === 's2')).toBe(true)
     expect(r.events.some((e) => e.t === 'roll-state' && e.event.state === 'switching')).toBe(true)
+    r.rolling.dispose()
+  })
+
+  // Agent Profiles design §7: the respawn is prepared and started with the session's profile, read back from its note
+  it('rolls a Host session started from an agent profile on that profile, and one without it on none', async () => {
+    const prepared: Array<string | undefined> = []
+    const r = await rig({ prepare: async (_a, _c, agentProfileId) => { prepared.push(agentProfileId) } })
+    await r.rolling.refresh()
+    r.open('p1', 's1', { accountId: 'a1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'], agentProfileId: 'ap_x' })
+    r.rolling.adoptSpawned({ ...info('s1'), agentProfileId: 'ap_x' }, accounts[0])
+    r.payloads.set('s1', payload(100))
+    r.ptys.get('p1')!.emit(LIMIT)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(prepared).toEqual(['ap_x'])
+    expect(r.spawned[0].agentProfileId).toBe('ap_x')
+    r.open('p9', 's9', { accountId: 'a1', cwd: os.tmpdir(), title: 't', rollAccountIds: ['a1', 'a2'] })
+    r.rolling.adoptSpawned(info('s9'), accounts[0])
+    r.payloads.set('s9', payload(100))
+    r.ptys.get('p9')!.emit(LIMIT)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(prepared).toEqual(['ap_x', undefined])
+    expect(r.spawned[1]).not.toHaveProperty('agentProfileId')
     r.rolling.dispose()
   })
 
@@ -454,6 +476,14 @@ describe('createHostRolling — chat chains (chat takeover, lifts R20)', () => {
     const h = harness({ chats, chatMayAct: () => true })
     h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', startedBy: 'agent', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
     expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ startedBy: 'agent' }))
+  })
+  it('carries the agent profile of a chat chain into its respawn', () => {
+    const chats = fakeChats()
+    const h = harness({ chats, chatMayAct: () => true })
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', agentProfileId: 'ap_x', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect(chats.spawn).toHaveBeenCalledWith(expect.objectContaining({ agentProfileId: 'ap_x' }))
+    h.spawnDep({ kind: 'chat', account: h.accounts[1], cwd: 'D:/p', resumeSessionId: 'th', restoreExtra: { rolledFrom: 'c1', roll: {} as never } })
+    expect((chats.spawn.mock.calls[1] as unknown[])[0]).not.toHaveProperty('agentProfileId')
   })
   it('does not announce a chat roll whose new proc ended before it started (review M2)', async () => {
     const chats = { ...fakeChats(), has: (id: string) => id === 'c1' || id === 'c2', procOf: (id: string) => (id === 'c2' ? null : 'p1') }

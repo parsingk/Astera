@@ -738,6 +738,32 @@ describe('the roll spawn (S6 R5, R6)', () => {
     const cmd = Array.isArray(last.args) ? last.args.join(' ') : last.args
     expect(cmd).toContain('--mcp-config')
   })
+  // Agent Profiles design §7: a roll keeps the session's profile, so the account it rolls onto gets that profile's
+  // servers (its prepare resolves them with the profile) and the new session's info and note keep the id
+  it('a roll respawn of a session started from an agent profile keeps the profile, its exclusions and its id', async () => {
+    const h = await spawnerRig()
+    const account = h.accounts[0]
+    const mcp = (id: string, name: string) => ({ id, kind: 'mcp' as const, name, transport: 'http' as const, url: `https://mcp.example.com/${name}`,
+      env: {}, providers: ['claude' as const, 'codex' as const], importedFrom: 'acc0', enabled: true })
+    await writeExtensionRegistry(h.profileDir, { version: 1, entries: [mcp('mcp-docs', 'docs'), mcp('mcp-linear', 'linear')] })
+    await writeAgentProfiles(h.profileDir, { version: 1, profiles: [{ id: 'ap_x', name: 'X', status: 'active', accountIds: [account.id],
+      mcpExclude: ['mcp-linear'], permission: 'inherit', createdAt: NOW, updatedAt: NOW }] })
+    await h.spawner.prepareRollSpawn(account, h.cwd, 'ap_x')
+    const info = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id], agentProfileId: 'ap_x', restoreExtra: { rolledBy: 'host', rolledFrom: 's0' } })
+    expect(info.agentProfileId).toBe('ap_x')
+    expect(h.registry.metaOf(h.registry.sessionPty(info.id)!)?.restore).toMatchObject({ agentProfileId: 'ap_x' })
+    const config = JSON.stringify(h.spawned[h.spawned.length - 1])
+    expect(config).toContain('--mcp-config')
+    const file = /--mcp-config","([^"]+)"/.exec(config)?.[1]
+    expect(file).toBeDefined()
+    const written = await fs.readFile(JSON.parse(`"${file}"`) as string, 'utf8')
+    expect(written).toContain('docs')
+    expect(written).not.toContain('linear')
+    // Without a profile: every shared server, and no id
+    await h.spawner.prepareRollSpawn(account, h.cwd)
+    const plain = h.spawner.rollSpawn({ account, cwd: h.cwd, rollAccountIds: [account.id] })
+    expect(plain).not.toHaveProperty('agentProfileId')
+  })
   it('prepareRollSpawn refuses a retiring Host and a damaged settings file, before anything is spawned', async () => {
     const h = await spawnerRig()
     await fs.writeFile(path.join(h.profileDir, 'app-settings.json'), '{ damaged')
