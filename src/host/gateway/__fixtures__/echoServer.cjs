@@ -23,6 +23,10 @@ process.stdin.on('data', (c) => {
       waiting.delete(m.id)
       continue
     }
+    if (m.method === 'notifications/cancelled') {
+      fs.appendFileSync(`${pidFile}.events`, `cancelled ${m.params.requestId}\n`)
+      continue
+    }
     if (m.method === 'initialize') {
       if (mode === 'silent') continue
       reply(m.id, { protocolVersion: m.params.protocolVersion, capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} }, serverInfo: { name: 'echo-fixture', version: '1.0.0' }, instructions: 'fixture' })
