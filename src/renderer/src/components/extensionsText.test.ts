@@ -44,14 +44,15 @@ describe('extensionsText', () => {
     expect(['account-unreadable', 'launch-chars', 'gateway-unavailable', 'transport'].every(notGivenWorthSaying)).toBe(true)
   })
 
-  it('offers each shareable item and lists the rest with why, with no secret switches', () => {
-    const p = importPrompt(ITEMS, 'Work', en)
+  it('offers each shareable item, says why the rest cannot be shared, and leaves Astera’s own out entirely', () => {
+    const p = importPrompt([...ITEMS, { kind: 'mcp', name: 'keyed', shareable: false, reason: 'arg-secret' }], 'Work', en)
     expect(p.choices.map((c) => [c.id, c.defaultChecked])).toEqual([
       ['item:mcp:linear', false],
       ['item:skill:review', false]
     ])
-    expect(p.body).toContain('astera-task')
-    expect(p.body).toContain(en('settings.extensions.reason.astera-own'))
+    expect(p.body).toContain('keyed')
+    expect(p.body).toContain(en('settings.extensions.reason.arg-secret'))
+    expect(p.body).not.toContain('astera-task')
   })
 
   it('keeps every environment value of a picked server as a secret', () => {

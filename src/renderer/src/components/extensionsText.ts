@@ -78,15 +78,18 @@ export interface ImportPick {
 
 const itemId = (i: Pick<FoundItem, 'kind' | 'name'>): string => `item:${i.kind}:${i.name}`
 
+/** Astera's own skills and server, which an account always has: never offered, and not worth a line either. */
+export const offeredItems = (items: readonly FoundItem[]): FoundItem[] => items.filter((i) => i.reason !== 'astera-own')
+
 /** The import dialog for what `extensions-discover` found in the account labelled `label`: one choice an item that can
- *  be shared; what cannot be shared is listed in the body with why. Nothing starts checked. */
+ *  be shared; what cannot be shared is listed in the body with why, Astera's own left out. Nothing starts checked. */
 export function importPrompt(
   items: readonly FoundItem[],
   label: string,
   t: T
 ): { title: string; body: string; footer: string; confirmLabel: string; choices: { id: string; label: string; defaultChecked: boolean }[] } {
   const choices = items.filter((x) => x.shareable).map((i) => ({ id: itemId(i), label: `${kindOneLabel(i.kind, t)} ${i.name}`, defaultChecked: false }))
-  const refused = items
+  const refused = offeredItems(items)
     .filter((x) => !x.shareable)
     .map((i) => t('settings.extensions.import.notShareable', { kind: kindOneLabel(i.kind, t), name: i.name, reason: reasonLabel(i.reason ?? '', t) }))
   return {

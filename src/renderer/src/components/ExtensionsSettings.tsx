@@ -6,7 +6,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { toast } from '../lib/toast'
 import { confirmModal, confirmModalWithChoices } from '../lib/confirm'
-import { copyProblem, failureLine, importPrompt, kindLabel, notGivenLabel, notGivenWorthSaying, picksOf, reasonLabel, serverProblem, type FoundItem } from './extensionsText'
+import { copyProblem, failureLine, importPrompt, kindLabel, notGivenLabel, notGivenWorthSaying, offeredItems, picksOf, reasonLabel, serverProblem, type FoundItem } from './extensionsText'
 
 type Entry = Record<string, unknown>
 type Status = { id: string; accountId: string; outcome: string; detail?: string }
@@ -84,7 +84,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
       setBusy(null)
     }
     const label = labelOf(accountId)
-    if (items.length === 0) return void toast.info(t('settings.extensions.import.nothing', { label }))
+    if (offeredItems(items).length === 0) return void toast.info(t('settings.extensions.import.nothing', { label }))
     const answer = await confirmModalWithChoices(importPrompt(items, label, t))
     const picks = answer.ok ? picksOf(items, answer.checked) : []
     if (picks.length === 0) return
@@ -143,6 +143,7 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
         return (
           <div key={kind} className="settings-stack">
             <span className="settings-field-label">{kindLabel(kind, t)}</span>
+            {kind === 'mcp' && <p className="settings-hint">{t('settings.extensions.mcpSharing')}</p>}
             <div className="ext-list">
               {ofKind.map((e) => {
                 const id = str(e.id)
