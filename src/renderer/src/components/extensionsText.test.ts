@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { t as translate, LANGS, type MessageKey, type MessageParams } from '../../../core/i18n'
-import { envSourceLabel, failureLine, importPrompt, kindLabel, kindOneLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
+import { envSourceLabel, failureLine, gatewayLine, importPrompt, kindLabel, kindOneLabel, mcpStateLabel, outcomeLabel, picksOf, reasonLabel, type FoundItem } from './extensionsText'
 import type { SyncOutcome } from '../../../core/extensions/types'
 import type { NotShareableReason } from '../../../core/extensions/envRules'
 import type { ExtensionKind, SkipReason } from '../../../core/extensions/types'
@@ -65,5 +65,19 @@ describe('extensionsText', () => {
     expect(failureLine({ ok: false, code: 'HOST_NOT_RUNNING', message: '' }, en)).toBe(en('settings.plugins.fail.noHost'))
     expect(failureLine({ ok: false, code: 'NOT_SUPPORTED', message: 'x' }, en)).toBe(en('settings.extensions.fail.notSupported', { message: 'x' }))
     expect(failureLine({ ok: false, code: 'CONFLICT', message: 'extensions/registry.json is damaged' }, en)).toBe('extensions/registry.json is damaged')
+  })
+})
+
+// Gateway design §4.5: the Gateway's state of a stdio server, in words
+describe('gatewayLine', () => {
+  it('says how the server’s processes stand, in every language, with the last error when it failed', () => {
+    for (const lang of LANGS) {
+      const tr = (key: MessageKey, params?: MessageParams): string => translate(lang, key, params)
+      for (const state of ['running', 'stopped', 'restarting', 'failed'] as const)
+        expect(gatewayLine({ state, processes: 2, lastError: 'boom' }, tr), `${lang} ${state}`).not.toMatch(/settings\./)
+    }
+    expect(gatewayLine({ state: 'running', processes: 2 }, en)).toContain('2')
+    expect(gatewayLine({ state: 'failed', processes: 0, lastError: 'the secret could not be read' }, en)).toContain('the secret could not be read')
+    expect(gatewayLine(undefined, en)).toBe(gatewayLine({ state: 'stopped', processes: 0 }, en))
   })
 })

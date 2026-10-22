@@ -59,6 +59,20 @@ export const kindLabel = (k: ExtensionKind, t: T): string => t(KINDS[k])
 export const kindOneLabel = (k: ExtensionKind, t: T): string => t(KIND_ONE[k])
 /** How an item's copy in one account stands after the last sync; one this app does not know by itself. */
 export const outcomeLabel = (o: string, t: T): string => (Object.hasOwn(OUTCOMES, o) ? t(OUTCOMES[o as SyncOutcome]) : o)
+/** How the Gateway's processes of one shared stdio server stand (Gateway design §4.5); none listed reads as stopped. */
+export function gatewayLine(s: { state: string; processes: number; lastError?: string } | undefined, t: T): string {
+  switch (s?.state) {
+    case 'running':
+      return t('settings.extensions.gateway.running', { count: s.processes })
+    case 'restarting':
+      return t('settings.extensions.gateway.restarting')
+    case 'failed':
+      return t('settings.extensions.gateway.failed', { error: s.lastError ?? '' })
+    default:
+      return t('settings.extensions.gateway.stopped')
+  }
+}
+
 /** Whether one account's sessions get a shared MCP server, or why not (final review I1). */
 export const mcpStateLabel = (s: string, t: T): string => (Object.hasOwn(MCP_STATES, s) ? t(MCP_STATES[s as 'given' | SkipReason]) : s)
 export const reasonLabel = (r: string, t: T): string => (Object.hasOwn(REASONS, r) ? t(REASONS[r as NotShareableReason]) : r)

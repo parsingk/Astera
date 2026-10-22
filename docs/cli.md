@@ -1044,10 +1044,12 @@ skill installed after it, and `data.note` says so. Open a new session.
 
 **`ext` is for the extensions shared with every account**: the MCP servers, skills, slash commands and
 subagents set up once in Settings › Extensions. Every session Astera starts gets the shared MCP servers
-when it starts. The skills, commands and agents are copied into each account's folder, and Astera keeps
-a record of the copies it owns instead of marking your files. `ext list` names what is shared and where
-the copies are. An MCP server's environment names say where each value comes from (`secret`, `value` or
-`inherit`), and no value is ever printed.
+when it starts; a server that runs as a command runs in the Host's MCP Gateway, and the session gets only
+its address and a token of its own. The skills, commands and agents are copied into each account's
+folder, and Astera keeps a record of the copies it owns instead of marking your files. `ext list` names
+what is shared and where the copies are. An MCP server's environment names say where each value comes
+from (`secret`, `value` or `inherit`), and no value is ever printed. `ext list` reads the profile and does
+not show whether the Gateway's processes are running; Settings › Extensions does.
 
 ```json
 {"ok":true,"data":{"entries":[{"id":"skill-review","kind":"skill","name":"review","enabled":true, …}],
