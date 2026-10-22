@@ -47,8 +47,9 @@ choose which environment values to keep as secrets. A server that carries a cred
 arguments or its address is not offered, since it would be stored in plain text. The sessions
 Astera starts then get the shared MCP servers. A server that runs as a command runs once inside
 Astera's MCP Gateway for each project folder: sessions in that folder share it, reach it with a
-token of their own, and never see its secret values. Turn on **One process per session** for a
-server that holds a browser or a connection. A remote server is reached directly by each session,
+token of their own, and never see its secret values. Sessions sharing a process also share what
+it is told to log and which of its resources are watched. Turn on **One process per session** for a
+server that holds a browser or a connection, or when that sharing matters. A remote server is reached directly by each session,
 so an account's own sign-in to it keeps working. Each server says per account whether its
 sessions get it and why not (an account with its own server of that name keeps its own, for
 example), and whether its process is running. Each account also

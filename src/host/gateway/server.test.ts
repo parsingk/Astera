@@ -25,23 +25,23 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) await removeFixture(d)
 })
 
-async function rig() {
+async function rig(o: { mode?: string; options?: McpExtension['options']; pool?: Partial<Parameters<typeof createUpstreamPool>[0]>; hide?: (s: string) => Promise<string> } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-gateway-'))
   dirs.push(root)
   const pidFile = path.join(root, 'pids.txt')
   const folder = path.join(root, 'repo')
   await fs.mkdir(folder)
   const echo: McpExtension = {
-    id: 'mcp-echo', kind: 'mcp', name: 'echo', transport: 'stdio', command: process.execPath, args: [FIXTURE, pidFile],
-    env: {}, providers: ['claude', 'codex'], importedFrom: 'acc_1', enabled: true
+    id: 'mcp-echo', kind: 'mcp', name: 'echo', transport: 'stdio', command: process.execPath, args: [FIXTURE, pidFile, ...(o.mode ? [o.mode] : [])],
+    env: {}, providers: ['claude', 'codex'], importedFrom: 'acc_1', enabled: true, ...(o.options ? { options: o.options } : {})
   }
   const other: McpExtension = { ...echo, id: 'mcp-other', name: 'other' }
   const registry: ExtensionRegistry = { version: 1, entries: [echo, other] }
   const tokens = createTokenTable()
   tokens.register(TOKEN, { ownerId: 'p1', folder, grant: new Set(['mcp-echo']) })
   tokens.register(OTHER, { ownerId: 'p2', folder, grant: new Set(['mcp-echo']) })
-  const pool = createUpstreamPool({ profileDir: path.join(root, 'profile'), baseEnv: process.env, log: () => {} })
-  const gateway: Gateway = createGateway({ tokens, pool, readRegistry: async () => registry, log: () => {} })
+  const pool = createUpstreamPool({ profileDir: path.join(root, 'profile'), baseEnv: process.env, log: () => {}, ...o.pool })
+  const gateway: Gateway = createGateway({ tokens, pool, readRegistry: async () => registry, log: () => {}, ...(o.hide ? { hide: o.hide } : {}) })
   const port = await gateway.listen()
   closers.push(() => pool.close(), () => gateway.close())
   const session = async (token = TOKEN, serverId = 'mcp-echo') => {
@@ -66,7 +66,7 @@ async function rig() {
       req.end(body)
     })
   const pids = async () => (await fs.readFile(pidFile, 'utf8').catch(() => '')).split('\n').filter(Boolean)
-  return { gateway, port, session, raw, pids, tokens, registry, pidFile }
+  return { gateway, port, session, raw, pids, tokens, registry, pidFile, pool, folder }
 }
 const text = (r: unknown) => ((r as { content: { text: string }[] }).content[0].text)
 
@@ -127,5 +127,53 @@ describe('the MCP Gateway', () => {
     await c.callTool({ name: 'crash', arguments: {} }).catch(() => {})
     const r = await c.callTool({ name: 'echo', arguments: { text: 'x' } }).then(text, (e: Error) => e.message)
     expect(r).toMatch(/restarting|echo: x/)
+  })
+})
+
+// Final review of release 2
+describe('the MCP Gateway, after the final review', () => {
+  it('ends a session whose token went while its initialize waited for the upstream, so the process idles out (I1)', async () => {
+    const h = await rig({ mode: 'slow', pool: { idleMs: 200 } })
+    const opening = h.session().catch(() => null)
+    await new Promise((r) => setTimeout(r, 300))
+    h.gateway.forgetTokens([TOKEN])
+    h.tokens.forgetOwner('p1')
+    await opening
+    await expect.poll(() => h.pool.states(), { timeout: 3000 }).toEqual([])
+  })
+
+  it('lets a call run as long as the server’s own tool timeout, and marks the server failed when a call hangs past it (I3, M4)', async () => {
+    const h = await rig({ options: { toolTimeoutSec: 1 } })
+    const c = await h.session()
+    const started = Date.now()
+    const r = await c.callTool({ name: 'hang', arguments: {} }).then(() => 'answered', (e: Error) => e.message)
+    expect(r).toMatch(/timed out/i)
+    expect(Date.now() - started).toBeLessThan(10_000)
+    expect(h.pool.states()).toEqual([expect.objectContaining({ serverId: 'mcp-echo', state: 'failed', lastError: expect.stringMatching(/timed out/i) })])
+    expect(text(await c.callTool({ name: 'echo', arguments: { text: 'ok' } }))).toBe('echo: ok')
+    expect(h.pool.states()[0].state).toBe('running')
+  })
+
+  it('redacts what it answers when an upstream cannot start (M2)', async () => {
+    const h = await rig({ mode: 'silent', pool: { startTimeoutMs: 200 }, hide: async (s) => s.replace(/echo/g, '[redacted]') })
+    const r = await h.session().then(() => 'opened', (e: Error) => e.message)
+    expect(r).toContain('[redacted]')
+    expect(r).not.toMatch(/\becho\b/)
+  })
+
+  it('ends a session’s earlier MCP session when it initializes again (M9)', async () => {
+    const h = await rig()
+    const first = await h.session()
+    await h.session()
+    const r = await first.callTool({ name: 'echo', arguments: { text: 'x' } }).then(() => 'answered', () => 'ended')
+    expect(r).toBe('ended')
+  })
+
+  it('closes promptly with a session still connected (M7)', async () => {
+    const h = await rig()
+    await h.session()
+    const started = Date.now()
+    await h.gateway.close()
+    expect(Date.now() - started).toBeLessThan(2000)
   })
 })

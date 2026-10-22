@@ -125,3 +125,63 @@ describe('upstream pool', () => {
     expect(h.pool.states()).toEqual([{ serverId: 'mcp-other', processes: 1, state: 'running' }])
   })
 })
+
+// Final review of release 2
+describe('upstream pool, after the final review', () => {
+  it('does not hand out or keep a server stopped while it was starting (I2)', async () => {
+    const h = await rig()
+    const slow = h.server({ args: [FIXTURE, path.join(h.profileDir, 'slow-pids.txt'), 'slow'] })
+    const starting = h.pool.acquire(slow, h.a, 'tok-1').then(() => 'handed out', (e: Error) => e.message)
+    await sleep(200)
+    await h.pool.stopServer('mcp-echo')
+    expect(await starting).toMatch(/stopped/)
+    expect(h.pool.states()).toEqual([])
+  })
+
+  it('forgets a failed server nobody uses after the idle time (M3)', async () => {
+    const h = await rig({ idleMs: 200, startTimeoutMs: 150 })
+    const silent = h.server({ args: [FIXTURE, path.join(h.profileDir, 'silent-pids.txt'), 'silent'] })
+    await h.pool.acquire(silent, h.a, 'tok-1').catch(() => {})
+    expect(h.pool.states()[0].state).toBe('failed')
+    await sleep(500)
+    expect(h.pool.states()).toEqual([])
+  })
+
+  it('keeps a key’s notification listeners when its process is started again (M6)', async () => {
+    const h = await rig()
+    const x = await h.pool.acquire(h.server(), h.a, 'tok-1')
+    const heard: string[] = []
+    h.pool.onNotification(x.key, (n) => void heard.push(n.method))
+    await h.pool.stopServer('mcp-echo')
+    const y = await h.pool.acquire(h.server(), h.a, 'tok-1')
+    await call(y.client, 'changed')
+    await expect.poll(() => heard).toContain('notifications/tools/list_changed')
+  })
+
+  it('logs a stderr line written in two pieces as one line (M2)', async () => {
+    const h = await rig()
+    const x = await h.pool.acquire(h.server(), h.a, 'tok-1')
+    await call(x.client, 'split')
+    await expect.poll(() => h.logs.join('\n')).toContain('gateway: echo: abcdef')
+  })
+
+  it.runIf(process.platform === 'win32')('ends a server started through a .cmd shim, child included, when it is stopped (M8)', async () => {
+    const h = await rig()
+    const pidFile = path.join(h.profileDir, 'stubborn-pids.txt')
+    const shim = path.join(h.profileDir, 'stubborn.cmd')
+    await fs.mkdir(h.profileDir, { recursive: true })
+    await fs.writeFile(shim, `@"${process.execPath}" "${FIXTURE}" "${pidFile}" stubborn\r\n`)
+    await h.pool.acquire(h.server({ command: shim, args: [] }), h.a, 'tok-1')
+    const pid = Number((await fs.readFile(pidFile, 'utf8')).trim())
+    await h.pool.stopServer('mcp-echo')
+    const alive = (): boolean => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    await expect.poll(alive, { timeout: 8000 }).toBe(false)
+  })
+})

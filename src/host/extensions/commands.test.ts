@@ -171,3 +171,15 @@ describe('createHostExtensions, with the Gateway', () => {
     expect((await readExtensionRegistry(h.profileDir)).entries[0]).toMatchObject({ isolation: 'session' })
   })
 })
+
+// Final review of release 2 (M2): the Gateway's last error is shown with stored secret values taken out
+describe('createHostExtensions, the Gateway’s errors', () => {
+  it('redacts a stored secret value from the processes’ last error', async () => {
+    const h = await rig()
+    await extensionSecrets(h.profileDir).put('mcp.mcp-linear.LINEAR_API_KEY', SECRET)
+    h.gateway.states = () => [{ serverId: 'mcp-linear', processes: 0, state: 'failed', lastError: `refused ${SECRET}` }] as never
+    const listed = await h.call('extensions-list')
+    expect(JSON.stringify(listed.body)).not.toContain(SECRET)
+    expect(JSON.stringify(listed.body)).toContain('[redacted]')
+  })
+})

@@ -17,6 +17,8 @@ import {
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
+  ErrorCode,
+  McpError,
   ResultSchema,
   SetLevelRequestSchema,
   SubscribeRequestSchema,
@@ -36,8 +38,9 @@ export interface Gateway {
   forgetTokens(tokens: string[]): void
 }
 
-/** How long a passed-on call may take before the session is answered with a timeout. */
-export const GATEWAY_CALL_TIMEOUT_MS = 120_000
+/** How long a passed-on call may go without an answer or a progress report before it is answered with a timeout, when
+ *  the server sets no tool timeout of its own (Codex's `tool_timeout_sec`, which import carries). */
+export const GATEWAY_CALL_TIMEOUT_MS = 600_000
 const BODY_MAX = 4 * 1024 * 1024
 
 /** The notifications an upstream sends that every session on it should see. */
@@ -77,7 +80,10 @@ export function createGateway(d: {
   pool: UpstreamPool
   readRegistry: () => Promise<ExtensionRegistry>
   log: (line: string) => void
+  /** Takes the stored secret values out of what a session is told; absent leaves the text as it is. */
+  hide?: (text: string) => Promise<string>
 }): Gateway {
+  const hide = d.hide ?? (async (s: string) => s)
   let server: http.Server | null = null
   let port: number | null = null
   const sessions = new Map<string, DownSession>()
@@ -96,12 +102,22 @@ export function createGateway(d: {
     try {
       up = await d.pool.acquire(entry, folder, token)
     } catch (err) {
-      return send(res, 502, rpcError(-32603, err instanceof Error ? err.message : String(err)))
+      return send(res, 502, rpcError(-32603, await hide(err instanceof Error ? err.message : String(err))))
     }
-    // The upstream a call goes to: the one acquired, or a new one once that one died (it restarts on the next request)
+    // The session may have ended while the upstream started: nothing could reach or end this one later (final review I1)
+    if (d.tokens.lookup(token) === null) {
+      up.release()
+      return send(res, 401, rpcError(-32001, 'Unauthorized'))
+    }
+    // A client initializes again after a reconnect; the MCP session it left is ended rather than held to its pty's exit
+    for (const old of [...sessions.values()]) if (old.token === token && old.serverId === entry.id) endSession(old)
+    // The upstream a call goes to: the one acquired, or a new one once that one died (it restarts on the next request),
+    // as long as the server is still shared (final review I2)
     let current = up
     const upstream = async (): Promise<Awaited<ReturnType<UpstreamPool['acquire']>>> => {
       if (current.client.transport !== undefined) return current
+      const shared = (await d.readRegistry()).entries.some((e) => e.id === entry.id && e.kind === 'mcp' && e.enabled)
+      if (!shared) throw new McpError(ErrorCode.InvalidRequest, `${entry.name} is no longer shared`)
       const next = await d.pool.acquire(entry, folder, token)
       current.release()
       current = next
@@ -119,13 +135,26 @@ export function createGateway(d: {
         const meta = params._meta as { progressToken?: string | number } | undefined
         delete params._meta
         const u = await upstream()
-        return u.client.request({ method, params } as never, ResultSchema, {
+        const timeout = entry.options?.toolTimeoutSec !== undefined ? entry.options.toolTimeoutSec * 1000 : GATEWAY_CALL_TIMEOUT_MS
+        const call = u.client.request({ method, params } as never, ResultSchema, {
           signal: AbortSignal.any([extra.signal, ended.signal]),
-          timeout: GATEWAY_CALL_TIMEOUT_MS,
+          timeout,
+          resetTimeoutOnProgress: true,
           ...(meta?.progressToken !== undefined
             ? { onprogress: (p) => void extra.sendNotification({ method: 'notifications/progress', params: { ...p, progressToken: meta.progressToken } } as never).catch(() => {}) }
             : {})
         })
+        // A call that times out shows the server as failed until one answers again (final review M4)
+        return call.then(
+          (r) => {
+            d.pool.clearStalled(u.key)
+            return r
+          },
+          (err: unknown) => {
+            if (err instanceof McpError && err.code === ErrorCode.RequestTimeout) d.pool.markStalled(u.key, `a call timed out after ${Math.round(timeout / 1000)} s`)
+            throw err
+          }
+        )
       }
     if (caps.tools) {
       down.setRequestHandler(ListToolsRequestSchema, pass('tools/list') as never)
@@ -160,9 +189,14 @@ export function createGateway(d: {
     s = { ended, token, serverId: entry.id, transport, server: down, release: () => current.release(), off }
     const session = s
     down.onclose = () => endSession(session)
-    await down.connect(transport)
-    await transport.handleRequest(req, res, body)
-    if (transport.sessionId === undefined || !sessions.has(transport.sessionId)) endSession(session)
+    try {
+      await down.connect(transport)
+      await transport.handleRequest(req, res, body)
+    } catch (err) {
+      endSession(session)
+      throw err
+    }
+    if (transport.sessionId === undefined || !sessions.has(transport.sessionId) || d.tokens.lookup(token) === null) endSession(session)
   }
 
   const handle = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
@@ -228,6 +262,9 @@ export function createGateway(d: {
         })
         s.once('error', reject)
         s.listen(0, '127.0.0.1', () => {
+          // Past the listen, an error (too many open files on accept, say) is logged, never thrown into the Host
+          s.off('error', reject)
+          s.on('error', (err) => d.log(`gateway: the listener reported an error (${err.message})`))
           server = s
           port = (s.address() as { port: number }).port
           resolve(port)
@@ -238,7 +275,12 @@ export function createGateway(d: {
       const s = server
       server = null
       port = null
-      if (s) await new Promise<void>((r) => s.close(() => r()))
+      if (s) {
+        // A connection left open (a session's event stream) would hold the close, and every spawn waits on it
+        const closed = new Promise<void>((r) => s.close(() => r()))
+        s.closeAllConnections()
+        await closed
+      }
     },
     port: () => port,
     forgetTokens: (tokens) => {

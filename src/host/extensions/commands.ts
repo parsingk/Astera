@@ -121,6 +121,10 @@ export function createHostExtensions(d: {
     return out
   }
 
+  /** The Gateway's processes, their last error with the stored secret values taken out (final review M2). */
+  const hiddenStates = async () =>
+    Promise.all((d.gateway?.states() ?? []).map(async (s) => (s.lastError === undefined ? s : { ...s, lastError: await hide(s.lastError) })))
+
   const answer = async (cmd: string, args: Record<string, unknown>): Promise<ExtensionsAnswer> => {
     switch (cmd) {
       case 'extensions-list': {
@@ -128,7 +132,7 @@ export function createHostExtensions(d: {
         await d.gateway?.sync()
         return {
           status: 200,
-          body: { entries: registry.entries.map(publicEntry), status: last, mcpStatus: await mcpStatus(registry.entries), gateway: d.gateway?.states() ?? [] }
+          body: { entries: registry.entries.map(publicEntry), status: last, mcpStatus: await mcpStatus(registry.entries), gateway: await hiddenStates() }
         }
       }
       case 'extensions-gateway':

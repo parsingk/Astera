@@ -5,6 +5,7 @@
 // started again after a backoff when it dies. A server that cannot start fails with its reason; nothing here hangs a
 // session or throws into the Host.
 import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -31,8 +32,12 @@ export interface UpstreamPool {
   stopServer(serverId: string): Promise<void>
   states(): UpstreamState[]
   close(): Promise<void>
-  /** Every notification the upstream of `key` sends, for the Gateway to pass on to its sessions. */
+  /** Every notification the upstream of `key` sends, for the Gateway to pass on to its sessions; kept for the key, so a
+   *  process started again for it keeps them. */
   onNotification(key: UpstreamKey, cb: (n: { method: string; params?: unknown }) => void): () => void
+  /** A call to the upstream of `key` timed out: shown as failed with `why` while it runs, until a call answers. */
+  markStalled(key: UpstreamKey, why: string): void
+  clearStalled(key: UpstreamKey): void
 }
 
 export const UPSTREAM_IDLE_MS = 300_000
@@ -64,8 +69,20 @@ interface Entry {
   startedAt: number
   state: UpstreamState['state']
   lastError?: string
-  listeners: Set<(n: { method: string; params?: unknown }) => void>
+  /** Why its calls time out while the process still runs. */
+  stalled?: string
+  /** The process the stdio transport started (cmd.exe for a .cmd shim on Windows). */
+  pid?: number
   closing: boolean
+}
+
+/** Ends a process and everything it started. On Windows a server started through a .cmd shim (npx) is cmd.exe's child,
+ *  which the SDK's close leaves running, so the tree goes first. */
+function killTree(pid: number): Promise<void> {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve()
+    execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve())
+  })
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
@@ -84,6 +101,7 @@ export function createUpstreamPool(d: {
   const startTimeoutMs = d.startTimeoutMs ?? UPSTREAM_START_TIMEOUT_MS
   const now = d.now ?? Date.now
   const entries = new Map<UpstreamKey, Entry>()
+  const listeners = new Map<UpstreamKey, Set<(n: { method: string; params?: unknown }) => void>>()
 
   const envFor = async (server: McpExtension): Promise<Record<string, string>> => {
     const env: Record<string, string> = {}
@@ -100,13 +118,29 @@ export function createUpstreamPool(d: {
     return env
   }
 
+  const closeClient = async (c: UpstreamClient, pid: number | undefined): Promise<void> => {
+    if (pid !== undefined) await killTree(pid)
+    await c.close().catch(() => {})
+  }
+
   const closeEntry = async (e: Entry): Promise<void> => {
     e.closing = true
     if (e.idle) clearTimeout(e.idle)
-    entries.delete(e.key)
+    if (entries.get(e.key) === e) entries.delete(e.key)
     const c = e.client
     e.client = null
-    await c?.close().catch(() => {})
+    if (c) await closeClient(c, e.pid)
+  }
+
+  /** An entry no session holds and that is not running is forgotten after the idle time, so a failed or crashed key
+   *  (one per session for an isolated server) does not stay listed for the Host's life. */
+  const forgetLater = (e: Entry): void => {
+    if (e.refs > 0 || e.closing) return
+    if (e.idle) clearTimeout(e.idle)
+    e.idle = setTimeout(() => {
+      if (e.refs === 0 && e.client === null && entries.get(e.key) === e) entries.delete(e.key)
+    }, idleMs)
+    e.idle.unref?.()
   }
 
   const failed = (e: Entry, why: string, state: 'failed' | 'restarting'): void => {
@@ -115,6 +149,7 @@ export function createUpstreamPool(d: {
     e.nextTryAt = now() + backoff[Math.min(e.failures - 1, backoff.length - 1)]
     e.state = state
     e.lastError = why
+    forgetLater(e)
   }
 
   const start = async (e: Entry, server: McpExtension, folder: string): Promise<UpstreamClient> => {
@@ -126,13 +161,17 @@ export function createUpstreamPool(d: {
       cwd: server.cwd ?? folder,
       stderr: 'pipe'
     })
+    // Whole lines only, so a value the server writes in two pieces is still one line for the redaction
+    let partial = ''
     transport.stderr?.on('data', (chunk: Buffer) => {
-      for (const line of chunk.toString('utf8').split(/\r?\n/)) if (line.trim() !== '') d.log(`gateway: ${server.name}: ${line}`)
+      const lines = (partial + chunk.toString('utf8')).split(/\r?\n/)
+      partial = lines.pop() ?? ''
+      for (const line of lines) if (line.trim() !== '') d.log(`gateway: ${server.name}: ${line}`)
     })
     const client = new Client({ name: 'astera-gateway', version: '1' }, { capabilities: { roots: { listChanged: false } } })
     client.setRequestHandler(ListRootsRequestSchema, async () => ({ roots: [{ uri: pathToFileURL(folder).href, name: path.basename(folder) }] }))
     client.fallbackNotificationHandler = async (n) => {
-      for (const cb of [...e.listeners]) cb(n)
+      for (const cb of [...(listeners.get(e.key) ?? [])]) cb(n)
     }
     client.onclose = () => {
       if (e.closing || e.client !== client) return
@@ -147,11 +186,12 @@ export function createUpstreamPool(d: {
     try {
       await Promise.race([client.connect(transport), timeout])
     } catch (err) {
-      await client.close().catch(() => {})
+      await closeClient(client, transport.pid ?? undefined)
       throw err
     } finally {
       clearTimeout(timer)
     }
+    e.pid = transport.pid ?? undefined
     return client
   }
 
@@ -159,7 +199,7 @@ export function createUpstreamPool(d: {
     const key = upstreamKey(server, folder, sessionToken)
     let e = entries.get(key)
     if (!e) {
-      e = { key, serverId: server.id, name: server.name, client: null, starting: null, refs: 0, idle: null, failures: 0, nextTryAt: 0, startedAt: 0, state: 'stopped', listeners: new Set(), closing: false }
+      e = { key, serverId: server.id, name: server.name, client: null, starting: null, refs: 0, idle: null, failures: 0, nextTryAt: 0, startedAt: 0, state: 'stopped', closing: false }
       entries.set(key, e)
     }
     const entry = e
@@ -168,7 +208,12 @@ export function createUpstreamPool(d: {
         if (now() < entry.nextTryAt) throw new Error(`${server.name} is ${entry.state === 'failed' ? 'failing' : 'restarting'}: ${entry.lastError ?? 'try again shortly'}`)
         entry.startedAt = now()
         entry.starting = start(entry, server, folder).then(
-          (client) => {
+          async (client) => {
+            // Stopped while it was starting (the server was disabled or removed): it is not handed out or kept
+            if (entry.closing) {
+              await closeClient(client, entry.pid)
+              throw new Error(`${server.name} was stopped`)
+            }
             entry.client = client
             entry.state = 'running'
             entry.lastError = undefined
@@ -176,6 +221,7 @@ export function createUpstreamPool(d: {
             return client
           },
           (err: unknown) => {
+            if (entry.closing) throw err
             failed(entry, message(err), 'failed')
             d.log(`gateway: ${server.name} could not start (${message(err)})`)
             throw err
@@ -217,10 +263,13 @@ export function createUpstreamPool(d: {
     },
     states: () => {
       const byServer = new Map<string, Entry[]>()
+      const stalled = (list: Entry[]) => list.find((e) => e.stalled !== undefined)
       for (const e of entries.values()) byServer.set(e.serverId, [...(byServer.get(e.serverId) ?? []), e])
       return [...byServer].map(([serverId, list]) => {
         const running = list.filter((e) => e.client !== null).length
         const worst = list.find((e) => e.state === 'failed') ?? list.find((e) => e.state === 'restarting')
+        const hung = stalled(list)
+        if (hung) return { serverId, processes: running, state: 'failed' as const, lastError: hung.stalled as string }
         const state: UpstreamState['state'] = running > 0 ? 'running' : (worst?.state ?? 'stopped')
         return { serverId, processes: running, state, ...(state !== 'running' && worst?.lastError ? { lastError: worst.lastError } : {}) }
       })
@@ -229,9 +278,21 @@ export function createUpstreamPool(d: {
       await Promise.all([...entries.values()].map(closeEntry))
     },
     onNotification: (key, cb) => {
+      const set = listeners.get(key) ?? new Set()
+      listeners.set(key, set)
+      set.add(cb)
+      return () => {
+        set.delete(cb)
+        if (set.size === 0) listeners.delete(key)
+      }
+    },
+    markStalled: (key, why) => {
       const e = entries.get(key)
-      e?.listeners.add(cb)
-      return () => void e?.listeners.delete(cb)
+      if (e) e.stalled = why
+    },
+    clearStalled: (key) => {
+      const e = entries.get(key)
+      if (e) e.stalled = undefined
     }
   }
 }

@@ -2,6 +2,7 @@
 // Host's two registries, the upstream pool and the HTTP listener, opened only while the registry shares an enabled
 // stdio server and closed when it shares none, so a profile that shares nothing opens no port (anti-goal 1).
 import { readExtensionRegistry } from '../../core/extensions/registry'
+import { hideExtensionSecrets } from '../../core/extensions/secrets'
 import type { PtyRegistry } from '../registry'
 import type { ProcRegistry } from '../procRegistry'
 import { createTokenTable, watchGatewayTokens } from './tokens'
@@ -27,7 +28,7 @@ export function createGatewayHub(d: {
   const tokens = createTokenTable()
   const pool = createUpstreamPool({ profileDir: d.profileDir, baseEnv: d.baseEnv ?? process.env, log: d.log })
   const readRegistry = () => readExtensionRegistry(d.profileDir)
-  const gateway = createGateway({ tokens, pool, readRegistry, log: d.log })
+  const gateway = createGateway({ tokens, pool, readRegistry, log: d.log, hide: (s) => hideExtensionSecrets(d.profileDir, s).catch(() => s) })
   watchGatewayTokens({ ptys: d.ptys, procs: d.procs, table: tokens, onForget: (t) => gateway.forgetTokens(t) })
 
   // One sync at a time: a registry change and a spawn's prepare may both ask
