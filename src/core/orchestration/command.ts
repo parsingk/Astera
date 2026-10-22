@@ -1331,24 +1331,39 @@ async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: s
 
 /** The agent profile a Job or Task is made from, by its id or its name (Agent Profiles design §6), or the reply that
  *  refuses it: one not found or archived is `agent-profile-unavailable`, and a damaged store refuses and names the file
- *  as the GitHub defaults do (a guess would make the work run as the wrong profile). `archivedOk` is for a profile the
- *  Job already holds: work that holds one keeps resolving it after it is archived (design §4). One an agent may not use
- *  is refused here too (`profileBypassRefusal`), the one place the three creates resolve a profile. */
+ *  as the GitHub defaults do (a guess would make the work run as the wrong profile). `held` is for a profile the Job
+ *  already holds: work that holds one keeps resolving it after it is archived (design §4). One an agent may not use is
+ *  refused here too (`profileBypassRefusal`), the one place the three creates resolve a profile, unless `bypassOk`: the
+ *  Job's own profile asked for by the coordinator carrying out that Job (`drivesRun`). */
 async function profileFor(
   deps: OrchServerDeps,
   caller: { sessionId: string; role?: string },
   idOrName: string,
-  archivedOk = false
+  opts: { held?: boolean; bypassOk?: boolean } = {}
 ): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
   const read = await profileStore(deps)
   if (!read.ok) return read
   const profile = findProfile(read.store, idOrName)
   if (!profile) return { ok: false, reply: profileRefused('agent-profile-unavailable', `unknown agent profile: ${idOrName}`) }
-  if (profile.status === 'archived' && !archivedOk)
+  if (profile.status === 'archived' && opts.held !== true)
     return { ok: false, reply: profileRefused('agent-profile-unavailable', `agent profile ${profile.name} is archived; restore it to start new work as it`) }
-  const refused = await profileBypassRefusal(deps, caller, profile)
+  const refused = opts.bypassOk === true ? null : await profileBypassRefusal(deps, caller, profile)
   if (refused) return { ok: false, reply: refused }
   return { ok: true, profile }
+}
+
+/** Whether the caller is the coordinator carrying out this Run now: the one Astera started for it, or the session that
+ *  drives it from outside (`externalCoordinatorSessionId`), while the Run is still running — `isRunCoordinator`'s test
+ *  in handleCommand, asked of one Run. The Tasks it adds inherit the profile a person chose for the Job, so the person's
+ *  decision on the final review (people choosing are unaffected) reaches them: it is not asked about that profile
+ *  (`profileBypassRefusal`), only about one it names itself. */
+function drivesRun(s: OrchState, caller: { sessionId: string }, runId: string): boolean {
+  const run = s.runs.find((r) => r.id === runId)
+  return (
+    run !== undefined &&
+    (run.coordinatorSessionId === caller.sessionId || run.externalCoordinatorSessionId === caller.sessionId) &&
+    outcomeOf(s, run.id) === 'running'
+  )
 }
 
 /** The agent profile store, or the reply that refuses: a caller with no reader, or a store that cannot be read, which
@@ -3316,18 +3331,20 @@ export async function handleCommand(
       // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
       // are needed, and may be archived since (the Job holds it); a profile the caller names now must be usable. An
       // agent's Task given accounts still runs as the Job's profile, so that one is asked about its permission alone
-      // (inheritedBypassRefusal).
+      // (inheritedBypassRefusal). The coordinator carrying out this Run is not asked about the Job's profile, with or
+      // without accounts (drivesRun); one it names itself is asked like any agent's.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
       let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
       if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
+      const inheritsForItsCoordinator = profileArg === null && drivesRun(s, caller, runId)
       let profile: AgentProfile | undefined
       if (profileArg !== null || accountArg === null) {
-        const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, profileArg === null)
+        const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, { held: profileArg === null, bypassOk: inheritsForItsCoordinator })
         if (!found.ok) return found.reply
         profile = found.profile
         agentProfileId = found.profile.id
-      } else if (agentProfileId !== undefined && agentCaller(caller)) {
+      } else if (agentProfileId !== undefined && agentCaller(caller) && !inheritsForItsCoordinator) {
         const refused = await inheritedBypassRefusal(deps, caller, agentProfileId)
         if (refused) return refused
       }

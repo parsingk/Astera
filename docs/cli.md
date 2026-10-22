@@ -1095,7 +1095,9 @@ decides the MCP servers and the permission prompts. A profile named with `--agen
 (2); a task that only inherits its Job's archived profile still gets that profile's accounts. **A `bypass` profile is
 for agents only while Astera skips the checks itself**: from inside an agent session, naming one, or adding a task to
 a Job that holds one, is refused with 5 and makes nothing unless **Run agents without permission checks** is on in
-Astera's settings. A person at their own shell is not asked.
+Astera's settings. A person at their own shell is not asked. Nor is a run's coordinator about the profile its Job
+holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A bypass profile the
+coordinator names itself with `--agent-profile` is asked about like any other.
 
 ```json
 {"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",

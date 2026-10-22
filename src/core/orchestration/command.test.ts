@@ -10288,7 +10288,16 @@ describe('agent profiles: a profile that runs without permission checks, by who 
     }
   })
 
-  it("refuses an agent's Task that would inherit it from its Job, with or without accounts of its own", async () => {
+  /** A person's Job made as the bypass profile and run: its Run, which `drivenBy` gives a coordinator */
+  const personsRun = async (deps: ReturnType<typeof setup>['deps'], drivenBy?: { field: 'coordinatorSessionId' | 'externalCoordinatorSessionId'; sessionId: string }): Promise<string> => {
+    await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b' })
+    const runId = deps.getState().runs[0].id
+    if (drivenBy)
+      await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, [drivenBy.field]: drivenBy.sessionId } : r)) })
+    return runId
+  }
+
+  it("refuses an agent's Task that would inherit it from its Job, with or without accounts of its own, unless it drives that Run", async () => {
     for (const caller of AGENTS) {
       const { deps, as } = setup(false)
       const jobId = idOf(await as({ sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', auto: true }))
@@ -10298,6 +10307,51 @@ describe('agent profiles: a profile that runs without permission checks, by who 
       }
       expect(deps.getState().tasks).toHaveLength(0)
     }
+    // An agent session that coordinates some other Run is no coordinator of this one
+    const { deps, as } = setup(false)
+    const runId = await personsRun(deps)
+    await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'other', cwd: 'D:/p' })
+    const other = deps.getState().runs.find((r) => r.id !== runId)!.id
+    await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === other ? { ...r, coordinatorSessionId: 'sess_agent' } : r)) })
+    for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+      const r = await as({ sessionId: 'sess_agent', role: 'cli' }, 'task-create', args)
+      expect([r.status, reasonOf(r)], JSON.stringify(args)).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // Follow-up F1: the coordinator carrying out a Job a person made as such a profile is not asked about the profile its
+  // Tasks inherit from that Job, whether Astera started it or it drives the Run from outside: the person chose it
+  it("lets the Run's own coordinator add Tasks that inherit the person's profile, with or without accounts", async () => {
+    for (const field of ['coordinatorSessionId', 'externalCoordinatorSessionId'] as const) {
+      const { deps, appWideYolo, as } = setup(false)
+      const runId = await personsRun(deps, { field, sessionId: 'sess_coord' })
+      const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
+      for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+        const r = await as(coordinator, 'task-create', args)
+        expect(r.status, `${field} ${JSON.stringify(args)} ${JSON.stringify(r.body)}`).toBe(200)
+        expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
+      }
+      expect((await as(coordinator, 'tasks-add', { run: runId, spec: 's' })).status, field).toBe(200)
+      expect(deps.getState().tasks, field).toHaveLength(3)
+      expect(appWideYolo, field).not.toHaveBeenCalled()
+    }
+  })
+
+  it('still refuses that coordinator a bypass profile it names itself, the Job’s own included', async () => {
+    const { deps, as } = setup(false)
+    const runId = await personsRun(deps, { field: 'coordinatorSessionId', sessionId: 'sess_coord' })
+    const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
+    for (const args of [
+      { run: runId, spec: 's', agentProfileId: 'ap_b' },
+      { run: runId, spec: 's', agentProfileId: 'Unattended', account: 'acc1' }
+    ]) {
+      const r = await as(coordinator, 'task-create', args)
+      expect([r.status, reasonOf(r)], JSON.stringify(args)).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    const pub = await as(coordinator, 'tasks-add', { run: runId, spec: 's', agentProfile: 'ap_b' })
+    expect([pub.status, reasonOf(pub)]).toEqual([403, 'agent-profile-bypass-refused'])
+    expect(deps.getState().tasks).toHaveLength(0)
   })
 
   // Follow-up to the fix wave: only a profile that resolves to bypass is refused. One deleted since falls back at the
