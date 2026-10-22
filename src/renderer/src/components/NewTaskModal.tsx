@@ -5,6 +5,8 @@ import { providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { formFailure, type OrchDoor } from '../lib/orchDoor'
 import { AccountSelect } from './AccountSelect'
+import { AgentProfileField } from './AgentProfileField'
+import { useAgentProfiles } from '../lib/agentProfiles'
 import { Select, type SelectOption } from './Select'
 import { X } from 'lucide-react'
 
@@ -62,6 +64,11 @@ export function NewTaskModal({
    *  첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다. **첫 칸을 비우면 뒤 칸도 함께
    *  사라진다** — 첫 계정이 provider 를 정하므로 그것 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다. */
   const [accountIds, setAccountIds] = useState<string[]>([])
+  /** 고른 에이전트 프로필(Agent Profiles design §6). '' 는 없음 — 그때는 지금까지와 같고, Job 에 프로필이 있으면
+   *  task-create 가 그것을 물려준다. 고르면 그 프로필의 계정이 accountIds 를 채우고, 사람이 그 목록을 고쳐도 MCP 와
+   *  권한은 프로필이 정한다. 짝 지은 Runtime 의 Task 에는 칸이 없다: 이 컴퓨터의 프로필은 그쪽에 없다. */
+  const [agentProfileId, setAgentProfileId] = useState('')
+  const profiles = useAgentProfiles()
   /** 완료 검사 — 고른 RunConfig id, **이 순서가 실행 순서다**(Plan 1 설계 D9: 첫 실패에서 멈춘다). 그래서 Set 이
    *  아니라 배열이고, 순서를 바꾸는 손잡이(↑↓)가 있다. */
   const [checks, setChecks] = useState<string[]>([])
@@ -145,7 +152,8 @@ export function NewTaskModal({
         // 쉼표 목록 — task-create 의 문법이다(server.ts, `--account` 와 같은 규약). 고른 순서가 실행 순서다.
         // 하나도 안 골랐으면 키를 보내지 않는다: 빈 문자열은 서버가 400 으로 거절한다.
         ...(checks.length > 0 ? { validate: checks.join(',') } : {}),
-        ...(review ? { review: true } : {})
+        ...(review ? { review: true } : {}),
+        ...(agentProfileId !== '' ? { agentProfileId } : {})
         // parent 는 보내지 않는다 — parentId 는 통합(integration) Task 의 표식이라, 이 폼에서 보내면
         // 스케줄러가 이 Task 를 병합 단계 없이 프로젝트 폴더에서 돌리는 통합 Task 로 취급하게 된다.
       })
@@ -228,6 +236,18 @@ export function NewTaskModal({
             )}
             <p className="modal-hint">{t('jobs.task.depsHint')}</p>
           </div>
+        )}
+        {/* 에이전트 프로필(Agent Profiles design §6): 계정 칸 위에 둔다. 고르면 그 계정 칸을 채운다 */}
+        {accounts !== null && door.runtimeId === undefined && (
+          <AgentProfileField
+            profiles={profiles}
+            accounts={accounts}
+            value={agentProfileId}
+            onChange={(p, ids) => {
+              setAgentProfileId(p?.id ?? '')
+              if (p) setAccountIds(ids)
+            }}
+          />
         )}
         {/* **계정이 하나도 없을 때만 접는다** — 위 선행 Task 칸과 같은 규칙이다: 고를 것이 없는
             컨트롤만 감춘다. 한때 "둘 이상일 때만" 이었는데 둘이 어긋났다. (1) 계정이 하나여도

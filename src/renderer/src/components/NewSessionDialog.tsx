@@ -27,6 +27,9 @@ import { toast } from '../lib/toast'
 import { trackWorktreeCreate } from '../lib/worktreeCreate'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
+import { AgentProfileField } from './AgentProfileField'
+import { chatHoldsPrompts, permissionFields } from './agentProfilesText'
+import { useAgentProfiles } from '../lib/agentProfiles'
 import { BranchGlyph } from './BranchGlyph'
 import { Select, type SelectOption } from './Select'
 import { ScheduleFields } from './ScheduleFields'
@@ -65,7 +68,10 @@ export function NewSessionDialog({
     roll: boolean
     rollPrompt?: string
     slackNotify: boolean
-    bypassPermissions: boolean
+    /** The dialog's checkbox, absent when a profile is picked: an explicit value would win over the profile's permission. */
+    bypassPermissions?: boolean
+    /** The picked agent profile (Agent Profiles design §6), absent for None. */
+    agentProfileId?: string
     /** chat takeover P8: the new chat session's unattended-permission policy. Absent for a terminal
      *  session, which has no such policy at all. */
     unattendedPermission?: UnattendedPermission
@@ -105,6 +111,14 @@ export function NewSessionDialog({
   // Host holds it as the writer. Meaningless once bypassPermissions is on — that session never holds a
   // prompt at all — so the control offering this is hidden then (see the checkbox below).
   const [unattended, setUnattended] = useState<UnattendedPermission>('hold')
+  // The app-wide mode itself, apart from the checkbox it seeds: a picked profile that follows the app setting asks
+  // exactly when this does, whatever the hidden checkbox says.
+  const [appWideYolo, setAppWideYolo] = useState(true)
+  // The picked agent profile (Agent Profiles design §6), undefined for None: it fills the account list and decides the
+  // permission, so the checkbox is hidden while one is picked.
+  const [profileId, setProfileId] = useState<string | undefined>(undefined)
+  const profiles = useAgentProfiles()
+  const profile = profiles.find((p) => p.id === profileId)
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
   // Both CLIs, because either one can be the missing one — the app opens with just one installed.
   // Two different questions live here, asked two different ways (design D3, fix round 2):
@@ -171,7 +185,10 @@ export function NewSessionDialog({
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
     void window.api.settings
       .getAgentPermissionMode()
-      .then((m) => setBypassPermissions(m === 'yolo'))
+      .then((m) => {
+        setBypassPermissions(m === 'yolo')
+        setAppWideYolo(m === 'yolo')
+      })
     // Existence, not runnability — asked once here because it does not depend on which folder gets
     // picked (design D3, fix round 2). The per-folder question below has its own effect on [cwd].
     void window.api.system.checkCliInstalled().then(setCliInstalled)
@@ -410,7 +427,7 @@ export function NewSessionDialog({
         roll: rollChecked,
         rollPrompt: rollChecked ? rollPrompt.trim() || undefined : undefined,
         slackNotify: slackReady && slackNotify,
-        bypassPermissions,
+        ...permissionFields(profileId, bypassPermissions),
         ...(kind === 'chat' ? { unattendedPermission: unattended } : {}),
         useWorktree: withWorktree,
         worktreeName: wtName.trim() || undefined,
@@ -599,6 +616,20 @@ export function NewSessionDialog({
             )}
           </>
         )}
+        <AgentProfileField
+          profiles={profiles}
+          accounts={accounts}
+          value={profileId ?? ''}
+          hint={t('agentProfiles.pick.permission')}
+          onChange={(p, ids) => {
+            setProfileId(p?.id)
+            // The profile's accounts are the person's choice now: the folder's default account must not replace them
+            if (p) {
+              touched.current = true
+              setAccountIds(ids)
+            }
+          }}
+        />
         <div className="field">
           <label>{t('session.field.account')}</label>
           {accountIds.map((id, slot) => (
@@ -708,17 +739,20 @@ export function NewSessionDialog({
           <input type="checkbox" checked={saveDefault} onChange={(e) => setSaveDefault(e.target.checked)} />
           {t('session.new.saveDefaultAccount')}
         </label>
-        <label className="row check-small">
-          <input
-            type="checkbox"
-            checked={bypassPermissions}
-            onChange={(e) => setBypassPermissions(e.target.checked)}
-          />
-          {t('session.new.bypassPermissions')}
-        </label>
+        {/* A picked profile decides the permission (its line sits under the picker) */}
+        {profileId === undefined && (
+          <label className="row check-small">
+            <input
+              type="checkbox"
+              checked={bypassPermissions}
+              onChange={(e) => setBypassPermissions(e.target.checked)}
+            />
+            {t('session.new.bypassPermissions')}
+          </label>
+        )}
         {/* chat takeover P8: only meaningful for a chat session that is not already bypassing every
             prompt — a bypassed one never holds a prompt for this policy to apply to. */}
-        {kind === 'chat' && !bypassPermissions && (
+        {kind === 'chat' && chatHoldsPrompts(profile, appWideYolo, bypassPermissions) && (
           <div className="field">
             <label>{t('chat.unattended.heading')}</label>
             <div className="kind-segmented">

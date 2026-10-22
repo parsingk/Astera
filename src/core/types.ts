@@ -42,6 +42,7 @@ import type {
   UnattendedPermission
 } from './chat/types'
 import type { ThemeId } from './theme/themes'
+import type { ProfilePermission } from './agentProfiles/types'
 import type { ConvTurn } from './history/convTypes'
 export type { ConvTurn } from './history/convTypes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -1154,6 +1155,9 @@ export interface CoreApi {
       /** chat takeover P8: the new chat session's unattended-permission policy (hold, the default, or
        *  deny after 60 s). Ignored for a terminal session, which has no such policy. */
       unattendedPermission?: UnattendedPermission
+      /** The agent profile picked in the new-session dialog (Agent Profiles design §6). Sent without bypassPermissions,
+       *  which would otherwise win over the profile's permission. */
+      agentProfileId?: string
     }): Promise<SessionInfo>
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
@@ -1949,6 +1953,29 @@ export interface ExtensionsApi {
   setIsolation(id: string, isolation: 'folder' | 'session'): Promise<PluginsCallAnswer>
 }
 
+/** What a person sets on an agent profile in Settings › Agent profiles. */
+export interface AgentProfileFields {
+  name: string
+  description?: string
+  /** Ordered: the first is used first, the rest are the roll order. */
+  accountIds: string[]
+  /** Shared MCP entry ids the profile does not get. */
+  mcpExclude?: string[]
+  permission?: ProfilePermission
+}
+
+/** Settings › Agent profiles and the profile pickers (Agent Profiles design §8): the Host's `agent-profiles-*` commands,
+ *  as the app. A refusal carries the Host's `reason` (name-empty, name-taken, mixed-provider, in-use, ...). */
+export interface AgentProfilesApi {
+  list(): Promise<PluginsCallAnswer>
+  create(fields: AgentProfileFields): Promise<PluginsCallAnswer>
+  update(id: string, changes: Partial<AgentProfileFields>): Promise<PluginsCallAnswer>
+  archive(id: string): Promise<PluginsCallAnswer>
+  restore(id: string): Promise<PluginsCallAnswer>
+  /** Refused with reason `in-use` while unfinished work or a live session holds the profile. */
+  remove(id: string): Promise<PluginsCallAnswer>
+}
+
 export interface RemoteApi {
   list(): Promise<RemoteRuntimeInfo[]>
   /** Pairs from the string `astera runtime pair` printed on the Runtime. The token is kept in main, never returned. */
@@ -2089,6 +2116,8 @@ export type RendererApi = CoreApi & {
   remote: RemoteApi
   plugins: PluginsApi
   extensions: ExtensionsApi
+  /** Settings › Agent profiles and the profile pickers: the Host's agent profiles, as the app. */
+  agentProfiles: AgentProfilesApi
   /** The Jobs view's "+ From a source" (plugin Phase 4c): the Host's job sources, as the app. */
   sources: SourcesApi
   remoteSessions: RemoteSessionsApi

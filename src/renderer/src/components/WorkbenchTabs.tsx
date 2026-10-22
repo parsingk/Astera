@@ -76,6 +76,8 @@ export type WorkbenchTab =
       /** 계정 롤링 체인의 툴팁. 롤링이 걸려 있지 않으면 null — 계정 목록은 PaneGrid가 갖고 있으므로
        *  문구를 거기서 만들어 넘긴다 */
       rollTooltip: string | null
+      /** The agent profile the session was started from, as a line for the tab's tooltip; null without one. */
+      profileTooltip: string | null
       /** A session on a paired Runtime (Phase 9b): its title is the Runtime's, so it is not renamed here. */
       remote?: boolean
     }
@@ -244,7 +246,16 @@ export function WorkbenchTabs({
                 }
               : undefined
           }
-          title={tab.kind === 'file' || tab.kind === 'media' ? tab.path : tab.kind === 'browser' ? tab.url : tab.title}
+          title={
+            tab.kind === 'file' || tab.kind === 'media'
+              ? tab.path
+              : tab.kind === 'browser'
+                ? tab.url
+                : tab.kind === 'session' && tab.profileTooltip !== null
+                  ? `${tab.title}
+${tab.profileTooltip}`
+                  : tab.title
+          }
           // 이름을 고치는 동안은 끌 수 없다 — 입력칸 안에서 글자를 끄는 것이 탭 이동이 되어 버린다
           draggable={renamingTabId !== tab.tabId}
           onClick={() => onSelect(tab.tabId)}

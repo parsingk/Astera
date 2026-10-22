@@ -67,6 +67,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './host/worktreeRoute'
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
+import { createAgentProfilesRoute } from './host/agentProfilesRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -4746,6 +4747,16 @@ export function registerIpc(
   ipcMain.handle('extensions.setEnabled', (_e, id: unknown, enabled: unknown) => extensions.setEnabled(id as string, enabled === true))
   ipcMain.handle('extensions.remove', (_e, id: unknown) => extensions.remove(id as string))
   ipcMain.handle('extensions.replace', (_e, accountId: unknown, id: unknown) => extensions.replace(accountId as string, id as string))
+  // Settings › Agent profiles (Agent Profiles design §8): the Host checks every argument; this only passes them on
+  const agentProfiles = createAgentProfilesRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('agentProfiles.list', () => agentProfiles.list())
+  ipcMain.handle('agentProfiles.create', (_e, fields: unknown) => agentProfiles.create(fields as Parameters<typeof agentProfiles.create>[0]))
+  ipcMain.handle('agentProfiles.update', (_e, id: unknown, changes: unknown) =>
+    agentProfiles.update(id as string, changes as Parameters<typeof agentProfiles.update>[1])
+  )
+  ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
+  ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
+  ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))
