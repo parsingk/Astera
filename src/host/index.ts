@@ -7,6 +7,7 @@ import { readGitHubLifecycleDefaults } from '../core/settings/githubLifecycle'
 import childProcess from 'node:child_process'
 import { createPluginManager } from './plugins/manager'
 import { createHostExtensions } from './extensions/commands'
+import { createHostAgentProfiles } from './agentProfiles/commands'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -754,12 +755,21 @@ async function main(): Promise<void> {
     log: (m) => log.write(m),
     gateway: mcpGateway
   })
+  // Agent Profiles (design §4): the store this Host owns. A profile cannot be deleted while a live session holds it
+  // (the session's note carries `agentProfileId`; Task 6 adds Tasks, Jobs and Dispatches to what counts as holding it)
+  const agentProfiles = createHostAgentProfiles({
+    profileDir,
+    readAccounts: () => readAccountEntries(path.join(profileDir, 'accounts.json')),
+    inUse: async (id) => [...registry.list(), ...procs.list()].some((e) => e.alive && (e.meta?.restore as { agentProfileId?: string } | undefined)?.agentProfileId === id),
+    log: (m) => log.write(m)
+  })
   const orch = createHostOrch({
     profileDir,
     version: hostVersion,
     controllers,
     plugins,
     extensions,
+    agentProfiles,
     // The job-source plugins a person makes Jobs from (plugin Phase 4 J10), asked through the runtime
     jobSources: hostJobSources({ manager: plugins, runtime: pluginRuntime }),
     // The completion check plugins a Task's checks ask (plugin Phase 5 C8), through the same runtime

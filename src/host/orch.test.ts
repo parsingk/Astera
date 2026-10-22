@@ -1074,6 +1074,37 @@ describe('shared extensions', () => {
   })
 })
 
+// Agent Profiles (design §4): routed like the extensions, below every gate.
+describe('agent profiles', () => {
+  const cli = { role: 'cli' as const, toOthers: () => {} }
+  const answering = () => {
+    const seen: { cmd: string; agentRefusal?: string }[] = []
+    return { seen, agentProfiles: { command: async (a: { cmd: string; agentRefusal?: string }) => (seen.push(a), { status: 200, body: { ok: true } }) } }
+  }
+
+  it('is refused to MCP and a controller by their gates, before the profiles are asked', async () => {
+    const f = answering()
+    const orch = orchOver({ agentProfiles: f.agentProfiles })
+    expect((await orch.call({ cmd: 'agent-profiles-create', args: {}, sessionId: '', from: { role: 'mcp', toOthers: () => {} } })).status).toBe(403)
+    const controller = { role: 'controller' as const, principal: { clientId: 'cli_x', name: 'x', permission: 'full-control' as const }, toOthers: () => {} }
+    expect((await orch.call({ cmd: 'agent-profiles-create', args: {}, sessionId: '', from: controller })).status).toBe(403)
+    expect(f.seen).toEqual([])
+  })
+
+  it('answers the CLI, telling the profiles when an agent session’s shell is the caller', async () => {
+    const f = answering()
+    const orch = orchOver({ agentProfiles: f.agentProfiles })
+    expect((await orch.call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })).status).toBe(200)
+    await orch.call({ cmd: 'agent-profiles-delete', args: { id: 'ap_x' }, sessionId: 'sess_1', from: cli })
+    expect(f.seen[0].agentRefusal).toBeUndefined()
+    expect(f.seen[1].agentRefusal).toMatch(/not an agent session/)
+  })
+
+  it('answers 501 on a Host that keeps none', async () => {
+    expect((await orchOver().call({ cmd: 'agent-profiles-list', args: {}, sessionId: '', from: cli })).status).toBe(501)
+  })
+})
+
 describe('pairing and clients (local only)', () => {
   const cli = { role: 'cli' as const, toOthers: () => {} }
   it('pair-create answers a code to the CLI, and clients-list and clients-revoke see the redeemed client', async () => {

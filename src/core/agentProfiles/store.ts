@@ -46,7 +46,7 @@ export async function writeAgentProfiles(profileDir: string, s: AgentProfileStor
 
 export const newProfileId = (): string => `ap_${randomBytes(6).toString('hex')}`
 
-export type ProfileRejection = 'name-empty' | 'name-taken' | 'no-account' | 'unknown-account' | 'mixed-provider'
+export type ProfileRejection = 'name-empty' | 'name-too-long' | 'name-taken' | 'no-account' | 'unknown-account' | 'mixed-provider'
 
 export interface ProfileInput {
   id?: string
@@ -69,7 +69,8 @@ export function validateProfile(
   others: AgentProfile[]
 ): { ok: true; profile: AgentProfile } | { ok: false; reason: ProfileRejection } {
   const name = input.name.trim()
-  if (name.length < 1 || name.length > NAME_MAX) return { ok: false, reason: 'name-empty' }
+  if (name.length < 1) return { ok: false, reason: 'name-empty' }
+  if (name.length > NAME_MAX) return { ok: false, reason: 'name-too-long' }
   const lower = name.toLowerCase()
   if (others.some((o) => o.name.toLowerCase() === lower)) return { ok: false, reason: 'name-taken' }
   if (input.accountIds.length === 0) return { ok: false, reason: 'no-account' }

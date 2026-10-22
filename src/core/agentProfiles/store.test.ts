@@ -69,7 +69,8 @@ describe('validateProfile', () => {
     expect(reason(validateProfile(input({ name: '   ' }), ACCOUNTS, others))).toBe('name-empty')
   })
   it('rejects a name longer than 60 characters', () => {
-    expect(reason(validateProfile(input({ name: 'x'.repeat(61) }), ACCOUNTS, others))).toBe('name-empty')
+    expect(reason(validateProfile(input({ name: 'x'.repeat(61) }), ACCOUNTS, others))).toBe('name-too-long')
+    expect(reason(validateProfile(input({ name: '  ' + 'x'.repeat(60) + '  ' }), ACCOUNTS, others))).toBe('ok')
   })
   it('rejects a name another profile has in any case', () => {
     expect(reason(validateProfile(input({ name: 'reviewer' }), ACCOUNTS, others))).toBe('name-taken')

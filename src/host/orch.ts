@@ -4,6 +4,7 @@
 import { REMOTE_SESSION_CHANGES, REMOTE_SESSION_READS, type RemoteSessions } from './remoteSessions'
 import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
+import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
 import type { PluginManager } from './plugins/manager'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -573,6 +574,9 @@ export function createHostOrch(a: {
   /** The shared extensions (Agent Control Plane release 1): every `extensions-*` command, for this machine's app and
    *  CLI, below the receipt line like the plugins. Absent: all of them answer 501. */
   extensions?: Pick<HostExtensions, 'command'>
+  /** The agent profiles (Agent Profiles design §4): every `agent-profiles-*` command, for this machine's app and CLI,
+   *  routed like the extensions. Absent: all of them answer 501. */
+  agentProfiles?: Pick<HostAgentProfiles, 'command'>
   /** Session work units in the Host (E2 §5), asked per call: `index.ts` builds them after this orch (their
    *  in-Run test reads its state). Passed through to `hostOrchDeps` (HOST_TRACKS), and the app only
    *  `work-units-fork`, `-reload`, `-complete`, `-cancel` and `-git-op`. Absent, or null (no spawner, so no
@@ -2018,6 +2022,19 @@ export function createHostOrch(a: {
                 marks
               })
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
+          return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
+        }
+        // **Agent profiles** (Agent Profiles design §4), the same way: no gate lists them either.
+        if (AGENT_PROFILE_COMMANDS.has(cmd)) {
+          const answered = a.agentProfiles
+            ? await a.agentProfiles.command({
+                cmd,
+                args,
+                role: from?.role,
+                ...(agentShell(from, sessionId) ? { agentRefusal: AGENT_REFUSAL(cmd) } : {}),
+                marks
+              })
+            : { status: 501, body: { error: 'this Host does not keep agent profiles' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
         // Design §8: a call that arrives before the state is loaded waits, rather than failing.
