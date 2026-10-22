@@ -1,6 +1,6 @@
 // Agent Profiles design §4: a versioned file under the profile, written atomically; a damaged file is kept aside and
 // reported, never read as "no profiles"; a profile needs a unique name and accounts of one provider.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -67,6 +67,24 @@ describe('agent profile store', () => {
     await fs.writeFile(file, '{ "version": 2 }')
     for (let i = 0; i < 2; i++) await expect(readAgentProfiles(p)).rejects.toBeInstanceOf(RepairNeeded)
     expect(await kept()).toHaveLength(2)
+  })
+
+  // A profiled spawn reads it up to three times at once: those reads keep one copy between them too. With a copy of an
+  // older damage already beside it, each copy takes a stamped name, so racing reads would each keep one
+  it('keeps one copy when the same damage is read several times at once', async () => {
+    const p = await profile()
+    const file = profilePaths(p).agentProfiles
+    await fs.writeFile(`${file}.bak`, 'an older damage')
+    await fs.writeFile(file, '{ "damaged": true }')
+    let t = 1_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => ++t)
+    try {
+      const reads = await Promise.allSettled([readAgentProfiles(p), readAgentProfiles(p), readAgentProfiles(p)])
+      expect(reads.every((r) => r.status === 'rejected' && r.reason instanceof RepairNeeded)).toBe(true)
+    } finally {
+      clock.mockRestore()
+    }
+    expect((await fs.readdir(path.dirname(file))).filter((f) => f.endsWith('.bak'))).toHaveLength(2)
   })
 
   it('generates ids as ap_ and 12 hex characters', () => {

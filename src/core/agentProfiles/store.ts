@@ -38,8 +38,9 @@ export async function readAgentProfiles(profileDir: string): Promise<AgentProfil
   if (!s || s.version !== 1 || !Array.isArray(s.profiles)) {
     const hash = createHash('sha256').update(read.text).digest('hex')
     if (keptDamage.get(file) !== hash) {
-      await keepDamaged(file, read.text)
+      // Remembered before the copy is awaited, so reads racing this one (a spawn reads it up to three times) skip it
       keptDamage.set(file, hash)
+      await keepDamaged(file, read.text)
     }
     throw new RepairNeeded(`${FILE} is damaged; a copy was kept beside it`, FILE)
   }
