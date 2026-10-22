@@ -177,13 +177,22 @@ export function ExtensionsSettings({ accounts }: { accounts: Account[] }): React
 function McpSharingNote(): React.JSX.Element {
   const { t } = useI18n()
   const marker = '\u0001'
-  const [before, after] = t('settings.extensions.mcpSharing', { option: marker }).split(marker)
+  const option = <strong>{t('settings.extensions.isolation')}</strong>
   return (
-    <p className="settings-hint ext-note">
-      {before}
-      <strong>{t('settings.extensions.isolation')}</strong>
-      {after}
-    </p>
+    <div className="settings-hint ext-note">
+      {t('settings.extensions.mcpSharing', { option: marker })
+        .split('\n')
+        .map((line, i) => {
+          const [before, after] = line.split(marker)
+          return (
+            <p key={i}>
+              {before}
+              {after !== undefined && option}
+              {after}
+            </p>
+          )
+        })}
+    </div>
   )
 }
 
