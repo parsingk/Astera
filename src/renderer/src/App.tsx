@@ -2494,15 +2494,14 @@ export default function App(): React.JSX.Element {
       roll: boolean
       rollPrompt?: string
       slackNotify: boolean
-      bypassPermissions: boolean
+      /** Left out when the resume carries a profile, which then decides it (spawnPermission) */
+      bypassPermissions?: boolean
       schedule?: ScheduleConfig
-      /** The profile the app recorded for the conversation (ResumeDialog). Optional for the reason `kind` is. */
+      /** The profile the resume carries, decided once by ResumeDialog (an open tab's, else the recorded one): its MCP
+       *  servers come back and its permission decides */
       agentProfileId?: string
     }
   ): void => {
-    // The profile of a tab that held this conversation, else the one the app recorded for it, so its MCP servers come
-    // back; the resume dialog's own permission checkbox is explicit and decides the bypass
-    const agentProfileId = profileOfConversation(sessionsRef.current, entry.sessionId) ?? opts.agentProfileId
     void spawn({
       // Resume under the selected account — the original account resumes as-is, a different one has the
       // transcript copied by ipc. With rolling on, the chain the modal computed follows [0].
@@ -2523,7 +2522,7 @@ export default function App(): React.JSX.Element {
       rollPrompt: opts.rollPrompt,
       slackNotify: opts.slackNotify,
       bypassPermissions: opts.bypassPermissions,
-      ...(agentProfileId !== undefined ? { agentProfileId } : {}),
+      ...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {}),
       schedule: opts.schedule
     })
   }
@@ -4626,6 +4625,7 @@ export default function App(): React.JSX.Element {
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
                   defaultSessionKind={defaultSessionKind}
+                  tabProfileOf={(id) => profileOfConversation(sessionsRef.current, id)}
                   onResume={resumeFromHistory}
                 />
               </>

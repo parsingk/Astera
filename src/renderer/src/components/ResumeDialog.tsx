@@ -9,7 +9,7 @@ import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
 import { backdropProps } from '../lib/backdrop'
 import { useAgentProfilesNaming } from '../lib/agentProfiles'
-import { resumeAsLine } from './agentProfilesText'
+import { permissionFields, resumeAsLine, resumeProfile } from './agentProfilesText'
 
 /** Modal for resuming a session from history. Only logged-in accounts appear as candidates and the
  *  original account is preselected. Picking a different account makes ipc copy the transcript into that
@@ -26,6 +26,7 @@ export function ResumeDialog({
   accounts,
   ghostAccounts,
   defaultSessionKind,
+  tabProfileId,
   onConfirm,
   onCancel
 }: {
@@ -38,15 +39,18 @@ export function ResumeDialog({
   /** Which kind the dialog opens on (the Settings default). Seeds the selection below and nothing
    *  more — picking the other one here belongs to this session and is not written back. */
   defaultSessionKind: SessionKind
+  /** The agent profile of an open tab that holds this conversation, which goes before the one the app recorded. */
+  tabProfileId: string | undefined
   onConfirm: (opts: {
     accountIds: string[] // [0] = the account to continue on, with the chain after it when rolling is on
     kind: SessionKind
     roll: boolean
     rollPrompt?: string
     slackNotify: boolean
-    bypassPermissions: boolean
+    /** Left out when the resume carries a profile: the profile decides (permissionFields) */
+    bypassPermissions?: boolean
     schedule?: ScheduleConfig
-    /** The agent profile the app recorded for this conversation (sessions.resumeDefaults), when it has one. */
+    /** The agent profile the resume carries (resumeProfile), when it carries one. */
     agentProfileId?: string
   }) => void
   onCancel: () => void
@@ -69,7 +73,7 @@ export function ResumeDialog({
   const [slackNotify, setSlackNotify] = useState(false)
   const [slackReady, setSlackReady] = useState(false)
   const [bypassPermissions, setBypassPermissions] = useState(false)
-  // The agent profile the conversation ran as, so its MCP servers come back; the checkbox above still decides the bypass
+  // The agent profile the app recorded for the conversation (sessions.resumeDefaults), so its MCP servers come back
   const [savedProfile, setSavedProfile] = useState<string | null>(null)
   const [loadedDefaults, setLoadedDefaults] = useState(false) // mount ScheduleFields only after the prefill
 
@@ -129,10 +133,13 @@ export function ResumeDialog({
     }
   }, [entry.sessionId])
 
-  // Said under the controls when the conversation resumes as a profile, by the name the shared list has for it (read
-  // again once when the list does not name it yet); nothing when the id no longer resolves
-  const profiles = useAgentProfilesNaming(savedProfile !== null ? [savedProfile] : [])
-  const resumeAs = resumeAsLine(profiles, savedProfile, t)
+  // The profile the resume carries, decided once (an open tab's first, then the record) and only while the shared list
+  // has it (read again once when it does not name it yet): the same one is said under the controls, decides the
+  // permission as in the New Session dialog, and goes to the spawn. None: the dialog is today's.
+  const wantedProfile = tabProfileId ?? savedProfile
+  const profiles = useAgentProfilesNaming(wantedProfile !== null ? [wantedProfile] : [])
+  const carried = resumeProfile(profiles, tabProfileId, savedProfile)
+  const resumeAs = resumeAsLine(carried, t)
 
   const crossAccount = selectedId !== '' && selectedId !== entry.accountId
   // The chain that actually goes to spawn — the display uses this value too (the result after the provider filter and the rotation reorder)
@@ -165,9 +172,8 @@ export function ResumeDialog({
       roll: rollOn,
       rollPrompt: rollOn ? rollPrompt.trim() || undefined : undefined,
       slackNotify: slackReady && slackNotify,
-      bypassPermissions,
       schedule: schedOn ? (schedule ?? undefined) : undefined,
-      ...(savedProfile !== null ? { agentProfileId: savedProfile } : {})
+      ...permissionFields(carried?.id, bypassPermissions)
     })
   }
 
@@ -288,14 +294,17 @@ export function ResumeDialog({
           {t('session.new.slackNotify')}
           {!slackReady && <span className="check-note">{t('session.new.slackNeedsWebhook')}</span>}
         </label>
-        <label className="row check-small">
-          <input
-            type="checkbox"
-            checked={bypassPermissions}
-            onChange={(e) => setBypassPermissions(e.target.checked)}
-          />
-          {t('session.new.bypassPermissions')}
-        </label>
+        {/* A profile the resume carries decides the permission, as a picked one does in the New Session dialog */}
+        {carried === null && (
+          <label className="row check-small">
+            <input
+              type="checkbox"
+              checked={bypassPermissions}
+              onChange={(e) => setBypassPermissions(e.target.checked)}
+            />
+            {t('session.new.bypassPermissions')}
+          </label>
+        )}
         {resumeAs !== null && <p className="modal-hint">{resumeAs}</p>}
         <div className="row right">
           <button onClick={onCancel}>{t('common.cancel')}</button>

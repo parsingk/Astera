@@ -247,6 +247,7 @@ export function HistoryBrowser({
   accounts,
   ghostAccounts,
   defaultSessionKind,
+  tabProfileOf,
   onResume
 }: {
   accounts: Account[]
@@ -255,6 +256,8 @@ export function HistoryBrowser({
   ghostAccounts: Account[]
   /** Passed straight to ResumeDialog — the Settings default the kind picker opens on. */
   defaultSessionKind: SessionKind
+  /** The agent profile of an open tab that holds a conversation, for ResumeDialog to decide the profile it carries. */
+  tabProfileOf: (conversationId: string) => string | undefined
   onResume: (
     entry: HistoryEntry,
     cwd: string,
@@ -263,8 +266,9 @@ export function HistoryBrowser({
       roll: boolean
       rollPrompt?: string
       slackNotify: boolean
-      bypassPermissions: boolean
+      bypassPermissions?: boolean
       schedule?: ScheduleConfig
+      agentProfileId?: string
     }
   ) => void
 }): React.JSX.Element {
@@ -562,6 +566,7 @@ export function HistoryBrowser({
           accounts={accounts}
           defaultSessionKind={defaultSessionKind}
           ghostAccounts={ghostAccounts}
+          tabProfileId={tabProfileOf(pendingResume.entry.sessionId)}
           onConfirm={(opts) => {
             onResume(pendingResume.entry, pendingResume.cwd, opts)
             setPendingResume(null)

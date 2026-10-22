@@ -16,6 +16,7 @@ import {
   profileOfConversation,
   reasonLine,
   resumeAsLine,
+  resumeProfile,
   spawnPermission
 } from './agentProfilesText'
 
@@ -129,44 +130,64 @@ describe('agentProfilesText', () => {
     expect(spawnPermission({})).toEqual({ bypassPermissions: undefined })
   })
 
-  it('a restart and a history resume carry the session’s profile', () => {
+  it('a restart carries the session’s profile', () => {
     const app = source('../App.tsx')
     const restart = app.slice(app.indexOf('const restart = (old: SessionInfo)'), app.indexOf('const resumeFromHistory = ('))
     expect(restart).toContain('bypassPermissions: old.bypassPermissions,')
     expect(restart).toContain("...(old.agentProfileId !== undefined ? { agentProfileId: old.agentProfileId } : {})")
-    const resume = app.slice(app.indexOf('const resumeFromHistory = ('), app.indexOf('// 마지막으로 활성이었던 세션'))
-    expect(resume).toContain('profileOfConversation(sessionsRef.current, entry.sessionId)')
   })
 
-  // Follow-up: a conversation no tab holds resumes as the profile the app recorded for it (sessions.resumeDefaults, null
-  // once that profile is gone); a tab that holds it still answers first
-  it('a history resume no tab holds takes the recorded profile from the resume dialog', () => {
+  // Third follow-up: the profile a history resume carries is decided once, in the resume dialog (an open tab's for the
+  // conversation first, then the one the app recorded, while the shared list still has it), and the same one names the
+  // hint, decides the permission and goes to the spawn. App.tsx hands the dialog the tab's and spawns what it decided
+  it('a history resume carries the one profile the dialog decided, tab first, then the record', () => {
+    const list = [profile(), profile({ id: 'ap_2', name: 'Night shift', status: 'archived' })]
+    expect(resumeProfile(list, 'ap_2', 'ap_1')?.id).toBe('ap_2')
+    expect(resumeProfile(list, undefined, 'ap_1')?.id).toBe('ap_1')
+    expect(resumeProfile(list, undefined, null)).toBeNull()
+    expect(resumeProfile(list, undefined, 'ap_gone')).toBeNull()
+    expect(resumeProfile(list, 'ap_gone', 'ap_1')).toBeNull()
     const dialog = source('./ResumeDialog.tsx')
     expect(dialog).toMatch(/setSavedProfile\(d\.agentProfileId\)/)
-    expect(dialog).toContain('...(savedProfile !== null ? { agentProfileId: savedProfile } : {})')
+    expect(dialog).toContain('const carried = resumeProfile(profiles, tabProfileId, savedProfile)')
+    const history = source('./HistoryBrowser.tsx')
+    expect(history).toContain('tabProfileId={tabProfileOf(pendingResume.entry.sessionId)}')
     const app = source('../App.tsx')
+    expect(app).toContain('tabProfileOf={(id) => profileOfConversation(sessionsRef.current, id)}')
     const resume = app.slice(app.indexOf('const resumeFromHistory = ('), app.indexOf('// 마지막으로 활성이었던 세션'))
-    expect(resume).toContain('profileOfConversation(sessionsRef.current, entry.sessionId) ?? opts.agentProfileId')
+    expect(resume).not.toContain('profileOfConversation(')
+    expect(resume).toContain('bypassPermissions: opts.bypassPermissions,')
+    expect(resume).toContain('...(opts.agentProfileId !== undefined ? { agentProfileId: opts.agentProfileId } : {})')
   })
 
-  // Second follow-up: the resume dialog says when the conversation resumes as a profile, by the name this computer's list
-  // has for it; nothing when none was recorded or the id no longer resolves (it resumes without one)
+  // Third follow-up: a resume that carries a profile follows its permission as the New Session dialog does: the bypass
+  // checkbox is hidden and the bypass left out (permissionFields), so the spawn's profile decides it (spawnPermission)
+  it('a resume that carries a profile hides the bypass checkbox and leaves the bypass out', () => {
+    const dialog = source('./ResumeDialog.tsx')
+    expect(dialog).toContain('...permissionFields(carried?.id, bypassPermissions)')
+    const checkbox = dialog.slice(dialog.indexOf('{carried === null && ('), dialog.indexOf("{t('session.new.bypassPermissions')}"))
+    expect(checkbox).toContain('checked={bypassPermissions}')
+    expect(dialog).not.toContain('agentProfileId: savedProfile')
+  })
+
+  // Second follow-up: the resume dialog says when the conversation resumes as a profile, by its name; nothing when it
+  // carries none (none recorded, or the id no longer resolves: it resumes without one)
   it('says which profile a history resume continues as, only while the profile resolves', () => {
     const list = [profile(), profile({ id: 'ap_2', name: 'Night shift', status: 'archived' })]
-    expect(resumeAsLine(list, 'ap_1', en)).toBe('This conversation resumes as the agent profile “Reviewer”.')
-    expect(resumeAsLine(list, 'ap_2', en)).toBe('This conversation resumes as the agent profile “Night shift”.')
-    expect(resumeAsLine(list, 'ap_1', (k, p) => translate('ko', k, p))).toBe("에이전트 프로필 'Reviewer'(으)로 이어집니다.")
-    expect(resumeAsLine(list, 'ap_gone', en)).toBeNull()
-    expect(resumeAsLine(list, null, en)).toBeNull()
-    for (const lang of LANGS) expect(resumeAsLine(list, 'ap_1', (k, p) => translate(lang, k, p)), lang).toContain('Reviewer')
+    expect(resumeAsLine(resumeProfile(list, undefined, 'ap_1'), en)).toBe('This conversation resumes as the agent profile “Reviewer”.')
+    expect(resumeAsLine(resumeProfile(list, 'ap_2', null), en)).toBe('This conversation resumes as the agent profile “Night shift”.')
+    expect(resumeAsLine(list[0], (k, p) => translate('ko', k, p))).toBe("에이전트 프로필 'Reviewer'(으)로 이어집니다.")
+    expect(resumeAsLine(resumeProfile(list, undefined, 'ap_gone'), en)).toBeNull()
+    expect(resumeAsLine(null, en)).toBeNull()
+    for (const lang of LANGS) expect(resumeAsLine(list[0], (k, p) => translate(lang, k, p)), lang).toContain('Reviewer')
   })
 
-  it('the resume dialog shows that line under its controls, naming the recorded profile from the shared list', () => {
+  it('the resume dialog shows that line under its controls, naming the profile it carries from the shared list', () => {
     const dialog = source('./ResumeDialog.tsx')
-    expect(dialog).toMatch(/useAgentProfilesNaming\(savedProfile !== null \? \[savedProfile\] : \[\]\)/)
-    expect(dialog).toMatch(/const resumeAs = resumeAsLine\(profiles, savedProfile, t\)/)
+    expect(dialog).toMatch(/useAgentProfilesNaming\(wantedProfile !== null \? \[wantedProfile\] : \[\]\)/)
+    expect(dialog).toMatch(/const resumeAs = resumeAsLine\(carried, t\)/)
     expect(dialog).toContain('{resumeAs !== null && <p className="modal-hint">{resumeAs}</p>}')
-    const controls = dialog.indexOf("{t('session.new.bypassPermissions')}")
+    const controls = dialog.indexOf("{t('session.new.slackNotify')}")
     const line = dialog.indexOf('{resumeAs !== null &&')
     expect(controls >= 0 && line > controls && line < dialog.indexOf('<div className="row right">')).toBe(true)
   })

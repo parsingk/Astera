@@ -71,7 +71,7 @@ export function spawnPermission(o: { agentProfileId?: string; bypassPermissions?
 
 /** The profile of a conversation a tab of this app held (its resumed session id or its chat thread id), for resuming
  *  it from history. Undefined when no tab here knows it: the transcript itself does not record a profile, so the resume
- *  then takes the one the app recorded for the conversation (sessions.resumeDefaults, via ResumeDialog). */
+ *  then takes the one the app recorded for the conversation (sessions.resumeDefaults); resumeProfile decides. */
 export function profileOfConversation(
   sessions: readonly { resumeSessionId?: string; threadId?: string; agentProfileId?: string }[],
   conversationId: string
@@ -79,12 +79,19 @@ export function profileOfConversation(
   return sessions.find((s) => s.agentProfileId !== undefined && (s.resumeSessionId === conversationId || s.threadId === conversationId))?.agentProfileId
 }
 
-/** The line the history resume dialog shows when the conversation resumes as the profile the app recorded for it, by
- *  the name this computer's list has for it (archived too). Null when none was recorded or the id no longer resolves:
- *  the dialog says nothing, and the resume starts without it as before. */
-export function resumeAsLine(profiles: readonly AgentProfile[], id: string | null, t: T): string | null {
-  const p = id === null ? undefined : profiles.find((x) => x.id === id)
-  return p === undefined ? null : t('agentProfiles.resumeAs', { name: p.name })
+/** The profile a history resume carries, decided once: an open tab's for the conversation first, else the one the app
+ *  recorded for it, while this computer's list still has it (archived too). Null when there is neither or the id no
+ *  longer resolves: the resume is then the dialog's own, without a profile, as before. The same one names the dialog's
+ *  line, decides its permission and goes to the spawn. */
+export function resumeProfile(profiles: readonly AgentProfile[], tab: string | undefined, recorded: string | null): AgentProfile | null {
+  const id = tab ?? recorded
+  return id === null ? null : (profiles.find((p) => p.id === id) ?? null)
+}
+
+/** The line the history resume dialog shows when the conversation resumes as a profile (resumeProfile); null when it
+ *  carries none, and the dialog says nothing. */
+export function resumeAsLine(profile: AgentProfile | null, t: T): string | null {
+  return profile === null ? null : t('agentProfiles.resumeAs', { name: profile.name })
 }
 
 /** Whether a new chat session will hold a permission prompt, so the dialog offers what to do with one nobody answers:
