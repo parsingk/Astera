@@ -238,8 +238,8 @@ only while Astera skips them anyway.** `create_job`, `create_task` and `create_s
 `create_task` in a Job that holds one, are refused with `PERMISSION_DENIED` (its `details.reason` is
 `agent-profile-bypass-refused`) and make nothing unless **Run agents without permission checks** is on in Astera's
 settings. A profile set to `inherit` or `ask` is not affected, and a person choosing in Astera or at their own shell
-is not asked. Neither is the coordinator carrying out such a Job, an
-agent session and never an MCP client, when the Tasks it adds inherit the profile a person chose for the Job.
+is not asked. Neither is the coordinator Astera started to carry out such a Job, an agent session and never an MCP
+client, when the Tasks it adds inherit the profile a person chose for the Job.
 
 **Who plans the Tasks.** A Job from `create_job` carries only its objective. Run it as it is and its
 coordinator plans it first: it breaks the objective into a few Tasks, with dependencies, an account

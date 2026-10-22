@@ -1096,9 +1096,10 @@ decides the MCP servers and the permission prompts. A profile named with `--agen
 (2); a task that only inherits its Job's archived profile still gets that profile's accounts. **A `bypass` profile is
 for agents only while Astera skips the checks itself**: from inside an agent session, naming one, or adding a task to
 a Job that holds one, is refused with 5 and makes nothing unless **Run agents without permission checks** is on in
-Astera's settings. A person at their own shell is not asked. Nor is a run's coordinator about the profile its Job
-holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A bypass profile the
-coordinator names itself with `--agent-profile` is asked about like any other. These refusals say why in
+Astera's settings. A person at their own shell is not asked. Nor is the coordinator Astera started for a run about the
+profile its Job holds: the person chose that profile, so the tasks it adds to the run it carries out inherit it. A
+bypass profile the coordinator names itself with `--agent-profile` is asked about like any other, and so is a session
+that drives the run from outside (one that made itself its driver with `check --run`). These refusals say why in
 `error.details.reason` too: `agent-profile-unavailable` (unknown or archived) and `agent-profile-no-account` with 2,
 `agent-profile-bypass-refused` with 5.
 

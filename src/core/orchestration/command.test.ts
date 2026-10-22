@@ -10288,16 +10288,17 @@ describe('agent profiles: a profile that runs without permission checks, by who 
     }
   })
 
-  /** A person's Job made as the bypass profile and run: its Run, which `drivenBy` gives a coordinator */
-  const personsRun = async (deps: ReturnType<typeof setup>['deps'], drivenBy?: { field: 'coordinatorSessionId' | 'externalCoordinatorSessionId'; sessionId: string }): Promise<string> => {
+  /** A person's Job made as the bypass profile and run: its Run, given the coordinator Astera started when `coordinator`
+   *  names one */
+  const personsRun = async (deps: ReturnType<typeof setup>['deps'], coordinator?: string): Promise<string> => {
     await handleCommand(deps, { sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b' })
     const runId = deps.getState().runs[0].id
-    if (drivenBy)
-      await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, [drivenBy.field]: drivenBy.sessionId } : r)) })
+    if (coordinator !== undefined)
+      await deps.setState({ ...deps.getState(), runs: deps.getState().runs.map((r) => (r.id === runId ? { ...r, coordinatorSessionId: coordinator } : r)) })
     return runId
   }
 
-  it("refuses an agent's Task that would inherit it from its Job, with or without accounts of its own, unless it drives that Run", async () => {
+  it("refuses an agent's Task that would inherit it from its Job, with or without accounts of its own, unless Astera started it as that Run's coordinator", async () => {
     for (const caller of AGENTS) {
       const { deps, as } = setup(false)
       const jobId = idOf(await as({ sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', auto: true }))
@@ -10320,27 +10321,41 @@ describe('agent profiles: a profile that runs without permission checks, by who 
     expect(deps.getState().tasks).toHaveLength(0)
   })
 
-  // Follow-up F1: the coordinator carrying out a Job a person made as such a profile is not asked about the profile its
-  // Tasks inherit from that Job, whether Astera started it or it drives the Run from outside: the person chose it
-  it("lets the Run's own coordinator add Tasks that inherit the person's profile, with or without accounts", async () => {
-    for (const field of ['coordinatorSessionId', 'externalCoordinatorSessionId'] as const) {
-      const { deps, appWideYolo, as } = setup(false)
-      const runId = await personsRun(deps, { field, sessionId: 'sess_coord' })
-      const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
-      for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
-        const r = await as(coordinator, 'task-create', args)
-        expect(r.status, `${field} ${JSON.stringify(args)} ${JSON.stringify(r.body)}`).toBe(200)
-        expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
-      }
-      expect((await as(coordinator, 'tasks-add', { run: runId, spec: 's' })).status, field).toBe(200)
-      expect(deps.getState().tasks, field).toHaveLength(3)
-      expect(appWideYolo, field).not.toHaveBeenCalled()
+  // Follow-up F1: the coordinator Astera started to carry out a Job a person made as such a profile is not asked about
+  // the profile its Tasks inherit from that Job: the person chose it
+  it("lets the coordinator Astera started for the Run add Tasks that inherit the person's profile, with or without accounts", async () => {
+    const { deps, appWideYolo, as } = setup(false)
+    const runId = await personsRun(deps, 'sess_coord')
+    const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
+    for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+      const r = await as(coordinator, 'task-create', args)
+      expect(r.status, `${JSON.stringify(args)} ${JSON.stringify(r.body)}`).toBe(200)
+      expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
     }
+    expect((await as(coordinator, 'tasks-add', { run: runId, spec: 's' })).status).toBe(200)
+    expect(deps.getState().tasks).toHaveLength(3)
+    expect(appWideYolo).not.toHaveBeenCalled()
+  })
+
+  // Second follow-up: an agent can make itself a Run's outside driver with `check --run` while Astera started no
+  // coordinator for it, so driving from outside earns nothing: its Tasks are asked about the Job's profile like any agent's
+  it("refuses an outside driver attached with check --run a Task that inherits the person's bypass profile, while the app asks", async () => {
+    const { deps, as } = setup(false)
+    const runId = await personsRun(deps)
+    const driver: Caller = { sessionId: 'sess_driver', role: 'cli' }
+    expect((await as(driver, 'check', { run: runId })).status).toBe(200)
+    expect(deps.getState().runs[0].externalCoordinatorSessionId).toBe('sess_driver')
+    for (const args of [{ run: runId, spec: 's' }, { run: runId, spec: 's', account: 'acc1' }]) {
+      const r = await as(driver, 'task-create', args)
+      expect([r.status, reasonOf(r)], JSON.stringify(args)).toEqual([403, 'agent-profile-bypass-refused'])
+    }
+    expect([(await as(driver, 'tasks-add', { run: runId, spec: 's' })).status]).toEqual([403])
+    expect(deps.getState().tasks).toHaveLength(0)
   })
 
   it('still refuses that coordinator a bypass profile it names itself, the Job’s own included', async () => {
     const { deps, as } = setup(false)
-    const runId = await personsRun(deps, { field: 'coordinatorSessionId', sessionId: 'sess_coord' })
+    const runId = await personsRun(deps, 'sess_coord')
     const coordinator: Caller = { sessionId: 'sess_coord', role: 'cli' }
     for (const args of [
       { run: runId, spec: 's', agentProfileId: 'ap_b' },

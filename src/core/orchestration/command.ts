@@ -1352,18 +1352,16 @@ async function profileFor(
   return { ok: true, profile }
 }
 
-/** Whether the caller is the coordinator carrying out this Run now: the one Astera started for it, or the session that
- *  drives it from outside (`externalCoordinatorSessionId`), while the Run is still running — `isRunCoordinator`'s test
- *  in handleCommand, asked of one Run. The Tasks it adds inherit the profile a person chose for the Job, so the person's
- *  decision on the final review (people choosing are unaffected) reaches them: it is not asked about that profile
- *  (`profileBypassRefusal`), only about one it names itself. */
+/** Whether the caller is the coordinator Astera started for this Run, while the Run is still running —
+ *  `isRunCoordinator`'s test in handleCommand, asked of one Run. The Tasks it adds inherit the profile a person chose for
+ *  the Job, so the person's decision on the final review (people choosing are unaffected) reaches them: it is not asked
+ *  about that profile (`profileBypassRefusal`), only about one it names itself. **Not a session that drives the Run from
+ *  outside** (`externalCoordinatorSessionId`): an agent becomes that with `check --run` on any Run Astera started no
+ *  coordinator for, which would hand it the person's bypass profile while the app asks; a Run an agent made itself went
+ *  through the gate at run-create. */
 function drivesRun(s: OrchState, caller: { sessionId: string }, runId: string): boolean {
   const run = s.runs.find((r) => r.id === runId)
-  return (
-    run !== undefined &&
-    (run.coordinatorSessionId === caller.sessionId || run.externalCoordinatorSessionId === caller.sessionId) &&
-    outcomeOf(s, run.id) === 'running'
-  )
+  return run !== undefined && run.coordinatorSessionId === caller.sessionId && outcomeOf(s, run.id) === 'running'
 }
 
 /** The agent profile store, or the reply that refuses: a caller with no reader, or a store that cannot be read, which
@@ -3331,8 +3329,8 @@ export async function handleCommand(
       // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
       // are needed, and may be archived since (the Job holds it); a profile the caller names now must be usable. An
       // agent's Task given accounts still runs as the Job's profile, so that one is asked about its permission alone
-      // (inheritedBypassRefusal). The coordinator carrying out this Run is not asked about the Job's profile, with or
-      // without accounts (drivesRun); one it names itself is asked like any agent's.
+      // (inheritedBypassRefusal). The coordinator Astera started for this Run is not asked about the Job's profile, with
+      // or without accounts (drivesRun); one it names itself is asked like any agent's, and so is an outside driver.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
       let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
