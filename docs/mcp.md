@@ -233,6 +233,12 @@ and `list_jobs` until `run_job` starts it, and a Job with no Run has `outcome: "
 a `run_job` that failed. A Run that `stop_run` paused has `paused: true` and `outcome: "paused"`, in
 `get_run`, `list_runs` and its Job, until `resume_run`.
 
+**An agent profile whose `permission` is `bypass` runs without permission checks, and an MCP client may use one
+only while Astera skips them anyway.** `create_job`, `create_task` and `create_session` with such a profile, and
+`create_task` in a Job that holds one, are refused with `PERMISSION_DENIED` and make nothing unless **Run agents
+without permission checks** is on in Astera's settings. A profile set to `inherit` or `ask` is not affected, and a
+person choosing in Astera or at their own shell is not asked.
+
 **Who plans the Tasks.** A Job from `create_job` carries only its objective. Run it as it is and its
 coordinator plans it first: it breaks the objective into a few Tasks, with dependencies, an account
 (its own unless the objective names another) and the project's run configurations as checks when

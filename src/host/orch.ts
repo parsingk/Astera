@@ -6,6 +6,7 @@ import { PLUGIN_COMMANDS, pluginsCommand } from './plugins/commands'
 import { EXTENSION_COMMANDS, type HostExtensions } from './extensions/commands'
 import { AGENT_PROFILE_COMMANDS, type HostAgentProfiles } from './agentProfiles/commands'
 import { readAgentProfiles } from '../core/agentProfiles/store'
+import { readAgentPermissionMode } from '../core/settings/agentPermissionMode'
 import type { PluginManager } from './plugins/manager'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -823,6 +824,9 @@ export function createHostOrch(a: {
       ...(a.readUnderstanding ? { readUnderstanding: a.readUnderstanding } : {}),
       // The agent profiles this Host owns (Agent Profiles design §6), read when a Job or Task is made from one
       readAgentProfiles: () => readAgentProfiles(a.profileDir),
+      // The app-wide mode from the same app-settings.json this Host's spawns read the bypass from, asked when an agent
+      // starts work as a profile that runs without permission checks (Agent Profiles final review)
+      appWideYolo: async () => (await readAgentPermissionMode(path.join(a.profileDir, 'app-settings.json'))) === 'yolo',
       ...(a.changes ? { changes: a.changes } : {}),
       ...(a.jobSources ? { jobSources: a.jobSources } : {}),
       ...(a.completionChecks ? { completionChecks: a.completionChecks } : {}),

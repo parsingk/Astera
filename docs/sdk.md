@@ -318,6 +318,12 @@ Task. Profiles need `@astera-app/client` 0.5.0 and the Astera that ships them. A
 answers `agentProfiles.list` and `agentProfiles.get` with `VERSION_MISMATCH`, ignores `agentProfileId` on
 `jobs.create`, and refuses a `tasks.create` that names a profile but no `accountIds`.
 
+A profile whose `permission` is `bypass` runs without permission checks, so **a plugin may make work as one only while
+Astera skips them anyway**: its `jobs.create` or `tasks.create` with such a profile, or a `tasks.create` in a Job that
+holds one, fails with `PERMISSION_DENIED` (`details.reason` is `agent-profile-bypass-refused`) and makes nothing unless
+**Run agents without permission checks** is on in Astera's settings. A client your own program makes on this machine is
+answered as your own shell is, and is not asked.
+
 ```ts
 const { items } = await astera.agentProfiles.list()
 const reviewer = items.find((p) => p.name === 'Reviewer' && p.status === 'active')

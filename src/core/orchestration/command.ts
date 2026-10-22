@@ -687,6 +687,11 @@ export interface OrchServerDeps {
    *  CLI's state-file reader with no Host, which writes nothing anyway), a Job or Task named with a profile answers
    *  409. Throws RepairNeeded when the file is damaged. */
   readAgentProfiles?(): Promise<AgentProfileStore>
+  /** Whether the app-wide permission mode skips permission checks (app-settings.json's agentPermissionMode is 'yolo'),
+   *  read per call when an agent's shell, an MCP client or a plugin starts work as a profile that runs without them
+   *  (`profileBypassRefusal`). Rejects with RepairNeeded when the file cannot be read. **Only the Host injects it**: the
+   *  app answers only its own UI, a person. Absent, such a caller is refused. */
+  appWideYolo?(): Promise<boolean>
   /** The job-source plugins (plugin Phase 4 J10): which there are and a question to one. **Only the Host injects it**,
    *  from its plugin manager and runtime; absent, the sources are GitHub's alone. */
   jobSources?: JobSourcesDeps
@@ -1292,12 +1297,46 @@ const profileRefused = (reason: 'agent-profile-unavailable' | 'agent-profile-no-
   body: { error: msg, reason }
 })
 
+/** A caller that is an agent rather than a person: an agent session's shell (the CLI with a session id), an MCP client
+ *  or a plugin. The app, a person's own shell (the CLI with none) and a remote controller's dialog are a person's. */
+const agentCaller = (caller: { sessionId: string; role?: string }): boolean =>
+  caller.role === 'mcp' || caller.role === 'plugin' || (caller.role === 'cli' && caller.sessionId !== '')
+
+/** The person's decision on the final review (2026-10-22): an agent (`agentCaller`) may start work as a profile that
+ *  runs without permission checks only while the app-wide mode already skips them, so a profile is never an agent's way
+ *  around the app's own setting. A person is not asked, and neither is a profile that checks or follows the app. A
+ *  settings file that cannot be read refuses and names the file, as the Host's spawn does: it may have said manual.
+ *  Null when the caller may. */
+async function profileBypassRefusal(deps: OrchServerDeps, caller: { sessionId: string; role?: string }, profile: AgentProfile): Promise<Reply | null> {
+  if (profile.permission !== 'bypass' || !agentCaller(caller)) return null
+  let yolo: boolean
+  try {
+    yolo = (await deps.appWideYolo?.()) === true
+  } catch (e) {
+    const refused = conflict(`Astera's permission setting could not be read: ${e instanceof Error ? e.message : String(e)}`)
+    return e instanceof RepairNeeded ? { ...refused, body: { ...(refused.body as object), repair: e.file } } : refused
+  }
+  if (yolo) return null
+  return {
+    status: 403,
+    body: {
+      error:
+        `agent profile ${profile.name} runs without permission checks, and an agent, an MCP client or a plugin may start work as it ` +
+        `only while Astera's own setting "Run agents without permission checks" is on. Turn that on in Settings, or start it yourself ` +
+        `from the app or your own shell`,
+      reason: 'agent-profile-bypass-refused'
+    }
+  }
+}
+
 /** The agent profile a Job or Task is made from, by its id or its name (Agent Profiles design §6), or the reply that
  *  refuses it: one not found or archived is `agent-profile-unavailable`, and a damaged store refuses and names the file
  *  as the GitHub defaults do (a guess would make the work run as the wrong profile). `archivedOk` is for a profile the
- *  Job already holds: work that holds one keeps resolving it after it is archived (design §4). */
+ *  Job already holds: work that holds one keeps resolving it after it is archived (design §4). One an agent may not use
+ *  is refused here too (`profileBypassRefusal`), the one place the three creates resolve a profile. */
 async function profileFor(
   deps: OrchServerDeps,
+  caller: { sessionId: string; role?: string },
   idOrName: string,
   archivedOk = false
 ): Promise<{ ok: true; profile: AgentProfile } | { ok: false; reply: Reply }> {
@@ -1313,6 +1352,8 @@ async function profileFor(
   if (!profile) return { ok: false, reply: profileRefused('agent-profile-unavailable', `unknown agent profile: ${idOrName}`) }
   if (profile.status === 'archived' && !archivedOk)
     return { ok: false, reply: profileRefused('agent-profile-unavailable', `agent profile ${profile.name} is archived; restore it to start new work as it`) }
+  const refused = await profileBypassRefusal(deps, caller, profile)
+  if (refused) return { ok: false, reply: refused }
   return { ok: true, profile }
 }
 
@@ -1920,7 +1961,7 @@ export async function handleCommand(
       const profileArg = str(args.agentProfileId)
       let agentProfileId: string | undefined
       if (profileArg !== null) {
-        const found = await profileFor(deps, profileArg)
+        const found = await profileFor(deps, caller, profileArg)
         if (!found.ok) return found.reply
         agentProfileId = found.profile.id
       }
@@ -3257,14 +3298,16 @@ export async function handleCommand(
       // The agent profile the Task runs as (Agent Profiles design §6), by id or name, else its Job's. Given one and no
       // `--account`, the Task's accounts are the profile's live ones, copied now and fixed from then on; given both,
       // the accounts are the ones given and the profile is still recorded. The Job's own is read only when its accounts
-      // are needed, and may be archived since (the Job holds it); a profile the caller names now must be usable.
+      // are needed, or when an agent makes the Task (it still decides the Task's permission, which an agent may not
+      // always use: profileBypassRefusal), and may be archived since (the Job holds it); a profile the caller names now
+      // must be usable.
       const profileArg = str(args.agentProfileId)
       const ownerJob = s.jobs.find((j) => j.id === runId) ?? s.jobs.find((j) => j.id === s.runs.find((r) => r.id === runId)?.jobId)
       let agentProfileId = profileArg === null ? ownerJob?.agentProfileId : undefined
       if (accountArg === null && profileArg === null && agentProfileId === undefined) return bad('--account is required')
       let profile: AgentProfile | undefined
-      if (profileArg !== null || accountArg === null) {
-        const found = await profileFor(deps, profileArg ?? agentProfileId!, profileArg === null)
+      if (profileArg !== null || accountArg === null || (agentProfileId !== undefined && agentCaller(caller))) {
+        const found = await profileFor(deps, caller, profileArg ?? agentProfileId!, profileArg === null)
         if (!found.ok) return found.reply
         profile = found.profile
         agentProfileId = found.profile.id
@@ -4876,7 +4919,7 @@ export async function handleCommand(
       let agentProfileId: string | undefined
       let profileChain: string[] = []
       if (args.agentProfile !== undefined) {
-        const found = await profileFor(deps, str(args.agentProfile)!)
+        const found = await profileFor(deps, caller, str(args.agentProfile)!)
         if (!found.ok) return found.reply
         agentProfileId = found.profile.id
         if (accountArg === undefined) {

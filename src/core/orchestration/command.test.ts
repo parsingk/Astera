@@ -10252,3 +10252,81 @@ describe('agent profiles: jobs create and tasks add', () => {
     expect(deps.getState().tasks).toHaveLength(0)
   })
 })
+
+// The person's decision on the final review (2026-10-22): an agent session's shell, an MCP client or a plugin may make a
+// Job or a Task as a profile that runs without permission checks only while the app-wide mode already skips them; a Task
+// that inherits such a profile from its Job counts the same. A person in the app or at their own shell is not asked
+describe('agent profiles: a profile that runs without permission checks, by who asks', () => {
+  type Caller = { sessionId: string; role?: 'app' | 'cli' | 'mcp' | 'controller' | 'plugin' }
+  const AGENTS: Caller[] = [{ sessionId: 'sess_agent', role: 'cli' }, { sessionId: '', role: 'mcp' }, { sessionId: '', role: 'plugin' }]
+  const PEOPLE: Caller[] = [{ sessionId: '', role: 'cli' }, { sessionId: '', role: 'app' }, { sessionId: APP_CALLER }]
+  const P = (over: Partial<AgentProfile>): AgentProfile => ({
+    id: 'ap_b', name: 'Unattended', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'bypass', createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const setup = (yolo: boolean | null) => {
+    const deps = makeDeps()
+    deps.readAgentProfiles = async () => ({ version: 1, profiles: [P({}), P({ id: 'ap_ask', name: 'Asks', permission: 'ask' })] })
+    const appWideYolo = vi.fn(async () => yolo === true)
+    if (yolo !== null) deps.appWideYolo = appWideYolo
+    const as = (caller: Caller, cmd: string, args: Record<string, unknown>) => handleCommand(deps, caller, cmd, args)
+    return { deps, appWideYolo, as }
+  }
+  const reasonOf = (r: { body: unknown }): unknown => (r.body as { reason?: unknown }).reason
+  const idOf = (r: { body: unknown }): string => (r.body as { id: string }).id
+
+  it('refuses an agent’s Job and Task made as such a profile while the app-wide mode asks, making nothing', async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(false)
+      const job = await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
+      expect([job.status, reasonOf(job)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+      expect((job.body as { error: string }).error).toContain('Run agents without permission checks')
+      expect(deps.getState().jobs).toHaveLength(0)
+      const jobId = idOf(await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p' }))
+      const task = await as(caller, 'tasks-add', { job: jobId, spec: 's', agentProfile: 'ap_b' })
+      expect([task.status, reasonOf(task)], JSON.stringify(caller)).toEqual([403, 'agent-profile-bypass-refused'])
+      expect(deps.getState().tasks).toHaveLength(0)
+    }
+  })
+
+  it("refuses an agent's Task that would inherit it from its Job, with or without accounts of its own", async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(false)
+      const jobId = idOf(await as({ sessionId: APP_CALLER }, 'run-create', { objective: 'o', cwd: 'D:/p', agentProfileId: 'ap_b', auto: true }))
+      for (const args of [{ run: jobId, spec: 's' }, { run: jobId, spec: 's', account: 'acc1' }]) {
+        const r = await as(caller, 'task-create', args)
+        expect([r.status, reasonOf(r)], `${JSON.stringify(caller)} ${JSON.stringify(args)}`).toEqual([403, 'agent-profile-bypass-refused'])
+      }
+      expect(deps.getState().tasks).toHaveLength(0)
+    }
+  })
+
+  it('lets an agent once the app-wide mode already skips the checks', async () => {
+    for (const caller of AGENTS) {
+      const { deps, as } = setup(true)
+      const job = await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'ap_b' })
+      expect(job.status, JSON.stringify(caller)).toBe(200)
+      const inherited = await as(caller, 'tasks-add', { job: idOf(job), spec: 's', account: 'acc1' })
+      expect(inherited.body, JSON.stringify(caller)).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_b' })
+      expect(deps.getState().tasks).toHaveLength(1)
+    }
+  })
+
+  it('a person in the app or at their own shell is not asked', async () => {
+    for (const caller of PEOPLE) {
+      const { appWideYolo, as } = setup(false)
+      const job = await as(caller, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
+      expect(job.status, JSON.stringify(caller)).toBe(200)
+      expect((await as(caller, 'tasks-add', { job: idOf(job), spec: 's' })).status, JSON.stringify(caller)).toBe(200)
+      expect(appWideYolo).not.toHaveBeenCalled()
+    }
+  })
+
+  it('a profile that checks permissions is not asked about, and a caller with no reader of the setting is refused', async () => {
+    const { appWideYolo, as } = setup(false)
+    expect((await as({ sessionId: '', role: 'mcp' }, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Asks' })).status).toBe(200)
+    expect(appWideYolo).not.toHaveBeenCalled()
+    const bare = setup(null)
+    const r = await bare.as({ sessionId: '', role: 'plugin' }, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Unattended' })
+    expect([r.status, reasonOf(r)]).toEqual([403, 'agent-profile-bypass-refused'])
+  })
+})

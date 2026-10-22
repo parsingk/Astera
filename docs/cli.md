@@ -1077,7 +1077,8 @@ the items in `error.details`. Running it twice changes nothing the second time. 
 
 **`agent-profiles` keeps the agent profiles**: each a name for a set of accounts (one provider's, in the order
 they are tried), the shared MCP servers its sessions leave out and a permission choice: `inherit` (Astera's
-setting), `bypass` (no permission prompts) or `ask`. Skills and commands are shared by every profile. The Host
+setting), `bypass` (run without permission checks) or `ask` (run with permission checks). Skills and commands are
+shared by every profile. The Host
 answers these commands, so they work with Astera closed. `show`, `update`, `archive`, `restore` and `delete` take
 the profile's id or its name in `--id`. `--exclude-mcp` takes the names `ext list` shows; a name no shared MCP server
 has is refused with 2, naming it, and nothing is changed. `update` changes only the flags given, and its
@@ -1091,7 +1092,10 @@ unless a task names its own, and the profile never picks the coordinator. A task
 runs on the profile's accounts, copied when it is added. A session with a profile and no `--account` starts on the
 profile's first account and rolls onto the others. With both, the account given is used, and the profile still
 decides the MCP servers and the permission prompts. A profile named with `--agent-profile` must not be archived
-(2); a task that only inherits its Job's archived profile still gets that profile's accounts.
+(2); a task that only inherits its Job's archived profile still gets that profile's accounts. **A `bypass` profile is
+for agents only while Astera skips the checks itself**: from inside an agent session, naming one, or adding a task to
+a Job that holds one, is refused with 5 and makes nothing unless **Run agents without permission checks** is on in
+Astera's settings. A person at their own shell is not asked.
 
 ```json
 {"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",
