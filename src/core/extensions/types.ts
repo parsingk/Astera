@@ -29,6 +29,9 @@ export interface McpExtension {
   env: Record<string, McpEnvValue>
   /** Codex's own per-server settings, carried from a Codex source and given to Codex sessions only. */
   options?: McpOptions
+  /** How the Gateway shares the server's process (Gateway design G3, G8): per project folder, or one per session.
+   *  Absent means `folder`. */
+  isolation?: 'folder' | 'session'
   providers: Provider[]
   /** The account it was imported from. */
   importedFrom: string

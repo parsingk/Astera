@@ -7,7 +7,7 @@ import path from 'node:path'
 import { isHomeClaudeDir } from '../accounts/settingsSync'
 import { providerOf } from '../providers/meta'
 import { readTomlObject } from '../providers/configWrite'
-import { envNameRefusal, envNameWarning, looksSecret, type NotShareableReason, type ShareWarning } from './envRules'
+import { looksSecret, type NotShareableReason } from './envRules'
 import type { Account, Provider } from '../types'
 import type { ExtensionKind, ExtensionRegistry, McpOptions } from './types'
 
@@ -28,7 +28,6 @@ interface DiscoveredBase {
   /** The file or folder it was found in. */
   source: string
   mcp?: DiscoveredMcp
-  warnings: ShareWarning[]
 }
 
 export type Discovered = (DiscoveredBase & { shareable: true }) | (DiscoveredBase & { shareable: false; reason: NotShareableReason })
@@ -81,6 +80,12 @@ export async function ownMcpNames(account: Account, homeDir: string): Promise<Se
   const root: unknown = claude ? JSON.parse(text) : readTomlObject(text)
   const servers = isObj(root) ? (claude ? root.mcpServers : root.mcp_servers) : undefined
   return new Set(isObj(servers) ? Object.keys(servers) : [])
+}
+
+/** Browser servers (Gateway design G8): one shared process would let two sessions drive one browser, so they start out
+ *  with one process per session. The list starts with the well-known ones. */
+export function knownSessionIsolated(def: { command?: string; args?: string[] }): boolean {
+  return [def.command ?? '', ...(def.args ?? [])].some((t) => /playwright|puppeteer|chrome-devtools/i.test(t))
 }
 
 /** Whether a server's arguments or address carry a credential (final review I3): `--api-key <value>`, `--token=<value>`,
@@ -144,8 +149,6 @@ function mcpOf(def: Obj): { mcp: DiscoveredMcp; headerSecret: boolean; argSecret
 export async function discoverIn(a: { account: Account; homeDir: string; registry: ExtensionRegistry }): Promise<Discovered[]> {
   const provider = providerOf(a.account)
   const shared = new Set(a.registry.entries.map((e) => `${e.kind}:${e.name}`))
-  const sharedEnvNames = new Map<string, string>()
-  for (const e of a.registry.entries) if (e.kind === 'mcp') for (const n of Object.keys(e.env)) sharedEnvNames.set(n, '')
   const out: Discovered[] = []
   const add = (d: DiscoveredBase, reason: NotShareableReason | null): void => {
     if (shared.has(`${d.kind}:${d.name}`)) return
@@ -158,17 +161,8 @@ export async function discoverIn(a: { account: Account; homeDir: string; registr
     for (const [name, def] of Object.entries(servers)) {
       if (!isObj(def)) continue
       const { mcp, headerSecret, argSecret } = mcpOf(def)
-      const warnings: ShareWarning[] = []
-      let reason: NotShareableReason | null = name === 'astera' ? 'astera-own' : headerSecret ? 'header-secret' : argSecret ? 'arg-secret' : null
-      for (const n of mcp.envNames) {
-        // Values are unknown here: only the name rules can refuse; a name another shared server uses is a warning,
-        // and the import, which knows the values, refuses it if they differ (Task 4 ruling)
-        const byName = envNameRefusal(n, '', new Map())
-        if (!reason && (byName === 'cli-env-name' || byName === 'process-env-name')) reason = byName
-        if (envNameWarning(n) && !warnings.includes('session-tools')) warnings.push('session-tools')
-        if (sharedEnvNames.has(n) && !warnings.includes('env-name-shared')) warnings.push('env-name-shared')
-      }
-      add({ kind: 'mcp', name, provider, source: mcpFile, mcp, warnings }, reason)
+      const reason: NotShareableReason | null = name === 'astera' ? 'astera-own' : headerSecret ? 'header-secret' : argSecret ? 'arg-secret' : null
+      add({ kind: 'mcp', name, provider, source: mcpFile, mcp }, reason)
     }
   }
 
@@ -181,7 +175,7 @@ export async function discoverIn(a: { account: Account; homeDir: string; registr
       if (!isDir && !e.name.endsWith('.md')) continue
       const name = isDir ? e.name : e.name.slice(0, -3)
       if (name.startsWith('.')) continue
-      add({ kind, name, provider, source: path.join(dir, e.name), warnings: [] }, kind === 'skill' && name.startsWith('astera-') ? 'astera-own' : null)
+      add({ kind, name, provider, source: path.join(dir, e.name) }, kind === 'skill' && name.startsWith('astera-') ? 'astera-own' : null)
     }
   }
   return out

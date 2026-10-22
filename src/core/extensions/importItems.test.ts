@@ -87,14 +87,15 @@ describe('importItems', () => {
     expect(await snapshot(s.configDir)).toEqual(before)
   })
 
-  it('refuses a server whose environment name a shared server already gives another value', async () => {
+  // Gateway design §4.6: each server's values go to its own process, so two may give one name different values
+  it('shares a server whose environment name another shared server gives another value', async () => {
     const s = await setup()
     await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'linear' }] })
     const other = path.join(s.home, '.claude-accounts', 'b')
     await write(path.join(other, '.claude.json'), JSON.stringify({ mcpServers: { linear2: { command: 'x', env: { LINEAR_API_KEY: 'another_value_000000000000' } } } }))
     const b: Account = { ...s.account, id: 'acc_2', configDir: other }
     const r = await importItems({ profileDir: s.profileDir, homeDir: s.home, account: b, picks: [{ kind: 'mcp', name: 'linear2' }] })
-    expect(r).toEqual({ imported: [], refused: [{ name: 'linear2', reason: 'env-name-clash' }] })
+    expect(r).toEqual({ imported: ['linear2'], refused: [] })
   })
 
   it('removeEntry deletes its secrets and canonical files; setEnabled flips one entry', async () => {
@@ -145,13 +146,30 @@ describe('importItems, after the final review', () => {
     expect(e.kind === 'mcp' && e.env).toEqual({ GH_HOST: { inherit: true } })
   })
 
-  it('refuses a server that sets a name another shared server passes through, and the other way round', async () => {
+  it('shares a server that sets a name another shared server passes through', async () => {
     const s = await setup()
     await write(path.join(s.configDir, '.claude.json'), JSON.stringify({ mcpServers: {
       passes: { command: 'npx', env: { GITHUB_TOKEN: '${GITHUB_TOKEN}' } },
       sets: { command: 'npx', env: { GITHUB_TOKEN: 'ghp_other_value_00000000' } }
     } }))
     const r = await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'passes' }, { kind: 'mcp', name: 'sets' }] })
-    expect(r).toEqual({ imported: ['passes'], refused: [{ name: 'sets', reason: 'env-name-clash' }] })
+    expect(r).toEqual({ imported: ['passes', 'sets'], refused: [] })
+  })
+})
+
+// Gateway design G8, §4.6
+describe('importItems, release 2', () => {
+  it('marks a browser server one process per session, and shares a server needing OPENAI_API_KEY or PATH', async () => {
+    const s = await setup()
+    await write(path.join(s.configDir, '.claude.json'), JSON.stringify({ mcpServers: {
+      browser: { command: 'npx', args: ['@playwright/mcp'] },
+      llm: { command: 'npx', env: { OPENAI_API_KEY: 'sk-test-value-0000000000', PATH: 'C:/tools' } }
+    } }))
+    const r = await importItems({ profileDir: s.profileDir, homeDir: s.home, account: s.account, picks: [{ kind: 'mcp', name: 'browser' }, { kind: 'mcp', name: 'llm' }] })
+    expect(r).toEqual({ imported: ['browser', 'llm'], refused: [] })
+    const reg = await readExtensionRegistry(s.profileDir)
+    const byName = Object.fromEntries(reg.entries.map((e) => [e.name, e]))
+    expect(byName.browser).toMatchObject({ isolation: 'session' })
+    expect(byName.llm).not.toHaveProperty('isolation')
   })
 })

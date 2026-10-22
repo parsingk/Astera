@@ -31,3 +31,16 @@ describe('the Extensions catalog', () => {
     }
   })
 })
+
+// Gateway design §4.6: the words for rules that no longer exist are gone
+describe('the Extensions catalog, release 2', () => {
+  it('has no words left for the lifted environment-name rules', () => {
+    for (const lang of LANGS) {
+      const keys = Object.keys(CATALOGS[lang].messages)
+      expect(
+        keys.filter((k) => /^settings\.extensions\.(reason\.(cli-env-name|process-env-name|env-name-clash)|warning\.)/.test(k)),
+        lang
+      ).toEqual([])
+    }
+  })
+})

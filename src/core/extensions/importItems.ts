@@ -9,8 +9,8 @@ import path from 'node:path'
 import { extensionPaths } from '../profile/paths'
 import { providerOf } from '../providers/meta'
 import { readTomlObject } from '../providers/configWrite'
-import { claudeMcpFile, discoverIn } from './discover'
-import { envNameRefusal, looksSecret, type NotShareableReason } from './envRules'
+import { claudeMcpFile, discoverIn, knownSessionIsolated } from './discover'
+import { looksSecret, type NotShareableReason } from './envRules'
 import { hashFile, hashTree } from './hash'
 import { readExtensionRegistry, writeExtensionRegistry } from './registry'
 import { extensionSecrets } from './secrets'
@@ -49,10 +49,6 @@ const secretRef = (id: string, env: string): string => {
   return SECRET_NAME.test(plain) ? plain : `mcp.${shortHash(`${id}\0${env}`, 32)}`
 }
 
-/** Stands for "the session's own variable" in the clash rule: two servers passing it through agree; one passing it and
- *  one setting it do not (final review M8). */
-const INHERITED = '\0inherit'
-
 async function serverDefinition(account: Account, homeDir: string, name: string): Promise<Obj | null> {
   if (providerOf(account) === 'claude') {
     const v: unknown = JSON.parse(await fs.readFile(claudeMcpFile(account, homeDir), 'utf8'))
@@ -62,21 +58,6 @@ async function serverDefinition(account: Account, homeDir: string, name: string)
   const servers = readTomlObject(await fs.readFile(path.join(account.configDir, 'config.toml'), 'utf8')).mcp_servers
   const def = isObj(servers) ? servers[name] : undefined
   return isObj(def) ? def : null
-}
-
-/** The value every shared server gives each environment name, for the clash rule. */
-async function sharedEnvValues(profileDir: string, entries: ExtensionEntry[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
-  const secrets = extensionSecrets(profileDir)
-  for (const e of entries) {
-    if (e.kind !== 'mcp') continue
-    for (const [n, v] of Object.entries(e.env)) {
-      if ('value' in v) out.set(n, v.value)
-      else if ('secret' in v) out.set(n, (await secrets.get(v.secret)) ?? '')
-      else out.set(n, INHERITED)
-    }
-  }
-  return out
 }
 
 async function copyTree(from: string, to: string): Promise<void> {
@@ -106,27 +87,24 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
       if (!def) continue
       const values = isObj(def.env) ? def.env : {}
       const passed = Array.isArray(def.env_vars) ? def.env_vars.filter((x): x is string => typeof x === 'string') : []
-      const taken = await sharedEnvValues(a.profileDir, entries)
       const secretNames = new Set(pick.secretNames ?? d.mcp.envNames.filter(looksSecret))
       const env: Record<string, McpEnvValue> = {}
       const toStore: [string, string][] = []
       let refused: NotShareableReason | null = null
       for (const n of d.mcp.envNames) {
         const raw = values[n]
-        // `${NAME}` passes the session's own variable through, as Codex's env_vars does; a reference to another name
-        // cannot be delivered under this one by either CLI (final review M4)
+        // `${NAME}` passes the variable of that name through; a reference to another name cannot be delivered under
+        // this one (final review M4)
         const selfReference = typeof raw === 'string' && raw === `\${${n}}`
         if (typeof raw === 'string' && raw.includes('${') && !selfReference) {
           refused = refused ?? 'env-reference'
           continue
         }
         if (selfReference || (passed.includes(n) && raw === undefined)) {
-          refused = refused ?? envNameRefusal(n, INHERITED, taken)
           env[n] = { inherit: true }
           continue
         }
         const value = String(raw ?? '')
-        refused = refused ?? envNameRefusal(n, value, taken)
         if (secretNames.has(n)) {
           const ref = secretRef(id, n)
           env[n] = { secret: ref }
@@ -139,7 +117,8 @@ export async function importItems(a: { profileDir: string; homeDir: string; acco
       }
       for (const [ref, value] of toStore) await secrets.put(ref, value)
       const { envNames: _names, ...server } = d.mcp
-      entries.push({ id, kind: 'mcp', name: pick.name, ...server, env, providers: BOTH, importedFrom: a.account.id, enabled: true })
+      const isolation = knownSessionIsolated(d.mcp) ? { isolation: 'session' as const } : {}
+      entries.push({ id, kind: 'mcp', name: pick.name, ...server, env, ...isolation, providers: BOTH, importedFrom: a.account.id, enabled: true })
     } else {
       const canonical =
         pick.kind === 'skill' ? path.join(paths.skills, pick.name) : path.join(pick.kind === 'command' ? paths.commands : paths.agents, `${pick.name}.md`)
