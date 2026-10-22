@@ -139,6 +139,10 @@ export const NOUNS = {
   // **Answered in the CLI process** (Agent Control Plane release 1 design §4.6): reads the profile's shared extension
   // registry and puts its skills, commands and agents into every account itself (cli/extensions.ts), no Host.
   ext: ['list', 'sync'],
+  // **Answered by the Host** (Agent Profiles design §6), like `sessions`: its `agent-profiles-*` commands, which the CLI
+  // reaches through cli/agentProfiles.ts (a name resolved to the id first, MCP server names to their ids). Changes are
+  // refused to an agent's shell, as `ext sync` and the extension changes are.
+  'agent-profiles': ['list', 'show', 'create', 'update', 'archive', 'restore', 'delete'],
   // **Host 가 제 레지스트리로 답한다 — 앱이 닫혀 있어도**(host/sessions.ts). pty 를 쥔 것이 Host 다.
   // id 는 앱의 세션 id(`ASTERA_SESSION`)이다. 대화 세션도 읽고 친다(phase D) — 치기는 앱이 열려 있으면 앱이 한다.
   sessions: ['list', 'read', 'send', 'create'],

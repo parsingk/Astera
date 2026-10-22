@@ -22,6 +22,8 @@ import { cliHostTarget, hostSpawnPlanFor, impostorError, logToStderr, otherProto
 import { higgsfieldCommand } from './higgsfield'
 import { installFailureOf, resolveSkillsDir, skillsCommand } from './skills'
 import { extensionsCommand } from './extensions'
+import { agentProfilesCommand } from './agentProfiles'
+import { readExtensionRegistry } from '../core/extensions/registry'
 import { serveMcp } from './mcp/server'
 import { runMcpHttp } from './mcp/http'
 import { runRuntimeGateway } from './runtime/gateway'
@@ -1578,6 +1580,25 @@ export async function main(): Promise<void> {
       if ('stuck' in installed) fail({ code: SILENT_HOST_CODE, message: installed.stuck, details: lost })
       if ('unreachable' in installed) return withoutHost(installed.unreachable, lost)
       return installed
+    }
+    // **`agent-profiles` is one or two calls on this one connection** (cli/agentProfiles.ts, Agent Profiles design §6): a
+    // name is resolved to the id with `agent-profiles-get` before a change, and only the change carries the request id.
+    if (parsed.cmd.startsWith('agent-profiles-')) {
+      const answered = await keepaliveDuring(keepalive, () =>
+        agentProfilesCommand({
+          cmd: parsed.cmd,
+          args,
+          request: carried.send,
+          call: (cmd, callArgs, request) =>
+            timedCall(verbose, { conn, cmd, args: callArgs, sessionId, request, timeoutMs: clientTimeoutMs({ cmd, args: callArgs }) }),
+          mcpEntries: async () => (await readExtensionRegistry(profileDir)).entries
+        })
+      )
+      conn.close()
+      const lost = lostAnswerDetails({ argv, request: carried.send, fromStdin: parsed.wantsStdin })
+      if ('stuck' in answered) fail({ code: SILENT_HOST_CODE, message: answered.stuck, details: lost })
+      if ('unreachable' in answered) return withoutHost(answered.unreachable, lost)
+      return answered
     }
     // Held rather than passed inline: the retry line below has to carry what this actually sent,
     // and `argsForCall` fills a missing `--cwd` that the typed line does not have (`implicitArgs`).

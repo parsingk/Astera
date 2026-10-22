@@ -111,7 +111,11 @@ describe('createHostAgentProfiles', () => {
   it('refuses a caller that is not the app or the CLI, and a change from an agent\'s shell', async () => {
     const h = await rig()
     expect((await h.call('agent-profiles-list', {}, { role: 'agent' })).status).toBe(403)
-    expect((await h.call('agent-profiles-list', {}, { role: 'mcp' })).status).toBe(403)
+    // An MCP client reads them (list_agent_profiles, behind the MCP gate) and changes none (Agent Profiles design §6)
+    expect((await h.call('agent-profiles-list', {}, { role: 'mcp' })).status).toBe(200)
+    expect((await h.call('agent-profiles-get', { idOrName: 'A' }, { role: 'mcp' })).status).toBe(404)
+    for (const cmd of ['agent-profiles-create', 'agent-profiles-update', 'agent-profiles-archive', 'agent-profiles-restore', 'agent-profiles-delete', 'agent-profiles-touch'])
+      expect((await h.call(cmd, { id: 'ap_000000000001', name: 'A', accountIds: ['acc_1'] }, { role: 'mcp' })).status, cmd).toBe(403)
     const refused = await h.call('agent-profiles-create', { name: 'A', accountIds: ['acc_1'] }, { role: 'cli', agentRefusal: 'not from an agent' })
     expect(refused.status).toBe(403)
     expect(refused.body).toEqual({ error: 'not from an agent' })

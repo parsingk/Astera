@@ -10208,3 +10208,47 @@ describe('agent profiles: the app answers task-create from the store on disk', (
     expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
   })
 })
+
+// Task 7 (Agent Profiles design §6): the public names take `--agent-profile <id|name>`, which reaches run-create and
+// task-create as their agentProfileId; the Job and the Task hold the real id
+describe('agent profiles: jobs create and tasks add', () => {
+  const profiled = () => {
+    const deps = makeDeps()
+    deps.readAgentProfiles = async () => ({
+      version: 1,
+      profiles: [{ id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc1'], mcpExclude: [], permission: 'inherit', createdAt: NOW, updatedAt: NOW }]
+    })
+    return deps
+  }
+
+  it('jobs create --agent-profile <name> makes a Job that holds the id, and answers it', async () => {
+    const deps = profiled()
+    const r = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'Reviewer' }, APP_CALLER)
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ agentProfileId: 'ap_1' })
+    expect(deps.getState().jobs[0].agentProfileId).toBe('ap_1')
+  })
+
+  it('tasks add --agent-profile with no --account gets the profile’s accounts; a Task of a profiled Job inherits it', async () => {
+    const deps = profiled()
+    const jobId = ((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)).body as { id: string }).id
+    const r = await call(deps, 'tasks-add', { job: jobId, spec: 's', agentProfile: 'reviewer' }, APP_CALLER)
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(r.body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
+    const profiledJob = ((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'ap_1' }, APP_CALLER)).body as { id: string }).id
+    expect((await call(deps, 'tasks-add', { job: profiledJob, spec: 's' }, APP_CALLER)).body).toMatchObject({ accountIds: ['acc1'], agentProfileId: 'ap_1' })
+  })
+
+  it('refuses --agent-profile with no value, and an unknown profile, making nothing', async () => {
+    const deps = profiled()
+    const bare = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: true }, APP_CALLER)
+    expect([bare.status, (bare.body as { error: string }).error]).toEqual([400, '--agent-profile needs a value: a profile id or name (from `agent-profiles list`)'])
+    const unknown = await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p', agentProfile: 'nope' }, APP_CALLER)
+    expect([unknown.status, (unknown.body as { reason?: string }).reason]).toEqual([400, 'agent-profile-unavailable'])
+    expect(deps.getState().jobs).toHaveLength(0)
+    const jobId = ((await call(deps, 'jobs-create', { objective: 'o', cwd: 'D:/p' }, APP_CALLER)).body as { id: string }).id
+    const task = await call(deps, 'tasks-add', { job: jobId, spec: 's', agentProfile: true }, APP_CALLER)
+    expect(task.status).toBe(400)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+})

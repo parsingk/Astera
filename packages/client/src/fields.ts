@@ -33,7 +33,9 @@ export const JOB_FIELDS = Object.freeze([
   'paused',
   'convergence',
   'source',
-  'github'
+  'github',
+  // The agent profile the Job's Tasks run as by default, by its id (Agent Profiles design §6)
+  'agentProfileId'
 ] as const)
 
 export const RUN_FIELDS = Object.freeze([
@@ -71,6 +73,8 @@ export const TASK_FIELDS = Object.freeze([
   'consecutiveFailures',
   // 'lifecycle' for the Task Astera adds to carry a Run through GitHub (GitHub lifecycle G3a); absent otherwise
   'kind',
+  // The agent profile the Task runs as, by its id (Agent Profiles design §6)
+  'agentProfileId',
   'createdAt',
   'updatedAt'
 ] as const)
@@ -91,6 +95,21 @@ export const QUESTION_FIELDS = Object.freeze([
 
 /** `default` is there only on its provider's default account; `signedIn` says whether the account can run now. */
 export const ACCOUNT_FIELDS = Object.freeze(['id', 'label', 'provider', 'default', 'signedIn'] as const)
+
+/** An agent profile (Agent Profiles design §4): a named set of accounts, the shared MCP servers it leaves out (their
+ *  registry ids) and its permission choice. Every field is the person's own setting, so all of them are public. */
+export const AGENT_PROFILE_FIELDS = Object.freeze([
+  'id',
+  'name',
+  'description',
+  'status',
+  'accountIds',
+  'mcpExclude',
+  'permission',
+  'createdAt',
+  'updatedAt',
+  'lastUsedAt'
+] as const)
 
 /** A run configuration's command, env and cwd stay in the app: an env value can be a secret. */
 export const RUN_CONFIG_FIELDS = Object.freeze(['id', 'name', 'type'] as const)

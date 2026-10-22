@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { handleCommand, type HostSession, type OrchServerDeps } from './command'
 import { emptyState, type OrchState } from './state'
 import { APP_CALLER, HOST_CALLER } from '../host/driver'
+import type { AgentProfile } from '../agentProfiles/types'
 
 const NOW = '2026-09-26T00:00:00.000Z'
 
@@ -76,6 +77,61 @@ describe('sessions create — what reaches the Host starter', () => {
     expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'chat', unattended: 'hold' }))
     await call(makeDeps({ createSession }), { account: 'acc_c', cwd: 'D:/p', kind: 'chat', unattended: 'deny-after-60s' })
     expect(createSession).toHaveBeenLastCalledWith(expect.objectContaining({ unattended: 'deny-after-60s' }))
+  })
+})
+
+// Agent Profiles design §6: `sessions create --agent-profile <id|name>`. The profile picks the account and the roll
+// chain when none is given (the New Session dialog's way), and the session is started from the profile's real id
+describe('sessions create — from an agent profile', () => {
+  const profile = (over: Partial<AgentProfile> = {}): AgentProfile => ({
+    id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_c2', 'acc_gone', 'acc_c'], mcpExclude: [], permission: 'inherit',
+    createdAt: NOW, updatedAt: NOW, ...over
+  })
+  const withProfiles = (profiles: AgentProfile[], createSession = vi.fn(async () => row())) => ({
+    createSession,
+    deps: makeDeps({ createSession, readAgentProfiles: async () => ({ version: 1, profiles }) })
+  })
+
+  it("with no --account, starts on the profile's first live account and rolls onto the rest, as the profile's id", async () => {
+    const { deps, createSession } = withProfiles([profile()])
+    const r = await call(deps, { agentProfile: 'reviewer', cwd: 'D:/p' })
+    expect(r.status, JSON.stringify(r.body)).toBe(200)
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc_c2', rollAccountIds: ['acc_c2', 'acc_c'], agentProfileId: 'ap_1' }))
+  })
+
+  it("a profile with one live account starts on it with no chain", async () => {
+    const { deps, createSession } = withProfiles([profile({ accountIds: ['acc_c'] })])
+    await call(deps, { agentProfile: 'ap_1', cwd: 'D:/p' })
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc_c', rollAccountIds: [], agentProfileId: 'ap_1' }))
+  })
+
+  it('an --account given wins, and the profile still decides MCP and permission', async () => {
+    const { deps, createSession } = withProfiles([profile()])
+    await call(deps, { agentProfile: 'Reviewer', account: 'acc_c', cwd: 'D:/p' })
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc_c', rollAccountIds: [], agentProfileId: 'ap_1' }))
+  })
+
+  it('refuses an unknown or archived profile, one with no live account, and --agent-profile with no value, starting nothing', async () => {
+    const { deps, createSession } = withProfiles([profile({ id: 'ap_old', name: 'Old', status: 'archived' }), profile({ id: 'ap_empty', name: 'Empty', accountIds: ['acc_gone'] })])
+    for (const [args, reason] of [
+      [{ agentProfile: 'nope', cwd: 'D:/p' }, 'agent-profile-unavailable'],
+      [{ agentProfile: 'Old', cwd: 'D:/p' }, 'agent-profile-unavailable'],
+      [{ agentProfile: 'Empty', cwd: 'D:/p' }, 'agent-profile-no-account']
+    ] as const) {
+      const r = await call(deps, args)
+      expect([r.status, (r.body as { reason?: unknown }).reason], JSON.stringify(args)).toEqual([400, reason])
+    }
+    const bare = await call(deps, { agentProfile: true, cwd: 'D:/p' })
+    expect([bare.status, error(bare)]).toEqual([400, '--agent-profile needs a value: a profile id or name (from `agent-profiles list`)'])
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('without a profile nothing is read and the session carries no profile, as before', async () => {
+    const read = vi.fn(async () => ({ version: 1 as const, profiles: [] }))
+    const createSession = vi.fn(async () => row())
+    await call(makeDeps({ createSession, readAgentProfiles: read }), { account: 'acc_c', cwd: 'D:/p' })
+    expect(read).not.toHaveBeenCalled()
+    expect(createSession.mock.calls[0]).toEqual([expect.not.objectContaining({ agentProfileId: expect.anything() })])
   })
 })
 

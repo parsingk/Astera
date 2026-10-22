@@ -735,7 +735,8 @@ export interface SessionCreate {
   /** `'agent'` when the CLI, MCP or a plugin asked for it (SessionInfo.startedBy): its tab closes when it ends. Absent
    *  for a person's, from a remote controller's new-session dialog or the app. */
   startedBy?: 'agent'
-  /** The agent profile the session is started from, by id or name (Agent Profiles design §5). Nothing sets it yet. */
+  /** The agent profile the session is started from (Agent Profiles design §5), by its id: `sessions create
+   *  --agent-profile` resolves a name first. */
   agentProfileId?: string
 }
 
@@ -1312,6 +1313,18 @@ async function profileFor(
     return { ok: false, reply: profileRefused('agent-profile-unavailable', `agent profile ${profile.name} is archived; restore it to start new work as it`) }
   return { ok: true, profile }
 }
+
+/** `--agent-profile <id|name>` of the public commands (`jobs create`, `tasks add`) as the `agentProfileId` run-create and
+ *  task-create read, which resolve it (Agent Profiles design §6). A bare flag is refused rather than read as none. */
+function publicProfileArgs(args: Record<string, unknown>): { args: Record<string, unknown> } | { error: string } {
+  const { agentProfile, ...rest } = args
+  if (agentProfile === undefined) return { args: rest }
+  const named = str(agentProfile)
+  if (named === null) return { error: PROFILE_NEEDS_VALUE }
+  return { args: { ...rest, agentProfileId: named } }
+}
+
+const PROFILE_NEEDS_VALUE = '--agent-profile needs a value: a profile id or name (from `agent-profiles list`)'
 
 /** The mark `jobs run` gives the `run-start` it calls: its plugin checks were looked at already (plugin Phase 5 C7). A
  *  symbol, so no JSON a caller sends can carry it. */
@@ -2163,7 +2176,9 @@ export async function handleCommand(
      * 403 을 받는다 — `jobs run` 이 run-start 로 가며 받는 것과 같은 경계다. tasks-add 도 같다.
      */
     case 'jobs-create': {
-      const reply = await handleCommand(deps, caller, 'run-create', { ...args, auto: true })
+      const profiled = publicProfileArgs(args)
+      if ('error' in profiled) return bad(profiled.error)
+      const reply = await handleCommand(deps, caller, 'run-create', { ...profiled.args, auto: true })
       if (reply.status < 200 || reply.status >= 300) return reply
       const after = deps.getState()
       const created = after.jobs.find((j) => j.id === (reply.body as { id?: unknown }).id)
@@ -2220,7 +2235,9 @@ export async function handleCommand(
             body: { error: `unknown run configuration: ${unknown.join(', ')} (not one of job ${owner.id}'s)`, jobId: owner.id }
           }
       }
-      const { job: _job, ...rest } = args
+      const profiled = publicProfileArgs(args)
+      if ('error' in profiled) return bad(profiled.error)
+      const { job: _job, ...rest } = profiled.args
       return handleCommand(deps, caller, 'task-create', { ...rest, run: job ?? run })
     }
     case 'jobs-wait':
@@ -4809,9 +4826,11 @@ export async function handleCommand(
       if (myDispatch !== undefined)
         return denied('a worker session cannot start sessions; ask your coordinator, or run it from a shell')
       if (!deps.createSession) return conflict('sessions are started by the Astera Host, and this caller is not one')
-      if (args.account === undefined) return bad('--account is required: the account the session runs on (from `accounts list`)')
-      const account = str(args.account)
-      if (account === null) return bad('--account needs a value: an account id (from `accounts list`)')
+      if (args.agentProfile !== undefined && str(args.agentProfile) === null) return bad(PROFILE_NEEDS_VALUE)
+      if (args.account === undefined && args.agentProfile === undefined)
+        return bad('--account is required: the account the session runs on (from `accounts list`)')
+      const accountArg = args.account === undefined ? undefined : str(args.account)
+      if (accountArg === null) return bad('--account needs a value: an account id (from `accounts list`)')
       if (args.cwd === undefined) return bad('--cwd is required: the folder the session starts in')
       const asked = str(args.cwd)
       if (asked === null) return bad('--cwd needs a value: a folder')
@@ -4849,9 +4868,25 @@ export async function handleCommand(
           '--prompt for a terminal session must not contain " & | < > ^ % or a line break: it is passed on the command line. Put the text in a file and ask the session to read it, or start a chat session'
         )
       const known = await deps.listAccounts()
+      // The agent profile it is started from (Agent Profiles design §6), by id or name, as its real id. Without
+      // --account it picks the account and the chain to roll onto, as the New Session dialog does: its live accounts in
+      // order. With one, the account given wins and the profile still decides the MCP servers and the permission.
+      let agentProfileId: string | undefined
+      let profileChain: string[] = []
+      if (args.agentProfile !== undefined) {
+        const found = await profileFor(deps, str(args.agentProfile)!)
+        if (!found.ok) return found.reply
+        agentProfileId = found.profile.id
+        if (accountArg === undefined) {
+          profileChain = liveAccounts(found.profile, known)
+          if (profileChain.length === 0)
+            return profileRefused('agent-profile-no-account', `agent profile ${found.profile.name} has no account left in Astera; give --account`)
+        }
+      }
+      const account = accountArg ?? profileChain[0]!
       const mine = known.find((a) => a.id === account)
       if (!mine) return notFound(`unknown account: ${account}`)
-      let chain: string[] = []
+      let chain: string[] = profileChain.length > 1 ? profileChain : []
       if (args.rollAccounts !== undefined) {
         const raw = str(args.rollAccounts)
         if (raw === null) return bad('--roll-accounts needs a value: account ids, comma-separated')
@@ -4874,7 +4909,8 @@ export async function handleCommand(
             ...(sessionKind === 'chat' ? { unattended: unattended.value ?? 'hold' } : {}),
             // Who started it, by who asked (2026-10-20, review M1): a remote controller's new-session dialog and the app
             // are a person; the CLI, MCP and a plugin are an agent, and its tab closes when it ends
-            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const })
+            ...(caller.role === 'controller' || caller.role === 'app' ? {} : { startedBy: 'agent' as const }),
+            ...(agentProfileId !== undefined ? { agentProfileId } : {})
           })
         )
       } catch (e) {

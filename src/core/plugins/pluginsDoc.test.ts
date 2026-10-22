@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { PLUGIN_CAPABILITIES, PLUGIN_PERMISSIONS, PLUGIN_TRUST_WARNING, capabilityPermissionProblem, parseManifest } from './manifest'
 import { SETTING_KEYWORDS, SETTING_TYPES, SETTINGS_MAX, parseSettingsSchema } from './settings'
-import { PLUGIN_COMMAND_PERMISSIONS, pluginRefusal } from '../host/pluginGate'
+import { PLUGIN_COMMAND_PERMISSIONS, SDK_COMMANDS_CLOSED_TO_PLUGINS, pluginRefusal } from '../host/pluginGate'
 import { LOG_CHARS_PER_SECOND, LOG_LINES_PER_SECOND, PLUGIN_TIMINGS, REDACT_MIN, createPluginRuntime } from '../../host/plugins/runtime'
 import { SECRET_NAME_MAX, SECRET_VALUE_MAX } from '../../host/plugins/pluginData'
 import { PLUGIN_SERVED_CAPABILITIES } from '../../host/plugins/manager'
@@ -71,7 +71,15 @@ const methods = Object.entries(createNamespaces(() => Promise.reject(new Error('
 )
 /** The Host command an SDK method sends: `jobs.list` sends `jobs-list`, with the few the client names otherwise. */
 const commandOf = (method: string): string =>
-  method.startsWith('events.') ? 'events-poll' : method === 'tasks.create' ? 'tasks-add' : method === 'completion.get' ? 'runs-completion' : method.replace('.', '-')
+  method.startsWith('events.')
+    ? 'events-poll'
+    : method === 'tasks.create'
+      ? 'tasks-add'
+      : method === 'completion.get'
+        ? 'runs-completion'
+        : method.startsWith('agentProfiles.')
+          ? `agent-profiles-${method.slice('agentProfiles.'.length)}`
+          : method.replace('.', '-')
 
 describe('docs/plugins.md', () => {
   it('says plainly that a plugin is trusted code and its permissions are not a sandbox', () => {
@@ -96,8 +104,13 @@ describe('docs/plugins.md', () => {
       expect([...new Set(named.map(commandOf))].sort(), permission).toEqual(opens)
       if (opens.length === 0) expect(cell, permission).toBe('nothing yet')
     }
-    // And every SDK method a plugin can call is in the table, in its permission's row
+    // And every SDK method a plugin can call is in the table, in its permission's row; the ones no permission opens are
+    // named as closed beside it
     for (const m of methods) {
+      if (SDK_COMMANDS_CLOSED_TO_PLUGINS.has(commandOf(m))) {
+        expect(prose(table), m).toContain(`\`${m}\``)
+        continue
+      }
       const needs = PLUGIN_COMMAND_PERMISSIONS[commandOf(m)]
       expect(needs, m).toBeDefined()
       expect(rows.get(needs!), m).toContain(`\`${m}\``)

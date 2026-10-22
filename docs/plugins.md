@@ -104,8 +104,9 @@ job source, and a `runCheck` for a completion check). A CommonJS entry sets `mod
 
 Each permission opens these methods of `ctx.astera` to the plugin. A call without its permission is refused with
 `PERMISSION_DENIED` (an `AsteraError`, exit code 5 in the SDK's terms), and a command the table does not list is
-refused to every plugin, `call()` included. `call('requests-show', ...)` needs no permission: it reads only the plugin's
-own request receipts.
+refused to every plugin, `call()` included, as `agentProfiles.list` and `agentProfiles.get` are: no permission opens
+the agent profiles to a plugin. `call('requests-show', ...)` needs no permission: it reads only the plugin's own request
+receipts.
 
 | Permission | Lets the plugin call |
 |---|---|

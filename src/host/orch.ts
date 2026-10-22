@@ -2028,7 +2028,8 @@ export function createHostOrch(a: {
             : { status: 501, body: { error: 'this Host does not keep shared extensions' } }
           return claimed === null ? answered : settleRequest(claimed, cmd, marks, answered)
         }
-        // **Agent profiles** (Agent Profiles design §4), the same way: no gate lists them either.
+        // **Agent profiles** (Agent Profiles design §4), the same way. The MCP gate admits only the list (design §6), and
+        // no other gate lists them.
         if (AGENT_PROFILE_COMMANDS.has(cmd)) {
           const answered = a.agentProfiles
             ? await a.agentProfiles.command({

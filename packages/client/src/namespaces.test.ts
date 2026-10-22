@@ -272,6 +272,60 @@ describe('astera.tasks', () => {
   })
 })
 
+describe('astera.agentProfiles, and the profile a Job or Task runs as', () => {
+  const PROFILE = { id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_1'], mcpExclude: [], permission: 'inherit', createdAt: 'T', updatedAt: 'T', internal: 1 }
+  const { internal: _p, ...profileShaped } = PROFILE
+  const answers = {
+    'agent-profiles-list': () => ok({ profiles: [PROFILE] }),
+    'agent-profiles-get': (a: Record<string, unknown>) =>
+      a.idOrName === 'Reviewer' || a.idOrName === PROFILE.id ? ok({ profile: PROFILE }) : { status: 404, body: { error: `no agent profile ${String(a.idOrName)}` } },
+    'jobs-create': () => ok({ ...JOB, agentProfileId: PROFILE.id }),
+    'tasks-add': () => ok({ id: 'tsk_1', runId: 'run_1', title: 't', spec: 's', deps: [], status: 'ready', accountIds: ['acc_1'], agentProfileId: PROFILE.id }),
+    'jobs-get': (a: Record<string, unknown>) => ok({ ...JOB, ...(a.id === 'job_prof' ? { agentProfileId: PROFILE.id } : {}) })
+  }
+
+  it('lists and gets profiles, by id or by name, in the public shape', async () => {
+    const { host, astera } = await setup(answers)
+    expect(await astera.agentProfiles.list()).toEqual({ items: [profileShaped] })
+    expect(await astera.agentProfiles.get('Reviewer')).toEqual(profileShaped)
+    expect((await rejection(astera.agentProfiles.get('nope'))).code).toBe('NOT_FOUND')
+    expect((await rejection(astera.agentProfiles.get(''))).code).toBe('INVALID_ARGUMENTS')
+    expect(sent(host)).toEqual([
+      ['agent-profiles-list', {}, undefined],
+      ['agent-profiles-get', { idOrName: 'Reviewer' }, undefined],
+      ['agent-profiles-get', { idOrName: 'nope' }, undefined]
+    ])
+  })
+
+  it('creates a Job and a Task as a profile, and a Task with only a profile reads no coordinator account', async () => {
+    const { host, astera } = await setup(answers)
+    expect(await astera.jobs.create({ objective: 'o', cwd: ABS, agentProfileId: 'Reviewer' })).toMatchObject({ agentProfileId: PROFILE.id })
+    expect(await astera.tasks.create({ runId: 'run_1', spec: 'x', agentProfileId: 'Reviewer' })).toMatchObject({ agentProfileId: PROFILE.id })
+    await astera.tasks.create({ runId: 'run_1', spec: 'x', agentProfileId: 'Reviewer', accountIds: ['acc_2'] })
+    expect(sent(host)).toEqual([
+      ['jobs-create', { objective: 'o', cwd: ABS, agentProfile: 'Reviewer' }, undefined],
+      ['tasks-add', { run: 'run_1', spec: 'x', agentProfile: 'Reviewer' }, undefined],
+      ['tasks-add', { run: 'run_1', spec: 'x', account: 'acc_2', agentProfile: 'Reviewer' }, undefined]
+    ])
+  })
+
+  it('a Task of a Job that runs as a profile takes its accounts from that profile, not the coordinator', async () => {
+    const { host, astera } = await setup(answers)
+    await astera.tasks.create({ jobId: 'job_prof', spec: 'x' })
+    expect(sent(host)).toEqual([
+      ['jobs-get', { id: 'job_prof' }, undefined],
+      ['tasks-add', { job: 'job_prof', spec: 'x' }, undefined]
+    ])
+  })
+
+  it('refuses an empty profile before sending anything', async () => {
+    const { host, astera } = await setup(answers)
+    expect((await rejection(astera.jobs.create({ objective: 'o', cwd: ABS, agentProfileId: '' }))).code).toBe('INVALID_ARGUMENTS')
+    expect((await rejection(astera.tasks.create({ runId: 'run_1', spec: 'x', agentProfileId: '' }))).code).toBe('INVALID_ARGUMENTS')
+    expect(sent(host)).toEqual([])
+  })
+})
+
 describe('astera.questions and astera.completion', () => {
   const GATE = { id: 'gat_1', runId: 'run_1', taskId: 'tsk_1', question: 'q', status: 'open', createdAt: 'T' }
   const COMPLETION = { runId: 'run_1', jobId: 'job_1', state: 'checking', tasks: [], extra: 1 }

@@ -626,7 +626,16 @@ const NOT_SWITCHED = [
   'sources-list',
   'sources-items',
   'sources-show',
-  'jobs-create-from-source'
+  'jobs-create-from-source',
+  // Answered by the Host's agent profiles (src/host/agentProfiles/commands.ts) through cli/agentProfiles.ts, beside the
+  // plugins: an agent's shell may read them and changes none, as with `ext sync`.
+  'agent-profiles-list',
+  'agent-profiles-show',
+  'agent-profiles-create',
+  'agent-profiles-update',
+  'agent-profiles-archive',
+  'agent-profiles-restore',
+  'agent-profiles-delete'
 ] as const satisfies readonly AgentCommand[]
 
 /**

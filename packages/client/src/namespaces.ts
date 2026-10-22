@@ -10,6 +10,7 @@ import { createEventsApi, stoppable, type EventsApi } from './events.js'
 import { eventKey } from './follow.js'
 import { publicEvent } from './shape.js'
 import type {
+  AgentProfile,
   AnsweredQuestion,
   ConvergencePolicy,
   Job,
@@ -63,6 +64,9 @@ interface CreateJobFields {
   readonly concurrency?: number
   /** Repair and recheck failing Tasks: `true` for the Host's defaults, or a policy. */
   readonly convergence?: true | ConvergencePolicy
+  /** The agent profile its Tasks run as unless a Task names its own: an id or a name (`agentProfiles.list`). It does not
+   *  pick the coordinator. */
+  readonly agentProfileId?: string
 }
 
 /** Where the work happens: a project id (its folder is looked up) or an absolute folder, exactly one. A relative
@@ -95,6 +99,9 @@ interface CreateTaskFields {
   readonly validate?: readonly string[]
   /** Ask for a review of the work. */
   readonly review?: boolean
+  /** The agent profile it runs as, an id or a name. Without `accountIds` the Task runs on the profile's accounts. A Task
+   *  names none to run as its Job's profile. */
+  readonly agentProfileId?: string
 }
 
 /** Whose Task: a Job's definition (`jobId`) or a Run's (`runId`), exactly one. */
@@ -133,6 +140,12 @@ export interface QuestionsApi {
   answer(questionId: string, input: { readonly answer: string }, options?: WriteOptions): Promise<AnsweredQuestion>
 }
 
+export interface AgentProfilesApi {
+  list(options?: ReadOptions): Promise<ListResult<AgentProfile>>
+  /** One profile, by its id or its name (names are matched without regard to case). */
+  get(idOrName: string, options?: ReadOptions): Promise<AgentProfile>
+}
+
 export interface CompletionApi {
   /** Where each Task of a Run stands on its way to done. Read only: whether work is done stays Astera's call. */
   get(runId: string, options?: ReadOptions): Promise<RunCompletion>
@@ -145,6 +158,7 @@ export interface Namespaces {
   readonly tasks: TasksApi
   readonly questions: QuestionsApi
   readonly completion: CompletionApi
+  readonly agentProfiles: AgentProfilesApi
   readonly events: EventsApi
 }
 
@@ -235,6 +249,7 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
         if (hasAccount) need('coordinator.accountId', coordinator.accountId)
         if (hasProvider && !PROVIDERS.includes(String(coordinator.provider))) throw invalid(`coordinator.provider is one of ${PROVIDERS.join(', ')}`)
       }
+      const profile = input.agentProfileId !== undefined ? need('agentProfileId', input.agentProfileId) : undefined
       const cwd = input.cwd !== undefined ? input.cwd : await folderOf(need('projectId', input.projectId), callOptions(o))
       const args: Record<string, unknown> = {
         objective,
@@ -243,7 +258,8 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
         ...(coordinator?.provider !== undefined ? { coordinatorProvider: coordinator.provider } : {}),
         ...(input.concurrency !== undefined ? { concurrency: input.concurrency } : {}),
         ...(policy !== undefined ? { convergence: true } : {}),
-        ...(isRecord(policy) ? Object.fromEntries(CONVERGENCE_KNOBS.filter((k) => policy[k] !== undefined).map((k) => [k, policy[k]])) : {})
+        ...(isRecord(policy) ? Object.fromEntries(CONVERGENCE_KNOBS.filter((k) => policy[k] !== undefined).map((k) => [k, policy[k]])) : {}),
+        ...(profile !== undefined ? { agentProfile: profile } : {})
       }
       return body<Job>('jobs-create', args, callOptions(o))
     },
@@ -325,13 +341,18 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
       if (input.parentId !== undefined) need('parentId', input.parentId)
       if (input.deps !== undefined && (!Array.isArray(input.deps) || input.deps.some((d) => typeof d !== 'string' || d.length === 0)))
         throw invalid('deps is a list of Task ids, none empty')
+      const profile = input.agentProfileId !== undefined ? need('agentProfileId', input.agentProfileId) : undefined
       let account = input.accountIds !== undefined ? idList('accountIds', input.accountIds) : undefined
-      if (account === undefined) {
-        // MCP's default (create_task): the Job's coordinator account. The Host takes a Run id for jobs-get too.
+      // A profile named here gives the Task its accounts, so the Host needs no account
+      if (account === undefined && profile === undefined) {
+        // MCP's default (create_task): the Job's profile, which the Host reads itself, else the Job's coordinator
+        // account. The Host takes a Run id for jobs-get too.
         const job = await body<JobWithRun>('jobs-get', { id: input.jobId ?? input.runId }, readOptions(o))
-        if (typeof job.coordinatorAccountId !== 'string' || job.coordinatorAccountId === '')
-          throw invalid('accountIds is required: this Job has no coordinator account to default to')
-        account = job.coordinatorAccountId
+        if (typeof job.agentProfileId !== 'string' || job.agentProfileId === '') {
+          if (typeof job.coordinatorAccountId !== 'string' || job.coordinatorAccountId === '')
+            throw invalid('accountIds is required: this Job has no coordinator account to default to')
+          account = job.coordinatorAccountId
+        }
       }
       const args: Record<string, unknown> = {
         ...owner,
@@ -339,9 +360,10 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.deps !== undefined && input.deps.length > 0 ? { deps: [...input.deps] } : {}),
         ...(input.parentId !== undefined ? { parent: input.parentId } : {}),
-        account,
+        ...(account !== undefined ? { account } : {}),
         ...(validate !== undefined ? { validate } : {}),
-        ...(input.review === true ? { review: true } : {})
+        ...(input.review === true ? { review: true } : {}),
+        ...(profile !== undefined ? { agentProfile: profile } : {})
       }
       return body<Task>('tasks-add', args, callOptions(o))
     }
@@ -367,5 +389,18 @@ export function createNamespaces(call: Call, features: () => readonly string[], 
     get: async (runId, o) => body<RunCompletion>('runs-completion', { id: need('runId', runId) }, readOptions(o))
   }
 
-  return { projects, jobs, runs, tasks, questions, completion, events: createEventsApi(call, features, closed !== undefined ? { closed } : {}) }
+  const agentProfiles: AgentProfilesApi = {
+    list: async (o) => {
+      const listed = await body<{ profiles?: unknown }>('agent-profiles-list', {}, readOptions(o))
+      if (!Array.isArray(listed?.profiles)) throw unexpected('agent-profiles-list', 'something that is not a list of profiles')
+      return { items: listed.profiles as AgentProfile[] }
+    },
+    get: async (idOrName, o) => {
+      const found = await body<{ profile?: unknown }>('agent-profiles-get', { idOrName: need('idOrName', idOrName) }, readOptions(o))
+      if (!isRecord(found?.profile)) throw unexpected('agent-profiles-get', 'something that is not a profile')
+      return found.profile as unknown as AgentProfile
+    }
+  }
+
+  return { projects, jobs, runs, tasks, questions, completion, agentProfiles, events: createEventsApi(call, features, closed !== undefined ? { closed } : {}) }
 }

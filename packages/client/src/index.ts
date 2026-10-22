@@ -3,6 +3,7 @@ export { CLIENT_VERSION, DEFAULT_CALL_TIMEOUT_MS, DEFAULT_CONNECT_TIMEOUT_MS, cr
 export type { AsteraClient, AsteraClientOptions, CallOptions, CallResult, HostInfo } from './client.js'
 export type * from './types.js'
 export type {
+  AgentProfilesApi,
   CompletionApi,
   Coordinator,
   CreateJobInput,

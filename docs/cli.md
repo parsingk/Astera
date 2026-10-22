@@ -710,7 +710,7 @@ astera jobs    list   [--status <pending|paused|scheduled|waiting|running|comple
 astera jobs    get    --id <jobId | runId>
 astera jobs    run    --id <jobId>
 astera jobs    wait   --id <jobId>  [--timeout-ms <n>]
-astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
+astera jobs    create --objective <text> [--cwd <path>] [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]] [--agent-profile <id|name>]
 astera jobs    create-from-source --source <sourceId> --item <itemId> --project <projectId> [--concurrency <n>] [--coordinator-account <accountId>] [--coordinator-provider <claude|codex>] [--convergence [--max-fix-attempts <n>] [--max-review-rounds <n>] [--blocking-severity <high|medium>] [--max-total-minutes <n>]] [--github-lifecycle [--github-checks <name,...>]]
 
 astera runs    list   [--job <jobId>] [--project <path>]
@@ -723,7 +723,7 @@ astera runs    checks --id <runId>
 astera runs    reconverge --id <runId>
 
 astera tasks   list   [--run <runId>] [--status <s>] [--ready] [--brief]
-astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> --account <id,…> [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
+astera tasks   add    [--job <jobId> | --run <runId>] --spec <text|-> [--account <id,…>] [--agent-profile <id|name>] [--title <text>] [--deps <json array>] [--parent <taskId>] [--validate <configId,…>] [--review]
 astera tasks   dispatch --id <taskId>
 
 astera accounts list  [--agent <claude|codex>]
@@ -739,13 +739,21 @@ astera higgsfield use --account <id|label|email>
 astera ext     list
 astera ext     sync
 
+astera agent-profiles list
+astera agent-profiles show    --id <profileId|name>
+astera agent-profiles create  --name <text> --account <id,…> [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--description <text>]
+astera agent-profiles update  --id <profileId|name> [--name <text>] [--account <id,…>] [--exclude-mcp <name,…>] [--permission <inherit|bypass|ask>] [--description <text>]
+astera agent-profiles archive --id <profileId|name>
+astera agent-profiles restore --id <profileId|name>
+astera agent-profiles delete  --id <profileId|name>
+
 astera mcp     serve                     serve Astera to an MCP client over stdio
 astera mcp     status                    would mcp serve work here: the Host, MCP access, the tools
 
 astera sessions list  [--status <alive|ended|working|waiting|unknown>] [--provider <claude|codex>] [--project <path>]
 astera sessions read   --id <sessionId> [--lines <n>] [--turns <n>]
 astera sessions send   --id <sessionId> --text <text|-> [--no-enter] [--wait [--timeout-ms <n>]]
-astera sessions create --account <accountId> --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
+astera sessions create [--account <accountId>] [--agent-profile <id|name>] --cwd <path> [--kind <terminal|chat>] [--title <text>] [--prompt <text|->] [--roll-accounts <id,…>] [--unattended <hold|deny-after-60s>]
 
 astera chats pending   [--session <sessionId>]
 astera chats answer    --id <promptId> [--allow | --deny] [--session <sessionId>]
@@ -1067,12 +1075,35 @@ account has its own different copy, which is left alone until you replace it in 
 the items in `error.details`. Running it twice changes nothing the second time. A damaged registry or
 `accounts.json` is a 6, and the message names the file.
 
+**`agent-profiles` keeps the agent profiles**: each a name for a set of accounts (one provider's, in the order
+they are tried), the shared MCP servers its sessions leave out and a permission choice: `inherit` (Astera's
+setting), `bypass` (no permission prompts) or `ask`. Skills and commands are shared by every profile. The Host
+answers these commands, so they work with Astera closed. `show`, `update`, `archive`, `restore` and `delete` take
+the profile's id or its name in `--id`. `--exclude-mcp` takes the names `ext list` shows; a name no shared MCP server
+has is refused with 2, naming it, and nothing is changed. `update` changes only the flags given, and its
+`--account` and `--exclude-mcp` replace the lists (`--exclude-mcp ""` leaves no server out). An archived profile
+starts no new work, while the work that holds it goes on; `restore` takes it back. `delete` is refused with 6 while
+unfinished work holds the profile. Changing profiles is for a person: from inside an agent session the changes are
+refused with 5, and the reads are not.
+
+`jobs create`, `tasks add` and `sessions create` take `--agent-profile <id|name>`. A Job's tasks run as its profile
+unless a task names its own, and the profile never picks the coordinator. A task with a profile and no `--account`
+runs on the profile's accounts, copied when it is added. A session with a profile and no `--account` starts on the
+profile's first account and rolls onto the others. With both, the account given is used, and the profile still
+decides the MCP servers and the permission prompts. A profile named with `--agent-profile` must not be archived
+(2); a task that only inherits its Job's archived profile still gets that profile's accounts.
+
+```json
+{"ok":true,"data":{"profiles":[{"id":"ap_3f2a9c01b7de","name":"Reviewer","status":"active",
+  "accountIds":["acc_1","acc_2"],"mcpExclude":["mcp-github"],"permission":"ask", …}]}}
+```
+
 **`mcp serve` is for an MCP client to launch, not for a person to type**: its stdout carries the MCP
 protocol. It connects to the Host of this profile, starting one when none answers, and serves
-forty-one tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
+forty-two tools that create, plan, run, observe, answer, stop and resume Jobs, read and use
 sessions when Settings allows it, read pull requests, CI and issues on GitHub and, when Settings
 allows it, act on them, read the job sources and make a Job from an item, read the How It Works records of a project
-and regenerate one, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
+and regenerate one, list the agent profiles, and list the Runtimes this machine is paired with. What it may do is set by MCP access in
 Settings (CLI tab). The six Job tools that change something (`create_job`, `create_task`, `run_job`, `stop_run`,
 `resume_run`, `answer_question`) take an optional `requestId`, and so do `send_message`, `create_session`, the four
 GitHub writes (`create_pr`, `retry_ci`, `create_job_from_issue`, `reconverge_run`), `create_job_from_source` and

@@ -19,13 +19,15 @@ const TOOLS = [
   'list_sessions', 'get_session', 'send_message', 'create_session', 'get_check_output', 'get_task_output',
   'get_pr_status', 'get_ci', 'get_issue', 'create_pr', 'retry_ci', 'create_job_from_issue', 'reconverge_run',
   'list_work_records', 'get_work_record', 'wait_for_run', 'regenerate_work_record',
-  'list_job_sources', 'list_source_items', 'get_source_item', 'create_job_from_source'
+  'list_job_sources', 'list_source_items', 'get_source_item', 'create_job_from_source',
+  'list_agent_profiles'
 ]
 
 /** The list tools MCP does not page itself. list_runtimes answers this machine's few pairings whole (remote runtime
  *  design §2.8); list_job_sources answers the few sources whole, and list_source_items is paged by the source, with the
  *  source's own cursor (plugin 4b R4). */
-const UNPAGED = new Set(['list_runtimes', 'list_job_sources', 'list_source_items'])
+// list_agent_profiles answers this machine's few profiles whole (Agent Profiles design §6).
+const UNPAGED = new Set(['list_runtimes', 'list_job_sources', 'list_source_items', 'list_agent_profiles'])
 
 async function connected(link: HostLink) {
   const server = createMcpServer({ link, version: '1.4.1', log: () => {} })
@@ -85,7 +87,7 @@ const INITIALIZE = {
 }
 
 describe('the MCP server', () => {
-  it('lists exactly the thirty-nine tools (a server with no Runtimes behind it)', async () => {
+  it('lists exactly the forty tools (a server with no Runtimes behind it)', async () => {
     const client = await connected(answering({}).link)
     const { tools } = await client.listTools()
     expect(tools.map((t) => t.name).sort()).toEqual([...TOOLS].sort())
@@ -690,6 +692,54 @@ describe('the MCP server', () => {
     expect(r.structuredContent).toMatchObject({ id: 'tsk_2' })
     await client.callTool({ name: 'create_task', arguments: { jobId: 'job_1', spec: 's', accountId: 'acc_1' } })
     expect(calls.at(-1)?.args).toEqual({ job: 'job_1', spec: 's', account: 'acc_1' })
+  })
+
+  // Agent Profiles design §6: a Job, a Task and a session may run as an agent profile, by its id or its name
+  it('create_job, create_task and create_session pass agentProfileId as the CLI flag --agent-profile', async () => {
+    const { link, calls } = answering({
+      'projects-get': { status: 200, body: { id: 'p1', name: 'Astera', path: 'D:/repo', addedAt: 'x' } },
+      'jobs-get': { status: 200, body: { id: 'job_1', coordinatorAccountId: 'coord_1' } }
+    })
+    const client = await connected(link)
+    await client.callTool({ name: 'create_job', arguments: { projectId: 'p1', objective: 'o', coordinatorAccountId: 'acc_1', agentProfileId: 'Reviewer' } })
+    expect(calls.at(-1)?.args).toEqual({ objective: 'o', cwd: 'D:/repo', coordinatorAccount: 'acc_1', agentProfile: 'Reviewer' })
+    await client.callTool({ name: 'create_task', arguments: { runId: 'run_1', spec: 's', accountId: 'acc_1', agentProfileId: 'Reviewer' } })
+    expect(calls.at(-1)?.args).toEqual({ run: 'run_1', spec: 's', account: 'acc_1', agentProfile: 'Reviewer' })
+    // With a profile and no account, the profile's accounts are the Task's: no coordinator account is read
+    calls.length = 0
+    await client.callTool({ name: 'create_task', arguments: { runId: 'run_1', spec: 's', agentProfileId: 'ap_000000000001' } })
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([['tasks-add', { run: 'run_1', spec: 's', agentProfile: 'ap_000000000001' }]])
+    // A session from a profile with no account starts on the profile's first account: no default is looked up
+    calls.length = 0
+    await client.callTool({ name: 'create_session', arguments: { projectId: 'p1', agentProfileId: 'Reviewer' } })
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['projects-get', { id: 'p1' }],
+      ['sessions-create', { cwd: 'D:/repo', agentProfile: 'Reviewer' }]
+    ])
+  })
+
+  it("create_task without an accountId on a Job that runs as a profile takes the profile's accounts, not the coordinator's", async () => {
+    const { link, calls } = answering({ 'jobs-get': { status: 200, body: { id: 'job_1', coordinatorAccountId: 'coord_1', agentProfileId: 'ap_000000000001' } } })
+    await (await connected(link)).callTool({ name: 'create_task', arguments: { jobId: 'job_1', spec: 's' } })
+    expect(calls.map((c) => [c.cmd, c.args])).toEqual([
+      ['jobs-get', { id: 'job_1' }],
+      ['tasks-add', { job: 'job_1', spec: 's' }]
+    ])
+  })
+
+  it('list_agent_profiles reads the profiles whole, in the public shape, and is a read', async () => {
+    const profile = { id: 'ap_000000000001', name: 'Reviewer', status: 'active', accountIds: ['acc_1'], mcpExclude: [], permission: 'ask', createdAt: 'T', updatedAt: 'T', internal: 1 }
+    const { link, calls } = answering({ 'agent-profiles-list': { status: 200, body: { profiles: [profile] } } })
+    const client = await connected(link)
+    const r = await client.callTool({ name: 'list_agent_profiles', arguments: {} })
+    expect(r.isError, JSON.stringify(r.content)).toBeFalsy()
+    expect(calls).toEqual([{ cmd: 'agent-profiles-list', args: {}, request: undefined }])
+    const { internal: _i, ...shaped } = profile
+    expect(r.structuredContent).toEqual({ profiles: [shaped] })
+    const { tools } = await client.listTools()
+    expect(tools.find((t) => t.name === 'list_agent_profiles')?.annotations?.readOnlyHint).toBe(true)
+    // No tool changes a profile: they change only from the app and the CLI
+    expect(tools.map((t) => t.name).filter((n) => n.includes('profile'))).toEqual(['list_agent_profiles'])
   })
 
   it("create_task without an accountId uses the Job's coordinator account", async () => {
@@ -1382,9 +1432,9 @@ describe('the GitHub tools (MCP P2-B)', () => {
     return { r, calls }
   }
 
-  it('lists thirty-nine tools, seven of them GitHub: the reads read-only, the writes not', async () => {
+  it('lists forty tools, seven of them GitHub: the reads read-only, the writes not', async () => {
     const { tools } = await (await connected(answering({}).link)).listTools()
-    expect(tools).toHaveLength(39)
+    expect(tools).toHaveLength(40)
     const by = (n: string) => tools.find((t) => t.name === n)
     for (const n of ['get_pr_status', 'get_ci', 'get_issue']) expect(by(n)?.annotations?.readOnlyHint).toBe(true)
     for (const n of ['create_pr', 'retry_ci', 'create_job_from_issue', 'reconverge_run']) expect(by(n)?.annotations?.readOnlyHint).toBe(false)

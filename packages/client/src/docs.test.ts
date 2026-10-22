@@ -75,7 +75,7 @@ describe('docs/sdk.md', () => {
 
   // Final review of SDK 1e, minor 1: a method the package lacks, named in a sentence, passed
   it('names no method the package does not have', () => {
-    const named = [...prose(guide).matchAll(/(?<![\w/.-])(projects|jobs|runs|tasks|questions|completion|events)\.([A-Za-z_]+)\b/g)].map((m) => `${m[1]}.${m[2]}`)
+    const named = [...prose(guide).matchAll(/(?<![\w/.-])(projects|jobs|runs|tasks|questions|completion|events|agentProfiles)\.([A-Za-z_]+)\b/g)].map((m) => `${m[1]}.${m[2]}`)
     const known = new Set<string>([...methods, ...EVENT_TYPES, 'runs.cancel'])
     expect(named.length).toBeGreaterThan(20)
     expect(named.filter((n) => !known.has(n))).toEqual([])
@@ -257,6 +257,15 @@ describe('docs/sdk.md', () => {
     expect(code).toContain('Astera 1.4.14')
     const cli = read('docs/cli.md').replace(/\s+/g, ' ')
     expect(cli).toContain('or is disabled, with `PLUGIN_CAPABILITY_MISSING` in `error.code`')
+  })
+
+  // Agent Profiles design §6: the profile a Job or Task runs as, and the reads, in the guide and the CHANGELOG
+  it('names the profile reads and agentProfileId in the guide and in the CHANGELOG’s Unreleased section', () => {
+    expect(guide).toContain('agentProfileId')
+    const changelog = read('packages/client/CHANGELOG.md')
+    const unreleased = changelog.slice(changelog.indexOf('## Unreleased'), changelog.indexOf('## 0.4.0'))
+    expect(changelog.indexOf('## Unreleased')).toBeGreaterThan(0)
+    for (const named of ['agentProfiles.list', 'agentProfiles.get', 'agentProfileId', 'AgentProfile']) expect(unreleased, named).toContain(named)
   })
 
   it('is reached from the CLI and MCP guides and from the package README', () => {

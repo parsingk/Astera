@@ -137,6 +137,21 @@ describe('humanFor', () => {
     )
   })
 
+  // Agent Profiles design §6: a row per profile, its state first as plugins list does, then its id, name, permission
+  // and accounts in order
+  it('agent-profiles list is a row per profile, and one profile is its fields', () => {
+    expect(
+      humanFor('agent-profiles-list', {
+        profiles: [
+          { id: 'ap_1', name: 'Reviewer', status: 'active', accountIds: ['acc_a', 'acc_b'], mcpExclude: [], permission: 'ask' },
+          { id: 'ap_2', name: 'Night', status: 'archived', accountIds: [], mcpExclude: ['m'], permission: 'inherit' }
+        ]
+      })
+    ).toBe(['ACTIVE    ap_1  Reviewer  ask      acc_a,acc_b', 'ARCHIVED  ap_2  Night     inherit  -'].join(String.fromCharCode(10)))
+    expect(humanFor('agent-profiles-show', { id: 'ap_1', name: 'Reviewer' })).toContain('Reviewer')
+    expect(humanFor('agent-profiles-delete', { id: 'ap_1', name: 'Reviewer', deleted: true })).toContain('ap_1')
+  })
+
   it('plugins logs prints the lines, and says when there are none', () => {
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: ['one', 'two'] })).toBe('one' + String.fromCharCode(10) + 'two')
     expect(humanFor('plugins-logs', { id: 'x', file: 'f', lines: [] })).toBe('no log yet')
