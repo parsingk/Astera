@@ -15,7 +15,7 @@ import { createAuditSources } from './audit/sources'
 import { openTokenStore } from './tokens/store'
 import { createTokenSources, tokenOwnerOf } from './tokens/sources'
 import { readAuditPolicy } from '../core/audit/policy'
-import { pruneRecords } from '../core/audit/store'
+import { keepPruning } from '../core/audit/store'
 import { createGatewayHub } from './gateway/hub'
 import { hidingLog } from '../core/extensions/secrets'
 import { sweepGeneratedMcp } from '../core/extensions/resolve'
@@ -1251,9 +1251,10 @@ async function main(): Promise<void> {
   void mcpGateway.sync().catch(() => null)
   // And the generated MCP files no session used for 30 days (a session in use touches its own at every spawn)
   void sweepGeneratedMcp(profileDir, 30 * 24 * 60 * 60 * 1000)
-  // And observe mode's records past 30 days or 50 MB (design §8): here at the start, then by the writes at most hourly.
-  // Never rejects, and a profile that never observed has no folder to read.
-  void pruneRecords(profileDir, { log: (m) => log.write(m) })
+  // And observe mode's records past 30 days or 50 MB (design §8): here at the start, then every hour on a timer that
+  // never keeps the Host alive, and by the writes between. Never rejects, and a profile that never observed has no folder
+  // to read.
+  keepPruning(profileDir, { log: (m) => log.write(m) })
 
   handlePty = attachPtyHost({ registry, broadcast: (m, to) => server.broadcast(m, to) })
   handleProc = attachProcHost({ registry: procs, broadcast: (m) => server.broadcast(m) })

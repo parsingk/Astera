@@ -130,7 +130,8 @@ async function realRecorder(entries: { ptys?: PtyEntry[]; procs?: PtyEntry[] }) 
     dispatchOf: () => null,
     log: () => {}
   })
-  return { profileDir, recorder, records: async (): Promise<AuditRecord[]> => (await recorder.flushed(), queryRecords(profileDir, {})) }
+  // Read as on the fixtures' day, so the kept days hold them whenever the suite runs
+  return { profileDir, recorder, records: async (): Promise<AuditRecord[]> => (await recorder.flushed(), queryRecords(profileDir, {}, { now: () => T0 })) }
 }
 
 const note = (kind: PtyMeta['kind'], id: string, restore: Record<string, unknown>): PtyMeta => ({ kind, id, restore })

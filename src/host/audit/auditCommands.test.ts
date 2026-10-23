@@ -40,7 +40,8 @@ async function rig(records: AuditRecord[] = []) {
   const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-host-audit-'))
   dirs.push(profileDir)
   if (records.length > 0) await appendRecords(profileDir, records, { now: () => NOW })
-  const audit = createHostAudit({ profileDir })
+  // Read as on the fixtures' day, so the kept days hold them whenever the suite runs
+  const audit = createHostAudit({ profileDir, now: () => NOW })
   const call = (cmd: string, args: Record<string, unknown> = {}, extra: { role?: Role; agentRefusal?: string } = {}) => {
     const marks = { effects: 0 }
     return audit

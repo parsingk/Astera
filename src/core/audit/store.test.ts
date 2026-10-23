@@ -9,12 +9,16 @@ import { profilePaths } from '../profile/paths'
 import {
   AUDIT_KEEP_DAYS,
   AUDIT_MAX_BYTES,
+  AUDIT_PRUNE_EVERY_MS,
   AUDIT_READ_YIELD_EVERY,
   appendRecords,
   auditDayOf,
   auditStoppedAtLimit,
+  keepPruning,
   pruneRecords,
-  queryRecords,
+  queryRecords as queryAt,
+  visitRecords,
+  type AuditFilter,
   type AuditRecord
 } from './store'
 
@@ -34,6 +38,8 @@ const at = (day: string, minute = 0): string => {
   return new Date(y, m - 1, d, 12, minute).toISOString()
 }
 const ms = (day: string): number => Date.parse(at(day))
+/** Read as on the fixtures' own day, so the kept days (30 back from the read) hold them whenever the suite runs. */
+const queryRecords = (p: string, f: AuditFilter, o: Parameters<typeof queryAt>[2] = { now: () => ms('2026-10-23') }) => queryAt(p, f, o)
 
 let n = 0
 const rec = (over: Partial<AuditRecord> = {}): AuditRecord => ({
@@ -269,6 +275,48 @@ describe('retention (Review Focus 4)', () => {
     await fs.writeFile(path.join(auditDir(p), '2026-09-01.jsonl'), '\n')
     await pruneRecords(p, { now: () => ms('2026-10-23') })
     expect(await files(p)).toEqual([])
+  })
+
+  // Final review M4: a Host that writes nothing for days (observe off, or no session) still lets the old days go
+  it('prunes at the start and then every hour, with nothing to write, until stopped', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    let now = ms('2026-10-23')
+    let tick: (() => void) | null = null
+    let period = 0
+    const stop = keepPruning(p, {
+      now: () => now,
+      every: (ms_, fn) => {
+        period = ms_
+        tick = fn
+        return () => (tick = null)
+      }
+    })
+    expect(period).toBe(AUDIT_PRUNE_EVERY_MS)
+    await fs.writeFile(path.join(auditDir(p), '2026-09-23.jsonl'), '\n')
+    await pruneRecords(p, { now: () => now }) // the start's prune, settled
+    expect(await files(p)).toEqual(['2026-09-23.jsonl'])
+    // A day on, the hour's prune lets 2026-09-23 go
+    now = ms('2026-10-24')
+    tick!()
+    await pruneRecords(p, { now: () => now })
+    expect(await files(p)).toEqual([])
+    stop()
+    expect(tick).toBeNull()
+  })
+
+  it('reads no day past the kept days, though its file is still there', async () => {
+    const p = await profile()
+    await fs.mkdir(auditDir(p), { recursive: true })
+    const old = rec({ at: at('2026-09-22') })
+    const kept = rec({ at: at('2026-09-23') })
+    for (const r of [old, kept]) await fs.writeFile(path.join(auditDir(p), `${auditDayOf(r.at)}.jsonl`), `${JSON.stringify(r)}\n`)
+    const o = { now: () => ms('2026-10-23') }
+    expect((await queryRecords(p, {}, o)).map((r) => r.id)).toEqual([kept.id])
+    expect((await queryRecords(p, { limit: 5 }, o)).map((r) => r.id)).toEqual([kept.id])
+    const seen: string[] = []
+    await visitRecords(p, {}, (r) => void seen.push(r.id), o)
+    expect(seen).toEqual([kept.id])
   })
 
   it('counts what it wrote since the last check, so the size holds between the hourly checks', async () => {

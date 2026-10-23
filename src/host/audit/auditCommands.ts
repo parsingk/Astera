@@ -82,7 +82,12 @@ function filterOf(args: Record<string, unknown>): { filter: AuditFilter; decisio
   return { filter, ...(args.decision !== undefined ? { decision: args.decision as AuditDecision } : {}) }
 }
 
-export function createHostAudit(d: { profileDir: string }): HostAudit {
+export function createHostAudit(d: {
+  profileDir: string
+  /** Test injection for the clock the kept days are counted back from (epoch ms). */
+  now?: () => number
+}): HostAudit {
+  const kept = d.now !== undefined ? { now: d.now } : {}
   /** The rules in force: the file's, or the starter rules while there is none. */
   const rules = async (): Promise<AuditPolicy> => (await readAuditPolicy(d.profileDir)) ?? STARTER_POLICY
 
@@ -97,7 +102,7 @@ export function createHostAudit(d: { profileDir: string }): HostAudit {
         const p = await rules()
         const where = f.decision !== undefined ? { where: (r: AuditRecord) => decide(r, p).decision === f.decision } : {}
         // One past the limit, to tell whether it cut anything
-        const found = await queryRecords(d.profileDir, { ...f.filter, ...where, limit: n + 1 })
+        const found = await queryRecords(d.profileDir, { ...f.filter, ...where, limit: n + 1 }, kept)
         const page = found.slice(0, n)
         const truncated = found.length > n
         // Where the next page starts: after this page's last record, in the page's order (time, then id)
@@ -119,7 +124,7 @@ export function createHostAudit(d: { profileDir: string }): HostAudit {
           const counts = byAction.get(r.action) ?? noCounts()
           counts[key] += 1
           byAction.set(r.action, counts)
-        })
+        }, kept)
         // A day of the period whose records stopped at the size has fewer of them than its calls
         const stoppedAtLimit = auditStoppedAtLimit(d.profileDir, { since: f.filter.since, until: f.filter.until })
         return { status: 200, body: { ...total, byAction: Object.fromEntries(byAction), stoppedAtLimit } }

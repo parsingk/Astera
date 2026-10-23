@@ -1,9 +1,10 @@
 // Observe mode's record store (design §8): what the Host's recorder keeps of each tool call, appended as one JSON line to
 // `<profile>/audit/YYYY-MM-DD.jsonl`, the local day the call happened. Kept 30 days or 50 MB, whichever comes first:
-// the days past 30 are dropped at the Host's start and at most hourly, and the bytes written since are counted, so the
-// oldest days go as soon as the size would pass, and a day whose own file reaches it is not filed further. A record
-// holds the action and a short target only (the resolver's), never a command, output or file contents, and no decision:
-// that is computed when the records are read, from the rules in force then, so editing a rule re-judges the past.
+// the days past 30 are dropped at the Host's start and hourly (and are not read in between), and the bytes written since
+// are counted, so the oldest days go as soon as the size would pass, and a day whose own file reaches it is not filed
+// further. A record holds the action and a short target only (the resolver's), never a command, output or file
+// contents, and no decision: that is computed when the records are read, from the rules in force then, so editing a
+// rule re-judges the past.
 //
 // The Host is the one writer. Writes go one after another, and a write that fails is logged and dropped: a source never
 // waits on the disk and never fails over it (Review Focus 4). A line torn by a crash costs that line only: the next write
@@ -12,7 +13,9 @@
 // Reads stream: each day file is read in chunks, newest day first. A page reads whole days, keeping only the newest it
 // has seen, and stops at the first day that fills it (a record is filed under its own day, so no older day holds a
 // newer one); a whole-folder count holds one chunk at a time. The event loop gets a turn every AUDIT_READ_YIELD_EVERY
-// lines, so a read of 50 MB never stalls the Host.
+// lines, so a read of 50 MB never stalls the Host. A known limit (Task 4 ruling): a machine whose time zone moved west
+// between two writes files the later record under an earlier local day, so a page that stops at a newer day can miss it;
+// the summary, which reads every day of the period, still counts it.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../profile/paths'
@@ -48,6 +51,13 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 const localDay = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+
+/** The oldest local day kept at `now`: the days before it are dropped by a prune and passed by a read. */
+const firstKeptDay = (o: AuditStoreOptions): string => {
+  const d = new Date((o.now ?? Date.now)())
+  d.setDate(d.getDate() - (o.keepDays ?? AUDIT_KEEP_DAYS))
+  return localDay(d)
+}
 
 /** The local day a record is filed under. */
 export const auditDayOf = (at: string): string => localDay(new Date(at))
@@ -164,11 +174,31 @@ export function pruneRecords(profileDir: string, o: AuditStoreOptions = {}): Pro
   return queued(dir, (s) => prune(dir, s, o, 0))
 }
 
+/** Checks the folder now and then every AUDIT_PRUNE_EVERY_MS, as the Host does from its start: a Host that writes
+ *  nothing for days (observe off, no session) still lets the days past the kept ones go. Returns the stop; the timer
+ *  never keeps a process alive. */
+export function keepPruning(
+  profileDir: string,
+  o: AuditStoreOptions & {
+    /** Test injection: how the check is repeated; returns the stop. */
+    every?: (ms: number, fn: () => void) => () => void
+  } = {}
+): () => void {
+  const every =
+    o.every ??
+    ((ms: number, fn: () => void) => {
+      const t = setInterval(fn, ms)
+      t.unref?.()
+      return () => clearInterval(t)
+    })
+  void pruneRecords(profileDir, o)
+  return every(AUDIT_PRUNE_EVERY_MS, () => void pruneRecords(profileDir, o))
+}
+
 /** Drops the days older than the kept days, then the oldest days while the folder and `room` more would pass its size.
  *  Today's file is never dropped for size (a day reaching it alone is stopped by the write). Never throws. */
 async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: number): Promise<void> {
   const now = (o.now ?? Date.now)()
-  const keepDays = o.keepDays ?? AUDIT_KEEP_DAYS
   const maxBytes = o.maxBytes ?? AUDIT_MAX_BYTES
   s.prunedAt = now
   try {
@@ -180,9 +210,7 @@ async function prune(dir: string, s: FolderState, o: AuditStoreOptions, room: nu
       s.sizes.clear()
       return
     }
-    const cutoffDate = new Date(now)
-    cutoffDate.setDate(cutoffDate.getDate() - keepDays)
-    const cutoff = localDay(cutoffDate)
+    const cutoff = firstKeptDay({ ...o, now: () => now })
     const today = localDay(new Date(now))
     const remove = async (day: string): Promise<boolean> => {
       const file = path.join(dir, `${day}.jsonl`)
@@ -319,10 +347,16 @@ async function eachLineFromEnd(file: string, visit: (line: string) => boolean): 
  * Hands `visit` each record that passes the filter (its `limit` aside) with its time parsed, newest day first and each
  * day from its last line back. Within a day that is the order the Host wrote them in, which is not always their time
  * order (a source catching up writes older calls late). `visit` returns false to stop. Damaged lines are skipped; a
- * folder or a day that is not there reads as nothing.
+ * folder or a day that is not there reads as nothing, and so does a day past the kept ones whose file the next prune
+ * has not removed yet. `o`: test injection for the clock and the kept days.
  */
-export function visitRecords(profileDir: string, f: AuditFilter, visit: (r: AuditRecord, at: number) => boolean | void): Promise<void> {
-  return visitDays(profileDir, f, visit, () => false)
+export function visitRecords(
+  profileDir: string,
+  f: AuditFilter,
+  visit: (r: AuditRecord, at: number) => boolean | void,
+  o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}
+): Promise<void> {
+  return visitDays(profileDir, f, visit, () => false, o)
 }
 
 /** visitRecords, asking `enough` after each whole day whether to stop there. */
@@ -330,7 +364,8 @@ async function visitDays(
   profileDir: string,
   f: AuditFilter,
   visit: (r: AuditRecord, at: number) => boolean | void,
-  enough: () => boolean
+  enough: () => boolean,
+  o: Pick<AuditStoreOptions, 'now' | 'keepDays'>
 ): Promise<void> {
   const dir = profilePaths(profileDir).auditRecords
   let names: string[]
@@ -346,10 +381,11 @@ async function visitDays(
   // too, for a machine whose time zone moved between the write and the read.
   const first = since !== undefined ? localDay(new Date(since - DAY_MS)) : null
   const last = until !== undefined ? localDay(new Date(until + DAY_MS)) : null
+  const kept = firstKeptDay(o)
   const days = names
     .filter((n) => DAY_FILE.test(n))
     .map((n) => n.slice(0, 10))
-    .filter((d) => (first === null || d >= first) && (last === null || d <= last))
+    .filter((d) => d >= kept && (first === null || d >= first) && (last === null || d <= last))
     .sort()
     .reverse()
   const action = f.action
@@ -384,13 +420,15 @@ const newerFirst = (a: Timed, b: Timed): number => b.at - a.at || (a.r.id < b.r.
  * The records that pass the filter, newest first by their time (then id), at most `limit`. Each record is filed under the
  * local day of its own time, so the days are read newest first and each one whole, keeping the `limit` newest seen so
  * far; once a day leaves that many, no older day can hold a newer one and the read stops. Memory is bounded by the
- * limit; without one every passing record is returned.
+ * limit; without one every passing record is returned. The exception is accepted (Task 4 ruling): after a westward time
+ * zone move between writes, a newer record can sit under an older local day than one already read, and a page that
+ * stopped is not shown it; `audit-summary` still counts it.
  */
-export async function queryRecords(profileDir: string, f: AuditFilter): Promise<AuditRecord[]> {
+export async function queryRecords(profileDir: string, f: AuditFilter, o: Pick<AuditStoreOptions, 'now' | 'keepDays'> = {}): Promise<AuditRecord[]> {
   const limit = f.limit
   if (limit === undefined) {
     const all: Timed[] = []
-    await visitRecords(profileDir, f, (r, at) => void all.push({ r, at }))
+    await visitRecords(profileDir, f, (r, at) => void all.push({ r, at }), o)
     return all.sort(newerFirst).map((x) => x.r)
   }
   if (limit <= 0) return []
@@ -404,7 +442,8 @@ export async function queryRecords(profileDir: string, f: AuditFilter): Promise<
       // Newer than the oldest kept: it takes that one's place
       else if (newerFirst(x, kept.peek()!) < 0) kept.replaceTop(x)
     },
-    () => kept.size() >= limit
+    () => kept.size() >= limit,
+    o
   )
   return kept.items().sort(newerFirst).map((x) => x.r)
 }

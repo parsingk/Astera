@@ -64,7 +64,8 @@ async function rig(
     setMode: (m: AuditMode) => (mode = m),
     modeReads: () => modeReads,
     advance: (msBy: number) => (now += msBy),
-    records: () => queryRecords(profileDir, {}),
+    // Read as on the fixtures' day, so the kept days hold them whenever the suite runs
+    records: () => queryRecords(profileDir, {}, { now: () => NOW }),
     folderExists: () => fs.stat(profilePaths(profileDir).auditRecords).then(() => true, () => false)
   }
 }
