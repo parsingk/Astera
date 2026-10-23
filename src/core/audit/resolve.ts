@@ -483,8 +483,11 @@ const PS_ASSIGNED = /^\$[\w:.]+[+-]?=/
 const PS_VARIABLE = /^\$[\w:.]+$/
 /** What PowerShell writes where a command could be but is not: a variable, an array or hashtable (`@(`, `@{`), a member
  *  (`.Count`), an operator (`-not`), a type (`[int]`), a number, or an item of an argument list (`$p,`). */
-const PS_EXPRESSION = /^(?:[$@]|\.[A-Za-z]|-[A-Za-z]|\[[A-Za-z]|[\d.,]+$)/
+const PS_EXPRESSION = /^(?:[$@]|\.[A-Za-z]|-[A-Za-z]|\[[A-Za-z]|(?:\d|[.,]\d)[\d.,]*$)/ // a lone `.` is dot-sourcing, a command
 const isPsExpression = (word: string): boolean => PS_EXPRESSION.test(word) || word.endsWith(',')
+
+/** Casts in front of a call, but not the class of a static call (`[IO.File]` before `::`). */
+const CASTS = /^(?:\[[\w.]+\](?!::))+/
 
 // The calls an expression can make. `[IO.File]::WriteAllText(` and `$f.Delete(` do something, so they stay commands.
 const SAFE_STATIC_CLASSES = new Set(
@@ -497,7 +500,8 @@ const BENIGN_MEMBERS = new Set(
   Match Matches IsMatch ContainsKey`.split(/\s+/)
 )
 const WRITE_MEMBERS = new Set(
-  `WriteAllText WriteAllLines WriteAllBytes AppendAllText AppendAllLines AppendText Copy CopyTo Move MoveTo Create CreateText Save`.split(' ')
+  `WriteAllText WriteAllLines WriteAllBytes AppendAllText AppendAllLines AppendText Copy CopyTo Move MoveTo Create CreateText
+  CreateDirectory CreateSubdirectory Save`.split(/\s+/)
 )
 const READ_MEMBERS = new Set(
   `ReadAllText ReadAllLines ReadAllBytes ReadLines Exists GetFiles GetDirectories GetFileSystemEntries EnumerateFiles
@@ -509,7 +513,8 @@ const READ_MEMBERS = new Set(
  * conversion (an expression, not a command), else facts. Known members that write, delete or read a file map to that
  * action, roughly (`heuristic`), with no place: the paths are in arguments this does not read. Any other call is unknown.
  */
-function methodFacts(word: string): Facts | null {
+function methodFacts(called: string): Facts | null {
+  const word = called.replace(CASTS, '') // `[void][IO.File]::Delete(` and `[string]$f.Name.Trim(` are the call behind the cast
   const stat = /^\[([\w.]+)\]::(\w+)$/.exec(word)
   const member = stat !== null ? stat[2] : /\.(\w+)$/.exec(word)?.[1]
   if (member === undefined) return null
@@ -587,7 +592,9 @@ function scriptOf(words: Words): { text: string; flavor: Flavor } | null {
   const prog = programName(words[0] ?? '').toLowerCase()
   const rest = words.slice(1)
   if (POSIX_SHELLS.has(prog)) {
-    const i = rest.findIndex((a) => /^-[A-Za-z]*c[A-Za-z]*$/.test(a))
+    // A bundle of letters that has a c in it, tested as two simple things: one pattern with a quantifier on each side of the
+    // c backtracks quadratically on a long run of letters.
+    const i = rest.findIndex((a) => /^-[A-Za-z]+$/.test(a) && a.includes('c'))
     return i >= 0 && i + 1 < rest.length ? { text: rest[i + 1], flavor: 'posix' } : null
   }
   const i = rest.findIndex((a) => (prog === 'cmd' ? /^\/[ck]$/i.test(a) : /^-c(?:ommand)?$/i.test(a)))
@@ -805,6 +812,12 @@ const SUBCOMMAND_PROGRAMS = new Set(
   deno rustup claude codex astera`.split(/\s+/)
 )
 
+/** For the programs whose first word is often a prompt, the words that are subcommands. */
+const SUBCOMMAND_WORDS = new Map<string, ReadonlySet<string>>([
+  ['claude', new Set('mcp config update doctor install plugin agents setup-token migrate-installer'.split(' '))],
+  ['codex', new Set('exec e login logout mcp apply resume sandbox completion cloud review fork proto app features'.split(' '))]
+])
+
 /** Global options that take a value, which `git -C dir push` and the like must step over to find the subcommand. */
 const VALUED_GLOBALS = new Map<string, ReadonlySet<string>>([
   ['git', new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env'])],
@@ -840,11 +853,15 @@ function positionals(prog: string, args: Words, n: number): string[] {
   return out
 }
 
-/** A subcommand is a plain word; a path, or a word that was quoted (a value), in its place is not one. `quoted` is for `args`. */
-function subcommandOf(prog: string, args: Words, quoted: boolean[]): string | undefined {
-  const at = subcommandAt(prog, args)
-  const sub = at < 0 || quoted[at] === true ? undefined : args[at]
-  return sub !== undefined && /^[A-Za-z0-9@][\w.:@/+-]{0,39}$/.test(sub) ? sub : undefined
+/** A subcommand is a plain word; a path or a quoted sentence in its place is not one. */
+const plainSubcommand = (word: string | undefined): string | undefined =>
+  word !== undefined && /^[A-Za-z0-9@][\w.:@/+-]{0,39}$/.test(word) ? word : undefined
+
+/** Whether the table the program is read by has this subcommand. A quoted word is a value, so it counts only if it is one. */
+function inTable(prog: string, sub: string): boolean {
+  if (prog === 'git') return GIT.has(sub)
+  if (prog === 'gh') return sub === 'api' || GH_WRITES.has(sub)
+  return INSTALLS.get(prog)?.has(sub) === true
 }
 
 const isSwitch = (a: string, prog: string): boolean =>
@@ -965,6 +982,7 @@ function installs(prog: string, args: Words, sub: string | undefined): boolean {
 
 const DELETERS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'unlink', 'remove-item', 'ri'])
 const COPIERS = new Set(['cp', 'mv', 'ln', 'copy', 'move', 'copy-item', 'move-item', 'cpi', 'mi'])
+const MOVERS = new Set(['mv', 'move', 'move-item', 'mi']) // a copy that also removes the original
 const SETTERS = new Set(['set-content', 'add-content', 'out-file'])
 const MAKERS = new Set(['touch', 'mkdir', 'md']) // create what their words name
 const ITEM_WRITERS = new Set(['new-item', 'ni', 'rename-item', 'rni', 'ren']) // write the item a -Path or first word names
@@ -1017,12 +1035,57 @@ VALUED_FLAGS.set('egrep', VALUED_FLAGS.get('grep')!)
 VALUED_FLAGS.set('fgrep', VALUED_FLAGS.get('grep')!)
 /** PowerShell parameters that take a value which is not a path. */
 const PS_VALUED = new Set([
-  'erroraction', 'ea', 'warningaction', 'wa', 'errorvariable', 'ev', 'include', 'exclude', 'filter', 'credential', 'stream',
+  'erroraction', 'ea', 'warningaction', 'wa', 'errorvariable', 'ev', 'warningvariable', 'informationaction',
+  'informationvariable', 'outvariable', 'outbuffer', 'pipelinevariable', 'include', 'exclude', 'filter', 'credential', 'stream',
   'totalcount', 'tail', 'head', 'encoding', 'readcount', 'delimiter', 'depth', 'attributes', 'destination', 'value',
-  'inputobject', 'itemtype', 'type', 'newname'
+  'inputobject', 'itemtype', 'type', 'newname', 'width'
 ])
 /** PowerShell parameters whose value is a path. */
 const PS_PATH = new Set(['path', 'literalpath', 'filepath'])
+
+// PowerShell takes a parameter by any prefix of its name that no other parameter of the cmdlet shares (`-Val` is -Value,
+// `-Inp` is -InputObject, `-Wid` is -Width), and by its aliases. The cmdlets below are the ones this reads parameters of.
+const PS_COMMON = 'verbose debug erroraction errorvariable warningaction warningvariable informationaction informationvariable outvariable outbuffer pipelinevariable whatif confirm'
+const PS_PARAMS = new Map<string, readonly string[]>()
+for (const [cmdlets, params] of [
+  ['set-content add-content', 'path literalpath value passthru filter include exclude force credential usetransaction nonewline encoding asbytestream stream'],
+  ['out-file', 'filepath literalpath encoding append force noclobber width nonewline inputobject'],
+  ['new-item', 'path name itemtype value force credential usetransaction'],
+  ['rename-item', 'path literalpath newname force passthru credential usetransaction'],
+  ['copy-item move-item', 'path literalpath destination container force filter include exclude recurse passthru credential usetransaction'],
+  ['remove-item', 'path literalpath filter include exclude recurse force credential stream usetransaction'],
+  ['get-content', 'path literalpath readcount totalcount tail filter include exclude force credential delimiter wait raw encoding asbytestream stream usetransaction'],
+  ['get-childitem', 'path literalpath filter include exclude recurse depth force name attributes directory file hidden readonly system followsymlink usetransaction'],
+  ['invoke-webrequest invoke-restmethod', 'uri outfile method headers body contenttype useragent usebasicparsing passthru credential']
+] as const) {
+  for (const cmdlet of cmdlets.split(' ')) PS_PARAMS.set(cmdlet, `${params} ${PS_COMMON}`.split(' '))
+}
+const PS_PARAM_ALIASES = new Map([
+  ['ea', 'erroraction'], ['ev', 'errorvariable'], ['wa', 'warningaction'], ['wv', 'warningvariable'], ['ia', 'informationaction'],
+  ['iv', 'informationvariable'], ['ov', 'outvariable'], ['ob', 'outbuffer'], ['pv', 'pipelinevariable'], ['cf', 'confirm'],
+  ['wi', 'whatif'], ['lp', 'literalpath'], ['pspath', 'literalpath']
+])
+const CMDLET_OF = new Map([
+  ['sc', 'set-content'], ['ac', 'add-content'], ['gc', 'get-content'], ['gci', 'get-childitem'], ['dir', 'get-childitem'],
+  ['ls', 'get-childitem'], ['ni', 'new-item'], ['rni', 'rename-item'], ['ren', 'rename-item'], ['cpi', 'copy-item'],
+  ['copy', 'copy-item'], ['cp', 'copy-item'], ['mi', 'move-item'], ['move', 'move-item'], ['mv', 'move-item'],
+  ['ri', 'remove-item'], ['rm', 'remove-item'], ['del', 'remove-item'], ['erase', 'remove-item'], ['rd', 'remove-item'],
+  ['rmdir', 'remove-item'], ['iwr', 'invoke-webrequest'], ['irm', 'invoke-restmethod']
+])
+
+/** The name a PowerShell parameter token stands for in `prog`'s command, lower case. Only a token written like PowerShell
+ *  (a capital, or a full cmdlet name) is read as a prefix, so a Bash bundle such as `-fi` is never taken for one. */
+function psParam(token: string, prog: string): string {
+  const t = token.toLowerCase()
+  const alias = PS_PARAM_ALIASES.get(t)
+  const names = PS_PARAMS.get(CMDLET_OF.get(prog) ?? prog)
+  if (names === undefined) return alias ?? t
+  if (names.includes(t)) return t
+  if (alias !== undefined) return alias
+  if (!(prog.includes('-') || /[A-Z]/.test(token))) return t
+  const hits = names.filter((n) => n.startsWith(t))
+  return hits.length === 1 ? hits[0] : t
+}
 
 /**
  * The path-like words of a command: its non-flag words, with `-Path x` (also `-Path:x`) taken and the value of other
@@ -1038,11 +1101,11 @@ function pathArgs(prog: string, args: Words): string[] {
     else if (!afterDashes && isSwitch(a, prog)) {
       const ps = /^-([A-Za-z]{2,})(?::(.*))?$/.exec(a)
       if (ps !== null) {
-        const name = ps[1].toLowerCase()
+        const name = psParam(ps[1], prog)
         if (PS_PATH.has(name)) {
           const v = ps[2] ?? args[++i]
           if (v !== undefined && v !== '') out.push(v)
-        } else if (PS_VALUED.has(name) && ps[2] === undefined) i++
+        } else if ((PS_VALUED.has(name) || (name === 'name' && (CMDLET_OF.get(prog) ?? prog) === 'new-item')) && ps[2] === undefined) i++
       } else if (valued?.has(a)) i++
     } else if (a !== '-') out.push(a)
   }
@@ -1050,14 +1113,14 @@ function pathArgs(prog: string, args: Words): string[] {
 }
 
 /** The value of one of `flags`, as `-t DIR` or `--target-directory=DIR`, or of a PowerShell parameter in `psNames`. */
-function valueOf(args: Words, flags: string[], psNames: string[]): string | undefined {
+function valueOf(args: Words, flags: string[], psNames: string[], prog = ''): string | undefined {
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (flags.includes(a)) return args[i + 1]
     const eq = flags.find((f) => f.startsWith('--') && a.startsWith(`${f}=`))
     if (eq !== undefined) return a.slice(eq.length + 1)
     const ps = /^-([A-Za-z]{2,})(?::(.*))?$/.exec(a)
-    if (ps !== null && psNames.includes(ps[1].toLowerCase())) return ps[2] ?? args[i + 1]
+    if (ps !== null && psNames.includes(psParam(ps[1], prog))) return ps[2] ?? args[i + 1]
   }
   return undefined
 }
@@ -1135,15 +1198,72 @@ function valuesOf(args: Words, flags: string[]): string[] {
   return out
 }
 
-/** The files a download saves: what curl (`-o`, `--output`), wget (`-O`, `-P`) and Invoke-WebRequest (`-OutFile`) are told.
- *  `-` and the null devices write no file. */
+// The short options that take a value, for curl and wget: a bundle such as `-fsSLo FILE` or `-qO../x` has to be read
+// letter by letter to know which word is the value of which letter.
+const CURL_VALUED = 'AbcCdDeEFHKmoPQrtTuUwxXyYz'
+const WGET_VALUED = 'OPoaeiBtTwQUlARDIX'
+
+/**
+ * The short options of `wanted` in `args`, read the way getopt reads a bundle: a letter that takes a value takes what is
+ * left of its word (`-o../x`) or else the next word (`-fsSLo FILE`), and ends the bundle. A word with a space in it is a
+ * value, not a bundle.
+ */
+function shortOptions(args: Words, valued: string, wanted: string): Array<{ letter: string; value?: string }> {
+  const found: Array<{ letter: string; value?: string }> = []
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (a === '--') break
+    if (a.length < 2 || a[0] !== '-' || a[1] === '-' || /\s/.test(a)) continue
+    for (let j = 1; j < a.length; j++) {
+      const letter = a[j]
+      if (valued.includes(letter)) {
+        const attached = a.slice(j + 1)
+        const value = attached !== '' ? attached : args[++i]
+        if (wanted.includes(letter) && value !== undefined) found.push({ letter, value })
+        break
+      }
+      if (wanted.includes(letter)) found.push({ letter })
+    }
+  }
+  return found
+}
+
+/** What `curl -O` names its file: the last part of the URL's path. */
+function remoteName(url: string | null): string | null {
+  if (url === null) return null
+  try {
+    return new URL(url).pathname.split('/').pop() || null
+  } catch {
+    return null
+  }
+}
+
+/** `file` as curl puts it under `--output-dir`, if that is given and the file is not already a full path. */
+const under = (dir: string | undefined, file: string): string =>
+  dir === undefined || UNFOLLOWABLE.test(file) || path.isAbsolute(nativePath(file)) ? file : `${dir}/${file}`
+
+/**
+ * The files a download saves: what curl (`-o`, `--output`, `-O` with the name from the URL, `--output-dir`), wget (`-O`,
+ * `-P`, `--output-document`, `--directory-prefix`) and Invoke-WebRequest (`-OutFile`) are told. `-` and the null devices
+ * write no file.
+ */
 function savedFiles(prog: string, args: Words): string[] {
-  const named =
-    prog === 'curl'
-      ? valuesOf(args, ['-o', '--output'])
-      : prog === 'wget'
-        ? valuesOf(args, ['-O', '--output-document', '-P', '--directory-prefix'])
-        : [valueOf(args, [], ['outfile'])].filter((v): v is string => v !== undefined)
+  let named: string[]
+  if (prog === 'curl') {
+    const dir = valuesOf(args, ['--output-dir'])[0]
+    const outputs = [...shortOptions(args, CURL_VALUED, 'o').map((o) => o.value ?? ''), ...valuesOf(args, ['--output'])]
+    named = outputs.filter((f) => f !== '-' && !SINK.test(f)).map((f) => under(dir, f))
+    const remote = shortOptions(args, CURL_VALUED, 'O').length > 0 || args.some((a) => a === '--remote-name' || a === '--remote-name-all')
+    if (remote) {
+      const file = remoteName(urlIn(args))
+      named.push(file === null ? (dir ?? '.') : under(dir, file))
+    }
+    return named
+  }
+  if (prog === 'wget') {
+    const given = shortOptions(args, WGET_VALUED, 'OP').map((o) => o.value ?? '')
+    named = [...given, ...valuesOf(args, ['--output-document', '--directory-prefix'])]
+  } else named = [valueOf(args, [], ['outfile'], prog)].filter((v): v is string => v !== undefined)
   return named.filter((f) => f !== '-' && !SINK.test(f))
 }
 
@@ -1151,7 +1271,7 @@ function savedFiles(prog: string, args: Words): string[] {
  *  for listing and for a mode this cannot find. */
 function tarFacts(name: string, args: Words, ctx: Ctx): Facts | null {
   // The mode letters are in a bundle (`-xzf`, or `xzf` as the first word) or a long flag.
-  const at = args.findIndex((a, i) => /^-[A-Za-z]*[cxtru][A-Za-z]*$/.test(a) || (i === 0 && /^[cxtru][A-Za-z]*$/.test(a)))
+  const at = args.findIndex((a, i) => (/^-[A-Za-z]+$/.test(a) && /[cxtru]/.test(a)) || (i === 0 && /^[cxtru][A-Za-z]*$/.test(a)))
   const bundle = at < 0 ? '' : args[at].replace(/^-/, '')
   const extract = /x/.test(bundle) || args.some((a) => a === '--extract' || a === '--get')
   const create = /[cru]/.test(bundle) || args.some((a) => a === '--create' || a === '--append' || a === '--update')
@@ -1172,10 +1292,10 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   const name = programName(words[0])
   const prog = name.toLowerCase()
   if (!PROGRAM.test(name)) return unreadable
-  // A quoted word is a value, not a program: it is one only when it is clearly a path to a program, or follows the call
-  // operator and names one the table has (`& 'git' push`).
+  // A quoted word is a value, not a program. It is one only when it names a program the table has and is written as a path
+  // (`"/usr/bin/git"`) or follows the call operator (`& 'git'`): a quoted word with a slash in it could as well be a secret.
   const knownName = KNOWN.has(prog) || PYTHON.test(prog) || PS_READ_VERB.test(prog)
-  if (cmd.quoted[0] === true && !/[\\/]/.test(words[0]) && !(cmd.call && knownName)) return unreadable
+  if (cmd.quoted[0] === true && !(knownName && (cmd.call || /[\\/]/.test(words[0])))) return unreadable
   const args = words.slice(1)
 
   if (DELETERS.has(prog)) {
@@ -1204,15 +1324,24 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
   if (COPIERS.has(prog)) {
     // The destination is named by -t / -Destination, else it is the last of two or more paths.
     const paths = pathArgs(prog, args)
-    const last = paths.length >= 2 ? paths[paths.length - 1] : undefined
-    const dest = valueOf(args, ['-t', '--target-directory'], ['destination']) ?? last
-    return writeFacts(name, dest === undefined ? [] : [dest], ctx)
+    const named = valueOf(args, ['-t', '--target-directory'], ['destination'], prog)
+    const dest = named ?? (paths.length >= 2 ? paths[paths.length - 1] : undefined)
+    const facts = writeFacts(name, dest === undefined ? [] : [dest], ctx)
+    // A move also takes the files from where they were: every path that is not the destination.
+    const sources = named !== undefined ? paths : paths.slice(0, -1)
+    if (MOVERS.has(prog) && dest !== undefined && sources.length > 0) {
+      facts.also = [{ action: 'filesystem.delete', target: name, known: true, inside: placesOf(sources, ctx, true).inside }]
+    }
+    return facts
   }
 
   if (SETTERS.has(prog) || ITEM_WRITERS.has(prog)) {
     // A named -Path / -LiteralPath / -FilePath outranks the positional words, and a value is never the destination.
-    const named = valueOf(args, [], ['path', 'literalpath', 'filepath'])
-    const dest = named ?? pathArgs(prog, args)[0]
+    const named = valueOf(args, [], ['path', 'literalpath', 'filepath'], prog)
+    const base = named ?? pathArgs(prog, args)[0]
+    // New-Item puts its -Name under its -Path (or here), however far up the name goes.
+    const item = CMDLET_OF.get(prog) === 'new-item' || prog === 'new-item' ? valueOf(args, [], ['name'], prog) : undefined
+    const dest = item === undefined ? base : under(base ?? '.', item)
     return writeFacts(name, dest === undefined ? [] : [dest], ctx)
   }
 
@@ -1274,7 +1403,16 @@ function classify(cmd: Cmd, ctx: Ctx): Facts {
     return { action: 'process.execute', target: name, known: asksVersion }
   }
 
-  const sub = SUBCOMMAND_PROGRAMS.has(prog) ? subcommandOf(prog, args, cmd.quoted.slice(1)) : undefined
+  const subAt = SUBCOMMAND_PROGRAMS.has(prog) ? subcommandAt(prog, args) : -1
+  const word = subAt < 0 ? undefined : plainSubcommand(args[subAt])
+  // claude and codex take a prompt where other programs take a subcommand, so only their own subcommands are shown.
+  const own = SUBCOMMAND_WORDS.get(prog)
+  const sub = word !== undefined && own !== undefined && !own.has(word) ? undefined : word
+  // A quoted subcommand is a value. It is classified as the subcommand it names when the table has it (`git "push"`) and
+  // shown only then; one the table does not have makes the line unknown and stays out of the target (`git 'hunter2'`).
+  if (subAt >= 0 && cmd.quoted[subAt + 1] === true && (sub === undefined || !inTable(prog, sub))) {
+    return { action: 'process.execute', target: name, known: false }
+  }
   const target = withTarget(name, sub)
 
   if (prog === 'git') {

@@ -735,7 +735,6 @@ describe('shell: writing and deleting files beyond rm', () => {
 
   it.each([
     ['cp a.txt ../outside/', 'outside project: outside', false],
-    ['mv a.txt ../outside/', 'outside project: outside', false],
     ['cp -r a b', 'b', true],
     ['cp -t ../elsewhere a b', 'outside project: elsewhere', false],
     ['cp --target-directory=sub a', 'sub', true],
@@ -990,7 +989,9 @@ describe('a quoted word in command position is data, whatever came before it', (
   it('shows a quoted word after the call operator as a program only when it is a path or a known program', () => {
     expect(ps("& 'hunter2'")).toMatchObject({ target: 'shell', confidence: 'unknown' })
     expect(ps("& 'git' push")).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
-    expect(ps("& 'C:\\tools\\mytool.exe' --x")).toMatchObject({ target: 'mytool', confidence: 'unknown' })
+    expect(ps("& 'C:\\Program Files\\Git\\bin\\git.exe' push")).toMatchObject({ action: 'git.remote.write', confidence: 'high' })
+    // A quoted path to a program the table does not have could be a secret with a slash in it, so it is not shown.
+    expect(ps("& 'C:\\tools\\mytool.exe' --x")).toMatchObject({ target: 'shell', confidence: 'unknown' })
   })
 })
 
@@ -1132,6 +1133,14 @@ describe('shell: more writers, each with the place of its destination', () => {
     expect(bash('xcopy src dst /E /I')).toMatchObject({ action: 'filesystem.write', target: 'dst', insideProject: true })
   })
 
+  it('puts the -Name of New-Item under its -Path', () => {
+    expect(ps('New-Item -Path . -Name ../x -ItemType File')).toMatchObject({ target: 'outside project: x', insideProject: false })
+    expect(ps('New-Item -Path sub -Name f.txt')).toMatchObject({ target: 'sub/f.txt', insideProject: true })
+    expect(ps('New-Item -Name ../x -ItemType File')).toMatchObject({ target: 'outside project: x', insideProject: false })
+    expect(ps('New-Item -ItemType File -Name f.txt')).toMatchObject({ target: 'f.txt', insideProject: true })
+    expect(ps('Get-ChildItem -Name sub')).toMatchObject({ action: 'filesystem.read', target: 'sub' }) // -Name is a switch here
+  })
+
   it('maps New-Item and Rename-Item to a write of the item', () => {
     expect(ps(`New-Item -Path "${elsewhere('x.txt')}" -ItemType File -Value y`)).toEqual({
       action: 'filesystem.write', target: 'outside project: x.txt', insideProject: false, confidence: 'high'
@@ -1196,8 +1205,200 @@ describe('what a target shows of a long path, a URL, a Glob and an rg flag', () 
   })
 })
 
+// Fix round 3 (re-review).
+describe('a quoted subcommand is classified by the table, and never shown unless it is in it', () => {
+  it.each([
+    ['git "push" origin main', 'git.remote.write', 'git push'],
+    ["git 'push' --force", 'git.remote.write', 'git push'],
+    ['git -C x "commit" -m y', 'git.local.write', 'git commit'],
+    ['git "status"', 'git.read', 'git status'],
+    ['npm "install" left-pad', 'package.install', 'npm install'],
+    ["gh 'pr' create --fill", 'github.pr.create', 'gh pr']
+  ] satisfies Array<[string, AuditAction, string]>)('%s is %s, shown as %s', (line, action, target) => {
+    expect(bash(line)).toEqual({ action, target, confidence: 'high' })
+    expect(ps(line)).toMatchObject({ action, target })
+  })
+
+  it('does not show a quoted word with a slash in it as the program it might name', () => {
+    for (const [line, secret] of [
+      ["'Zm9v/cXV4' | docker login --password-stdin", 'cXV4'],
+      ["sudo 'Zm9v/cXV4'", 'cXV4'],
+      ["if true; then 'a/hunter2'; fi", 'hunter2']
+    ]) {
+      expect(JSON.stringify(bash(line))).not.toContain(secret)
+    }
+    expect(JSON.stringify(ps("& 'Zm9v/cXV4'"))).not.toContain('cXV4')
+  })
+
+  it('does not show the prompt of claude or codex as a subcommand', () => {
+    expect(bash('claude -p hunter2').target).toBe('claude')
+    expect(bash('claude --model opus -p hunter2').target).toBe('claude')
+    expect(bash('codex hunter2').target).toBe('codex')
+    expect(bash('claude mcp add x').target).toBe('claude mcp')
+    expect(bash('codex exec do-it').target).toBe('codex exec')
+  })
+
+  it('is unknown, and shows only the program, for a quoted subcommand the table does not have', () => {
+    for (const line of ["git 'hunter2'", "npm 'hunter2'", "docker 'hunter2' x", "gh 'hunter2' create", "npx 'hunter2'"]) {
+      const r = bash(line)
+      expect(JSON.stringify(r)).not.toContain('hunter2')
+      expect(r).toMatchObject({ action: 'process.execute', confidence: 'unknown' })
+      expect(r.target).toBe(line.split(' ')[0])
+    }
+  })
+})
+
+describe('curl and wget save the file their bundled short options name', () => {
+  const writes = (line: string) => bash(line).commands?.filter((c) => c.action === 'filesystem.write')
+
+  it.each([
+    ['curl -Lo ../x https://a.example.com/x', false],
+    ['curl -fsSLo ~/.local/bin/x https://a.example.com/x', false],
+    ['curl -o../x https://a.example.com/x', false],
+    ['curl -sLo /usr/local/bin/x https://a.example.com/x', false],
+    ['wget -qO ~/x https://a.example.com/x', false],
+    ['wget -qO../x https://a.example.com/x', false],
+    ['curl -sSLo out/x https://a.example.com/x', true],
+    ['curl -sS https://a.example.com/x -o ../x', false],
+    ['curl --output-dir ../d -o x https://a.example.com/x', false],
+    ['curl --output ../x https://a.example.com/x', false],
+    ['curl -O https://a.example.com/dir/file.tgz', true],
+    ['curl -sSLO https://a.example.com/dir/file.tgz', true],
+    ['curl --output-dir ../d -O https://a.example.com/dir/file.tgz', false],
+    ['curl --remote-name https://a.example.com/file.tgz', true]
+  ])('%s saves a file, inside the project: %s', (line, inside) => {
+    expect(writes(line)).toEqual([{ action: 'filesystem.write', insideProject: inside }])
+    expect(bash(line)).toMatchObject({ action: 'network.request', target: 'a.example.com', confidence: 'heuristic' })
+  })
+
+  it('shows the name curl -O gets from the URL, with the folder --output-dir names', () => {
+    expect(bash('curl -O https://a.example.com/dir/file.tgz?x=1').commands).toContainEqual({
+      action: 'filesystem.write', insideProject: true
+    })
+  })
+
+  it('does not take a header or data value for an option, nor standard output for a file', () => {
+    for (const line of [
+      'curl -fsSL https://a.example.com/x',
+      'curl -H "X: -o y" https://a.example.com/x',
+      'curl -d "-o ../x" https://a.example.com/x',
+      'curl -o - https://a.example.com/x',
+      'wget -qO- https://a.example.com/x',
+      'wget -O- https://a.example.com/x',
+      'wget -q https://a.example.com/x'
+    ]) {
+      expect(writes(line) ?? []).toEqual([])
+    }
+  })
+
+  it('still sees the pipe into a shell when the download goes to standard output', () => {
+    const r = bash('wget -qO- https://a.example.com/x | sh')
+    expect(r.confidence).toBe('unknown')
+    expect(acts(r)).toEqual(['network.request', 'process.execute'])
+  })
+})
+
+describe('PowerShell: dot-sourcing, casts and parameter prefixes', () => {
+  it('reads dot-sourcing as an unknown command, not as an expression', () => {
+    for (const line of ['. ./script.ps1', '. $PROFILE', '. ./script.ps1; Get-Date']) {
+      expect(ps(line).confidence).toBe('unknown')
+    }
+    expect(bash('. ./env.sh').confidence).toBe('unknown')
+  })
+
+  it('keeps a number or a list of numbers an expression', () => {
+    expect(ps('1,2 | ForEach-Object { $_ }')).toMatchObject({ target: 'ForEach-Object', confidence: 'heuristic' })
+    expect(ps('1.5 | Get-Date')).toMatchObject({ target: 'Get-Date', confidence: 'heuristic' })
+  })
+
+  it('does not let a cast hide the call behind it', () => {
+    expect(ps("[void][IO.File]::Delete('../x')")).toMatchObject({ action: 'filesystem.delete', confidence: 'heuristic' })
+    expect(ps('[void]$f.Delete()')).toMatchObject({ action: 'filesystem.delete', confidence: 'heuristic' })
+    expect(ps('[string][IO.File]::ReadAllText($p)')).toMatchObject({ action: 'filesystem.read', confidence: 'heuristic' })
+    expect(ps("[void][System.IO.Directory]::CreateDirectory('../x')")).toMatchObject({ action: 'filesystem.write' })
+    expect(ps('$n = [int][math]::Min(1, 2); Get-Date')).toMatchObject({ target: 'Get-Date', confidence: 'heuristic' })
+  })
+
+  it('matches a parameter name by its unique prefix, as PowerShell does', () => {
+    const out = elsewhere('x.txt')
+    for (const line of [
+      `Set-Content -Val hunter2 "${out}"`,
+      `Set-Content -Va hunter2 "${out}"`,
+      `Out-File -Inp hunter2 "${out}"`,
+      `Out-File -Width 300 "${out}"`,
+      `Out-File -Wid 300 "${out}"`,
+      `Out-File -Enc utf8 -App "${out}"`,
+      `Set-Content -LiteralP "${out}" -Val hunter2`,
+      `Add-Content -Pat "${out}" -Value hunter2`
+    ]) {
+      const r = ps(line)
+      expect(r).toMatchObject({ action: 'filesystem.write', target: 'outside project: x.txt', insideProject: false })
+      expect(JSON.stringify(r)).not.toContain('hunter2')
+    }
+  })
+
+  it('does not take an ambiguous prefix for a parameter, nor a bash bundle for a PowerShell one', () => {
+    // -In is Include, InformationAction and InformationVariable: PowerShell refuses it, so it must not eat the next word.
+    expect(ps('Get-Content -In a.txt')).toMatchObject({ action: 'filesystem.read', target: 'a.txt' })
+    expect(bash('cp -fi a b')).toMatchObject({ target: 'b', insideProject: true })
+  })
+})
+
+describe('mv and Move-Item also remove their source', () => {
+  it('lists the source as a delete with its own place', () => {
+    const r = bash('mv ../a .')
+    expect(r).toMatchObject({ action: 'filesystem.write', target: '.', insideProject: true, confidence: 'heuristic' })
+    expect(r.commands).toEqual([
+      { action: 'filesystem.write', insideProject: true },
+      { action: 'filesystem.delete', insideProject: false }
+    ])
+  })
+
+  it('lists an inside source and an outside destination apart', () => {
+    expect(bash('mv a.txt ../outside/')).toMatchObject({
+      action: 'filesystem.write',
+      target: 'outside project: outside',
+      insideProject: false,
+      commands: [
+        { action: 'filesystem.write', insideProject: false },
+        { action: 'filesystem.delete', insideProject: true }
+      ]
+    })
+  })
+
+  it('takes every path but the destination for the sources, with -t and with Move-Item', () => {
+    expect(bash('mv -t sub ../a b').commands).toEqual([
+      { action: 'filesystem.write', insideProject: true },
+      { action: 'filesystem.delete', insideProject: false }
+    ])
+    expect(ps(`Move-Item -Path "${elsewhere('a')}" -Destination .`).commands).toEqual([
+      { action: 'filesystem.write', insideProject: true },
+      { action: 'filesystem.delete', insideProject: false }
+    ])
+    expect(ps(`Move-Item "${elsewhere('a')}" x`).commands).toContainEqual({ action: 'filesystem.delete', insideProject: false })
+  })
+
+  it('leaves cp alone: a copy removes nothing', () => {
+    expect(bash('cp ../a .').commands).toBeUndefined()
+  })
+})
+
 // The Host feeds this from files and streams it does not control.
 describe('malformed and hostile input', () => {
+  it('reads a long bundle of flags in linear time, for tar, a shell, unzip and sed', () => {
+    const n = 100_000
+    const started = Date.now()
+    bash(`tar -${'c'.repeat(n)}1`)
+    bash(`tar -${'x'.repeat(n)}9`)
+    bash(`tar ${'x'}${'c'.repeat(n)}1`)
+    bash(`bash -${'c'.repeat(n)}1`)
+    bash(`unzip -${'l'.repeat(n)}1`)
+    bash(`sed -${'n'.repeat(n)}1 x`)
+    codex('exec', `await tools.exec_command({cmd:"tar -${'x'.repeat(n)}9"});`)
+    ps(`$x.${'a'.repeat(n)}-b()`)
+    expect(Date.now() - started).toBeLessThan(500)
+  })
+
   it('never throws, and says other and unknown when it cannot read the call', () => {
     const bad = [undefined, null, 42, [], {}, 'x']
     for (const input of bad) {
