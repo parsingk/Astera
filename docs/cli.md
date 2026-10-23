@@ -1160,13 +1160,15 @@ matched exactly, or by a start ending in `*` (`git.*`), and a rule with `--scope
 matches only calls known to be inside, or outside, the session's project folder. Each command of a line
 (`cd sub && git push`) is judged on its own, and a command a rule denies makes the line `would-deny` wherever it sits:
 in a compound line, in a loop or an `if` block (it may not have run, and the preview errs toward flagging it), or beside
-a command Astera could not read. A line with no denied command is `unknown` when it has an unknown shell command or
-script in it, or when a write or delete names no path and a scoped rule could match it. The first time observe is turned
-on, Astera writes the starter rules: deny `git.remote.write`, `github.pr.create` and `github.write`, deny
-`filesystem.write` and `filesystem.delete` outside the project, and otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
-`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back
-and keeps the mode. Every change answers the mode and the rules as they now are. An action Astera does not know is
-refused with 2 and the message lists them, a rule that is not there is a 4, and a damaged `audit-policy.json` is a 6:
+a command Astera could not read. A line with no denied command is `unknown` when Astera could not read all of it (a
+shell command or script it does not know, or a call to a tool it does not know at all), or when a write or delete names
+no path and a scoped rule could match it. With `otherwise` deny, a call that no rule matches is `would-deny` even when
+Astera could not read it. The first time observe is turned on, Astera writes the starter rules: deny `git.remote.write`,
+`github.pr.create` and `github.write`, deny `filesystem.write` and `filesystem.delete` outside the project, and
+otherwise allow. Until then `policies show` shows them and nothing is written. The rule commands take a rule's id from
+`policies show` and its place in the list counted from 0 (`--at`, `--to`); `rules-reset` puts the starter rules back and
+keeps the mode. Every change answers the mode and the rules as they now are. An action Astera does not know is refused
+with 2 and the message lists them, a rule that is not there is a 4, and a damaged `audit-policy.json` is a 6:
 `policies rules-reset` writes the starter rules over it, and a copy of the damaged file is kept beside it.
 
 `audit list` prints the records newest first, each with `decision` and `ruleId` (the rule that decided, left out when
