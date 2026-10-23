@@ -9,8 +9,9 @@
 import { jobNameOf } from './jobName'
 import { diagnosticLine, findingsCountOf, oneLine } from './pluginChecks'
 import type { CheckResult, JobSourceRef } from './types'
-import type { AuditAction } from '../audit/resolve'
-import type { CoverageNote } from '../audit/policy'
+import type { AuditAction, CoverageNote } from '../audit/types'
+import { ACTION_PHRASES, COVERAGE_NOTE_PHRASES } from '../audit/phrases'
+import { t } from '../i18n'
 
 /** 상태 한 낱말. **파생값과 플래그를 한 낱말로 접는다** — 사람이 목록에서 훑는 것이 이것이고,
  *  훑으려면 한 칸에 있어야 한다.
@@ -194,26 +195,11 @@ function pluginCheckLines(validation: unknown): { before: string[]; after: strin
   return { before, after }
 }
 
-/** What each action is called on a person's screen (observe mode design §11): a plain phrase, never `git.remote.write`. */
-const ACTION_PHRASES: Record<AuditAction, string> = {
-  'process.execute': 'run a command',
-  'git.read': 'read from git',
-  'git.local.write': 'change git locally',
-  'git.remote.write': 'git push to a remote',
-  'github.pr.create': 'open a pull request',
-  'github.write': 'change something on GitHub',
-  'package.install': 'install a package',
-  'filesystem.read': 'read a file',
-  'filesystem.write': 'write a file',
-  'filesystem.delete': 'delete a file',
-  'network.request': 'make a web request',
-  'mcp.call': 'call an MCP tool',
-  'agent.spawn': 'start a subagent',
-  other: 'use another tool'
-}
-
-/** An action's phrase; one this build does not know (a newer Host's) as it was named. */
-const phraseOf = (action: unknown): string => (Object.hasOwn(ACTION_PHRASES, str(action)) ? ACTION_PHRASES[str(action) as AuditAction] : str(action))
+/** What each action is called on a person's screen (observe mode design §11): a plain phrase, never `git.remote.write`,
+ *  in the English of the table Settings › Security & Access says in the person's language (audit/phrases.ts). One this
+ *  build does not know (a newer Host's) as it was named. */
+const phraseOf = (action: unknown): string =>
+  Object.hasOwn(ACTION_PHRASES, str(action)) ? t('en', ACTION_PHRASES[str(action) as AuditAction]) : str(action)
 
 const two = (n: number): string => String(n).padStart(2, '0')
 
@@ -232,12 +218,6 @@ const COVERAGE_CLASSES = [
   ['network', 'network']
 ] as const
 
-const COVERAGE_NOTES: Record<CoverageNote, string> = {
-  'web-tools-only': 'web tools only',
-  'shell-text-only': 'shell text only',
-  'web-search-and-shell-text': 'web search and shell text'
-}
-
 /** What observe can see, a row per provider and kind of session, with why a class is only partly seen. */
 function coverageText(rows: Record<string, unknown>[]): string {
   return columns([
@@ -248,7 +228,8 @@ function coverageText(rows: Record<string, unknown>[]): string {
         `${str(row.provider)} ${str(row.kind)}`,
         ...COVERAGE_CLASSES.map(([key]) => {
           const c = Object.hasOwn(classes, key) ? classes[key] : undefined
-          const note = typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTES, c.note) ? COVERAGE_NOTES[c.note as CoverageNote] : c.note) : undefined
+          const note =
+            typeof c?.note === 'string' ? (Object.hasOwn(COVERAGE_NOTE_PHRASES, c.note) ? t('en', COVERAGE_NOTE_PHRASES[c.note as CoverageNote]) : c.note) : undefined
           return note === undefined ? str(c?.level) : `${str(c?.level)} (${note})`
         })
       ]

@@ -16,37 +16,10 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { profilePaths } from '../profile/paths'
-import type { AuditAction, CommandFacts, Confidence } from './resolve'
+import type { AuditRecord } from './types'
 
-/** Where a record came from (design §5). The provider is the first word. */
-export type AuditSource = 'claude-hook' | 'claude-chat' | 'codex-rollout' | 'codex-chat'
-
-export interface AuditRecord {
-  id: string
-  /** When the call happened, ISO. */
-  at: string
-  /** The app's id for the session (ASTERA_SESSION). */
-  sessionId: string
-  provider: 'claude' | 'codex'
-  kind: 'terminal' | 'chat'
-  accountId: string
-  agentProfileId?: string
-  /** From the session's Dispatch, when it has one; a coordinator's from its Run (no Task). */
-  jobId?: string
-  runId?: string
-  taskId?: string
-  source: AuditSource
-  /** The provider's own name for the tool (`Bash`, `apply_patch`, `mcp__github__create_issue`). */
-  providerTool: string
-  action: AuditAction
-  target: string
-  insideProject?: boolean
-  /** The resolver's commands of a compound line, each with its own place, so the rules judge it later as they would
-   *  have then. At most AUDIT_COMMANDS_KEPT (recorder.ts); a line cut short is kept as `unknown`. */
-  commands?: CommandFacts[]
-  confidence: Confidence
-  status: 'ok' | 'failed' | 'unknown'
-}
+// Declared beside the other shapes the renderer reads (types.ts), kept importable from here
+export type { AuditRecord, AuditSource } from './types'
 
 export const AUDIT_KEEP_DAYS = 30
 export const AUDIT_MAX_BYTES = 50 * 1024 * 1024

@@ -9,29 +9,11 @@ import { profilePaths } from '../profile/paths'
 import { keepDamaged, readStoreFile } from '../storeFile'
 import { writeThroughTmp } from '../accounts/fileQueue'
 import { RepairNeeded } from '../settings/repairNeeded'
-import type { AuditAction, CommandFacts, ResolvedAction } from './resolve'
+import type { ResolvedAction } from './resolve'
+import type { AuditAction, AuditDecision, AuditMode, AuditPolicy, AuditRule, CommandFacts, CoverageCell, CoverageRow } from './types'
 
-/** `compatibility`: nothing is observed, as before observe mode existed. `enforce` is not offered in this phase. */
-export type AuditMode = 'compatibility' | 'observe'
-
-export interface AuditRule {
-  id: string
-  effect: 'allow' | 'deny'
-  /** An action exactly, or a prefix ending in `*` (`git.*`). */
-  action: string
-  /** Left out: wherever the call was. */
-  scope?: 'inside-project' | 'outside-project'
-}
-
-export interface AuditPolicy {
-  version: 1
-  mode: AuditMode
-  rules: AuditRule[]
-  /** What a call no rule matches gets. */
-  otherwise: 'allow' | 'deny'
-}
-
-export type AuditDecision = 'allow' | 'would-deny' | 'unknown'
+// Declared beside the other shapes the renderer reads (types.ts), kept importable from here
+export type { AuditDecision, AuditMode, AuditPolicy, AuditRule, CoverageCell, CoverageClass, CoverageNote, CoverageRow } from './types'
 
 /** What most people would not want an agent to do unattended, without flooding the preview (design §7). Written the
  *  first time observe is turned on, then the person's to edit; shown while there is no file. */
@@ -218,22 +200,6 @@ export async function readPolicyMode(profileDir: string): Promise<AuditMode> {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Coverage
-
-export type CoverageClass = 'shell' | 'file-read' | 'file-write' | 'mcp' | 'network'
-
-/** Why a class is only partly seen, as a key the screens and the CLI put in words. */
-export type CoverageNote = 'web-tools-only' | 'shell-text-only' | 'web-search-and-shell-text'
-
-export interface CoverageCell {
-  level: 'seen' | 'partial' | 'none'
-  note?: CoverageNote
-}
-
-export interface CoverageRow {
-  provider: 'claude' | 'codex'
-  kind: 'terminal' | 'chat'
-  classes: Record<CoverageClass, CoverageCell>
-}
 
 const SEEN: CoverageCell = { level: 'seen' }
 const SHELL_TEXT_ONLY: CoverageCell = { level: 'partial', note: 'shell-text-only' }

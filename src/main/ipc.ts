@@ -68,6 +68,7 @@ import { createWorktreeRoute, NO_HOST_CONNECTION, hostDeadlineMessage } from './
 import { createPluginsRoute } from './host/pluginsRoute'
 import { createExtensionsRoute } from './host/extensionsRoute'
 import { createAgentProfilesRoute } from './host/agentProfilesRoute'
+import { createAuditRoute } from './host/auditRoute'
 import { createSourcesRoute } from './host/sourcesRoute'
 import { createHostGitHubRoute } from './host/hostGitHubRoute'
 import { needsHostGitHub } from '../core/orchestration/hostGitHub'
@@ -4765,6 +4766,21 @@ export function registerIpc(
   ipcMain.handle('agentProfiles.archive', (_e, id: unknown) => agentProfiles.archive(id as string))
   ipcMain.handle('agentProfiles.restore', (_e, id: unknown) => agentProfiles.restore(id as string))
   ipcMain.handle('agentProfiles.remove', (_e, id: unknown) => agentProfiles.remove(id as string))
+  // Settings › Security & Access and Run detail's token totals (observe mode design §11): the Host checks every
+  // argument; this only passes them on
+  const audit = createAuditRoute({ call: (m) => orchCall(m) })
+  ipcMain.handle('audit.policies', () => audit.policies())
+  ipcMain.handle('audit.setMode', (_e, mode: unknown) => audit.setMode(mode as Parameters<typeof audit.setMode>[0]))
+  ipcMain.handle('audit.setOtherwise', (_e, otherwise: unknown) => audit.setOtherwise(otherwise as Parameters<typeof audit.setOtherwise>[0]))
+  ipcMain.handle('audit.addRule', (_e, rule: unknown) => audit.addRule(rule as Parameters<typeof audit.addRule>[0]))
+  ipcMain.handle('audit.editRule', (_e, id: unknown, changes: unknown) => audit.editRule(id as string, changes as Parameters<typeof audit.editRule>[1]))
+  ipcMain.handle('audit.removeRule', (_e, id: unknown) => audit.removeRule(id as string))
+  ipcMain.handle('audit.moveRule', (_e, id: unknown, to: unknown) => audit.moveRule(id as string, to as number))
+  ipcMain.handle('audit.resetRules', () => audit.resetRules())
+  ipcMain.handle('audit.list', (_e, q: unknown) => audit.list(q as Parameters<typeof audit.list>[0]))
+  ipcMain.handle('audit.summary', (_e, q: unknown) => audit.summary(q as Parameters<typeof audit.summary>[0]))
+  ipcMain.handle('audit.runTokens', (_e, runId: unknown) => audit.runTokens(runId as string))
+  ipcMain.handle('audit.taskTokens', (_e, taskId: unknown) => audit.taskTokens(taskId as string))
   ipcMain.handle('plugins.list', () => plugins.list())
   ipcMain.handle('plugins.inspect', (_e, source: unknown) => plugins.inspect(source as Parameters<typeof plugins.inspect>[0]))
   ipcMain.handle('plugins.install', (_e, a: unknown) => plugins.install(a as Parameters<typeof plugins.install>[0]))

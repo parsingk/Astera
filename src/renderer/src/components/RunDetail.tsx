@@ -9,7 +9,8 @@ import type {
   MessageType,
   Provider,
   RunDetail as RunDetailData,
-  TaskStatus
+  TaskStatus,
+  TokenTotals
 } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
 import { accountToDispatchOn } from '../../../core/accounts/dispatchAccount'
@@ -46,6 +47,22 @@ import { backdropProps } from '../lib/backdrop'
 import { SourceChip } from './SourceChip'
 import { AgentProfileChip } from './AgentProfileField'
 import { jobName } from '../lib/jobName'
+import { summaryOf, tokensOf, wouldDenyLine, type AuditCounts } from './securityText'
+
+/** One of the Host's `runs-get` and `tasks-get`, whose bodies carry the token totals (observe mode design §10): this
+ *  computer's through its Host, which alone keeps them (main's own command layer answers both without), a Runtime's
+ *  through its door. Null when it did not answer. */
+function readTokens(door: OrchDoor, runtimeId: string | undefined, cmd: 'runs-get' | 'tasks-get', id: string): Promise<unknown> {
+  if (runtimeId !== undefined) return door.command(cmd, { id }).then((r) => (r.status === 200 ? r.body : null))
+  return (cmd === 'runs-get' ? window.api.audit.runTokens(id) : window.api.audit.taskTokens(id)).then((r) => (r.ok ? r.body : null))
+}
+
+/** A token total's numbers as the person's locale writes them. */
+const tokenParams = (s: TokenTotals): { total: string; input: string; output: string } => ({
+  total: s.total.toLocaleString(),
+  input: s.input.toLocaleString(),
+  output: s.output.toLocaleString()
+})
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -184,7 +201,8 @@ export function RunDetail({
   onShowOlderJournal,
   onClose,
   runtimeId,
-  door
+  door,
+  onOpenAuditLogs
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
    *  스냅샷과 detail 은 서로 다른 호출이라 어긋날 수 있으므로, 한쪽에만 있는 Task 는 그리지 않는다. */
@@ -206,6 +224,9 @@ export function RunDetail({
   runtimeId?: string
   /** Where this Run's commands, accounts and run configurations go: this computer or its Runtime (Phase 7). */
   door: OrchDoor
+  /** Settings › Security & Access › Audit Logs with this Run's calls only (observe mode design §11). This computer's
+   *  Runs only: a Runtime's records stay on the Runtime, and no controller reads them. */
+  onOpenAuditLogs?: (run: { id: string; name: string }) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   /** Why the controls are off: a read-only pairing (Phase 7). They are drawn disabled with it as their title, and it
@@ -313,6 +334,32 @@ export function RunDetail({
       cancelled = true
     }
   }, [authoring, door])
+  /** The tokens the Run's Tasks and its coordinator spent (observe mode design §10), and how many of its calls the rules
+   *  would deny: read again with the detail, so they follow the Run without a poll of their own. Both name the Run as
+   *  run-merge does: a Job row folded onto its one Run was opened with the Job's id. */
+  const [spent, setSpent] = useState<{ tokens?: TokenTotals; coordinatorTokens?: TokenTotals }>({})
+  const [denyCounts, setDenyCounts] = useState<AuditCounts | null>(null)
+  const observedRunId = runIdToMerge(run, runId)
+  useEffect(() => {
+    let cancelled = false
+    void readTokens(door, runtimeId, 'runs-get', observedRunId).then(
+      (body) => {
+        if (!cancelled) setSpent(tokensOf(body))
+      },
+      () => {}
+    )
+    // The records are this computer's: a Runtime's Run has none here
+    if (runtimeId === undefined)
+      void window.api.audit.summary({ runId: observedRunId }).then(
+        (r) => {
+          if (!cancelled) setDenyCounts(r.ok ? summaryOf(r.body) : null)
+        },
+        () => {}
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [detail, observedRunId, runtimeId, door])
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
    *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
@@ -413,6 +460,26 @@ export function RunDetail({
     ? (events ?? []).filter((e) => e.taskId === selectedTask.id)
     : (events ?? [])
   const hidden = (events?.length ?? 0) - shown.length
+  /** The selected Task's tokens, every attempt's (design §10), read as the Run's are. Kept with the Task it is for, so a
+   *  newly picked Task never shows the last one's while its own is read. */
+  const [taskSpent, setTaskSpent] = useState<{ taskId: string; tokens?: TokenTotals } | null>(null)
+  const selectedId = selectedTask?.id
+  useEffect(() => {
+    if (selectedId === undefined) return
+    let cancelled = false
+    void readTokens(door, runtimeId, 'tasks-get', selectedId).then(
+      (body) => {
+        const { tokens } = tokensOf(body)
+        if (!cancelled) setTaskSpent({ taskId: selectedId, ...(tokens ? { tokens } : {}) })
+      },
+      () => {}
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId, detail, runtimeId, door])
+  const selectedTokens = taskSpent !== null && taskSpent.taskId === selectedId ? taskSpent.tokens : undefined
+  const denyLine = denyCounts !== null ? wouldDenyLine(denyCounts, t) : null
 
   const running = runningCount(tasks)
   const counts = HEAD_STATES.map(
@@ -810,6 +877,30 @@ export function RunDetail({
             </button>
           )}
         </div>
+        {/* What the Run spent and what its rules would have denied (observe mode design §10, §11). The tokens are the
+            Tasks' sum, the coordinator's apart under its own name; that input counts cached input is said once, on hover
+            of the two. No money: cost is not known. */}
+        {(spent.tokens !== undefined || spent.coordinatorTokens !== undefined || (denyLine !== null && onOpenAuditLogs !== undefined)) && (
+          <div className="detail-observe">
+            {(spent.tokens !== undefined || spent.coordinatorTokens !== undefined) && (
+              <span className="detail-observe-tokens" title={t('jobs.detail.tokensCached')}>
+                {spent.tokens !== undefined && <span>{t('jobs.detail.tokens', tokenParams(spent.tokens))}</span>}
+                {spent.coordinatorTokens !== undefined && <span>{t('jobs.detail.coordinatorTokens', tokenParams(spent.coordinatorTokens))}</span>}
+              </span>
+            )}
+            {denyLine !== null && onOpenAuditLogs !== undefined && (
+              <span className="detail-observe-deny">
+                <span>{denyLine}</span>
+                {/* Leaves this window, so not while a form here holds something unsent (formOpen) */}
+                {!formOpen && (
+                  <button className="detail-observe-link" onClick={() => onOpenAuditLogs({ id: observedRunId, name: run ? jobName(run) : observedRunId })}>
+                    {t('jobs.detail.wouldDenyOpen')}
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
+        )}
         {/* flex: 1; min-height: 0 이 styles.css 에 있다 — 없으면 아래의 두 칸이 줄지 않아 모달 밖으로
             넘치고 닫기 버튼이 밀려난다. 이 저장소가 실제로 그 결함을 냈던 자리다 */}
         <div className="detail-body">
@@ -1000,6 +1091,12 @@ export function RunDetail({
                         {selectedTask.accountIds
                           .map((id) => accounts?.find((a) => a.id === id)?.label ?? id)
                           .join(' → ')}
+                      </span>
+                    )}
+                    {/* The Task's tokens, every attempt's (observe mode design §10) */}
+                    {selectedTokens !== undefined && (
+                      <span className="detail-chip" title={t('jobs.detail.taskTokensTitle', tokenParams(selectedTokens))}>
+                        {t('jobs.detail.taskTokens', tokenParams(selectedTokens))}
                       </span>
                     )}
                     <button

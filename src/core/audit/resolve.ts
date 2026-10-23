@@ -5,24 +5,10 @@
 import path from 'node:path'
 import { isPathWithin } from '../files/tree'
 import { redactSecrets } from '../remote/redact'
+import type { AuditAction, CommandFacts, Confidence } from './types'
 
-export type AuditAction =
-  | 'process.execute'
-  | 'git.read'
-  | 'git.local.write'
-  | 'git.remote.write'
-  | 'github.pr.create'
-  | 'github.write'
-  | 'package.install'
-  | 'filesystem.read'
-  | 'filesystem.write'
-  | 'filesystem.delete'
-  | 'network.request'
-  | 'mcp.call'
-  | 'agent.spawn'
-  | 'other'
-
-export type Confidence = 'exact' | 'high' | 'heuristic' | 'unknown'
+// Declared beside the other shapes the renderer reads (types.ts), kept importable from here
+export type { AuditAction, CommandFacts, Confidence } from './types'
 
 export interface ResolveCall {
   provider: 'claude' | 'codex'
@@ -32,13 +18,6 @@ export interface ResolveCall {
   input: unknown
   /** The session's folder, what "inside the project" is measured against. */
   cwd: string
-}
-
-/** What one command of a line does, and where, for a rule to judge on its own. */
-export interface CommandFacts {
-  action: AuditAction
-  /** Left out when the command names no path. */
-  insideProject?: boolean
 }
 
 export interface ResolvedAction {

@@ -50,6 +50,9 @@ import { PluginsSettings } from './components/PluginsSettings'
 import { ExtensionsSettings } from './components/ExtensionsSettings'
 import { AgentProfilesSettings } from './components/AgentProfilesSettings'
 import { profileOfConversation, spawnPermission } from './components/agentProfilesText'
+import { SecuritySettings } from './components/SecuritySettings'
+import { SECURITY_TAB } from './components/securityText'
+import { jobName } from './lib/jobName'
 import { RuntimeSelector } from './components/RuntimeSelector'
 import { createReplyGate } from './lib/replyGate'
 import { LOCAL, controlReason, detailOffScreen, detailRunGone, isRemoteRuntime, offlineNote, remoteDetailKey, remoteNewJobFolder, remotePollReady } from './lib/remoteJobs'
@@ -711,9 +714,16 @@ export default function App(): React.JSX.Element {
     | 'plugins'
     | 'extensions'
     | 'agentProfiles'
+    | 'security'
     | 'worktree'
     | 'history'
   >('general') // the settings sidebar, with general and accounts added
+  /** The Run Run detail opened Settings › Security & Access for: Audit Logs shows its calls only, until the filter is
+   *  cleared or Settings closes. */
+  const [auditRun, setAuditRun] = useState<{ id: string; name: string } | null>(null)
+  useEffect(() => {
+    if (!showSettings) setAuditRun(null)
+  }, [showSettings])
   /** Settings fields changed since the modal opened (audit UI-7). */
   const settingsTouched = useRef(createTouched())
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
@@ -5007,6 +5017,9 @@ export default function App(): React.JSX.Element {
                     // Agent profiles (Agent Profiles design §8): accounts, MCP servers and permission under one name,
                     // right after the MCP servers they choose from.
                     ['agentProfiles', t('settings.tab.agentProfiles')],
+                    // Security & Access (observe mode design §11): the rules agents' calls are judged by and the record of
+                    // those calls, after the profiles they are made as. Its name is English in every language.
+                    ['security', SECURITY_TAB],
                     ['hiw', t('hiw.title')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
@@ -5444,6 +5457,19 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'plugins' && <PluginsSettings />}
                 {settingsTab === 'extensions' && <ExtensionsSettings accounts={accounts} />}
                 {settingsTab === 'agentProfiles' && <AgentProfilesSettings accounts={accounts} />}
+                {settingsTab === 'security' && (
+                  <SecuritySettings
+                    // A Run picked from Run detail starts Audit Logs over with its filter
+                    key={auditRun?.id ?? ''}
+                    {...(auditRun !== null ? { run: auditRun } : {})}
+                    onClearRun={() => setAuditRun(null)}
+                    sessionTitle={(id) => sessions.find((s) => s.id === id)?.title}
+                    runName={(id) => {
+                      const row = orchSnapshot ? findRun(orchSnapshot, id) : undefined
+                      return row ? jobName(row) : undefined
+                    }}
+                  />
+                )}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>
@@ -5624,6 +5650,17 @@ export default function App(): React.JSX.Element {
             }))
           }
           onClose={() => setOpenRun(null)}
+          // Audit Logs filtered to this Run (observe mode design §11): this computer's Runs only, whose records are here
+          {...(openRun.runtimeId === undefined
+            ? {
+                onOpenAuditLogs: (r: { id: string; name: string }) => {
+                  setOpenRun(null) // Settings opens in its place
+                  setAuditRun(r)
+                  setSettingsTab('security')
+                  setShowSettings(true)
+                }
+              }
+            : {})}
         />
       )}
       {/* currentProject 가 있을 때만 그린다 — 없으면 run-create 에 넘길 cwd 가 없어 만들 자리가

@@ -1284,6 +1284,43 @@ button.source-chip:hover { color: var(--accent); border-color: var(--accent); }
 .ext-list.is-uncapped { max-height: none; }
 .agent-profile-new { border: 1px solid var(--line); border-radius: var(--radius); }
 .agent-profile-new > .ext-row-body { border-top: 0; }
+/* Settings › Security & Access (observe mode design §11): two sections under English headings, Policies (the switch, what
+   observe can see, the rules) and Audit Logs (the counts, the filters, the rows). Only the tokens the other settings use. */
+.security-section { display: flex; flex-direction: column; gap: 16px; }
+.security-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.security-choices { display: flex; align-items: center; gap: 14px; }
+/* The coverage table and the rows: wide, so they scroll sideways inside the tab rather than widen it */
+.security-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+.security-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.security-table th, .security-table td { padding: 6px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+.security-table tr:last-child > * { border-bottom: 0; }
+.security-table thead th { color: var(--text-dim); font-weight: 600; white-space: nowrap; }
+.security-table tbody th { color: var(--text); font-weight: 600; white-space: nowrap; }
+.security-table td.is-seen { color: var(--ok); }
+.security-table td.is-partial { color: var(--warn); }
+.security-table td.is-none { color: var(--text-faint); }
+/* A rule: its place, its three fields, then up, down and remove, as an account row of an agent profile reads. The list's
+   own numbers are its places, so the <ol>'s markers and indent are taken off. */
+.security-rules { margin: 0; padding: 0; list-style: none; }
+.security-rule { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+.security-rule > button { flex: none; background: none; border: 0; padding: 0 3px; color: var(--text-faint); font-size: 12px; line-height: 1; cursor: pointer; }
+.security-rule > button:hover:not(:disabled) { color: var(--accent); }
+.security-rule > button:disabled { opacity: .3; cursor: default; }
+.security-rule-fields { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.security-rule-action { min-width: 200px; }
+.security-new-rule { flex-wrap: wrap; }
+.security-audit { display: flex; flex-direction: column; gap: 12px; }
+.security-run-filter { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-dim); }
+.security-run-filter b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.security-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.security-counts { display: flex; flex-wrap: wrap; gap: 8px; }
+.security-decision { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: var(--radius-sm); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.security-decision.is-allow { color: var(--ok); background: var(--ok-bg); }
+.security-decision.is-would-deny { color: var(--danger); background: var(--danger-bg); }
+.security-decision.is-unknown { color: var(--text-dim); background: var(--elevated); }
+.security-time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--text-dim); }
+.security-session { display: block; color: var(--text); }
+.security-target { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11.5px; }
 .plugin-card .settings-hint { overflow-wrap: anywhere; }
 /* A fieldset, so a save holds every field at once; its own frame is taken off. */
 .plugin-form { display: flex; flex-direction: column; gap: 12px; min-width: 0; margin: 6px 0 0; padding: 10px 0 0; border: 0; border-top: 1px solid var(--line-soft); }
@@ -1722,6 +1759,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    같은 아이콘과 같은 숫자가 화면마다 다르게 생기면 "아이콘으로 읽는다"는 규칙이 무너진다 */
 .detail-head { flex: none; display: flex; align-items: center; gap: 9px; }
 .detail-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Run detail's token totals and its would-deny line (observe mode design §10, §11), one quiet line under the head */
+.detail-observe { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 4px; font-size: 11.5px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.detail-observe-tokens { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; cursor: help; }
+.detail-observe-deny { display: inline-flex; align-items: center; gap: 8px; }
+.detail-observe-link { background: none; border: 0; padding: 0; color: var(--accent); font-size: inherit; cursor: pointer; }
+.detail-observe-link:hover { text-decoration: underline; }
 /* 창을 닫는 ✕. 아래 .detail-clear 와 같은 모양을 쓰지만 margin-left: auto 가 아니다 — 제목이
    flex: 1 로 남는 자리를 다 가져가므로 개수 묶음과 이 버튼은 이미 오른쪽 끝에 붙어 있고, auto 를
    또 주면 개수 묶음과 이 버튼 사이가 벌어진다. 글자를 --text-faint 로 두지 않는 이유는 사이드바에서
