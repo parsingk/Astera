@@ -399,12 +399,32 @@ describe('dispatchOfSession', () => {
     expect(dispatchOfSession(s, 'sess_x', T('03:30'))).toBeNull()
   })
 
-  it('takes the Dispatch that ended last when none holds the call', () => {
+  // Final review I2: the worker's own last calls (its report) land just after its Dispatch ends; a tab a worker was typed
+  // into goes on long after, and that is not the Task's work
+  it('takes the Dispatch that ended last for a call within two minutes of its end, and none after', () => {
     const s = state([
       { id: 'd1', taskId: 'task1', sessionId: 'sess_b', startedAt: T('01:00'), endedAt: T('02:00') },
       { id: 'd2', taskId: 'task2', sessionId: 'sess_b', startedAt: T('00:00'), endedAt: T('00:30') }
     ])
-    expect(dispatchOfSession(s, 'sess_b', T('02:10'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+    expect(dispatchOfSession(s, 'sess_b', '2026-10-23T02:01:59.000Z')).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+    expect(dispatchOfSession(s, 'sess_b', '2026-10-23T02:02:00.000Z')).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+    expect(dispatchOfSession(s, 'sess_b', '2026-10-23T02:02:01.000Z')).toBeNull()
+    expect(dispatchOfSession(s, 'sess_b', T('02:10'))).toBeNull()
+    // Between two Dispatches, the earlier one's window only
+    expect(dispatchOfSession(s, 'sess_b', '2026-10-23T00:31:00.000Z')).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task2' })
+    expect(dispatchOfSession(s, 'sess_b', T('00:45'))).toBeNull()
+  })
+
+  it('falls to the coordinator slot once the ended Dispatch’s window has passed', () => {
+    const s = state(
+      [{ id: 'd1', taskId: 'task1', sessionId: 'sess_co', startedAt: T('01:00'), endedAt: T('02:00') }],
+      [
+        { id: 'run1', jobId: 'job1', createdAt: T('00:00') },
+        { id: 'run2', jobId: 'job2', createdAt: T('00:00'), coordinatorSessionId: 'sess_co' }
+      ]
+    )
+    expect(dispatchOfSession(s, 'sess_co', T('02:01'))).toEqual({ jobId: 'job1', runId: 'run1', taskId: 'task1' })
+    expect(dispatchOfSession(s, 'sess_co', T('02:10'))).toEqual({ jobId: 'job2', runId: 'run2' })
   })
 
   it('names what it can find when the Task or Run is gone', () => {

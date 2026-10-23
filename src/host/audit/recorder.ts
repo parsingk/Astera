@@ -270,20 +270,26 @@ const latest = <T>(items: T[], key: (x: T) => number): T | undefined => {
   return best
 }
 
+/** How long after its Dispatch ended a session's call is still its Task's: the worker's own last calls (its report) land
+ *  just after the end. Past it, a tab a worker was typed into is used on, and that is nobody's Task (final review I2). */
+export const DISPATCH_END_GRACE_MS = 2 * 60 * 1000
+
 /**
  * `dispatchOf` over the orchestration state. The session's Dispatch whose time holds the call (from its start to its
- * end, or on while it is open), else the one that ended last, with that Dispatch's Task, Run and Job as far as they are
- * still there. A session with no Dispatch may be a Run's coordinator, which has none (ruling I1): then that Run and its
- * Job, the unfinished Run first, else the latest. A session that drives a Run from outside is not looked for.
+ * end, or on while it is open), else the one that ended last when the call came within DISPATCH_END_GRACE_MS of its end,
+ * with that Dispatch's Task, Run and Job as far as they are still there. A session with no such Dispatch may be a Run's
+ * coordinator, which has none (ruling I1): then that Run and its Job, the unfinished Run first, else the latest. A
+ * session that drives a Run from outside is not looked for.
  */
 export function dispatchOfSession(s: OrchState, sessionId: string, at: string): DispatchIds | null {
   const t = Date.parse(at)
   const held = s.dispatches.filter((x) => x.sessionId === sessionId)
   const holds = (x: Dispatch): boolean => Date.parse(x.startedAt) <= t && (!x.endedAt || t <= Date.parse(x.endedAt))
+  const justEnded = (x: Dispatch): boolean => !!x.endedAt && Date.parse(x.endedAt) <= t && t <= Date.parse(x.endedAt) + DISPATCH_END_GRACE_MS
   const dispatch =
     latest(held.filter(holds), (x) => Date.parse(x.startedAt)) ??
     latest(
-      held.filter((x) => !!x.endedAt),
+      held.filter(justEnded),
       (x) => Date.parse(x.endedAt!)
     )
   if (dispatch) {

@@ -26,7 +26,8 @@
 // response is written).
 //
 // **Whom a response was for** is `ownerOf` at the response's own time: the Dispatch the session held open then (one
-// that ended holds nothing after its end), else the Run it coordinated. When the state no longer names the session (a
+// that ended holds nothing after its end), else the Run it coordinated, while that Run was unfinished or had just
+// finished (final review I2). When the state no longer names the session (a
 // roll rekeyed its Dispatch, or its Run's coordinator slot, before its last lines were read), the owner it last had
 // stands, within the same bounds. A response for nobody (a person's own tab) is not kept. A session the app runs in its
 // own node-pty, with no Host, is not read: its Tasks show no tokens.
@@ -37,7 +38,7 @@ import { TAIL_CAP } from '../../core/rolling/tailLines'
 import { claudeTokenReader } from '../../core/usage/claudeTokens'
 import { codexTokenReader } from '../../core/usage/codex'
 import { extractStatusLineSession } from '../../core/usage/statusline'
-import { outcomeOf } from '../../core/orchestration/running'
+import { outcomeOf, tasksOwnedBy, withoutSupersededLifecycle } from '../../core/orchestration/running'
 import type { OrchState } from '../../core/orchestration/state'
 import type { Dispatch, JobRun } from '../../core/orchestration/types'
 import type { PtyMeta } from '../../core/host/protocol'
@@ -57,16 +58,30 @@ const latest = <T>(items: readonly T[], key: (x: T) => number): T | undefined =>
 /** Whether the Dispatch was open at `t`: from its start to its end, or on while it has none. */
 const held = (x: Dispatch, t: number): boolean => Date.parse(x.startedAt) <= t && (x.endedAt === undefined || t <= Date.parse(x.endedAt))
 
+/** How long after its Run finished a coordinator's response is still the Run's: the last ones are written as it
+ *  finishes. Past it, a finished Run's coordinator tab used on is nobody's Run (final review I2; the recorder's
+ *  DISPATCH_END_GRACE_MS). */
+export const RUN_END_GRACE_MS = 2 * 60 * 1000
+
+/** Whether the coordinator of the Run spent `t` for it: while the Run is unfinished, and up to RUN_END_GRACE_MS after it
+ *  finished, which is when its last Task last changed. */
+const coordinating = (s: OrchState, r: JobRun, t: number): boolean => {
+  if (outcomeOf(s, r.id) === 'running') return true
+  const finished = Math.max(...withoutSupersededLifecycle(tasksOwnedBy(s, r.id)).map((x) => Date.parse(x.updatedAt)))
+  return t <= finished + RUN_END_GRACE_MS
+}
+
 /**
  * Whom a session's response at `at` was for: the session's Dispatch open then (the one started last, when two were),
- * else the Run whose coordinator the session is, the unfinished one first. A Dispatch holds only what was spent while it
- * was open, read late or not (fix round 1, ruling 3): a tab a worker was typed into (`worker-start --terminal`) goes on
- * after the Dispatch ended, and that is not the Task's work, nor is what it spent before.
+ * else the Run whose coordinator the session is while it coordinates it (`coordinating`), the unfinished one first. A
+ * Dispatch holds only what was spent while it was open, read late or not (fix round 1, ruling 3): a tab a worker was
+ * typed into (`worker-start --terminal`) goes on after the Dispatch ended, and that is not the Task's work, nor is what
+ * it spent before. A finished Run's coordinator tab is the same.
  *
  * `last` is the owner the session's earlier responses had. It stands for a session the state no longer names (a roll
  * rekeyed its Dispatch or its Run's coordinator slot before its last lines were read), within the same bounds: a
- * Dispatch still there and open at `at`, a Run still there. Null for a session that worked for nobody then. A session
- * that drives a Run from outside is not looked for.
+ * Dispatch still there and open at `at`, a Run still there and coordinated at `at`. Null for a session that worked for
+ * nobody then. A session that drives a Run from outside is not looked for.
  */
 export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: TokenOwner | null = null): TokenOwner | null {
   const t = Date.parse(at)
@@ -78,14 +93,16 @@ export function tokenOwnerOf(s: OrchState, sessionId: string, at: string, last: 
   const coordinated = s.runs.filter((r: JobRun) => r.coordinatorSessionId === sessionId)
   if (coordinated.length > 0) {
     const unfinished = coordinated.filter((r) => outcomeOf(s, r.id) === 'running')
-    return { coordinatorOf: latest(unfinished.length > 0 ? unfinished : coordinated, (r) => Date.parse(r.createdAt))!.id }
+    const run = latest(unfinished.length > 0 ? unfinished : coordinated.filter((r) => coordinating(s, r, t)), (r) => Date.parse(r.createdAt))
+    return run ? { coordinatorOf: run.id } : null
   }
   if (last === null) return null
   if ('dispatchId' in last) {
     const x = s.dispatches.find((d) => d.id === last.dispatchId)
     return x && held(x, t) ? last : null
   }
-  return s.runs.some((r) => r.id === last.coordinatorOf) ? last : null
+  const run = s.runs.find((r) => r.id === last.coordinatorOf)
+  return run && coordinating(s, run, t) ? last : null
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null)

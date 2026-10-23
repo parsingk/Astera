@@ -148,6 +148,26 @@ describe('tokenOwnerOf', () => {
     expect(tokenOwnerOf(s, 'sess_k', iso(T0))).toEqual({ coordinatorOf: 'run_1' })
     expect(tokenOwnerOf(s, 'sess_tab', iso(T0))).toBeNull()
   })
+
+  // Final review I2: a finished Run's coordinator tab may be used on; what it spends then is not the Run's. Its last
+  // responses, written as the Run finished, still are
+  it('a coordinator’s are its Run’s while the Run is unfinished, and up to two minutes after it finished', () => {
+    const MIN = 60_000
+    const finished = (s: OrchState, at: number): OrchState => ({
+      ...s,
+      tasks: s.tasks.map((t) => ({ ...t, status: 'completed' as const, updatedAt: iso(at) }))
+    })
+    const running = orch([], 'sess_k')
+    expect(tokenOwnerOf(running, 'sess_k', iso(T0 + 60 * MIN))).toEqual({ coordinatorOf: 'run_1' })
+    const done = finished(running, T0 + 10 * MIN)
+    expect(tokenOwnerOf(done, 'sess_k', iso(T0 + 5 * MIN))).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(done, 'sess_k', iso(T0 + 12 * MIN))).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(done, 'sess_k', iso(T0 + 12 * MIN + 1))).toBeNull()
+    // The owner it last had stands within the same bounds
+    const noSlot = finished(orch([]), T0 + 10 * MIN)
+    expect(tokenOwnerOf(noSlot, 'sess_k1', iso(T0 + 11 * MIN), { coordinatorOf: 'run_1' })).toEqual({ coordinatorOf: 'run_1' })
+    expect(tokenOwnerOf(noSlot, 'sess_k1', iso(T0 + 13 * MIN), { coordinatorOf: 'run_1' })).toBeNull()
+  })
 })
 
 describe('createTokenSources', () => {
