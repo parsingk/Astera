@@ -615,6 +615,33 @@ describe('shell: a command substitution inside double quotes is a command of the
     expect(acts(bash(`${commit} && git push`))).toContain('git.remote.write')
   })
 
+  // Arithmetic runs nothing itself, but a substitution inside it runs
+  it('reads the substitutions inside arithmetic, quoted or not', () => {
+    expect(acts(bash('echo "$(( $(git push) + 1 ))"'))).toContain('git.remote.write')
+    expect(acts(bash('echo $(( $(git push) + 1 ))'))).toContain('git.remote.write')
+    expect(acts(bash('echo "$(( `git push` + 1 ))"'))).toContain('git.remote.write')
+    expect(acts(bash('echo "$(( 1 + $(( $(git push) )) ))"'))).toContain('git.remote.write')
+    expect(acts(bash('echo "$(( (1 + 2) * $(git push) )) $(git status)"'))).toEqual(['process.execute', 'git.remote.write', 'git.read'])
+    expect(bash('echo "$(( (1 + 2) * 3 ))"')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+  })
+
+  // `$((` is arithmetic in POSIX only: PowerShell has no arithmetic expansion, so `$((git push))` is `$( (git push) )`
+  it('reads $(( in PowerShell as a sub-expression holding a command', () => {
+    expect(acts(ps('Write-Output "$((git push))"'))).toContain('git.remote.write')
+    // A number or an expression in it is no command, and no unknown one
+    expect(acts(ps('Write-Output "$((1 + 2))"'))).toEqual(['process.execute'])
+    expect(ps('Write-Output "$((1 + 2))"').confidence).not.toBe('unknown')
+  })
+
+  // PowerShell's escape is the backtick, and a backslash is only a letter: it never keeps a quote open
+  it('does not let a backslash escape a quote in PowerShell, as it does in POSIX', () => {
+    expect(acts(ps('Remove-Item "C:\\dir\\" ; git push'))).toEqual(['filesystem.delete', 'git.remote.write'])
+    expect(acts(ps('Write-Output "a`"b" ; git push'))).toEqual(['process.execute', 'git.remote.write'])
+    expect(acts(ps('Write-Output "a""b" ; git push'))).toEqual(['process.execute', 'git.remote.write'])
+    // POSIX keeps its rule: \" is a quote in the string, so the push is inside it
+    expect(bash('echo "a\\" ; git push"')).toEqual({ action: 'process.execute', target: 'echo', confidence: 'high' })
+  })
+
   it('reads $( ) in PowerShell, not its backtick, in a string and in a here-string', () => {
     expect(acts(ps('Write-Output "$(git push)"'))).toContain('git.remote.write')
     expect(acts(ps('Write-Output @"\n$(git push)\n"@'))).toContain('git.remote.write')
@@ -1858,6 +1885,11 @@ describe('malformed and hostile input', () => {
     bash(`echo ${'"$(echo '.repeat(10_000)}`)
     bash(`echo "$(${'a '.repeat(25_000)}`)
     bash(`echo ${'"$(a'.repeat(10_000)}`)
+    bash(`echo "${'$(('.repeat(25_000)}`)
+    bash(`echo "$(( ${'$(a) '.repeat(10_000)} ))"`)
+    bash(`echo "$(( ${'('.repeat(25_000)}`)
+    bash(`echo "${'$(( 1 + '.repeat(10_000)}${')) '.repeat(10_000)}"`)
+    ps(`Write-Output "${'$(('.repeat(25_000)}`)
     ps(`Write-Output @"\n${'$(a) '.repeat(10_000)}\n"@`)
     expect(Date.now() - started).toBeLessThan(1000)
   })

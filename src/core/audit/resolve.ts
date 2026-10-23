@@ -779,6 +779,43 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
     invoked = false
     quoted = []
   }
+  /** Reads the substitution (a `$(` or a backtick) at `at` as a line of its own, whose commands follow the command in
+   *  progress, and says where it ends. Past the depth substitutions are read to it is not read, and this says `at`. */
+  const substitute = (at: number, tick: boolean): number => {
+    if (depth >= 2) {
+      unread = true // the command is not known
+      return at
+    }
+    const sub = splitFrom(line, at + (tick ? 1 : 2), tick ? 'tick' : 'paren', flavor, depth + 1)
+    for (const s of sub.commands) later.push({ ...s, sub: true })
+    return sub.end
+  }
+  /** Reads the POSIX arithmetic `$(( ))` at `at`, which runs nothing, for the substitutions inside it, and says where it ends
+   *  (at its closing `))`, whose parentheses inner ones do not close). A nested one is counted, not entered, so the reading
+   *  is one pass of the text however deep the nesting. */
+  const arithmetic = (at: number): number => {
+    let open = 1 // the `$((` not closed yet
+    let paren = 0 // plain parentheses inside it
+    let j = at + 3
+    for (; j < line.length; j++) {
+      const e = line[j]
+      if (e === '$' && line[j + 1] === '(') {
+        if (line[j + 2] === '(') {
+          open++
+          j += 2
+        } else j = substitute(j, false)
+      } else if (e === '`') j = substitute(j, true)
+      else if (e === '(') paren++
+      else if (e === ')') {
+        if (paren > 0) paren--
+        else if (line[j + 1] === ')') {
+          j++
+          if (--open === 0) break
+        }
+      }
+    }
+    return j
+  }
 
   for (let i = start; i < line.length; i++) {
     const c = line[i]
@@ -804,23 +841,18 @@ function splitFrom(line: string, start: number, stop: Stop, flavor: Flavor, dept
         } else if (flavor === 'posix' && d === '\\' && n === '\\') {
           cur += '\\\\' // a backslash, which does not escape what follows it
           i++
-        } else if (!here && d === '\\' && (n === '"' || (flavor === 'posix' && (n === '$' || n === '`')))) {
-          cur += n
+        } else if (flavor === 'posix' && d === '\\' && (n === '"' || n === '$' || n === '`')) {
+          cur += n // in PowerShell a backslash escapes nothing
           i++
-        } else if (d === '$' && n === '(' && line[i + 2] === '(') {
-          const close = line.indexOf('))', i + 3) // arithmetic, which runs nothing
-          cur += '$'
-          i = close < 0 ? line.length : close + 1
+        } else if (flavor === 'posix' && d === '$' && n === '(' && line[i + 2] === '(') {
+          cur += '$' // in PowerShell `$((` is a sub-expression that starts with a parenthesis
+          i = arithmetic(i)
         } else if ((d === '$' && n === '(') || (d === '`' && flavor === 'posix')) {
-          if (depth >= 2) {
-            unread = true // too deep to read: the text is a word's, and the command is not known
-            cur += d
-          } else {
-            const tick = d === '`'
-            const sub = splitFrom(line, i + (tick ? 1 : 2), tick ? 'tick' : 'paren', flavor, depth + 1)
-            for (const s of sub.commands) later.push({ ...s, sub: true })
+          const to = substitute(i, d === '`')
+          if (to === i) cur += d // too deep to read: the text stays the word's
+          else {
             cur += '$'
-            i = sub.end
+            i = to
           }
         } else cur += d
       }
